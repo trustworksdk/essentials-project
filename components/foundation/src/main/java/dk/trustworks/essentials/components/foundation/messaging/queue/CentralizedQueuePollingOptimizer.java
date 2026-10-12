@@ -19,6 +19,7 @@ import org.slf4j.*;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.concurrent.ConcurrentSkipListSet;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -33,6 +34,18 @@ public class CentralizedQueuePollingOptimizer implements QueuePollingOptimizer {
 
     private final AtomicLong currentDelayMs = new AtomicLong();
     private final AtomicLong nextAllowedPollEpochMs = new AtomicLong();
+    /**
+     * When messages known to this node become deliverable - see {@link #messageScheduledFor(Instant)}. Bounded: past
+     * {@link #MAX_TRACKED_DUE_TIMES} the latest are dropped, and those messages wait at most the backoff cap
+     */
+    private final ConcurrentSkipListSet<Long> dueAtEpochMs = new ConcurrentSkipListSet<>();
+    private static final int MAX_TRACKED_DUE_TIMES = 1_000;
+    /**
+     * How long after a message's due time the queue keeps being polled. A poll can run its claim a moment before the
+     * due time and find nothing - the claim's {@code now} is read once per poll, before any queue is polled - so
+     * forgetting a due time at the first poll after it let the message wait out a whole backoff step
+     */
+    private static final long DUE_TIME_GRACE_MS = 250;
 
     /**
      * @param queueName       the queue this optimizer is for
@@ -66,7 +79,9 @@ public class CentralizedQueuePollingOptimizer implements QueuePollingOptimizer {
     public boolean shouldSkipPolling() {
         long now = Instant.now().toEpochMilli();
         long next = nextAllowedPollEpochMs.get();
-        boolean skip = now < next;
+        // A message coming due ends the backoff early
+        var earliestDue = dueAtEpochMs.ceiling(Long.MIN_VALUE);
+        boolean skip = now < next && (earliestDue == null || now < earliestDue);
         log.trace("[{}] shouldSkipPolling? {} (now={}, nextAllowed={})",
                 queueName, skip, now, next);
         return skip;
@@ -74,6 +89,7 @@ public class CentralizedQueuePollingOptimizer implements QueuePollingOptimizer {
 
     @Override
     public void queuePollingReturnedNoMessages() {
+        forgetDueTimesUpTo(Instant.now().toEpochMilli() - DUE_TIME_GRACE_MS);
         long prevDelay = currentDelayMs.get();
         long rawNext = (long)(prevDelay * backoffFactor);
         long capped  = Math.min(maxDelayMs, rawNext);
@@ -92,6 +108,7 @@ public class CentralizedQueuePollingOptimizer implements QueuePollingOptimizer {
 
     @Override
     public void queuePollingReturnedMessage(QueuedMessage queuedMessage) {
+        forgetDueTimesUpTo(Instant.now().toEpochMilli() - DUE_TIME_GRACE_MS);
         currentDelayMs.set(initialDelayMs);
         nextAllowedPollEpochMs.set(Instant.now().toEpochMilli());
         log.trace("[{}] got message '{}' → reset delay to '{}' ms",
@@ -100,6 +117,7 @@ public class CentralizedQueuePollingOptimizer implements QueuePollingOptimizer {
 
     @Override
     public void queuePollingReturnedMessages(List<QueuedMessage> queuedMessages) {
+        forgetDueTimesUpTo(Instant.now().toEpochMilli() - DUE_TIME_GRACE_MS);
         currentDelayMs.set(initialDelayMs);
         nextAllowedPollEpochMs.set(Instant.now().toEpochMilli());
         log.trace("[{}] got '{}' messages  → reset delay to '{}' ms",
@@ -112,6 +130,26 @@ public class CentralizedQueuePollingOptimizer implements QueuePollingOptimizer {
         nextAllowedPollEpochMs.set(Instant.now().toEpochMilli());
         log.trace("[{}] messageAdded '{}' → reset delay to '{}' ms",
                 queueName, queuedMessage.getId(), initialDelayMs);
+    }
+
+    /**
+     * Poll when a message on this queue becomes deliverable, rather than sleeping past it on the backoff. Retries,
+     * delayed enqueues and delayed resurrections made by this node report their due time here; without it, a retry
+     * on a queue that had backed off was delivered up to a whole backoff cap late.
+     */
+    @Override
+    public void messageScheduledFor(Instant dueAt) {
+        dueAtEpochMs.add(dueAt.toEpochMilli());
+        while (dueAtEpochMs.size() > MAX_TRACKED_DUE_TIMES) {
+            dueAtEpochMs.pollLast();
+        }
+    }
+
+    /**
+     * Polls since a due time (plus {@link #DUE_TIME_GRACE_MS}) have looked for the message, found or not
+     */
+    private void forgetDueTimesUpTo(long epochMs) {
+        dueAtEpochMs.headSet(epochMs, true).clear();
     }
 
     @Override

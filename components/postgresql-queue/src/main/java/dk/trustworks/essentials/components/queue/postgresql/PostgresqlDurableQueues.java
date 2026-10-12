@@ -966,7 +966,7 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                 throw new DurableQueueException("Failed to insert message", queueName);
             }
             if (!isDeadLetterMessage) {
-                unitOfWork.registerLifecycleCallbackForResource(new LocallyQueuedMessage(queueName, queueEntryId, message), localEnqueueSignal);
+                unitOfWork.registerLifecycleCallbackForResource(new LocallyQueuedMessage(queueName, queueEntryId, message, nextDeliveryTimestamp), localEnqueueSignal);
             }
         });
         log.debug("[{}:{}] Queued {}{}message{} with nextDeliveryTimestamp {}",
@@ -1047,7 +1047,7 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                                                    }
                                                    if (!messages.isEmpty()) {
                                                        unitOfWorkFactory.getRequiredUnitOfWork()
-                                                                        .registerLifecycleCallbackForResource(new LocallyQueuedMessage(queueName, queueEntryIds.getFirst(), messages.getFirst()),
+                                                                        .registerLifecycleCallbackForResource(new LocallyQueuedMessage(queueName, queueEntryIds.getFirst(), messages.getFirst(), nextDeliveryTimestamp),
                                                                                                               localEnqueueSignal);
                                                    }
 
@@ -1077,6 +1077,7 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                                                                                  .findOne();
                                                    if (result.isPresent()) {
                                                        log.debug("Marked Message with id '{}' for Retry at {}. Message entry after update: {}", operation.queueEntryId, nextDeliveryTimestamp, result.get());
+                                                       signalLocalConsumerAfterCommit(result.get(), nextDeliveryTimestamp);
                                                        return result;
                                                    } else {
                                                        log.error("Failed to Mark Message with id '{}' for Retry", operation.queueEntryId);
@@ -1148,6 +1149,7 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                                                                                  .findOne();
                                                    if (result.isPresent()) {
                                                        var updateResult = result.get();
+                                                       signalLocalConsumerAfterCommit(updateResult, nextDeliveryTimestamp);
 
                                                        var isOrderedMessage = updateResult.getDeliveryMode() == QueuedMessage.DeliveryMode.IN_ORDER;
                                                        log.debug("[{}] Resurrected Dead Letter {}Message with id '{}' {} and nextDeliveryTimestamp: {}. Message entry after update: {}",
@@ -1547,43 +1549,24 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                     List<QueuedMessage>  messagesForQueue;
                     MessageMappingResult mappingResult;
 
+                    // Ordered and unordered in one statement: the ordered part takes the heads it can, the unordered
+                    // part fills the slots it left - see DurableQueuesSql.buildClaimSqlStatement
                     var byHeadScan = orderedClaimByHeadScan(queueName);
-                    var orderedSql = byHeadScan
-                                     ? durableQueuesSql.buildOrderedHeadScanSqlStatement(!excluded.isEmpty())
-                                     : durableQueuesSql.buildOrderedSqlStatement(!excluded.isEmpty());
-                    var orderedQ = uow.handle().createQuery(orderedSql)
-                                      .bind("queueName", queueName)
-                                      .bind("now", now)
-                                      .bind("limit", availableWorkerSlotsForThisQueue);
-                    if (!excluded.isEmpty()) orderedQ.bindList("excludeKeys", excluded);
+                    var claimQ = uow.handle().createQuery(durableQueuesSql.buildClaimSqlStatement(byHeadScan, !excluded.isEmpty()))
+                                    .bind("queueName", queueName)
+                                    .bind("now", now)
+                                    .bind("limit", availableWorkerSlotsForThisQueue);
+                    if (!excluded.isEmpty()) claimQ.bindList("excludeKeys", excluded);
 
                     var claimStartedNanos = System.nanoTime();
-                    mappingResult = mapQueryResultsWithExceptionHandling(orderedQ);
-                    recordOrderedClaim(queueName, byHeadScan, System.nanoTime() - claimStartedNanos,
-                                       mappingResult.successfulMessages().size() + mappingResult.failedMappings().size(),
+                    mappingResult = mapQueryResultsWithExceptionHandling(claimQ);
+                    var orderedClaimed = (int) mappingResult.successfulMessages().stream()
+                                                            .filter(queued -> queued.getMessage() instanceof OrderedMessage)
+                                                            .count();
+                    recordOrderedClaim(queueName, byHeadScan, System.nanoTime() - claimStartedNanos, orderedClaimed,
                                        availableWorkerSlotsForThisQueue);
                     messagesForQueue = mappingResult.successfulMessages();
                     handleFailedMappings(queueName, mappingResult);
-
-                    // Fill whatever the ordered claim left free. Running the unordered claim only when the ordered
-                    // one found nothing left unordered messages on a queue that also carries ordered ones waiting a
-                    // whole polling interval whenever a single ordered message was claimed
-                    var slotsLeft = availableWorkerSlotsForThisQueue - messagesForQueue.size();
-                    if (slotsLeft > 0) {
-                        var unorderedSql = durableQueuesSql.buildUnorderedSqlStatement();
-                        var unorderedQ = uow.handle().createQuery(unorderedSql)
-                                            .bind("queueName", queueName)
-                                            .bind("now", now)
-                                            .bind("limit", slotsLeft);
-                        mappingResult = mapQueryResultsWithExceptionHandling(unorderedQ);
-                        if (messagesForQueue.isEmpty()) {
-                            messagesForQueue = mappingResult.successfulMessages();
-                        } else {
-                            messagesForQueue = new ArrayList<>(messagesForQueue);
-                            messagesForQueue.addAll(mappingResult.successfulMessages());
-                        }
-                        handleFailedMappings(queueName, mappingResult);
-                    }
 
                     log.debug("[{}] Batch fetched {} messages with {} slots available",
                               queueName, messagesForQueue.size(), availableWorkerSlotsForThisQueue);
@@ -1912,11 +1895,22 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
      * A message this node queued, registered with the enqueuing {@link UnitOfWork} so the queue's local consumer can be
      * told once it commits - see {@link LocalEnqueueSignal}
      */
-    private record LocallyQueuedMessage(QueueName queueName, QueueEntryId queueEntryId, Message message) {
+    private record LocallyQueuedMessage(QueueName queueName, QueueEntryId queueEntryId, Message message, Instant dueAt) {
     }
 
     /**
-     * Resets the polling backoff of this node's consumer of a queue once a transaction that queued to it commits.
+     * Tell this node's consumer of the message's queue when the message becomes deliverable, once the transaction
+     * that scheduled it commits - see {@link LocalEnqueueSignal}
+     */
+    private void signalLocalConsumerAfterCommit(QueuedMessage scheduled, Instant dueAt) {
+        unitOfWorkFactory.getRequiredUnitOfWork()
+                         .registerLifecycleCallbackForResource(new LocallyQueuedMessage(scheduled.getQueueName(), scheduled.getId(), scheduled.getMessage(), dueAt),
+                                                               localEnqueueSignal);
+    }
+
+    /**
+     * Resets the polling backoff of this node's consumer of a queue once a transaction that queued to it commits, or,
+     * for a message that becomes deliverable later - a delayed enqueue, a retry, a delayed resurrection - tells it when.
      * <p>
      * Without a {@link MultiTableChangeListener} nothing else does: a queue that had backed off while idle kept a
      * message this very node had just queued waiting out the backoff. After the commit, not before: a poll between
@@ -1935,24 +1929,34 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
 
         @Override
         public void afterCommit(UnitOfWork unitOfWork, List<LocallyQueuedMessage> associatedResources) {
-            var lastPerQueue = new LinkedHashMap<QueueName, LocallyQueuedMessage>();
-            associatedResources.forEach(queued -> lastPerQueue.put(queued.queueName(), queued));
-            lastPerQueue.values().forEach(queued -> {
-                var consumer = durableQueueConsumers.get(queued.queueName());
-                if (consumer == null) {
-                    return;
-                }
-                try {
-                    consumer.messageAdded(DefaultQueuedMessage.builder()
-                                                              .setId(queued.queueEntryId())
-                                                              .setQueueName(queued.queueName())
-                                                              .setMessage(queued.message())
-                                                              .setAddedTimestamp(OffsetDateTime.now())
-                                                              .build());
-                } catch (Exception e) {
-                    log.debug("[{}] Could not reset the polling backoff after a local enqueue", queued.queueName(), e);
-                }
-            });
+            var now = Instant.now();
+            associatedResources.stream()
+                               .collect(Collectors.groupingBy(LocallyQueuedMessage::queueName, LinkedHashMap::new, Collectors.toList()))
+                               .forEach((queueName, scheduled) -> {
+                                   var consumer = durableQueueConsumers.get(queueName);
+                                   if (consumer == null) {
+                                       return;
+                                   }
+                                   try {
+                                       // Deliverable now: poll at once. Deliverable later: poll when it is due
+                                       scheduled.stream()
+                                                .filter(queued -> queued.dueAt() == null || !queued.dueAt().isAfter(now))
+                                                .reduce((first, second) -> second)
+                                                .ifPresent(queued -> consumer.messageAdded(DefaultQueuedMessage.builder()
+                                                                                                               .setId(queued.queueEntryId())
+                                                                                                               .setQueueName(queueName)
+                                                                                                               .setMessage(queued.message())
+                                                                                                               .setAddedTimestamp(OffsetDateTime.now())
+                                                                                                               .build()));
+                                       scheduled.stream()
+                                                .map(LocallyQueuedMessage::dueAt)
+                                                .filter(dueAt -> dueAt != null && dueAt.isAfter(now))
+                                                .distinct()
+                                                .forEach(dueAt -> consumer.getQueuePollingOptimizer().messageScheduledFor(dueAt));
+                                   } catch (Exception e) {
+                                       log.debug("[{}] Could not signal the local consumer after a commit", queueName, e);
+                                   }
+                               });
         }
 
         @Override

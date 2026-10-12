@@ -171,6 +171,11 @@ Continuous polling at fixed intervals wastes DB resources when queues are idle. 
    transaction commits. A message queued by another node resets it only through LISTEN/NOTIFY (requires a
    `MultiTableChangeListener`); without one it waits at most the backoff cap.
 
+4. **Message due later** → a retry, delayed enqueue or delayed resurrection made by this node tells the optimizer
+   when the message becomes deliverable, and the queue is polled then instead of sleeping past it (since 0.60.1;
+   before, a retry on a backed-off queue could arrive a whole backoff cap late). A delayed message enqueued by
+   another node still waits at most the cap.
+
 **The `CentralizedMessageFetcher` always uses an optimizer.** Since 0.60.1 it no longer depends on a
 `MultiTableChangeListener`. Defaults: start at half the polling interval, ×1.5 per empty poll, ±10% jitter, capped at
 20× the polling interval with a listener and 10× without one (200 ms at the default 20 ms). Before 0.60.1, a queue
@@ -464,6 +469,12 @@ PostgresqlDurableQueues.builder()
     .setMultiTableChangeListener(multiTableChangeListener)
     .build();
 ```
+
+### One claim statement per poll
+
+Since 0.60.1 a poll claims a queue's ordered and unordered messages in one statement: the ordered part takes the
+heads it can, and the unordered part fills the slots it left (`DurableQueuesSql.buildClaimSqlStatement`). A queue that
+never carries ordered messages no longer pays a round trip per poll for an ordered claim that finds nothing.
 
 ### Saturated queues are refilled, not held to the polling interval
 

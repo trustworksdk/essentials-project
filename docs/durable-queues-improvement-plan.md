@@ -55,8 +55,9 @@ Ordered claim under the same conditions: 1 026 ms with the current form, 827 ms 
 | F7 | Done: comment corrected. `visible_at` is indexed, so the retry update cannot be HOT, and the index is needed by the head sweep. |
 | F12 | Done: the two idle-cost figures describe different lanes. The unordered owner reads per shard; the ordered owner batches per queue. The text now says so. |
 | F13 | No change. The hostname default is deliberate and documented in the starter's `CLAUDE.md` (it replaced a per-boot UUID), and `essentials.shard-owned-queue.instance-id` covers hosts that are not unique per process. A per-process id would also make a restarted instance wait out the lease TTL before taking its own shards back. |
-| C3 | Open. |
-| C4 | Partial fill done: the unordered claim fills whatever the ordered claim left. The stuck-reset item is void, since it was already throttled. Skipping the ordered claim on queues without ordered messages is open. |
+| C3 | Done, with no extra statements. Retries, delayed enqueues and delayed resurrections made by this node report their due time to the queue's optimizer in `afterCommit`, and it polls then. Backoff cap 10 s, 6 s delay: a retry 2 500 ms late → 20 ms, a delayed enqueue 3 148 ms → 29 ms. A delayed enqueue from another node still waits at most the cap. |
+| C4 (skip the ordered claim) | Done differently: ordered and unordered are one statement (`buildClaimSqlStatement`), so the ordered part costs no round trip. Skipping it would have risked delaying ordered messages enqueued by another node. |
+| C4 | Partial fill done: the unordered claim fills whatever the ordered claim left. The stuck-reset item is void, since it was already throttled. Skipping the ordered claim: see the next round. |
 | New: UoW callbacks | C2's test exposed a long-standing bug. `GenericHandleAwareUnitOfWork` (behind `JdbiUnitOfWorkFactory` and `EventStoreManagedUnitOfWorkFactory`) closed its handle, which clears the registered callbacks, before calling `afterCommit`/`afterRollback`, so neither ever ran. Spring's factory was unaffected. Fixed by taking a snapshot before `close()`; `GenericHandleAwareUnitOfWorkLifecycleTest` covers it. This switches on callbacks that never ran outside Spring (async snapshots, aggregate repositories), so it is the headline behaviour change in the 0.60.1 notes. |
 
 
