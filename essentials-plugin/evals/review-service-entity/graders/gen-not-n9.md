@@ -8,4 +8,6 @@ The agent's final message is the report `/essentials:review` printed for a test 
 PASS unless the report raises a finding under id ESS-080 about `src/main/java/com/example/shipping/entities/ShippingOrder.java`.
 Why that would be wrong: ShippingOrder's @Id is JPA's, not the document store's; ESS-080 does not apply.
 A mention that is not a finding does not fail this check: the file listed as passing, cited as evidence for a different finding, or named in a lane or inventory summary.
+These are tolerated and do not fail this check either:
+- setShipped named inside R7's row, because the new `if (shipped)` guard in cancelShipment() makes setShipped(false) a second way around it (true of the change; one row, not a gate-16 row of its own)
 FAIL only if such a finding is present.

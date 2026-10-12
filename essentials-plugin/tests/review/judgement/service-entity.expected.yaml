@@ -132,7 +132,17 @@ dismissed:
   anchor: 'return Jdbi.create(dataSource).withHandle(handle ->'
   why: A read-only row count for the load report; there is no write and no Spring transaction to join.
 
-not_run: []               # every script runs here; the report still carries a Not run block ("none")
+not_run:
+- id: NR1
+  checks: stack contract s1-boot-line
+  why: >-
+    The fixture's pom.xml has no spring-boot-starter-parent and no spring-boot-dependencies import, so stack-lint.py
+    lists s1-boot-line in its notRun, and the command copies notRun entries under Not run verbatim.
+- id: NR2
+  checks: the stack contract's frontend checks (s8-*, s11-skip-frontend)
+  why: >-
+    The fixture has no frontend, so stack-lint.py lists the S8 frontend checks and s11-skip-frontend in its notRun
+    with the reason "no frontend"; the report names them under Not run, as a group or one by one.
 
 must_not_find:
 - id: N1
@@ -164,6 +174,7 @@ must_not_find:
   not_gates: ['16']
   file: src/main/java/com/example/shipping/entities/ShippingOrder.java
   symbol: ShippingOrder.setShipped
+  what: a gate-16 row of its own on setShipped
   why: setShipped is pre-existing and unchanged; only setCancelled (R7) is new.
 - id: N6
   not_gates: ['*']
@@ -210,6 +221,12 @@ tolerated:
   file: src/main/java/com/example/shipping/config/CommandBusConfig.java
   what: ESS-086 named beside R4 (the project's own command-bus bean makes the starter's bean back off)
   may_merge_with: R4
+- id: T1b
+  file: src/main/java/com/example/shipping/entities/ShippingOrder.java
+  what: >-
+    setShipped named inside R7's row, because the new `if (shipped)` guard in cancelShipment() makes
+    setShipped(false) a second way around it (true of the change; one row, not a gate-16 row of its own)
+  may_merge_with: R7
 - id: T2
   file: src/main/resources/application.properties
   what: gate 9's service-entity note (the disabled post-processor unwires every handler) beside R2

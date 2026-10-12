@@ -8,4 +8,6 @@ The agent's final message is the report `/essentials:review` printed for a test 
 PASS unless the report raises a finding under gate 8 (§R4) or gate 8d (§R4) about `src/main/java/com/example/shipping/entities/ShippingOrder.java` (symbol `ShippingOrder.<init>(RegisterShippingOrder)`).
 Why that would be wrong: The command-typed constructor is pre-existing, on lines the patch did not change.
 A mention that is not a finding does not fail this check: the file listed as passing, cited as evidence for a different finding, or named in a lane or inventory summary.
+These are tolerated and do not fail this check either:
+- setShipped named inside R7's row, because the new `if (shipped)` guard in cancelShipment() makes setShipped(false) a second way around it (true of the change; one row, not a gate-16 row of its own)
 FAIL only if such a finding is present.
