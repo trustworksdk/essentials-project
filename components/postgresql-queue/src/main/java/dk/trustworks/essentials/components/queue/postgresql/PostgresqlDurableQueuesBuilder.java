@@ -193,7 +193,8 @@ public final class PostgresqlDurableQueuesBuilder {
      * queue-fetch-strategy benchmark found this to pay off above roughly four active queues - see
      * {@code BENCHMARK-queue-fetch-strategy.md} and {@link #setBatchedFetchSwitchThreshold(int)}.<br>
      * <br>
-     * Note that the two strategies do not select identical messages: per-queue fetching is ordered-priority,
+     * Note that the two strategies do not select identical messages when there are fewer free slots than eligible
+     * messages: per-queue fetching gives ordered messages the slots first and fills the rest with unordered ones,
      * whereas batched fetching selects the oldest eligible messages regardless of delivery mode.
      *
      * @param useBatchedFetch whether the centralized fetcher may use batched fetching

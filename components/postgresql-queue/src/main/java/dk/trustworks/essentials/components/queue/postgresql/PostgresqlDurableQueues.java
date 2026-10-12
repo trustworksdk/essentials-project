@@ -133,6 +133,7 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
 
     private   Function<QueueName, QueuePollingOptimizer> centralizedQueuePollingOptimizerFactory;
     private   int                                        messageHandlingTimeoutMs;
+    private final LocalEnqueueSignal                     localEnqueueSignal = new LocalEnqueueSignal();
     /**
      * Contains the timestamp of the last performed {@link #resetMessagesStuckBeingDelivered(QueueName)} check<br>
      */
@@ -715,8 +716,9 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
 
         if (useCentralizedMessageFetcher) {
             // Create and register a CentralizedMessageFetcherDurableQueueConsumer
-            var queuePollingOptimizer = multiTableChangeListener.map(_ignore -> centralizedQueuePollingOptimizerFactory.apply(operation.getQueueName()))
-                                                                .orElseGet(QueuePollingOptimizer::None);
+            // With or without LISTEN/NOTIFY. Without it the default caps its backoff lower, because only a local
+            // enqueue resets it - see createCentralizedQueuePollingOptimizerFor
+            var queuePollingOptimizer = centralizedQueuePollingOptimizerFactory.apply(operation.getQueueName());
             return durableQueueConsumers.computeIfAbsent(operation.queueName, _queueName -> {
                 var consumer = (CentralizedMessageFetcherDurableQueueConsumer) newInterceptorChainForOperation(operation,
                                                                                                                interceptors,
@@ -803,10 +805,16 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
      * @return a new {@link CentralizedQueuePollingOptimizer} configured with:
      * <ul>
      *   <li>Minimum polling interval: 50% of the centralized fetcher's polling interval</li>
-     *   <li>Maximum polling interval: 20x the centralized fetcher's polling interval</li>
-     *   <li>Polling interval increase factor: 1.5 (50% increase per empty poll)</li>
-     *   <li>Polling interval decrease factor: 0.1 (90% decrease when messages found)</li>
+     *   <li>Maximum polling interval: 20x the centralized fetcher's polling interval with a {@link MultiTableChangeListener},
+     *   10x without one. Without LISTEN/NOTIFY nothing resets the backoff when another node enqueues, so the cap is
+     *   also the most a message enqueued elsewhere waits after the queue has been idle: 200 ms at the default 20 ms
+     *   interval. A message enqueued by this node resets the backoff on commit</li>
+     *   <li>Backoff factor: 1.5 (50% increase per empty poll)</li>
+     *   <li>Jitter: ±10% of each delay</li>
      * </ul>
+     * Before 0.60.1 a queue without a {@link MultiTableChangeListener} got no optimizer at all and was polled every
+     * interval forever, with two claim statements per poll. To get that back, set
+     * {@code setCentralizedQueuePollingOptimizerFactory(queueName -> QueuePollingOptimizer.None())}.
      * @throws IllegalStateException if called and the centralized message fetcher is not enabled
      */
     private QueuePollingOptimizer createCentralizedQueuePollingOptimizerFor(QueueName queueName) {
@@ -815,8 +823,8 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
         }
         var pollingIntervalMs = centralizedMessageFetcher.getPollingIntervalMs();
         return new CentralizedQueuePollingOptimizer(queueName,
-                                                    (long) (pollingIntervalMs * 0.5d),
-                                                    pollingIntervalMs * 20,
+                                                    Math.max(1, (long) (pollingIntervalMs * 0.5d)),
+                                                    pollingIntervalMs * (multiTableChangeListener.isPresent() ? 20 : 10),
                                                     1.5,
                                                     0.1
         );
@@ -948,6 +956,9 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
             if (numberOfRowsUpdated == 0) {
                 throw new DurableQueueException("Failed to insert message", queueName);
             }
+            if (!isDeadLetterMessage) {
+                unitOfWork.registerLifecycleCallbackForResource(new LocallyQueuedMessage(queueName, queueEntryId, message), localEnqueueSignal);
+            }
         });
         log.debug("[{}:{}] Queued {}{}message{} with nextDeliveryTimestamp {}",
                   queueName,
@@ -1024,6 +1035,11 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                                                    if (numberOfRowsUpdated != messages.size()) {
                                                        throw new DurableQueueException(msg("Attempted to queue {} messages but only inserted {} messages", messages.size(), numberOfRowsUpdated),
                                                                                        queueName);
+                                                   }
+                                                   if (!messages.isEmpty()) {
+                                                       unitOfWorkFactory.getRequiredUnitOfWork()
+                                                                        .registerLifecycleCallbackForResource(new LocallyQueuedMessage(queueName, queueEntryIds.getFirst(), messages.getFirst()),
+                                                                                                              localEnqueueSignal);
                                                    }
 
                                                    log.debug("[{}] Queued {} Messages with nextDeliveryTimestamp {} and entry-id's: {}",
@@ -1530,14 +1546,23 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                     messagesForQueue = mappingResult.successfulMessages();
                     handleFailedMappings(queueName, mappingResult);
 
-                    if (messagesForQueue.isEmpty()) {
+                    // Fill whatever the ordered claim left free. Running the unordered claim only when the ordered
+                    // one found nothing left unordered messages on a queue that also carries ordered ones waiting a
+                    // whole polling interval whenever a single ordered message was claimed
+                    var slotsLeft = availableWorkerSlotsForThisQueue - messagesForQueue.size();
+                    if (slotsLeft > 0) {
                         var unorderedSql = durableQueuesSql.buildUnorderedSqlStatement();
                         var unorderedQ = uow.handle().createQuery(unorderedSql)
                                             .bind("queueName", queueName)
                                             .bind("now", now)
-                                            .bind("limit", availableWorkerSlotsForThisQueue);
+                                            .bind("limit", slotsLeft);
                         mappingResult = mapQueryResultsWithExceptionHandling(unorderedQ);
-                        messagesForQueue = mappingResult.successfulMessages();
+                        if (messagesForQueue.isEmpty()) {
+                            messagesForQueue = mappingResult.successfulMessages();
+                        } else {
+                            messagesForQueue = new ArrayList<>(messagesForQueue);
+                            messagesForQueue.addAll(mappingResult.successfulMessages());
+                        }
                         handleFailedMappings(queueName, mappingResult);
                     }
 
@@ -1820,4 +1845,60 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                                                                                               .findOne());
     }
 
+
+    /**
+     * A message this node queued, registered with the enqueuing {@link UnitOfWork} so the queue's local consumer can be
+     * told once it commits - see {@link LocalEnqueueSignal}
+     */
+    private record LocallyQueuedMessage(QueueName queueName, QueueEntryId queueEntryId, Message message) {
+    }
+
+    /**
+     * Resets the polling backoff of this node's consumer of a queue once a transaction that queued to it commits.
+     * <p>
+     * Without a {@link MultiTableChangeListener} nothing else does: a queue that had backed off while idle kept a
+     * message this very node had just queued waiting out the backoff. After the commit, not before: a poll between
+     * the insert and the commit finds nothing and backs off again.
+     */
+    private final class LocalEnqueueSignal implements UnitOfWorkLifecycleCallback<LocallyQueuedMessage> {
+        @Override
+        public BeforeCommitProcessingStatus beforeCommit(UnitOfWork unitOfWork, List<LocallyQueuedMessage> associatedResources) {
+            return BeforeCommitProcessingStatus.COMPLETED;
+        }
+
+        @Override
+        public boolean hasPendingChanges(LocallyQueuedMessage resource) {
+            return false;
+        }
+
+        @Override
+        public void afterCommit(UnitOfWork unitOfWork, List<LocallyQueuedMessage> associatedResources) {
+            var lastPerQueue = new LinkedHashMap<QueueName, LocallyQueuedMessage>();
+            associatedResources.forEach(queued -> lastPerQueue.put(queued.queueName(), queued));
+            lastPerQueue.values().forEach(queued -> {
+                var consumer = durableQueueConsumers.get(queued.queueName());
+                if (consumer == null) {
+                    return;
+                }
+                try {
+                    consumer.messageAdded(DefaultQueuedMessage.builder()
+                                                              .setId(queued.queueEntryId())
+                                                              .setQueueName(queued.queueName())
+                                                              .setMessage(queued.message())
+                                                              .setAddedTimestamp(OffsetDateTime.now())
+                                                              .build());
+                } catch (Exception e) {
+                    log.debug("[{}] Could not reset the polling backoff after a local enqueue", queued.queueName(), e);
+                }
+            });
+        }
+
+        @Override
+        public void beforeRollback(UnitOfWork unitOfWork, List<LocallyQueuedMessage> associatedResources, Throwable causeOfTheRollback) {
+        }
+
+        @Override
+        public void afterRollback(UnitOfWork unitOfWork, List<LocallyQueuedMessage> associatedResources, Throwable causeOfTheRollback) {
+        }
+    }
 }

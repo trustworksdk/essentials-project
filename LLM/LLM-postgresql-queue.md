@@ -103,7 +103,7 @@ Created via `PostgresqlDurableQueues.builder()`.
 | `useCentralizedMessageFetcher` | `boolean` | `true` | Centralized vs per-consumer |
 | `centralizedMessageFetcherPollingInterval` | `Duration` | 20ms | Polling interval |
 | `queuePollingOptimizerFactory` | `Function<ConsumeFromQueue,QueuePollingOptimizer>` | null | For `DefaultDurableQueueConsumer` |
-| `centralizedQueuePollingOptimizerFactory` | `Function<QueueName,QueuePollingOptimizer>` | null | For `CentralizedMessageFetcher` |
+| `centralizedQueuePollingOptimizerFactory` | `Function<QueueName,QueuePollingOptimizer>` | `CentralizedQueuePollingOptimizer` (cap 20× interval with a listener, 10× without) | For `CentralizedMessageFetcher`, with or without a listener |
 | `multiTableChangeListener` | `MultiTableChangeListener` | null | LISTEN/NOTIFY support |
 
 ## Transactions
@@ -157,7 +157,16 @@ Continuous polling at fixed intervals wastes DB resources when queues are idle. 
 
 1. **Message found** → Reset to initial (fast) polling interval
 2. **No message found** → Increase delay using backoff strategy
-3. **Message added** → LISTEN/NOTIFY immediately resets to fast polling (requires `MultiTableChangeListener`)
+3. **Message added** → resets to fast polling. A message queued by this node resets its own consumer when the
+   transaction commits. A message queued by another node resets it only through LISTEN/NOTIFY (requires a
+   `MultiTableChangeListener`); without one it waits at most the backoff cap.
+
+**The `CentralizedMessageFetcher` always uses an optimizer.** Since 0.60.1 it no longer depends on a
+`MultiTableChangeListener`. Defaults: start at half the polling interval, ×1.5 per empty poll, ±10% jitter, capped at
+20× the polling interval with a listener and 10× without one (200 ms at the default 20 ms). Before 0.60.1, a queue
+without a listener was polled every interval forever, with two claim statements per poll. To opt out, use
+`.setCentralizedQueuePollingOptimizerFactory(queueName -> QueuePollingOptimizer.None())`. The traditional
+`DefaultDurableQueueConsumer` still uses an optimizer only with a listener.
 
 ### SimpleQueuePollingOptimizer
 
@@ -193,7 +202,7 @@ import dk.trustworks.essentials.components.foundation.messaging.queue.SimpleQueu
 import dk.trustworks.essentials.components.foundation.messaging.queue.CentralizedQueuePollingOptimizer;
 
 .setUseCentralizedMessageFetcher(true)
-.setMultiTableChangeListener(multiTableChangeListener)  // Required
+.setMultiTableChangeListener(multiTableChangeListener)  // Optional: wakes the queue when another node enqueues
 .setCentralizedQueuePollingOptimizerFactory(queueName ->
     new CentralizedQueuePollingOptimizer(
         queueName,
@@ -446,12 +455,13 @@ PostgresqlDurableQueues.builder()
     .build();
 ```
 
-### Throughput ceiling per consumer
+### Saturated queues are refilled, not held to the polling interval
 
-The `CentralizedMessageFetcher` polls once per `centralizedMessageFetcherPollingInterval` and claims at most each
-queue's free worker slots. A queue therefore handles at most `parallelConsumers / pollingInterval` messages per
-second, even with a no-op handler: 8 consumers at 20 ms is 400 msg/s. Above that, the backlog grows. To go faster,
-raise `parallelConsumers` or shorten the interval.
+The `CentralizedMessageFetcher` claims at most a queue's free worker slots per poll. Up to 0.60.0 it polled once per
+interval, so a queue handled at most `parallelConsumers / pollingInterval` messages per second however fast its handler
+was (400 msg/s for 8 consumers at 20 ms). Since 0.60.1, a queue whose poll filled every free slot is polled again as
+soon as half its workers are free, so throughput is bounded by the handler and the database. Measured: 2 000 messages,
+8 consumers, 200 ms polling drained in 3.3 s, against 50 s before.
 
 ### Stale statistics on a draining queue table
 
@@ -511,7 +521,7 @@ See [README Security](../components/postgresql-queue/README.md#security) for ful
 |-------|-------|-------|
 | Expecting the handler's writes and the acknowledgement to commit together | Relying on a handler rollback to un-acknowledge | Idempotent handler - a retried delivery repeats it |
 | SQL injection via table name | `.setSharedQueueTableName(request.getParameter("table"))` | `.setSharedQueueTableName("message_queue")` |
-| Optimizer without listener | `.setQueuePollingOptimizerFactory(...)` alone | `.setMultiTableChangeListener(...).setQueuePollingOptimizerFactory(...)` |
+| Traditional-consumer optimizer without listener (ignored) | `.setUseCentralizedMessageFetcher(false).setQueuePollingOptimizerFactory(...)` alone | Add `.setMultiTableChangeListener(...)`, or use the centralized fetcher, whose optimizer works without one |
 | Aggressive polling without optimization | `.setCentralizedMessageFetcherPollingInterval(Duration.ofMillis(1))` | Add optimizer + reasonable interval |
 
 ## Integration

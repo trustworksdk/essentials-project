@@ -145,9 +145,13 @@ var durableQueues = PostgresqlDurableQueues.builder()
 
 **Benefits:** Reduced database load, batch fetching, built-in ordering coordination
 
-**Throughput ceiling:** the fetcher polls once per interval and claims at most each queue's free worker slots, so a
-queue handles at most `parallelConsumers / pollingInterval` messages per second - 400 msg/s for 8 consumers at
-20 ms, however fast the handler is. Raise `parallelConsumers` or shorten the interval to go faster.
+**Saturated queues are refilled at once:** a poll claims at most a queue's free worker slots. When it fills all of
+them, the queue is polled again as soon as half its workers are free, instead of at the next interval - so throughput
+is bounded by the handler and the database, not by `parallelConsumers / pollingInterval`.
+
+**Idle queues back off, with or without LISTEN/NOTIFY:** each queue gets a `CentralizedQueuePollingOptimizer` by
+default. Without a `MultiTableChangeListener` its backoff is capped at 10x the polling interval, and a message queued
+by this node resets it on commit. Opt out with `setCentralizedQueuePollingOptimizerFactory(q -> QueuePollingOptimizer.None())`.
 
 **Draining tables and stale statistics:** a queue table that drains to empty and is then analyzed tells the planner
 it has no rows. The claim statements are written to stay fast regardless, except for the ordered claim's per-key
