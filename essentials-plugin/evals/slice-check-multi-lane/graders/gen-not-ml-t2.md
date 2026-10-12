@@ -5,7 +5,8 @@ type: llm
 
 The agent's final message is the report `/essentials:slice-check` printed for a test project. Paths in it are relative to the project root, and a report may cite a file by path, by `path:line`, or by its type or directory name.
 
-PASS unless the report raises a finding under gate 14 (Write-style lane (§R5)) or gate 17 (Routing ↔ lane) about `src/main/java/com/example/multi/payments/routing/PaymentCommand.java`.
+PASS unless the report raises a finding under gate 14 (Write-style lane (§R5)) or gate 17 (Routing ↔ lane) about `src/main/java/com/example/multi/payments/routing/PaymentCommand.java` line 6, `public interface PaymentCommand {` (or what that line declares).
+Only a finding drawn from that code fails this check; match it by content, not only the line number. A finding about another line of the same file (for example a correct one drawn from a different guard or method) does not.
 Why that would be wrong: routing/ is evidence about a BC, never a lane signal, and on the decider lane it is required. Its marker is not sealed and declares only the id.
 A mention that is not a finding does not fail this check: the file listed as passing, cited as evidence for a different finding, or named in a lane or inventory summary.
 These are tolerated and do not fail this check either:

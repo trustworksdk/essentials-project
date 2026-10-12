@@ -5,7 +5,8 @@ type: llm
 
 The agent's final message is the report `/essentials:slice-check` printed for a test project. Paths in it are relative to the project root, and a report may cite a file by path, by `path:line`, or by its type or directory name.
 
-PASS unless the report raises a finding under gate 14 (Write-style lane (§R5)) about `orders/automations/screen_order/ScreenOrderProcessor.kt`.
+PASS unless the report raises a finding under gate 14 (Write-style lane (§R5)) about `orders/automations/screen_order/ScreenOrderProcessor.kt` line 26, `class ScreenOrderProcessor(` (or what that line declares).
+Only a finding drawn from that code fails this check; match it by content, not only the line number. A finding about another line of the same file (for example a correct one drawn from a different guard or method) does not.
 Why that would be wrong: An EventProcessor is not a decider; orders stays single-lane.
 A mention that is not a finding does not fail this check: the file listed as passing, cited as evidence for a different finding, or named in a lane or inventory summary.
 These are tolerated and do not fail this check either:

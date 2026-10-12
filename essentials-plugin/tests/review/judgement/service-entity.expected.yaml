@@ -147,7 +147,7 @@ must_not_find:
   file: pom.xml
   line: 14
   anchor: '<dependency>'
-  what: ESS-S3.1 as a row of its own
+  what: ESS-S3.1 as a row of its own; R1's ESS-094 row naming ESS-S3.1 beside its id does not count
   why: The same defect as R1; one row per defect.
 - id: N3
   not_gates: ['6']

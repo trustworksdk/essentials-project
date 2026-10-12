@@ -5,7 +5,8 @@ type: llm
 
 The agent's final message is the report `/essentials:slice-enrich` printed for a test project. Paths in it are relative to the project root, and a report may cite a file by path, by `path:line`, or by its type or directory name.
 
-PASS unless the report raises a finding of any kind about `src/main/kotlin/com/example/library/accounts/use_cases/open_account/OpenAccountHandler.kt`, described as: a drafted invariant such as "tier is required".
+PASS unless the report raises a finding of any kind about `src/main/kotlin/com/example/library/accounts/use_cases/open_account/OpenAccountHandler.kt` line 11, `requireNotNull(cmd.tier) { "tier is required" }` (or what that line declares), described as: a drafted invariant worded from this guard, such as "tier is required".
+Only a finding drawn from that code fails this check; match it by content, not only the line number. A finding about another line of the same file (for example a correct one drawn from a different guard or method) does not.
 Why that would be wrong: requireNotNull is a null guard, not a rule.
 A mention that is not a finding does not fail this check: the file listed as passing, cited as evidence for a different finding, or named in a lane or inventory summary.
 FAIL only if such a finding is present.

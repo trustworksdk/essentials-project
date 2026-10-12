@@ -10,7 +10,8 @@
 #   runs          which command runs against this fixture, with which argument
 #   lanes         gate 14 per bounded context: code signals, declared lanes, verdict
 #   must_find     every entry must appear in the report (matched on file, plus symbol when given)
-#   must_not_find a finding under any listed gate at that file/symbol fails the run ("*" = any gate)
+#   must_not_find a finding under any listed gate at that line (file/symbol when no line) fails the run
+#                 ("*" = any gate); a finding drawn from another line of the same file does not
 #   skipped       gates the report must name as skipped or out of scope, never silently omit
 #   tolerated     findings that may appear or not; neither counts for or against the run
 #   reader        syntactic facts a source reader must extract (handlers, mappings, endpoint bindings)

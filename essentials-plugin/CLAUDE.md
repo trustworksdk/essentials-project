@@ -341,7 +341,8 @@ that load.
 ## Before committing
 
 From the repository root, `scripts/plugin-check.sh quick` runs every step of the `plugin-docs` job of
-`.github/workflows/maven.yml`, in its order, with the same commands, arguments and `UV_PYTHON=3.11`: CI calls the
+`.github/workflows/maven.yml`, in its order (side by side, up to `--jobs N`, default the CPU count; output and table
+still in that order; `--jobs 1` runs one at a time), with the same commands, arguments and `UV_PYTHON=3.11`: CI calls the
 same script one step at a time, so the two cannot drift. Each step exits 0. `scripts/plugin-check.sh list` names the
 steps and `step <name>` reruns one. It needs `git` and `uv` (uv fetches Python 3.11, the scripts' declared minimum, and
 the PEP 723 pins). Locally `ess-ids` compares with HEAD and `plugin-version` with the merge base with `origin/main`

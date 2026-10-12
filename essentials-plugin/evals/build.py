@@ -215,8 +215,18 @@ def sec_must_not_find(exp: dict[str, Any], o: dict[str, Any], src: str) -> dict[
         kinds = [gate_label(g) for g in gates if g != "*"] + [f"id {i}" for i in e.get("not_ids") or []]
         under = "of any kind" if "*" in gates else "under " + " or ".join(kinds)
         subject = f" about {where(e)}" if e.get("file") else ""
+        at = ", ".join(p for p in (f"line {e['line']}" if e.get("line") else "",
+                                   f"`{e['anchor']}`" if e.get("anchor") else "") if p)
+        if subject and at:
+            subject += f" {at} (or what that line declares)"
         what = f", described as: {e['what']}" if e.get("what") else ""
         body = intro(o["command"]) + f"PASS unless the report raises a finding {under}{subject}{what}."
+        if subject and at:
+            # Naming the file alone reads as "any such finding about this file" to the judge, which then
+            # fails a correct finding drawn from another line of it.
+            body += ("\nOnly a finding drawn from that code fails this check; match it by content, not only the line"
+                     " number. A finding about another line of the same file (for example a correct one drawn from"
+                     " a different guard or method) does not.")
         if e.get("why"):
             body += f"\nWhy that would be wrong: {' '.join(str(e['why']).split())}"
         body += "\n" + NOT_A_FINDING

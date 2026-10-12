@@ -5,7 +5,8 @@ type: llm
 
 The agent's final message is the report `/essentials:slice-enrich` printed for a test project. Paths in it are relative to the project root, and a report may cite a file by path, by `path:line`, or by its type or directory name.
 
-PASS unless the report raises a finding of any kind about `src/main/java/com/example/library/lending/views/loans_on_shelf/slice.yaml`, described as: ShelfCountProjection's consistency reported as written, or a hand edit of the manifest (or an offer to rewrite the projection as a block mapping) to get it in.
+PASS unless the report raises a finding of any kind about `src/main/java/com/example/library/lending/views/loans_on_shelf/slice.yaml` line 20, `{ name: ShelfCountProjection` (or what that line declares), described as: ShelfCountProjection's consistency reported as written, or a hand edit of the manifest (or an offer to rewrite the projection as a block mapping) to get it in.
+Only a finding drawn from that code fails this check; match it by content, not only the line number. A finding about another line of the same file (for example a correct one drawn from a different guard or method) does not.
 Why that would be wrong: apply refuses a consistency on a projection written as a flow mapping and rewrites nothing; the command reports the refusal as worded and never writes the refused value by hand.
 A mention that is not a finding does not fail this check: the file listed as passing, cited as evidence for a different finding, or named in a lane or inventory summary.
 FAIL only if such a finding is present.

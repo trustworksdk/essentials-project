@@ -148,7 +148,7 @@ must_not_find:
   file: src/main/java/com/example/library/lending/use_cases/borrow_book/BorrowBook.java
   line: 15
   anchor: 'requireNonNull(memberId, "memberId is required");'
-  what: a drafted invariant such as "memberId is required"
+  what: a drafted invariant worded from this guard, such as "memberId is required"
   why: >-
     A requireNonNull is a null guard on an argument, not a business rule. Invariants are drafted from
     guard messages that state a rule, which is why propose reports none here.
@@ -156,31 +156,31 @@ must_not_find:
   file: src/main/java/com/example/library/lending/use_cases/borrow_book/BorrowBookDecider.java
   line: 15
   anchor: 'throw new IllegalArgumentException("copyId is required");'
-  what: a drafted invariant such as "copyId is required"
+  what: a drafted invariant worded from this guard, such as "copyId is required"
   why: An `if (x == null) throw` is a null check written out by hand; it states no rule.
 - id: E-T3
   file: src/main/java/com/example/library/lending/use_cases/borrow_book/BorrowBookDecider.java
   line: 23
   anchor: '// throw new IllegalStateException("A reserved copy cannot be lent");'
-  what: a drafted invariant such as "A reserved copy cannot be lent"
+  what: a drafted invariant worded from this commented-out throw, such as "A reserved copy cannot be lent"
   why: The throw is commented out; the code enforces nothing there, so there is no evidence.
 - id: E-T4
   file: src/main/java/com/example/library/lending/use_cases/borrow_book/BorrowBook.java
   line: 11
   anchor: 'The member must be known to the accounts context.'
-  what: a drafted invariant such as "The member must be known to the accounts context"
+  what: a drafted invariant worded from this Javadoc sentence, such as "The member must be known to the accounts context"
   why: That sentence is Javadoc prose, not a guard; no code enforces it, and an invariant needs an enforcedBy.
 - id: E-T5
   file: src/main/kotlin/com/example/library/accounts/use_cases/open_account/OpenAccountHandler.kt
   line: 10
   anchor: '?: throw IllegalArgumentException("memberId is required")'
-  what: a drafted invariant such as "memberId is required"
+  what: a drafted invariant worded from this guard, such as "memberId is required"
   why: 'A Kotlin `?: throw` is a null guard, the Kotlin form of requireNonNull.'
 - id: E-T6
   file: src/main/kotlin/com/example/library/accounts/use_cases/open_account/OpenAccountHandler.kt
   line: 11
   anchor: 'requireNotNull(cmd.tier) { "tier is required" }'
-  what: a drafted invariant such as "tier is required"
+  what: a drafted invariant worded from this guard, such as "tier is required"
   why: requireNotNull is a null guard, not a rule.
 - id: E-T7
   file: src/main/java/com/example/library/lending/use_cases/renew_loan/
@@ -194,7 +194,9 @@ must_not_find:
   file: src/main/java/com/example/library/lending/use_cases/return_book/slice.yaml
   line: 17
   anchor: 'scenarios: []'
-  what: drafted scenarios for lending.return_book, for instance from ReturnBookDeciderTest#takesBackALoanedCopy
+  what: >-
+    drafted scenarios for lending.return_book, a proposal to fill this present field whatever test it
+    cites, for instance ReturnBookDeciderTest#takesBackALoanedCopy
   why: >-
     `scenarios: []` is present. A field present in any form is the human's; only absent fields are
     proposed, and an empty list is not absent.
@@ -202,13 +204,15 @@ must_not_find:
   file: src/main/java/com/example/library/lending/use_cases/register_copy/slice.yaml
   line: 14
   anchor: 'invariants: []'
-  what: drafted invariants for lending.register_copy
+  what: drafted invariants for lending.register_copy, a proposal to fill this present field whatever code it cites
   why: '`invariants: []` is present, so the field is not proposed.'
 - id: E-T11
   file: src/test/java/com/example/library/lending/use_cases/borrow_book/ReturnBookAfterLoanTest.java
   line: 8
   anchor: 'class ReturnBookAfterLoanTest {'
-  what: ReturnBookAfterLoanTest, or its method lendsACopyThatCameBack, attributed to lending.return_book
+  what: >-
+    ReturnBookAfterLoanTest, the class or any of its methods such as lendsACopyThatCameBack, attributed to
+    lending.return_book
   why: >-
     The class name mentions another slice's command, but it sits in the borrow_book test package and
     sends BorrowBook to the BorrowBookDecider; propose maps it to lending.borrow_book, and the command
