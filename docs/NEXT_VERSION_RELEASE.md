@@ -11,7 +11,8 @@ plumbing that no user sees go in §7 at most, as one line._
 
 **So far:** no breaking change, nine framework changes with a behaviour change (§1.1), additive features
 (§2), bug fixes (§3), plugin releases `0.60.0-6` and `0.60.0-7`, and example and tooling updates. Nothing here requires a migration
-step. The persisted
+step, except one for `essentials.schema.mode=validate` deployments: re-run `emit` and apply the script before the
+first start (§1). The persisted
 format changes for one shape only, back to what 0.50 wrote: a type with a public `is`-getter (§1.1.2).
 
 ---
@@ -31,8 +32,15 @@ format changes for one shape only, back to what 0.50 wrote: a type with a public
 
 ## 1. Breaking — what you MUST apply
 
-None so far. No public API was removed or changed incompatibly, and no configuration key was renamed or removed;
-the additions are listed in §2.
+No public API was removed or changed incompatibly, and no configuration key was renamed or removed; the additions
+are listed in §2.
+
+**Only if you run `essentials.schema.mode=validate`:** re-run `emit` and apply the new script before starting this
+release. The change-notification trigger that the durable queues and the event store install is now written
+differently (the startup deadlock fix in §3), so its schema-history checksum changes, and `validate` refuses to start
+with "applied with other statements" until the new statements are recorded. The script is safe to run against a
+database that instances are using. In the default `create` mode nothing needs doing: the change is repeatable, so it
+just records the new checksum.
 
 ### 1.1 ⚠️ Silent behaviour changes
 
@@ -408,6 +416,7 @@ The plugin's features are in [§4](#4-the-essentials-claude-code-plugin).
 | `MultiTableChangeListener` | A `start()` that ran while `stop()` or `close()` was finishing could lose its LISTEN connection to that stop: the stop closed whichever connection was current once it had waited for the poll thread, so the restarted listener kept the old connection and saw it closed, and notifications sent before the next poll reopened it were lost. `start()` promises every registered table is LISTENed to when it returns. A stop now takes the connection away together with the poll task and closes only that one; a racing `start()` opens and keeps its own, and a poll still in flight from the stopped run no longer touches it. The stop waits for that connection without holding the listener's lock, so a `listenToNotificationsFor` still borrowing a pooled connection no longer blocks the listener's other operations, the shutdown signal included | `520facbc`, `c0c60b97` |
 | Command bus | Two `EventStreamDeciderAndAggregateTypeConfigurator`s sharing a `CommandBus` and configured on different threads could corrupt the list behind the duplicate-command-type WARN, or throw `ConcurrentModificationException` from it: one appended to it without holding the lock the other iterated it under. Both now hold it | `a20947b2` |
 | Command bus | `addCommandHandler`/`removeCommandHandler` on `LocalCommandBus` and `DurableLocalCommandBus` were not thread-safe: handlers registered from several threads at once could be lost, and a command-type lookup running during a registration could keep the old answer cached. Registration is now thread-safe | `796e4578` |
+| Durable queues, event store (PostgreSQL) | Starting an instance could deadlock with instances already running. On every startup the durable queues and the event store (when change notifications are on) dropped and re-created their change-notification trigger, which locked the queue or event table exclusively in the middle of the schema transaction, after `CREATE INDEX IF NOT EXISTS` had already taken a SHARE lock on it. A running instance that had read the table and then wrote to it (a queue claim, an event append) completed a lock cycle, and PostgreSQL aborted either the startup ("deadlock detected" applying `change-notification-trigger`) or the queue or event operation. The trigger is now left alone when it is already correct, which takes no lock on the table, and replaced with `CREATE OR REPLACE TRIGGER` on PostgreSQL 14+ when it is not. Nothing to change in your code; `validate`-mode deployments re-run `emit` (§1) | `5d870062` |
 | Scheduler | A job registered with `DefaultEssentialsScheduler` while the scheduler was acquiring its fenced lock could be silently dropped: it stayed in the job list but was never scheduled until the lock was next re-acquired. This typically hit a `@TTLJob` whose `PostgresqlTTLManager` started at the same moment, so its TTL delete never ran. Registration now waits for the lock callback to finish and always sees the lock state it leaves | `35fafdaa` |
 
 ---
