@@ -18,6 +18,7 @@ package dk.trustworks.essentials.components.queue.postgresql;
 
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.operations.*;
+import dk.trustworks.essentials.components.foundation.transaction.UnitOfWorkStatus;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
 import dk.trustworks.essentials.shared.interceptor.InterceptorChain;
 
@@ -100,7 +101,32 @@ public class SingleOperationTransactionDurableQueuesInterceptor implements Durab
             // therefore no database connection held - see UnitOfWorkMode#NONE
             return interceptorChain.proceed();
         }
-        return unitOfWorkFactory.withUnitOfWork(interceptorChain::proceed);
+        return unitOfWorkFactory.withUnitOfWork(unitOfWork -> {
+            interceptorChain.proceed();
+            acknowledgeWithHandler(operation, unitOfWork);
+            return null;
+        });
+    }
+
+    /**
+     * Acknowledge a successfully handled message inside the handler's own transaction, as its last statement.
+     * <p>
+     * The handler's writes and the acknowledgement then commit together, or not at all - before, the acknowledgement
+     * was a second transaction on a second pooled connection, and a crash or a failed acknowledgement between the
+     * two left the handler's writes committed and the message to be delivered again. It also saves a connection
+     * checkout and a commit per message.
+     * <p>
+     * Left to the consumer's own, separate acknowledgement - as before - when the handler asked for redelivery, and
+     * when the unit of work is marked rollback-only: the handler's writes are then discarded, and an acknowledgement
+     * inside the same transaction would be discarded with them, turning a consumed message into one redelivered
+     * after every {@code messageHandlingTimeout}.
+     */
+    private void acknowledgeWithHandler(HandleQueuedMessage operation, HandleAwareUnitOfWork unitOfWork) {
+        var message = operation.getMessage();
+        if (durableQueues == null || message.isManuallyMarkedForRedelivery() || unitOfWork.status() == UnitOfWorkStatus.MarkedForRollbackOnly) {
+            return;
+        }
+        operation.acknowledgedWithHandler(durableQueues.acknowledgeMessageAsHandled(message.getId()));
     }
 
     @Override

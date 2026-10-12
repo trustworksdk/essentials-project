@@ -85,6 +85,28 @@ back. It also charged every queued row an attempt on every takeover, including c
 
 The `takeoverAttemptBumps` metric therefore drops to zero for clean handovers and to a small number for crashes.
 
+### 1.5a A handled message is acknowledged inside the handler's transaction (`postgresql-queue`)
+
+The acknowledgement used to be a second transaction on a second pooled connection, after the handler's committed.
+It is now the last statement of the handler's own transaction, so the handler's writes and the acknowledgement commit
+together. This saves a connection checkout and a commit per message: drain throughput through a 10-connection pool
+rose about 10%, and threads waiting for a connection halved (`QueueDrainThroughputIT`, opt-in benchmark).
+
+What changes:
+
+- **A failing acknowledgement rolls back the handler's writes**, and the message is retried as a failed attempt.
+  Before, the writes stayed committed, and the message was delivered again after `messageHandlingTimeout`, repeating
+  them.
+- **An interceptor on `AcknowledgeMessageAsHandled` runs inside the handler's transaction.** If it throws, the
+  handler's writes roll back.
+
+What does not change:
+
+- A handler that requests redelivery, one that marks its unit of work rollback-only (its message is still consumed),
+  and `UnitOfWorkMode.NONE` handlers are acknowledged separately, as before.
+- `springdata-mongo-queue` and the shard-owned engine are unchanged.
+- A crash before the commit still redelivers, so handlers should stay idempotent.
+
 ### 1.6 Idle queues back off without LISTEN/NOTIFY (`postgresql-queue`)
 
 Without a `MultiTableChangeListener`, a queue consumed through the `CentralizedMessageFetcher` used to get no

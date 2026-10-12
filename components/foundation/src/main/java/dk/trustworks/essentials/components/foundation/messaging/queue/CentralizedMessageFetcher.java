@@ -407,7 +407,11 @@ public class CentralizedMessageFetcher implements Lifecycle {
                               message.getId());
 
                     try {
-                        boolean acknowledged = durableQueues.acknowledgeMessageAsHandled(message.getId());
+                        // Acknowledged already when an interceptor did it inside the handler's transaction
+                        var     acknowledgedWithHandler = operation.getAcknowledgedWithHandler();
+                        boolean acknowledged            = acknowledgedWithHandler != null
+                                                          ? acknowledgedWithHandler
+                                                          : durableQueues.acknowledgeMessageAsHandled(message.getId());
                         if (!acknowledged) {
                             // Message was already acknowledged or deleted
                             log.debug("[{}:{}] Message acknowledgment reported message already handled or deleted",

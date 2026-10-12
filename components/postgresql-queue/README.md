@@ -122,10 +122,20 @@ public DurableQueues durableQueues(
 
 ### Transactions
 
-Every queue operation runs in its own transaction: queueing, fetching, acknowledging, retrying and dead-lettering are
-separate, so a failing handler can never roll back its own retry count. (0.60 removed `TransactionalMode`; its
-`FullyTransactional` mode broke exactly that.) A `queueMessage` called inside a caller's `UnitOfWork` joins it, so the
-enqueue commits or rolls back with the caller's writes - which is what an Outbox relies on.
+Queue operations run in their own transactions: queueing, fetching, retrying and dead-lettering are separate, so a
+failing handler can never roll back its own retry count. (0.60 removed `TransactionalMode`; its `FullyTransactional`
+mode broke exactly that.) A `queueMessage` called inside a caller's `UnitOfWork` joins it, so the enqueue commits or
+rolls back with the caller's writes - which is what an Outbox relies on.
+
+The one exception, since 0.60.1: a successfully handled message is acknowledged inside the handler's own transaction,
+as its last statement. The handler's writes and the acknowledgement commit together or not at all, and a message
+costs one connection checkout and one commit instead of two (about +10% drain throughput through a 10-connection
+pool). If the acknowledgement fails, the handler's writes roll back and the message is retried; before, they
+stayed committed and the message was delivered again after `messageHandlingTimeout`. A `DurableQueuesInterceptor`
+on `AcknowledgeMessageAsHandled` therefore runs inside the handler's transaction. The acknowledgement stays separate,
+as before, for a handler that requests redelivery, one that marks its unit of work rollback-only (its message is
+still consumed), and `UnitOfWorkMode.NONE` handlers. A crash before the commit still redelivers, so handlers should
+stay idempotent.
 
 ## Polling Mechanisms
 
