@@ -591,5 +591,10 @@ Not published; listed because they are the reference for how to use the framewor
 - `scripts/plugin-check.sh quick` runs its steps in parallel (`--jobs N` / `PLUGIN_CHECK_JOBS`, default the CPU
   count; `--jobs 1` is the old serial run): about 8 s instead of about 37 s on 10 cores. Output and the PASS/FAIL
   table still print in CI order, and CI's `step <name>` calls are unchanged.
+- `scripts/plugin-check.sh scaffold all` takes about 70 s instead of about 5 min. It installs only the modules the
+  generated projects use (`scripts/plugin-scaffold.sh install`, the command CI runs too) with a parallel reactor and
+  no versions report (`--full-install` keeps the whole reactor), and builds the init cells and slice cases from one
+  queue of `--jobs` builds, half the CPU count by default. `release` runs the scaffold beside the other checks rather
+  than after them, and `--no-evals` runs everything but the evals (the release then fails).
 - The plugin's must-not-find eval graders name the trap's line and anchor, not only its file, so the judge no
   longer fails a report for a correct finding drawn from another line of the same file.

@@ -29,7 +29,7 @@ nothing was checked; say so plainly — it is not a pass, and a release needs it
 
 Ask with AskUserQuestion, one grouped question per expensive mode `changed` called for, recommended option first:
 
-- **scaffold** (Docker, a full reactor install, minutes per mode): offer the narrowest set `changed` printed (for
+- **scaffold** (Docker; a subset install of ~25 s, then ~70 s for `scaffold all` at the default `--jobs`): offer the narrowest set `changed` printed (for
   example `scaffold slices --case fixture-multi-lane`) first, then `scaffold all`, then skip. Before running, check
   nothing else is building in this checkout (another agent, a terminal): the script refuses the install while another
   Maven process runs, and `--force` is the user's call, never yours.

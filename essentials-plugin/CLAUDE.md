@@ -355,8 +355,10 @@ what else the change needs, with the commands.
 
 The scaffold builds — the `scaffold ·` jobs beside `verify`, run on every PR — when a template, a pin,
 the init tree, an S2.1 row or a fixture's source changed: `scripts/plugin-check.sh scaffold [matrix|slices|all]`.
-It installs the reactor first (`mvn clean install -DskipTests -DskipDependencyCheck=true`; `--no-install` skips it;
-CI installs only the Essentials modules the init templates declare, `-am`, and a full install is a superset), refuses
+It installs first with `scripts/plugin-scaffold.sh install`, the command CI runs too: only the Essentials modules
+the init templates declare (`plugin-scaffold.sh modules`), `-am`, a parallel reactor, no versions report, ~25 s;
+`--full-install` installs the whole reactor, `--no-install` skips it. It builds the cases from one queue of `--jobs N`
+builds (default half the CPU count; `PLUGIN_CHECK_SCAFFOLD_JOBS`), refuses
 without Maven, a JDK or Docker, and needs nothing else building in this checkout (root `CLAUDE.md`, `target/`). The
 remaining arguments go to `scripts/plugin-scaffold.sh`. About 1.5 minutes per mode once warm. The frontend legs are
 not automated and need Node; run them in each cell with a frontend, after the matrix (`--work` names where the cells
@@ -382,10 +384,11 @@ sections beside the intro's `━━━ CORE PRINCIPLES ━━━` block as READ:
 ## Before a release
 
 A release is a commit that reaches the marketplace ref with a new `plugin.json` version. Before it, run
-`scripts/plugin-check.sh release` (with `--chrome PATH` on a machine with Chrome): quick, manual, scaffold all, the
-eval suite over every case with the flags of `evals/README.md` § Run it, `claude plugin validate essentials-plugin`
+`scripts/plugin-check.sh release` (with `--chrome PATH` on a machine with Chrome): scaffold all (the only Maven
+build) beside one lane of quick, manual, the eval suite over every case with the flags of `evals/README.md` § Run it, `claude plugin validate essentials-plugin`
 and `claude plugin validate .` (the marketplace manifest), and `CHANGELOG.md`'s top heading against the
-`plugin.json` version and the `essentials.version` pin. A SKIPPED `render-check` fails it: a release needs exit 0,
+`plugin.json` version and the `essentials.version` pin; each part's output prints whole, in that order.
+`--no-evals` runs everything else and records the evals SKIPPED. A SKIPPED `render-check` or eval suite fails it: a release needs exit 0,
 not 3. It ends with what no script can check:
 
 1. The latest run of `plugin-scaffold-scheduled.yml` green (start it by hand if the ref has not had a nightly run),

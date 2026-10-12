@@ -34,11 +34,7 @@ Needs a JDK, Maven, Python 3 and the reactor installed in the Maven repository t
 on Central). `verify` also needs Docker. The subset the hosts and slices need:
 
 ```bash
-mvn -B install -DskipTests -DskipDependencyCheck=true -pl shared,types,reactive,components/foundation,\
-components/foundation-types,components/eventsourced-aggregates,components/postgresql-event-store,\
-components/postgresql-document-db,components/kotlin-eventsourcing,types-spring-web,\
-components/spring-boot-starter-postgresql,components/spring-boot-starter-postgresql-event-store,\
-components/spring-boot-starter-mongodb -am
+scripts/plugin-scaffold.sh install       # the modules `scripts/plugin-scaffold.sh modules` lists, -am; CI runs the same
 
 scripts/plugin-scaffold.sh slices                          # every case, its own goal
 scripts/plugin-scaffold.sh slices --compile-only           # test-compile only: no Docker, no context start
