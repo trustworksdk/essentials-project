@@ -272,10 +272,10 @@ public final class ListenNotify {
 
     /**
      * The statements {@link #addChangeNotificationTriggerToTable(Handle, String, List, String...)} executes, as a schema
-     * contribution: the notify function, then the trigger. Unlike that method it cannot ask the server for its version,
-     * so the trigger is always dropped and re-created rather than {@code CREATE OR REPLACE}d - equivalent inside the one
-     * transaction a {@link dk.trustworks.essentials.components.foundation.schema.SchemaApplier} runs it in, and valid on
-     * every supported PostgreSQL version.
+     * contribution: the notify function, then a {@code DO} block that ensures the trigger. Safe to run on every boot
+     * against a table other instances are using: when the trigger is already in place the block takes no lock on the
+     * table; otherwise it is {@code CREATE OR REPLACE}d on PostgreSQL 14+ and dropped and re-created on older servers.
+     * Valid on every supported PostgreSQL version.
      *
      * @param tableName                                         the table to notify about
      * @param triggerOnSqlOperations                            the operations that notify
@@ -311,15 +311,58 @@ public final class ListenNotify {
                                      arg("channelName", resolveTableChangeChannelName(tableName)),
                                      arg("additionalColumnsPayLoadStatement", additionalColumnsPayLoadStatement),
                                      arg("additionalColumnsSelectStatement", additionalColumnsSelectStatement));
-        var dropTriggerSql = bind("DROP TRIGGER IF EXISTS notify_on_{:tableName}_changes ON {:tableName} CASCADE",
-                                  arg("tableName", tableName));
-        var createTriggerSql = bind("CREATE TRIGGER notify_on_{:tableName}_changes\n" +
-                                            "      AFTER {:on} ON {:tableName}\n" +
-                                            "      FOR EACH ROW\n" +
-                                            "         EXECUTE FUNCTION notify_{:tableName}_change();",
+        // The trigger step must take no lock on the table when the trigger is already in place - which is every boot
+        // but the first. The changes before it in the same transaction (CREATE INDEX IF NOT EXISTS) already hold a
+        // SHARE lock on the table even when the index exists, and DROP TRIGGER wants ACCESS EXCLUSIVE: a lock upgrade.
+        // Any running transaction elsewhere that read the table and then writes it - another instance's queue claim, an
+        // event append - completes a lock cycle with it, and PostgreSQL aborts one side with "deadlock detected".
+        // When it does have to change the trigger, CREATE OR REPLACE TRIGGER (PostgreSQL 14+) takes SHARE ROW
+        // EXCLUSIVE, which such readers do not conflict with. EXECUTE, because PL/pgSQL syntax-checks the block on
+        // servers that do not know the statement.
+        var triggerSql = bind("TRIGGER notify_on_{:tableName}_changes AFTER {:on} ON {:tableName} FOR EACH ROW EXECUTE FUNCTION notify_{:tableName}_change()",
+                              arg("tableName", tableName),
+                              arg("on", triggerOnSqlOperations.stream().map(Enum::name).reduce((result, on) -> result + " OR " + on).get()));
+        var ensureTriggerSql = bind("DO $notify_trigger$\n" +
+                                            "BEGIN\n" +
+                                            "    IF EXISTS (SELECT 1 FROM pg_trigger t\n" +
+                                            "               WHERE t.tgrelid = to_regclass('{:tableName}')\n" +
+                                            "                 AND t.tgname = 'notify_on_{:tableName}_changes'\n" +
+                                            "                 AND t.tgfoid = to_regprocedure('notify_{:tableName}_change()')\n" +
+                                            "                 AND t.tgtype = {:triggerType}\n" +
+                                            "                 AND t.tgenabled <> 'D'\n" +
+                                            "                 AND t.tgqual IS NULL\n" +
+                                            "                 AND t.tgnargs = 0) THEN\n" +
+                                            "        RETURN;\n" +
+                                            "    END IF;\n" +
+                                            "    IF current_setting('server_version_num')::int >= 140000 THEN\n" +
+                                            "        EXECUTE 'CREATE OR REPLACE {:trigger}';\n" +
+                                            "    ELSE\n" +
+                                            "        DROP TRIGGER IF EXISTS notify_on_{:tableName}_changes ON {:tableName} CASCADE;\n" +
+                                            "        EXECUTE 'CREATE {:trigger}';\n" +
+                                            "    END IF;\n" +
+                                            "END\n" +
+                                            "$notify_trigger$",
                                     arg("tableName", tableName),
-                                    arg("on", triggerOnSqlOperations.stream().map(Enum::name).reduce((result, on) -> result + " OR " + on).get()));
-        return List.of(notifyFunctionSql, dropTriggerSql, createTriggerSql);
+                                    arg("triggerType", rowTriggerType(triggerOnSqlOperations)),
+                                    arg("trigger", triggerSql));
+        return List.of(notifyFunctionSql, ensureTriggerSql);
+    }
+
+    /**
+     * {@code pg_trigger.tgtype} of an {@code AFTER ... FOR EACH ROW} trigger on {@code operations}: the row bit plus one
+     * bit per operation (PostgreSQL's {@code TRIGGER_TYPE_*} constants in {@code catalog/pg_trigger.h})
+     */
+    private static int rowTriggerType(List<SqlOperation> operations) {
+        var type = 1;
+        for (var operation : EnumSet.copyOf(operations)) {
+            type |= switch (operation) {
+                case INSERT -> 1 << 2;
+                case DELETE -> 1 << 3;
+                case UPDATE -> 1 << 4;
+                case TRUNCATE -> 1 << 5;
+            };
+        }
+        return type;
     }
 
     /**
