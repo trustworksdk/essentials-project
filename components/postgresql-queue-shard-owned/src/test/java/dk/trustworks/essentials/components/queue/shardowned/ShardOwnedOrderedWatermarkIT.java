@@ -118,8 +118,9 @@ class ShardOwnedOrderedWatermarkIT {
                 // The outbox shape: the enqueue runs inside the caller's transaction, so the sequence
                 // value is allocated now and the row becomes visible only at the caller's commit.
                 held.setAutoCommit(false);
-                storage.enqueueOrderedBatch(held, shard,
-                                            List.of(new OrderedPayload(key, 0, "held".getBytes(StandardCharsets.UTF_8), 1)));
+                var heldSeq = storage.enqueueOrderedBatch(held, shard,
+                                                          List.of(new OrderedPayload(key, 0, "held".getBytes(StandardCharsets.UTF_8), 1)))
+                                     .getFirst();
 
                 // A later value on the same shard, on its own connection so it commits while the held
                 // one does not. The held value is now a gap the cursor is being invited to pass.
@@ -151,6 +152,13 @@ class ShardOwnedOrderedWatermarkIT {
                 // Well past holeExpiry (200 ms), and the shard has been polled throughout.
                 assertThat(received).as("the held message cannot be delivered before it is committed")
                                     .doesNotContain("held");
+                // The discriminating assertion, taken at the moment of the hazard rather than inferred
+                // afterwards: the owner's cursor is still below the open value while later values on
+                // the same unit have committed and been delivered. A watermark that stepped over it
+                // would sit at or above the "after" value here.
+                assertThat(orderedCursor(queue, shard))
+                        .as("the cursor must not step over seq %d while its transaction is open", heldSeq)
+                        .isLessThan(heldSeq);
 
                 held.commit();
             }
@@ -170,14 +178,14 @@ class ShardOwnedOrderedWatermarkIT {
             assertThat((Long) metrics.get("holesAbandoned"))
                     .as("the ordered lane no longer writes values off on a timer: %s", metrics)
                     .isZero();
-            // The discriminating assertion. Delivery alone does not distinguish a correct watermark
-            // from a cursor that stepped over the value and left the head sweep to clean up — and the
-            // sweep is exactly what the mechanism this replaced fell back on. Insist the CURSOR found
-            // it.
-            assertThat((Long) metrics.get("sweepRecoveries"))
-                    .as("the value must be found by the cursor read, not recovered by the head "
-                        + "sweep: %s", metrics)
-                    .isZero();
+            // Deliberately NOT sweepRecoveries == 0. That counter also counts a row that commits
+            // between a pass's cursor statement and its sweep statement — two snapshots, so the sweep
+            // sees it first although the cursor never passed it. Every unit sweeps on its first pass,
+            // which is exactly when this test commits "after", and a loaded build widens that window
+            // enough to hit it (reproduced with a 300 ms pause between the two statements: 3 of 3,
+            // headSweeps=64, i.e. only the start-up sweep). QueueStatistics documents it as not a
+            // defect by itself. Whether the cursor stepped over the value is asserted directly above,
+            // before the commit.
             assertThat((Long) metrics.get("watermarkCapped"))
                     .as("the horizon, not the wall-clock cap, must be what held the cursor back: %s", metrics)
                     .isZero();
@@ -240,6 +248,24 @@ class ShardOwnedOrderedWatermarkIT {
                         + "open: %s", metrics)
                     .isZero();
         }
+    }
+
+    /**
+     * The safe cursor of the owner serving {@code unit}. Read reflectively so the engine carries no
+     * test-only accessor; a renamed field fails this loudly rather than passing. The field is written
+     * by the pump thread without a barrier, so a stale read can only be an OLDER, lower value — it
+     * could mask a step-over, never invent one.
+     */
+    private static long orderedCursor(ShardOwnedQueue queue, int unit) throws ReflectiveOperationException {
+        var field = ShardOwnedQueue.class.getDeclaredField("owners");
+        field.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        var owners = (List<LeasedOwner>) field.get(queue);
+        return owners.stream()
+                     .filter(owner -> owner instanceof OrderedShardOwner && owner.shard() == unit && owner.leaseHeld())
+                     .map(owner -> ((OrderedShardOwner) owner).batchReadCursor())
+                     .findFirst()
+                     .orElseThrow(() -> new AssertionError("no ordered owner holds unit " + unit));
     }
 
     /** Keys that hash to a given shard, so the traffic lands where the held value is. */
