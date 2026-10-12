@@ -17,6 +17,7 @@
 package dk.trustworks.essentials.components.queue.shardowned;
 
 import dk.trustworks.essentials.components.queue.shardowned.spi.*;
+import dk.trustworks.essentials.shared.Exceptions;
 import org.slf4j.*;
 
 import java.sql.*;
@@ -255,6 +256,11 @@ final class OrderedShardOwner implements BatchReadableOwner {
     private long sweepIntervalNanos;
     private long lastAckFlushNanos;
 
+    /**
+     * Whether the takeover charge has been made, or is not owed - see {@code ShardOwner#takeoverCharged}
+     */
+    private boolean takeoverCharged;
+
     OrderedShardOwner(ShardOwnedStorage storage,
                       int shard,
                       long fence,
@@ -264,7 +270,8 @@ final class OrderedShardOwner implements BatchReadableOwner {
                       RedeliveryPolicy redeliveryPolicy,
                       String instanceId,
                       ShardWakeup wakeup,
-                      HandlerDispatch dispatch) {
+                      HandlerDispatch dispatch,
+                      boolean previousOwnerReleased) {
         this.storage = requireNonNull(storage, "No storage provided");
         this.shard = shard;
         this.fence = fence;
@@ -276,6 +283,7 @@ final class OrderedShardOwner implements BatchReadableOwner {
         this.instanceId = requireNonNull(instanceId, "No instanceId provided");
         this.wakeup = requireNonNull(wakeup, "No wakeup provided");
         this.dispatch = requireNonNull(dispatch, "No dispatch provided");
+        this.takeoverCharged = previousOwnerReleased;
     }
 
     @Override
@@ -315,7 +323,22 @@ final class OrderedShardOwner implements BatchReadableOwner {
 
     @Override
     public void onTakeover(Connection connection) throws SQLException {
-        metrics.takeoverAttemptBumps.add(storage.bumpOrderedAttemptsOnTakeover(connection, shard));
+        if (!takeoverCharged) {
+            metrics.takeoverAttemptBumps.add(storage.bumpOrderedAttemptsOnTakeover(connection, shard, settings.ackBatchSize()));
+            // A message whose handler took the process down every time never fails - see ShardOwner#onTakeover.
+            // Parked before the blocks are read below, so its key is blocked from the first dispatch
+            for (var seq : storage.exhaustedAfterTakeover(connection, ShardOwnedSchema.ORDERED_TABLE, shard,
+                                                           redeliveryPolicy.maxAttempts())) {
+                if (storage.moveToDeadLetterIfOwned(connection, ShardOwnedSchema.ORDERED_TABLE, "ordered", shard, seq,
+                                                    ShardOwnedStorage.EXHAUSTED_BY_TAKEOVERS, instanceId, fence)) {
+                    metrics.observer().deadLettered(new MessageId(MessageId.Lane.ORDERED, shard, seq),
+                                                    redeliveryPolicy.maxAttempts(),
+                                                    new IllegalStateException(ShardOwnedStorage.EXHAUSTED_BY_TAKEOVERS));
+                    metrics.deadLettered.increment();
+                }
+            }
+            takeoverCharged = true;
+        }
         // Before the first pumpOnce, so the first dispatch already knows which keys are blocked. A
         // successor that learned this later would deliver past a dead letter in the window, which is
         // exactly what the previous owner refused to do.
@@ -630,8 +653,12 @@ final class OrderedShardOwner implements BatchReadableOwner {
                     metrics.delivered.increment();
                 }
             }
-        } catch (RuntimeException e) {
-            metrics.handlerFailures.increment();
+        } catch (RuntimeException | Error e) {
+            // A non-critical Error is a failed delivery like any other - see ShardOwner.runHandler
+            Exceptions.rethrowIfCriticalError(e);
+            if (!(e instanceof RedeliveryRequested)) {
+                metrics.handlerFailures.increment();
+            }
             // Deliberately NOT under stateLock. onFailure performs a database round trip, and holding
             // a monitor across one serialises the whole shard's failure path behind a network call —
             // and, on a virtual thread before JDK 24, pins the carrier for its duration.
@@ -652,16 +679,37 @@ final class OrderedShardOwner implements BatchReadableOwner {
      * Failure path for a key. Either schedule a retry that keeps the key blocked, or park the
      * message and let the key move on — a dead letter must not stall its key forever.
      */
-    private void onFailure(String key, long keyOrder, ShardOwnedStorage.OrderedRow row, RuntimeException cause) {
-        int attempts;
+    /**
+     * Count this attempt, continuing from the count stored on the row the first time it fails under this owner -
+     * see {@code ShardOwner#countAttempt}
+     */
+    private int countAttempt(Connection connection, long seq) throws SQLException {
+        Integer counted;
         synchronized (stateLock) {
-            attempts = attemptsBySeq.merge(row.seq(), 1, Integer::sum);
+            counted = attemptsBySeq.get(seq);
         }
-        metrics.observer().deliveryFailed(key, attempts, cause);
+        var attempts = (counted != null ? counted : storage.storedAttempts(connection, ShardOwnedSchema.ORDERED_TABLE, shard, seq)) + 1;
+        synchronized (stateLock) {
+            attemptsBySeq.put(seq, attempts);
+        }
+        return attempts;
+    }
+
+    private void onFailure(String key, long keyOrder, ShardOwnedStorage.OrderedRow row, Throwable cause) {
         try (var connection = storage.connection()) {
-            if (redeliveryPolicy.isExhausted(attempts)) {
-                var moved = storage.moveToDeadLetter(connection, ShardOwnedSchema.ORDERED_TABLE, "ordered", shard,
-                                                     row.seq(), cause.getClass().getName() + ": " + cause.getMessage());
+            var attempts = countAttempt(connection, row.seq());
+            // A requested redelivery is not a failure - see RedeliveryRequested
+            var redeliveryRequest = cause instanceof RedeliveryRequested request ? request : null;
+            if (redeliveryRequest == null) {
+                metrics.observer().deliveryFailed(key, attempts, cause);
+            }
+            if (redeliveryRequest == null && redeliveryPolicy.isExhausted(attempts)) {
+                var moved = storage.moveToDeadLetterIfOwned(connection, ShardOwnedSchema.ORDERED_TABLE, "ordered", shard,
+                                                            row.seq(), cause.getClass().getName() + ": " + cause.getMessage(),
+                                                            instanceId, fence);
+                if (!moved && leaseLost(key, row, "dead-letter")) {
+                    return;
+                }
                 if (!moved) {
                     // Nothing was parked, so there is no dead letter for the key to wait behind: blocking
                     // it here would hold the key on a block no later owner can see or clear.
@@ -686,8 +734,12 @@ final class OrderedShardOwner implements BatchReadableOwner {
                 metrics.deadLettered.increment();
                 return;
             }
-            var delay = redeliveryPolicy.delayAfter(attempts);
-            storage.scheduleRetry(connection, ShardOwnedSchema.ORDERED_TABLE, shard, row.seq(), attempts, delay.toMillis());
+            var delay = redeliveryRequest != null ? redeliveryRequest.delay() : redeliveryPolicy.delayAfter(attempts);
+            if (!storage.scheduleRetryIfOwned(connection, ShardOwnedSchema.ORDERED_TABLE, shard, row.seq(), attempts,
+                                              delay.toMillis(), instanceId, fence)
+                    && leaseLost(key, row, "retry")) {
+                return;
+            }
             synchronized (stateLock) {
                 keysAwaitingRetry.add(key);
                 retrySchedule.add(new OrderedRetry(System.nanoTime() + delay.toNanos(), key, keyOrder, row));
@@ -700,6 +752,25 @@ final class OrderedShardOwner implements BatchReadableOwner {
                 requeue(key, keyOrder, row);
             }
         }
+    }
+
+    /**
+     * Whether a fenced failure write changed nothing because this owner no longer holds the lease, rather than
+     * because the row was gone. The failure is then the successor's to record. The key stays blocked here,
+     * with nothing scheduled, so this owner never dispatches it again: a later message for the key delivered
+     * by a superseded owner would race the successor's redelivery of this one, and that is reordering.
+     */
+    private boolean leaseLost(String key, ShardOwnedStorage.OrderedRow row, String write) throws SQLException {
+        if (storage.stillOwns("ordered", shard, instanceId, fence)) {
+            return false;
+        }
+        synchronized (stateLock) {
+            attemptsBySeq.remove(row.seq());
+            keysAwaitingRetry.add(key);
+        }
+        log.info("Ordered shard {}: {} for seq {} of key '{}' not recorded under fence {} - lease lost, the next "
+                 + "owner redelivers the message", shard, write, row.seq(), key, fence);
+        return true;
     }
 
     /**

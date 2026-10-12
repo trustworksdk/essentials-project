@@ -17,6 +17,8 @@
 package dk.trustworks.essentials.components.queue.shardowned;
 
 import dk.trustworks.essentials.components.queue.shardowned.spi.MessageId;
+import dk.trustworks.essentials.components.queue.shardowned.spi.RedeliveryRequested;
+import dk.trustworks.essentials.shared.Exceptions;
 import org.slf4j.*;
 
 import java.sql.*;
@@ -145,6 +147,13 @@ final class ShardOwner implements LeasedOwner {
      */
     private long nextVisibleAtNanos = Long.MAX_VALUE;
 
+    /**
+     * Whether the takeover charge has been made - or is not owed, because the previous owner released the shard
+     * cleanly. {@link #onTakeover} runs once per pump connection, a reconnect included, and charging again on
+     * every reconnect cost the in-flight window an attempt each time the database blipped.
+     */
+    private boolean takeoverCharged;
+
     ShardOwner(ShardOwnedStorage storage,
                int shard,
                long fence,
@@ -154,7 +163,8 @@ final class ShardOwner implements LeasedOwner {
                RedeliveryPolicy redeliveryPolicy,
                ShardWakeup wakeup,
                String instanceId,
-               HandlerDispatch dispatch) {
+               HandlerDispatch dispatch,
+               boolean previousOwnerReleased) {
         this.storage = requireNonNull(storage, "No storage provided");
         this.shard = shard;
         this.fence = fence;
@@ -166,6 +176,7 @@ final class ShardOwner implements LeasedOwner {
         this.wakeup = requireNonNull(wakeup, "No wakeup provided");
         this.instanceId = requireNonNull(instanceId, "No instanceId provided");
         this.dispatch = requireNonNull(dispatch, "No dispatch provided");
+        this.takeoverCharged = previousOwnerReleased;
     }
 
     /**
@@ -240,7 +251,23 @@ final class ShardOwner implements LeasedOwner {
 
     @Override
     public void onTakeover(Connection connection) throws SQLException {
-        metrics.takeoverAttemptBumps.add(storage.bumpAttemptsOnTakeover(connection, shard));
+        if (takeoverCharged) {
+            return;
+        }
+        metrics.takeoverAttemptBumps.add(storage.bumpAttemptsOnTakeover(connection, shard, fence, dispatch.capacity(),
+                                                                        settings.ackBatchSize()));
+        // A message whose handler took the process down every time never fails, so the failure path never parks
+        // it. The charge above is the only count it has; once that reaches the policy's limit it is parked here.
+        for (var seq : storage.exhaustedAfterTakeover(connection, ShardOwnedSchema.UNORDERED_TABLE, shard,
+                                                       redeliveryPolicy.maxAttempts())) {
+            if (storage.moveToDeadLetterIfOwned(connection, ShardOwnedSchema.UNORDERED_TABLE, "unordered", shard, seq,
+                                                ShardOwnedStorage.EXHAUSTED_BY_TAKEOVERS, instanceId, fence)) {
+                metrics.observer().deadLettered(new MessageId(MessageId.Lane.UNORDERED, shard, seq),
+                                                redeliveryPolicy.maxAttempts(), new IllegalStateException(ShardOwnedStorage.EXHAUSTED_BY_TAKEOVERS));
+                metrics.deadLettered.increment();
+            }
+        }
+        takeoverCharged = true;
     }
 
     @Override
@@ -539,8 +566,15 @@ final class ShardOwner implements LeasedOwner {
                 } else {
                     handled = true;
                 }
-            } catch (RuntimeException e) {
-                metrics.handlerFailures.increment();
+            } catch (RuntimeException | Error e) {
+                // A non-critical Error (an AssertionError, say) is a failed delivery like any other. Letting it
+                // escape uncounted freed the slot without recording an attempt, so the message came back
+                // through the head sweep forever and never reached the dead-letter table. A critical one
+                // (VirtualMachineError, LinkageError) still propagates, as it does from the classic queue.
+                Exceptions.rethrowIfCriticalError(e);
+                if (!(e instanceof RedeliveryRequested)) {
+                    metrics.handlerFailures.increment();
+                }
                 // Inside the in-flight slot, deliberately. Releasing the slot first let the pump
                 // re-read and re-deliver the row before its failure had been recorded, so the message
                 // burned two attempts for one failure and was dead-lettered where the policy said
@@ -551,8 +585,8 @@ final class ShardOwner implements LeasedOwner {
             LeaseOverrun.check(metrics, settings, "unordered", shard, startedNanos);
             // In the finally, not in the branches: a slot that is never released is a shard that
             // never reads again, because the pump refuses to read while this one is at capacity.
-            // Anything the handler can throw — including an Error a catch of RuntimeException would
-            // miss — has to leave the slot free.
+            // Anything the handler can throw — including a critical Error, which the catch above
+            // rethrows — has to leave the slot free.
             synchronized (stateLock) {
                 inFlight.remove(row.seq());
                 if (handled) {
@@ -573,45 +607,93 @@ final class ShardOwner implements LeasedOwner {
     /**
      * Failure path. Rare, so it is allowed to be expensive — one HOT update, or a dead-letter move.
      */
-    private void onFailure(ShardOwnedStorage.Row row, RuntimeException cause) {
-        int attempts;
-        synchronized (stateLock) {
-            attempts = attemptsBySeq.merge(row.seq(), 1, Integer::sum);
-        }
-        // Emitted here rather than at the call site, because this is the only place that knows which
-        // attempt this was. The SPI's `attempt` argument used to be hardcoded to zero.
-        metrics.observer().deliveryFailed(null, attempts, cause);
+    private void onFailure(ShardOwnedStorage.Row row, Throwable cause) {
         try (var connection = storage.connection()) {
-            if (redeliveryPolicy.isExhausted(attempts)) {
-                var moved = storage.moveToDeadLetter(connection, ShardOwnedSchema.UNORDERED_TABLE, "unordered", shard,
-                                                     row.seq(), cause.getClass().getName() + ": " + cause.getMessage());
-                synchronized (stateLock) {
-                    attemptsBySeq.remove(row.seq());
-                    seenAcked(row.seq());
-                }
-                if (!moved) {
-                    // Deleted by an operator or acknowledged elsewhere while it was failing. Nothing was
-                    // parked, so reporting a dead letter would be a lie — and it is exactly the report
-                    // that hid a lost message for as long as it did.
-                    log.warn("Shard {}: seq {} exhausted its attempts but was no longer in the table, so it "
-                             + "was not dead-lettered", shard, row.seq());
-                    return;
-                }
-                metrics.observer().deadLettered(new MessageId(MessageId.Lane.UNORDERED, shard, row.seq()),
-                                                attempts, cause);
-                metrics.deadLettered.increment();
-                return;
-            }
-            var delay = redeliveryPolicy.delayAfter(attempts);
-            storage.scheduleRetry(connection, ShardOwnedSchema.UNORDERED_TABLE, shard, row.seq(), attempts, delay.toMillis());
-            synchronized (stateLock) {
-                retrySchedule.add(new Retry(System.nanoTime() + delay.toNanos(), row));
-            }
-            metrics.retriesScheduled.increment();
-            metrics.observer().retryScheduled(null, attempts, delay.toMillis());
+            onFailure(connection, row, cause);
         } catch (SQLException e) {
             log.error("Shard {}: failed to record failure for seq {}", shard, row.seq(), e);
         }
+    }
+
+    /**
+     * Count this attempt. The first failure under this owner continues from the count stored on the row - what
+     * earlier owners recorded, and what takeovers charged - instead of starting from 1, which gave every message
+     * a fresh budget on every takeover.
+     */
+    private int countAttempt(Connection connection, long seq) throws SQLException {
+        Integer counted;
+        synchronized (stateLock) {
+            counted = attemptsBySeq.get(seq);
+        }
+        var attempts = (counted != null ? counted : storage.storedAttempts(connection, ShardOwnedSchema.UNORDERED_TABLE, shard, seq)) + 1;
+        synchronized (stateLock) {
+            attemptsBySeq.put(seq, attempts);
+        }
+        return attempts;
+    }
+
+    private void onFailure(Connection connection, ShardOwnedStorage.Row row, Throwable cause) throws SQLException {
+        var attempts = countAttempt(connection, row.seq());
+        // A requested redelivery is not a failure: it is scheduled at the delay the handler asked for and never
+        // dead-letters the message - see RedeliveryRequested
+        var redeliveryRequest = cause instanceof RedeliveryRequested request ? request : null;
+        if (redeliveryRequest == null) {
+            // Emitted here rather than at the call site, because this is the only place that knows which
+            // attempt this was. The SPI's `attempt` argument used to be hardcoded to zero.
+            metrics.observer().deliveryFailed(null, attempts, cause);
+        }
+        if (redeliveryRequest == null && redeliveryPolicy.isExhausted(attempts)) {
+            var moved = storage.moveToDeadLetterIfOwned(connection, ShardOwnedSchema.UNORDERED_TABLE, "unordered", shard,
+                                                        row.seq(), cause.getClass().getName() + ": " + cause.getMessage(),
+                                                        instanceId, fence);
+            synchronized (stateLock) {
+                attemptsBySeq.remove(row.seq());
+                seenAcked(row.seq());
+            }
+            if (!moved && leaseLost("dead-letter")) {
+                return;
+            }
+            if (!moved) {
+                // Deleted by an operator or acknowledged elsewhere while it was failing. Nothing was
+                // parked, so reporting a dead letter would be a lie — and it is exactly the report
+                // that hid a lost message for as long as it did.
+                log.warn("Shard {}: seq {} exhausted its attempts but was no longer in the table, so it "
+                         + "was not dead-lettered", shard, row.seq());
+                return;
+            }
+            metrics.observer().deadLettered(new MessageId(MessageId.Lane.UNORDERED, shard, row.seq()),
+                                            attempts, cause);
+            metrics.deadLettered.increment();
+            return;
+        }
+        var delay = redeliveryRequest != null ? redeliveryRequest.delay() : redeliveryPolicy.delayAfter(attempts);
+        if (!storage.scheduleRetryIfOwned(connection, ShardOwnedSchema.UNORDERED_TABLE, shard, row.seq(), attempts,
+                                          delay.toMillis(), instanceId, fence)
+                && leaseLost("retry")) {
+            // The successor redelivers it; scheduling it here as well would deliver it twice
+            synchronized (stateLock) {
+                attemptsBySeq.remove(row.seq());
+            }
+            return;
+        }
+        synchronized (stateLock) {
+            retrySchedule.add(new Retry(System.nanoTime() + delay.toNanos(), row));
+        }
+        metrics.retriesScheduled.increment();
+        metrics.observer().retryScheduled(null, attempts, delay.toMillis());
+    }
+
+    /**
+     * Whether a fenced failure write changed nothing because this owner no longer holds the lease, rather than
+     * because the row was gone. The failure is then the successor's to record: it redelivers the message.
+     */
+    private boolean leaseLost(String write) throws SQLException {
+        if (storage.stillOwns("unordered", shard, instanceId, fence)) {
+            return false;
+        }
+        log.info("Shard {}: {} not recorded under fence {} - lease lost, the next owner redelivers the message",
+                 shard, write, fence);
+        return true;
     }
 
     /**

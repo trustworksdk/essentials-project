@@ -555,6 +555,20 @@ public final class ShardOwnedStorage {
      * system is already in trouble. One extra index lookup on the lease table's primary key, per
      * batch rather than per message.
      */
+    /**
+     * The fence check of {@link #stillOwnedClause()} for either lane, against a row aliased {@code alias}.
+     * Binds three parameters, in order: the lane, the owner and the fence.
+     */
+    private static String ownedByClause(String alias) {
+        return " AND EXISTS (SELECT 1 FROM " + LEASE_TABLE + " l"
+                + " WHERE l.queue_id = " + alias + ".queue_id AND l.lane = ? AND l.shard = " + alias + ".shard"
+                + " AND l.owner = ? AND l.fence = ?)";
+    }
+
+    private static String laneOf(String table) {
+        return ORDERED_TABLE.equals(table) ? "ordered" : "unordered";
+    }
+
     private static String stillOwnedClause() {
         return " AND EXISTS (SELECT 1 FROM " + LEASE_TABLE + " l"
                 + " WHERE l.queue_id = u.queue_id AND l.lane = 'unordered' AND l.shard = u.shard"
@@ -823,38 +837,154 @@ public final class ShardOwnedStorage {
      * the old handler was still running, and two processes sharing an id both acknowledged. A new fence refuses them.
      */
     public Optional<Long> acquireLease(String lane, int shard, String owner, long ttlMillis) throws SQLException {
-        var sql = "UPDATE " + LEASE_TABLE + " l"
+        return acquireLeaseGrant(lane, shard, owner, ttlMillis).map(LeaseGrant::fence);
+    }
+
+    /**
+     * {@link #acquireLease}, also reporting how the previous owner left the unit.
+     * <p>
+     * A voluntary release ({@link #releaseLease}) clears the owner after flushing acknowledgements, so a unit taken
+     * with no owner was handed over cleanly. Anything else - an expired or taken-over owner, or an earlier
+     * incarnation under this owner's own id - may have left a handler mid-delivery, and only that kind of takeover
+     * charges the rows the previous owner could have had in flight with an attempt. Charging every takeover made
+     * each routine deploy or rebalance cost every queued message an attempt.
+     */
+    public Optional<LeaseGrant> acquireLeaseGrant(String lane, int shard, String owner, long ttlMillis) throws SQLException {
+        // RETURNING only sees the new owner, so the old one is read by a CTE joined into the UPDATE - joined, not
+        // referenced from RETURNING: a CTE is evaluated where it is first used, and from RETURNING that is after the
+        // UPDATE has changed the row, where it read nothing at all and every takeover looked unclean. A concurrent
+        // acquirer blocks on the row lock and re-checks the WHERE against the winner's row, which names a live
+        // owner, so it takes nothing
+        var sql = "WITH previous AS (SELECT owner FROM " + LEASE_TABLE
+                + "   WHERE queue_id = ? AND lane = ? AND shard = ?)"
+                + " UPDATE " + LEASE_TABLE + " l"
                 + " SET owner = ?, lease_until = NULL, fence = l.fence + 1"
+                + " FROM previous p"
                 + " WHERE l.queue_id = ? AND l.lane = ? AND l.shard = ?"
                 + "   AND (l.owner IS NULL OR l.owner = ? OR" + ownerIsGoneClause() + ")"
-                + " RETURNING l.fence";
+                + " RETURNING l.fence, p.owner IS NULL";
         try (var connection = dataSource.getConnection();
              var statement = connection.prepareStatement(sql)) {
-            statement.setString(1, owner);
-            statement.setShort(2, queueId);
-            statement.setString(3, lane);
-            statement.setInt(4, shard);
-            statement.setString(5, owner);
-            statement.setLong(6, ttlMillis);
+            statement.setShort(1, queueId);
+            statement.setString(2, lane);
+            statement.setInt(3, shard);
+            statement.setString(4, owner);
+            statement.setShort(5, queueId);
+            statement.setString(6, lane);
+            statement.setInt(7, shard);
+            statement.setString(8, owner);
+            statement.setLong(9, ttlMillis);
             try (var resultSet = statement.executeQuery()) {
-                return resultSet.next() ? Optional.of(resultSet.getLong(1)) : Optional.empty();
+                return resultSet.next()
+                       ? Optional.of(new LeaseGrant(resultSet.getLong(1), resultSet.getBoolean(2)))
+                       : Optional.empty();
             }
         }
     }
 
     /**
+     * @param fence                 the fence the unit is now held under
+     * @param previousOwnerReleased whether the previous owner released the unit voluntarily, after flushing its
+     *                              acknowledgements - so it can have left nothing mid-delivery
+     */
+    public record LeaseGrant(long fence, boolean previousOwnerReleased) {
+    }
+
+    /**
+     * The error recorded for a message dead-lettered by {@link #exhaustedAfterTakeover}: no failure was ever
+     * recorded for it, because its handler never returned or its owner lost the shard before it could record one.
+     */
+    public static final String EXHAUSTED_BY_TAKEOVERS = "Exhausted its attempts without a failure ever being recorded: "
+            + "each delivery ended with the delivering process stopping (crashed or killed) or losing the shard";
+
+    /**
      * Bulk attempt increment on takeover.
      * <p>
      * A handler that crashes the JVM never records its attempt, so without this a poison message
-     * loops forever. One statement over whatever the previous owner left unacked is enough, and it
-     * is the only reason the steady-state path can get away with never writing an attempt count.
+     * loops forever. It is the only reason the steady-state path can get away with never writing an
+     * attempt count.
+     * <p>
+     * Only the rows the previous owner can have had in flight are charged, not the whole backlog: charging every
+     * row made each takeover cost every queued message an attempt, so a message that sat through a few of them
+     * was dead-lettered by its first real failure. The previous owner dispatched in sequence order, held at most
+     * {@code inFlightBound} handlers, and had at most {@code ackBatchSize} handled rows not yet deleted, so a row
+     * it could have been handling is
+     * <ul>
+     *     <li>among the lowest {@code inFlightBound + ackBatchSize} visible rows that have never been charged,</li>
+     *     <li>a retry that had come due, which it re-dispatches from memory regardless of sequence, or</li>
+     *     <li>a row it pre-claimed for local hand-off, stamped with its fence ({@code fence - 1}).</li>
+     * </ul>
+     *
+     * @param fence         the fence the new owner holds; the previous owner's is the one before it
+     * @param inFlightBound how many handlers the previous owner could have had running at once
+     * @param ackBatchSize  how many handled rows the previous owner could have held before flushing their deletes
+     * @return how many rows were charged
      */
-    public int bumpAttemptsOnTakeover(Connection connection, int shard) throws SQLException {
+    public int bumpAttemptsOnTakeover(Connection connection, int shard, long fence, int inFlightBound, int ackBatchSize) throws SQLException {
+        var window = (int) Math.min(Integer.MAX_VALUE, (long) inFlightBound + ackBatchSize);
         try (var statement = connection.prepareStatement(
-                "UPDATE " + UNORDERED_TABLE + " SET attempts = attempts + 1 WHERE queue_id = ? AND shard = ?")) {
+                "UPDATE " + UNORDERED_TABLE + " u SET attempts = u.attempts + 1"
+                        + " WHERE u.queue_id = ? AND u.shard = ? AND u.seq IN ("
+                        + "   SELECT seq FROM " + UNORDERED_TABLE
+                        + "   WHERE queue_id = ? AND shard = ? AND visible_at <= now()"
+                        + "     AND (attempts > 0 OR lease = ?)"
+                        + "   UNION"
+                        + "   (SELECT seq FROM " + UNORDERED_TABLE
+                        + "    WHERE queue_id = ? AND shard = ? AND visible_at <= now() AND attempts = 0"
+                        + notRowLeasedClause()
+                        + "    ORDER BY seq LIMIT ?))")) {
             statement.setShort(1, queueId);
             statement.setInt(2, shard);
+            statement.setShort(3, queueId);
+            statement.setInt(4, shard);
+            statement.setLong(5, fence - 1);
+            statement.setShort(6, queueId);
+            statement.setInt(7, shard);
+            statement.setInt(8, window);
             return statement.executeUpdate();
+        }
+    }
+
+    /**
+     * The rows a takeover has charged up to the redelivery policy's limit, within the same window
+     * {@link #bumpAttemptsOnTakeover} charges. Their handler never completed - the delivering process stopped every
+     * time - so no failure will ever be recorded for them, and without this they would be redelivered forever.
+     *
+     * @return the sequence values of the rows to dead-letter
+     */
+    public List<Long> exhaustedAfterTakeover(Connection connection, String table, int shard, int maxAttempts) throws SQLException {
+        try (var statement = connection.prepareStatement(
+                "SELECT seq FROM " + table + " WHERE queue_id = ? AND shard = ? AND attempts >= ? AND visible_at <= now()"
+                        + " ORDER BY seq")) {
+            statement.setShort(1, queueId);
+            statement.setInt(2, shard);
+            statement.setInt(3, maxAttempts);
+            try (var resultSet = statement.executeQuery()) {
+                var seqs = new ArrayList<Long>();
+                while (resultSet.next()) {
+                    seqs.add(resultSet.getLong(1));
+                }
+                return seqs;
+            }
+        }
+    }
+
+    /**
+     * The attempt count stored on a live row, or 0 when the row is gone.
+     * <p>
+     * Read on the failure path only, the first time a message fails under an owner: the delivery read leaves the
+     * count out on purpose (see {@code MessageHandler}), and an owner that seeded its in-memory count from 1 gave
+     * every message a fresh budget on every takeover.
+     */
+    public int storedAttempts(Connection connection, String table, int shard, long seq) throws SQLException {
+        try (var statement = connection.prepareStatement(
+                "SELECT attempts FROM " + table + " WHERE queue_id = ? AND shard = ? AND seq = ?")) {
+            statement.setShort(1, queueId);
+            statement.setInt(2, shard);
+            statement.setLong(3, seq);
+            try (var resultSet = statement.executeQuery()) {
+                return resultSet.next() ? resultSet.getInt(1) : 0;
+            }
         }
     }
 
@@ -1282,11 +1412,29 @@ public final class ShardOwnedStorage {
         }
     }
 
-    public int bumpOrderedAttemptsOnTakeover(Connection connection, int shard) throws SQLException {
+    /**
+     * {@link #bumpAttemptsOnTakeover} for the ordered lane. A key has at most one message in a handler, behind at
+     * most {@code ackBatchSize} handled rows of the same key whose deletes had not been flushed, so a row the previous
+     * owner could have been handling is among the first {@code ackBatchSize + 1} rows of its key, or a retry that
+     * had come due.
+     *
+     * @return how many rows were charged
+     */
+    public int bumpOrderedAttemptsOnTakeover(Connection connection, int shard, int ackBatchSize) throws SQLException {
+        var window = (int) Math.min(Integer.MAX_VALUE, (long) ackBatchSize + 1);
         try (var statement = connection.prepareStatement(
-                "UPDATE " + ORDERED_TABLE + " SET attempts = attempts + 1 WHERE queue_id = ? AND shard = ?")) {
+                "UPDATE " + ORDERED_TABLE + " o SET attempts = o.attempts + 1"
+                        + " WHERE o.queue_id = ? AND o.shard = ? AND o.seq IN ("
+                        + "   SELECT seq FROM ("
+                        + "     SELECT seq, attempts, visible_at,"
+                        + "            row_number() OVER (PARTITION BY msg_key ORDER BY key_order) AS position_in_key"
+                        + "     FROM " + ORDERED_TABLE + " WHERE queue_id = ? AND shard = ?) r"
+                        + "   WHERE r.visible_at <= now() AND (r.position_in_key <= ? OR r.attempts > 0))")) {
             statement.setShort(1, queueId);
             statement.setInt(2, shard);
+            statement.setShort(3, queueId);
+            statement.setInt(4, shard);
+            statement.setInt(5, window);
             return statement.executeUpdate();
         }
     }
@@ -1355,15 +1503,41 @@ public final class ShardOwnedStorage {
      * that a crash does not lose the backoff.
      */
     public void scheduleRetry(Connection connection, String table, int shard, long seq, int attempts, long delayMillis) throws SQLException {
+        scheduleRetry(connection, table, shard, seq, attempts, delayMillis, null, null, 0L);
+    }
+
+    /**
+     * {@link #scheduleRetry(Connection, String, int, long, int, long)}, fenced the way acknowledgements are: the
+     * row is only touched while {@code owner} still holds the shard's lease under {@code fence}. An owner that
+     * has lost its lease must not push out the visibility of, or overwrite the attempt count on, a row its
+     * successor may be delivering.
+     *
+     * @return false, with nothing changed, when the owner no longer holds the lease or the row is gone -
+     *         {@link #stillOwns(String, int, String, long)} tells the two apart
+     */
+    public boolean scheduleRetryIfOwned(Connection connection, String table, int shard, long seq, int attempts, long delayMillis,
+                                        String owner, long fence) throws SQLException {
+        requireNonNull(owner, "No owner provided");
+        return scheduleRetry(connection, table, shard, seq, attempts, delayMillis, laneOf(table), owner, fence);
+    }
+
+    private boolean scheduleRetry(Connection connection, String table, int shard, long seq, int attempts, long delayMillis,
+                                  String lane, String owner, long fence) throws SQLException {
         try (var statement = connection.prepareStatement(
-                "UPDATE " + table + " SET attempts = ?, visible_at = now() + make_interval(secs => ? / 1000.0)"
-                        + " WHERE queue_id = ? AND shard = ? AND seq = ?")) {
+                "UPDATE " + table + " u SET attempts = ?, visible_at = now() + make_interval(secs => ? / 1000.0)"
+                        + " WHERE u.queue_id = ? AND u.shard = ? AND u.seq = ?"
+                        + (owner != null ? ownedByClause("u") : ""))) {
             statement.setInt(1, attempts);
             statement.setLong(2, delayMillis);
             statement.setShort(3, queueId);
             statement.setInt(4, shard);
             statement.setLong(5, seq);
-            statement.executeUpdate();
+            if (owner != null) {
+                statement.setString(6, lane);
+                statement.setString(7, owner);
+                statement.setLong(8, fence);
+            }
+            return statement.executeUpdate() > 0;
         }
     }
 
@@ -1377,6 +1551,25 @@ public final class ShardOwnedStorage {
      *         succeed silently in that case, which let a caller report a dead letter that did not exist
      */
     public boolean moveToDeadLetter(Connection connection, String table, String lane, int shard, long seq, String error) throws SQLException {
+        return moveToDeadLetter(connection, table, lane, shard, seq, error, null, 0L);
+    }
+
+    /**
+     * {@link #moveToDeadLetter(Connection, String, String, int, long, String)}, fenced the way acknowledgements
+     * are: nothing moves unless {@code owner} still holds the shard's lease under {@code fence}, so an owner that
+     * has lost its lease cannot park a message its successor may be delivering.
+     *
+     * @return false, with nothing changed, when the owner no longer holds the lease or the row is gone -
+     *         {@link #stillOwns(String, int, String, long)} tells the two apart
+     */
+    public boolean moveToDeadLetterIfOwned(Connection connection, String table, String lane, int shard, long seq, String error,
+                                           String owner, long fence) throws SQLException {
+        requireNonNull(owner, "No owner provided");
+        return moveToDeadLetter(connection, table, lane, shard, seq, error, owner, fence);
+    }
+
+    private boolean moveToDeadLetter(Connection connection, String table, String lane, int shard, long seq, String error,
+                                     String owner, long fence) throws SQLException {
         var autoCommit = connection.getAutoCommit();
         connection.setAutoCommit(false);
         try {
@@ -1385,12 +1578,18 @@ public final class ShardOwnedStorage {
                     "INSERT INTO " + DLQ_TABLE + " (queue_id, shard, source_lane, msg_key, key_order, seq,"
                             + " payload, payload_type, attempts, last_error)"
                             + " SELECT queue_id, shard, ?, " + keyColumns + ", seq, payload, payload_type, attempts, ?"
-                            + " FROM " + table + " WHERE queue_id = ? AND shard = ? AND seq = ?")) {
+                            + " FROM " + table + " m WHERE m.queue_id = ? AND m.shard = ? AND m.seq = ?"
+                            + (owner != null ? ownedByClause("m") : ""))) {
                 insert.setString(1, lane);
                 insert.setString(2, error);
                 insert.setShort(3, queueId);
                 insert.setInt(4, shard);
                 insert.setLong(5, seq);
+                if (owner != null) {
+                    insert.setString(6, lane);
+                    insert.setString(7, owner);
+                    insert.setLong(8, fence);
+                }
                 if (insert.executeUpdate() == 0) {
                     connection.rollback();
                     return false;
