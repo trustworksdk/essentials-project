@@ -468,13 +468,24 @@ soon as half its workers are free, so throughput is bounded by the handler and t
 A queue table that drains to empty and is then analyzed (by autovacuum or by hand) records `reltuples = 0` while
 keeping its pages. When the next burst arrives, the planner expects no rows. The claim statements select the rows
 to update by primary-key array, so the unordered claim stays fast (4 ms instead of 185 ms at 20 000 queued
-messages). The ordered claim's per-key `NOT EXISTS` barrier can still degrade to a nested loop over the queue
-(about 1 s at 20 000 ordered messages). If ordered queues regularly drain and refill, keep the table's statistics
-fresh with per-table autovacuum settings:
+messages). The ordered claim's per-key barrier can still be planned badly in that state. If ordered queues
+regularly drain and refill, keep the table's statistics fresh with per-table autovacuum settings:
 
 ```sql
 ALTER TABLE durable_queues SET (autovacuum_analyze_scale_factor = 0, autovacuum_analyze_threshold = 1000);
 ```
+
+### Ordered queues whose backlog sits on few keys
+
+The ordered claim takes each key's head: its lowest `key_order`, which blocks the rest of the key. The default
+statement walks candidates until it has as many heads as there are free slots. With fewer heads than that (a few
+keys with many messages each, the typical event-processor shape), it never stops early and probes every queued
+message on every poll: 180 ms at 20 keys × 1 000 messages.
+
+Since 0.60.1 such a queue switches to a second statement that finds each key's head with one index probe per key:
+0.4 ms for the same backlog. It switches back when the queue has many keys, where that statement is the slow one
+(114 ms at 20 000 keys of one message each, against 1.6 ms). The switch happens per queue, after a claim that took
+over 10 ms. Both statements claim the same messages.
 
 ## Security
 

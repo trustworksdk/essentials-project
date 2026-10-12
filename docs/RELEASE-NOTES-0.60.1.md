@@ -120,9 +120,17 @@ queue, so each claim took time proportional to the backlog: 185 ms instead of 4 
 messages. Both claim statements now select their rows by primary-key array (`WHERE q.id = ANY(ARRAY(…))`).
 `PostgresqlDurableQueuesClaimPlanIT` recreates the stale statistics and guards the plan shape.
 
-The ordered claim's per-key ordering check can still degrade under the same conditions. If ordered queues regularly
-drain and refill, keep the table's statistics fresh; see "Stale statistics on a draining queue table" in
+The ordered claim's per-key ordering check can still be planned badly under the same conditions. If ordered queues
+regularly drain and refill, keep the table's statistics fresh; see "Stale statistics on a draining queue table" in
 `LLM/LLM-postgresql-queue.md`.
+
+### 2.1a Ordered queues with a few long keys claim in under a millisecond (`postgresql-queue`)
+
+The ordered claim walked every queued message on every poll when a queue had fewer heads than free slots. Few keys
+with many messages each is a common event-processor shape: 20 keys × 1 000 messages took 180 ms per claim, even with
+fresh statistics. Such a queue now switches to a statement that visits each key's head once (0.4 ms). It switches
+back when the queue has many keys, where the original statement is the cheap one. Both claim the same messages;
+`PostgresqlDurableQueuesOrderedClaimStrategyIT` checks that, and the ordered-message suites run against both.
 
 ### 2.2 Shard-owned: a superseded owner cannot record a failure
 

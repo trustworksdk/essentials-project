@@ -135,6 +135,15 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
     private   int                                        messageHandlingTimeoutMs;
     private final LocalEnqueueSignal                     localEnqueueSignal = new LocalEnqueueSignal();
     /**
+     * Per queue: whether the ordered claim currently uses {@link DurableQueuesSql#buildOrderedHeadScanSqlStatement}
+     * rather than {@link DurableQueuesSql#buildOrderedSqlStatement} - see {@link #recordOrderedClaim}
+     */
+    private final ConcurrentMap<QueueName, Boolean>      orderedClaimByHeadScan = new ConcurrentHashMap<>();
+    /**
+     * For tests only: forces one ordered-claim statement for every queue. {@code null} picks adaptively
+     */
+    private volatile Boolean                             orderedClaimByHeadScanOverride;
+    /**
      * Contains the timestamp of the last performed {@link #resetMessagesStuckBeingDelivered(QueueName)} check<br>
      */
     protected ConcurrentMap<QueueName, Instant>          lastResetStuckMessagesCheckTimestamps = new ConcurrentHashMap<>();
@@ -1236,7 +1245,8 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
 
     private Optional<QueuedMessage> fetchNextMessageReadyForDeliveryOrderedUnordered(QueueName queueName, Collection<String> excludes, Instant now) {
         boolean hasExcludes = !excludes.isEmpty();
-        var     orderedSql  = durableQueuesSql.buildOrderedSqlStatement(hasExcludes);
+        var     byHeadScan  = orderedClaimByHeadScan(queueName);
+        var     orderedSql  = byHeadScan ? durableQueuesSql.buildOrderedHeadScanSqlStatement(hasExcludes) : durableQueuesSql.buildOrderedSqlStatement(hasExcludes);
         log.trace("[{}] Executing fetchNextMessageReadyForDeliveryOrderedUnordered sql", queueName);
 
         var handle = unitOfWorkFactory.getRequiredUnitOfWork().handle();
@@ -1247,9 +1257,11 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                                  .bind("limit", 1);
         if (hasExcludes) orderedQuery.bindList("excludeKeys", excludes);
 
+        var claimStartedNanos = System.nanoTime();
         Optional<QueuedMessage> queuedMessage = orderedQuery
                 .map(queuedMessageMapper)
                 .findOne();
+        recordOrderedClaim(queueName, byHeadScan, System.nanoTime() - claimStartedNanos, queuedMessage.isPresent() ? 1 : 0, 1);
         if (queuedMessage.isPresent()) {
             return queuedMessage;
         }
@@ -1535,14 +1547,21 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                     List<QueuedMessage>  messagesForQueue;
                     MessageMappingResult mappingResult;
 
-                    var orderedSql = durableQueuesSql.buildOrderedSqlStatement(!excluded.isEmpty());
+                    var byHeadScan = orderedClaimByHeadScan(queueName);
+                    var orderedSql = byHeadScan
+                                     ? durableQueuesSql.buildOrderedHeadScanSqlStatement(!excluded.isEmpty())
+                                     : durableQueuesSql.buildOrderedSqlStatement(!excluded.isEmpty());
                     var orderedQ = uow.handle().createQuery(orderedSql)
                                       .bind("queueName", queueName)
                                       .bind("now", now)
                                       .bind("limit", availableWorkerSlotsForThisQueue);
                     if (!excluded.isEmpty()) orderedQ.bindList("excludeKeys", excluded);
 
+                    var claimStartedNanos = System.nanoTime();
                     mappingResult = mapQueryResultsWithExceptionHandling(orderedQ);
+                    recordOrderedClaim(queueName, byHeadScan, System.nanoTime() - claimStartedNanos,
+                                       mappingResult.successfulMessages().size() + mappingResult.failedMappings().size(),
+                                       availableWorkerSlotsForThisQueue);
                     messagesForQueue = mappingResult.successfulMessages();
                     handleFailedMappings(queueName, mappingResult);
 
@@ -1845,6 +1864,49 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                                                                                               .findOne());
     }
 
+
+    /**
+     * An ordered claim that takes longer than this is reconsidered - see {@link #recordOrderedClaim}
+     */
+    static final long SLOW_ORDERED_CLAIM_NANOS = Duration.ofMillis(10).toNanos();
+
+    boolean orderedClaimByHeadScan(QueueName queueName) {
+        var override = orderedClaimByHeadScanOverride;
+        return override != null ? override : orderedClaimByHeadScan.getOrDefault(queueName, false);
+    }
+
+    /**
+     * Pick the ordered-claim statement for the queue's next poll from how this one went.
+     * <p>
+     * The two statements claim the same messages and are each cheap where the other is expensive: the default walks
+     * candidates until it has {@code limit} heads, so it is slow when the queue has fewer heads than that - few keys
+     * with many messages each; the head scan visits every key once, so it is slow when the queue has many keys. A
+     * slow default claim that came back short means few heads, so the next poll uses the head scan; a slow head scan
+     * means many keys, so the next poll goes back. Each statement keeps being used while it is fast, and a change of
+     * shape costs one slow poll.
+     */
+    private void recordOrderedClaim(QueueName queueName, boolean byHeadScan, long elapsedNanos, int claimed, int limit) {
+        if (orderedClaimByHeadScanOverride != null || elapsedNanos < SLOW_ORDERED_CLAIM_NANOS) {
+            return;
+        }
+        if (!byHeadScan && claimed < limit) {
+            log.debug("[{}] Ordered claim took {} ms for {} of {} messages - the backlog sits on few keys, switching to the head scan",
+                      queueName, Duration.ofNanos(elapsedNanos).toMillis(), claimed, limit);
+            orderedClaimByHeadScan.put(queueName, true);
+        } else if (byHeadScan) {
+            log.debug("[{}] Ordered head scan took {} ms - the queue has many keys, switching back",
+                      queueName, Duration.ofNanos(elapsedNanos).toMillis());
+            orderedClaimByHeadScan.put(queueName, false);
+        }
+    }
+
+    /**
+     * For tests: force the ordered claim to always use the head scan ({@code true}) or the default statement
+     * ({@code false}), or pick adaptively again ({@code null})
+     */
+    void setOrderedClaimByHeadScanOverride(Boolean headScan) {
+        this.orderedClaimByHeadScanOverride = headScan;
+    }
 
     /**
      * A message this node queued, registered with the enqueuing {@link UnitOfWork} so the queue's local consumer can be
