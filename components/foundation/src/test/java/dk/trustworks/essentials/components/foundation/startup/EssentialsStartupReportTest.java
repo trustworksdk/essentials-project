@@ -23,6 +23,7 @@ import dk.trustworks.essentials.components.foundation.startup.EssentialsStartupR
 import org.junit.jupiter.api.*;
 import org.slf4j.LoggerFactory;
 
+import java.time.*;
 import java.util.concurrent.*;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -130,5 +131,175 @@ class EssentialsStartupReportTest {
             binding.close();
         }
         assertThat(EssentialsStartupReport.current()).isEmpty();
+    }
+
+    @Test
+    void without_a_bound_report_a_finding_reaches_the_run_report_only_when_exactly_one_is_registered() throws Exception {
+        assertThat(EssentialsStartupReport.runReport()).isEmpty();
+        var first  = new EssentialsStartupReport();
+        var second = new EssentialsStartupReport();
+
+        // 0 registered: dropped
+        EssentialsStartupReport.addToCurrent(Finding.warn("none registered", "dropped", ""));
+
+        // 1 registered: reaches it, from any thread
+        try (var firstRegistration = first.registerAsRunReport()) {
+            assertThat(EssentialsStartupReport.runReport()).containsSame(first);
+            assertThat(EssentialsStartupReport.current()).isEmpty();
+            EssentialsStartupReport.addToCurrent(Finding.warn("one registered", "kept", ""));
+            var executor = Executors.newSingleThreadExecutor();
+            try {
+                executor.submit(() -> EssentialsStartupReport.addToCurrent(Finding.warn("one registered", "kept on another thread", ""))).get(5, TimeUnit.SECONDS);
+            } finally {
+                executor.shutdownNow();
+            }
+
+            // A report bound to the thread still wins
+            var bound = new EssentialsStartupReport();
+            try (var binding = bound.bindToCurrentThread()) {
+                EssentialsStartupReport.addToCurrent(Finding.warn("bound", "to the bound report", ""));
+            }
+            assertThat(bound.getFindings()).extracting(Finding::message).containsExactly("to the bound report");
+
+            // 2 registered: dropped - neither is "the" run report
+            try (var secondRegistration = second.registerAsRunReport()) {
+                assertThat(EssentialsStartupReport.runReport()).isEmpty();
+                assertThat(first.isRegisteredAsRunReport()).isTrue();
+                EssentialsStartupReport.addToCurrent(Finding.warn("two registered", "dropped", ""));
+            }
+
+            // Back to 1
+            assertThat(EssentialsStartupReport.runReport()).containsSame(first);
+            assertThat(second.isRegisteredAsRunReport()).isFalse();
+            firstRegistration.close();
+            firstRegistration.close();
+        }
+
+        assertThat(EssentialsStartupReport.runReport()).isEmpty();
+        EssentialsStartupReport.addToCurrent(Finding.warn("none registered", "dropped again", ""));
+        assertThat(first.getFindings()).extracting(Finding::message).containsExactly("kept", "kept on another thread");
+        assertThat(second.getFindings()).isEmpty();
+    }
+
+    @Test
+    void identical_findings_are_kept_once_with_their_count_and_first_and_last_seen() {
+        var clock  = new MutableClock(Instant.parse("2026-10-12T08:00:00Z"));
+        var report = new EssentialsStartupReport(10, clock);
+        var noisy  = Finding.warn("queue 'Orders'", "enqueued outside a UnitOfWork", "Use a UnitOfWork");
+
+        report.add(noisy);
+        clock.now = Instant.parse("2026-10-12T08:05:00Z");
+        report.add(Finding.info("schema", "a note", ""));
+        clock.now = Instant.parse("2026-10-12T09:00:00Z");
+        report.add(noisy);
+        report.add(noisy);
+
+        assertThat(report.getFindings()).containsExactly(noisy, Finding.info("schema", "a note", ""));
+        assertThat(report.getOccurrences()).containsExactly(
+                new Occurrences(noisy, 3, Instant.parse("2026-10-12T08:00:00Z"), Instant.parse("2026-10-12T09:00:00Z")),
+                new Occurrences(Finding.info("schema", "a note", ""), 1, Instant.parse("2026-10-12T08:05:00Z"), Instant.parse("2026-10-12T08:05:00Z")));
+    }
+
+    @Test
+    void beyond_the_cap_distinct_findings_are_only_counted() {
+        var report = new EssentialsStartupReport(2);
+        report.add(Finding.warn("a", "1", ""));
+        report.add(Finding.warn("b", "2", ""));
+        report.add(Finding.warn("c", "3", ""));
+        report.add(Finding.warn("c", "3", ""));
+        report.add(Finding.error("d", "4", ""));
+        // A finding already kept is still counted, not overflowed
+        report.add(Finding.warn("a", "1", ""));
+
+        assertThat(report.getFindings()).extracting(Finding::source).containsExactly("a", "b");
+        assertThat(report.getOccurrences().getFirst().count()).isEqualTo(2);
+        assertThat(report.getOverflowCount()).isEqualTo(3);
+        assertThat(report.renderRunReport()).contains("Plus 3 occurrences of findings not kept - the report holds at most 2 distinct findings");
+        assertThat(new EssentialsStartupReport().getOverflowCount()).isZero();
+    }
+
+    @Test
+    void the_periodic_log_prints_only_the_findings_not_printed_before_at_their_highest_severity() {
+        var report = new EssentialsStartupReport(2);
+        report.add(Finding.warn("startup", "found at start-up", ""));
+        report.log();
+        logAppender.list.clear();
+
+        // Nothing new: nothing logged
+        assertThat(report.logNewFindings()).isFalse();
+        // A repeat of a finding already printed is not new
+        report.add(Finding.warn("startup", "found at start-up", ""));
+        assertThat(report.logNewFindings()).isFalse();
+        assertThat(logAppender.list).isEmpty();
+
+        report.add(Finding.info("runtime", "a note", ""));
+        assertThat(report.logNewFindings()).isTrue();
+        assertThat(logAppender.list).singleElement().satisfies(event -> {
+            assertThat(event.getLevel()).isEqualTo(Level.INFO);
+            assertThat(event.getFormattedMessage()).contains("Essentials report, 1 new finding since the last report: 0 errors, 0 warnings, 1 note")
+                                                   .contains("  - [runtime] a note\n    Seen once, at ")
+                                                   .doesNotContain("found at start-up");
+        });
+        logAppender.list.clear();
+
+        // Overflow alone is news too
+        report.add(Finding.error("runtime", "beyond the cap", "fix it"));
+        assertThat(report.logNewFindings()).isTrue();
+        assertThat(logAppender.list).singleElement().satisfies(event -> {
+            assertThat(event.getLevel()).isEqualTo(Level.WARN);
+            assertThat(event.getFormattedMessage()).contains("Essentials report, 0 new findings since the last report")
+                                                   .contains("Plus 1 occurrence of findings not kept");
+        });
+        assertThat(report.logNewFindings()).isFalse();
+    }
+
+    @Test
+    void the_run_report_lists_every_finding_of_the_run_with_its_occurrences() {
+        var clock  = new MutableClock(Instant.parse("2026-10-12T08:00:00Z"));
+        var report = new EssentialsStartupReport(10, clock);
+        report.add(Finding.warn("startup", "found at start-up", "Fix A"));
+        report.log();
+        clock.now = Instant.parse("2026-10-12T10:00:00Z");
+        report.add(Finding.error("runtime", "found later", "Fix B"));
+        clock.now = Instant.parse("2026-10-12T11:00:00Z");
+        report.add(Finding.error("runtime", "found later", "Fix B"));
+        report.logNewFindings();
+        logAppender.list.clear();
+
+        report.logRunReport();
+
+        assertThat(logAppender.list).singleElement().satisfies(event -> {
+            assertThat(event.getLevel()).isEqualTo(Level.ERROR);
+            assertThat(event.getFormattedMessage())
+                    .contains("Essentials run report: 1 error, 1 warning, 0 notes over the whole run - each was also logged where it was found")
+                    .contains("  - [runtime] found later\n    Fix: Fix B\n    Seen 2 times, first at 2026-10-12T10:00:00Z, last at 2026-10-12T11:00:00Z\n")
+                    .contains("  - [startup] found at start-up\n    Fix: Fix A\n    Seen once, at 2026-10-12T08:00:00Z\n");
+        });
+        // The start-up block does not carry the occurrences
+        assertThat(report.render()).doesNotContain("Seen");
+        assertThat(new EssentialsStartupReport().renderRunReport()).isEqualTo("Essentials run report: no findings over the whole run");
+    }
+
+    private static final class MutableClock extends Clock {
+        private volatile Instant now;
+
+        private MutableClock(Instant now) {
+            this.now = now;
+        }
+
+        @Override
+        public ZoneId getZone() {
+            return ZoneOffset.UTC;
+        }
+
+        @Override
+        public Clock withZone(ZoneId zone) {
+            return this;
+        }
+
+        @Override
+        public Instant instant() {
+            return now;
+        }
     }
 }

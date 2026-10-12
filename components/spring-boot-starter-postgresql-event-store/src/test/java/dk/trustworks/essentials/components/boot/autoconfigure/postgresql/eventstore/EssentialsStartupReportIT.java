@@ -27,9 +27,11 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.pr
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.AggregateIdSerializer;
 import dk.trustworks.essentials.components.foundation.boot.EssentialsStartupChecksAutoConfiguration;
 import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
+import dk.trustworks.essentials.components.foundation.messaging.queue.*;
 import dk.trustworks.essentials.components.foundation.startup.EssentialsStartupReport;
 import dk.trustworks.essentials.components.foundation.startup.EssentialsStartupReport.*;
 import dk.trustworks.essentials.shared.security.EssentialsSecurityProvider;
+import org.awaitility.Awaitility;
 import org.junit.jupiter.api.*;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.*;
@@ -40,6 +42,7 @@ import org.springframework.context.annotation.*;
 import org.testcontainers.junit.jupiter.*;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 
+import java.time.Duration;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -107,6 +110,53 @@ class EssentialsStartupReportIT {
                                  .contains("Fix: Add a @MessageHandler for each type the view should react to");
                 assertThat(block.indexOf("ERROR (")).isLessThan(block.indexOf("WARN ("));
             });
+        }
+    }
+
+    /**
+     * Relies on this context being the only one open in the JVM - no test in this module keeps a context cached - since
+     * a finding raised after start-up reaches a report only then
+     */
+    @Test
+    void a_finding_raised_while_the_application_runs_is_logged_as_new_and_in_the_run_report_on_close() {
+        var application = new SpringApplication(MisconfiguredApplication.class);
+        application.setWebApplicationType(WebApplicationType.NONE);
+        application.setBannerMode(Banner.Mode.OFF);
+        try (var context = application.run("--spring.datasource.url=" + postgreSQLContainer.getJdbcUrl(),
+                                           "--spring.datasource.username=" + postgreSQLContainer.getUsername(),
+                                           "--spring.datasource.password=" + postgreSQLContainer.getPassword(),
+                                           "--essentials.eventstore.cdc.enabled=false",
+                                           "--essentials.startup-report.new-findings-interval=200ms")) {
+            assertThat(EssentialsStartupReport.runReport()).containsSame(context.getBean(EssentialsStartupReport.class));
+
+            // At runtime, on this thread, with no report bound to it: an enqueue outside a UnitOfWork
+            context.getBean(DurableQueues.class).queueMessage(QueueName.of("StartupReportRuntimeQueue"), Message.of("payload"));
+
+            Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(logged()).anySatisfy(event -> {
+                assertThat(event.getLevel()).isEqualTo(Level.WARN);
+                assertThat(event.getFormattedMessage()).contains("Essentials report, 1 new finding since the last report: 0 errors, 1 warning, 0 notes")
+                                                       .contains("[DurableQueues enqueue on queue 'StartupReportRuntimeQueue' from ")
+                                                       .contains("a message was enqueued outside a UnitOfWork/transaction, so it committed on its own")
+                                                       .doesNotContain("OrderSummaryView");
+            }));
+        }
+
+        assertThat(logged()).filteredOn(event -> event.getFormattedMessage().contains("Essentials run report")).singleElement().satisfies(event -> {
+            assertThat(event.getLevel()).isEqualTo(Level.WARN);
+            assertThat(event.getFormattedMessage()).contains("Essentials run report: 0 errors, 2 warnings, 0 notes over the whole run")
+                                                   .contains("[ViewEventProcessor 'OrderSummaryView']")
+                                                   .contains("[DurableQueues enqueue on queue 'StartupReportRuntimeQueue' from ")
+                                                   .contains("Seen once, at ");
+        });
+        assertThat(EssentialsStartupReport.runReport()).isEmpty();
+    }
+
+    /**
+     * The periodic log appends on its own thread; logback's AppenderBase appends under the appender's monitor
+     */
+    private List<ILoggingEvent> logged() {
+        synchronized (logAppender) {
+            return List.copyOf(logAppender.list);
         }
     }
 

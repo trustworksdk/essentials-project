@@ -1143,22 +1143,34 @@ public DefaultLifecycleManager lifecycleManager() {
 ### Startup report
 
 Since 0.60.1. `EssentialsStartupReport` (`dk.trustworks.essentials.components.foundation.startup`) collects the findings
-of the Essentials start-up checks so they can be printed as one block. Every check still logs where it runs; it also
-calls `EssentialsStartupReport.addToCurrent(finding)`, which adds to the report bound to the **current thread** and
-does nothing when none is bound. There is no JVM-wide report (a test JVM runs many contexts at once). The Spring Boot
-starters create, bind and print one per context - see
-[LLM-spring-boot-starter-modules.md § Startup Report](LLM-spring-boot-starter-modules.md#startup-report). Without Spring:
+of the Essentials checks so they can be printed as one block at start-up, and again, complete, when the application
+stops. Every check still logs where it runs; it also calls `EssentialsStartupReport.addToCurrent(finding)`, which adds
+to the report bound to the **current thread**; when none is bound (after start-up, another thread) to the **run
+report** - the report registered with `registerAsRunReport()` - but only while **exactly one** is registered in the JVM;
+otherwise it does nothing. There is no JVM-wide report (a test JVM runs many contexts at once, so with 0 or 2+
+registered a runtime finding is only logged by its check). The Spring Boot starters create, bind, register and print one
+per context - see [LLM-spring-boot-starter-modules.md § Startup Report](LLM-spring-boot-starter-modules.md#startup-report).
+Without Spring:
 
 ```java
-var report = new EssentialsStartupReport();
+var report = new EssentialsStartupReport();             // keeps 500 distinct findings; new EssentialsStartupReport(n) for another cap
 try (var binding = report.bindToCurrentThread()) {     // close on the same thread; bindings nest
     // build and start the Essentials components
 }
 report.log();   // one block: ERROR if any error finding, WARN if any warning, else INFO "no findings"
-List<EssentialsStartupReport.Finding> findings = report.getFindings();   // Finding(severity, source, message, fix)
+var registration = report.registerAsRunReport();       // later findings, any thread, reach it while it is the only one
+scheduler.scheduleWithFixedDelay(report::logNewFindings, 5, 5, TimeUnit.MINUTES);   // only what was not logged before; nothing if nothing new
+// on shutdown
+report.logRunReport();   // every finding of the run, with count and first/last seen
+registration.close();
+List<EssentialsStartupReport.Finding> findings = report.getFindings();       // Finding(severity, source, message, fix)
+List<EssentialsStartupReport.Occurrences> seen = report.getOccurrences();     // Occurrences(finding, count, firstSeen, lastSeen)
 ```
 
-A finding raised on another thread is only logged by its check. Identical findings are kept once.
+Identical findings (equal severity, source, message and fix) are kept once, with a count and first/last-seen time.
+Beyond the cap further distinct findings are only counted (`getOverflowCount()`), so a noisy runtime finding cannot
+grow memory. A shutdown log can be lost (SIGTERM followed by a kill, a log shipper already gone) - that is what
+`logNewFindings()` is for.
 
 ### PostgreSQL Utilities
 

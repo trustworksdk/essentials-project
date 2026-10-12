@@ -21,6 +21,7 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import dk.trustworks.essentials.components.foundation.startup.EssentialsStartupReport;
 import dk.trustworks.essentials.components.foundation.startup.EssentialsStartupReport.*;
+import org.awaitility.Awaitility;
 import org.junit.jupiter.api.*;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.SmartInitializingSingleton;
@@ -30,6 +31,7 @@ import org.springframework.boot.logging.LoggingSystem;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.*;
 
+import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
 
@@ -114,6 +116,90 @@ class EssentialsStartupReportPublisherTest {
         } finally {
             executor.shutdownNow();
         }
+    }
+
+    @Test
+    void a_finding_raised_after_start_up_is_logged_as_new_and_in_the_complete_report_when_the_context_closes() throws Exception {
+        try (var context = start(ApplicationWithACheck.class, "essentials.startup-report.new-findings-interval=100ms")) {
+            var publisher = context.getBean(EssentialsStartupReportPublisher.class);
+            assertThat(publisher.getNewFindingsInterval()).isEqualTo(Duration.ofMillis(100));
+            assertThat(publisher.isLoggingNewFindings()).isTrue();
+            assertThat(EssentialsStartupReport.runReport()).containsSame(context.getBean(EssentialsStartupReport.class));
+
+            // A check running after start-up, on a thread no report is bound to
+            var executor = Executors.newSingleThreadExecutor();
+            try {
+                executor.submit(() -> EssentialsStartupReport.addToCurrent(Finding.error("runtime check", "raised while the application ran", "fix the runtime"))).get(5, TimeUnit.SECONDS);
+            } finally {
+                executor.shutdownNow();
+            }
+            EssentialsStartupReport.addToCurrent(Finding.error("runtime check", "raised while the application ran", "fix the runtime"));
+
+            Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(newFindingsBlocks()).singleElement().satisfies(event -> {
+                assertThat(event.getLevel()).isEqualTo(Level.ERROR);
+                assertThat(event.getFormattedMessage()).contains("Essentials report, 1 new finding since the last report: 1 error, 0 warnings, 0 notes")
+                                                       .contains("[runtime check] raised while the application ran")
+                                                       .contains("Seen 2 times")
+                                                       .doesNotContain("[test check]");
+            }));
+        }
+
+        assertThat(runReportBlocks()).singleElement().satisfies(event -> {
+            assertThat(event.getLevel()).isEqualTo(Level.ERROR);
+            assertThat(event.getFormattedMessage()).contains("Essentials run report: 1 error, 1 warning, 0 notes over the whole run")
+                                                   .contains("  - [runtime check] raised while the application ran\n    Fix: fix the runtime\n    Seen 2 times, first at ")
+                                                   .contains("  - [test check] raised while a bean was created\n    Fix: nothing\n    Seen once, at ");
+        });
+        // Deregistered with the context
+        assertThat(EssentialsStartupReport.runReport()).isEmpty();
+        // Exactly one new-findings block: nothing new after the first
+        assertThat(newFindingsBlocks()).hasSize(1);
+    }
+
+    @Test
+    void a_zero_interval_turns_the_periodic_log_off_but_the_run_report_is_still_logged_on_close() {
+        EssentialsStartupReportPublisher publisher;
+        try (var context = start(TestApplication.class, "essentials.startup-report.new-findings-interval=0")) {
+            publisher = context.getBean(EssentialsStartupReportPublisher.class);
+            assertThat(publisher.getNewFindingsInterval()).isZero();
+            assertThat(publisher.isLoggingNewFindings()).isFalse();
+            EssentialsStartupReport.addToCurrent(Finding.info("runtime", "a note", ""));
+        }
+
+        assertThat(newFindingsBlocks()).isEmpty();
+        assertThat(runReportBlocks()).singleElement().satisfies(event -> {
+            assertThat(event.getLevel()).isEqualTo(Level.INFO);
+            assertThat(event.getFormattedMessage()).contains("Essentials run report: 0 errors, 0 warnings, 1 note over the whole run");
+        });
+    }
+
+    @Test
+    void the_default_interval_is_five_minutes_and_the_thread_stops_with_the_context() {
+        EssentialsStartupReportPublisher publisher;
+        try (var context = start(TestApplication.class)) {
+            publisher = context.getBean(EssentialsStartupReportPublisher.class);
+            assertThat(publisher.getNewFindingsInterval()).isEqualTo(EssentialsStartupReportPublisher.DEFAULT_NEW_FINDINGS_INTERVAL).isEqualTo(Duration.ofMinutes(5));
+            assertThat(publisher.isLoggingNewFindings()).isTrue();
+        }
+        assertThat(publisher.isLoggingNewFindings()).isFalse();
+        assertThat(runReportBlocks()).singleElement().extracting(ILoggingEvent::getFormattedMessage).isEqualTo("Essentials run report: no findings over the whole run");
+    }
+
+    /**
+     * The periodic log appends on its own thread; logback's AppenderBase appends under the appender's monitor
+     */
+    private List<ILoggingEvent> logged() {
+        synchronized (logAppender) {
+            return List.copyOf(logAppender.list);
+        }
+    }
+
+    private List<ILoggingEvent> newFindingsBlocks() {
+        return logged().stream().filter(event -> event.getFormattedMessage().contains("Essentials report, ")).toList();
+    }
+
+    private List<ILoggingEvent> runReportBlocks() {
+        return logged().stream().filter(event -> event.getFormattedMessage().contains("Essentials run report")).toList();
     }
 
     private List<ILoggingEvent> reportBlocks() {

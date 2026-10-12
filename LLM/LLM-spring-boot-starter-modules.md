@@ -324,7 +324,19 @@ Since 0.60.1, every starter (shared `EssentialsStartupChecksAutoConfiguration`, 
 context an `EssentialsStartupReport` bean and logs it as **one block on `ApplicationReadyEvent`**: at ERROR if any
 finding is an error, at WARN if any is a warning, otherwise one INFO line `Essentials startup report: no findings`.
 The block lists the findings grouped by severity, each with its fix. Every check still logs where it runs, so nothing
-is lost without the block. No property; logger `dk.trustworks.essentials.components.foundation.startup.EssentialsStartupReport`.
+is lost without the block. Logger `dk.trustworks.essentials.components.foundation.startup.EssentialsStartupReport`.
+
+The report keeps collecting while the application runs, and logs twice more:
+
+- **New findings, periodically** - every `essentials.startup-report.new-findings-interval` (`Duration`, default `5m`;
+  `0` or negative turns it off), one block `Essentials report, N new findings since the last report` with only the
+  findings not logged before, at the highest severity among them, each with how often and when it was seen. Nothing is
+  logged when nothing is new.
+- **The run report, on shutdown** - when the context closes, once: `Essentials run report` with every finding of the
+  run, each with its count and first/last-seen time. A shutdown log can be lost (SIGTERM then kill, a log shipper
+  already stopped), which is why the periodic one exists.
+
+Identical findings are kept once with a count; at most 500 distinct findings are kept, further ones are only counted.
 
 | Finding | Severity | Fix it points at |
 |---|---|---|
@@ -335,19 +347,21 @@ is lost without the block. No property; logger `dk.trustworks.essentials.compone
 | A command type would be handled by more than one handler or decider | WARN | Register it with exactly one decider |
 | `ShardOwnedDurableQueues` built without a `UnitOfWorkFactory` | WARN | `setUnitOfWorkFactory(...)` |
 | An incomplete `RedeliveryPolicy` was built | WARN | The builder setters named |
-| A message was enqueued outside a `UnitOfWork` while the application started | WARN | Enqueue in a `UnitOfWork`/transaction |
+| A message was enqueued outside a `UnitOfWork` - at start-up or at runtime | WARN | Enqueue in a `UnitOfWork`/transaction |
 | `essentials.schema.mode=emit` / `validate`: what the script or the validation covers | INFO | Register every `AggregateType` at start-up |
 
 - **What reaches it:** findings raised on the thread that refreshes the context (bean creation, the start of the
-  `Lifecycle` beans). A finding raised on another thread or after the refresh (an `ApplicationRunner`) is only logged.
+  `Lifecycle` beans) always. A finding raised after the refresh or on another thread (an `ApplicationRunner`, a
+  runtime enqueue, a processor started later) reaches it only while its context is the **only** one open in the JVM -
+  true in production; in a test JVM with several contexts open it is only logged by its check.
 - **What does not:** a check that stops the application - a missing provided library such as Objenesis,
   `wire-format-check=fail`, a failed schema `validate`. The failure is the report.
 - **When it prints:** on `ApplicationReadyEvent`; an application stopped after `ApplicationStartedEvent` without
   becoming ready (`essentials.schema.mode=emit`) prints it as the context closes. A context not started by
   `SpringApplication` (`ApplicationContextRunner`) prints nothing - read the `EssentialsStartupReport` bean
   (`getFindings()`).
-- One report per context, never shared: two contexts in one JVM never see each other's findings. Not exposed over the
-  admin API or actuator.
+- One report per context, never shared: two contexts in one JVM never see each other's findings - and neither gets
+  the runtime findings while both are open. Not exposed over the admin API or actuator.
 
 #### Database Schema
 
