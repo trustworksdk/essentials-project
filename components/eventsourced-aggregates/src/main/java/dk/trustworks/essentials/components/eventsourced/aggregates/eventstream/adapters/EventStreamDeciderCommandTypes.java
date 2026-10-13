@@ -37,7 +37,7 @@ final class EventStreamDeciderCommandTypes {
      *
      * @param decider the decider
      * @return the concrete command types the decider declares and can handle; empty when its {@code COMMAND} type
-     * argument cannot be resolved (a lambda, a generic base class)
+     * argument cannot be resolved (a lambda, or a type variable no subclass binds)
      */
     static Set<Class<?>> declaredCommandTypes(EventStreamDecider<?, ?> decider) {
         var commandTypes = new LinkedHashSet<Class<?>>();
@@ -48,21 +48,57 @@ final class EventStreamDeciderCommandTypes {
 
     /**
      * @param deciderType the decider's class
-     * @return the raw {@code COMMAND} type argument the decider class (or a superclass) gives {@link EventStreamDecider};
-     * empty when it is a type variable or the class does not implement {@link EventStreamDecider} with type arguments
+     * @return the raw {@code COMMAND} type argument the decider class gives {@link EventStreamDecider}, found through its
+     * superclasses and (sub-)interfaces, with type variables mapped back through each parameterization on the way
+     * ({@code interface OrderDecider extends EventStreamDecider<OrderCommand, OrderEvent>}, {@code abstract class Base<C>
+     * implements EventStreamDecider<C, E>}); empty when it stays a type variable or the class does not implement
+     * {@link EventStreamDecider} with type arguments
      */
     static Optional<Class<?>> resolveCommandTypeArgument(Class<?> deciderType) {
-        for (Class<?> type = deciderType; type != null && type != Object.class; type = type.getSuperclass()) {
-            for (var genericInterface : type.getGenericInterfaces()) {
-                if (genericInterface instanceof ParameterizedType parameterized && parameterized.getRawType() == EventStreamDecider.class) {
-                    var commandTypeArgument = parameterized.getActualTypeArguments()[0];
+        return findCommandTypeArgument(deciderType, Map.of(), new HashSet<>())
+                .map(commandTypeArgument -> {
                     if (commandTypeArgument instanceof Class<?> commandType) {
-                        return Optional.of(commandType);
+                        return commandType;
                     }
                     if (commandTypeArgument instanceof ParameterizedType parameterizedCommandType && parameterizedCommandType.getRawType() instanceof Class<?> commandType) {
-                        return Optional.of(commandType);
+                        return commandType;
                     }
-                    return Optional.empty();
+                    return null;
+                });
+    }
+
+    private static Optional<Type> findCommandTypeArgument(Class<?> type, Map<TypeVariable<?>, Type> bindings, Set<Class<?>> visited) {
+        if (type == null || type == Object.class || !visited.add(type)) {
+            return Optional.empty();
+        }
+        var supertypes = new ArrayList<Type>(Arrays.asList(type.getGenericInterfaces()));
+        if (type.getGenericSuperclass() != null) {
+            supertypes.add(type.getGenericSuperclass());
+        }
+        for (var supertype : supertypes) {
+            if (supertype instanceof ParameterizedType parameterized && parameterized.getRawType() instanceof Class<?> rawType) {
+                var arguments = parameterized.getActualTypeArguments();
+                if (rawType == EventStreamDecider.class) {
+                    var argument = arguments[0];
+                    while (argument instanceof TypeVariable<?> variable && bindings.containsKey(variable)) {
+                        argument = bindings.get(variable);
+                    }
+                    return Optional.of(argument);
+                }
+                var typeParameters = rawType.getTypeParameters();
+                var nextBindings = new HashMap<TypeVariable<?>, Type>();
+                for (int i = 0; i < typeParameters.length && i < arguments.length; i++) {
+                    var argument = arguments[i];
+                    nextBindings.put(typeParameters[i], argument instanceof TypeVariable<?> variable && bindings.containsKey(variable) ? bindings.get(variable) : argument);
+                }
+                var found = findCommandTypeArgument(rawType, nextBindings, visited);
+                if (found.isPresent()) {
+                    return found;
+                }
+            } else if (supertype instanceof Class<?> rawType && rawType != EventStreamDecider.class) {
+                var found = findCommandTypeArgument(rawType, Map.of(), visited);
+                if (found.isPresent()) {
+                    return found;
                 }
             }
         }

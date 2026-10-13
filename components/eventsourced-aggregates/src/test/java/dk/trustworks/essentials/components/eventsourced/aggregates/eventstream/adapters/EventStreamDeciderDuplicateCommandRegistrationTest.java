@@ -171,6 +171,24 @@ class EventStreamDeciderDuplicateCommandRegistrationTest {
                               .contains(AnotherCreateOrderDecider.class.getName());
     }
 
+    @Test
+    void deciders_declared_through_a_sub_interface_or_a_generic_abstract_base_class_are_checked_too() {
+        assertThat(EventStreamDeciderCommandTypes.resolveCommandTypeArgument(SubInterfaceCreateOrderDecider.class)).contains(CreateOrder.class);
+        assertThat(EventStreamDeciderCommandTypes.resolveCommandTypeArgument(BaseClassCreateOrderDecider.class)).contains(CreateOrder.class);
+
+        // A checker that does not itself resolve the decider's generics: HandlesCommandsThatInheritFromCommandType rejects a sub-interface decider
+        var acceptsAll = new EventStreamAggregateTypeConfiguration(AggregateType.of("Orders"), OrderId.class, AggregateIdSerializer.serializerFor(OrderId.class),
+                                                                   decider -> true,
+                                                                   command -> ((OrderCommand) command).orderId(),
+                                                                   event -> ((OrderEvent) event).orderId());
+        new EventStreamDeciderAndAggregateTypeConfigurator(eventStore, commandBus, List.of(acceptsAll), List.of(new SubInterfaceCreateOrderDecider(), new BaseClassCreateOrderDecider()));
+
+        assertThat(warnings()).singleElement().asString()
+                              .contains("'" + CreateOrder.class.getName() + "'")
+                              .contains(SubInterfaceCreateOrderDecider.class.getName())
+                              .contains(BaseClassCreateOrderDecider.class.getName());
+    }
+
     private List<String> warnings() {
         return logAppender.list.stream()
                                .filter(event -> event.getLevel() == Level.WARN)
@@ -185,6 +203,36 @@ class EventStreamDeciderDuplicateCommandRegistrationTest {
     }
 
     public static class AnotherCreateOrderDecider implements EventStreamDecider<CreateOrder, OrderEvent> {
+        @Override
+        public Optional<OrderEvent> handle(CreateOrder command, List<OrderEvent> events) {
+            return Optional.empty();
+        }
+
+        @Override
+        public boolean canHandle(Class<?> command) {
+            return CreateOrder.class.isAssignableFrom(command);
+        }
+    }
+
+    public interface OrderDecider extends EventStreamDecider<CreateOrder, OrderEvent> {
+    }
+
+    public static class SubInterfaceCreateOrderDecider implements OrderDecider {
+        @Override
+        public Optional<OrderEvent> handle(CreateOrder command, List<OrderEvent> events) {
+            return Optional.empty();
+        }
+
+        @Override
+        public boolean canHandle(Class<?> command) {
+            return CreateOrder.class.isAssignableFrom(command);
+        }
+    }
+
+    public abstract static class GenericDecider<C, E> implements EventStreamDecider<C, E> {
+    }
+
+    public static class BaseClassCreateOrderDecider extends GenericDecider<CreateOrder, OrderEvent> {
         @Override
         public Optional<OrderEvent> handle(CreateOrder command, List<OrderEvent> events) {
             return Optional.empty();
