@@ -187,6 +187,15 @@ analyzed while drained, PostgreSQL planned that as a nested loop over the shard,
 claim took 155 s instead of 7.5 ms at 20 000 rows per shard. The claim now selects its rows by primary key (the same
 fix as §2.1). `ShardOwnedSessionClaimPlanIT` recreates the stale statistics and guards the plan.
 
+### 2.7 Shard-owned: a takeover no longer chases the shard's history
+
+A new owner of an unordered shard (after a restart, deploy or rebalance) started reading from sequence 0. It
+therefore treated every message the shard had ever delivered and deleted as a "hole" and kept querying for them for
+`holeExpiry` (10 s by default). The memory and query cost grew with the shard's history: a 5 000-message history
+became 5 000 holes and thousands of chase queries. A new owner now starts at the shard's first readable row. A message
+whose sequence value was allocated before the takeover but committed after it is still delivered, by the head sweep,
+exactly once (`ShardOwnedTakeoverHistoryIT`).
+
 ## 3. Documentation
 
 - The polling-optimizer docs describe the new defaults, and the stale-statistics guidance is next to the claim

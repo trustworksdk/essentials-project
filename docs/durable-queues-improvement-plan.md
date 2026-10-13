@@ -59,6 +59,8 @@ Ordered claim under the same conditions: 1 026 ms with the current form, 827 ms 
 | D2 | Closed, no code change; documented instead. In a Spring application the transaction manager, not Essentials, takes the connection when a unit of work begins, so making acquisition lazy means wrapping the application's `DataSource` in `LazyConnectionDataSourceProxy`, an application-wide choice. Since D1 a successful handler's transaction always ends with the acknowledgement, so laziness only shortens the hold. Handlers that block on other systems already have `UnitOfWorkMode.NONE`. Both are in `LLM-postgresql-queue.md`. |
 | D3 | Closed, no code change. Unlike the shard-owned pumps, classic-queue handlers hold a connection only while they run, so more consumers than connections means waiting, not starvation. Measured: 2 × 32 consumers on a pool of 10 drained 13–15k msg/s with about one thread waiting for a connection on average (`QueueDrainThroughputIT`). A warning keyed on consumers > pool size would fire on healthy configurations. The real failure, handlers holding connections while blocked elsewhere, is covered by the D2 note, and the pool's own pending-threads metric is the operator's signal. |
 | F9 | Done. The pull-session claim joined its locking subquery back to the table and, with stale statistics, nested a loop over the shard. Measured with the real schema: 155 s instead of 7.5 ms for a 32-row claim at 20 000 rows per shard (2.8 s vs 0.9 ms at 2 000). It now selects by primary key, like A1. With fresh statistics it is 0.13 ms vs 0.22 ms before. `ShardOwnedSessionClaimPlanIT` guards it with a legacy control. |
+| F8 | Closed, not done. With a fresh schema per rate (64 unordered shards, single-message enqueues from another instance) the unordered lane issues 2.65 read statements per message at 200 msg/s and 2.06 at 2 000 msg/s (about 4 100 cheap primary-key reads per second), the same on `main`. Batching would save some of those at the cost of concurrency-sensitive changes to the owner, which is not worth it. The first measurement showed 6 statements per message, which was not read cost: it exposed the takeover finding below. |
+| New: takeover history | Done. A new owner's cursor started at 0, so every takeover chased the shard's whole delivered history as holes for `holeExpiry` (5 000 holes after a 5 000-message history). The cursor now starts at the shard's head. A late commit below it is delivered by a head sweep pinned to its base interval for `holeExpiry`, and the range ack is bounded below so it cannot delete that message first (mutation-checked). See the measurement below. |
 | F11 | Covered by F1: a takeover now charges only the in-flight window, and only after an unclean handover, instead of rewriting every backlog row on every takeover. |
 | C3 | Done, with no extra statements. Retries, delayed enqueues and delayed resurrections made by this node report their due time to the queue's optimizer in `afterCommit`, and it polls then. Backoff cap 10 s, 6 s delay: a retry 2 500 ms late → 20 ms, a delayed enqueue 3 148 ms → 29 ms. A delayed enqueue from another node still waits at most the cap. |
 | C4 (skip the ordered claim) | Reverted. I merged the two claims into one statement without measuring, reversing the 0.60 split that measured 5.4× faster. Any change here needs before/after measurements against the existing benchmark suites first. |
@@ -107,6 +109,20 @@ Measured and changed as a result:
   design.
 - **C1** (backoff without a listener) cost +100 ms for a message from another node, and stalled ordered drains. The
   builder now wires a listener like the starter, and without one nothing backs off.
+
+### Shard-owned takeover fix, measured (branch vs `main`, clean worktrees, two alternating rounds)
+
+| Benchmark | `main` | branch |
+| --- | --- | --- |
+| Takeover after a 5 000-message history: holes recorded | 5 000 | < 10 |
+| Late commit across a takeover, delivered exactly once | yes | yes |
+| Unordered steady load, 64 shards, 200 msg/s: reads per message, p99 | 2.64, 6 ms | 2.64–2.65, 5 ms |
+| Unordered steady load, 2 000 msg/s: reads per message, p99 | 2.08, 7 ms | 2.05–2.06, 5–11 ms |
+| Idle, 5 queues × (4 unordered shards + 64 ordered units): queries/s | 7.9–8.4 | 7.4–7.6 |
+| Ordered idle statements in 3 s | 108–120 | 90–93 |
+| Stalled-key cost, routing-space cost, cross-host partition timings | — | unchanged |
+
+`main` round 1's 2 000 msg/s run was excluded: it overlapped the post-commit graph rebuild (fewer messages sent, p99 532 ms).
 
 ## Workstream A — Claim SQL (classic `postgresql-queue`)
 
