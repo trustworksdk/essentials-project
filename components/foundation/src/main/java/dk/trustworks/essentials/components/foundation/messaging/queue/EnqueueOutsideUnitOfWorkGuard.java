@@ -37,18 +37,20 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * together" - an {@code Outbox.sendMessage} called outside the business transaction, for example, survives a rollback
  * of that business work and its message is delivered anyway.
  * <ul>
- *     <li>Not required (the default): the enqueue goes ahead and commits on its own, and is logged at WARN once per
- *         call site, with its stack trace, so the application can find every such site - a deliberate standalone
- *         enqueue logged first does not hide a hazardous one elsewhere. The call site is the first
+ *     <li>Not required (the default): the enqueue goes ahead and commits on its own, and is logged at WARN with its
+ *         stack trace, so the application can find such sites - a deliberate standalone enqueue logged first does not
+ *         hide a hazardous one elsewhere, within the budget below. The call site is the first
  *         {@value #CALL_SITE_FRAMES} stack frames outside the framework and the JDK, so callers that reach the enqueue
  *         through one application wrapper (a gateway around {@code Outbox.sendMessage}, say) are still told apart (with
  *         no such frame, it is the first frame outside the {@link DurableQueues} implementation). The logging is capped
  *         per innermost application frame, not per call site, so one wrapper reached from many callers cannot use up
- *         the cap and hide every other call site: up to {@value #MAX_WARNED_CALL_SITES} innermost frames per
+ *         the cap and hide every other call site: up to {@value #MAX_WARNED_INNERMOST_FRAMES} innermost frames per
  *         {@link DurableQueues} instance are logged, each with up to {@value #MAX_WARNED_CALLERS_PER_INNERMOST_FRAME}
  *         of its call sites (its callers' variants); later call sites through an innermost frame that has used its
  *         variants are not logged. The first call site of the last innermost frame is followed by one line saying
- *         further call sites are not logged, and from then on the guard no longer looks at the stack.</li>
+ *         further call sites are not logged. Once that frame is charged, the guard still walks the stack, so a frame
+ *         charged earlier keeps logging its remaining caller variants, but it stops once every charged frame has used
+ *         its variants.</li>
  *     <li>Required ({@link #setRequireActiveUnitOfWork(boolean)}, in Spring Boot the property
  *         {@value #REQUIRE_ACTIVE_UNIT_OF_WORK_FOR_ENQUEUE_PROPERTY}): the enqueue fails with a
  *         {@link NoActiveUnitOfWorkException} and nothing is queued. Note that this includes every framework caller that
@@ -71,13 +73,22 @@ public final class EnqueueOutsideUnitOfWorkGuard {
     /**
      * How many distinct innermost application frames one guard (one {@link DurableQueues} instance) logs call sites for
      * at WARN before it stops. Each innermost frame logs up to {@value #MAX_WARNED_CALLERS_PER_INNERMOST_FRAME} call
-     * sites, so this bounds the WARNs at {@value #MAX_WARNED_CALL_SITES} times that.
+     * sites, so this bounds the WARNs at {@value #MAX_WARNED_INNERMOST_FRAMES} times that.
      */
-    public static final int MAX_WARNED_CALL_SITES = 32;
+    public static final int MAX_WARNED_INNERMOST_FRAMES = 32;
+
+    /**
+     * The historical name of {@link #MAX_WARNED_INNERMOST_FRAMES}: it caps innermost application frames, not call
+     * sites - the WARNs are bounded by that times {@value #MAX_WARNED_CALLERS_PER_INNERMOST_FRAME}.
+     *
+     * @deprecated use {@link #MAX_WARNED_INNERMOST_FRAMES}
+     */
+    @Deprecated
+    public static final int MAX_WARNED_CALL_SITES = MAX_WARNED_INNERMOST_FRAMES;
 
     /**
      * How many call sites (callers' variants) sharing one innermost application frame are logged - only the first of
-     * them counts against {@link #MAX_WARNED_CALL_SITES}
+     * them counts against {@link #MAX_WARNED_INNERMOST_FRAMES}
      */
     static final int MAX_WARNED_CALLERS_PER_INNERMOST_FRAME = 4;
 
@@ -118,7 +129,7 @@ public final class EnqueueOutsideUnitOfWorkGuard {
      */
     private final    Set<List<CallSiteFrame>>                   warnedCallSites                = ConcurrentHashMap.newKeySet();
     /**
-     * Each innermost frame seen, with the slot it was charged. Grows past {@link #MAX_WARNED_CALL_SITES} only by the
+     * Each innermost frame seen, with the slot it was charged. Grows past {@link #MAX_WARNED_INNERMOST_FRAMES} only by the
      * threads racing in with a new innermost frame as the cap is reached.
      */
     private final    ConcurrentHashMap<CallSiteFrame, Charge>   chargedInnermostFrames         = new ConcurrentHashMap<>();
@@ -128,6 +139,11 @@ public final class EnqueueOutsideUnitOfWorkGuard {
      * holds however many threads race past the check before the stack walk
      */
     private final    AtomicInteger                              chargedInnermostFrameCount     = new AtomicInteger();
+    /**
+     * Innermost frames that have logged all their {@link #MAX_WARNED_CALLERS_PER_INNERMOST_FRAME} caller variants. With
+     * every slot charged and exhausted, nothing more can be logged, so the guard stops walking the stack.
+     */
+    private final    AtomicInteger                              exhaustedInnermostFrameCount   = new AtomicInteger();
     private volatile boolean                                    requireActiveUnitOfWork;
 
     /**
@@ -152,7 +168,7 @@ public final class EnqueueOutsideUnitOfWorkGuard {
     /**
      * @param requireActiveUnitOfWork {@code true}: an enqueue outside a unit of work or transaction fails with a
      *                                {@link NoActiveUnitOfWorkException}. {@code false} (default): it commits on its own
-     *                                and is logged at WARN once per call site
+     *                                and is logged at WARN (once per call site, within the per-innermost-frame budget)
      */
     public void setRequireActiveUnitOfWork(boolean requireActiveUnitOfWork) {
         this.requireActiveUnitOfWork = requireActiveUnitOfWork;
@@ -192,15 +208,17 @@ public final class EnqueueOutsideUnitOfWorkGuard {
                                                   + REQUIRE_ACTIVE_UNIT_OF_WORK_FOR_ENQUEUE_PROPERTY + "' is enabled. "
                                                   + "Enqueue inside unitOfWorkFactory.usingUnitOfWork(...) or a Spring @Transactional/TransactionTemplate.");
         }
-        if (chargedInnermostFrameCount.get() >= MAX_WARNED_CALL_SITES) {
-            // The cap is reached: no stack walk at all
+        if (exhaustedInnermostFrameCount.get() >= MAX_WARNED_INNERMOST_FRAMES) {
+            // Every slot is charged and has used its caller variants: no stack walk at all
             return;
         }
         var callSite       = callSite();
         var key            = callSite.key();
         var innermostFrame = key.isEmpty() ? UNKNOWN_FRAME : key.getFirst();
-        var charge         = chargedInnermostFrames.computeIfAbsent(innermostFrame, frame -> new Charge(chargedInnermostFrameCount.incrementAndGet()));
-        if (charge.slot() > MAX_WARNED_CALL_SITES) {
+        var charge = chargedInnermostFrameCount.get() >= MAX_WARNED_INNERMOST_FRAMES
+                     ? chargedInnermostFrames.get(innermostFrame) // all slots taken: a new innermost frame is never charged
+                     : chargedInnermostFrames.computeIfAbsent(innermostFrame, frame -> new Charge(chargedInnermostFrameCount.incrementAndGet()));
+        if (charge == null || charge.slot() > MAX_WARNED_INNERMOST_FRAMES) {
             // Lost the race for the last slot
             return;
         }
@@ -216,15 +234,18 @@ public final class EnqueueOutsideUnitOfWorkGuard {
             // Lost the race for this innermost frame's last caller variant
             return;
         }
+        if (caller == MAX_WARNED_CALLERS_PER_INNERMOST_FRAME) {
+            exhaustedInnermostFrameCount.incrementAndGet();
+        }
         warn(queueName, callSite.describe());
-        if (caller == 1 && charge.slot() == MAX_WARNED_CALL_SITES) {
+        if (caller == 1 && charge.slot() == MAX_WARNED_INNERMOST_FRAMES) {
             log.warn("[{}] Messages have been enqueued outside a UnitOfWork/transaction from {} innermost application frames - further call sites are not logged",
-                     queueName, MAX_WARNED_CALL_SITES);
+                     queueName, MAX_WARNED_INNERMOST_FRAMES);
         }
     }
 
     /**
-     * @param slot          the innermost frame's place against {@link #MAX_WARNED_CALL_SITES}, from 1
+     * @param slot          the innermost frame's place against {@link #MAX_WARNED_INNERMOST_FRAMES}, from 1
      * @param callersWarned call sites through the innermost frame logged so far, up to
      *                      {@link #MAX_WARNED_CALLERS_PER_INNERMOST_FRAME}
      */
@@ -237,8 +258,8 @@ public final class EnqueueOutsideUnitOfWorkGuard {
     private void warn(QueueName queueName, String callSite) {
         log.warn("[{}] A message was enqueued outside a UnitOfWork/transaction from '{}', so it committed on its own and is NOT rolled back with " +
                  "any surrounding business work. If the enqueue should commit together with that work, enqueue inside a UnitOfWork or a " +
-                 "Spring transaction; set '{}=true' to make such an enqueue fail instead. Logged once per call site; the " +
-                 "stack trace shows the full call path.",
+                 "Spring transaction; set '{}=true' to make such an enqueue fail instead. Each call site is logged once, within a per-innermost-frame budget (see " +
+                 "EnqueueOutsideUnitOfWorkGuard); the stack trace shows the full call path.",
                  queueName, callSite, REQUIRE_ACTIVE_UNIT_OF_WORK_FOR_ENQUEUE_PROPERTY, new EnqueueCallSite());
         // During start-up this reaches the report of the context being refreshed; at runtime the run report - when exactly
         // one is registered in the JVM (see EssentialsRunReport), otherwise only the WARN above

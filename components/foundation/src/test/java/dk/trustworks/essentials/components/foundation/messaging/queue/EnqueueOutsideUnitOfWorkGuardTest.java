@@ -145,19 +145,18 @@ class EnqueueOutsideUnitOfWorkGuardTest {
     @Test
     void after_the_maximum_number_of_call_sites_one_line_says_further_ones_are_not_logged() {
         var guard   = guardWithApplicationClasses();
-        var sites   = EnqueueOutsideUnitOfWorkGuard.MAX_WARNED_CALL_SITES + 5;
+        var sites   = EnqueueOutsideUnitOfWorkGuard.MAX_WARNED_INNERMOST_FRAMES + 5;
         assertThat(sites).as("enqueueFromCallSite tells apart " + DISTINCT_INNERMOST_FRAMES + " innermost frames").isLessThanOrEqualTo(DISTINCT_INNERMOST_FRAMES);
 
-        for (var site = 0; site < sites; site++) {
-            enqueueFromCallSite(guard, site);
-        }
-        for (var site = 0; site < sites; site++) {
-            enqueueFromCallSite(guard, site);
+        for (var round = 0; round < 2; round++) { // one call instruction, so the second round repeats the first round's call sites
+            for (var site = 0; site < sites; site++) {
+                enqueueFromCallSite(guard, site);
+            }
         }
 
         var warnings = warnings();
-        assertThat(warnings).hasSize(EnqueueOutsideUnitOfWorkGuard.MAX_WARNED_CALL_SITES + 1);
-        assertThat(warnings.subList(0, EnqueueOutsideUnitOfWorkGuard.MAX_WARNED_CALL_SITES))
+        assertThat(warnings).hasSize(EnqueueOutsideUnitOfWorkGuard.MAX_WARNED_INNERMOST_FRAMES + 1);
+        assertThat(warnings.subList(0, EnqueueOutsideUnitOfWorkGuard.MAX_WARNED_INNERMOST_FRAMES))
                 .as("each a distinct call site")
                 .doesNotHaveDuplicates()
                 .allSatisfy(warning -> assertThat(warning).contains("enqueueFromCallSite"));
@@ -167,7 +166,7 @@ class EnqueueOutsideUnitOfWorkGuardTest {
     @Test
     void one_wrapper_reached_from_many_callers_does_not_use_up_the_cap() {
         var guard   = guardWithApplicationClasses(ApplicationGateway.class);
-        var callers = EnqueueOutsideUnitOfWorkGuard.MAX_WARNED_CALL_SITES + 8;
+        var callers = EnqueueOutsideUnitOfWorkGuard.MAX_WARNED_INNERMOST_FRAMES + 8;
         assertThat(callers).as("sendThroughTheGatewayFromCaller tells apart 8^2 callers").isLessThanOrEqualTo(64);
 
         for (var caller = 0; caller < callers; caller++) {
@@ -189,7 +188,7 @@ class EnqueueOutsideUnitOfWorkGuardTest {
     @RepeatedTest(40)
     void the_cap_holds_when_threads_race_for_the_last_slot() throws InterruptedException {
         var guard = guardWithApplicationClasses();
-        var max   = EnqueueOutsideUnitOfWorkGuard.MAX_WARNED_CALL_SITES;
+        var max   = EnqueueOutsideUnitOfWorkGuard.MAX_WARNED_INNERMOST_FRAMES;
         for (var site = 0; site < max - 1; site++) {
             enqueueFromCallSite(guard, site);
         }
@@ -224,6 +223,84 @@ class EnqueueOutsideUnitOfWorkGuardTest {
                 .hasSize(max)
                 .doesNotHaveDuplicates();
         assertThat(warnings).hasSize(max + 1);
+    }
+
+    @Test
+    void a_frame_charged_early_keeps_logging_its_caller_variants_after_the_last_slot_is_taken() {
+        var guard = guardWithApplicationClasses(ApplicationGateway.class);
+        var max   = EnqueueOutsideUnitOfWorkGuard.MAX_WARNED_INNERMOST_FRAMES;
+        sendThroughTheGatewayFromCaller(guard, 0, 2);
+        for (var site = 0; site < max - 1; site++) {
+            enqueueFromCallSite(guard, site);
+        }
+        assertThat(warnings()).as("the gateway, 31 other frames and the 'further' line").hasSize(1 + (max - 1) + 1);
+
+        for (var caller = 1; caller < 10; caller++) {
+            sendThroughTheGatewayFromCaller(guard, caller, 2);
+        }
+        enqueueFromCallSite(guard, max);
+
+        var gatewayWarnings = warnings().stream().filter(warning -> warning.contains("ApplicationGateway.send")).toList();
+        assertThat(gatewayWarnings).hasSize(EnqueueOutsideUnitOfWorkGuard.MAX_WARNED_CALLERS_PER_INNERMOST_FRAME).doesNotHaveDuplicates();
+        assertThat(warnings()).as("a new innermost frame past the cap is not logged").hasSize(1 + (max - 1) + 1 + (EnqueueOutsideUnitOfWorkGuard.MAX_WARNED_CALLERS_PER_INNERMOST_FRAME - 1));
+    }
+
+    @RepeatedTest(40)
+    void the_caller_variant_budget_holds_when_threads_race_through_one_wrapper() throws InterruptedException {
+        var guard  = guardWithApplicationClasses(ApplicationGateway.class);
+        var budget = EnqueueOutsideUnitOfWorkGuard.MAX_WARNED_CALLERS_PER_INNERMOST_FRAME;
+        for (var caller = 0; caller < budget - 1; caller++) {
+            sendThroughTheGatewayFromCaller(guard, caller, 2);
+        }
+        var racers = 8;
+        raceThroughTheGateway(guard, budget - 1, racers);
+
+        assertThat(warnings().stream().filter(warning -> warning.contains("ApplicationGateway.send")))
+                .as("exactly the budget, no duplicates")
+                .hasSize(budget)
+                .doesNotHaveDuplicates();
+        assertThat(warnings()).noneSatisfy(warning -> assertThat(warning).contains("further call sites are not logged"));
+    }
+
+    @RepeatedTest(40)
+    void exactly_one_further_call_sites_line_when_threads_race_through_the_wrapper_on_the_last_slot() throws InterruptedException {
+        var guard = guardWithApplicationClasses(ApplicationGateway.class);
+        var max   = EnqueueOutsideUnitOfWorkGuard.MAX_WARNED_INNERMOST_FRAMES;
+        for (var site = 0; site < max - 1; site++) {
+            enqueueFromCallSite(guard, site);
+        }
+        raceThroughTheGateway(guard, 0, 8);
+
+        var warnings = warnings();
+        assertThat(warnings.stream().filter(warning -> warning.contains("further call sites are not logged"))).hasSize(1);
+        assertThat(warnings.stream().filter(warning -> warning.contains("ApplicationGateway.send")))
+                .hasSize(EnqueueOutsideUnitOfWorkGuard.MAX_WARNED_CALLERS_PER_INNERMOST_FRAME)
+                .doesNotHaveDuplicates();
+    }
+
+    /**
+     * {@code racers} threads released together, each through the gateway from its own distinct caller, starting at {@code firstCaller}
+     */
+    private static void raceThroughTheGateway(EnqueueOutsideUnitOfWorkGuard guard, int firstCaller, int racers) throws InterruptedException {
+        var start    = new CountDownLatch(1);
+        var finished = new CountDownLatch(racers);
+        var failures = new CopyOnWriteArrayList<Throwable>();
+        for (var racer = 0; racer < racers; racer++) {
+            var caller = firstCaller + racer;
+            Thread.ofPlatform().start(() -> {
+                try {
+                    start.await();
+                    sendThroughTheGatewayFromCaller(guard, caller, 2);
+                } catch (Throwable e) {
+                    failures.add(e);
+                } finally {
+                    finished.countDown();
+                }
+            });
+        }
+        start.countDown();
+        assertThat(finished.await(10, TimeUnit.SECONDS)).isTrue();
+        assertThat(failures).isEmpty();
     }
 
     private static void enqueueFromTheFirstCallSite(EnqueueOutsideUnitOfWorkGuard guard) {

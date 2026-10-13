@@ -115,10 +115,11 @@ enqueue commits or rolls back with the caller's writes - which is what an Outbox
 `SpringTransactionAwareJdbiUnitOfWorkFactory` a plain Spring `@Transactional`/`TransactionTemplate` is joined too.
 
 An enqueue **outside** any `UnitOfWork` or Spring transaction commits on its own and is not undone by a later
-rollback of the caller's work - e.g. `Outbox.sendMessage` called before the business transaction starts. Each call
-site's first one logs a WARN with its stack trace (up to 32 innermost application frames per `DurableQueues`, each with up to 4 of its callers), so a deliberate standalone
-enqueue cannot hide another one. A call site is the first three stack frames outside Essentials, the JDK, Reactor, Kotlin and Spring, so
-two callers of one application wrapper (a gateway around `Outbox.sendMessage`) are two call sites. Opt in to failing instead with
+rollback of the caller's work - e.g. `Outbox.sendMessage` called before the business transaction starts. The first
+enqueue from a call site logs a WARN with its stack trace, for up to 4 call sites per innermost application frame and up to 32 such
+frames per `DurableQueues`; past that budget enqueues are not logged, so a silent enqueue is not proof of a transaction. A call site is the
+first three stack frames outside Essentials, the JDK, Reactor, Kotlin and Spring, so two callers of one application wrapper (a gateway
+around `Outbox.sendMessage`) are two call sites, but they share that wrapper's budget of 4. Opt in to failing instead with
 `setRequireActiveUnitOfWorkForEnqueue(true)` on the builder, or in Spring Boot
 `essentials.durable-queues.require-active-unit-of-work-for-enqueue=true`: such an enqueue then throws
 `NoActiveUnitOfWorkException` and queues nothing. A plain Spring `@Transactional`/`TransactionTemplate` counts as
