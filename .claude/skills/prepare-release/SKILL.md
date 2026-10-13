@@ -1,6 +1,6 @@
 ---
 name: prepare-release
-description: Prepare an Essentials release up to a local commit — convert docs/NEXT_VERSION_RELEASE.md into docs/RELEASE-NOTES-<version>.md and reset it, move the plugin version, CHANGELOG heading and essentials.version pin, write the plugin's migration notes, regenerate what reads the pin, run every release check, write the GitHub release body, and print the tag, push and gh release commands for the maintainer. Never tags, never pushes. Use when asked to prepare, cut or get ready a release, a patch release or a version bump of Essentials. Argument - the version, e.g. 0.60.1.
+description: Prepare an Essentials release up to a local commit — convert docs/NEXT_VERSION_RELEASE.md into docs/RELEASE-NOTES-<version>.md and reset it, move the plugin version, CHANGELOG heading and essentials.version pin, write the plugin's migration notes, regenerate what reads the pin, run every release check, write the GitHub release body (local, uncommitted GITHUB-RELEASE-<version>.md), and print the tag, push and gh release commands for the maintainer. Never tags, never pushes. Use when asked to prepare, cut or get ready a release, a patch release or a version bump of Essentials. Argument - the version, e.g. 0.60.1.
 argument-hint: "<version, e.g. 0.60.1>"
 ---
 
@@ -125,12 +125,24 @@ Then work through the hand-checked list `plugin-check.sh release` prints at its 
 
 ## 6. The GitHub release body
 
-Run the `github-release` skill with the version. It writes `GITHUB-RELEASE-<version>.md` at the root, local and
-never committed. Its links are pinned to the tag, so any fix it makes under `docs/` is committed before the tag.
+Always produce `GITHUB-RELEASE-<version>.md` at the repository root: run the `github-release` skill with the
+version. It follows the newest `GITHUB-RELEASE-*.md` there (e.g. `GITHUB-RELEASE-0.60.0.md`) as the style exemplar.
+The file stays local and uncommitted, like every earlier one: never stage it, and do not add it to `.gitignore`.
+The tag need not exist yet; `check.py` resolves the tag-pinned links against the local files. It must pass:
+
+```bash
+python3 -I .claude/skills/github-release/check.py GITHUB-RELEASE-<version>.md <version> \
+    docs/RELEASE-NOTES-<version>.md docs/MIGRATION-<major.minor>.md docs/MIGRATION-NEXT_MAJOR.md
+```
+
+Any fix it makes under `docs/` goes in a new commit before the tag, or its anchors do not exist at the tag. When an
+earlier file for this version already exists, show the maintainer the difference before overwriting it.
 
 ## 7. Hand over
 
-Print these for the maintainer, filled in, and stop. Do not run them.
+First confirm `GITHUB-RELEASE-<version>.md` exists, is untracked (`git status --porcelain GITHUB-RELEASE-<version>.md`
+prints `??`) and passed `check.py`; name it in the hand-over. Then print these for the maintainer, filled in, and
+stop. Do not run them.
 
 ```bash
 git push origin <branch>                         # then land on main as usual; the plugin marketplace goes live when main has the new plugin.json
