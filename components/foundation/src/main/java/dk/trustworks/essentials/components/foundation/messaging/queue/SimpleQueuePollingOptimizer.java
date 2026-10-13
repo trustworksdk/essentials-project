@@ -170,11 +170,10 @@ public class SimpleQueuePollingOptimizer implements QueuePollingOptimizer {
 
     /**
      * Poll when a message on this queue becomes deliverable, rather than sleeping past it on the backoff. The
-     * PostgreSQL {@code DurableQueues} reports the due time of each retry, delayed enqueue and delayed resurrection made
-     * by this node here; without it, a retry on a queue that had backed off was delivered up to {@code maxDelayMs}
-     * late. The consumer polls on its
-     * polling interval and asks {@link #shouldSkipPolling()} each time, so the message is claimed within one polling
-     * interval of its due time.
+     * PostgreSQL and MongoDB {@code DurableQueues} report the due time of each retry, delayed enqueue and delayed
+     * resurrection made by this node here; without it, a retry on a queue that had backed off was delivered up to
+     * {@code maxDelayMs} late. The consumer polls on its polling interval and asks {@link #shouldSkipPolling()} each
+     * time, so the message is claimed within one polling interval of its due time.
      */
     @Override
     public void messageScheduledFor(Instant dueAt) {

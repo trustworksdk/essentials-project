@@ -170,7 +170,8 @@ Auto-created on `start()`:
 ### SimpleQueuePollingOptimizer
 Linear backoff - only option for MongoDB.
 
-**Algorithm**: `delay += increment` on empty poll, reset on message/notification.
+**Algorithm**: `delay += increment` on empty poll, reset on message/notification. Since 0.60.1 it also polls when a
+retry, delayed enqueue or delayed resurrection made by this node comes due, instead of sleeping past it.
 
 ```java
 // Base package: dk.trustworks.essentials.components.foundation.messaging.queue
@@ -194,8 +195,10 @@ MongoDurableQueues.builder()
 | `maxDelayMs` | Cap (5000ms) |
 
 **Defaults** (if no factory):
-- `delayIncrementMs` = 50% of `messageHandlingTimeout`
-- `maxDelayMs` = 20× `messageHandlingTimeout`
+- `delayIncrementMs` = 50% of the consumer's polling interval
+- `maxDelayMs` = 20× the consumer's polling interval
+
+Before 0.60.1 the builder ignored `setQueuePollingOptimizerFactory`, so these defaults always applied.
 
 ### Change Streams
 Automatically enabled on `start()` - triggers immediate polling on message arrival.
