@@ -18,11 +18,14 @@ Edit `LLM/` only: `essentials-plugin/references/llm/` is generated from it by `s
 
 ```bash
 mvn test                                              # unit only, no Docker
-mvn verify                                            # unit + integration (needs Docker)
-scripts/fast-verify.sh                                # all unit tests first (fail fast), then ITs only; see script header
-mvn verify -DskipUTs                                  # ITs only; -DskipITs = unit only; -DskipTests = neither
-mvn test -pl types -am                                # single module, unit
-mvn verify -pl components/postgresql-event-store -am  # single module, integration
+mvn verify                                            # unit + integration (needs Docker), interleaved per module
+scripts/fast-verify.sh                                # both in sequence: every unit test first (fail fast), then ITs only
+mvn verify -DskipUTs                                  # integration only
+mvn verify -DskipITs                                  # unit only, through the whole lifecycle
+mvn clean install -DskipTests                         # no tests at all (skips failsafe too)
+mvn test -pl types -am                                # one module, unit (-am also runs upstream modules' unit tests)
+mvn verify -pl components/postgresql-event-store -am  # one module, unit + integration — and every upstream module's too
+mvn verify -pl <module> -am -DskipUTs -Dit.test=<Class> -Dfailsafe.failIfNoSpecifiedTests=false  # one IT class only
 mvn clean install                                     # full build
 mvn clean install -DskipDependencyCheck=true          # skip OWASP check
 mvn clean install -P test-release                     # simulated release
