@@ -32,8 +32,11 @@ format changes for one shape only, back to what 0.50 wrote: a type with a public
 
 ## 1. Breaking — what you MUST apply
 
-No public API was removed or changed incompatibly, and no configuration key was renamed or removed; the additions
-are listed in §2.
+No public API was removed, and no configuration key was renamed or removed; the additions are listed in §2. Two of
+the additions can still stop your code compiling: `AbstractEventProcessor` gains `getCurrentUnitOfWork()`,
+`getRequiredUnitOfWork()` and `getUnitOfWorkFactory()`, and `CommandHandler` gains a `default handledCommandTypes()`.
+A processor subclass or `CommandHandler` implementation of your own that already declares a method with one of those
+names and an incompatible signature or return type no longer compiles; rename yours.
 
 **Supported PostgreSQL is now 15+.** Essentials supports the PostgreSQL majors the PostgreSQL community still
 patches, which today means 15 and later (14 reaches end of life on 2026-11-12). Before this release the module docs

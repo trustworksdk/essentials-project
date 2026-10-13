@@ -1140,8 +1140,9 @@ start-up rather than silently later.
 
 ### 17.1 PostgreSQL version
 
-**PostgreSQL 13 or later** if the ordered lane is used; **9.5** for the unordered lane alone. The
-floor comes from the start-up probe, not from the delivery path:
+**PostgreSQL 15 or later**, the supported floor (README § Version Compatibility). On its own the ordered
+lane would need 13+, and the unordered lane alone 9.5; that technical floor comes from the start-up probe, not
+from the delivery path:
 
 | Feature | Introduced | Used by | Used for |
 |---|---|---|---|
