@@ -116,8 +116,8 @@ rolls back with the caller's writes - which is what an Outbox relies on.
 
 The one exception, since 0.60.1: a successfully handled message is acknowledged inside the handler's own transaction,
 as its last statement. The handler's writes and the acknowledgement commit together or not at all, and a message
-costs one connection checkout and one commit instead of two (about +10% drain throughput through a 10-connection
-pool). If the acknowledgement fails, the handler's writes roll back and the message is retried; before, they
+costs one connection checkout and one commit instead of two (measured on its own: about +10% drain throughput
+through a 10-connection pool, without LISTEN/NOTIFY). If the acknowledgement fails, the handler's writes roll back and the message is retried; before, they
 stayed committed and the message was delivered again after `messageHandlingTimeout`. A `DurableQueuesInterceptor`
 on `AcknowledgeMessageAsHandled` therefore runs inside the handler's transaction. The acknowledgement stays separate,
 as before, for a handler that requests redelivery, one that marks its unit of work rollback-only (its message is

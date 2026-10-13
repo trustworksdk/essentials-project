@@ -89,8 +89,11 @@ The `takeoverAttemptBumps` metric therefore drops to zero for clean handovers an
 
 The acknowledgement used to be a second transaction on a second pooled connection, after the handler's committed.
 It is now the last statement of the handler's own transaction, so the handler's writes and the acknowledgement commit
-together. This saves a connection checkout and a commit per message: drain throughput through a 10-connection pool
-rose about 10%, and threads waiting for a connection halved (`QueueDrainThroughputIT`, opt-in benchmark).
+together. This saves a connection checkout and a commit per message. Measured on its own with the builder's previous
+wiring (no LISTEN/NOTIFY), drain throughput through a 10-connection pool rose about 10% (13.6k to 14.9k msg/s), and
+threads waiting for a connection halved (`QueueDrainThroughputIT`, opt-in benchmark). With the Spring Boot starter's
+wiring its share was not measured separately; the release as a whole drains 4.2× faster there (see the measurement
+table in `docs/durable-queues-improvement-plan.md`).
 
 What changes:
 
