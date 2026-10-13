@@ -588,6 +588,9 @@ public abstract class DurableQueuesIT<DURABLE_QUEUES extends DurableQueues, UOW 
         assertThat(messages.get(4)).usingRecursiveComparison().isEqualTo(message1);
         assertThat(messages.get(5)).usingRecursiveComparison().isEqualTo(message1);
 
+        // The handler records the message before it throws, so the 6th delivery is seen before its failure is marked as a dead letter
+        Awaitility.waitAtMost(Duration.ofSeconds(4))
+                  .untilAsserted(() -> assertThat(withDurableQueue(() -> durableQueues.getDeadLetterMessage(message1Id))).isPresent());
         assertThat(durableQueues.getTotalMessagesQueuedFor(queueName)).isEqualTo(0); // Dead letter messages is not counted
         var deadLetterMessage = withDurableQueue(() -> durableQueues.getDeadLetterMessage(message1Id));
         assertThat(deadLetterMessage).isPresent();
@@ -692,7 +695,9 @@ public abstract class DurableQueuesIT<DURABLE_QUEUES extends DurableQueues, UOW 
         assertThat(messages.get(8)).usingRecursiveComparison().isEqualTo(message1);
         assertThat(messages.get(9)).usingRecursiveComparison().isEqualTo(message1);
 
-        assertThat(durableQueues.getTotalMessagesQueuedFor(queueName)).isEqualTo(0); // Message was delivered
+        // The handler records the message before it returns, so the final delivery is seen before it is acknowledged
+        Awaitility.waitAtMost(Duration.ofSeconds(4))
+                  .untilAsserted(() -> assertThat(durableQueues.getTotalMessagesQueuedFor(queueName)).isEqualTo(0)); // Message was delivered
         var deadLetterMessage = withDurableQueue(() -> durableQueues.getDeadLetterMessage(message1Id));
         assertThat(deadLetterMessage).isEmpty();
         assertThat(durableQueues.getQueuedMessageCountsFor(queueName).numberOfQueuedMessages()).isEqualTo(0);
