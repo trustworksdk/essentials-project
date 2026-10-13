@@ -296,9 +296,15 @@ public final class ShardOwnedSchema {
                               queue_id    smallint    NOT NULL,
                               instance_id text        NOT NULL,
                               last_seen   timestamptz NOT NULL DEFAULT now(),
+                              -- Which process last refreshed the row: a token per JVM. Two processes running
+                              -- under one instance id keep overwriting each other's, which is how the shared id
+                              -- is detected - see ShardOwnedStorage.heartbeat
+                              incarnation text,
                               PRIMARY KEY (queue_id, instance_id)
                           )
                           """.formatted(INSTANCE_TABLE));
+        // The membership table already shipped without it
+        statements.add("ALTER TABLE %s ADD COLUMN IF NOT EXISTS incarnation text".formatted(INSTANCE_TABLE));
 
         // The name-to-id registry. The engine addresses a queue by an interned smallint because
         // a two-byte column in every row's primary key is what keeps the hot index dense; the

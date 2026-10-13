@@ -18,6 +18,7 @@ package dk.trustworks.essentials.components.foundation.messaging.queue;
 
 import dk.trustworks.essentials.components.foundation.messaging.queue.operations.GetNextMessageReadyForDelivery;
 
+import java.time.Instant;
 import java.util.List;
 
 /**
@@ -66,5 +67,15 @@ public interface QueuePollingOptimizer extends DurableQueueConsumerNotifications
     default void queuePollingReturnedMessages(List<QueuedMessage> queuedMessages) {}
 
     boolean shouldSkipPolling();
+
+    /**
+     * A message on this queue becomes deliverable at {@code dueAt}: a retry, a delayed enqueue or a delayed
+     * resurrection. An optimizer that backs off should poll at that time rather than sleep past it, or the message
+     * is delivered up to a whole backoff late. The default ignores it.
+     *
+     * @param dueAt when the message becomes deliverable
+     */
+    default void messageScheduledFor(Instant dueAt) {
+    }
 
 }

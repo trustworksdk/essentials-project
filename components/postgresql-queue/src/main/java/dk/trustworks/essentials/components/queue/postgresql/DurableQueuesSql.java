@@ -48,6 +48,11 @@ public class DurableQueuesSql {
      * in an unordered manner based on the specified conditions.
      */
     public String buildUnorderedSqlStatement() {
+        // The UPDATE selects its rows by primary-key array, never by joining the CTE. When the table was analyzed
+        // while drained (reltuples = 0, relpages > 0) the planner expects no rows and joins with a nested loop over
+        // the whole queue, so a claim cost time proportional to the backlog (185 ms vs 4 ms for 20 000 queued
+        // messages and a limit of 128). ARRAY(...) is evaluated once, so the locked id set is fixed before the
+        // UPDATE runs. Guarded by PostgresqlDurableQueuesClaimPlanIT.
         return bind("""
                       WITH cte_unordered AS (
                         SELECT id
@@ -68,9 +73,7 @@ public class DurableQueuesSql {
                         next_delivery_ts     = NULL,
                         is_being_delivered   = TRUE,
                         delivery_ts          = :now
-                      FROM cte_unordered u
-                      WHERE q.id = u.id
-                        AND q.queue_name = :queueName
+                      WHERE q.id = ANY(ARRAY(SELECT id FROM cte_unordered))
                       RETURNING q.*;
                     """, arg("tableName", sharedQueueTableName));
     }
@@ -88,6 +91,7 @@ public class DurableQueuesSql {
      * logic for selecting, ordering, and updating messages in a queue table.
      */
     public String buildOrderedSqlStatement(boolean hasExclusiveKeys) {
+        // UPDATE by primary-key array, not by joining the CTE - see buildUnorderedSqlStatement()
         return bind("""
                     WITH cte_ordered AS (
                                SELECT id
@@ -119,13 +123,71 @@ public class DurableQueuesSql {
                                         next_delivery_ts     = NULL,
                                         is_being_delivered   = TRUE,
                                         delivery_ts          = :now
-                                      FROM cte_ordered o
-                                      WHERE q.id = o.id
-                                        AND q.queue_name = :queueName
+                                      WHERE q.id = ANY(ARRAY(SELECT id FROM cte_ordered))
                                       RETURNING q.*;
                     """,
                     arg("tableName", sharedQueueTableName),
                     arg("excludeKeys", hasExclusiveKeys ? "AND key NOT IN (<excludeKeys>)" : ""));
+    }
+
+    /**
+     * The ordered claim for a queue whose backlog sits on few keys: claims the same messages as
+     * {@link #buildOrderedSqlStatement(boolean)}, found a different way.
+     * <p>
+     * That statement walks the eligible candidates in {@code key_order} and probes each for an earlier message of its
+     * key, stopping once it has {@code limit} heads. When the queue has fewer heads than the limit - a few keys with
+     * many messages each, the typical event-processor shape - it never stops early and probes every candidate on
+     * every poll: 180 ms at 20 keys x 1 000 messages. This statement first finds each key's head with one index
+     * probe per key (a recursive "loose index scan" over {@code idx_<table>_ordered_msg}), so its cost follows the
+     * number of keys instead: 0.4 ms for the same backlog, but 114 ms at 20 000 keys of one message each, where the
+     * other statement takes 1.6 ms. {@code PostgresqlDurableQueues} picks between the two per queue.
+     * <p>
+     * A key's head is its lowest {@code key_order} across every message of the key, dead letters and messages being
+     * delivered included - the same full per-key barrier as the {@code NOT EXISTS} in the other statement.
+     *
+     * @param hasExclusiveKeys whether to exclude the keys bound as {@code excludeKeys}
+     * @return the SQL statement
+     */
+    public String buildOrderedHeadScanSqlStatement(boolean hasExclusiveKeys) {
+        return bind("""
+                    WITH RECURSIVE heads AS (
+                        (SELECT key, key_order
+                         FROM {:tableName}
+                         WHERE queue_name = :queueName AND key IS NOT NULL
+                         ORDER BY key, key_order
+                         LIMIT 1)
+                        UNION ALL
+                        SELECT next_head.key, next_head.key_order
+                        FROM heads h
+                        CROSS JOIN LATERAL (SELECT key, key_order
+                                            FROM {:tableName}
+                                            WHERE queue_name = :queueName AND key > h.key
+                                            ORDER BY key, key_order
+                                            LIMIT 1) next_head
+                    ),
+                    cte_ordered AS (
+                        SELECT q.id
+                        FROM heads h
+                        JOIN {:tableName} q ON q.queue_name = :queueName AND q.key = h.key AND q.key_order = h.key_order
+                        WHERE q.is_dead_letter_message = FALSE
+                          AND q.is_being_delivered     = FALSE
+                          AND q.next_delivery_ts      <= :now
+                          {:excludeKeys}
+                        ORDER BY q.key_order, q.next_delivery_ts
+                        LIMIT :limit
+                        FOR UPDATE OF q SKIP LOCKED
+                    )
+                    UPDATE {:tableName} q
+                    SET
+                      total_attempts       = q.total_attempts + 1,
+                      next_delivery_ts     = NULL,
+                      is_being_delivered   = TRUE,
+                      delivery_ts          = :now
+                    WHERE q.id = ANY(ARRAY(SELECT id FROM cte_ordered))
+                    RETURNING q.*;
+                    """,
+                    arg("tableName", sharedQueueTableName),
+                    arg("excludeKeys", hasExclusiveKeys ? "AND q.key NOT IN (<excludeKeys>)" : ""));
     }
 
     /**
