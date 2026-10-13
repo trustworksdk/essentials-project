@@ -116,7 +116,16 @@ public class SpringTransactionAwareUnitOfWork<TRX_MGR extends PlatformTransactio
             if (manuallyStartedSpringTransaction.get().isCompleted()) {
                 log.warn("Cannot commit the already COMPLETED manually managed Spring Transaction, associated with this UnitOfWork: {}", info());
             } else if (manuallyStartedSpringTransaction.get().isRollbackOnly()) {
-                log.info("Cannot commit the MARKED FOR ROLLBACK ONLY manually managed Spring Transaction, associated with this UnitOfWork: {}", info());
+                // Typically a transactional participant - an inner @Transactional method or TransactionTemplate - failed,
+                // and marked the transaction rollback-only, even if its caller caught the exception. The transaction can't
+                // commit, but it must still be completed: handing it to the transaction manager's commit makes Spring roll
+                // it back, unbind its resources from the thread and run the synchronizations (which complete this UnitOfWork
+                // as RolledBack) - and, as for any Spring transaction a participant marked rollback-only, throw an
+                // UnexpectedRollbackException, so the caller learns its work was discarded rather than believing it committed.
+                // Only logging here left the transaction, its connection and this UnitOfWork bound to the thread, to be
+                // joined by whatever ran on it next
+                log.debug("Rolling back the MARKED FOR ROLLBACK ONLY manually managed Spring Transaction associated with this UnitOfWork: {}", info());
+                unitOfWorkFactory.transactionManager.commit(manuallyStartedSpringTransaction.get());
             } else {
                 log.debug("Committing the manually managed Spring Transaction associated with this UnitOfWork: {}", info());
                 unitOfWorkFactory.transactionManager.commit(manuallyStartedSpringTransaction.get());
