@@ -445,19 +445,20 @@ public final class ShardOwnedStorage {
      */
     public List<SessionRow> claimForSession(Connection connection, int shard, int limit,
                                             long sessionFence, long leaseMillis) throws SQLException {
-        var sql = "UPDATE " + UNORDERED_TABLE + " SET lease = ?, lease_until = now() + make_interval(secs => ? / 1000.0)"
-                + " WHERE (queue_id, shard, seq) IN ("
-                + "   SELECT queue_id, shard, seq FROM " + UNORDERED_TABLE
-                + "   WHERE queue_id = ? AND shard = ? AND visible_at <= now()"
-                + "     AND (lease_until IS NULL OR lease_until <= now())"
-                + "   ORDER BY seq LIMIT ? FOR UPDATE SKIP LOCKED)"
-                + " RETURNING seq, payload, payload_type, attempts";
-        try (var statement = connection.prepareStatement(sql)) {
+        // The rows to update are selected by primary key - (queue_id, shard) and an array of seq - never by joining
+        // the locking subquery back to the table. When the table was analyzed while drained the planner expects no
+        // rows, and the join (WHERE (queue_id, shard, seq) IN (...)) became a nested loop over the shard, quadratic in
+        // its size: a 32-row claim took 155 s instead of 7.5 ms at 20 000 rows per shard, and 2.8 s instead of 0.9 ms at
+        // 2 000. ARRAY(...) is evaluated once, so the locked set is fixed before the UPDATE runs. Guarded by
+        // ShardOwnedSessionClaimPlanIT
+        try (var statement = connection.prepareStatement(claimForSessionSql())) {
             statement.setLong(1, sessionFence);
             statement.setLong(2, leaseMillis);
             statement.setShort(3, queueId);
             statement.setInt(4, shard);
-            statement.setInt(5, limit);
+            statement.setShort(5, queueId);
+            statement.setInt(6, shard);
+            statement.setInt(7, limit);
             try (var resultSet = statement.executeQuery()) {
                 var rows = new ArrayList<SessionRow>();
                 while (resultSet.next()) {
@@ -467,6 +468,20 @@ public final class ShardOwnedStorage {
                 return rows;
             }
         }
+    }
+
+    /**
+     * The statement {@link #claimForSession} runs. Binds, in order: the session fence, the lease in milliseconds,
+     * then queue id and shard twice, then the limit
+     */
+    static String claimForSessionSql() {
+        return "UPDATE " + UNORDERED_TABLE + " SET lease = ?, lease_until = now() + make_interval(secs => ? / 1000.0)"
+                + " WHERE queue_id = ? AND shard = ? AND seq = ANY(ARRAY("
+                + "   SELECT seq FROM " + UNORDERED_TABLE
+                + "   WHERE queue_id = ? AND shard = ? AND visible_at <= now()"
+                + "     AND (lease_until IS NULL OR lease_until <= now())"
+                + "   ORDER BY seq LIMIT ? FOR UPDATE SKIP LOCKED))"
+                + " RETURNING seq, payload, payload_type, attempts";
     }
 
     /**

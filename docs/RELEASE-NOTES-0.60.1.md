@@ -179,6 +179,14 @@ deliverable, and the queue is polled then. With a 10 s cap, a 6 s retry arrived 
 a 6 s delayed message 29 ms late instead of 3.1 s (`PostgresqlDurableQueuesDueTimeIT`). Spring applications benefit
 too: their default cap is 2 s. A delayed message enqueued by another node still waits at most the cap.
 
+### 2.6 Shard-owned: pull-session claims stay fast after a shard drains
+
+A pull session (`MessageQueue.openSession`) claimed its rows with
+`UPDATE … WHERE (queue_id, shard, seq) IN (SELECT … FOR UPDATE SKIP LOCKED)`. When the unordered table had been
+analyzed while drained, PostgreSQL planned that as a nested loop over the shard, quadratic in its size: a 32-row
+claim took 155 s instead of 7.5 ms at 20 000 rows per shard. The claim now selects its rows by primary key (the same
+fix as §2.1). `ShardOwnedSessionClaimPlanIT` recreates the stale statistics and guards the plan.
+
 ## 3. Documentation
 
 - The polling-optimizer docs describe the new defaults, and the stale-statistics guidance is next to the claim
