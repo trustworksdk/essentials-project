@@ -9,8 +9,8 @@ _Add an entry in the same commit as the change. Cite the commit or PR. Write it 
 changes for them, and what they must do, if anything. Purely internal refactors, test-only changes and CI
 plumbing that no user sees go in §7 at most, as one line._
 
-**So far:** no breaking change, nine framework changes with a behaviour change (§1.1), additive features
-(§2), bug fixes (§3), plugin releases `0.60.0-6` and `0.60.0-7`, and example and tooling updates. Nothing here requires a migration
+**So far:** no breaking change, eighteen framework changes with a behaviour change (§1.1, six of them in the
+durable queues and units of work from the `queue_improvements` work), additive features (§2), bug fixes (§3), plugin releases `0.60.0-6` and `0.60.0-7`, and example and tooling updates. Nothing here requires a migration
 step, except one for `essentials.schema.mode=validate` deployments: re-run `emit` and apply the script before the
 first start (§1). Supported PostgreSQL is now 15+ (§1). The persisted
 format changes for one shape only, back to what 0.50 wrote: a type with a public `is`-getter (§1.1.2).
@@ -49,7 +49,10 @@ release. The change-notification trigger that the durable queues and the event s
 differently (the startup deadlock fix in §3), so its schema-history checksum changes, and `validate` refuses to start
 with "applied with other statements" until the new statements are recorded. The script is safe to run against a
 database that instances are using. In the default `create` mode nothing needs doing: the change is repeatable, so it
-just records the new checksum.
+just records the new checksum. Two more schema changes ride on the same step: the shard-owned engine's schema adds a
+nullable `incarnation` column to `shard_queue_instance` (§3), and a `PostgresqlDurableQueues` made with the builder
+now installs the change-notification trigger on its queue table (§1.1.17). Applying the `ALTER TABLE` alone is not
+enough: `validate` compares the recorded statements, so re-run `emit` and apply the script.
 
 ### 1.1 ⚠️ Silent behaviour changes
 
@@ -211,9 +214,7 @@ dead process's id. Containers that share a hostname and all run as pid 1 still n
 rolling upgrade that mixes old and new instances is safe: the id only names membership rows and lease owners, and
 every lease acquisition bumps the fence. (N-8, `e639f3d0`)
 
-Also on the shard-owned ordered lane: the attempt bump at takeover now skips rows that are not yet visible (delayed
-messages and messages waiting out a retry backoff), so their `attempts` no longer goes up on a hand-over.
-(N-16, `dacd9ebb`)
+The attempt counting at takeover changed as well; see §1.1.18.
 
 #### 1.1.9 `MultiTableChangeListener` behaves differently at the edges
 
@@ -291,6 +292,130 @@ after the chain. What changes for you:
   are unchanged.
 
 (`f722edb8`)
+
+#### 1.1.13 `afterCommit` / `afterRollback` callbacks run on JDBI units of work
+
+`GenericHandleAwareUnitOfWork` is the unit of work behind `JdbiUnitOfWorkFactory` and the event store's
+`EventStoreManagedUnitOfWorkFactory`. Its `commit()` and `rollback()` closed the JDBI handle before calling the
+registered callbacks, and closing the handle cleared them, so no `UnitOfWorkLifecycleCallback#afterCommit` or
+`#afterRollback` ever ran with these factories. That has been the case since the first commit of this repository.
+They run now. Spring's `SpringTransactionAwareUnitOfWorkFactory` has its own commit path and was never affected, and
+neither were `PersistedEventsCommitLifecycleCallback`s.
+
+Code that was silently skipped outside Spring now executes:
+
+- **`DurableAsyncAggregateSnapshotRepository`** (`ASYNC_DURABLE` snapshots) enqueues its snapshot jobs after commit,
+  so outside Spring it never created any. It does now, so snapshot job rows appear and snapshots get written.
+- **`AsyncAggregateSnapshotRepository`** writes its snapshots after commit, so the same applies to it.
+- **The event store's gap-fill acknowledgement** clears its bookkeeping after commit. Outside Spring the map behind
+  it grew without bound, and the gap-reconciliation outcome was never reported for fills acknowledged in the
+  subscriber's unit of work. Both are fixed.
+- **A retry or a delayed message wakes its queue when it comes due** (§3). The wake-up is an after-commit callback,
+  so outside Spring it depends on this fix.
+- **Your own callbacks run.** An `afterRollback` callback runs once the failed unit of work is no longer current, so
+  a callback that opens a unit of work gets a fresh one rather than the rolled-back one. An exception or a
+  non-critical `Error` that a callback throws is logged. It does not change the outcome of the commit or rollback,
+  and does not stop the remaining callbacks or the publishing of persisted events.
+- **A rolled-back event-store unit of work reports its events as rolled back.** `EventStoreManagedUnitOfWork` passed
+  them to `PersistedEventsCommitLifecycleCallback#afterCommit`, so events that a completed `beforeCommit` round had
+  already handed on were published on the `EventStoreEventBus` as `CommitStage.AfterCommit` although they were
+  never committed. They now go to `afterRollback`, published as `CommitStage.AfterRollback`. The Spring unit of work
+  publishes nothing for a rollback, as before.
+
+(`4a870434`, `ad75485b`, `20875720`)
+
+#### 1.1.14 `QueuedMessage.getDeliveryMode()` returns `IN_ORDER` for ordered messages (PostgreSQL)
+
+`DefaultQueuedMessage.getDeliveryMode()` returned `NORMAL` for every message, including an `OrderedMessage`. It now
+returns `IN_ORDER` whenever `getMessage()` is an `OrderedMessage`. Ordering itself was never affected; code that
+branched on the delivery mode now sees the correct value. Fixing it exposed a latent crash: resurrecting an ordered
+dead letter in `PostgresqlDurableQueues` would have thrown `ClassCastException` from its log line. That code had never
+run, because the mode was always `NORMAL`; it is fixed too. (`5603a596`)
+
+#### 1.1.15 Stored delivery errors start with the root cause (PostgreSQL and MongoDB queues)
+
+A handler's exception reaches the queue wrapped, typically as
+`UnitOfWorkException → ReflectionException → InvocationTargetException → yours`, so the stored
+`last_delivery_error` began with `UnitOfWorkException`. When the exception is wrapped, the stored text now starts
+with one line, `Root cause: <type>: <message>`, followed by the complete, unchanged stack trace. An exception that is
+not wrapped is stored exactly as before. Anything that parses the first line of `getLastDeliveryError()` sees the new
+summary line. (`5603a596`)
+
+#### 1.1.16 A handled message is acknowledged inside the handler's transaction (`PostgresqlDurableQueues`)
+
+The acknowledgement used to be a second transaction on a second pooled connection, after the handler's had committed.
+It is now the handler's last statement, in the handler's own transaction, so the handler's writes and the
+acknowledgement commit together. That saves a connection checkout and a commit per message: measured on its own with
+the builder's previous wiring (no LISTEN/NOTIFY), drain throughput through a 10-connection pool rose about 10%
+(13.6k to 14.9k msg/s), and the threads waiting for a connection halved (`QueueDrainThroughputIT`, opt-in
+benchmark). What changes:
+
+- **A failing acknowledgement, or a failing commit, rolls back the handler's writes** and is handled like a handler
+  exception: it uses a redelivery attempt and goes through the permanent-error list. Before, on the centralized
+  message fetcher (the default), the handler's writes stayed committed, the failure was only logged, and the message
+  was delivered again after `messageHandlingTimeout`, repeating them; the per-consumer path retried it under the
+  `RedeliveryPolicy`.
+- **A `DurableQueuesInterceptor` on `AcknowledgeMessageAsHandled` runs inside the handler's transaction.** If it
+  throws, the handler's writes roll back, and an `IllegalArgumentException` (`requireNonNull`, `requireTrue`, Kotlin
+  `require`) dead-letters the message on its first delivery, as it would from the handler.
+- **`beforeCommit` callbacks run after the acknowledgement**: event-store appends and in-transaction handlers. The
+  queue row stays locked until the commit, and the stuck-message reset waits for it.
+
+What does not change: a handler that requests redelivery, one that marks its unit of work rollback-only (its message
+is still consumed) and `UnitOfWorkMode.NONE` handlers are acknowledged separately, as before. `MongoDurableQueues`
+and the shard-owned engine are unchanged. A crash before the commit still redelivers, so handlers should stay
+idempotent. (`6949dcac`)
+
+#### 1.1.17 `PostgresqlDurableQueues.builder()` is wired like the Spring Boot starter
+
+The builder now creates a `MultiTableChangeListener` when none is set, and its default
+`CentralizedQueuePollingOptimizer` uses the Spring Boot starter's values (start at the polling interval, ×1.5 per
+empty poll, capped at 2 s). A builder-made instance therefore behaves like a Spring one: idle queues back off, and
+LISTEN/NOTIFY wakes them when a message is added on any node. What a builder user sees:
+
+- One more held database connection per instance, for the listener, which starts and stops with the queues.
+  `PostgresqlDurableQueues` is now `AutoCloseable`: `close()` stops it for good and releases the listener and its
+  event bus. Spring calls `close()` on a `PostgresqlDurableQueues` bean at shutdown, after `stop()`, which is safe.
+- The change-notification trigger on the queue table becomes part of the queue's schema. With
+  `SchemaOwnership.COMPONENT` it is created on start-up; under the schema harness in `validate` mode it must be in
+  the applied script (§1).
+- `setCreateMultiTableChangeListener(false)` keeps the previous wiring: no listener, and every queue polled every
+  polling interval without a backoff, since nothing could wake a backed-off queue.
+
+Spring Boot applications see no change: the starter passes its own listener. (`a72aa558`)
+
+#### 1.1.18 Shard-owned engine: attempt counts survive a change of owner, and redelivery requests are not attempts
+
+- **Attempt counts survive a change of owner.** They were kept only in memory, so every new owner started a
+  message's count from 1, and the bulk increment a new owner made at takeover was never read back. The first failure
+  under a new owner now continues from the count stored on the row.
+- **A clean handover charges nothing.** When the previous owner stopped and released the shard, no queued message is
+  charged an attempt, so deploys and rebalances no longer cost messages attempts. Before, every takeover charged
+  every queued row.
+- **A takeover after a crash or a lost lease charges one attempt only to the rows the previous owner could have had
+  in flight**: on the unordered lane a window of `parallelConsumers + ackBatchSize` rows and the rows that had
+  already failed and come due; on the ordered lane the first `ackBatchSize + 1` visible rows of each key. A row that
+  is not yet visible (a delayed message, or a retry waiting out its backoff) is never charged. Neither are the rows of
+  a key held by an earlier retry in backoff, a pending requested redelivery or a dead letter, nor a row a pull
+  session holds; the same rows are never dead-lettered at takeover either.
+- **A message that has taken its owner down `maxAttempts` times is dead-lettered at takeover**, with an error saying
+  that no failure was ever recorded for it. On the ordered lane its key is blocked behind it, as for any dead letter.
+  The `takeoverAttemptBumps` metric drops to zero for clean handovers and to a few rows for crashes.
+- **`QueuedMessage.markForRedeliveryIn(delay)` honours the delay and is not an attempt** through the shard-owned
+  adapter. It used to be treated as a failure: the delay was ignored in favour of the policy's backoff, and enough
+  requests dead-lettered a healthy message. Now only the message's visibility moves: the redelivery count does not
+  go up, the policy's budget is not used, it is not reported as a handler failure, and it never leads to a dead
+  letter, also not at takeover. This deliberately differs from `PostgresqlDurableQueues`, where a manual redelivery
+  counts. Engine users get the same with the new `spi.RedeliveryRequested(delay)` (§2).
+- **A handler `Error` counts as a failed attempt.** An `AssertionError`, or any other non-critical `Error`, used to
+  free its slot without recording an attempt, so the message came back forever and never reached the dead-letter
+  table. It now runs through the redelivery policy like any other failure. `VirtualMachineError` and `LinkageError`
+  still propagate uncounted, as in `postgresql-queue`.
+- **A pull session's failure counts an attempt** on top of the stored count; before, it reset the count to 1. Its
+  failure write is fenced by the session's shard lease, or guarded by its row lease, so a superseded session can no
+  longer push out a message's visibility.
+
+(`a4f541e4`, `f9fdd99b`, N-16 `dacd9ebb`)
 
 ---
 
@@ -420,6 +545,23 @@ after the chain. What changes for you:
   return type no longer compiles; rename it. There is deliberately no processor `usingUnitOfWork(uow -> ...)` overload:
   it would make Kotlin's `usingUnitOfWork { ... }` an overload ambiguity.
 
+- **`PostgresqlDurableQueuesBuilder.setCreateMultiTableChangeListener(boolean)`** (default `true`) decides whether
+  `build()` creates a `MultiTableChangeListener` when none was set (§1.1.17). (`a72aa558`)
+- **`QueuePollingOptimizer.messageScheduledFor(Instant)`**, a default method: the queue tells its optimizer when a
+  retry, a delayed enqueue or a delayed resurrection becomes deliverable, so a backed-off queue polls then. Also
+  `queuePollingReturnedNoMessages(Instant claimedAt)` and `queuePollingReturnedMessages(List, Instant claimedAt)`,
+  which tell it when the claim ran; by default they call the existing methods. A custom optimizer that ignores all
+  three keeps working. (`7a742881`, `13461645`)
+- **`PostgresqlDurableQueuesBuilder.setOrderedClaimSlowThreshold(Duration)`** (default 10 ms,
+  `PostgresqlDurableQueues.DEFAULT_ORDERED_CLAIM_SLOW_THRESHOLD`): how slow an ordered claim must be to count towards
+  switching statements (§3). (`7e80c23c`)
+- **`PostgresqlDurableQueues` implements `AutoCloseable`** (§1.1.17). (`7e80c23c`)
+- **Shard-owned engine: `spi.RedeliveryRequested(delay)`.** A handler throws it to ask for redelivery after `delay`
+  without it counting as an attempt, being reported as a failure or leading to a dead letter (§1.1.18).
+  (`a4f541e4`, `f9fdd99b`)
+- **Shard-owned engine metrics:** `sharedInstanceIdHeartbeats` (§3) and `cursorRowsRead`, the rows the unordered
+  lane's reads returned; divided by `delivered` it is the read amplification. (`d54671a6`, `e06910c2`)
+
 The plugin's features are in [§4](#4-the-essentials-claude-code-plugin).
 
 ---
@@ -458,6 +600,16 @@ The plugin's features are in [§4](#4-the-essentials-claude-code-plugin).
 | Fenced locks | A blocking `acquireLock(name)` or `tryAcquireLock(name, timeout)` kept querying the database after shutdown had started, and one that was waiting while the lock manager stopped could still take the lock, leaving its row held by a manager that no longer confirmed it until `lock-time-out` passed. Both now give up: `tryAcquireLock` returns empty and `acquireLock` throws `IllegalStateException`. The timeout of `tryAcquireLock(name, timeout)` now also bounds the wait behind the manager's own lock-confirmation work, though not a database round trip already in flight. During shutdown, checking whether a failed acquire commit reached the database is a single bounded attempt | `f1840271` |
 | Event-stream deciders | `EventStreamDeciderSupportsAggregateTypeChecker.HandlesCommandsThatInheritFromCommandType` failed the configuration with an `IllegalStateException` for a decider declared through a sub-interface (`implements OrderDecider`, where `OrderDecider extends EventStreamDecider<OrderCommand, OrderEvent>`), through a generic abstract base class, or as a CGLIB-proxied bean; and a sub-interface that changes the type-argument order was matched on the wrong argument. It now finds the command type in all of these. A decider whose command type cannot be resolved (a raw type, an unbound type variable, a JDK dynamic proxy) is reported as not supported, with a WARN, instead of throwing; if no other checker claims it, configuration still fails as before. Present since the checker was added (0.40.25) | `abb1228d` |
 | Scheduler | A job registered with `DefaultEssentialsScheduler` while the scheduler was acquiring its fenced lock could be silently dropped: it stayed in the job list but was never scheduled until the lock was next re-acquired. This typically hit a `@TTLJob` whose `PostgresqlTTLManager` started at the same moment, so its TTL delete never ran. Registration now waits for the lock callback to finish and always sees the lock state it leaves | `35fafdaa` |
+| Durable queues (PostgreSQL) | A busy queue was held to one poll per polling interval. A poll claims at most a queue's free worker slots, so a queue was capped at `parallelConsumers / pollingInterval` messages per second however fast its handler was: 400 msg/s for 8 consumers at the default 20 ms. A queue whose poll filled every free slot is now polled again as soon as half its workers are free: 2 000 messages, 8 consumers and 200 ms polling drained in 3.3 s instead of 50 s (`PostgresqlDurableQueuesSaturationIT`). A poll whose ordered claim finds fewer messages than there are free slots also fills the remaining slots with unordered messages in the same poll, rather than leaving them for the next poll | `abeca59c`, `b60f9faa` |
+| Durable queues (PostgreSQL) | Claims slowed down in proportion to the backlog after a queue table had drained. Once a drained table was analyzed, PostgreSQL planned the claim's `UPDATE … FROM cte WHERE q.id = cte.id` as a nested loop over the whole queue: 185 ms instead of 4 ms per claim at 20 000 queued messages. The per-queue claim statements now select their rows by primary-key array (`WHERE q.id = ANY(ARRAY(…))`); the opt-in batched fetch is unchanged. The ordered claim's per-key ordering check can still be planned badly under the same conditions, so keep the statistics of a regularly draining ordered queue table fresh (`LLM-postgresql-queue.md` § Stale statistics on a draining queue table) | `5603a596` |
+| Durable queues (PostgreSQL) | An ordered queue with a few keys and many messages per key, a common event-processor shape, walked every queued message on every poll: 20 keys × 1 000 messages took 180 ms per claim, even with fresh statistics. Such a queue now switches to a statement that visits each key's head once (0.4 ms), and back when the queue has many keys. Both claim the same messages. The switch needs three slow claims in a row and goes only to the statement last measured as faster, so a database 10 ms or more away does not make a queue alternate between them, running the expensive scan on every other poll | `b6e17c87`, `7e80c23c` |
+| Durable queues (PostgreSQL) | A retry, delayed enqueue or delayed resurrection could wait out the rest of an idle queue's polling backoff after it came due. The queue's optimizer is now told when such a message becomes deliverable and polls then: with a 10 s cap, a 6 s retry arrived 20 ms late instead of 2.5 s, a 6 s delayed message 29 ms instead of 3.1 s (`PostgresqlDurableQueuesDueTimeIT`). The optimizer stops watching a due time only once a claim that ran after it has polled the queue, so a slow poll of many queues cannot miss it. Applies to the centralized message fetcher (the default) and to messages scheduled by the same node; a delayed message enqueued by another node still waits at most the backoff cap (2 s in Spring) | `7a742881`, `13461645` |
+| Durable queues (PostgreSQL) | A poll that ran while a consumer was stopping could claim a message and hand it to the consumer's already shut-down worker pool, leaving the message marked as being delivered until `messageHandlingTimeout`. A stopping consumer is no longer polled, and a message its pool refuses is handed back for redelivery at once, as in §1.1.1; the hand-back counts as a redelivery attempt. An ordered message's key is now also released when its consumer had already unregistered, so a consumer registering again is given that key | `994c4928` |
+| Durable queues (shard-owned) | An owner that had lost a shard could still record a failure: retry and dead-letter writes lacked the lease check that acknowledgements have, so a superseded owner could push out the visibility of, or dead-letter, a message its successor was delivering. They now carry it, as do a pull session's failure writes | `a4f541e4`, `f9fdd99b` |
+| Durable queues (shard-owned) | Each read of the unordered lane fetched up to `readBatchSize` (500) rows, payloads included, though only as many as there were free handlers could be dispatched; the rest were read again next time, about 24 rows per delivered message. Reads are now capped at 64 rows, or twice the free handlers if that is more, about 4 rows per message. Drain time is unchanged; this saves database and network I/O | `e06910c2` |
+| Durable queues (shard-owned) | A pull session's (`MessageQueue.openSession`) claim was planned as a nested loop over the shard once the unordered table had been analyzed while drained: a 32-row claim took 155 s instead of 7.5 ms at 20 000 rows per shard. It now selects its rows by primary key (`ShardOwnedSessionClaimPlanIT`) | `9dd04532` |
+| Durable queues (shard-owned) | A new owner of an unordered shard started reading from sequence 0, so it treated every message the shard had ever delivered as a hole and kept querying for them for `holeExpiry` (10 s): a 5 000-message history became 5 000 holes and thousands of chase queries. A new owner now starts at the shard's first readable row. A message whose sequence value was allocated before the takeover but committed after it is still delivered exactly once, by the head sweep (`ShardOwnedTakeoverHistoryIT`) | `2790492c` |
+| Durable queues (shard-owned) | Two live processes sharing one instance id count as one instance in the rebalance and keep taking shards from each other: safe, because the lease fence refuses the loser's writes, but wasteful and hard to diagnose. The engine now logs a WARN naming `essentials.shard-owned-queue.instance-id` (at most once a minute) and counts `sharedInstanceIdHeartbeats` when it sees that; a restart is not reported. With the new `<hostname>:<pid>` default (§1.1.8) this mostly concerns explicitly set ids and containers that share a hostname and all run as pid 1. **Schema:** `shard_queue_instance` gains a nullable `incarnation text` column, added on start-up with `SchemaOwnership.COMPONENT`; in `validate` mode see §1 | `d54671a6` |
 
 ---
 
@@ -491,7 +643,10 @@ entries are in [`essentials-plugin/CHANGELOG.md`](../essentials-plugin/CHANGELOG
 - **Fixed:** `LLM-eventsourced-aggregates.md` and the Java command test template used a rejection method
   `GivenWhenThenScenario` does not have; they now use `thenFailsWithExceptionType(...)`.
 - **Docs follow this release's framework changes:** `AppendedEvents`' new module and package, `CommandBus`
-  handler listing and its duplicate-handler WARN, and the run report (`EssentialsRunReport`).
+  handler listing and its duplicate-handler WARN, the run report (`EssentialsRunReport`), and the durable-queue
+  changes (§1.1.13–§1.1.18): acknowledgement inside the handler's transaction, the polling-optimizer defaults,
+  stale statistics on a draining queue table, handlers that hold a connection, and the shard-owned attempt counting
+  and shared-instance-id WARN.
 - **Fixed:** `/essentials:slice-enrich` no longer suggests a hand edit for a value `apply` refused.
 
 **`0.60.0-6`**
@@ -621,7 +776,12 @@ Not published; listed because they are the reference for how to use the framewor
       Rerunning the script is still safe.
     - The script goes to `essentials-schema.sql` in the working directory by default; set
       `essentials.schema.emit.script-file` to change it.
-- **Design documents:** `docs/slice-atlas-design.md` and `docs/slice-enrich-design.md` (`764af560`, `73d1993f`).
+- **Durable queues** (`LLM-postgresql-queue.md`, the module README): the polling-optimizer defaults; "Stale
+  statistics on a draining queue table", next to the claim settings; and why a handler that holds a connection
+  while it calls another system needs a pool with room for it (`00102b51`).
+- **Design documents:** `docs/slice-atlas-design.md` and `docs/slice-enrich-design.md` (`764af560`, `73d1993f`);
+  `docs/durable-queues-improvement-plan.md`, the measurements and open items behind the durable-queue changes, and
+  `docs/Durable Queues Port Report.md`, the Rust port experiment they came from (`0925b7ca`).
 
 ---
 

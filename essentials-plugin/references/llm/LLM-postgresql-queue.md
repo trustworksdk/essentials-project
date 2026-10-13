@@ -194,7 +194,7 @@ Continuous polling at fixed intervals wastes DB resources when queues are idle. 
 
 **The builder is wired like the Spring Boot starter.** Since 0.60.1, `PostgresqlDurableQueues.builder()` creates a
 `MultiTableChangeListener` when none is set (LISTEN/NOTIFY on the queue table, polled every 50 ms; it holds one
-connection and is started and stopped with the queues), and the default `CentralizedQueuePollingOptimizer` uses the
+connection, is started and stopped with the queues, and is released by `close()`), and the default `CentralizedQueuePollingOptimizer` uses the
 starter's values: start at the polling interval, ×1.5 per empty poll, ±10% jitter, capped at 2 s. A builder-made
 instance therefore behaves like a Spring one. `.setCreateMultiTableChangeListener(false)` keeps the old wiring: no
 LISTEN/NOTIFY and no backoff, every queue polled every interval - a queue only backs off where something can wake it.
@@ -533,8 +533,10 @@ message on every poll: 180 ms at 20 keys × 1 000 messages.
 
 Since 0.60.1 such a queue switches to a second statement that finds each key's head with one index probe per key:
 0.4 ms for the same backlog. It switches back when the queue has many keys, where that statement is the slow one
-(114 ms at 20 000 keys of one message each, against 1.6 ms). The switch happens per queue, after a claim that took
-over 10 ms. Both statements claim the same messages.
+(114 ms at 20 000 keys of one message each, against 1.6 ms). The switch happens per queue, after three slow claims in
+a row (over 10 ms; `setOrderedClaimSlowThreshold(Duration)` on the builder), and only to the statement last measured
+as faster, so a slow round trip to the database does not make a queue alternate. A queue stuck on a slow statement
+re-measures the other one now and then. Both statements claim the same messages.
 
 ## Security
 

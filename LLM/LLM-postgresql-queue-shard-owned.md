@@ -199,8 +199,9 @@ Through the `DurableQueues` adapter these come from the `ConsumeFromQueue`'s `Re
 **What counts as a failure.** Any `RuntimeException`, and any non-critical `Error` such as an `AssertionError`,
 is a failed attempt that runs through the policy. Critical errors (`VirtualMachineError`, `LinkageError`) propagate
 uncounted, as they do on `postgresql-queue`. To deliver a message again later without it being a failure, throw
-`spi.RedeliveryRequested(delay)`. The message comes back after `delay`, the attempt counts, and the request never
-dead-letters it. Through the adapter, `QueuedMessage.markForRedeliveryIn(delay)` does exactly this.
+`spi.RedeliveryRequested(delay)`. The message comes back after `delay`. The request is not an attempt: it does not
+raise the redelivery count or use up the policy's budget, and it never dead-letters the message, also not at a
+takeover. This differs from `postgresql-queue`, where a manual redelivery counts. Through the adapter, `QueuedMessage.markForRedeliveryIn(delay)` does exactly this.
 
 **A failure is recorded only under the owner's lease fence.** An owner that has lost a shard does not
 schedule the retry or dead-letter the message; the next owner redelivers it.
