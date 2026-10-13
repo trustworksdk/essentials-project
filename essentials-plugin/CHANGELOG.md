@@ -136,9 +136,10 @@ targets, with a `-N` suffix for plugin-only releases.
   `LLM-postgresql-queue-shard-owned.md`). A handled message is acknowledged inside the handler's transaction, and a
   failing acknowledgement is classified like a handler exception; a builder-made `PostgresqlDurableQueues` is wired
   like the starter, with its own change listener, and is `AutoCloseable`; the polling-optimizer defaults and due-time
-  polling; stale statistics on a draining queue table; the ordered-claim statement switch and its threshold;
-  handlers that hold a connection. Shard-owned: attempt counts survive a change of owner, a requested redelivery is
-  not an attempt, and a WARN names `essentials.shard-owned-queue.instance-id` when two live processes share an id.
+  polling; stale statistics on a draining queue table; the ordered-claim statement switch, its threshold and the
+  timeout a probe of the other statement runs under; handlers that hold a connection. Shard-owned: attempt counts
+  survive a change of owner, a requested redelivery is not an attempt, and a WARN names
+  `essentials.shard-owned-queue.instance-id` when two live processes share an id.
   MongoDB (`LLM-springdata-mongo-queue.md`): due-time polling, and the backoff defaults stated correctly (50% of the
   polling interval per empty poll, capped at 20× the polling interval).
 - **Docs: supported PostgreSQL is 15+.** `LLM.md` states the floor (the majors the PostgreSQL community still patches)
