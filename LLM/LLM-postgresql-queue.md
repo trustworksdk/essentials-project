@@ -185,7 +185,9 @@ Continuous polling at fixed intervals wastes DB resources when queues are idle. 
 1. **Message found** → Reset to initial (fast) polling interval
 2. **No message found** → Increase delay using backoff strategy
 3. **Message added** → resets to fast polling. A message queued by this node resets its own consumer when the
-   transaction commits. A message queued by another node resets it through LISTEN/NOTIFY.
+   transaction commits, whether it is consumed through the centralized message fetcher or polls on its own
+   (`useCentralizedMessageFetcher(false)`, since 0.60.1). A message queued by another node resets it through
+   LISTEN/NOTIFY.
 
 4. **Message due later** → a retry, delayed enqueue or delayed resurrection made by this node tells the optimizer
    when the message becomes deliverable, and the queue is polled then instead of sleeping past it (since 0.60.1;
@@ -498,9 +500,11 @@ soon as half its workers are free, so throughput is bounded by the handler and t
 ### Stale statistics on a draining queue table
 
 A queue table that drains to empty and is then analyzed (by autovacuum or by hand) records `reltuples = 0` while
-keeping its pages. When the next burst arrives, the planner expects no rows. The claim statements select the rows
-to update by primary-key array, so the unordered claim stays fast (4 ms instead of 185 ms at 20 000 queued
-messages). The ordered claim's per-key barrier can still be planned badly in that state. If ordered queues
+keeping its pages. When the next burst arrives, the planner expects no rows. The claim statements, the opt-in batched
+fetch's included, select the rows to update by primary-key array, so the unordered claim stays fast (4 ms instead of
+185 ms at 20 000 queued messages; a batched poll over two such queues 111 ms instead of 37.6 s). The batched fetch
+still reads and sorts each queue's whole ready backlog on every poll, so on a large backlog it stays slower than
+per-queue fetching. The ordered claim's per-key barrier can still be planned badly in that state. If ordered queues
 regularly drain and refill, keep the table's statistics fresh with per-table autovacuum settings:
 
 ```sql
