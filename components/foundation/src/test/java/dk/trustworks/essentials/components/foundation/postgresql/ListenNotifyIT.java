@@ -98,6 +98,30 @@ class ListenNotifyIT {
         assertThat(notification.column2).isEqualTo("Column2Value");
     }
 
+    /**
+     * The trigger is created with an unquoted name, which PostgreSQL folds to lower case, so the "already in place" check
+     * must compare against the folded name. Otherwise a table name with upper-case letters re-creates the trigger - and
+     * takes its lock - on every boot.
+     */
+    @Test
+    void reapplying_the_trigger_statements_for_a_mixed_case_table_name_leaves_the_trigger_in_place() {
+        var mixedCaseTableName = "MixedCase_Events";
+        jdbi.useTransaction(handle -> handle.execute("CREATE TABLE IF NOT EXISTS " + mixedCaseTableName + " (id bigint PRIMARY KEY, column1 TEXT)"));
+        try {
+            var statements = ListenNotify.changeNotificationTriggerStatements(mixedCaseTableName, List.of(ListenNotify.SqlOperation.INSERT), "id", "column1");
+            jdbi.useTransaction(handle -> statements.forEach(handle::execute));
+            var oidSql         = "SELECT t.oid::bigint FROM pg_trigger t WHERE t.tgrelid = to_regclass('" + mixedCaseTableName + "') AND NOT t.tgisinternal";
+            var oidAfterFirst  = jdbi.withHandle(handle -> handle.createQuery(oidSql).mapTo(Long.class).one());
+
+            jdbi.useTransaction(handle -> statements.forEach(handle::execute));
+            var oidAfterSecond = jdbi.withHandle(handle -> handle.createQuery(oidSql).mapTo(Long.class).one());
+
+            assertThat(oidAfterSecond).as("the second run found the trigger and did not re-create it").isEqualTo(oidAfterFirst);
+        } finally {
+            jdbi.useTransaction(handle -> handle.execute("DROP TABLE IF EXISTS " + mixedCaseTableName));
+        }
+    }
+
     @Test
     void single_insert_listen_notify_test() throws InterruptedException, JacksonException {
         jdbi.useTransaction(handle -> {

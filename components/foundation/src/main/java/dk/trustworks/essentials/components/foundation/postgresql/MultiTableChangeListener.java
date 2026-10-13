@@ -441,6 +441,7 @@ public final class MultiTableChangeListener<T extends TableChangeNotification> i
      */
     @Override
     public void start() {
+        long generation;
         synchronized (this) {
             lifecycleManaged = true;
             if (started) {
@@ -449,6 +450,29 @@ public final class MultiTableChangeListener<T extends TableChangeNotification> i
             log.info("Starting MultiTableChangeListener");
             started = true;
             startPolling();
+            generation = pollGeneration;
+        }
+        openListenConnectionOutsideMonitor(generation);
+    }
+
+    /**
+     * Opens the LISTEN connection of a just started run, under {@code connectionLock} alone: borrowing a pooled connection
+     * can take as long as the pool's connection timeout, and a {@link #listenToNotificationsFor(String, Class)} that is
+     * already borrowing holds the lock, so waiting for it inside the monitor would block
+     * {@link #shutdownStarting(ShutdownContext)}. {@code generation} was read under the monitor; if a stop has ended the run
+     * since, {@link #openConnectionIfNeeded(long)} finds polling inactive and opens nothing.
+     */
+    private void openListenConnectionOutsideMonitor(long generation) {
+        if (listenForNotificationsRelatedToTables.isEmpty()) {
+            return;
+        }
+        synchronized (connectionLock) {
+            try {
+                openConnectionIfNeeded(generation);
+            } catch (Throwable e) {
+                rethrowIfCriticalError(e);
+                connectionFailed("opening the LISTEN connection", e);
+            }
         }
     }
 
@@ -456,8 +480,8 @@ public final class MultiTableChangeListener<T extends TableChangeNotification> i
      * Stops polling and closes the LISTEN connection. The registered tables are kept, so a later {@link #start()}
      * LISTENs to them again.<br>
      * It waits for a {@link #listenToNotificationsFor(String, Class)} that is borrowing the connection from the pool, but
-     * not while holding the listener's monitor, so {@link #shutdownStarting(ShutdownContext)} and a racing
-     * {@link #start()} are not held up behind that wait.
+     * not while holding the listener's monitor, and {@link #start()} opens its connection outside the monitor too, so
+     * {@link #shutdownStarting(ShutdownContext)} is not held up behind that wait.
      */
     @Override
     public void stop() {
@@ -509,7 +533,8 @@ public final class MultiTableChangeListener<T extends TableChangeNotification> i
     }
 
     /**
-     * Caller holds {@code this}
+     * Caller holds {@code this}. Only bookkeeping: the LISTEN connection is opened by the caller after it has released the
+     * monitor, see {@link #openListenConnectionOutsideMonitor(long)}
      */
     private void startPolling() {
         if (pollTask != null) {
@@ -525,16 +550,6 @@ public final class MultiTableChangeListener<T extends TableChangeNotification> i
             thread.setDaemon(true);
             return thread;
         });
-        if (!listenForNotificationsRelatedToTables.isEmpty()) {
-            synchronized (connectionLock) {
-                try {
-                    openConnectionIfNeeded(pollGeneration);
-                } catch (Throwable e) {
-                    rethrowIfCriticalError(e);
-                    connectionFailed("opening the LISTEN connection", e);
-                }
-            }
-        }
         var generation = pollGeneration;
         pollTask = executorService.scheduleWithFixedDelay(() -> pollForNotifications(generation),
                                                           pollingInterval.toMillis(),

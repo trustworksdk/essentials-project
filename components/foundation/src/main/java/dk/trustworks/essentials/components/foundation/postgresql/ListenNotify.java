@@ -326,7 +326,8 @@ public final class ListenNotify {
                                             "BEGIN\n" +
                                             "    IF EXISTS (SELECT 1 FROM pg_trigger t\n" +
                                             "               WHERE t.tgrelid = to_regclass('{:tableName}')\n" +
-                                            "                 AND t.tgname = 'notify_on_{:tableName}_changes'\n" +
+                                            // The trigger is created with an unquoted name, which PostgreSQL stores folded to lower case
+                                            "                 AND t.tgname = lower('notify_on_{:tableName}_changes')\n" +
                                             "                 AND t.tgfoid = to_regprocedure('notify_{:tableName}_change()')\n" +
                                             "                 AND t.tgtype = {:triggerType}\n" +
                                             "                 AND t.tgenabled <> 'D'\n" +

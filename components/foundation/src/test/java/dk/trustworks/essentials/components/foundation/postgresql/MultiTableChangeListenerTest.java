@@ -109,8 +109,9 @@ class MultiTableChangeListenerTest {
             logger.detachAppender(appender);
         }
     }
+
     /**
-     * Review F-034: {@code stop()} used to close whatever LISTEN connection was current once it had waited for the poll
+     * Regression for 520facbc and c0c60b97: {@code stop()} used to close whatever LISTEN connection was current once it had waited for the poll
      * thread, outside the monitor. A {@code start()} that ran in that window found the old connection still open, kept
      * it - and then lost it to the finishing {@code stop()}, so notifications sent before the next poll reopened it were
      * gone, although {@code start()} promises that every registered table is LISTENed to when it returns.<br>
@@ -184,7 +185,7 @@ class MultiTableChangeListenerTest {
     }
 
     /**
-     * Review F-050: {@code stop()} used to wait for the connection lock while holding the listener's monitor. A
+     * Regression for c0c60b97: {@code stop()} used to wait for the connection lock while holding the listener's monitor. A
      * {@code listenToNotificationsFor} holds that lock while it borrows a connection from the pool - up to the pool's
      * connection timeout - so the stop, and with it every other {@code synchronized} section, the shutdown signal included,
      * waited for the borrow. Now the stop waits for it outside the monitor, and still closes the connection the borrow
@@ -223,6 +224,160 @@ class MultiTableChangeListenerTest {
             stopping.get(10, TimeUnit.SECONDS);
             assertThat(openedHandles).hasSize(1);
             verify(openedHandles.getFirst()).close();
+        } finally {
+            releaseBorrow.countDown();
+            threads.shutdownNow();
+        }
+    }
+
+    /**
+     * {@code start()} used to open the LISTEN connection while holding the listener's monitor, so a start that raced a
+     * {@code listenToNotificationsFor} borrowing a pooled connection waited for that borrow inside the monitor, and
+     * {@link MultiTableChangeListener#shutdownStarting(ShutdownContext)} blocked behind it. It now opens the connection
+     * under the connection lock alone, after releasing the monitor.
+     */
+    @Test
+    void a_start_waiting_for_a_connection_borrow_does_not_hold_up_the_shutdown_signal() throws Exception {
+        var borrowStarted = new CountDownLatch(1);
+        var releaseBorrow = new CountDownLatch(1);
+        var firstBorrow   = new AtomicBoolean(true);
+        var openedHandles = new CopyOnWriteArrayList<Handle>();
+        var jdbi          = mock(Jdbi.class);
+        when(jdbi.open()).thenAnswer(invocation -> {
+            if (firstBorrow.getAndSet(false)) {
+                borrowStarted.countDown();
+                awaitIgnoringInterrupts(releaseBorrow);
+            }
+            var handle = listenHandleDelivering(new ConcurrentLinkedQueue<>());
+            openedHandles.add(handle);
+            return handle;
+        });
+        var listener = new MultiTableChangeListener<MultiTableChangeListenerIT.TestTableNotification>(jdbi, Duration.ofSeconds(30), mock(JSONSerializer.class), mock(EventBus.class), false);
+        listener.start();
+
+        var threads = Executors.newFixedThreadPool(3);
+        try {
+            var listening = threads.submit(() -> listener.listenToNotificationsFor("table1", MultiTableChangeListenerIT.Table1Notification.class));
+            assertThat(borrowStarted.await(5, TimeUnit.SECONDS)).as("listenToNotificationsFor is borrowing a connection").isTrue();
+            var stopping = threads.submit(listener::stop);
+            Awaitility.waitAtMost(Duration.ofSeconds(5)).until(() -> !listener.isStarted());
+            var starting = threads.submit(listener::start);
+            Awaitility.waitAtMost(Duration.ofSeconds(5)).until(listener::isStarted);
+
+            var signalling = CompletableFuture.runAsync(() -> listener.shutdownStarting(ShutdownContext.startingNow(Duration.ofSeconds(10))));
+            assertThatCode(() -> signalling.get(5, TimeUnit.SECONDS)).as("the shutdown signal is not held up behind the borrow").doesNotThrowAnyException();
+            assertThat(starting.isDone()).as("start() waits for the borrow, outside the monitor").isFalse();
+
+            releaseBorrow.countDown();
+            listening.get(10, TimeUnit.SECONDS);
+            stopping.get(10, TimeUnit.SECONDS);
+            starting.get(10, TimeUnit.SECONDS);
+            openedHandles.forEach(opened -> verify(opened, times(1)).close());
+        } finally {
+            releaseBorrow.countDown();
+            threads.shutdownNow();
+        }
+    }
+
+    /**
+     * Regression for c0c60b97: a {@code start()} of a later generation that takes the connection lock before the
+     * generation-0 {@code stop()} does moves the old LISTEN connection aside for that stop, which must still
+     * {@code UNLISTEN *} and close it, and leave the connection the start opened alone. Either of the two threads can win
+     * the lock; the outcome asserted is the same, and it is only the start-first order that exercises the hand-over of the
+     * retired connection.
+     */
+    @Test
+    void a_start_that_takes_the_connection_lock_before_the_ending_stop_hands_the_old_connection_to_that_stop() throws Exception {
+        var borrowStarted = new CountDownLatch(1);
+        var releaseBorrow = new CountDownLatch(1);
+        var firstBorrow   = new AtomicBoolean(true);
+        var openedHandles = new CopyOnWriteArrayList<Handle>();
+        var jdbi          = mock(Jdbi.class);
+        when(jdbi.open()).thenAnswer(invocation -> {
+            if (firstBorrow.getAndSet(false)) {
+                borrowStarted.countDown();
+                awaitIgnoringInterrupts(releaseBorrow);
+            }
+            var handle = listenHandleDelivering(new ConcurrentLinkedQueue<>());
+            openedHandles.add(handle);
+            return handle;
+        });
+        // Polls far apart, so the only borrows are the ones the test provokes
+        var listener = new MultiTableChangeListener<MultiTableChangeListenerIT.TestTableNotification>(jdbi, Duration.ofSeconds(30), mock(JSONSerializer.class), mock(EventBus.class), false);
+        listener.start();
+
+        var threads = Executors.newFixedThreadPool(3);
+        try {
+            var listening = threads.submit(() -> listener.listenToNotificationsFor("table1", MultiTableChangeListenerIT.Table1Notification.class));
+            assertThat(borrowStarted.await(5, TimeUnit.SECONDS)).as("listenToNotificationsFor is borrowing a connection").isTrue();
+            var stopping = threads.submit(listener::stop);
+            Awaitility.waitAtMost(Duration.ofSeconds(5)).until(() -> !listener.isStarted());
+            var starting = threads.submit(listener::start);
+            Awaitility.waitAtMost(Duration.ofSeconds(5)).until(listener::isStarted);
+
+            releaseBorrow.countDown();
+            listening.get(10, TimeUnit.SECONDS);
+            stopping.get(10, TimeUnit.SECONDS);
+            starting.get(10, TimeUnit.SECONDS);
+
+            assertThat(openedHandles).as("the borrow and the start each opened a connection").hasSize(2);
+            var oldConnection = openedHandles.getFirst();
+            var newConnection = openedHandles.getLast();
+            verify(oldConnection, times(1)).execute("UNLISTEN *");
+            verify(oldConnection, times(1)).close();
+            verify(newConnection, never()).execute("UNLISTEN *");
+            verify(newConnection, never()).close();
+            assertThat(listener.isStarted()).isTrue();
+        } finally {
+            releaseBorrow.countDown();
+            threads.shutdownNow();
+            listener.stop();
+        }
+    }
+
+    /**
+     * Regression for c0c60b97: stop, start, stop where the second stop can take the connection lock before the first one.
+     * The later stop drains the retired connections, so the earlier one must find nothing to close - one {@code close()}
+     * per connection that was opened, and no exception from either stop.
+     */
+    @Test
+    void overlapping_stops_close_each_connection_exactly_once() throws Exception {
+        var borrowStarted = new CountDownLatch(1);
+        var releaseBorrow = new CountDownLatch(1);
+        var firstBorrow   = new AtomicBoolean(true);
+        var openedHandles = new CopyOnWriteArrayList<Handle>();
+        var jdbi          = mock(Jdbi.class);
+        when(jdbi.open()).thenAnswer(invocation -> {
+            if (firstBorrow.getAndSet(false)) {
+                borrowStarted.countDown();
+                awaitIgnoringInterrupts(releaseBorrow);
+            }
+            var handle = listenHandleDelivering(new ConcurrentLinkedQueue<>());
+            openedHandles.add(handle);
+            return handle;
+        });
+        var listener = new MultiTableChangeListener<MultiTableChangeListenerIT.TestTableNotification>(jdbi, Duration.ofSeconds(30), mock(JSONSerializer.class), mock(EventBus.class), false);
+        listener.start();
+
+        var threads = Executors.newFixedThreadPool(4);
+        try {
+            var listening = threads.submit(() -> listener.listenToNotificationsFor("table1", MultiTableChangeListenerIT.Table1Notification.class));
+            assertThat(borrowStarted.await(5, TimeUnit.SECONDS)).as("listenToNotificationsFor is borrowing a connection").isTrue();
+            var firstStop = threads.submit(listener::stop);
+            Awaitility.waitAtMost(Duration.ofSeconds(5)).until(() -> !listener.isStarted());
+            var starting = threads.submit(listener::start);
+            Awaitility.waitAtMost(Duration.ofSeconds(5)).until(listener::isStarted);
+            var secondStop = threads.submit(listener::stop);
+            Awaitility.waitAtMost(Duration.ofSeconds(5)).until(() -> !listener.isStarted());
+
+            releaseBorrow.countDown();
+            listening.get(10, TimeUnit.SECONDS);
+            assertThatCode(() -> firstStop.get(10, TimeUnit.SECONDS)).doesNotThrowAnyException();
+            assertThatCode(() -> starting.get(10, TimeUnit.SECONDS)).doesNotThrowAnyException();
+            assertThatCode(() -> secondStop.get(10, TimeUnit.SECONDS)).doesNotThrowAnyException();
+
+            assertThat(openedHandles).isNotEmpty();
+            openedHandles.forEach(opened -> verify(opened, times(1)).close());
         } finally {
             releaseBorrow.countDown();
             threads.shutdownNow();
