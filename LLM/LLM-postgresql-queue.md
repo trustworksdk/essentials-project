@@ -490,6 +490,23 @@ regularly drain and refill, keep the table's statistics fresh with per-table aut
 ALTER TABLE durable_queues SET (autovacuum_analyze_scale_factor = 0, autovacuum_analyze_threshold = 1000);
 ```
 
+### Handlers that hold connections while waiting on something else
+
+A handler runs inside a unit of work, and its transaction takes a pooled connection when it begins: in a Spring
+application the transaction manager does that, not Essentials. A handler that spends most of its time on a slow
+call to another system therefore holds a connection it is not using. With more consumers than connections, the other
+handlers then queue on the pool. Two remedies, in order of preference:
+
+- **`@MessageHandler(unitOfWork = UnitOfWorkMode.NONE)`** for the handlers that make the slow call: they run with no
+  unit of work and no connection, and open their own transaction for the database part afterwards. See
+  [Blocking I/O in a Message Handler](LLM-foundation.md#blocking-io-in-a-message-handler-unitofworkmode).
+- **Spring's `LazyConnectionDataSourceProxy`** around the application's `DataSource`: a transaction then takes its
+  connection at its first statement rather than when it begins. This is an application-wide choice that affects
+  every transaction, so Essentials does not make it for you.
+
+A successful handler's transaction always ends with the acknowledgement (since 0.60.1), so it needs a connection
+at some point; laziness only shortens how long it is held.
+
 ### Ordered queues whose backlog sits on few keys
 
 The ordered claim takes each key's head: its lowest `key_order`, which blocks the rest of the key. The default
