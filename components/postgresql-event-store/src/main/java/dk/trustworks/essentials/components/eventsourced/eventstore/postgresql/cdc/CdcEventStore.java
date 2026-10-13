@@ -169,11 +169,6 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
      * subscribe of the subscriber that starts before the old one's end has run cannot hide either tracker
      */
     private final ConcurrentMap<SubscriberAndAggregateType, Set<CdcDeliveryTracker>> runningDeliveryTrackers = new ConcurrentHashMap<>();
-    /**
-     * Whether the delegate is a {@link PostgresqlEventStore} with the very gap handler this event store has: then its
-     * {@link #isAwaitedAsGap} reads the subscriber's transient gaps already, and this one does not read them a second time
-     */
-    private final boolean                                                     delegateReadsTheSameTransientGaps;
 
     /**
      * Create a {@link CdcEventStoreBuilder} that names every argument and accepts both plain values and
@@ -269,8 +264,6 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
             backfillToLiveTransitionTimer = null;
         }
         validateDeprecatedLiveDrainStallThreshold(eventBusProperties);
-        this.delegateReadsTheSameTransientGaps = delegate instanceof PostgresqlEventStore<?> postgresqlEventStore &&
-                postgresqlEventStore.getEventStreamGapHandler() == eventStreamGapHandler;
         warnIfDelegateIsNoAwaitedGapInspector(delegate);
     }
 
@@ -1733,10 +1726,11 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
      * {@link AwaitedGapInspector} is reported with a WARN when this event store is built: then the middles of wide gaps
      * its polls await in memory only go unanswered, so the answer is complete only while CDC is active.
      * <p>
-     * The transient gaps are read once per call: when the delegate is a {@link PostgresqlEventStore} with this event
-     * store's own gap handler - as wired by default - its answer covers them, and this one does not read them too. A
-     * delegate that only forwards to such a {@link PostgresqlEventStore} (a decorator) is not recognised, so there the
-     * transient gaps are read a second time: the answer is the same, only the read is duplicated.
+     * The transient gaps are read once per call: when the delegate reports this event store's own gap handler as the one
+     * its answer reads them from ({@link AwaitedGapInspector#transientGapsReadFrom()}, compared by identity) - a
+     * {@link PostgresqlEventStore} as wired by default, or a decorator that forwards to one - this one does not read them
+     * too. A delegate that reports another gap handler, or none (the default), has them read here as well: the answer is
+     * the same, only the read may be duplicated.
      * <p>
      * Asks a running subscription's tracker under the tracker's monitor, which its delivering threads take for every event
      * - briefly, and never the bus thread's.
@@ -1748,9 +1742,30 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
         requireNonNull(globalEventOrder, "No globalEventOrder provided");
         return gapMiddlesAwaitedAcrossSubscribes.isAwaited(subscriberId, aggregateType, globalEventOrder.longValue()) ||
                 isAwaitedByARunningSubscription(subscriberId, aggregateType, globalEventOrder.longValue()) ||
-                (recordsGaps() && !delegateReadsTheSameTransientGaps &&
+                (recordsGaps() && !delegateReadsTheSameTransientGaps() &&
                         eventStreamGapHandler.gapHandlerFor(subscriberId).getTransientGapsFor(aggregateType).contains(globalEventOrder)) ||
                 (eventStore instanceof AwaitedGapInspector delegate && delegate.isAwaitedAsGap(subscriberId, aggregateType, globalEventOrder));
+    }
+
+    /**
+     * @return whether the delegate's {@link #isAwaitedAsGap} answer already covers the transient gaps of this event store's
+     * own gap handler - asked on every call, as a decorating delegate forwards the question to whatever it decorates
+     */
+    private boolean delegateReadsTheSameTransientGaps() {
+        return eventStore instanceof AwaitedGapInspector delegate &&
+                delegate.transientGapsReadFrom().filter(gapHandler -> gapHandler == eventStreamGapHandler).isPresent();
+    }
+
+    /**
+     * @return this event store's gap handler, when it records gaps - {@link #isAwaitedAsGap} answers from its transient
+     * gaps, read here or by the delegate - else whatever the delegate reports, as {@link #isAwaitedAsGap} forwards to it
+     */
+    @Override
+    public Optional<EventStreamGapHandler<?>> transientGapsReadFrom() {
+        if (recordsGaps()) {
+            return Optional.of(eventStreamGapHandler);
+        }
+        return eventStore instanceof AwaitedGapInspector delegate ? delegate.transientGapsReadFrom() : Optional.empty();
     }
 
     private boolean isAwaitedByARunningSubscription(SubscriberId subscriberId, AggregateType aggregateType, long globalEventOrder) {

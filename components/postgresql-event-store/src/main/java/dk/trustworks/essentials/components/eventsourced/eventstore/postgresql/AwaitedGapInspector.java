@@ -17,8 +17,11 @@
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql;
 
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.EventStreamGapHandler;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
 import dk.trustworks.essentials.components.foundation.types.SubscriberId;
+
+import java.util.Optional;
 
 /**
  * Role interface of an {@link EventStore} that can tell whether a subscriber still awaits a {@link GlobalEventOrder} as a
@@ -36,7 +39,9 @@ import dk.trustworks.essentials.components.foundation.types.SubscriberId;
  * its gap handler's transient gaps, the middles of wide gaps its subscriptions await in memory only - those the running
  * subscription found itself included - and by forwarding to the event store it decorates. <b>An event store that
  * decorates one of them must implement it too, and forward to its delegate</b> - the same as
- * {@link EventStore#forgetGapMiddlesAwaitedInMemory(SubscriberId, AggregateType)}.
+ * {@link EventStore#forgetGapMiddlesAwaitedInMemory(SubscriberId, AggregateType)}. It should forward
+ * {@link #transientGapsReadFrom()} as well, so an event store decorating it in turn can tell which transient gaps its
+ * answer already covers.
  * <p>
  * A {@code CdcEventStore} over an event store that does not implement it gives a full answer only while CDC is active:
  * while it is not, the delegate's polls serve the subscriptions, and the middles of wide gaps those polls await in memory
@@ -52,4 +57,20 @@ public interface AwaitedGapInspector {
      * it does not await it
      */
     boolean isAwaitedAsGap(SubscriberId subscriberId, AggregateType aggregateType, GlobalEventOrder globalEventOrder);
+
+    /**
+     * The gap handler whose transient gaps {@link #isAwaitedAsGap} answers from - read by this inspector itself, or by
+     * the event store it forwards to. An event store that decorates this one and records gaps with the very same gap
+     * handler (compared by identity) can then leave reading them to this inspector, instead of reading the subscriber's
+     * transient gaps a second time - as {@link dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.CdcEventStore}
+     * does.
+     * <p>
+     * A decorator that forwards {@link #isAwaitedAsGap} should forward this method too: the default, empty, only costs
+     * the decorating store that second read - its answer stays the same.
+     *
+     * @return the gap handler whose transient gaps {@link #isAwaitedAsGap} covers, or empty when unknown (the default)
+     */
+    default Optional<EventStreamGapHandler<?>> transientGapsReadFrom() {
+        return Optional.empty();
+    }
 }

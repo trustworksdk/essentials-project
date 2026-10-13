@@ -30,8 +30,9 @@ import dk.trustworks.essentials.types.LongRange;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
 
+import java.lang.reflect.*;
 import java.time.Duration;
-import java.util.List;
+import java.util.*;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.CdcDeliveryTracker.MAX_AWAITED_ORDERS_PER_GAP_END;
@@ -124,7 +125,7 @@ class CdcEventStoreAwaitedGapInspectorTest {
     void does_not_read_the_transient_gaps_a_second_time_when_the_delegate_reads_them_with_the_same_gap_handler() {
         PostgresqlEventStore<SeparateTablePerAggregateEventStreamConfiguration> delegate = mock(PostgresqlEventStore.class);
         var gapHandler = transientGaps(GlobalEventOrder.of(3));
-        doReturn(gapHandler).when(delegate).getEventStreamGapHandler();
+        doReturn(Optional.of(gapHandler)).when(delegate).transientGapsReadFrom();
         when(delegate.isAwaitedAsGap(SUBSCRIBER, ORDERS, GlobalEventOrder.of(3))).thenReturn(true);
         var cdcEventStore = cdcEventStore(delegate, gapHandler);
 
@@ -138,13 +139,50 @@ class CdcEventStoreAwaitedGapInspectorTest {
     @SuppressWarnings("unchecked")
     void reads_the_transient_gaps_of_its_own_gap_handler_when_the_delegate_has_another_one() {
         PostgresqlEventStore<SeparateTablePerAggregateEventStreamConfiguration> delegate = mock(PostgresqlEventStore.class);
-        doReturn(transientGaps()).when(delegate).getEventStreamGapHandler();
+        doReturn(Optional.of(transientGaps())).when(delegate).transientGapsReadFrom();
         var gapHandler    = transientGaps(GlobalEventOrder.of(3));
         var cdcEventStore = cdcEventStore(delegate, gapHandler);
 
         assertThat(cdcEventStore.isAwaitedAsGap(SUBSCRIBER, ORDERS, GlobalEventOrder.of(3))).isTrue();
         assertThat(cdcEventStore.isAwaitedAsGap(SUBSCRIBER, ORDERS, GlobalEventOrder.of(4))).isFalse();
         verify(gapHandler, times(2)).gapHandlerFor(SUBSCRIBER);
+    }
+
+    @Test
+    void reads_the_transient_gaps_once_per_call_behind_a_forwarding_decorator_over_a_store_with_the_same_gap_handler() {
+        var gapHandler    = transientGaps(GlobalEventOrder.of(3));
+        var cdcEventStore = cdcEventStore(forwardingDecorator(storeReadingTheTransientGapsOf(gapHandler)), gapHandler);
+
+        for (var order : List.of(GlobalEventOrder.of(3), GlobalEventOrder.of(4))) {
+            clearInvocations(gapHandler);
+            assertThat(cdcEventStore.isAwaitedAsGap(SUBSCRIBER, ORDERS, order)).isEqualTo(order.equals(GlobalEventOrder.of(3)));
+            verify(gapHandler, times(1).description("read by the store behind the decorator only")).gapHandlerFor(SUBSCRIBER);
+        }
+    }
+
+    @Test
+    void reads_the_transient_gaps_of_its_own_gap_handler_too_behind_a_forwarding_decorator_over_a_store_with_another_one() {
+        var delegatesGapHandler = transientGaps(GlobalEventOrder.of(5));
+        var gapHandler          = transientGaps(GlobalEventOrder.of(3));
+        var cdcEventStore       = cdcEventStore(forwardingDecorator(storeReadingTheTransientGapsOf(delegatesGapHandler)), gapHandler);
+
+        assertThat(cdcEventStore.isAwaitedAsGap(SUBSCRIBER, ORDERS, GlobalEventOrder.of(3))).as("its own gap handler's").isTrue();
+        assertThat(cdcEventStore.isAwaitedAsGap(SUBSCRIBER, ORDERS, GlobalEventOrder.of(5))).as("the delegate's gap handler's").isTrue();
+        clearInvocations(gapHandler, delegatesGapHandler);
+        assertThat(cdcEventStore.isAwaitedAsGap(SUBSCRIBER, ORDERS, GlobalEventOrder.of(4))).isFalse();
+        verify(gapHandler).gapHandlerFor(SUBSCRIBER);
+        verify(delegatesGapHandler).gapHandlerFor(SUBSCRIBER);
+    }
+
+    @Test
+    void reports_its_own_gap_handler_as_the_one_it_reads_transient_gaps_from_or_the_delegates_when_its_own_records_none() {
+        var delegatesGapHandler = transientGaps();
+        var delegate            = storeReadingTheTransientGapsOf(delegatesGapHandler);
+        var gapHandler          = transientGaps();
+
+        assertThat(cdcEventStore(delegate, gapHandler).transientGapsReadFrom()).containsSame(gapHandler);
+        assertThat(cdcEventStore(delegate, new NoEventStreamGapHandler<>()).transientGapsReadFrom()).containsSame(delegatesGapHandler);
+        assertThat(cdcEventStore(mock(ConfigurableEventStore.class), new NoEventStreamGapHandler<>()).transientGapsReadFrom()).isEmpty();
     }
 
     @Test
@@ -235,6 +273,38 @@ class CdcEventStoreAwaitedGapInspectorTest {
     }
 
     private record WideGap(CdcDeliveryTracker tracker, long inTheMiddle, long aboveTheGap) {
+    }
+
+    /**
+     * A {@link PostgresqlEventStore} as far as {@link AwaitedGapInspector} goes: answers from the transient gaps of
+     * {@code gapHandler}, and reports it as the gap handler it reads them from
+     */
+    @SuppressWarnings("unchecked")
+    private static PostgresqlEventStore<SeparateTablePerAggregateEventStreamConfiguration> storeReadingTheTransientGapsOf(EventStreamGapHandler<?> gapHandler) {
+        PostgresqlEventStore<SeparateTablePerAggregateEventStreamConfiguration> store = mock(PostgresqlEventStore.class);
+        when(store.isAwaitedAsGap(any(), any(), any())).thenAnswer(call -> gapHandler.gapHandlerFor(call.getArgument(0))
+                                                                                     .getTransientGapsFor(call.getArgument(1))
+                                                                                     .contains(call.getArgument(2)));
+        doReturn(Optional.of(gapHandler)).when(store).transientGapsReadFrom();
+        return store;
+    }
+
+    /**
+     * An application decorator around {@code delegate} that implements {@link AwaitedGapInspector} and forwards every
+     * call to it, {@link AwaitedGapInspector#transientGapsReadFrom()} included - a JDK dynamic proxy, so the test needn't
+     * hand-write a forwarder for every {@link ConfigurableEventStore} method
+     */
+    @SuppressWarnings("unchecked")
+    private static ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> forwardingDecorator(ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> delegate) {
+        return (ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration>) Proxy.newProxyInstance(CdcEventStoreAwaitedGapInspectorTest.class.getClassLoader(),
+                                                                                                                  new Class<?>[]{ConfigurableEventStore.class, AwaitedGapInspector.class},
+                                                                                                                  (proxy, method, args) -> {
+                                                                                                                      try {
+                                                                                                                          return method.invoke(delegate, args);
+                                                                                                                      } catch (InvocationTargetException e) {
+                                                                                                                          throw e.getCause();
+                                                                                                                      }
+                                                                                                                  });
     }
 
     private static List<ILoggingEvent> awaitedGapInspectorWarnings(ListAppender<ILoggingEvent> appender) {

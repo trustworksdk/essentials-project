@@ -243,6 +243,15 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
                                      .contains(globalEventOrder);
     }
 
+    /**
+     * @return the {@link #getEventStreamGapHandler() gap handler}: {@link #isAwaitedAsGap} reads the subscriber's
+     * transient gaps from it
+     */
+    @Override
+    public Optional<EventStreamGapHandler<?>> transientGapsReadFrom() {
+        return Optional.of(eventStreamGapHandler);
+    }
+
     @Override
     public EventBus localEventBus() {
         return eventStoreEventBus;

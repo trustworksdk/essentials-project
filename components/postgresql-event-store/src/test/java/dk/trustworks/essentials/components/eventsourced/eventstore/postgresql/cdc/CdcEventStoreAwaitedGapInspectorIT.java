@@ -16,7 +16,7 @@
 
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc;
 
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.PostgresqlEventStore;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.PostgresqlEventStreamGapHandler;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.EventProcessorIT;
@@ -31,9 +31,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * {@link CdcEventStore#isAwaitedAsGap} skips its own read of the subscriber's transient gaps when its delegate is a
- * {@link PostgresqlEventStore} with the very same gap handler, because that delegate reads them. Pinned here against a
- * real {@link PostgresqlEventStore}, the way the starter wires the two: if the delegate stopped consulting the transient
- * gap rows, {@code awaitProcessed} would report a late-committing event as processed while CDC is inactive.
+ * {@link PostgresqlEventStore} with the very same gap handler, because that delegate reads them and reports so through
+ * {@link AwaitedGapInspector#transientGapsReadFrom()}. Pinned here against a real {@link PostgresqlEventStore}, the
+ * way the starter wires the two: if the delegate stopped consulting the transient gap rows, {@code awaitProcessed}
+ * would report a late-committing event as processed while CDC is inactive.
  */
 class CdcEventStoreAwaitedGapInspectorIT extends AbstractLogicalReplicationPostgresIT {
     private static final SubscriberId SUBSCRIBER = SubscriberId.of("awaited-gap-inspector-it");
@@ -59,6 +60,8 @@ class CdcEventStoreAwaitedGapInspectorIT extends AbstractLogicalReplicationPostg
                                                 new CdcProperties(),
                                                 new CdcAvailability());
 
+        assertThat(eventStore.transientGapsReadFrom()).containsSame(sharedHandler);
+        assertThat(cdcEventStore.transientGapsReadFrom()).containsSame(sharedHandler);
         unitOfWorkFactory.usingUnitOfWork(() -> sharedHandler.gapHandlerFor(SUBSCRIBER).addTransientGaps(ORDERS, LongRange.only(5)));
 
         assertThat(unitOfWorkFactory.withUnitOfWork(() -> cdcEventStore.isAwaitedAsGap(SUBSCRIBER, ORDERS, GlobalEventOrder.of(5)))).isTrue();
