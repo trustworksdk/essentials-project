@@ -21,6 +21,7 @@ import dk.trustworks.essentials.shared.Exceptions;
 import org.slf4j.*;
 
 import java.sql.*;
+import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.atomic.*;
 
@@ -362,8 +363,10 @@ final class OrderedShardOwner implements BatchReadableOwner {
      * server says it becomes visible, and its key into {@link #keysAwaitingRetry} — exactly the state the
      * owner that scheduled the retry was in. From there the ordinary path takes over: the key is refused
      * by {@link #dispatchReadyKeys} until {@link #dispatchDueRetries} puts the message back at its head.
-     * The attempt count is not carried over, as it never has been across a hand-over: an owner counts
-     * attempts in {@link #attemptsBySeq} and does not read the table's {@code attempts} back.
+     * Only the schedule and the block are restored, not the attempt count: that stays on the row, and the
+     * message's next failure under this owner continues from it ({@link #countAttempt} reads
+     * {@code storedAttempts} when {@link #attemptsBySeq} has no entry), so the hand-over neither resets nor
+     * charges the redelivery policy's budget.
      */
     private void restoreRetriesInBackoff(Connection connection) throws SQLException {
         var retries = storage.orderedRetriesInBackoff(connection, shard);
@@ -734,13 +737,13 @@ final class OrderedShardOwner implements BatchReadableOwner {
 
     private void onFailure(String key, long keyOrder, ShardOwnedStorage.OrderedRow row, Throwable cause) {
         try (var connection = storage.connection()) {
-            var attempts = countAttempt(connection, row.seq());
-            // A requested redelivery is not a failure - see RedeliveryRequested
-            var redeliveryRequest = cause instanceof RedeliveryRequested request ? request : null;
-            if (redeliveryRequest == null) {
-                metrics.observer().deliveryFailed(key, attempts, cause);
+            if (cause instanceof RedeliveryRequested request) {
+                onRedeliveryRequested(connection, key, keyOrder, row, request);
+                return;
             }
-            if (redeliveryRequest == null && redeliveryPolicy.isExhausted(attempts)) {
+            var attempts = countAttempt(connection, row.seq());
+            metrics.observer().deliveryFailed(key, attempts, cause);
+            if (redeliveryPolicy.isExhausted(attempts)) {
                 var moved = storage.moveToDeadLetterIfOwned(connection, ShardOwnedSchema.ORDERED_TABLE, "ordered", shard,
                                                             row.seq(), cause.getClass().getName() + ": " + cause.getMessage(),
                                                             instanceId, fence);
@@ -771,24 +774,48 @@ final class OrderedShardOwner implements BatchReadableOwner {
                 metrics.deadLettered.increment();
                 return;
             }
-            var delay = redeliveryRequest != null ? redeliveryRequest.delay() : redeliveryPolicy.delayAfter(attempts);
+            var delay = redeliveryPolicy.delayAfter(attempts);
             if (!storage.scheduleRetryIfOwned(connection, ShardOwnedSchema.ORDERED_TABLE, shard, row.seq(), attempts,
                                               delay.toMillis(), instanceId, fence)
                     && leaseLost(key, row, "retry")) {
                 return;
             }
-            synchronized (stateLock) {
-                keysAwaitingRetry.add(key);
-                retrySchedule.add(new OrderedRetry(System.nanoTime() + delay.toNanos(), key, keyOrder, row));
-            }
-            metrics.retriesScheduled.increment();
-            metrics.observer().retryScheduled(key, attempts, delay.toMillis());
+            scheduleInMemory(key, keyOrder, row, attempts, delay);
         } catch (SQLException e) {
             log.error("Ordered shard {}: failed to record failure for seq {}", shard, row.seq(), e);
             synchronized (stateLock) {
                 requeue(key, keyOrder, row);
             }
         }
+    }
+
+    /**
+     * A requested redelivery is not a failure, and not an attempt either - see {@code ShardOwner#onRedeliveryRequested}.
+     * The key is held exactly as for a retry, and the row is marked so a successor holds it too.
+     */
+    private void onRedeliveryRequested(Connection connection, String key, long keyOrder, ShardOwnedStorage.OrderedRow row,
+                                       RedeliveryRequested request) throws SQLException {
+        var delay = request.delay();
+        if (!storage.scheduleRequestedRedeliveryIfOwned(connection, ShardOwnedSchema.ORDERED_TABLE, shard, row.seq(),
+                                                        delay.toMillis(), instanceId, fence)
+                && leaseLost(key, row, "requested redelivery")) {
+            return;
+        }
+        Integer counted;
+        synchronized (stateLock) {
+            counted = attemptsBySeq.get(row.seq());
+        }
+        var attemptsSoFar = counted != null ? counted : storage.storedAttempts(connection, ShardOwnedSchema.ORDERED_TABLE, shard, row.seq());
+        scheduleInMemory(key, keyOrder, row, attemptsSoFar, delay);
+    }
+
+    private void scheduleInMemory(String key, long keyOrder, ShardOwnedStorage.OrderedRow row, int attempts, Duration delay) {
+        synchronized (stateLock) {
+            keysAwaitingRetry.add(key);
+            retrySchedule.add(new OrderedRetry(System.nanoTime() + delay.toNanos(), key, keyOrder, row));
+        }
+        metrics.retriesScheduled.increment();
+        metrics.observer().retryScheduled(key, attempts, delay.toMillis());
     }
 
     /**

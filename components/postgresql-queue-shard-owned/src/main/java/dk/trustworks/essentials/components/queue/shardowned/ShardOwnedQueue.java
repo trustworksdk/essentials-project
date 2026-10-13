@@ -600,7 +600,8 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
     /**
      * Another live process heartbeats under this instance id. Both then count as one instance in the rebalance and
      * keep taking the same shards from each other - safe, because the fence refuses the loser's writes, but the queue
-     * churns. Typically two JVMs on one host with the hostname default. Logged at most once a minute.
+     * churns. Typically an instance id configured explicitly to the same value in two processes, or derived from
+     * something they share, such as the hostname. Logged at most once a minute.
      */
     private void reportSharedInstanceId() {
         metrics.sharedInstanceIdHeartbeats.increment();
@@ -609,9 +610,9 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         if (last == 0 || now - last >= TimeUnit.MINUTES.toNanos(1)) {
             lastSharedInstanceIdWarningNanos = now;
             log.warn("Another process is running queue {} under the same instance id '{}' as this one. The rebalance counts "
-                             + "the two as one instance, and they keep taking the same shards from each other. Give every "
-                             + "process its own instance id (Spring Boot: essentials.shard-owned-queue.instance-id; it defaults "
-                             + "to the hostname, which two JVMs on one host share)", queueId, instanceId);
+                             + "the two as one instance, and they keep taking the same shards from each other. Set the instance "
+                             + "id to a value unique per process (Spring Boot: essentials.shard-owned-queue.instance-id)",
+                     queueId, instanceId);
         }
     }
 

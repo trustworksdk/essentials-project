@@ -30,7 +30,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * Two live processes running a queue under one instance id are reported; a restart and one process's two lanes are
  * not.
  * <p>
- * The instance id defaults to the hostname, which two JVMs on one host share. The rebalance then counts them as one
+ * Two processes given the same instance id - configured to one value, or derived from something they share, such as
+ * the hostname - are counted by the rebalance as one
  * instance and they keep taking the same shards from each other. Each process stamps the membership row with its own
  * token on every heartbeat, so finding another process's stamp after this one's first heartbeat means the id is
  * shared. A second process is simulated by re-stamping the row with a different token.

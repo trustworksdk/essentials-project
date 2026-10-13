@@ -219,6 +219,17 @@ class ShardOwnedRowLeaseSessionIT {
                     }
                     assertThat(again).as("a failed message must be available again at once").hasSize(1);
                     assertThat(again.getFirst().id().sequence()).isEqualTo(pulled.getFirst().id().sequence());
+                    assertThat(again.getFirst().attempts()).isEqualTo(1);
+
+                    // A second failure counts on the stored count. It used to write 1, so a message failed
+                    // through sessions never used up its budget
+                    other.fail(again.getFirst().id(), new IllegalStateException("nope again"));
+                    var third = new ArrayList<QueueSession.PulledMessage>();
+                    for (var attempt = 0; attempt < 20 && third.isEmpty(); attempt++) {
+                        third.addAll(other.poll(5));
+                    }
+                    assertThat(third).hasSize(1);
+                    assertThat(third.getFirst().attempts()).isEqualTo(2);
                 }
 
                 assertThat(session.acknowledge(pulled.subList(1, 3).stream()

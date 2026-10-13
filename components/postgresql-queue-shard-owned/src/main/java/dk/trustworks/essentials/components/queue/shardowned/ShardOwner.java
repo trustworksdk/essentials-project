@@ -22,6 +22,7 @@ import dk.trustworks.essentials.shared.Exceptions;
 import org.slf4j.*;
 
 import java.sql.*;
+import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -661,17 +662,27 @@ final class ShardOwner implements LeasedOwner {
         return attempts;
     }
 
-    private void onFailure(Connection connection, ShardOwnedStorage.Row row, Throwable cause) throws SQLException {
-        var attempts = countAttempt(connection, row.seq());
-        // A requested redelivery is not a failure: it is scheduled at the delay the handler asked for and never
-        // dead-letters the message - see RedeliveryRequested
-        var redeliveryRequest = cause instanceof RedeliveryRequested request ? request : null;
-        if (redeliveryRequest == null) {
-            // Emitted here rather than at the call site, because this is the only place that knows which
-            // attempt this was. The SPI's `attempt` argument used to be hardcoded to zero.
-            metrics.observer().deliveryFailed(null, attempts, cause);
+    /**
+     * The attempts counted so far, without counting one: what this owner has counted, or else what the row holds.
+     */
+    private int attemptsSoFar(Connection connection, long seq) throws SQLException {
+        Integer counted;
+        synchronized (stateLock) {
+            counted = attemptsBySeq.get(seq);
         }
-        if (redeliveryRequest == null && redeliveryPolicy.isExhausted(attempts)) {
+        return counted != null ? counted : storage.storedAttempts(connection, ShardOwnedSchema.UNORDERED_TABLE, shard, seq);
+    }
+
+    private void onFailure(Connection connection, ShardOwnedStorage.Row row, Throwable cause) throws SQLException {
+        if (cause instanceof RedeliveryRequested request) {
+            onRedeliveryRequested(connection, row, request);
+            return;
+        }
+        var attempts = countAttempt(connection, row.seq());
+        // Emitted here rather than at the call site, because this is the only place that knows which
+        // attempt this was. The SPI's `attempt` argument used to be hardcoded to zero.
+        metrics.observer().deliveryFailed(null, attempts, cause);
+        if (redeliveryPolicy.isExhausted(attempts)) {
             var moved = storage.moveToDeadLetterIfOwned(connection, ShardOwnedSchema.UNORDERED_TABLE, "unordered", shard,
                                                         row.seq(), cause.getClass().getName() + ": " + cause.getMessage(),
                                                         instanceId, fence);
@@ -695,7 +706,7 @@ final class ShardOwner implements LeasedOwner {
             metrics.deadLettered.increment();
             return;
         }
-        var delay = redeliveryRequest != null ? redeliveryRequest.delay() : redeliveryPolicy.delayAfter(attempts);
+        var delay = redeliveryPolicy.delayAfter(attempts);
         if (!storage.scheduleRetryIfOwned(connection, ShardOwnedSchema.UNORDERED_TABLE, shard, row.seq(), attempts,
                                           delay.toMillis(), instanceId, fence)
                 && leaseLost("retry")) {
@@ -705,6 +716,28 @@ final class ShardOwner implements LeasedOwner {
             }
             return;
         }
+        scheduleInMemory(row, attempts, delay);
+    }
+
+    /**
+     * A requested redelivery is not a failure, and not an attempt either: it is scheduled at the delay the handler
+     * asked for and leaves the count alone, so it neither uses up the redelivery policy's budget nor brings the
+     * message closer to a takeover's dead-letter - see RedeliveryRequested.
+     */
+    private void onRedeliveryRequested(Connection connection, ShardOwnedStorage.Row row, RedeliveryRequested request) throws SQLException {
+        var delay = request.delay();
+        if (!storage.scheduleRequestedRedeliveryIfOwned(connection, ShardOwnedSchema.UNORDERED_TABLE, shard, row.seq(),
+                                                        delay.toMillis(), instanceId, fence)
+                && leaseLost("requested redelivery")) {
+            synchronized (stateLock) {
+                attemptsBySeq.remove(row.seq());
+            }
+            return;
+        }
+        scheduleInMemory(row, attemptsSoFar(connection, row.seq()), delay);
+    }
+
+    private void scheduleInMemory(ShardOwnedStorage.Row row, int attempts, Duration delay) {
         synchronized (stateLock) {
             retrySchedule.add(new Retry(System.nanoTime() + delay.toNanos(), row));
         }

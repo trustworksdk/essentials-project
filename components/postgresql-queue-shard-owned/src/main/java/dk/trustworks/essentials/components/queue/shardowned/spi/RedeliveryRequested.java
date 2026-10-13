@@ -27,8 +27,13 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * A handler has only two outcomes otherwise - return (acknowledge) or throw (fail) - and a failure runs through the
  * redelivery policy: its backoff replaces the delay the handler asked for, and once the policy is exhausted the
  * message is dead-lettered, so a handler that only wanted to wait could park a healthy message. A redelivery request
- * is scheduled at the requested delay, counts as an attempt (as a manual redelivery counts as a redelivery in the
- * classic {@code DurableQueues}) and never dead-letters the message.
+ * is scheduled at the requested delay and is not an attempt: the stored attempt count is left as it is, so a request
+ * neither uses up the redelivery policy's budget for a later failure nor brings the message closer to being
+ * dead-lettered by unclean takeovers. However often a handler asks, the request itself never dead-letters the message.
+ * <p>
+ * This differs from a manual redelivery in the classic {@code DurableQueues}, which counts as a redelivery. It used
+ * to count here too, and a message whose handler had asked often enough was dead-lettered by the next unclean
+ * takeover of its shard with no failure recorded.
  */
 public class RedeliveryRequested extends RuntimeException {
     private final Duration delay;

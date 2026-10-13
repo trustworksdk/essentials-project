@@ -18,6 +18,7 @@ package dk.trustworks.essentials.components.queue.shardowned;
 
 import com.zaxxer.hikari.*;
 import dk.trustworks.essentials.components.queue.shardowned.ShardOwnedStorage.OrderedPayload;
+import dk.trustworks.essentials.components.queue.shardowned.spi.RedeliveryRequested;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.*;
 import org.testcontainers.junit.jupiter.*;
@@ -42,7 +43,10 @@ import static org.assertj.core.api.Assertions.assertThat;
  *     whole backlog.</li>
  *     <li>A message whose handler takes the process down every time is dead-lettered once those charges reach
  *     the policy's limit - it never fails, so nothing else would ever park it.</li>
+ *     <li>A redelivery the handler asked for is not counted, so however often it asked, the next unclean takeover
+ *     charges the message one attempt and does not dead-letter it.</li>
  * </ul>
+ * Which rows a takeover charges, exactly: {@code ShardOwnedTakeoverChargeIT}.
  */
 @Testcontainers(disabledWithoutDocker = true)
 class ShardOwnedTakeoverAttemptsIT {
@@ -213,6 +217,41 @@ class ShardOwnedTakeoverAttemptsIT {
             for (var queue : queues) {
                 queue.close();
             }
+        }
+    }
+
+    @Test
+    void redeliveries_a_handler_requested_never_bring_a_message_closer_to_a_takeover_dead_letter() throws Exception {
+        var deliveries = new AtomicInteger();
+        var handled    = new AtomicInteger();
+        var policy     = RedeliveryPolicy.fixed(Duration.ofMillis(10), 3);
+        var requests   = 5;
+
+        var first = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "instance-1");
+        try {
+            first.startConsuming((messageId, payload, payloadType) -> {
+                if (deliveries.incrementAndGet() <= requests) {
+                    throw new RedeliveryRequested(Duration.ofMillis(10));
+                }
+                // Then the process goes down in the middle of the next delivery
+                awaitUninterruptibly(crashedHandlersRelease, null);
+            }, SHORT_LEASE, SHARD_COUNT, policy);
+            first.enqueue(List.of(bytes("asks-to-wait")), 1);
+            Awaitility.await().atMost(Duration.ofSeconds(20)).until(() -> deliveries.get() == requests + 1);
+            first.stopAbruptly();
+            Thread.sleep(LEASE_TTL.toMillis() + 200);
+
+            try (var second = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "instance-2")) {
+                second.startConsuming((messageId, payload, payloadType) -> handled.incrementAndGet(), SHORT_LEASE, SHARD_COUNT, policy);
+                Awaitility.await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> assertThat(handled.get()).isEqualTo(1));
+                assertThat(second.deadLetterCount())
+                        .as("%s requested redeliveries against a policy of 3 attempts, then one unclean takeover: one attempt charged", requests)
+                        .isZero();
+                assertThat(second.remaining()).isZero();
+            }
+        } finally {
+            crashedHandlersRelease.countDown();
+            first.close();
         }
     }
 

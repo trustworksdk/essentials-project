@@ -588,6 +588,26 @@ public final class ShardOwnedStorage {
         }
     }
 
+    /**
+     * A row lease session's {@code fail}: count the attempt and hand the row back, visible at once, in one statement
+     * guarded by the session's row lease. The count is the stored one plus one - the session pulled it with that
+     * count - never a constant, which reset the budget of every message a session failed. A row another session has
+     * claimed since this one's lease lapsed is left alone.
+     *
+     * @return whether the row was still this session's
+     */
+    public boolean failSessionRow(Connection connection, int shard, long seq, long sessionFence) throws SQLException {
+        try (var statement = connection.prepareStatement(
+                "UPDATE " + UNORDERED_TABLE + " SET attempts = attempts + 1, visible_at = now(), lease = NULL, lease_until = NULL"
+                        + " WHERE queue_id = ? AND shard = ? AND seq = ? AND lease = ?")) {
+            statement.setShort(1, queueId);
+            statement.setInt(2, shard);
+            statement.setLong(3, seq);
+            statement.setLong(4, sessionFence);
+            return statement.executeUpdate() > 0;
+        }
+    }
+
     public record SessionRow(int shard, long seq, byte[] payload, int payloadType, int attempts) {
     }
 
@@ -1013,6 +1033,8 @@ public final class ShardOwnedStorage {
                         + "   SELECT seq FROM " + UNORDERED_TABLE
                         + "   WHERE queue_id = ? AND shard = ? AND visible_at <= now()"
                         + "     AND (attempts > 0 OR lease = ?)"
+                        // A row a live pull session holds is that session's delivery, not the previous owner's
+                        + notRowLeasedClause()
                         + "   UNION"
                         + "   (SELECT seq FROM " + UNORDERED_TABLE
                         + "    WHERE queue_id = ? AND shard = ? AND visible_at <= now() AND attempts = 0"
@@ -1034,13 +1056,20 @@ public final class ShardOwnedStorage {
      * The rows a takeover has charged up to the redelivery policy's limit, within the same window
      * {@link #bumpAttemptsOnTakeover} charges. Their handler never completed - the delivering process stopped every
      * time - so no failure will ever be recorded for them, and without this they would be redelivered forever.
+     * <p>
+     * Never a row nobody could have been delivering: one a live pull session holds, or an ordered row whose key is
+     * held behind a retry in backoff or a dead letter. Those are not charged either, so one that reads as exhausted
+     * here has a count left from before, and is dead-lettered as a failure, or parked behind the dead letter, when
+     * its turn comes. A requested redelivery is never counted (see {@link #scheduleRequestedRedeliveryIfOwned}), so
+     * a handler asking to wait can never bring a message here.
      *
      * @return the sequence values of the rows to dead-letter
      */
     public List<Long> exhaustedAfterTakeover(Connection connection, String table, int shard, int maxAttempts) throws SQLException {
         try (var statement = connection.prepareStatement(
-                "SELECT seq FROM " + table + " WHERE queue_id = ? AND shard = ? AND attempts >= ? AND visible_at <= now()"
-                        + " ORDER BY seq")) {
+                "SELECT a.seq FROM " + table + " a WHERE a.queue_id = ? AND a.shard = ? AND a.attempts >= ? AND a.visible_at <= now()"
+                        + (ORDERED_TABLE.equals(table) ? orderedKeyNotHeldClause("a") : notRowLeasedClause())
+                        + " ORDER BY a.seq")) {
             statement.setShort(1, queueId);
             statement.setInt(2, shard);
             statement.setInt(3, maxAttempts);
@@ -1508,6 +1537,14 @@ public final class ShardOwnedStorage {
      * unrecorded attempt to account for. Leaving it alone is also what keeps {@code attempts > 0} on a
      * not-yet-visible row meaning "a retry pushed this out" (see {@link #orderedRetriesInBackoff}):
      * bumping a delayed row here would make it look like a retry to the next takeover, and block its key.
+     * The position is counted among the visible rows only: a delayed row ahead of the one in a handler used to
+     * take a place in the window and could push that one out of it, so a message that took the process down
+     * every time was never charged.
+     * <p>
+     * <b>Not a held key.</b> A key whose earlier message is waiting out a retry backoff, or is dead-lettered, was
+     * not being delivered at all - the previous owner held it, and the successor holds it too (see
+     * {@link #orderedRetriesInBackoff}, {@link #orderedDeadLetterBlocks}). Charging the visible rows queued behind
+     * it cost each of them an attempt per takeover, and enough takeovers dead-lettered them, never delivered.
      *
      * @return how many rows were charged
      */
@@ -1517,10 +1554,11 @@ public final class ShardOwnedStorage {
                 "UPDATE " + ORDERED_TABLE + " o SET attempts = o.attempts + 1"
                         + " WHERE o.queue_id = ? AND o.shard = ? AND o.seq IN ("
                         + "   SELECT seq FROM ("
-                        + "     SELECT seq, attempts, visible_at,"
-                        + "            row_number() OVER (PARTITION BY msg_key ORDER BY key_order) AS position_in_key"
-                        + "     FROM " + ORDERED_TABLE + " WHERE queue_id = ? AND shard = ?) r"
-                        + "   WHERE r.visible_at <= now() AND (r.position_in_key <= ? OR r.attempts > 0))")) {
+                        + "     SELECT v.seq, v.attempts,"
+                        + "            row_number() OVER (PARTITION BY v.msg_key ORDER BY v.key_order) AS position_in_key"
+                        + "     FROM " + ORDERED_TABLE + " v WHERE v.queue_id = ? AND v.shard = ? AND v.visible_at <= now()"
+                        + orderedKeyNotHeldClause("v") + ") r"
+                        + "   WHERE r.position_in_key <= ? OR r.attempts > 0)")) {
             statement.setShort(1, queueId);
             statement.setInt(2, shard);
             statement.setShort(3, queueId);
@@ -1528,6 +1566,40 @@ public final class ShardOwnedStorage {
             statement.setInt(5, window);
             return statement.executeUpdate();
         }
+    }
+
+    /**
+     * What a requested redelivery leaves in an ordered row's {@code lease} column, which the ordered lane does not
+     * otherwise use. A requested redelivery is not an attempt, so it leaves {@code attempts} alone - and with it the
+     * only thing that told a row waiting out a retry from a delayed message. This tells it instead, so a successor
+     * holds the key until the redelivery is due (see {@link #orderedRetriesInBackoff}). Only read together with
+     * {@code visible_at > now()}; every write that pushes an ordered row's visibility out sets or clears it.
+     */
+    static final long REDELIVERY_REQUESTED = -1L;
+
+    /**
+     * Whether an ordered row that is not yet visible is waiting out a retry or a requested redelivery - rather than
+     * delayed by its producer - which holds its key. {@code alias} is the row's table alias, or empty.
+     */
+    private static String orderedRetryPending(String alias) {
+        var prefix = alias.isEmpty() ? "" : alias + ".";
+        return "(" + prefix + "attempts > 0 OR " + prefix + "lease = " + REDELIVERY_REQUESTED + ")";
+    }
+
+    /**
+     * Excludes an ordered row aliased {@code alias} whose key is held at an earlier {@code key_order}: by a row
+     * waiting out a retry or a requested redelivery, or by a dead letter. Nobody delivers such a row, so a
+     * takeover must neither charge it nor dead-letter it as exhausted.
+     */
+    private static String orderedKeyNotHeldClause(String alias) {
+        return " AND NOT EXISTS (SELECT 1 FROM " + ORDERED_TABLE + " b"
+                + "  WHERE b.queue_id = " + alias + ".queue_id AND b.shard = " + alias + ".shard"
+                + "    AND b.msg_key = " + alias + ".msg_key AND b.key_order < " + alias + ".key_order"
+                + "    AND b.visible_at > now() AND " + orderedRetryPending("b") + ")"
+                + " AND NOT EXISTS (SELECT 1 FROM " + DLQ_TABLE + " d"
+                + "  WHERE d.queue_id = " + alias + ".queue_id AND d.shard = " + alias + ".shard"
+                + "    AND d.source_lane = 'ordered' AND d.msg_key = " + alias + ".msg_key"
+                + "    AND d.key_order < " + alias + ".key_order)";
     }
 
     /**
@@ -1551,7 +1623,8 @@ public final class ShardOwnedStorage {
      * <p>
      * A retry is told apart from a delayed message by {@code attempts > 0}: {@link #scheduleRetry}
      * always writes a positive count, an enqueue writes 0, and {@link #bumpOrderedAttemptsOnTakeover}
-     * no longer touches a row that is not yet visible. A delayed ordered message therefore still does
+     * no longer touches a row that is not yet visible. A requested redelivery, which is not counted, is
+     * told apart by {@link #REDELIVERY_REQUESTED} in the row's otherwise unused {@code lease} column. A delayed ordered message therefore still does
      * not block its key, exactly as before. A row an older version bumped while it was delayed reads
      * as a retry and holds its key until it is visible — the conservative direction.
      * <p>
@@ -1563,7 +1636,7 @@ public final class ShardOwnedStorage {
                 "SELECT seq, msg_key, key_order, payload, payload_type,"
                         + " CEIL(EXTRACT(EPOCH FROM (visible_at - now())) * 1000)::bigint"
                         + " FROM " + ORDERED_TABLE
-                        + " WHERE queue_id = ? AND shard = ? AND visible_at > now() AND attempts > 0"
+                        + " WHERE queue_id = ? AND shard = ? AND visible_at > now() AND " + orderedRetryPending("")
                         + " ORDER BY msg_key, key_order")) {
             statement.setShort(1, queueId);
             statement.setInt(2, shard);
@@ -1664,21 +1737,69 @@ public final class ShardOwnedStorage {
         return scheduleRetry(connection, table, shard, seq, attempts, delayMillis, laneOf(table), owner, fence);
     }
 
-    private boolean scheduleRetry(Connection connection, String table, int shard, long seq, int attempts, long delayMillis,
+    /**
+     * {@link #scheduleRetryIfOwned}, counting the attempt on the stored count ({@code attempts + 1}) rather than
+     * writing one the caller tracked. For a pull session, which keeps no count in memory - it may be gone before
+     * the retry is due - so the row is the only count there is.
+     */
+    public boolean countAndScheduleRetryIfOwned(Connection connection, String table, int shard, long seq, long delayMillis,
+                                                String owner, long fence) throws SQLException {
+        requireNonNull(owner, "No owner provided");
+        return scheduleRetry(connection, table, shard, seq, null, delayMillis, laneOf(table), owner, fence);
+    }
+
+    /**
+     * Schedule a redelivery the handler asked for ({@code RedeliveryRequested}), fenced as
+     * {@link #scheduleRetryIfOwned}. Only the visibility moves: a requested redelivery is not an attempt, so the
+     * count is left as it is. The redelivery policy's budget is for failures, and a takeover's charge (see
+     * {@link #exhaustedAfterTakeover}) is for deliveries that never finished - a handler that asked to wait did
+     * finish. An ordered row is marked with {@link #REDELIVERY_REQUESTED}, so a successor still holds its key.
+     *
+     * @return false, with nothing changed, when the owner no longer holds the lease or the row is gone
+     */
+    public boolean scheduleRequestedRedeliveryIfOwned(Connection connection, String table, int shard, long seq, long delayMillis,
+                                                      String owner, long fence) throws SQLException {
+        requireNonNull(owner, "No owner provided");
+        try (var statement = connection.prepareStatement(
+                "UPDATE " + table + " u SET visible_at = now() + make_interval(secs => ? / 1000.0)"
+                        + (ORDERED_TABLE.equals(table) ? ", lease = " + REDELIVERY_REQUESTED : "")
+                        + " WHERE u.queue_id = ? AND u.shard = ? AND u.seq = ?"
+                        + ownedByClause("u"))) {
+            statement.setLong(1, delayMillis);
+            statement.setShort(2, queueId);
+            statement.setInt(3, shard);
+            statement.setLong(4, seq);
+            statement.setString(5, laneOf(table));
+            statement.setString(6, owner);
+            statement.setLong(7, fence);
+            return statement.executeUpdate() > 0;
+        }
+    }
+
+    /**
+     * @param attempts the count to write, or null to count this attempt on the stored one
+     */
+    private boolean scheduleRetry(Connection connection, String table, int shard, long seq, Integer attempts, long delayMillis,
                                   String lane, String owner, long fence) throws SQLException {
         try (var statement = connection.prepareStatement(
-                "UPDATE " + table + " u SET attempts = ?, visible_at = now() + make_interval(secs => ? / 1000.0)"
+                "UPDATE " + table + " u SET attempts = " + (attempts != null ? "?" : "u.attempts + 1")
+                        + ", visible_at = now() + make_interval(secs => ? / 1000.0)"
+                        // A failure, not a requested redelivery: clear the mark (see REDELIVERY_REQUESTED)
+                        + (ORDERED_TABLE.equals(table) ? ", lease = NULL" : "")
                         + " WHERE u.queue_id = ? AND u.shard = ? AND u.seq = ?"
                         + (owner != null ? ownedByClause("u") : ""))) {
-            statement.setInt(1, attempts);
-            statement.setLong(2, delayMillis);
-            statement.setShort(3, queueId);
-            statement.setInt(4, shard);
-            statement.setLong(5, seq);
+            var index = 1;
+            if (attempts != null) {
+                statement.setInt(index++, attempts);
+            }
+            statement.setLong(index++, delayMillis);
+            statement.setShort(index++, queueId);
+            statement.setInt(index++, shard);
+            statement.setLong(index++, seq);
             if (owner != null) {
-                statement.setString(6, lane);
-                statement.setString(7, owner);
-                statement.setLong(8, fence);
+                statement.setString(index++, lane);
+                statement.setString(index++, owner);
+                statement.setLong(index, fence);
             }
             return statement.executeUpdate() > 0;
         }
@@ -2154,6 +2275,7 @@ public final class ShardOwnedStorage {
         try (var connection = dataSource.getConnection();
              var statement = connection.prepareStatement(
                      "UPDATE " + table + " SET attempts = 0, visible_at = now() + make_interval(secs => ? / 1000.0)"
+                             + (ordered ? ", lease = NULL" : "")
                              + " WHERE queue_id = ? AND shard = ? AND seq = ?")) {
             statement.setLong(1, delayMillis);
             statement.setShort(2, queueId);
