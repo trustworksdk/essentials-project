@@ -347,12 +347,15 @@ public final class EssentialsRunReport {
     private void startUncollectedPeriod(int registered) {
         var now = clock.instant();
         synchronized (lock) {
+            var previous = openUncollected;
             if (openUncollected != null) {
                 openUncollected = openUncollected.withRegistered(Math.max(registered, openUncollected.registered()));
             } else {
                 openUncollected = new UncollectedPeriod(now, null, registered);
             }
-            uncollectedVersion++;
+            if (!openUncollected.equals(previous)) {
+                uncollectedVersion++;
+            }
         }
     }
 
@@ -530,7 +533,7 @@ public final class EssentialsRunReport {
             rendered = render(newFindings, newOverflow, true,
                               "Essentials report, " + plural(newFindings.size(), "new finding") + " since the last report: ", "", "",
                               uncollectedVersion == uncollectedVersionPrinted ? List.of() : uncollectedPeriods());
-            level = highestSeverity(newFindings).orElse(Severity.WARN);
+            level = highestSeverity(newFindings).orElse(newOverflow > 0 ? Severity.WARN : Severity.INFO);
             markAllPrinted();
         }
         logAt(level, rendered);

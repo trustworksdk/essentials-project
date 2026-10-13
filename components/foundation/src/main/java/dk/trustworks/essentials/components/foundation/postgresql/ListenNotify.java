@@ -91,7 +91,7 @@ public final class ListenNotify {
      */
     public static String resolveTableChangeChannelName(String tableName) {
         var resolvedChannelName = requireNonNull(tableName, "No tableName provided");
-        PostgresqlUtil.checkIsValidTableOrColumnName(resolvedChannelName);
+        checkIsValidUnqualifiedTableName(resolvedChannelName);
         return resolvedChannelName.toLowerCase(Locale.ROOT);
     }
 
@@ -206,7 +206,7 @@ public final class ListenNotify {
         requireNonNull(handle, "No handle provided");
         requireNonBlank(tableName, "No tableName provided");
         requireNonEmpty(triggerOnSqlOperations, "No triggerOnSqlOperations entries provided");
-        PostgresqlUtil.checkIsValidTableOrColumnName(tableName);
+        checkIsValidUnqualifiedTableName(tableName);
 
         var additionalColumnsPayLoadStatement = TABLE_NAME + ", " + SQL_OPERATION;
         var additionalColumnsSelectStatement  = "TG_TABLE_NAME, TG_OP";
@@ -287,7 +287,7 @@ public final class ListenNotify {
                                                                    String... includeAdditionalTableColumnsInNotificationPayload) {
         requireNonBlank(tableName, "No tableName provided");
         requireNonEmpty(triggerOnSqlOperations, "No triggerOnSqlOperations entries provided");
-        PostgresqlUtil.checkIsValidTableOrColumnName(tableName);
+        checkIsValidUnqualifiedTableName(tableName);
 
         var additionalColumnsPayLoadStatement = TABLE_NAME + ", " + SQL_OPERATION;
         var additionalColumnsSelectStatement  = "TG_TABLE_NAME, TG_OP";
@@ -327,7 +327,7 @@ public final class ListenNotify {
                                             "    IF EXISTS (SELECT 1 FROM pg_trigger t\n" +
                                             "               WHERE t.tgrelid = to_regclass('{:tableName}')\n" +
                                             // The trigger is created with an unquoted name, which PostgreSQL stores folded to lower case
-                                            "                 AND t.tgname = lower('notify_on_{:tableName}_changes')\n" +
+                                            "                 AND t.tgname = left(lower('notify_on_{:tableName}_changes'), 63)\n" +
                                             "                 AND t.tgfoid = to_regprocedure('notify_{:tableName}_change()')\n" +
                                             "                 AND t.tgtype = {:triggerType}\n" +
                                             "                 AND t.tgenabled <> 'D'\n" +
@@ -353,6 +353,20 @@ public final class ListenNotify {
      * {@code pg_trigger.tgtype} of an {@code AFTER ... FOR EACH ROW} trigger on {@code operations}: the row bit plus one
      * bit per operation (PostgreSQL's {@code TRIGGER_TYPE_*} constants in {@code catalog/pg_trigger.h})
      */
+    /**
+     * {@link PostgresqlUtil#checkIsValidTableOrColumnName(String)}, minus the schema-qualified form it also accepts: the
+     * table name is pasted into the notify function's name, the trigger's name and the LISTEN channel, none of which can
+     * carry a schema, so {@code schema.table} would otherwise fail later with a SQL syntax error - or create the function
+     * in a schema named after the {@code notify_} prefix.
+     */
+    private static void checkIsValidUnqualifiedTableName(String tableName) {
+        PostgresqlUtil.checkIsValidTableOrColumnName(tableName);
+        if (tableName.contains(".")) {
+            throw new InvalidTableOrColumnNameException(msg("Schema-qualified table name '{}' isn't supported by ListenNotify - " +
+                                                                    "use the unqualified table name and put its schema on the search_path", tableName));
+        }
+    }
+
     private static int rowTriggerType(List<SqlOperation> operations) {
         var type = 1;
         for (var operation : EnumSet.copyOf(operations)) {
@@ -394,7 +408,7 @@ public final class ListenNotify {
                                                                 String tableName) {
         requireNonNull(handle, "No handle provided");
         requireNonBlank(tableName, "No tableName provided");
-        PostgresqlUtil.checkIsValidTableOrColumnName(tableName);
+        checkIsValidUnqualifiedTableName(tableName);
 
         var notifyFunctionSql = bind("DROP FUNCTION IF EXISTS notify_{:tableName}_change() CASCADE",
                                      arg("tableName", tableName));
@@ -462,7 +476,7 @@ public final class ListenNotify {
         requireNonNull(jdbi, "No jdbi provided");
         requireNonBlank(tableName, "No tableName provided");
         requireNonNull(pollingInterval, "No pollingInterval provided");
-        PostgresqlUtil.checkIsValidTableOrColumnName(tableName);
+        checkIsValidUnqualifiedTableName(tableName);
 
         var handleReference = new AtomicReference<Handle>();
         return Flux.defer(() -> {

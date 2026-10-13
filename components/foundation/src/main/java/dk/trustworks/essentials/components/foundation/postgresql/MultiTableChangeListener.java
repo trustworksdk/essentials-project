@@ -467,6 +467,10 @@ public final class MultiTableChangeListener<T extends TableChangeNotification> i
             return;
         }
         synchronized (connectionLock) {
+            if (generation != pollGeneration) {
+                // A stop ended the run this start belongs to: opening a connection stamped with the stale generation would leak it
+                return;
+            }
             try {
                 openConnectionIfNeeded(generation);
             } catch (Throwable e) {

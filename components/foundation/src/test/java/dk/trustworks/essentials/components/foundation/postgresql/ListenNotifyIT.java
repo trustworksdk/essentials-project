@@ -176,7 +176,7 @@ class ListenNotifyIT {
         Awaitility.waitAtMost(Duration.ofMillis(2000))
                   .untilAsserted(() -> assertThat(receivedNotification.get()).isNotNull());
 
-        System.out.println(receivedNotification.get());
+        log.info("Received notification: {}", receivedNotification.get());
         var notification = objectMapper.readValue(receivedNotification.get(), TestTableNotification.class);
         assertThat(notification.getTableName()).isEqualTo(TABLE_NAME);
         assertThat(notification.getOperation()).isEqualTo(ListenNotify.SqlOperation.INSERT);

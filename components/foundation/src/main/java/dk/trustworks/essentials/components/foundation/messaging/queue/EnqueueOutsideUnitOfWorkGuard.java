@@ -239,8 +239,8 @@ public final class EnqueueOutsideUnitOfWorkGuard {
         }
         warn(queueName, callSite.describe());
         if (caller == 1 && charge.slot() == MAX_WARNED_INNERMOST_FRAMES) {
-            log.warn("[{}] Messages have been enqueued outside a UnitOfWork/transaction from {} innermost application frames - further call sites are not logged",
-                     queueName, MAX_WARNED_INNERMOST_FRAMES);
+            log.warn("[{}] Messages have been enqueued outside a UnitOfWork/transaction from {} innermost application frames - further call sites are not logged (frames already listed may still log up to {} of their callers)",
+                     queueName, MAX_WARNED_INNERMOST_FRAMES, MAX_WARNED_CALLERS_PER_INNERMOST_FRAME);
         }
     }
 

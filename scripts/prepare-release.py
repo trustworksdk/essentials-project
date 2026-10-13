@@ -175,7 +175,7 @@ def fetch_origin_main() -> None:
     release landed since the last fetch) makes the released top section look unreleased, and `rename` would then
     rewrite a published heading that `--check` cannot tell from a right one."""
     try:
-        r = subprocess.run(["git", "fetch", "--quiet", "origin", "main"], cwd=ROOT, capture_output=True, text=True,
+        r = subprocess.run(["git", "fetch", "--quiet", "origin", "+refs/heads/main:refs/remotes/origin/main"], cwd=ROOT, capture_output=True, text=True,
                            timeout=60, env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})
         error = ((r.stderr.strip().splitlines() or [f"exit {r.returncode}"])[0]) if r.returncode != 0 else ""
     except subprocess.TimeoutExpired:
