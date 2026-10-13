@@ -61,6 +61,48 @@ Ordered claim under the same conditions: 1 026 ms with the current form, 827 ms 
 | New: UoW callbacks | C2's test exposed a long-standing bug. `GenericHandleAwareUnitOfWork` (behind `JdbiUnitOfWorkFactory` and `EventStoreManagedUnitOfWorkFactory`) closed its handle, which clears the registered callbacks, before calling `afterCommit`/`afterRollback`, so neither ever ran. Spring's factory was unaffected. Fixed by taking a snapshot before `close()`; `GenericHandleAwareUnitOfWorkLifecycleTest` covers it. This switches on callbacks that never ran outside Spring (async snapshots, aggregate repositories), so it is the headline behaviour change in the 0.60.1 notes. |
 
 
+## Measurement round (branch vs `main`, Spring Boot starter wiring)
+
+Every queue change above was measured against `main` with the existing benchmark suites and four added ones
+(`-Dbenchmark.run=true`). Each benchmark wires `PostgresqlDurableQueues` the way the Spring Boot starter does by
+default (`SpringWiredDurableQueues`: LISTEN/NOTIFY polled every 50 ms; backoff 20 ms → ×1.5 → 2 s cap), so the
+numbers describe what a Spring application runs. `main` ran from a separate worktree; three alternating rounds per
+tree, one test fork, nothing else running.
+
+| Benchmark | `main` | branch | Change |
+| --- | --- | --- | --- |
+| Unordered drain, 2 queues × 20 000, 32 consumers each, pool of 10 | 3 198 msg/s | 13 373 msg/s | 4.2× |
+| Ordered drain, 20 keys × 1 000 (32 consumers) | 38.2 s | 20.1 s | −47% |
+| Ordered drain, 2 000 keys × 10 | 15.2 s | 8.9 s | −41% |
+| Ordered drain, 20 000 keys × 1 | 14.3 s | 9.4 s | −34% |
+| Steady 200 msg/s, 8 consumers: claim statements per message | 0.50 | 0.50 | = |
+| Steady 200 msg/s: latency p50 / p99 | 12 / 25 ms | 12 / 26 ms | = |
+| Steady 2 000 msg/s: latency p50 / p99 | 20 s / 40 s (falls behind) | 7 / 22 ms | keeps up |
+| Steady 2 000 msg/s: claim statements per message | 0.25 | 0.46 | +86%, the cost of keeping up |
+| Retry wave, 1 000 messages failing once, 500 ms delay: time / claims | 5.0 s / 502 | 0.70 s / 1 012 | 7× faster, 2× the claims |
+| Latency suite (ordered / unordered / mixed average) | 1.15 / 0.99 / 1.10 ms | 1.05 / 0.92 / 1.07 ms | −3 to −9% |
+| Load suites (centralized / traditional), elapsed | 1.87 / 3.39 s | 1.69 / 2.72 s | −10 / −20% |
+| Fetch-strategy suite, elapsed | 360 s | 381 s | +6%; per-queue polls now fill the slots the ordered claim left, so each returns more messages |
+| Message from another node after 2 s idle: p50 / max | 37–52 / 58–110 ms | 38–52 / 58–112 ms | = (bimodal at ~39 or ~50 ms on both) |
+| Shard-owned suites (cost, stalled key, routing space) | — | — | within ±6% |
+
+Two apparent regressions were investigated and are not caused by the code:
+
+- **Shard-owned idle statements** (`ShardOwnedOrderedIdleCostIT`): a median of 120 vs 216 in the campaign. The same
+  branch commit run from a clean worktree gives a median of 105 (90–138), the same as `main` (111). Runs from
+  `/workspace` are inflated and erratic, most likely by the IDE's language server compiling there. Every branch figure
+  above carries that small handicap.
+- **Cross-node latency**: a median p50 of 41.5 vs 50 ms in one series. A bisect across every commit gives 37–54 ms
+  with no trend, and the branch head measures 39 / 39 ms. The value is bimodal, depending on how the listener's 50 ms
+  poll lines up with the 20 ms fetch tick.
+
+Measured and changed as a result:
+
+- **C4** (merged claim statement) was reverted: it was committed without measurement and reversed a measured 0.60
+  design.
+- **C1** (backoff without a listener) cost +100 ms for a message from another node, and stalled ordered drains. The
+  builder now wires a listener like the starter, and without one nothing backs off.
+
 ## Workstream A — Claim SQL (classic `postgresql-queue`)
 
 ### A1. Unordered claim: update by primary-key array
