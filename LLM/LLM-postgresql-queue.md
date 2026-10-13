@@ -502,9 +502,11 @@ soon as half its workers are free, so throughput is bounded by the handler and t
 A queue table that drains to empty and is then analyzed (by autovacuum or by hand) records `reltuples = 0` while
 keeping its pages. When the next burst arrives, the planner expects no rows. The claim statements, the opt-in batched
 fetch's included, select the rows to update by primary-key array, so the unordered claim stays fast (4 ms instead of
-185 ms at 20 000 queued messages; a batched poll over two such queues 111 ms instead of 37.6 s). The batched fetch
-still reads and sorts each queue's whole ready backlog on every poll, so on a large backlog it stays slower than
-per-queue fetching. The ordered claim's per-key barrier can still be planned badly in that state. If ordered queues
+185 ms at 20 000 queued messages; a batched poll over two such queues 111 ms instead of 37.6 s). Since 0.60.1 the batched fetch
+also takes each queue's candidates under that queue's slot limit instead of sorting every queue's whole backlog. It
+still reads a polled queue's ordered messages once per poll, because it hands out ordered heads by
+`next_delivery_ts` and no index serves that order, so a large ordered backlog costs it more than the per-queue
+claims. The ordered claim's per-key barrier can still be planned badly in that state. If ordered queues
 regularly drain and refill, keep the table's statistics fresh with per-table autovacuum settings:
 
 ```sql
