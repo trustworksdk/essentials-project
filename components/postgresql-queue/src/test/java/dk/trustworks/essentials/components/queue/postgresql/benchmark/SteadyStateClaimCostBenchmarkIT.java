@@ -53,6 +53,7 @@ class SteadyStateClaimCostBenchmarkIT {
     private HikariDataSource        dataSource;
     private JdbiUnitOfWorkFactory   unitOfWorkFactory;
     private PostgresqlDurableQueues durableQueues;
+    private SpringWiredDurableQueues wired;
     private final AtomicLong        claimStatements = new AtomicLong();
 
     @BeforeEach
@@ -74,16 +75,13 @@ class SteadyStateClaimCostBenchmarkIT {
             }
         });
         unitOfWorkFactory = new JdbiUnitOfWorkFactory(jdbi);
-        durableQueues = PostgresqlDurableQueues.builder()
-                                               .setUnitOfWorkFactory(unitOfWorkFactory)
-                                               .setJsonSerializer(EssentialsObjectMappers.createJSONSerializer())
-                                               .build();
-        durableQueues.start();
+        wired = new SpringWiredDurableQueues(jdbi, unitOfWorkFactory);
+        durableQueues = wired.durableQueues;
     }
 
     @AfterEach
     void tearDown() {
-        durableQueues.stop();
+        wired.close();
         dataSource.close();
     }
 

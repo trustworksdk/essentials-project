@@ -35,7 +35,8 @@ import java.util.*;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * Delivery latency of a message enqueued by another node to a queue that has been idle, without LISTEN/NOTIFY: two
+ * Delivery latency of a message enqueued by another node to a queue that has been idle, wired like the Spring Boot
+ * starter (see {@link SpringWiredDurableQueues}): two
  * {@link PostgresqlDurableQueues} instances share the table, one consumes, the other produces. Uses only APIs that
  * exist on every 0.60 release, so it runs before and after a change.
  */
@@ -52,6 +53,8 @@ class CrossNodeLatencyBenchmarkIT {
     private PostgresqlDurableQueues consumingNode;
     private PostgresqlDurableQueues producingNode;
     private JdbiUnitOfWorkFactory   producerUnitOfWorkFactory;
+    private SpringWiredDurableQueues consumingWired;
+    private SpringWiredDurableQueues producingWired;
 
     @BeforeEach
     void setUp() {
@@ -61,24 +64,19 @@ class CrossNodeLatencyBenchmarkIT {
         config.setPassword(postgreSQLContainer.getPassword());
         config.setMaximumPoolSize(20);
         dataSource = new HikariDataSource(config);
-        consumingNode = node(new JdbiUnitOfWorkFactory(Jdbi.create(dataSource)));
-        producerUnitOfWorkFactory = new JdbiUnitOfWorkFactory(Jdbi.create(dataSource));
-        producingNode = node(producerUnitOfWorkFactory);
-    }
-
-    private static PostgresqlDurableQueues node(JdbiUnitOfWorkFactory unitOfWorkFactory) {
-        var node = PostgresqlDurableQueues.builder()
-                                          .setUnitOfWorkFactory(unitOfWorkFactory)
-                                          .setJsonSerializer(EssentialsObjectMappers.createJSONSerializer())
-                                          .build();
-        node.start();
-        return node;
+        var consumerJdbi = Jdbi.create(dataSource);
+        consumingWired = new SpringWiredDurableQueues(consumerJdbi, new JdbiUnitOfWorkFactory(consumerJdbi));
+        consumingNode = consumingWired.durableQueues;
+        var producerJdbi = Jdbi.create(dataSource);
+        producerUnitOfWorkFactory = new JdbiUnitOfWorkFactory(producerJdbi);
+        producingWired = new SpringWiredDurableQueues(producerJdbi, producerUnitOfWorkFactory);
+        producingNode = producingWired.durableQueues;
     }
 
     @AfterEach
     void tearDown() {
-        producingNode.stop();
-        consumingNode.stop();
+        producingWired.close();
+        consumingWired.close();
         dataSource.close();
     }
 
@@ -103,7 +101,7 @@ class CrossNodeLatencyBenchmarkIT {
         }
         consumer.cancel();
         var sorted = latencies.stream().sorted().toList();
-        System.out.printf("%n=== Message from another node after 2 s idle, no LISTEN/NOTIFY, %d samples: p50 %d ms, max %d ms ===%n%n",
+        System.out.printf("%n=== Message from another node after 2 s idle, Spring wiring, %d samples: p50 %d ms, max %d ms ===%n%n",
                           SAMPLES, sorted.get(SAMPLES / 2), sorted.getLast());
     }
 }

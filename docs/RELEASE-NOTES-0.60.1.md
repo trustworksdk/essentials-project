@@ -107,19 +107,22 @@ What does not change:
 - `springdata-mongo-queue` and the shard-owned engine are unchanged.
 - A crash before the commit still redelivers, so handlers should stay idempotent.
 
-### 1.6 Idle queues back off without LISTEN/NOTIFY (`postgresql-queue`)
+### 1.6 The builder is wired like the Spring Boot starter (`postgresql-queue`)
 
-Without a `MultiTableChangeListener`, a queue consumed through the `CentralizedMessageFetcher` used to get no
-polling optimizer. Every queue was polled every interval forever, with two claim statements per poll. It now gets a
-`CentralizedQueuePollingOptimizer`, capped at 10× the polling interval (200 ms at the default 20 ms). Measured on an
-idle queue: 28 queue-table scans in 3 s, against about 300 claim statements before.
+`PostgresqlDurableQueues.builder()` now creates a `MultiTableChangeListener` when none is set, and its default
+`CentralizedQueuePollingOptimizer` uses the Spring Boot starter's values (start at the polling interval, ×1.5 per
+empty poll, capped at 2 s). A builder-made instance therefore behaves like a Spring one: idle queues back off, and
+LISTEN/NOTIFY wakes them when a message is added on any node.
 
-- A message queued by this node resets the backoff when its transaction commits.
-- A message queued by another node waits at most the cap after the queue has been idle.
-- A `centralizedQueuePollingOptimizerFactory` you set is now used even without a listener. Before, it was ignored.
-- To opt out, use `setCentralizedQueuePollingOptimizerFactory(queueName -> QueuePollingOptimizer.None())`.
+What a builder user sees:
 
-The Spring Boot starter always creates a listener, so Spring applications see no change.
+- One more held database connection per instance, for the listener.
+- The change-notification trigger on the queue table becomes part of the queue's schema. With
+  `SchemaOwnership.COMPONENT` it is created on start-up; in `validate` mode it must exist.
+- `setCreateMultiTableChangeListener(false)` keeps the pre-0.60.1 wiring: no listener, and every queue polled every
+  interval without a backoff.
+
+Spring Boot applications see no change.
 
 ## 2. Fixes
 

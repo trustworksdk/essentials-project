@@ -24,8 +24,11 @@ import dk.trustworks.essentials.components.foundation.postgresql.*;
 import dk.trustworks.essentials.components.foundation.transaction.*;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
 
+import dk.trustworks.essentials.reactive.LocalEventBus;
+import org.slf4j.*;
+
 import java.time.Duration;
-import java.util.function.Function;
+import java.util.function.*;
 
 import static dk.trustworks.essentials.components.queue.postgresql.PostgresqlDurableQueues.DEFAULT_DURABLE_QUEUES_TABLE_NAME;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
@@ -47,11 +50,19 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * vulnerabilities, compromising the security and integrity of the database.</b>
  */
 public final class PostgresqlDurableQueuesBuilder {
+    private static final Logger log = LoggerFactory.getLogger(PostgresqlDurableQueuesBuilder.class);
+    /**
+     * How often a {@link MultiTableChangeListener} created by {@link #build()} polls for notifications - the Spring
+     * Boot starter's default ({@code essentials.multi-table-change-listener.polling-interval})
+     */
+    public static final Duration DEFAULT_CHANGE_LISTENER_POLLING_INTERVAL = Duration.ofMillis(50);
+
     private SchemaOwnership schemaOwnership = SchemaOwnership.COMPONENT;
     private HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory;
     private JSONSerializer                                                jsonSerializer;
     private String                                                        sharedQueueTableName         = DEFAULT_DURABLE_QUEUES_TABLE_NAME;
     private MultiTableChangeListener<TableChangeNotification>             multiTableChangeListener     = null;
+    private boolean                                                       createMultiTableChangeListener = true;
     private Function<ConsumeFromQueue, QueuePollingOptimizer>             queuePollingOptimizerFactory = null;
     private Duration                                                      messageHandlingTimeout       = Duration.ofSeconds(30);
 
@@ -258,11 +269,50 @@ public final class PostgresqlDurableQueuesBuilder {
         return this;
     }
 
+    /**
+     * Whether {@link #build()} creates a {@link MultiTableChangeListener} when none was set with
+     * {@link #setMultiTableChangeListener(MultiTableChangeListener)}. Default {@code true}, so a builder-made instance
+     * is wired like the Spring Boot starter's: LISTEN/NOTIFY on the queue table (polled every 50 ms), and a polling
+     * backoff that a message added on any node interrupts. The created listener holds one database connection, is
+     * started and stopped with the {@link PostgresqlDurableQueues}, and its change-notification trigger is part of the
+     * queue's schema.
+     * <p>
+     * {@code false} keeps the instance without LISTEN/NOTIFY, as builder-made instances were before 0.60.1: every queue
+     * is then polled every polling interval, without a backoff, since nothing could wake a backed-off queue.
+     *
+     * @param createMultiTableChangeListener whether to create a listener when none was set
+     * @return this builder instance
+     */
+    public PostgresqlDurableQueuesBuilder setCreateMultiTableChangeListener(boolean createMultiTableChangeListener) {
+        this.createMultiTableChangeListener = createMultiTableChangeListener;
+        return this;
+    }
+
     public PostgresqlDurableQueues build() {
+        // Before anything touches the database, the listener included
+        PostgresqlUtil.checkIsValidTableOrColumnName(sharedQueueTableName);
+        var serializer = jsonSerializer != null ? jsonSerializer : DurableQueuesSerialization.createDefaultJSONSerializer();
+        var listener   = multiTableChangeListener;
+        Supplier<MultiTableChangeListener<TableChangeNotification>> ownedListenerFactory = null;
+        // A unit of work factory that yields no Jdbi - a test double - gets no listener
+        var jdbi = listener == null && createMultiTableChangeListener
+                   ? requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory provided").withUnitOfWork(unitOfWork -> unitOfWork.handle().getJdbi())
+                   : null;
+        if (jdbi != null) {
+            // The Spring Boot starter's defaults: a 50 ms notification poll, duplicate notifications filtered
+            ownedListenerFactory = () -> new MultiTableChangeListener<>(jdbi,
+                                                                        DEFAULT_CHANGE_LISTENER_POLLING_INTERVAL,
+                                                                        serializer,
+                                                                        new LocalEventBus("DurableQueues-" + sharedQueueTableName + "-ChangeListener", 1,
+                                                                                          (failingSubscriber, event, exception) ->
+                                                                                                  log.error("Failed to handle {} in {}", event, failingSubscriber, exception)),
+                                                                        true);
+            listener = ownedListenerFactory.get();
+        }
         var durableQueues = new PostgresqlDurableQueues(unitOfWorkFactory,
-                                                       jsonSerializer != null ? jsonSerializer : DurableQueuesSerialization.createDefaultJSONSerializer(),
+                                                       serializer,
                                                        sharedQueueTableName,
-                                                       multiTableChangeListener,
+                                                       listener,
                                                        queuePollingOptimizerFactory,
                                                        messageHandlingTimeout,
                                                        useCentralizedMessageFetcher,
@@ -273,6 +323,9 @@ public final class PostgresqlDurableQueuesBuilder {
                                                        batchedFetchWarnRowsThreshold,
                                                        schemaOwnership);
         durableQueues.setMessageObserver(messageObserver);
+        if (ownedListenerFactory != null) {
+            durableQueues.ownMultiTableChangeListener(ownedListenerFactory);
+        }
         return durableQueues;
     }
 }

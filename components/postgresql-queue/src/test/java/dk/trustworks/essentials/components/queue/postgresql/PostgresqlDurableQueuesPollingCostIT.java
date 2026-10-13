@@ -34,10 +34,11 @@ import java.util.*;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Polling cost without LISTEN/NOTIFY.
+ * Polling cost with the builder's default wiring, which matches the Spring Boot starter's.
  * <ul>
- *     <li>An idle queue backs off. Without a {@code MultiTableChangeListener} it used to get no polling optimizer at
- *     all and was polled every interval forever, two claim statements a poll.</li>
+ *     <li>An idle queue backs off. A builder-made instance used to get no {@code MultiTableChangeListener} and so no
+ *     polling optimizer, and was polled every interval forever, two claim statements a poll. Opting out of the
+ *     listener still gives that.</li>
  *     <li>A message this node queues resets the backoff when its transaction commits, so a local producer does not
  *     wait out the backoff.</li>
  *     <li>A poll whose ordered claim finds fewer messages than there are free slots fills the rest with unordered
@@ -79,7 +80,7 @@ class PostgresqlDurableQueuesPollingCostIT {
     }
 
     @Test
-    void an_idle_queue_without_listen_notify_backs_off() throws Exception {
+    void an_idle_queue_backs_off() throws Exception {
         durableQueues.start();
         consumer = consumeWith(1, message -> { });
         // Let the backoff reach its cap, then measure
@@ -95,6 +96,26 @@ class PostgresqlDurableQueuesPollingCostIT {
         assertThat(scans)
                 .as("an idle queue polled every %s ms runs at least %s claim statements in %s", POLLING_INTERVAL.toMillis(), pollsWithoutBackoff * 2, measuredFor)
                 .isLessThan(pollsWithoutBackoff / 2);
+    }
+
+    @Test
+    void without_a_listener_an_idle_queue_is_polled_every_interval() throws Exception {
+        // Nothing could wake a backed-off queue, so it must not back off
+        durableQueues.stop();
+        durableQueues = PostgresqlDurableQueues.builder()
+                                               .setUnitOfWorkFactory(unitOfWorkFactory)
+                                               .setJsonSerializer(EssentialsObjectMappers.createJSONSerializer())
+                                               .setSharedQueueTableName(QUEUE_TABLE)
+                                               .setCentralizedMessageFetcherPollingInterval(POLLING_INTERVAL)
+                                               .setCreateMultiTableChangeListener(false)
+                                               .build();
+        durableQueues.start();
+        consumer = consumeWith(1, message -> { });
+        var optimizer = ((CentralizedMessageFetcherDurableQueueConsumer) consumer).getQueuePollingOptimizer();
+        Thread.sleep(500);
+
+        assertThat(optimizer.shouldSkipPolling()).isFalse();
+        assertThat(optimizer.toString()).isEqualTo("NoQueuePollingOptimizer");
     }
 
     @Test

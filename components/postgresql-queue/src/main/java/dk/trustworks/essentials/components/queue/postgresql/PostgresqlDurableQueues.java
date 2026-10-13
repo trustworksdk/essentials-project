@@ -101,7 +101,14 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
     private final       ConcurrentMap<QueueName, PostgresqlDurableQueueConsumer>                traditionalDurableQueueConsumers = new ConcurrentHashMap<>();
     private final       QueuedMessageRowMapper                                                  queuedMessageMapper;
     private final       List<DurableQueuesInterceptor>                                          interceptors                     = new CopyOnWriteArrayList<>();
-    private final       Optional<MultiTableChangeListener<TableChangeNotification>>             multiTableChangeListener;
+    private             Optional<MultiTableChangeListener<TableChangeNotification>>             multiTableChangeListener;
+    /**
+     * Set when the {@link PostgresqlDurableQueuesBuilder} created the {@link #multiTableChangeListener}: this instance
+     * then starts and stops it, and creates a new one when started again, since a stopped listener cannot be
+     * restarted - see {@link #ownMultiTableChangeListener(Supplier)}
+     */
+    private             Supplier<MultiTableChangeListener<TableChangeNotification>>             ownedMultiTableChangeListenerFactory;
+    private             boolean                                                                 ownedMultiTableChangeListenerStopped;
     private final       SchemaOwnership                                                         schemaOwnership;
     private final       Function<ConsumeFromQueue, QueuePollingOptimizer>                       queuePollingOptimizerFactory;
     /**
@@ -550,6 +557,15 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                 traditionalDurableQueueConsumers.values().forEach(PostgresqlDurableQueueConsumer::start);
             }
 
+            if (ownedMultiTableChangeListenerFactory != null) {
+                if (ownedMultiTableChangeListenerStopped) {
+                    var listener = ownedMultiTableChangeListenerFactory.get();
+                    listener.addDuplicationFilterAsFirst(new QueueNameDuplicationFilter());
+                    multiTableChangeListener = Optional.of(listener);
+                    ownedMultiTableChangeListenerStopped = false;
+                }
+                multiTableChangeListener.get().start();
+            }
             multiTableChangeListener.ifPresent(listener -> {
                 listener.listenToNotificationsFor(sharedQueueTableName,
                                                   QueueTableNotification.class);
@@ -667,8 +683,18 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                     }
                 }
             });
+            if (ownedMultiTableChangeListenerFactory != null) {
+                // Releases the listener's connection and thread. A stopped listener cannot be restarted, so start()
+                // creates a new one
+                multiTableChangeListener.ifPresent(MultiTableChangeListener::stop);
+                ownedMultiTableChangeListenerStopped = true;
+            }
             started = false;
             log.info("Stopped");
+        } else if (ownedMultiTableChangeListenerFactory != null && !ownedMultiTableChangeListenerStopped) {
+            // Built but never started: the listener's polling thread was started when it was created
+            multiTableChangeListener.ifPresent(MultiTableChangeListener::close);
+            ownedMultiTableChangeListenerStopped = true;
         }
     }
 
@@ -725,9 +751,11 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
 
         if (useCentralizedMessageFetcher) {
             // Create and register a CentralizedMessageFetcherDurableQueueConsumer
-            // With or without LISTEN/NOTIFY. Without it the default caps its backoff lower, because only a local
-            // enqueue resets it - see createCentralizedQueuePollingOptimizerFor
-            var queuePollingOptimizer = centralizedQueuePollingOptimizerFactory.apply(operation.getQueueName());
+            // Back off only where something can wake the queue: without LISTEN/NOTIFY a message enqueued by another
+            // node would wait out the backoff. The builder creates a listener by default, so this is the explicit
+            // opt-out, and it polls every interval - as it always has
+            var queuePollingOptimizer = multiTableChangeListener.map(_ignore -> centralizedQueuePollingOptimizerFactory.apply(operation.getQueueName()))
+                                                                .orElseGet(QueuePollingOptimizer::None);
             return durableQueueConsumers.computeIfAbsent(operation.queueName, _queueName -> {
                 var consumer = (CentralizedMessageFetcherDurableQueueConsumer) newInterceptorChainForOperation(operation,
                                                                                                                interceptors,
@@ -813,17 +841,14 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
      * @param queueName the queue name for which to create the polling optimizer
      * @return a new {@link CentralizedQueuePollingOptimizer} configured with:
      * <ul>
-     *   <li>Minimum polling interval: 50% of the centralized fetcher's polling interval</li>
-     *   <li>Maximum polling interval: 20x the centralized fetcher's polling interval with a {@link MultiTableChangeListener},
-     *   10x without one. Without LISTEN/NOTIFY nothing resets the backoff when another node enqueues, so the cap is
-     *   also the most a message enqueued elsewhere waits after the queue has been idle: 200 ms at the default 20 ms
-     *   interval. A message enqueued by this node resets the backoff on commit</li>
+     *   <li>Initial delay: the centralized fetcher's polling interval</li>
+     *   <li>Maximum delay: 2 seconds</li>
      *   <li>Backoff factor: 1.5 (50% increase per empty poll)</li>
      *   <li>Jitter: ±10% of each delay</li>
      * </ul>
-     * Before 0.60.1 a queue without a {@link MultiTableChangeListener} got no optimizer at all and was polled every
-     * interval forever, with two claim statements per poll. To get that back, set
-     * {@code setCentralizedQueuePollingOptimizerFactory(queueName -> QueuePollingOptimizer.None())}.
+     * The same values the Spring Boot starter configures by default, so a builder-made instance behaves like the
+     * Spring one. Only used with a {@link MultiTableChangeListener}, which wakes a backed-off queue when a message
+     * is added.
      * @throws IllegalStateException if called and the centralized message fetcher is not enabled
      */
     private QueuePollingOptimizer createCentralizedQueuePollingOptimizerFor(QueueName queueName) {
@@ -832,8 +857,8 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
         }
         var pollingIntervalMs = centralizedMessageFetcher.getPollingIntervalMs();
         return new CentralizedQueuePollingOptimizer(queueName,
-                                                    Math.max(1, (long) (pollingIntervalMs * 0.5d)),
-                                                    pollingIntervalMs * (multiTableChangeListener.isPresent() ? 20 : 10),
+                                                    pollingIntervalMs,
+                                                    Math.max(pollingIntervalMs, DEFAULT_MAX_POLLING_INTERVAL.toMillis()),
                                                     1.5,
                                                     0.1
         );
@@ -1866,6 +1891,21 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                                                                                               .findOne());
     }
 
+
+    /**
+     * The default maximum delay of the polling backoff - the Spring Boot starter's default
+     * ({@code essentials.durable-queues.max-polling-interval})
+     */
+    public static final Duration DEFAULT_MAX_POLLING_INTERVAL = Duration.ofSeconds(2);
+
+    /**
+     * Called by the {@link PostgresqlDurableQueuesBuilder} when it created the {@link MultiTableChangeListener} this
+     * instance was given: this instance then starts and stops it, and creates a new one with {@code factory} when
+     * started again after a stop
+     */
+    void ownMultiTableChangeListener(Supplier<MultiTableChangeListener<TableChangeNotification>> factory) {
+        this.ownedMultiTableChangeListenerFactory = requireNonNull(factory, "No factory provided");
+    }
 
     /**
      * An ordered claim that takes longer than this is reconsidered - see {@link #recordOrderedClaim}

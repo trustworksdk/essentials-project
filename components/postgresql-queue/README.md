@@ -159,9 +159,9 @@ var durableQueues = PostgresqlDurableQueues.builder()
 them, the queue is polled again as soon as half its workers are free, instead of at the next interval - so throughput
 is bounded by the handler and the database, not by `parallelConsumers / pollingInterval`.
 
-**Idle queues back off, with or without LISTEN/NOTIFY:** each queue gets a `CentralizedQueuePollingOptimizer` by
-default. Without a `MultiTableChangeListener` its backoff is capped at 10x the polling interval, and a message queued
-by this node resets it on commit. Opt out with `setCentralizedQueuePollingOptimizerFactory(q -> QueuePollingOptimizer.None())`.
+**The builder is wired like the Spring Boot starter:** it creates a `MultiTableChangeListener` (LISTEN/NOTIFY, one
+held connection) when none is set, and idle queues back off up to 2 s, woken when a message is added on any node.
+`setCreateMultiTableChangeListener(false)` keeps the pre-0.60.1 wiring: no listener, no backoff.
 
 **Draining tables and stale statistics:** a queue table that drains to empty and is then analyzed tells the planner
 it has no rows. The claim statements are written to stay fast regardless, except for the ordered claim's per-key

@@ -103,8 +103,9 @@ Created via `PostgresqlDurableQueues.builder()`.
 | `useCentralizedMessageFetcher` | `boolean` | `true` | Centralized vs per-consumer |
 | `centralizedMessageFetcherPollingInterval` | `Duration` | 20ms | Polling interval |
 | `queuePollingOptimizerFactory` | `Function<ConsumeFromQueue,QueuePollingOptimizer>` | null | For `DefaultDurableQueueConsumer` |
-| `centralizedQueuePollingOptimizerFactory` | `Function<QueueName,QueuePollingOptimizer>` | `CentralizedQueuePollingOptimizer` (cap 20× interval with a listener, 10× without) | For `CentralizedMessageFetcher`, with or without a listener |
-| `multiTableChangeListener` | `MultiTableChangeListener` | null | LISTEN/NOTIFY support |
+| `centralizedQueuePollingOptimizerFactory` | `Function<QueueName,QueuePollingOptimizer>` | `CentralizedQueuePollingOptimizer` (interval, ×1.5, 2 s cap) | For `CentralizedMessageFetcher`; only used with a listener |
+| `multiTableChangeListener` | `MultiTableChangeListener` | created by `build()` | LISTEN/NOTIFY support |
+| `createMultiTableChangeListener` | `boolean` | `true` | `false`: no listener and no backoff, as before 0.60.1 |
 
 ## Transactions
 
@@ -168,20 +169,19 @@ Continuous polling at fixed intervals wastes DB resources when queues are idle. 
 1. **Message found** → Reset to initial (fast) polling interval
 2. **No message found** → Increase delay using backoff strategy
 3. **Message added** → resets to fast polling. A message queued by this node resets its own consumer when the
-   transaction commits. A message queued by another node resets it only through LISTEN/NOTIFY (requires a
-   `MultiTableChangeListener`); without one it waits at most the backoff cap.
+   transaction commits. A message queued by another node resets it through LISTEN/NOTIFY.
 
 4. **Message due later** → a retry, delayed enqueue or delayed resurrection made by this node tells the optimizer
    when the message becomes deliverable, and the queue is polled then instead of sleeping past it (since 0.60.1;
    before, a retry on a backed-off queue could arrive a whole backoff cap late). A delayed message enqueued by
    another node still waits at most the cap.
 
-**The `CentralizedMessageFetcher` always uses an optimizer.** Since 0.60.1 it no longer depends on a
-`MultiTableChangeListener`. Defaults: start at half the polling interval, ×1.5 per empty poll, ±10% jitter, capped at
-20× the polling interval with a listener and 10× without one (200 ms at the default 20 ms). Before 0.60.1, a queue
-without a listener was polled every interval forever, with two claim statements per poll. To opt out, use
-`.setCentralizedQueuePollingOptimizerFactory(queueName -> QueuePollingOptimizer.None())`. The traditional
-`DefaultDurableQueueConsumer` still uses an optimizer only with a listener.
+**The builder is wired like the Spring Boot starter.** Since 0.60.1, `PostgresqlDurableQueues.builder()` creates a
+`MultiTableChangeListener` when none is set (LISTEN/NOTIFY on the queue table, polled every 50 ms; it holds one
+connection and is started and stopped with the queues), and the default `CentralizedQueuePollingOptimizer` uses the
+starter's values: start at the polling interval, ×1.5 per empty poll, ±10% jitter, capped at 2 s. A builder-made
+instance therefore behaves like a Spring one. `.setCreateMultiTableChangeListener(false)` keeps the old wiring: no
+LISTEN/NOTIFY and no backoff, every queue polled every interval - a queue only backs off where something can wake it.
 
 ### SimpleQueuePollingOptimizer
 

@@ -60,6 +60,7 @@ class QueueDrainThroughputIT {
     private HikariDataSource        dataSource;
     private JdbiUnitOfWorkFactory   unitOfWorkFactory;
     private PostgresqlDurableQueues durableQueues;
+    private SpringWiredDurableQueues wired;
     private final List<DurableQueueConsumer> consumers = new ArrayList<>();
 
     @BeforeEach
@@ -70,19 +71,17 @@ class QueueDrainThroughputIT {
         config.setPassword(postgreSQLContainer.getPassword());
         config.setMaximumPoolSize(POOL_SIZE);
         dataSource = new HikariDataSource(config);
-        unitOfWorkFactory = new JdbiUnitOfWorkFactory(Jdbi.create(dataSource));
-        durableQueues = PostgresqlDurableQueues.builder()
-                                               .setUnitOfWorkFactory(unitOfWorkFactory)
-                                               .setJsonSerializer(EssentialsObjectMappers.createJSONSerializer())
-                                               .build();
-        durableQueues.start();
+        var jdbi = Jdbi.create(dataSource);
+        unitOfWorkFactory = new JdbiUnitOfWorkFactory(jdbi);
+        wired = new SpringWiredDurableQueues(jdbi, unitOfWorkFactory);
+        durableQueues = wired.durableQueues;
         unitOfWorkFactory.usingUnitOfWork(uow -> uow.handle().execute("CREATE TABLE IF NOT EXISTS handled (queue TEXT, payload TEXT)"));
     }
 
     @AfterEach
     void tearDown() {
         consumers.forEach(DurableQueueConsumer::cancel);
-        durableQueues.stop();
+        wired.close();
         dataSource.close();
     }
 

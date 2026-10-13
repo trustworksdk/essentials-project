@@ -50,7 +50,7 @@ class OrderedBacklogDrainBenchmarkIT {
 
     private HikariDataSource        dataSource;
     private JdbiUnitOfWorkFactory   unitOfWorkFactory;
-    private PostgresqlDurableQueues durableQueues;
+    private Jdbi                    jdbi;
 
     @BeforeEach
     void setUp() {
@@ -60,30 +60,39 @@ class OrderedBacklogDrainBenchmarkIT {
         config.setPassword(postgreSQLContainer.getPassword());
         config.setMaximumPoolSize(20);
         dataSource = new HikariDataSource(config);
-        unitOfWorkFactory = new JdbiUnitOfWorkFactory(Jdbi.create(dataSource));
-        durableQueues = PostgresqlDurableQueues.builder()
-                                               .setUnitOfWorkFactory(unitOfWorkFactory)
-                                               .setJsonSerializer(EssentialsObjectMappers.createJSONSerializer())
-                                               .build();
-        durableQueues.start();
+        jdbi = Jdbi.create(dataSource);
+        unitOfWorkFactory = new JdbiUnitOfWorkFactory(jdbi);
     }
 
     @AfterEach
     void tearDown() {
-        durableQueues.stop();
         dataSource.close();
     }
 
     @Test
     void drain_ordered_backlogs_of_three_shapes() {
         var results = new ArrayList<String>();
-        for (var keys : List.of(20, 2_000, 20_000)) {
+        // -Dordered.drain.keys=2000 measures one shape, e.g. to bisect a change
+        var shapes = System.getProperty("ordered.drain.keys") != null
+                     ? Arrays.stream(System.getProperty("ordered.drain.keys").split(",")).map(Integer::parseInt).toList()
+                     : List.of(20, 2_000, 20_000);
+        for (var keys : shapes) {
             results.add(drain(keys));
         }
         System.out.printf("%n=== Ordered backlog drain, %,d messages, %d consumers ===%n%s%n%n", MESSAGES, PARALLEL_CONSUMERS, String.join("\n", results));
     }
 
+    /**
+     * Each shape on its own, freshly created table: one shape's run must not leave the next one's table in a different
+     * state (statistics, dead tuples), or the results depend on the order the shapes run in
+     */
     private String drain(int keys) {
+        try (var shapeWired = new SpringWiredDurableQueues(jdbi, unitOfWorkFactory, "ordered_drain_" + keys)) {
+            return drain(keys, shapeWired.durableQueues);
+        }
+    }
+
+    private String drain(int keys, PostgresqlDurableQueues durableQueues) {
         var queueName = QueueName.of("OrderedDrain-" + keys);
         var perKey    = MESSAGES / keys;
         for (var offset = 0; offset < MESSAGES; offset += 1_000) {
