@@ -73,6 +73,9 @@ public interface FencedLockManager extends Lifecycle {
      * <p>
      * Like {@link #tryAcquireLock(LockName)}, this returns the already-held {@link FencedLock} at once if this lock manager
      * instance holds the lock - it never waits for another caller in the same JVM to release it.
+     * <p>
+     * The timeout bounds how long acquire attempts are retried; it does not cut short a round trip to the lock store
+     * that is already in flight, so the call can return somewhat after the timeout.
      *
      * @param lockName the name of the lock
      * @param timeout  timeout for the lock acquiring
