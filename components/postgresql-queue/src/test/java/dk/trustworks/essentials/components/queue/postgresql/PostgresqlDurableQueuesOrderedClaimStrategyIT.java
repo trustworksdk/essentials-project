@@ -94,14 +94,25 @@ class PostgresqlDurableQueuesOrderedClaimStrategyIT {
     void a_queue_switches_to_the_head_scan_for_few_long_keys_and_back_for_many_keys() {
         // 20 keys of 1 000: fewer heads than the claim's limit, so the default statement probes every candidate
         queue(i -> OrderedMessage.of("payload-" + i, "key-" + (i % 20), i / 20), 20_000);
-        claimedIds(null, Set.of());
+        claimUntilHeadScanIs(true, OrderedClaimStatementChooser.SLOW_POLLS_BEFORE_SWITCH);
         assertThat(durableQueues.orderedClaimByHeadScan(QUEUE)).as("switched to the head scan").isTrue();
+        claimedIds(null, Set.of());
+        assertThat(durableQueues.orderedClaimByHeadScan(QUEUE)).as("the head scan is fast for this backlog, so it stays").isTrue();
 
-        // 20 000 keys of one message: the head scan visits every key
+        // 20 000 keys of one message: the head scan visits every key. Its first poll is slower than the default
+        // statement's last, which switches back at once, or, if not, it probes the default after a few slow polls
         durableQueues.purgeQueue(QUEUE);
         queue(i -> OrderedMessage.of("payload-" + i, "single-" + i, 0), 20_000);
-        claimedIds(null, Set.of());
+        claimUntilHeadScanIs(false, OrderedClaimStatementChooser.SLOW_POLLS_BEFORE_SWITCH + OrderedClaimStatementChooser.INITIAL_PROBE_INTERVAL);
         assertThat(durableQueues.orderedClaimByHeadScan(QUEUE)).as("switched back to the default statement").isFalse();
+        claimedIds(null, Set.of());
+        assertThat(durableQueues.orderedClaimByHeadScan(QUEUE)).as("the default is fast for this backlog, so it stays").isFalse();
+    }
+
+    private void claimUntilHeadScanIs(boolean headScan, int maxClaims) {
+        for (var claims = 0; claims < maxClaims && durableQueues.orderedClaimByHeadScan(QUEUE) != headScan; claims++) {
+            claimedIds(null, Set.of());
+        }
     }
 
     /**
