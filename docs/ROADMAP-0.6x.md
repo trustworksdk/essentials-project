@@ -208,11 +208,6 @@ Everything planned here before 2026-10-13 shipped in 0.60.1.
   init goldens say a missing objenesis fails "at the first read", which is true for 0.60.0. From 0.60.1, mapper
   creation fails at startup naming the dependency (SB-2). Update the row with the `essentials.version` pin and
   regenerate the goldens.
-- **0.60.1 migration notes: re-emit in `validate` mode (NW-8).** 0.60.1 rewrites the change-notification trigger's
-  statements (the startup deadlock fix), so its schema-history checksum changes and a `validate`-mode deployment
-  refuses to start until the new script is applied. `/essentials:upgrade`'s migration notes for 0.60.1
-  (`references/stack/migrations/`) need that step: run `emit`, apply the script, then start. Ship it with the
-  `essentials.version` pin move.
 - **Spring Boot's failsafe in generated projects (NW-6).** maven-failsafe-plugin 3.6.0 no longer binds `skipTests`, so
   `-DskipTests` runs every integration test (fixed in Essentials' own POM in 0.60.1 by defaulting `skipITs` to
   `skipTests`). Generated projects take failsafe from Spring Boot, which manages 3.5.6 in 4.1.1, so they are safe
@@ -269,6 +264,31 @@ Everything planned here before 2026-10-13 shipped in 0.60.1.
     deleting it;
   - a unit test that fails when the pinned Essentials version changes, prompting someone to walk the register;
   - optionally, reflection "canary" tests asserting that each worked-around behaviour still exists.
+
+
+---
+
+## P5: build and tooling
+
+Internal to the Essentials build and the plugin's checks: nothing a framework or plugin user notices, so these items
+need no release-notes entry beyond §7 and can ship in any release.
+
+- **Re-measure the parallel reactor (NW-9).** `mvn -T 3 verify` took 12:53 against about 23 minutes serially on
+  2026-10-12, but three `postgresql-queue-shard-owned` ITs failed under it, which is why the root `CLAUDE.md` says that
+  module flakes under `-T`. All three failures came from the lease test and the watermark test, and both are fixed.
+  Run `mvn -T 3 verify` three times; if it is clean, drop the warning from `CLAUDE.md` and consider `-T` for the CI
+  `verify` job.
+- **`plugin-check.sh release` has not run for real (NW-10).** The release lanes added on 2026-10-12 were tested with
+  `--no-evals` only, and Ctrl-C was not tried. Before the next plugin release, run `scripts/plugin-check.sh release`
+  with the evals, and press Ctrl-C once mid-scaffold to check that every child build stops and the work directories
+  are left in a state the next run accepts.
+- **Parallel scaffold builds on a cold `~/.m2` (NW-11).** `scripts/plugin-scaffold.sh` runs its lanes concurrently, and
+  on an empty local repository every lane downloads the same artifacts at once. Maven 3.9 resolves that safely only
+  with named file locks. Either warm the repository with one case before fanning out, or pass
+  `-Daether.syncContext.named.factory=file-lock -Daether.syncContext.named.nameMapper=file-gav` to each lane.
+- **Confirm the `review-service-entity` expectation fix (NW-12).** `gen-not-run` failed in all three runs before its
+  expectations were corrected (NR1/NR2), and has been run once since. Run that case three times and confirm it passes
+  every time.
 
 ---
 
