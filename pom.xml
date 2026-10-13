@@ -931,6 +931,7 @@
                                 <artifact>postgresql-cqrs</artifact>
                                 <artifact>postgresql-inbox-outbox</artifact>
                                 <artifact>mongodb-inbox-outbox</artifact>
+                                <artifact>essentials-webshop-demo</artifact>
                             </excludeArtifacts>
                         </configuration>
                     </plugin>
