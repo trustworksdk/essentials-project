@@ -280,6 +280,74 @@ class EssentialsRunReportTest {
         assertThat(new EssentialsRunReport().renderRunReport()).isEqualTo("Essentials run report: no findings over the whole run");
     }
 
+    @Test
+    void closing_one_of_two_registrations_of_the_same_report_keeps_it_registered() {
+        var report = new EssentialsRunReport();
+        var first  = report.registerAsRunReport();
+        var second = report.registerAsRunReport();
+        try {
+            first.close();
+            assertThat(report.isRegisteredAsRunReport()).isTrue();
+            assertThat(EssentialsRunReport.runReport()).containsSame(report);
+            second.close();
+            assertThat(report.isRegisteredAsRunReport()).isFalse();
+            assertThat(EssentialsRunReport.runReport()).isEmpty();
+        } finally {
+            first.close();
+            second.close();
+        }
+    }
+
+    @Test
+    void out_of_order_binding_closes_leave_nothing_bound() {
+        var a = new EssentialsRunReport();
+        var b = new EssentialsRunReport();
+        var bindingA = a.bindToCurrentThread();
+        var bindingB = b.bindToCurrentThread();
+        assertThat(EssentialsRunReport.current()).containsSame(b);
+
+        bindingA.close();
+        assertThat(EssentialsRunReport.current()).containsSame(b);
+        bindingB.close();
+        assertThat(EssentialsRunReport.current()).isEmpty();
+    }
+
+    @Test
+    void a_report_that_was_not_the_run_report_says_so_instead_of_claiming_no_findings() {
+        var clock  = new MutableClock(Instant.parse("2026-10-12T08:00:00Z"));
+        var first  = new EssentialsRunReport(10, clock);
+        var second = new EssentialsRunReport(10, clock);
+        var firstRegistration = first.registerAsRunReport();
+        Registration secondRegistration = null;
+        try {
+            clock.now = Instant.parse("2026-10-12T08:05:00Z");
+            secondRegistration = second.registerAsRunReport();
+            assertThat(logAppender.list).anySatisfy(event -> {
+                assertThat(event.getLevel()).isEqualTo(Level.INFO);
+                assertThat(event.getFormattedMessage()).contains("More than one Essentials run report is registered");
+            });
+            // No run report now: the finding goes nowhere
+            EssentialsRunReport.addToCurrent(Finding.warn("queue", "enqueue outside a UnitOfWork", ""));
+            assertThat(first.getFindings()).isEmpty();
+
+            assertThat(first.renderRunReport())
+                    .contains("no findings over the whole run, but runtime findings were not collected from 2026-10-12T08:05:00Z until now")
+                    .contains("2 run reports registered");
+            assertThat(first.logNewFindings()).isTrue();
+            assertThat(first.logNewFindings()).isFalse();
+
+            clock.now = Instant.parse("2026-10-12T08:10:00Z");
+            secondRegistration.close();
+            assertThat(first.renderRunReport()).contains("from 2026-10-12T08:05:00Z until 2026-10-12T08:10:00Z");
+            assertThat(second.renderRunReport()).contains("from 2026-10-12T08:05:00Z until 2026-10-12T08:10:00Z");
+        } finally {
+            firstRegistration.close();
+            if (secondRegistration != null) {
+                secondRegistration.close();
+            }
+        }
+    }
+
     private static final class MutableClock extends Clock {
         private volatile Instant now;
 

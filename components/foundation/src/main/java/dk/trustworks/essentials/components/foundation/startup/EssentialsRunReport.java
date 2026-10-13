@@ -78,17 +78,23 @@ public final class EssentialsRunReport {
      */
     public static final int DEFAULT_MAX_DISTINCT_FINDINGS = 500;
 
+    private static final int MAX_UNCOLLECTED_PERIODS = 20;
+
     private static final Logger                                log        = LoggerFactory.getLogger(EssentialsRunReport.class);
-    private static final ThreadLocal<EssentialsRunReport> CURRENT    = new ThreadLocal<>();
     /**
-     * Every report {@link #registerAsRunReport() registered}, by identity. Guarded by itself.
+     * The bindings of the calling thread, innermost first
      */
-    private static final Set<EssentialsRunReport>         REGISTERED = Collections.newSetFromMap(new IdentityHashMap<>());
+    private static final ThreadLocal<Deque<Binding>>       CURRENT    = new ThreadLocal<>();
+    /**
+     * Every report {@link #registerAsRunReport() registered}, by identity, with how many open registrations it has.
+     * Guarded by itself.
+     */
+    private static final Map<EssentialsRunReport, Integer> REGISTERED = new IdentityHashMap<>();
     /**
      * The only registered report, or {@code null} when none or more than one is registered - what
      * {@link #addToCurrent(Finding)} falls back to. Recomputed under {@link #REGISTERED}'s lock.
      */
-    private static volatile EssentialsRunReport           runReport;
+    private static volatile EssentialsRunReport            runReport;
 
     /**
      * How serious a {@link Finding} is
@@ -186,6 +192,21 @@ public final class EssentialsRunReport {
      * {@link #overflowCount} when the report was last printed. Guarded by {@link #lock}.
      */
     private       long                overflowCountPrinted;
+    /**
+     * The periods in which this report was registered but not the run report, because another was too, oldest first,
+     * at most {@link #MAX_UNCOLLECTED_PERIODS}. Guarded by {@link #lock}.
+     */
+    private final List<UncollectedPeriod> uncollected = new ArrayList<>();
+    /**
+     * The period under way, or {@code null}. Guarded by {@link #lock}.
+     */
+    private       UncollectedPeriod       openUncollected;
+    /**
+     * Bumped when {@link #uncollectedPeriods()} changes; {@link #uncollectedVersionPrinted} is its value when the report
+     * was last printed. Guarded by {@link #lock}.
+     */
+    private       long                    uncollectedVersion;
+    private       long                    uncollectedVersionPrinted;
 
     /**
      * A report that keeps up to {@link #DEFAULT_MAX_DISTINCT_FINDINGS} distinct findings
@@ -219,7 +240,13 @@ public final class EssentialsRunReport {
      * the {@link #runReport() run report}.
      */
     public static Optional<EssentialsRunReport> current() {
-        return Optional.ofNullable(CURRENT.get());
+        return Optional.ofNullable(currentOrNull());
+    }
+
+    private static EssentialsRunReport currentOrNull() {
+        var bindings  = CURRENT.get();
+        var innermost = bindings == null ? null : bindings.peekFirst();
+        return innermost == null ? null : innermost.report;
     }
 
     /**
@@ -239,7 +266,7 @@ public final class EssentialsRunReport {
      */
     public static void addToCurrent(Finding finding) {
         requireNonNull(finding, "No finding provided");
-        var report = CURRENT.get();
+        var report = currentOrNull();
         if (report == null) {
             report = runReport;
         }
@@ -251,16 +278,33 @@ public final class EssentialsRunReport {
     /**
      * Make this the report {@link #addToCurrent(Finding)} falls back to on any thread with no report bound - for as long
      * as it is the only one registered in this JVM - until the returned registration is closed. Registering a report
-     * that is already registered changes nothing.
+     * that is already registered is counted: it stays registered until every registration it was given is closed.
+     * <p>
+     * When a second report is registered the run report is gone - runtime findings are no longer collected by any
+     * report. That is logged once at INFO, and each registered report records the period and says so in
+     * {@link #renderRunReport()} and {@link #logNewFindings()}, so that its silence is not read as health.
      *
      * @return the registration, to close when the application stops
      */
     public Registration registerAsRunReport() {
+        List<EssentialsRunReport> competing = null;
         synchronized (REGISTERED) {
-            REGISTERED.add(this);
-            recomputeRunReport();
+            var before = REGISTERED.size();
+            REGISTERED.merge(this, 1, Integer::sum);
+            recomputeRunReport(null);
+            if (before == 1 && REGISTERED.size() == 2) {
+                competing = List.copyOf(REGISTERED.keySet());
+            }
+        }
+        if (competing != null) {
+            log.info("More than one Essentials run report is registered ({}) - runtime findings (raised after start-up) are only logged by their checks, "
+                     + "not collected, until only one is left", competing.stream().map(EssentialsRunReport::identity).collect(Collectors.joining(" and ")));
         }
         return new Registration(this);
+    }
+
+    private String identity() {
+        return "EssentialsRunReport@" + Integer.toHexString(System.identityHashCode(this));
     }
 
     /**
@@ -269,22 +313,83 @@ public final class EssentialsRunReport {
      */
     public boolean isRegisteredAsRunReport() {
         synchronized (REGISTERED) {
-            return REGISTERED.contains(this);
+            return REGISTERED.containsKey(this);
         }
     }
 
     private static void deregister(EssentialsRunReport report) {
         synchronized (REGISTERED) {
-            REGISTERED.remove(report);
-            recomputeRunReport();
+            REGISTERED.computeIfPresent(report, (key, registrations) -> registrations > 1 ? registrations - 1 : null);
+            recomputeRunReport(REGISTERED.containsKey(report) ? null : report);
         }
     }
 
     /**
      * Callers hold {@link #REGISTERED}'s lock
+     *
+     * @param deregistered the report that just left {@link #REGISTERED}, if any - its open uncollected period ends
      */
-    private static void recomputeRunReport() {
-        runReport = REGISTERED.size() == 1 ? REGISTERED.iterator().next() : null;
+    private static void recomputeRunReport(EssentialsRunReport deregistered) {
+        var registered = REGISTERED.size();
+        runReport = registered == 1 ? REGISTERED.keySet().iterator().next() : null;
+        if (deregistered != null) {
+            deregistered.endUncollectedPeriod();
+        }
+        for (var report : REGISTERED.keySet()) {
+            if (registered > 1) {
+                report.startUncollectedPeriod(registered);
+            } else {
+                report.endUncollectedPeriod();
+            }
+        }
+    }
+
+    private void startUncollectedPeriod(int registered) {
+        var now = clock.instant();
+        synchronized (lock) {
+            if (openUncollected != null) {
+                openUncollected = openUncollected.withRegistered(Math.max(registered, openUncollected.registered()));
+            } else {
+                openUncollected = new UncollectedPeriod(now, null, registered);
+            }
+            uncollectedVersion++;
+        }
+    }
+
+    private void endUncollectedPeriod() {
+        var now = clock.instant();
+        synchronized (lock) {
+            if (openUncollected == null) {
+                return;
+            }
+            var ended = openUncollected.withEnd(now);
+            openUncollected = null;
+            if (uncollected.size() < MAX_UNCOLLECTED_PERIODS) {
+                uncollected.add(ended);
+            } else {
+                var last = uncollected.removeLast();
+                uncollected.add(new UncollectedPeriod(last.from(), ended.until(), Math.max(last.registered(), ended.registered())));
+            }
+            uncollectedVersion++;
+        }
+    }
+
+    /**
+     * Callers hold {@link #lock}
+     */
+    private List<UncollectedPeriod> uncollectedPeriods() {
+        if (openUncollected == null) {
+            return List.copyOf(uncollected);
+        }
+        var all = new ArrayList<>(uncollected);
+        all.add(openUncollected);
+        return all;
+    }
+
+    private static String describe(UncollectedPeriod period) {
+        return "runtime findings were not collected from " + period.from() + " "
+               + (period.until() == null ? "until now" : "until " + period.until())
+               + ": " + period.registered() + " run reports registered, so none was the run report";
     }
 
     /**
@@ -353,14 +458,20 @@ public final class EssentialsRunReport {
 
     /**
      * Make this the report {@link #current()} on the calling thread until the returned binding is closed - on the same
-     * thread. Bindings nest: closing one restores the report that was current before it.
+     * thread. Bindings nest: closing one restores the report that was current before it - also when they are closed out of order,
+     * the report of the innermost binding still open is then the current one.
      *
      * @return the binding, to close when start-up is over
      */
     public Binding bindToCurrentThread() {
-        var previous = CURRENT.get();
-        CURRENT.set(this);
-        return new Binding(this, previous, Thread.currentThread());
+        var bindings = CURRENT.get();
+        if (bindings == null) {
+            bindings = new ArrayDeque<>();
+            CURRENT.set(bindings);
+        }
+        var binding = new Binding(this, Thread.currentThread());
+        bindings.addFirst(binding);
+        return binding;
     }
 
     /**
@@ -369,7 +480,7 @@ public final class EssentialsRunReport {
      */
     public String render() {
         synchronized (lock) {
-            return render(snapshot(false), overflowCount, false, "Essentials startup report: ", "", "no findings");
+            return render(snapshot(false), overflowCount, false, "Essentials startup report: ", "", "no findings", List.of());
         }
     }
 
@@ -379,7 +490,8 @@ public final class EssentialsRunReport {
      */
     public String renderRunReport() {
         synchronized (lock) {
-            return render(snapshot(false), overflowCount, true, "Essentials run report: ", " over the whole run", "no findings over the whole run");
+            return render(snapshot(false), overflowCount, true, "Essentials run report: ", " over the whole run", "no findings over the whole run",
+                          uncollectedPeriods());
         }
     }
 
@@ -412,11 +524,12 @@ public final class EssentialsRunReport {
         synchronized (lock) {
             var newFindings = snapshot(true);
             var newOverflow = overflowCount - overflowCountPrinted;
-            if (newFindings.isEmpty() && newOverflow == 0) {
+            if (newFindings.isEmpty() && newOverflow == 0 && uncollectedVersion == uncollectedVersionPrinted) {
                 return false;
             }
             rendered = render(newFindings, newOverflow, true,
-                              "Essentials report, " + plural(newFindings.size(), "new finding") + " since the last report: ", "", "");
+                              "Essentials report, " + plural(newFindings.size(), "new finding") + " since the last report: ", "", "",
+                              uncollectedVersion == uncollectedVersionPrinted ? List.of() : uncollectedPeriods());
             level = highestSeverity(newFindings).orElse(Severity.WARN);
             markAllPrinted();
         }
@@ -463,6 +576,7 @@ public final class EssentialsRunReport {
     private void markAllPrinted() {
         findings.values().forEach(tally -> tally.printed = true);
         overflowCountPrinted = overflowCount;
+        uncollectedVersionPrinted = uncollectedVersion;
     }
 
     private static Optional<Severity> highestSeverity(List<Occurrences> occurrences) {
@@ -477,9 +591,11 @@ public final class EssentialsRunReport {
         }
     }
 
-    private String render(List<Occurrences> occurrences, long overflow, boolean withOccurrences, String headline, String scope, String empty) {
+    private String render(List<Occurrences> occurrences, long overflow, boolean withOccurrences, String headline, String scope, String empty, List<UncollectedPeriod> notCollected) {
         if (occurrences.isEmpty() && overflow == 0) {
-            return headline + empty;
+            return notCollected.isEmpty()
+                   ? headline + empty
+                   : headline + (empty.isEmpty() ? "" : empty + ", but ") + notCollected.stream().map(EssentialsRunReport::describe).collect(Collectors.joining("; "));
         }
         var block  = new StringBuilder();
         var banner = "=".repeat(120);
@@ -516,6 +632,9 @@ public final class EssentialsRunReport {
             block.append("Plus ").append(plural(overflow, "occurrence")).append(" of findings not kept - the report holds at most ")
                  .append(maxDistinctFindings).append(" distinct findings\n");
         }
+        for (var period : notCollected) {
+            block.append("Note: ").append(describe(period)).append('\n');
+        }
         return block.append(banner).toString();
     }
 
@@ -525,6 +644,19 @@ public final class EssentialsRunReport {
 
     private static String plural(long count, String noun) {
         return count + " " + noun + (count == 1 ? "" : "s");
+    }
+
+    /**
+     * A period in which a registered report was not the run report. {@code until} is null while it lasts.
+     */
+    private record UncollectedPeriod(Instant from, Instant until, int registered) {
+        UncollectedPeriod withEnd(Instant until) {
+            return new UncollectedPeriod(from, until, registered);
+        }
+
+        UncollectedPeriod withRegistered(int registered) {
+            return new UncollectedPeriod(from, until, registered);
+        }
     }
 
     /**
@@ -573,13 +705,11 @@ public final class EssentialsRunReport {
      */
     public static final class Binding implements AutoCloseable {
         private final EssentialsRunReport report;
-        private final EssentialsRunReport previous;
         private final Thread                  thread;
         private       boolean                 closed;
 
-        private Binding(EssentialsRunReport report, EssentialsRunReport previous, Thread thread) {
+        private Binding(EssentialsRunReport report, Thread thread) {
             this.report = report;
-            this.previous = previous;
             this.thread = thread;
         }
 
@@ -589,11 +719,11 @@ public final class EssentialsRunReport {
                 return;
             }
             closed = true;
-            if (CURRENT.get() == report) {
-                if (previous == null) {
+            var bindings = CURRENT.get();
+            if (bindings != null) {
+                bindings.removeFirstOccurrence(this);
+                if (bindings.isEmpty()) {
                     CURRENT.remove();
-                } else {
-                    CURRENT.set(previous);
                 }
             }
         }

@@ -9,7 +9,7 @@
     {
       "name": "essentials.run-report.new-findings-interval",
       "type": "java.time.Duration",
-      "description": "How often the Essentials startup report logs the findings raised after start-up (an enqueue outside a UnitOfWork, a processor started later) that were not logged before, as one block at the highest severity among them; nothing is logged when there is nothing new. 0 or negative turns the periodic log off. The complete report of the run is logged when the application context closes either way, but a shutdown log can be lost, which is what this is for. A finding raised after start-up reaches the report only while it is the only one in the JVM.",
+      "description": "How often the Essentials run report logs the findings raised after start-up (an enqueue outside a UnitOfWork, a processor started later) that were not logged before, as one block at the highest severity among them; nothing is logged when there is nothing new. 0 or negative turns the periodic log off. The complete report of the run is logged when the application context closes either way, but a shutdown log can be lost, which is what this is for. A finding raised after start-up reaches the report only while it is the only one in the JVM.",
       "defaultValue": "5m"
     },
     {
