@@ -22,11 +22,16 @@ import java.lang.reflect.*;
 import java.util.*;
 
 /**
+ * <b>Internal - not part of the public API</b>, and may change in any release: public only so
+ * {@link dk.trustworks.essentials.components.eventsourced.aggregates.eventstream.EventStreamDeciderSupportsAggregateTypeChecker.HandlesCommandsThatInheritFromCommandType},
+ * in the parent package, resolves a decider's command type the same way as this package does.
+ * <p>
  * Resolves the command types an {@link EventStreamDecider} declares through its {@code COMMAND} type argument - for
- * {@link EventStreamDeciderCommandHandlerAdapter#handledCommandTypes()} and the startup checks of
- * {@link EventStreamDeciderAndAggregateTypeConfigurator}
+ * {@link EventStreamDeciderCommandHandlerAdapter#handledCommandTypes()}, the startup checks of
+ * {@link EventStreamDeciderAndAggregateTypeConfigurator} and the aggregate type routing of
+ * {@link dk.trustworks.essentials.components.eventsourced.aggregates.eventstream.EventStreamDeciderSupportsAggregateTypeChecker.HandlesCommandsThatInheritFromCommandType}
  */
-final class EventStreamDeciderCommandTypes {
+public final class EventStreamDeciderCommandTypes {
     private EventStreamDeciderCommandTypes() {
     }
 
@@ -37,7 +42,7 @@ final class EventStreamDeciderCommandTypes {
      *
      * @param decider the decider
      * @return the concrete command types the decider declares and can handle; empty when its {@code COMMAND} type
-     * argument cannot be resolved (a lambda, or a type variable no subclass binds)
+     * argument cannot be resolved (a raw {@link EventStreamDecider}, a JDK dynamic proxy, or a type variable no subclass binds)
      */
     static Set<Class<?>> declaredCommandTypes(EventStreamDecider<?, ?> decider) {
         var commandTypes = new LinkedHashSet<Class<?>>();
@@ -54,7 +59,7 @@ final class EventStreamDeciderCommandTypes {
      * implements EventStreamDecider<C, E>}); empty when it stays a type variable or the class does not implement
      * {@link EventStreamDecider} with type arguments
      */
-    static Optional<Class<?>> resolveCommandTypeArgument(Class<?> deciderType) {
+    public static Optional<Class<?>> resolveCommandTypeArgument(Class<?> deciderType) {
         return findCommandTypeArgument(deciderType, Map.of(), new HashSet<>())
                 .map(commandTypeArgument -> {
                     if (commandTypeArgument instanceof Class<?> commandType) {

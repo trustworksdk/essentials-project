@@ -176,12 +176,7 @@ class EventStreamDeciderDuplicateCommandRegistrationTest {
         assertThat(EventStreamDeciderCommandTypes.resolveCommandTypeArgument(SubInterfaceCreateOrderDecider.class)).contains(CreateOrder.class);
         assertThat(EventStreamDeciderCommandTypes.resolveCommandTypeArgument(BaseClassCreateOrderDecider.class)).contains(CreateOrder.class);
 
-        // A checker that does not itself resolve the decider's generics: HandlesCommandsThatInheritFromCommandType rejects a sub-interface decider
-        var acceptsAll = new EventStreamAggregateTypeConfiguration(AggregateType.of("Orders"), OrderId.class, AggregateIdSerializer.serializerFor(OrderId.class),
-                                                                   decider -> true,
-                                                                   command -> ((OrderCommand) command).orderId(),
-                                                                   event -> ((OrderEvent) event).orderId());
-        new EventStreamDeciderAndAggregateTypeConfigurator(eventStore, commandBus, List.of(acceptsAll), List.of(new SubInterfaceCreateOrderDecider(), new BaseClassCreateOrderDecider()));
+        new EventStreamDeciderAndAggregateTypeConfigurator(eventStore, commandBus, List.of(orderConfiguration), List.of(new SubInterfaceCreateOrderDecider(), new BaseClassCreateOrderDecider()));
 
         assertThat(warnings()).singleElement().asString()
                               .contains("'" + CreateOrder.class.getName() + "'")

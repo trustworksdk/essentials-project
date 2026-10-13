@@ -16,11 +16,10 @@
 
 package dk.trustworks.essentials.components.eventsourced.aggregates.eventstream;
 
-import dk.trustworks.essentials.shared.types.GenericType;
+import dk.trustworks.essentials.components.eventsourced.aggregates.eventstream.adapters.EventStreamDeciderCommandTypes;
 import org.slf4j.*;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
-import static dk.trustworks.essentials.shared.MessageFormatter.msg;
 
 /**
  * Functional interface for determining if an {@link EventStreamDecider} supports a specific aggregate type.
@@ -94,29 +93,37 @@ public interface EventStreamDeciderSupportsAggregateTypeChecker {
         }
 
         /**
-         * Determines if the decider supports the aggregate type by checking if it can handle
-         * commands that inherit from the configured command type.
+         * Determines if the decider supports the aggregate type by checking if the {@code COMMAND} type argument the
+         * decider's class gives {@link EventStreamDecider} inherits from the configured command type.
          * <p>
-         * This method creates a test instance of the command type and checks if the decider
-         * can handle it. Since we can't instantiate arbitrary classes, this implementation
-         * uses reflection to check the generic type parameters of the decider.
-         * 
+         * The type argument is found through the decider's superclasses and (sub-)interfaces, so a decider declared as
+         * {@code implements EventStreamDecider<CreateOrder, OrderEvent>}, as {@code implements OrderDecider} (where
+         * {@code interface OrderDecider extends EventStreamDecider<OrderCommand, OrderEvent>}) or as
+         * {@code extends BaseDecider<CreateOrder>} (where {@code abstract class BaseDecider<C> implements EventStreamDecider<C, OrderEvent>})
+         * is resolved alike.
+         * <p>
+         * A decider whose command type cannot be resolved - a class implementing the raw {@link EventStreamDecider}, a
+         * JDK dynamic proxy, or a generic class whose {@code COMMAND} type variable no subclass binds - is not supported: this returns {@code false} and logs a WARN, so another
+         * aggregate type's checker may still claim it, and a decider no checker claims fails the configuration.
+         *
          * @param decider The decider to check. Must not be null.
-         * @return {@code true} if the decider can handle commands of the configured type
+         * @return {@code true} if the decider's command type is, or inherits from, the configured command type
          * @throws IllegalArgumentException if decider is null
          */
         @Override
         public boolean supports(EventStreamDecider<?, ?> decider) {
             requireNonNull(decider, "decider cannot be null");
 
-            var commandTypeTheDeciderHandles = GenericType.resolveGenericTypeForInterface(
-                    decider.getClass(),
-                    EventStreamDecider.class,
-                    0
-            );
-            if (commandTypeTheDeciderHandles == null) {
-                throw new IllegalArgumentException(msg("Couldn't resolve command type from '{}'", decider.getClass().getName()));
+            var resolvedCommandType = EventStreamDeciderCommandTypes.resolveCommandTypeArgument(decider.getClass());
+            if (resolvedCommandType.isEmpty()) {
+                log.warn("Couldn't resolve the command type of EventStreamDecider '{}' - so it isn't supported by '{}'. " +
+                                 "Declare the decider as a class that gives EventStreamDecider a concrete COMMAND type argument " +
+                                 "(directly, through a sub-interface or through a generic base class) - not a raw type, an unbound type variable or a JDK dynamic proxy",
+                         decider.getClass().getName(),
+                         this);
+                return false;
             }
+            var commandTypeTheDeciderHandles = resolvedCommandType.get();
             log.debug(
                     "Resolved command type '{}' from '{}' - checking if it inherits from '{}'",
                     commandTypeTheDeciderHandles.getName(),
