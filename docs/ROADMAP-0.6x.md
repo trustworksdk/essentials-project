@@ -162,6 +162,14 @@ first; if confirmed, apply each table's changes in its own transaction, or take 
 already holds the lock, so a second caller in the same JVM cannot share, and then release, the first caller's lock.
 Changing the default is deferred to the next major.
 
+**An acquire inside the caller's unit of work (NW-13).** Since 0.60.1 a lock is recorded as acquired only after its
+acquire has committed, and a failed commit is resolved by looking the row up. That holds only when the lock manager
+owns the unit of work. A `tryAcquireLock`/`acquireLock` called while the caller already has one active joins it, so the
+lock is recorded before the caller commits; if the caller then rolls back, this instance holds a lock the database never
+gave it, and a later confirmation can release another instance's lock under the same token. Either always acquire in a
+unit of work of the lock manager's own (a new transaction), or record the lock from an after-commit callback of the
+joined unit of work. Decide whether a caller relies on the acquire joining its transaction first.
+
 ### Value types
 
 **OpenAPI and AssertJ support (SJ-6).** Two problems:
