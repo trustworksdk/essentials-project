@@ -1734,7 +1734,9 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
      * its polls await in memory only go unanswered, so the answer is complete only while CDC is active.
      * <p>
      * The transient gaps are read once per call: when the delegate is a {@link PostgresqlEventStore} with this event
-     * store's own gap handler - as wired by default - its answer covers them, and this one does not read them too.
+     * store's own gap handler - as wired by default - its answer covers them, and this one does not read them too. A
+     * delegate that only forwards to such a {@link PostgresqlEventStore} (a decorator) is not recognised, so there the
+     * transient gaps are read a second time: the answer is the same, only the read is duplicated.
      * <p>
      * Asks a running subscription's tracker under the tracker's monitor, which its delivering threads take for every event
      * - briefly, and never the bus thread's.

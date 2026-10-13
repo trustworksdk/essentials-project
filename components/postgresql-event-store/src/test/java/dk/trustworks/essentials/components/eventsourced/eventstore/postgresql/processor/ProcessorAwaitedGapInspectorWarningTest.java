@@ -21,7 +21,7 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.EventStoreSubscriptionManager;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.EventStoreUnitOfWorkFactory;
 import dk.trustworks.essentials.components.foundation.messaging.eip.store_and_forward.*;
 import dk.trustworks.essentials.components.foundation.reactive.command.DurableLocalCommandBus;
@@ -65,7 +65,11 @@ class ProcessorAwaitedGapInspectorWarningTest {
         var processor = new ThingsEventProcessor(subscriptionManager(mock(EventStore.class)));
 
         processor.start();
+        // A second start() on a started processor returns at once; only a stop() in between lets it run the guard again
+        processor.stop();
         processor.start();
+        // The awaitProcessed fallback asks the same guard
+        processor.warnOnceIfEventStoreIsNoAwaitedGapInspector();
 
         assertThat(awaitedGapInspectorWarnings()).singleElement()
                                                  .satisfies(warning -> assertThat(warning.getFormattedMessage()).contains("If you call awaitProcessed on this processor")
@@ -94,7 +98,10 @@ class ProcessorAwaitedGapInspectorWarningTest {
 
     private static EventStoreSubscriptionManager subscriptionManager(EventStore eventStore) {
         doReturn(mock(EventStoreUnitOfWorkFactory.class)).when(eventStore).getUnitOfWorkFactory();
-        var subscriptionManager = mock(EventStoreSubscriptionManager.class);
+        // stop() stops every subscription start() created, so subscribing hands back one
+        var subscriptionManager = mock(EventStoreSubscriptionManager.class,
+                                       invocation -> invocation.getMethod().getName().equals("exclusivelySubscribeToAggregateEventsAsynchronously") ?
+                                                     mock(EventStoreSubscription.class) : RETURNS_DEFAULTS.answer(invocation));
         when(subscriptionManager.getEventStore()).thenReturn(eventStore);
         return subscriptionManager;
     }
