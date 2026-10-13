@@ -300,7 +300,7 @@ The ceiling is reported as `maxInstances` on the **admin API's** queue status
 itself carries the two ceilings separately — `shardCount()` and `orderedUnits()` — and no combined
 accessor.
 
-**Instance identity is the hostname** by default (`Network.hostName()`, as the fenced lock manager and scheduler use), overridable with `essentials.shard-owned-queue.instance-id`. Set it where one host runs several instances: two processes sharing an id look like one instance, so each is allowed only half the shards.
+**Instance identity is the hostname** by default (`Network.hostName()`, as the fenced lock manager and scheduler use), overridable with `essentials.shard-owned-queue.instance-id`. Set it where one host runs several instances: two processes sharing an id look like one instance, so each is allowed only half the shards. Since 0.60.1 the engine logs a WARN naming the property when it detects two live processes under one id (metric `sharedInstanceIdHeartbeats`); a restart is not reported.
 
 **Autoscaling specifics.** Membership is a row per instance, refreshed every `leaseTtl / 3` and
 counted live within `leaseTtl`. A gracefully stopped instance deregisters immediately, so scaling in

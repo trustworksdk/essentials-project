@@ -59,6 +59,11 @@ public final class ShardOwnerMetrics {
     public final LongAdder     delivered                        = new LongAdder();
     public final LongAdder     cursorReads                      = new LongAdder();
     /**
+     * Heartbeats that found the membership row last refreshed by another process: two live processes share this
+     * instance id. See {@code ShardOwnedStorage.heartbeat}
+     */
+    public final LongAdder     sharedInstanceIdHeartbeats       = new LongAdder();
+    /**
      * Rows the unordered lane's cursor reads returned. Divided by {@code delivered} this is the read amplification:
      * rows carried over the wire, payloads included, per message dispatched
      */
@@ -267,6 +272,7 @@ public final class ShardOwnerMetrics {
         var snapshot = new LinkedHashMap<String, Object>();
         snapshot.put("delivered", delivered.sum());
         snapshot.put("cursorReads", cursorReads.sum());
+        snapshot.put("sharedInstanceIdHeartbeats", sharedInstanceIdHeartbeats.sum());
         snapshot.put("cursorRowsRead", cursorRowsRead.sum());
         snapshot.put("holesObserved", holesObserved.sum());
         snapshot.put("holesResolved", holesResolved.sum());

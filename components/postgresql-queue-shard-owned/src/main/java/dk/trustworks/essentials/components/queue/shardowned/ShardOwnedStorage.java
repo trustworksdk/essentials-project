@@ -633,15 +633,46 @@ public final class ShardOwnedStorage {
      * Announce that this instance is alive and wants work.
      */
     public void heartbeatInstance(String instanceId) throws SQLException {
+        heartbeat(instanceId);
+    }
+
+    /**
+     * {@link #heartbeatInstance}, reporting whether the membership row was last refreshed by another process.
+     * <p>
+     * Every process stamps the row with its {@link #PROCESS_INCARNATION}. After this process has refreshed the row
+     * once, finding another process's stamp means a second live process heartbeats under the same instance id: the
+     * rebalance then counts the two as one instance, and they keep taking the same shards from each other. A process
+     * restarted after a crash sees its predecessor's stamp once, on its first heartbeat, which the caller ignores.
+     *
+     * @return whether the row's previous stamp was another process's
+     */
+    public boolean heartbeat(String instanceId) throws SQLException {
+        // The previous row is read by a CTE in the same statement; without FOR UPDATE it sees the row as it was
+        // before the upsert
         try (var connection = dataSource.getConnection();
              var statement = connection.prepareStatement(
-                     "INSERT INTO " + INSTANCE_TABLE + " (queue_id, instance_id, last_seen) VALUES (?, ?, now())"
-                             + " ON CONFLICT (queue_id, instance_id) DO UPDATE SET last_seen = now()")) {
+                     "WITH previous AS (SELECT incarnation FROM " + INSTANCE_TABLE + " WHERE queue_id = ? AND instance_id = ?)"
+                             + " INSERT INTO " + INSTANCE_TABLE + " (queue_id, instance_id, last_seen, incarnation) VALUES (?, ?, now(), ?)"
+                             + " ON CONFLICT (queue_id, instance_id) DO UPDATE SET last_seen = now(), incarnation = EXCLUDED.incarnation"
+                             + " RETURNING (SELECT incarnation FROM previous)")) {
             statement.setShort(1, queueId);
             statement.setString(2, instanceId);
-            statement.executeUpdate();
+            statement.setShort(3, queueId);
+            statement.setString(4, instanceId);
+            statement.setString(5, PROCESS_INCARNATION);
+            try (var resultSet = statement.executeQuery()) {
+                resultSet.next();
+                var previous = resultSet.getString(1);
+                return previous != null && !previous.equals(PROCESS_INCARNATION);
+            }
         }
     }
+
+    /**
+     * A token per JVM, stamped on this process's membership rows - see {@link #heartbeat}. Per process rather than
+     * per queue object: one process's unordered and ordered consumers share an instance id and must not look like two
+     */
+    static final String PROCESS_INCARNATION = UUID.randomUUID().toString();
 
     /**
      * Remove this instance from the membership table on the way out.

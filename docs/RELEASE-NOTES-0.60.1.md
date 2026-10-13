@@ -196,6 +196,18 @@ became 5 000 holes and thousands of chase queries. A new owner now starts at the
 whose sequence value was allocated before the takeover but committed after it is still delivered, by the head sweep,
 exactly once (`ShardOwnedTakeoverHistoryIT`).
 
+### 2.8 Shard-owned: a shared instance id is reported
+
+The instance id defaults to the hostname. Two JVMs on one host therefore share it, count as one instance in the
+rebalance, and keep taking the same shards from each other. This is safe, because the lease fence refuses the losing
+process's writes, but wasteful and confusing. The engine now logs a WARN naming `essentials.shard-owned-queue.instance-id`
+when another live process heartbeats under the same id, and counts it as `sharedInstanceIdHeartbeats`. Restarts are
+not reported.
+
+**Schema:** the membership table `shard_queue_instance` gains a nullable column, `incarnation text`. It is added on
+start-up with `SchemaOwnership.COMPONENT`. If you run the schema harness in `validate` mode, apply
+`ALTER TABLE shard_queue_instance ADD COLUMN IF NOT EXISTS incarnation text` first.
+
 ## 3. Documentation
 
 - The polling-optimizer docs describe the new defaults, and the stale-statistics guidance is next to the claim

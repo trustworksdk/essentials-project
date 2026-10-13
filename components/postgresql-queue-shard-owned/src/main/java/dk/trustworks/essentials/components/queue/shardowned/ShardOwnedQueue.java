@@ -144,6 +144,8 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         return new ShardOwnedQueueBuilder();
     }
 
+    private volatile long lastSharedInstanceIdWarningNanos;
+
     public ShardOwnedQueue(DataSource dataSource, short queueId, int shardCount, String instanceId) {
         this(dataSource, queueId, shardCount, instanceId, new ShardOwnerMetrics());
     }
@@ -595,11 +597,31 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * superseded and stops immediately; it does not wait to find out at acknowledgement time,
      * because by then it may have dispatched work its successor is also dispatching.
      */
+    /**
+     * Another live process heartbeats under this instance id. Both then count as one instance in the rebalance and
+     * keep taking the same shards from each other - safe, because the fence refuses the loser's writes, but the queue
+     * churns. Typically two JVMs on one host with the hostname default. Logged at most once a minute.
+     */
+    private void reportSharedInstanceId() {
+        metrics.sharedInstanceIdHeartbeats.increment();
+        var now  = System.nanoTime();
+        var last = lastSharedInstanceIdWarningNanos;
+        if (last == 0 || now - last >= TimeUnit.MINUTES.toNanos(1)) {
+            lastSharedInstanceIdWarningNanos = now;
+            log.warn("Another process is running queue {} under the same instance id '{}' as this one. The rebalance counts "
+                             + "the two as one instance, and they keep taking the same shards from each other. Give every "
+                             + "process its own instance id (Spring Boot: essentials.shard-owned-queue.instance-id; it defaults "
+                             + "to the hostname, which two JVMs on one host share)", queueId, instanceId);
+        }
+    }
+
     private void startHeartbeat() {
         var interval = Math.max(200L, leaseTtlMillis / 3);
         heartbeat = runtime.scheduleHeartbeat(() -> {
             try {
-                storage.heartbeatInstance(instanceId);
+                if (storage.heartbeat(instanceId)) {
+                    reportSharedInstanceId();
+                }
                 confirmLiveness();
                 // Garbage collection, not liveness: ten lease lifetimes is far past anything
                 // fairShare looks at, so this can never remove a row that still counts.
