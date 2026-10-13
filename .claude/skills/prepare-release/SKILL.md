@@ -44,7 +44,7 @@ Stop and report at the first one that fails.
 python3 scripts/prepare-release.py <version>
 ```
 
-Without `origin/main` it asks for `--plugin-section rename|new`: `rename` when the CHANGELOG's top section was never
+It fetches `origin/main` first and decides from it; only when the fetch fails does it stop and ask for `--plugin-section rename|new`: `rename` when the CHANGELOG's top section was never
 released, `new` when it was. Read the whole output. It lists every file it changed, every file a regenerator
 changed (read those diffs: a golden is checked only by reading it), and what still needs a decision. When the
 version is not the previous tag's next patch, it also rewrote that patch's "since …" marker across the docs and

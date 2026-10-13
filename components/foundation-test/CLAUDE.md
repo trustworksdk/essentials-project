@@ -39,7 +39,7 @@ All classes live in `src/main/java` — shipped as a test-support library consum
 - `@BeforeEach` calls factory methods then starts the SUT; `@AfterEach` stops and nulls.
 - Awaitility used for async assertions; typical timeouts 2–10 s.
 - `withDurableQueue(Supplier)` / `usingDurableQueue(Runnable)` helpers in `DurableQueuesIT` run the action directly — since 0.60 every queue operation carries its own transaction, so the suites no longer branch on a transactional mode
-- `DBFencedLockManagerIT.deleteAllLocksInDBWithRetry` retries up to 5x with backoff on `WriteConflict` — needed for multi-node setups sharing one DB schema.
+- `DBFencedLockManagerIT.deleteAllLocksInDBWithRetry` retries for up to 30 s with backoff, but only on a `WriteConflict` (anywhere in the cause chain) or an I/O failure (`IOExceptionUtil.isIOException`); anything else is rethrown at once — needed for multi-node setups sharing one DB schema.
 
 ## Extension Points
 
