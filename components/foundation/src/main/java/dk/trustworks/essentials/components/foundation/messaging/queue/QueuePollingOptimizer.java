@@ -66,6 +66,30 @@ public interface QueuePollingOptimizer extends DurableQueueConsumerNotifications
 
     default void queuePollingReturnedMessages(List<QueuedMessage> queuedMessages) {}
 
+    /**
+     * Like {@link #queuePollingReturnedNoMessages()}, for a poll whose claim only took messages due at or before
+     * {@code claimedAt}. A message due after {@code claimedAt} could not have been seen by that poll, even when it was
+     * due before the optimizer heard back - the claim's time is read once per poll, and a poll of many queues can
+     * take a while to reach this one. An optimizer that tracks due times (see {@link #messageScheduledFor(Instant)})
+     * should only consider due times up to {@code claimedAt} looked for. The default ignores {@code claimedAt}.
+     *
+     * @param claimedAt the {@code now} the claim compared each message's next delivery timestamp against
+     */
+    default void queuePollingReturnedNoMessages(Instant claimedAt) {
+        queuePollingReturnedNoMessages();
+    }
+
+    /**
+     * Like {@link #queuePollingReturnedMessages(List)}, for a poll whose claim only took messages due at or before
+     * {@code claimedAt} - see {@link #queuePollingReturnedNoMessages(Instant)}. The default ignores {@code claimedAt}.
+     *
+     * @param queuedMessages the messages the poll claimed
+     * @param claimedAt      the {@code now} the claim compared each message's next delivery timestamp against
+     */
+    default void queuePollingReturnedMessages(List<QueuedMessage> queuedMessages, Instant claimedAt) {
+        queuePollingReturnedMessages(queuedMessages);
+    }
+
     boolean shouldSkipPolling();
 
     /**

@@ -1573,6 +1573,8 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
             return unitOfWorkFactory.withUnitOfWork(uow -> {
                 resetMessagesStuckBeingDeliveredAcrossMultipleQueues(queueNames);
 
+                // One claim time for every queue in this poll - the optimizers are told it, so they only treat
+                // due times up to it as looked for, however long the poll takes to reach their queue
                 var now         = Instant.now();
                 var allMessages = new ArrayList<QueuedMessage>();
 
@@ -1638,10 +1640,10 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                     log.debug("[{}] Batch fetched {} messages with {} slots available",
                               queueName, messagesForQueue.size(), availableWorkerSlotsForThisQueue);
                     if (messagesForQueue.isEmpty()) {
-                        optimizer.queuePollingReturnedNoMessages();
+                        optimizer.queuePollingReturnedNoMessages(now);
                         log.trace("[{}] No messages fetched for this queue", queueName);
                     } else {
-                        optimizer.queuePollingReturnedMessages(messagesForQueue);
+                        optimizer.queuePollingReturnedMessages(messagesForQueue, now);
                         log.trace("[{}] Fetched {} messages for this queue", queueName, messagesForQueue.size());
                     }
                     allMessages.addAll(messagesForQueue);
@@ -1752,9 +1754,9 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                     var                 queuePollingOptimizer = durableQueueConsumer.getQueuePollingOptimizer();
                     List<QueuedMessage> messagesForQueue      = byQueue.getOrDefault(queueName, Collections.emptyList());
                     if (messagesForQueue.isEmpty()) {
-                        queuePollingOptimizer.queuePollingReturnedNoMessages();
+                        queuePollingOptimizer.queuePollingReturnedNoMessages(now);
                     } else {
-                        queuePollingOptimizer.queuePollingReturnedMessages(messagesForQueue);
+                        queuePollingOptimizer.queuePollingReturnedMessages(messagesForQueue, now);
                     }
                 }
 
