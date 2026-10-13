@@ -170,6 +170,16 @@ gave it, and a later confirmation can release another instance's lock under the 
 unit of work of the lock manager's own (a new transaction), or record the lock from an after-commit callback of the
 joined unit of work. Decide whether a caller relies on the acquire joining its transaction first.
 
+**Database round trips under the manager-wide lock (NW-14).** `DBFencedLockManager`'s `reentrantLock` is held for the
+whole of every blocking acquire, the confirmation tick and the async acquiring tick, and `usingUnitOfWork` and
+`withUnitOfWork` take it for their own round trip too. An acquire can hold it across two round trips (the acquire and,
+when its commit fails, the outcome lookup), so a slow database delays every other acquire and the confirmation of
+locks already held; today the only mitigation is a `lockTimeOut` well above the confirmation interval plus a few slow
+round trips, documented on the field. Give confirmation its own lock, or do the DB work outside the lock and take it
+only to update `locksAcquiredByThisLockManager`. Either way the protected `usingUnitOfWork`/`withUnitOfWork` helpers
+change what they guarantee to subclasses, so check every in-repo subclass and say so in the release notes. Needs the
+fenced-lock ITs on PostgreSQL and MongoDB, and a test with a slow storage that shows confirmation is no longer held up.
+
 ### Value types
 
 **OpenAPI and AssertJ support (SJ-6).** Two problems:
