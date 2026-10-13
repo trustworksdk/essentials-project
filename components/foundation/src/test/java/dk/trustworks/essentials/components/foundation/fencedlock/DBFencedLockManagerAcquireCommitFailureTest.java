@@ -17,6 +17,7 @@
 package dk.trustworks.essentials.components.foundation.fencedlock;
 
 import dk.trustworks.essentials.components.foundation.transaction.*;
+import dk.trustworks.essentials.reactive.*;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.*;
 
@@ -24,7 +25,7 @@ import java.io.*;
 import java.time.*;
 import java.util.*;
 import java.util.concurrent.*;
-import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.*;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -102,6 +103,41 @@ class DBFencedLockManagerAcquireCommitFailureTest {
         assertThat(node2Lock.isLocked()).isTrue();
     }
 
+    @Test
+    void an_acquire_whose_commit_outcome_cannot_be_looked_up_is_not_held_and_its_row_expires() {
+        // Given a lock manager with a short lock timeout, and node1's acquire reaching the DB but its commit and the look-up of its outcome failing
+        node1.stop();
+        node2.stop();
+        var events = new CopyOnWriteArrayList<Object>();
+        var eventBus = new LocalEventBus("test");
+        eventBus.addSyncSubscriber(events::add);
+        node1 = createLockManager("node1", Duration.ofSeconds(1), eventBus);
+        node2 = createLockManager("node2", Duration.ofSeconds(1), null);
+        storage.nextAcquireCommit = CommitOutcome.APPLIED_THEN_CONNECTION_LOST_AND_LOOKUP_FAILS;
+
+        // Then node1 does not hold the lock, nothing says it acquired it, and the row stays locked by node1 with the initial token
+        assertThat(node1.tryAcquireLock(LOCK_NAME)).isEmpty();
+        assertThat(events).noneMatch(event -> event instanceof FencedLockEvents.LockAcquired);
+        assertThat(storage.rows.get(LOCK_NAME).lockedBy()).isEqualTo("node1");
+        assertThat(storage.rows.get(LOCK_NAME).token()).isEqualTo(storage.getInitialTokenValue());
+
+        // And node2 gets the lock only once the row has timed out, with the next token
+        assertThat(node2.tryAcquireLock(LOCK_NAME)).isEmpty();
+        var node2Lock = node2.tryAcquireLock(LOCK_NAME, Duration.ofSeconds(5)).orElseThrow();
+        assertThat(node2Lock.getCurrentToken()).isEqualTo(storage.getInitialTokenValue() + 1);
+
+        // And across several of node1's confirmation ticks node1 neither re-adopts nor releases the row
+        Awaitility.await()
+                  .during(Duration.ofMillis(800))
+                  .atMost(Duration.ofSeconds(3))
+                  .untilAsserted(() -> {
+                      var row = storage.rows.get(LOCK_NAME);
+                      assertThat(row.lockedBy()).isEqualTo("node2");
+                      assertThat(row.token()).isEqualTo(storage.getInitialTokenValue() + 1);
+                  });
+        assertThat(events).noneMatch(event -> event instanceof FencedLockEvents.LockAcquired);
+    }
+
     private void verifyAsyncAcquireWithUnknownCommitOutcomeHoldsAndReleasesTheLock(CommitOutcome commitOutcome) {
         // Given node1's acquire reaches the DB, but its commit reports a failure
         storage.nextAcquireCommit = commitOutcome;
@@ -131,13 +167,18 @@ class DBFencedLockManagerAcquireCommitFailureTest {
     }
 
     private TestDBFencedLockManager createLockManager(String lockManagerInstanceId) {
+        return createLockManager(lockManagerInstanceId, LOCK_TIME_OUT, null);
+    }
+
+    private TestDBFencedLockManager createLockManager(String lockManagerInstanceId, Duration lockTimeOut, EventBus eventBus) {
         var lockManager = new TestDBFencedLockManager(storage,
                                                       new StagingUnitOfWorkFactory(storage),
                                                       FencedLockManagerSettings.builder()
                                                                                .setLockManagerInstanceId(lockManagerInstanceId)
-                                                                               .setLockTimeOut(LOCK_TIME_OUT)
+                                                                               .setLockTimeOut(lockTimeOut)
                                                                                .setLockConfirmationInterval(Duration.ofMillis(100))
-                                                                               .build());
+                                                                               .build(),
+                                                      eventBus);
         lockManager.start();
         return lockManager;
     }
@@ -157,7 +198,11 @@ class DBFencedLockManagerAcquireCommitFailureTest {
          * The commit is applied in the DB, but the thread is interrupted waiting for the reply - an interruptible driver
          * (MongoDB) then fails the commit, and fails every further operation on that thread while the interrupt is pending
          */
-        APPLIED_THEN_INTERRUPTED
+        APPLIED_THEN_INTERRUPTED,
+        /**
+         * Like {@link #APPLIED_THEN_CONNECTION_LOST}, and the connection stays down: the look-up of the commit's outcome fails too
+         */
+        APPLIED_THEN_CONNECTION_LOST_AND_LOOKUP_FAILS
     }
 
     record Row(long token, String lockedBy, OffsetDateTime lockAcquiredTimestamp, OffsetDateTime lockLastConfirmedTimestamp) {
@@ -167,7 +212,14 @@ class DBFencedLockManagerAcquireCommitFailureTest {
         TestDBFencedLockManager(FencedLockStorage<StagingUnitOfWork, DBFencedLock> lockStorage,
                                 UnitOfWorkFactory<StagingUnitOfWork> unitOfWorkFactory,
                                 FencedLockManagerSettings settings) {
-            super(lockStorage, unitOfWorkFactory, settings, null);
+            this(lockStorage, unitOfWorkFactory, settings, null);
+        }
+
+        TestDBFencedLockManager(FencedLockStorage<StagingUnitOfWork, DBFencedLock> lockStorage,
+                                UnitOfWorkFactory<StagingUnitOfWork> unitOfWorkFactory,
+                                FencedLockManagerSettings settings,
+                                EventBus eventBus) {
+            super(lockStorage, unitOfWorkFactory, settings, eventBus);
         }
     }
 
@@ -182,6 +234,20 @@ class DBFencedLockManagerAcquireCommitFailureTest {
          * Consumed by the next commit of a unit of work that acquires a lock
          */
         volatile CommitOutcome                nextAcquireCommit;
+        /**
+         * Fails the next look-up, whatever it looks up
+         */
+        volatile boolean                      failNextLookup;
+        /**
+         * Run by a commit of an acquire after it was applied in the DB and before it reports its failure
+         */
+        volatile Runnable                     afterAcquireApplied;
+        /**
+         * Run by every look-up of the lock with the given name, before it reads - a test blocks here to hold the lock manager's lock
+         */
+        volatile LockName                     blockedLookupName;
+        volatile CountDownLatch               blockedLookupGate;
+        final AtomicInteger                   lookups = new AtomicInteger();
 
         @Override
         public void initializeLockStorage(DBFencedLockManager<StagingUnitOfWork, DBFencedLock> lockManager, StagingUnitOfWork uow) {
@@ -239,6 +305,20 @@ class DBFencedLockManagerAcquireCommitFailureTest {
 
         @Override
         public Optional<DBFencedLock> lookupLockInDB(DBFencedLockManager<StagingUnitOfWork, DBFencedLock> lockManager, StagingUnitOfWork uow, LockName lockName) {
+            lookups.incrementAndGet();
+            var gate = blockedLookupGate;
+            if (gate != null && lockName.equals(blockedLookupName)) {
+                try {
+                    gate.await();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException(e);
+                }
+            }
+            if (failNextLookup) {
+                failNextLookup = false;
+                throw new UncheckedIOException(new IOException("Connection lost looking up the lock"));
+            }
             if (Thread.currentThread().isInterrupted()) {
                 throw new IllegalStateException("Interrupted - an interruptible driver fails every operation while the interrupt is pending");
             }
@@ -379,6 +459,15 @@ class DBFencedLockManagerAcquireCommitFailureTest {
             stagedWrites.forEach(Runnable::run);
             status = UnitOfWorkStatus.Committed;
             onCompleted.run();
+            var afterApplied = acquires ? storage.afterAcquireApplied : null;
+            if (afterApplied != null) {
+                storage.afterAcquireApplied = null;
+                afterApplied.run();
+            }
+            if (outcome == CommitOutcome.APPLIED_THEN_CONNECTION_LOST_AND_LOOKUP_FAILS) {
+                storage.failNextLookup = true;
+                throw new UncheckedIOException(new IOException("Connection lost waiting for the commit reply"));
+            }
             if (outcome == CommitOutcome.APPLIED_THEN_CONNECTION_LOST) {
                 throw new UncheckedIOException(new IOException("Connection lost waiting for the commit reply"));
             }

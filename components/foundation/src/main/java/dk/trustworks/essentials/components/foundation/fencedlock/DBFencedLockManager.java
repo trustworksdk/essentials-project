@@ -70,6 +70,17 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
      * {@code Optional} field costs an allocation per access without buying anything a null check does not.
      */
     private final EventBus                         eventBus;
+    /**
+     * The one fair lock of this manager. It guards: the lock confirmation tick, every async-acquiring tick,
+     * {@link #acquireLockAsync(LockName, LockCallback)}, the teardown in {@link #stop()} and {@link #start()}, shutdown releases, and the
+     * acquire - its commit, the commit-outcome lookup and recording the result - of the blocking {@link #tryAcquireLock(LockName)}
+     * variants and {@link #acquireLock(LockName)}. {@link #usingUnitOfWork(CheckedConsumer, CheckedConsumer)} and
+     * {@link #withUnitOfWork(CheckedFunction, CheckedFunction)} take it as well, so <b>every database round trip this manager
+     * makes is serialised by it</b>: a holder may wait on the database for up to two round trips (acquire and commit-outcome lookup),
+     * and a lock confirmation queued behind it waits for them. Against a degraded database a confirmation can therefore be late -
+     * keep {@code lockTimeOut} comfortably above the confirmation interval plus a few of the database's slow round trips.
+     * Narrowing the acquire's critical section would not help while the unit of work helpers themselves hold this lock.
+     */
     private final ReentrantLock                    reentrantLock = new ReentrantLock(true);
     private final boolean                          releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation;
 
@@ -574,21 +585,27 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
 
     @Override
     public Optional<FencedLock> tryAcquireLock(LockName lockName) {
-        var result = _tryAcquireLock(lockName).block();
+        var result = _tryAcquireLock(lockName, NO_WAIT_LIMIT).block();
         return Optional.ofNullable(result);
     }
 
+    /**
+     * The timeout bounds the retries and the wait for this manager's internal lock (queued behind a lock confirmation, say), but
+     * not a database round trip already in flight: a single attempt - the acquire, its commit and, if the commit failed, the
+     * look-up of its outcome - can last as long as the connection timeout of an unreachable database. The call can therefore
+     * return later than {@code timeout}.
+     */
     @Override
     public Optional<FencedLock> tryAcquireLock(LockName lockName, Duration timeout) {
         requireNonNull(timeout, "No timeout value provided");
         var deadline = System.nanoTime() + timeout.toNanos();
         while (true) {
-            var lock = _tryAcquireLock(lockName).block();
+            var lock = _tryAcquireLock(lockName, Math.max(0L, deadline - System.nanoTime())).block();
             if (lock != null) {
                 return Optional.of(lock);
             }
             var remainingMs = Duration.ofNanos(deadline - System.nanoTime()).toMillis();
-            if (remainingMs <= 0 || !pauseBeforeNextAcquireAttempt(Math.min(remainingMs, syncAcquireLockPauseIntervalMs))) {
+            if (remainingMs <= 0 || shutdown != null || !pauseBeforeNextAcquireAttempt(Math.min(remainingMs, syncAcquireLockPauseIntervalMs))) {
                 return Optional.empty();
             }
         }
@@ -612,10 +629,18 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
         }
     }
 
-    private Mono<LOCK> _tryAcquireLock(LockName lockName) {
+    /**
+     * @param waitLimitNanos how long to wait for {@link #reentrantLock}, or {@link #NO_WAIT_LIMIT} to wait for as long as it takes
+     */
+    private Mono<LOCK> _tryAcquireLock(LockName lockName, long waitLimitNanos) {
         requireNonNull(lockName, "No lockName provided");
         if (!started) {
             throw new IllegalStateException(msg("The {} isn't started", this.getClass().getSimpleName()));
+        }
+        if (shutdown != null) {
+            // Like acquireLockAsync and the async ticks: no new database work once shutdown has started
+            log.debug("[{}] Shutting down - not attempting to acquire lock '{}'", lockManagerInstanceId, lockName);
+            return Mono.empty();
         }
 
         log.debug("[{}] Attempting to acquire lock '{}'", lockManagerInstanceId, lockName);
@@ -629,9 +654,16 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
             }
         }
         // Held across the acquire, its commit and recording the outcome locally, so stop() - which releases and clears
-        // every locally recorded lock under the same lock - never runs in between
-        reentrantLock.lock();
+        // every locally recorded lock under the same lock - never runs in between. It can have run before, while this thread
+        // waited for the lock: the state is therefore checked again once the lock is held
+        if (!lockForAcquire(waitLimitNanos)) {
+            return Mono.empty();
+        }
         try {
+            if (!started || stopping || shutdown != null) {
+                log.debug("[{}] Lock manager stopped or shutting down while waiting to acquire lock '{}' - not acquiring it", lockManagerInstanceId, lockName);
+                return Mono.empty();
+            }
             // Set as soon as the acquire statement has succeeded, so a failure of the UnitOfWork after it - its commit -
             // is told apart from a failure to acquire
             var acquiredInUnitOfWork = new AtomicReference<LOCK>();
@@ -665,6 +697,25 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
         }
     }
 
+    private static final long NO_WAIT_LIMIT = -1L;
+
+    /**
+     * @return true if {@link #reentrantLock} is now held by the calling thread; false if the wait limit passed or the thread was
+     * interrupted while waiting (the interrupt is restored)
+     */
+    private boolean lockForAcquire(long waitLimitNanos) {
+        if (waitLimitNanos == NO_WAIT_LIMIT) {
+            reentrantLock.lock();
+            return true;
+        }
+        try {
+            return reentrantLock.tryLock(waitLimitNanos, TimeUnit.NANOSECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
+    }
+
     /**
      * The acquire statement for {@code attemptedLock} succeeded, but the {@link UnitOfWork} then failed - in practice its
      * commit: the connection was lost, or (MongoDB, whose driver fails on a pending interrupt) the acquiring thread was
@@ -687,12 +738,7 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
     private LOCK resolveAcquireWithUnknownCommitOutcome(LOCK attemptedLock) {
         var interrupted = Thread.interrupted();
         try {
-            var lockInDB = withUnitOfWork(uow -> lockStorage.lookupLockInDB(this, uow, attemptedLock.getName()),
-                                          e -> {
-                                              log.debug(msg("[{}] Failed to look up lock '{}' after its acquiring failed to commit - its row, if locked, expires after the lock timeout",
-                                                            lockManagerInstanceId, attemptedLock.getName()), e);
-                                              return Optional.<LOCK>empty();
-                                          });
+            var lockInDB = lookupLockAfterFailedCommit(attemptedLock);
             var committed = lockInDB.filter(lock -> Objects.equals(lock.getLockedByLockManagerInstanceId(), lockManagerInstanceId))
                                     .filter(lock -> Objects.equals(lock.getCurrentToken(), attemptedLock.getCurrentToken()))
                                     .isPresent();
@@ -704,6 +750,27 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
                 Thread.currentThread().interrupt();
             }
         }
+    }
+
+    /**
+     * The look-up of {@link #resolveAcquireWithUnknownCommitOutcome(DBFencedLock)}. During shutdown it is one
+     * {@link ShutdownContext#attemptCleanup bounded attempt}, skipped once the database is known to be unreachable - this thread
+     * holds {@link #reentrantLock}, which every shutdown release waits for. A skipped or failed look-up reads as "not committed".
+     */
+    private Optional<LOCK> lookupLockAfterFailedCommit(LOCK attemptedLock) {
+        var shutdown = this.shutdown;
+        if (shutdown != null) {
+            var lookedUp = new AtomicReference<Optional<LOCK>>(Optional.empty());
+            shutdown.attemptCleanup(msg("[{}] look up lock '{}' after its acquiring failed to commit", lockManagerInstanceId, attemptedLock.getName()),
+                                    () -> lookedUp.set(unitOfWorkFactory.withUnitOfWork(uow -> lockStorage.lookupLockInDB(this, uow, attemptedLock.getName()))));
+            return lookedUp.get();
+        }
+        return withUnitOfWork(uow -> lockStorage.lookupLockInDB(this, uow, attemptedLock.getName()),
+                              e -> {
+                                  log.debug(msg("[{}] Failed to look up lock '{}' after its acquiring failed to commit - its row, if locked, expires after the lock timeout",
+                                                lockManagerInstanceId, attemptedLock.getName()), e);
+                                  return Optional.<LOCK>empty();
+                              });
     }
 
     /**
@@ -808,9 +875,12 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
     @Override
     public FencedLock acquireLock(LockName lockName) {
         while (true) {
-            var lock = _tryAcquireLock(lockName).block();
+            var lock = _tryAcquireLock(lockName, NO_WAIT_LIMIT).block();
             if (lock != null) {
                 return lock;
+            }
+            if (shutdown != null) {
+                throw new IllegalStateException(msg("[{}] Shutting down while waiting to acquire lock '{}'", lockManagerInstanceId, lockName));
             }
             if (!pauseBeforeNextAcquireAttempt(syncAcquireLockPauseIntervalMs)) {
                 throw new IllegalStateException(msg("[{}] Interrupted while waiting to acquire lock '{}'", lockManagerInstanceId, lockName));
