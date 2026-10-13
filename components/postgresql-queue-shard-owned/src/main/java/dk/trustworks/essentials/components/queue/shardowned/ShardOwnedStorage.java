@@ -232,6 +232,30 @@ public final class ShardOwnedStorage {
     }
 
     /**
+     * Where a new owner's cursor starts: just below the shard's first row the cursor read can see, or - with none -
+     * at the shard sequence's last allocated value.
+     * <p>
+     * The cursor used to start at 0, so the first read recorded every sequence value below the shard's first
+     * remaining row as a hole: every message the shard had ever delivered and deleted, chased for
+     * {@code holeExpiry}. A row below the starting point that is not readable yet - delayed, retrying, held by a
+     * session, or allocated by a transaction that commits after the takeover - is delivered by the head sweep.
+     */
+    public long takeoverCursor(Connection connection, int shard) throws SQLException {
+        try (var statement = connection.prepareStatement(
+                "SELECT coalesce((SELECT min(seq) - 1 FROM " + UNORDERED_TABLE
+                        + "                WHERE queue_id = ? AND shard = ? AND visible_at <= now()" + notRowLeasedClause() + "),"
+                        + "                (SELECT CASE WHEN is_called THEN last_value ELSE last_value - 1 END FROM "
+                        + ShardOwnedSchema.sequenceName(queueId, shard) + "))")) {
+            statement.setShort(1, queueId);
+            statement.setInt(2, shard);
+            try (var resultSet = statement.executeQuery()) {
+                resultSet.next();
+                return Math.max(0L, resultSet.getLong(1));
+            }
+        }
+    }
+
+    /**
      * The fast path: a forward range scan on the primary key from the owner's cursor.
      * <p>
      * No lease predicate, no anti-join, no filtering of rows belonging to another consumer — the
@@ -356,10 +380,24 @@ public final class ShardOwnedStorage {
      */
     public int acknowledge(Connection connection, int shard, long contiguousThrough, Collection<Long> stragglers,
                            String owner, long fence) throws SQLException {
+        return acknowledge(connection, shard, 0L, contiguousThrough, stragglers, owner, fence);
+    }
+
+    /**
+     * {@link #acknowledge(Connection, int, long, Collection, String, long)} with the range delete bounded below:
+     * {@code rangeAbove < seq <= contiguousThrough}.
+     * <p>
+     * A new owner starts its cursor just below the shard's first readable row instead of at 0, and a message whose
+     * sequence value was allocated before that point but committed after it is delivered by the head sweep. The
+     * range delete must not reach down to it before it is delivered, so the owner bounds the range at that point and
+     * acknowledges anything at or below it by exact sequence value.
+     */
+    public int acknowledge(Connection connection, int shard, long rangeAbove, long contiguousThrough, Collection<Long> stragglers,
+                           String owner, long fence) throws SQLException {
         var deleted = 0;
-        if (contiguousThrough > 0) {
+        if (contiguousThrough > rangeAbove) {
             try (var statement = connection.prepareStatement(
-                    "DELETE FROM " + UNORDERED_TABLE + " u WHERE u.queue_id = ? AND u.shard = ? AND u.seq <= ?"
+                    "DELETE FROM " + UNORDERED_TABLE + " u WHERE u.queue_id = ? AND u.shard = ? AND u.seq <= ? AND u.seq > ?"
                             // A row a session holds is not the owner's to delete. Without this the range
                             // delete would remove it once its hole expired — undelivered, and while a
                             // session was still working on it.
@@ -374,8 +412,9 @@ public final class ShardOwnedStorage {
                 statement.setShort(1, queueId);
                 statement.setInt(2, shard);
                 statement.setLong(3, contiguousThrough);
-                statement.setString(4, owner);
-                statement.setLong(5, fence);
+                statement.setLong(4, rangeAbove);
+                statement.setString(5, owner);
+                statement.setLong(6, fence);
                 deleted += statement.executeUpdate();
             }
         }

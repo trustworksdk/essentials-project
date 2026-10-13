@@ -116,6 +116,18 @@ final class ShardOwner implements LeasedOwner {
      */
     private       long                cursor;
     /**
+     * Where the cursor started when this owner took the shard. A row at or below it can only be delivered by the head
+     * sweep - a late commit, or a row that was not readable yet - so the range acknowledgement never reaches it; it is
+     * acknowledged by exact sequence value. See {@link ShardOwnedStorage#takeoverCursor}
+     */
+    private       long                takeoverCursor;
+    private       boolean             cursorPositioned;
+    /**
+     * Until when the head sweep runs at its base interval without backing off: {@code holeExpiry} after the takeover,
+     * the window in which a late commit below {@link #takeoverCursor} would once have been chased as a hole
+     */
+    private       long                sweepPinnedUntilNanos;
+    /**
      * Sequence values the cursor stepped over, mapped to when they were first missed.
      */
     private final TreeMap<Long, Long> pendingHoles = new TreeMap<>();
@@ -251,6 +263,15 @@ final class ShardOwner implements LeasedOwner {
 
     @Override
     public void onTakeover(Connection connection) throws SQLException {
+        if (!cursorPositioned) {
+            var start = storage.takeoverCursor(connection, shard);
+            synchronized (stateLock) {
+                cursor = start;
+                takeoverCursor = start;
+            }
+            sweepPinnedUntilNanos = System.nanoTime() + settings.holeExpiry().toNanos();
+            cursorPositioned = true;
+        }
         if (takeoverCharged) {
             return;
         }
@@ -427,7 +448,7 @@ final class ShardOwner implements LeasedOwner {
      * lost notification is recovered, so both silently became thirty-second operations.
      */
     private void adjustSweepBackoff(int delivered, boolean sweptThisPass) {
-        if (delivered > 0) {
+        if (delivered > 0 || System.nanoTime() < sweepPinnedUntilNanos) {
             sweepIntervalNanos = settings.sweepIntervalNanos();
             return;
         }
@@ -745,6 +766,7 @@ final class ShardOwner implements LeasedOwner {
      */
     private void flushAcks(Connection connection, boolean force) throws SQLException {
         long       contiguousThrough;
+        long       rangeAbove;
         List<Long> stragglers;
         // Everything below reads three collections the handler threads mutate. Iterating them
         // unguarded threw ConcurrentModificationException out of pumpOnce, which the pump did not
@@ -782,9 +804,12 @@ final class ShardOwner implements LeasedOwner {
             }
             var safeFloor     = Math.min(Math.min(inFlightFloor, holeFloor), retryFloor);
 
-            contiguousThrough = 0L;
-            var expected = pendingAcks.first();
-            for (var seq : pendingAcks) {
+            // Only above the takeover cursor: anything at or below it came from the head sweep and is acknowledged
+            // by exact sequence value, so the range delete cannot reach a late commit below it - see takeoverCursor
+            var rangeCandidates = pendingAcks.tailSet(takeoverCursor, false);
+            contiguousThrough = takeoverCursor;
+            var expected = rangeCandidates.isEmpty() ? Long.MAX_VALUE : rangeCandidates.first();
+            for (var seq : rangeCandidates) {
                 // A message that has failed before is acknowledged by its exact seq, never by the
                 // range. The range delete skips rows that are not visible yet, so that it cannot take
                 // a delayed or backed-off row nobody here remembers; but a retry fires from the
@@ -811,17 +836,18 @@ final class ShardOwner implements LeasedOwner {
                 // in-flight messages, so everything finished behind a slow handler
                 // waited for it. With inline delivery there was only ever one in flight, which is why it
                 // never showed.
-                if (seq > contiguousThrough) {
+                if (seq <= takeoverCursor || seq > contiguousThrough) {
                     stragglers.add(seq);
                 }
             }
-            if (contiguousThrough == 0 && stragglers.isEmpty()) {
+            if (contiguousThrough == takeoverCursor && stragglers.isEmpty()) {
                 return;
             }
+            rangeAbove = takeoverCursor;
         }
 
         // The round trip happens outside the monitor, so handlers finishing are not blocked on it.
-        var deleted = storage.acknowledge(connection, shard, contiguousThrough, stragglers, instanceId, fence);
+        var deleted = storage.acknowledge(connection, shard, rangeAbove, contiguousThrough, stragglers, instanceId, fence);
         metrics.ackFlushes.increment();
         if (deleted == 0 && !storage.stillOwns("unordered", shard, instanceId, fence)) {
             // Zero rows deleted is ambiguous — the fence clause rejected this owner, or the rows had
@@ -835,12 +861,16 @@ final class ShardOwner implements LeasedOwner {
         }
 
         var finalContiguous = contiguousThrough;
+        var finalRangeAbove = rangeAbove;
         var finalStragglers = stragglers;
         synchronized (stateLock) {
-            pendingAcks.removeIf(seq -> seq <= finalContiguous || finalStragglers.contains(seq));
+            // Exactly what was deleted: the range above the takeover cursor and the stragglers. A bare
+            // `seq <= finalContiguous` would also drop the attempt count of a late commit below the takeover
+            // cursor that is still being retried
+            pendingAcks.removeIf(seq -> (seq > finalRangeAbove && seq <= finalContiguous) || finalStragglers.contains(seq));
             // A retried message's attempt count is done with once it is acknowledged; nothing removed
             // it on success before, so the map grew by one entry per message that ever recovered.
-            attemptsBySeq.keySet().removeIf(seq -> seq <= finalContiguous || finalStragglers.contains(seq));
+            attemptsBySeq.keySet().removeIf(seq -> (seq > finalRangeAbove && seq <= finalContiguous) || finalStragglers.contains(seq));
         }
     }
 
