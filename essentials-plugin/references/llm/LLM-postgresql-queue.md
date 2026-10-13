@@ -542,7 +542,9 @@ Since 0.60.1 such a queue switches to a second statement that finds each key's h
 (114 ms at 20 000 keys of one message each, against 1.6 ms). The switch happens per queue, after three slow claims in
 a row (over 10 ms; `setOrderedClaimSlowThreshold(Duration)` on the builder), and only to the statement last measured
 as faster, so a slow round trip to the database does not make a queue alternate. A queue stuck on a slow statement
-re-measures the other one now and then. Both statements claim the same messages.
+re-measures the other one now and then. Both statements claim the same messages. A claim that tries the other
+statement runs under a transaction-local `statement_timeout` of the claim that caused the switch (at least the slow
+threshold), and is cancelled when it runs past it: on stale statistics (below) the head scan took 41 s at 20 000 keys.
 
 ## Security
 

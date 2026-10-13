@@ -124,4 +124,20 @@ class OrderedClaimStatementChooserTest {
         var headScans = poll(new Shape(20, 130, 5), 3 + MAX_PROBE_INTERVAL * 10);
         assertThat(headScans).isGreaterThanOrEqualTo(10);
     }
+
+    @Test
+    void only_a_probe_runs_under_a_timeout_of_the_poll_that_caused_the_switch() {
+        assertThat(chooser.probeTimeoutNanos(THRESHOLD)).isZero();
+        for (var i = 0; i < SLOW_POLLS_BEFORE_SWITCH; i++) {
+            chooser.record(false, Duration.ofMillis(40).toNanos(), 0, LIMIT, THRESHOLD);
+        }
+        assertThat(chooser.byHeadScan()).isTrue();
+        assertThat(chooser.probeTimeoutNanos(THRESHOLD)).isEqualTo(Duration.ofMillis(40).toNanos());
+        assertThat(chooser.probeTimeoutNanos(Duration.ofMillis(60).toNanos())).as("never below the slow threshold").isEqualTo(Duration.ofMillis(60).toNanos());
+
+        // The probe was cancelled at its timeout: it took the timeout and claimed nothing
+        chooser.record(true, chooser.probeTimeoutNanos(THRESHOLD), 0, LIMIT, THRESHOLD);
+        assertThat(chooser.byHeadScan()).as("switched back").isFalse();
+        assertThat(chooser.probeTimeoutNanos(THRESHOLD)).isZero();
+    }
 }

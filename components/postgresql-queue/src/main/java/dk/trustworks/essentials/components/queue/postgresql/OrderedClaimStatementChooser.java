@@ -46,6 +46,9 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  *     <li>A measurement goes stale when the queue changes shape, so a statement that keeps being slow probes the other
  *     one anyway every so many slow polls - {@link #INITIAL_PROBE_INTERVAL}, doubling with each probe that loses, up
  *     to {@link #MAX_PROBE_INTERVAL}. A probe costs one poll.</li>
+ *     <li>A probe runs under a statement timeout of the poll that caused the switch, or the slow threshold if that is
+ *     longer - see {@link #probeTimeoutNanos(long)}. A probe that takes longer loses anyway, and the statement it
+ *     tries can be very much slower than that: on stale table statistics a head scan over 20 000 keys took 41 s.</li>
  * </ul>
  * Thread-safe: traditional consumers of the same queue can record claims concurrently.
  */
@@ -82,6 +85,18 @@ final class OrderedClaimStatementChooser {
 
     synchronized boolean byHeadScan() {
         return byHeadScan;
+    }
+
+    /**
+     * How long the next poll's claim statement may run on the database, or 0 for no limit. Only a probe is limited, to
+     * the elapsed time of the poll that caused the switch, or {@code slowThresholdNanos} if that is longer: a probe
+     * that takes longer than both switches back whatever it claims, so cancelling it changes nothing but how long the
+     * poll takes. A cancelled probe is recorded as a poll that took the timeout and claimed nothing.
+     *
+     * @param slowThresholdNanos a poll faster than this never leads to a switch
+     */
+    synchronized long probeTimeoutNanos(long slowThresholdNanos) {
+        return probing ? Math.max(probeBaselineNanos, slowThresholdNanos) : 0;
     }
 
     /**

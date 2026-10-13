@@ -109,6 +109,58 @@ class PostgresqlDurableQueuesOrderedClaimStrategyIT {
         assertThat(durableQueues.orderedClaimByHeadScan(QUEUE)).as("the default is fast for this backlog, so it stays").isFalse();
     }
 
+    @Test
+    void a_probe_that_runs_past_its_timeout_is_cancelled_and_the_poll_carries_on() {
+        startProbingTheHeadScan(Duration.ofMillis(100));
+
+        unitOfWorkFactory.usingUnitOfWork(uow -> {
+            var handle         = uow.handle();
+            var startedNanos   = System.nanoTime();
+            // Stands in for a head scan planned on stale statistics, which took 41 s at 20 000 keys
+            var probe = durableQueues.claimOrdered(handle, QUEUE, true, 64,
+                                                   () -> handle.createQuery("SELECT pg_sleep(5)").mapTo(String.class).one(),
+                                                   claimed -> 0);
+
+            assertThat(probe).as("cancelled").isEmpty();
+            assertThat(Duration.ofNanos(System.nanoTime() - startedNanos)).isLessThan(Duration.ofSeconds(2));
+            // Rolled back to the savepoint: the transaction is not aborted, and the timeout is gone with it
+            assertThat(statementTimeout(handle)).isEqualTo("0");
+        });
+        assertThat(durableQueues.orderedClaimByHeadScan(QUEUE)).as("the cancelled probe lost, so the queue switched back").isFalse();
+    }
+
+    @Test
+    void a_probe_that_finishes_in_time_keeps_its_claim_and_restores_the_timeout() {
+        startProbingTheHeadScan(Duration.ofMillis(500));
+
+        unitOfWorkFactory.usingUnitOfWork(uow -> {
+            var handle = uow.handle();
+            var probe = durableQueues.claimOrdered(handle, QUEUE, true, 64,
+                                                   () -> statementTimeout(handle),
+                                                   claimed -> 64);
+
+            assertThat(probe).as("ran under the probe's timeout").contains("500ms");
+            assertThat(statementTimeout(handle)).isEqualTo("0");
+        });
+        assertThat(durableQueues.orderedClaimByHeadScan(QUEUE)).as("the probe claimed in time, so the head scan stays").isTrue();
+    }
+
+    /**
+     * Three slow polls of the default statement, with the head scan never measured, switch the queue to probing the head
+     * scan, under a timeout of the last poll's elapsed time
+     */
+    private void startProbingTheHeadScan(Duration slowPoll) {
+        durableQueues.setOrderedClaimSlowThreshold(Duration.ofMillis(10));
+        for (var i = 0; i < OrderedClaimStatementChooser.SLOW_POLLS_BEFORE_SWITCH; i++) {
+            durableQueues.recordOrderedClaim(QUEUE, false, slowPoll.toNanos(), 0, 64);
+        }
+        assertThat(durableQueues.orderedClaimByHeadScan(QUEUE)).as("probing the head scan").isTrue();
+    }
+
+    private static String statementTimeout(org.jdbi.v3.core.Handle handle) {
+        return handle.createQuery("SHOW statement_timeout").mapTo(String.class).one();
+    }
+
     private void claimUntilHeadScanIs(boolean headScan, int maxClaims) {
         for (var claims = 0; claims < maxClaims && durableQueues.orderedClaimByHeadScan(QUEUE) != headScan; claims++) {
             claimedIds(null, Set.of());

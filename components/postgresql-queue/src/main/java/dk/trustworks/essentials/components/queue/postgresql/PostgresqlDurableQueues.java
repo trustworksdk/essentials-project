@@ -1337,11 +1337,10 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                                  .bind("limit", 1);
         if (hasExcludes) orderedQuery.bindList("excludeKeys", excludes);
 
-        var claimStartedNanos = System.nanoTime();
-        Optional<QueuedMessage> queuedMessage = orderedQuery
-                .map(queuedMessageMapper)
-                .findOne();
-        recordOrderedClaim(queueName, byHeadScan, System.nanoTime() - claimStartedNanos, queuedMessage.isPresent() ? 1 : 0, 1);
+        Optional<QueuedMessage> queuedMessage = claimOrdered(handle, queueName, byHeadScan, 1,
+                                                             () -> orderedQuery.map(queuedMessageMapper).findOne(),
+                                                             claimed -> claimed.isPresent() ? 1 : 0)
+                .flatMap(claimed -> claimed);
         if (queuedMessage.isPresent()) {
             return queuedMessage;
         }
@@ -1639,13 +1638,16 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                                       .bind("limit", availableWorkerSlotsForThisQueue);
                     if (!excluded.isEmpty()) orderedQ.bindList("excludeKeys", excluded);
 
-                    var claimStartedNanos = System.nanoTime();
-                    mappingResult = mapQueryResultsWithExceptionHandling(orderedQ);
-                    recordOrderedClaim(queueName, byHeadScan, System.nanoTime() - claimStartedNanos,
-                                       mappingResult.successfulMessages().size() + mappingResult.failedMappings().size(),
-                                       availableWorkerSlotsForThisQueue);
-                    messagesForQueue = mappingResult.successfulMessages();
-                    handleFailedMappings(queueName, mappingResult);
+                    var orderedClaim = claimOrdered(uow.handle(), queueName, byHeadScan, availableWorkerSlotsForThisQueue,
+                                                    () -> mapQueryResultsWithExceptionHandling(orderedQ),
+                                                    claimed -> claimed.successfulMessages().size() + claimed.failedMappings().size());
+                    if (orderedClaim.isPresent()) {
+                        mappingResult = orderedClaim.get();
+                        messagesForQueue = mappingResult.successfulMessages();
+                        handleFailedMappings(queueName, mappingResult);
+                    } else {
+                        messagesForQueue = List.of();
+                    }
 
                     // Fill whatever the ordered claim left free. Running the unordered claim only when the ordered
                     // one found nothing left unordered messages on a queue that also carries ordered ones waiting a
@@ -1984,6 +1986,12 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
      */
     public static final Duration DEFAULT_ORDERED_CLAIM_SLOW_THRESHOLD = Duration.ofMillis(10);
 
+    private static final String ORDERED_CLAIM_PROBE_SAVEPOINT = "essentials_ordered_claim_probe";
+    /**
+     * PostgreSQL's SQL state for a statement cancelled by {@code statement_timeout}
+     */
+    private static final String QUERY_CANCELED_SQL_STATE      = "57014";
+
     /**
      * Set by the {@link PostgresqlDurableQueuesBuilder} - see {@link PostgresqlDurableQueuesBuilder#setOrderedClaimSlowThreshold(Duration)}
      */
@@ -2003,10 +2011,99 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
     }
 
     /**
+     * Run the queue's ordered claim and record how it went with its {@link OrderedClaimStatementChooser}.
+     * <p>
+     * When the poll probes the other statement, the claim runs under a savepoint with a transaction-local
+     * {@code statement_timeout} - see {@link OrderedClaimStatementChooser#probeTimeoutNanos(long)}. A cancelled probe is
+     * rolled back to the savepoint, which undoes the timeout too, so the rest of the transaction carries on: the
+     * unordered claim, and in a centralized poll the other queues' claims.
+     *
+     * @param handle       the poll's handle - inside a transaction
+     * @param byHeadScan   the statement {@code claim} runs
+     * @param limit        how many messages the claim asks for
+     * @param claim        runs the ordered claim statement
+     * @param claimedCount how many messages a claim result holds
+     * @return the claim's result, or empty when a probe was cancelled
+     */
+    <T> Optional<T> claimOrdered(Handle handle, QueueName queueName, boolean byHeadScan, int limit, Supplier<T> claim, ToIntFunction<T> claimedCount) {
+        var probeTimeoutNanos = orderedClaimProbeTimeoutNanos(queueName);
+        if (probeTimeoutNanos <= 0) {
+            var claimStartedNanos = System.nanoTime();
+            var claimed           = claim.get();
+            recordOrderedClaim(queueName, byHeadScan, System.nanoTime() - claimStartedNanos, claimedCount.applyAsInt(claimed), limit);
+            return Optional.of(claimed);
+        }
+
+        var previousStatementTimeout = handle.createQuery("SELECT current_setting('statement_timeout')").mapTo(String.class).one();
+        handle.savepoint(ORDERED_CLAIM_PROBE_SAVEPOINT);
+        setLocalStatementTimeout(handle, ((probeTimeoutNanos + 999_999) / 1_000_000) + "ms");
+        var claimStartedNanos = System.nanoTime();
+        T   claimed;
+        try {
+            claimed = claim.get();
+        } catch (RuntimeException e) {
+            if (!isQueryCanceled(e)) {
+                // E.g. a DurableQueueDeserializationException, which the caller handles in this transaction - so
+                // without the probe's timeout. After a failed SQL statement the transaction is aborted and this fails too
+                try {
+                    endOrderedClaimProbe(handle, previousStatementTimeout);
+                } catch (RuntimeException endFailure) {
+                    e.addSuppressed(endFailure);
+                }
+                throw e;
+            }
+            var elapsedNanos = System.nanoTime() - claimStartedNanos;
+            // Jdbi forgets the savepoint on rollback, so there is nothing to release afterwards
+            handle.rollbackToSavepoint(ORDERED_CLAIM_PROBE_SAVEPOINT);
+            log.debug("[{}] Ordered claim probe by the {} was cancelled after {} ms",
+                      queueName, byHeadScan ? "head scan" : "default statement", Duration.ofNanos(elapsedNanos).toMillis());
+            recordOrderedClaim(queueName, byHeadScan, Math.max(elapsedNanos, probeTimeoutNanos), 0, limit);
+            return Optional.empty();
+        }
+        var elapsedNanos = System.nanoTime() - claimStartedNanos;
+        endOrderedClaimProbe(handle, previousStatementTimeout);
+        recordOrderedClaim(queueName, byHeadScan, elapsedNanos, claimedCount.applyAsInt(claimed), limit);
+        return Optional.of(claimed);
+    }
+
+    private static void endOrderedClaimProbe(Handle handle, String previousStatementTimeout) {
+        setLocalStatementTimeout(handle, previousStatementTimeout);
+        handle.release(ORDERED_CLAIM_PROBE_SAVEPOINT);
+    }
+
+    private static void setLocalStatementTimeout(Handle handle, String statementTimeout) {
+        handle.createQuery("SELECT set_config('statement_timeout', :statementTimeout, true)")
+              .bind("statementTimeout", statementTimeout)
+              .mapTo(String.class)
+              .one();
+    }
+
+    /**
+     * Whether a statement failed because it was cancelled - SQL state {@value #QUERY_CANCELED_SQL_STATE}, which
+     * {@code statement_timeout} raises
+     */
+    private static boolean isQueryCanceled(Throwable e) {
+        for (var cause = e; cause != null; cause = cause.getCause()) {
+            if (cause instanceof SQLException sqlException && QUERY_CANCELED_SQL_STATE.equals(sqlException.getSQLState())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private long orderedClaimProbeTimeoutNanos(QueueName queueName) {
+        if (orderedClaimByHeadScanOverride != null) {
+            return 0;
+        }
+        var chooser = orderedClaimStatementChoosers.get(queueName);
+        return chooser != null ? chooser.probeTimeoutNanos(orderedClaimSlowThresholdNanos) : 0;
+    }
+
+    /**
      * Let the queue's {@link OrderedClaimStatementChooser} pick the ordered-claim statement for its next poll from
      * how this one went
      */
-    private void recordOrderedClaim(QueueName queueName, boolean byHeadScan, long elapsedNanos, int claimed, int limit) {
+    void recordOrderedClaim(QueueName queueName, boolean byHeadScan, long elapsedNanos, int claimed, int limit) {
         if (orderedClaimByHeadScanOverride != null) {
             return;
         }
