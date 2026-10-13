@@ -139,6 +139,8 @@ targets, with a `-N` suffix for plugin-only releases.
   polling; stale statistics on a draining queue table; the ordered-claim statement switch and its threshold;
   handlers that hold a connection. Shard-owned: attempt counts survive a change of owner, a requested redelivery is
   not an attempt, and a WARN names `essentials.shard-owned-queue.instance-id` when two live processes share an id.
+  MongoDB (`LLM-springdata-mongo-queue.md`): due-time polling, and the backoff defaults stated correctly (50% of the
+  polling interval per empty poll, capped at 20× the polling interval).
 - **Docs: supported PostgreSQL is 15+.** `LLM.md` states the floor (the majors the PostgreSQL community still patches)
   and the fenced-lock and shard-owned docs point at it instead of the old 9.5+ and 13+.
 
