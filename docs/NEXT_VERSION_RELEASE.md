@@ -341,7 +341,10 @@ after the chain. What changes for you:
   processed before its gap fill was handled. The WARN begins "If you call awaitProcessed on this processor" - an
   application that never calls `awaitProcessed` can ignore it. A `CdcEventStore` built over a store that does not
   implement `AwaitedGapInspector` logs the same kind of WARN once: it then gives a complete answer only while CDC is
-  active. (ES-4, `944633a4`, `6ff9ca9e`, `9fb0ea51`, `13c13051`, `4fa85508`, `948d5852`)
+  active. Forward the new `default` method `AwaitedGapInspector.transientGapsReadFrom()` as well: a `CdcEventStore` over
+  your decorator then reads the subscriber's transient gaps once per check instead of twice; without it the answer is
+  the same, with the second read. (ES-4, `944633a4`, `6ff9ca9e`, `9fb0ea51`, `13c13051`, `4fa85508`, `948d5852`,
+  `e30f83fe`)
 - **`AppendedEvents.recordDuring(() -> commandBus.send(cmd))`** (`postgresql-event-store`,
   `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.AppendedEvents`) returns what the action
   returned plus every `PersistedEvent` appended during it, so a caller has an order to wait for. It records at
