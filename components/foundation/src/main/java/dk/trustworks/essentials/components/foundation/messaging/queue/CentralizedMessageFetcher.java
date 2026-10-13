@@ -359,6 +359,8 @@ public class CentralizedMessageFetcher implements Lifecycle {
                      queueName,
                      message.getId(),
                      pollingIntervalMs);
+            // No worker will release the key, and a consumer registering again would otherwise never be given it
+            releaseOrderedKey(queueName, message);
             durableQueues.retryMessage(message.getId(),
                                        null,
                                        Duration.ofMillis(pollingIntervalMs));
@@ -370,7 +372,21 @@ public class CentralizedMessageFetcher implements Lifecycle {
                   queueName,
                   message.getId());
 
-        // Submit message for processing
+        try {
+            // A consumer stopping shuts its worker pool down before it unregisters, and workers finishing in between
+            // fire refill polls - so a poll can claim a message for a pool that no longer takes work
+            if (!registration.consumer.isStarted()) {
+                throw new RejectedExecutionException("The consumer began stopping before the message reached a worker");
+            }
+            submitToWorker(registration, queueName, message);
+        } catch (RejectedExecutionException e) {
+            registration.activeWorkers.decrementAndGet();
+            releaseOrderedKey(queueName, message);
+            handBackUndelivered(queueName, message, e);
+        }
+    }
+
+    private void submitToWorker(DurableQueueConsumerRegistration registration, QueueName queueName, QueuedMessage message) {
         registration.workerPool.submit(() -> {
             var handlerStartedAtNanos = System.nanoTime();
             try {
@@ -472,21 +488,23 @@ public class CentralizedMessageFetcher implements Lifecycle {
                               retryEx);
                 }
             } finally {
-                // Cleanup from both the shared concurrent set
-                if (message.getMessage() instanceof OrderedMessage orderedMessage) {
-                    var key = orderedMessage.getKey();
-
-                    // Remove from shared state
-                    var currentKeysBeingProcessed = inProcessOrderedKeys.get(queueName);
-                    if (currentKeysBeingProcessed != null) {
-                        currentKeysBeingProcessed.remove(key);
-                    }
-                }
-
+                releaseOrderedKey(queueName, message);
                 registration.activeWorkers.decrementAndGet();
                 refillIfSaturated(registration);
             }
         });
+    }
+
+    /**
+     * Let the next poll claim messages with this message's key again (a no-op for an unordered message)
+     */
+    private void releaseOrderedKey(QueueName queueName, QueuedMessage message) {
+        if (message.getMessage() instanceof OrderedMessage orderedMessage) {
+            var currentKeysBeingProcessed = inProcessOrderedKeys.get(queueName);
+            if (currentKeysBeingProcessed != null) {
+                currentKeysBeingProcessed.remove(orderedMessage.getKey());
+            }
+        }
     }
 
     /**
@@ -524,6 +542,10 @@ public class CentralizedMessageFetcher implements Lifecycle {
             if (reg == null) {
                 // Skip if registration is somehow null
                 log.warn("Registration for queue '{}' is null, skipping", queueName);
+                continue;
+            }
+            if (!reg.consumer.isStarted()) {
+                // Stopping: its worker pool no longer takes work, so claiming for it would only hand messages back
                 continue;
             }
 
@@ -571,6 +593,28 @@ public class CentralizedMessageFetcher implements Lifecycle {
                  queueName,
                  message.getId(),
                  e.getMessage());
+        handBack(message, e);
+    }
+
+    /**
+     * Return a message a poll claimed but no worker would take, because its consumer began stopping in between.
+     * Without this the message stayed marked as being delivered until the stuck-message reset, a whole
+     * {@code messageHandlingTimeout} later. Like {@link #handBackAfterConsumerStopped}, it is returned for immediate
+     * redelivery and the hand-back counts as a redelivery attempt.
+     */
+    private void handBackUndelivered(QueueName queueName, QueuedMessage message, RejectedExecutionException e) {
+        log.info("[{}:{}] Consumer began stopping before the message reached a worker; returning the message for redelivery. Reason: {}",
+                 queueName,
+                 message.getId(),
+                 e.getMessage());
+        handBack(message, e);
+    }
+
+    /**
+     * Return a message for immediate redelivery, with the thread's interrupt flag cleared for the write - see
+     * {@link #handBackAfterConsumerStopped}
+     */
+    private void handBack(QueuedMessage message, Throwable e) {
         var wasInterrupted = Thread.interrupted();
         try {
             durableQueues.retryMessage(message.getId(), e, Duration.ZERO);
