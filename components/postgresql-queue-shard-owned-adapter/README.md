@@ -412,7 +412,7 @@ messages behind it are dead-lettered too, so it appears in the dead-letter count
 - **Two `queue` packages export `QueueName`, `Message` and `QueuedMessage`** — the engine's `spi`
   package and `foundation`'s messaging package. Star-importing both is a compile error, and it is the
   first thing that happens to anyone adding a file here.
-- **The engine's own prerequisites still apply** — PostgreSQL 13+ for the ordered lane, a readable
+- **The engine's own prerequisites still apply** — PostgreSQL 15+, a readable
   `pg_stat_activity.backend_xid`, `pumpThreads + 1` permanently held connections, and above all
   **`socketTimeout` on the DataSource**. See the
   [engine README](../postgresql-queue-shard-owned/README.md#prerequisites).

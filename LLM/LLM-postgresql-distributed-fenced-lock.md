@@ -11,7 +11,7 @@
 - **Extends**: `DBFencedLockManager<HandleAwareUnitOfWork, DBFencedLock>` from foundation
 - **Key Deps**: JDBI, PostgreSQL, foundation module
 - **Scope**: Intra-service only (instances sharing same PostgreSQL database)
-- **Requirements**: PostgreSQL 9.5+
+- **Requirements**: PostgreSQL 15+ (the supported floor, `LLM.md`)
 - **Status**: WORK-IN-PROGRESS
 
 ```xml
@@ -358,7 +358,7 @@ See [README Security](../components/postgresql-distributed-fenced-lock/README.md
 
 ### Runtime Requirements
 
-- PostgreSQL 9.5+
+- PostgreSQL 15+ (the supported floor, `LLM.md`)
 - JDBI 3.x
 - PostgreSQL JDBC Driver
 - foundation module

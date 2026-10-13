@@ -132,6 +132,8 @@ targets, with a `-N` suffix for plugin-only releases.
   service-entity trap descriptions are tightened to match. The review service-entity case now expects the two
   checks stack-lint itself reports as not run on that fixture (`s1-boot-line`, the frontend checks) under "Not run",
   and tolerates `setShipped` named inside the `setCancelled` row, where the new guard makes it a second bypass.
+- **Docs: supported PostgreSQL is 15+.** `LLM.md` states the floor (the majors the PostgreSQL community still patches)
+  and the fenced-lock and shard-owned docs point at it instead of the old 9.5+ and 13+.
 
 ## 0.60.0-6 — targets Essentials 0.60.0
 - **`/essentials:upgrade` now moves a project to the plugin's Essentials release, code included.** A

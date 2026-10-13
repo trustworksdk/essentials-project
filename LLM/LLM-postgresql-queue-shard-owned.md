@@ -145,7 +145,7 @@ try (var connection = dataSource.getConnection()) {
 
 Full detail and the failure modes: [docs/durable-queue-shard-owned.md](../docs/durable-queue-shard-owned.md) §17.
 
-- **PostgreSQL 13+** if you use the **ordered** lane; **9.5+** for the unordered lane alone. The floor comes from the ordered lane's start-up probe (`pg_current_xact_id()`), not from its delivery path.
+- **PostgreSQL 15+**, the supported floor (`LLM.md`). The ordered lane on its own would need 13+, for its start-up probe (`pg_current_xact_id()`).
 - **`pg_stat_activity.backend_xid` must be readable.** The ordered lane's cursor decides that a sequence value can never arrive from the set of running write transactions. A *partial* answer is a wrong answer, not a degraded one — the cursor would step over a live writer and lose its messages silently. Verified on PostgreSQL 17.10: an ordinary `LOGIN` role with no grants reads it, for its own backends and for other roles'. `pg_read_all_stats` made no difference in any case tested; it is the fallback the error message names if a managed platform ever redacts the view.
 - **The engine probes for it at start-up** (`verifyWatermarkPrerequisites`, first statement of `startOrdered`, once per `DataSource`) and refuses to start the lane rather than risk silent loss. Do not suppress it. It constructs the condition rather than inspecting the column, because `backend_xid` is legitimately null for a backend that has not written.
 - **No superuser, no replication slot, no `wal_level=logical`, no extensions.**

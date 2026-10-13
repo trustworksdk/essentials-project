@@ -102,7 +102,7 @@ Full detail and the failure modes: [docs/durable-queue-shard-owned.md](../../doc
 
 | Requirement | Why |
 |---|---|
-| **PostgreSQL 13+** for the ordered lane (9.5+ for the unordered lane alone) | The floor comes from the ordered lane's start-up probe (`pg_current_xact_id()`), not from its delivery path |
+| **PostgreSQL 15+** (the supported floor, [README § Version Compatibility](../../README.md#version-compatibility)) | The ordered lane on its own would need 13+, for its start-up probe (`pg_current_xact_id()`) |
 | **`pg_stat_activity.backend_xid` must be readable** | The ordered lane's cursor proves a sequence value can never arrive from the set of running write transactions. A *partial* answer is a wrong answer — the cursor would step over a live writer and lose its messages silently |
 | **`pumpThreads + 1` pool connections held permanently** (default 3) | Held for the life of the process and never returned, and lease renewal and enqueue need the pool too. Given the pool's size (`ConnectionPoolMetadata` — the Spring Boot starter supplies it for every pool Spring Boot can read), the runtime refuses a pool no larger than that at start-up and warns when it takes more than half; without it the requirement is only logged, and a pool that is too small shows up as pumps retrying while their shards stop delivering, logged as `connection pool exhausted` where the pool's live count is known |
 | **`LISTEN`/`NOTIFY` on one channel** | Blocked notifications (some poolers in transaction mode) cost latency, not correctness — delivery falls back to the sweep cadence, worst case `maxSweepInterval` |

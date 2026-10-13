@@ -493,7 +493,7 @@ MongoUtil.checkIsValidCollectionName(collectionName);
 | **Technology** | Spring Data MongoDB | JDBI + JDBC |
 | **UnitOfWork** | `ClientSessionAwareUnitOfWork` | `HandleAwareUnitOfWork` |
 | **Transactions** | MongoDB transactions | SQL transactions |
-| **Requirements** | MongoDB 4.0+ (replica set) | PostgreSQL 9.5+ |
+| **Requirements** | MongoDB 4.0+ (replica set) | PostgreSQL 15+ |
 | **Index Type** | MongoDB compound indexes | B-tree indexes |
 | **Schema Init** | Automatic collection/index creation | Automatic table creation |
 | **Query Language** | MongoDB query DSL | SQL |

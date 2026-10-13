@@ -732,6 +732,12 @@ JDK 26 and 27.
 **Spring Boot 4.1.x.** The starters resolve `org.springframework.boot:spring-boot:4.1.1`. Spring Boot 3.x is not
 supported — 4.0 moved to Jackson 3 and Jakarta EE 11, so a 3.x application cannot consume these starters unchanged.
 
+**PostgreSQL 15+.** Essentials supports the PostgreSQL majors the PostgreSQL community still patches
+([versioning policy](https://www.postgresql.org/support/versioning/)): from 0.60.1 that is 15 and later, since 14
+reaches end of life on 2026-11-12. The floor follows that schedule, so it moves to 16 after 15's end of life on
+2027-11-11. An older server may still work with 0.60.x, since a patch release removes nothing, but it is untested
+and unsupported. 0.61 removes the code paths kept for servers older than 15. CI runs PostgreSQL 18.
+
 **Jackson.** From 0.60 Jackson 3 (`tools.jackson.core`) is the only supported major, matching what Spring Boot 4 ships;
 Jackson 2 support (`types-jackson`/`immutable-jackson`) ended with 0.50. The persisted JSON format is unchanged — see
 [Choosing the Jackson Major](#-choosing-the-jackson-major), including the two payload-class changes that bite silently

@@ -12,7 +12,7 @@ plumbing that no user sees go in §7 at most, as one line._
 **So far:** no breaking change, nine framework changes with a behaviour change (§1.1), additive features
 (§2), bug fixes (§3), plugin releases `0.60.0-6` and `0.60.0-7`, and example and tooling updates. Nothing here requires a migration
 step, except one for `essentials.schema.mode=validate` deployments: re-run `emit` and apply the script before the
-first start (§1). The persisted
+first start (§1). Supported PostgreSQL is now 15+ (§1). The persisted
 format changes for one shape only, back to what 0.50 wrote: a type with a public `is`-getter (§1.1.2).
 
 ---
@@ -34,6 +34,12 @@ format changes for one shape only, back to what 0.50 wrote: a type with a public
 
 No public API was removed or changed incompatibly, and no configuration key was renamed or removed; the additions
 are listed in §2.
+
+**Supported PostgreSQL is now 15+.** Essentials supports the PostgreSQL majors the PostgreSQL community still
+patches, which today means 15 and later (14 reaches end of life on 2026-11-12). Before this release the module docs
+said 9.5+, or 13+ for the shard-owned ordered lane. Nothing in 0.60.1 stops an older server from working, but older
+servers are no longer tested or supported, and 0.61 removes the code paths kept for them. If you run PostgreSQL 14
+or older, plan the server upgrade before 0.61. Details: README § Version Compatibility.
 
 **Only if you run `essentials.schema.mode=validate`:** re-run `emit` and apply the new script before starting this
 release. The change-notification trigger that the durable queues and the event store install is now written

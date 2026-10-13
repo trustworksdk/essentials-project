@@ -7,7 +7,8 @@ The open fixes and improvements planned for the 0.6x line. Every item here was c
 
 - The bucket names the earliest release an item may ship in. Project rule: breaking changes only in a new major;
   patch and minor releases are additive.
-- The id in parentheses after each title (e.g. `ES-4`, `N-9`) is a stable label from the 0.60.0 maintainer review.
+- The id in parentheses after each title (e.g. `ES-4`, `N-9`) is a stable label from the 0.60.0 maintainer review;
+  `NW-n` ids come from the 2026-10-13 test-speed wave, whose flaky-test fixes surfaced them.
   Put it in the commit message that fixes the item, so the history can be searched by it.
 - When an item ships, delete it here and add its entry to `docs/NEXT_VERSION_RELEASE.md` in the same commit. When an
   item is partly done, rewrite it to say only what remains.
@@ -110,6 +111,33 @@ shows up only as stale data.
   event order is local to an instance.
 - Add Micrometer meters for fenced locks: held, acquired, released and lost, per lock name and per manager instance.
 
+**Count only real sweep recoveries (NW-4).** The shard-owned engine's `sweepRecoveries` statistic also counts a row
+that committed between a pass's cursor read and its head sweep (two statements, two snapshots). Nothing was stepped
+over, and the counter's Javadoc already says a recovery is "not a defect by itself", but a dashboard alerting on it
+fires on harmless rows, most often in the start-up sweep. **Fix:** count only swept rows with `seq <= safeCursor`, and
+say in the release notes that the counter's meaning narrowed.
+
+### Database schema at startup
+
+**Raise the PostgreSQL floor in code (NW-1).** From 0.60.1 the supported PostgreSQL is 15+ (README § Version
+Compatibility), but the code still carries paths for older servers. **Problem:** on PostgreSQL below 14,
+`ListenNotify` drops and re-creates the change-notification trigger. The schema contribution does it on the one boot
+that has to change the trigger, and the public `addChangeNotificationTriggerToTable` does it on every call. Either can
+deadlock with instances using the table, which 0.60.1 fixed for 14+ only. **Fix:** remove the pre-14 branches (the
+`server_version_num` check in the trigger `DO` block, the drop-and-create in `addChangeNotificationTriggerToTable`),
+drop `ListenNotifyPostgresql12IT` and `MultiTableChangeListenerPostgresql12IT`, and log a WARN at startup on a server
+below the supported floor. Not in a patch: a 0.60.x deployment on PostgreSQL 13 or 14 keeps working.
+
+**Index DDL without a table lock on every boot (NW-2).** `CREATE INDEX IF NOT EXISTS` takes a SHARE lock on the table
+even when the index exists, so every startup briefly stalls the queue's and the event store's writers while the
+schema transaction runs. It can no longer deadlock (0.60.1), but the stall grows with the length of that transaction.
+**Fix:** check `pg_indexes` first, in a `DO` block like the trigger's, and only create a missing index.
+
+**Lock order of the event store's startup transaction (NW-3).** The event store applies several event tables in one
+schema transaction. A user transaction that writes those tables in the opposite order could, in theory, deadlock with
+a starting instance. Not reproduced. **Plan:** confirm or rule out with a test like `QueueSchemaReapplyConcurrencyIT`
+first; if confirmed, apply each table's changes in its own transaction, or take the table locks in a fixed order.
+
 ### Messaging
 
 **Application LISTEN/NOTIFY channels (LN-1).**
@@ -165,7 +193,12 @@ starter that WARNs once when a DML statement runs with no active transaction.
 
 ## P3: documentation
 
-Everything planned here shipped in 0.60.1.
+Everything planned here before 2026-10-13 shipped in 0.60.1.
+
+- **A lost fenced lock can be won straight back (NW-5).** After a database outage longer than the lock timeout, the
+  instance that lost a lock can win it again through its still-running `acquireLockAsync`, under the next fence token.
+  That is correct fencing, and `DBFencedLockManagerIT` now accepts either instance as the new holder, but the fenced
+  lock docs (`LLM-foundation.md`, the module READMEs) do not say so. Say it, next to the fence-token explanation.
 
 ---
 
@@ -175,6 +208,22 @@ Everything planned here shipped in 0.60.1.
   init goldens say a missing objenesis fails "at the first read", which is true for 0.60.0. From 0.60.1, mapper
   creation fails at startup naming the dependency (SB-2). Update the row with the `essentials.version` pin and
   regenerate the goldens.
+- **0.60.1 migration notes: re-emit in `validate` mode (NW-8).** 0.60.1 rewrites the change-notification trigger's
+  statements (the startup deadlock fix), so its schema-history checksum changes and a `validate`-mode deployment
+  refuses to start until the new script is applied. `/essentials:upgrade`'s migration notes for 0.60.1
+  (`references/stack/migrations/`) need that step: run `emit`, apply the script, then start. Ship it with the
+  `essentials.version` pin move.
+- **Spring Boot's failsafe in generated projects (NW-6).** maven-failsafe-plugin 3.6.0 no longer binds `skipTests`, so
+  `-DskipTests` runs every integration test (fixed in Essentials' own POM in 0.60.1 by defaulting `skipITs` to
+  `skipTests`). Generated projects take failsafe from Spring Boot, which manages 3.5.6 in 4.1.1, so they are safe
+  today. When the Boot pin moves, check the managed failsafe version; at 3.6+, add the same property to the backend
+  POM template and a `stack-lint` rule.
+- **Eval failures older than the grader fix (NW-7).** One run each on 2026-10-12, all also failing in the earlier
+  3-run results: `slice-check-aggregate-lane` (`gen-find-f3`; `gen-not-t5`/`t6`, the gate-6 row citing the handlers
+  at `:29`/`:36`), `slice-check-multi-lane` (`gen-find-ml-3`, `gen-lanes`), `slice-check-service-entity`
+  (`gen-find-3`; `gen-not-t3`, a "beyond the gates" finding on `findByIdIn`; `gen-not-t10`) and
+  `slice-discover-brownfield-layered` (0.71: find, ladder and slices graders, `gen-not-n4`). Triage each as a skill
+  defect or a grader defect, as was done for `gen-not-e-t1`/`t3` and the `review-service-entity` expectations.
 - **Profile-aware project `CLAUDE.md` (DOC-2).** The templates are done. Two pieces remain:
   - Scope init's "say which write styles the project can use" to the chat reply, and make it aware of the DB
     profile (no event-sourced lanes on `pg-crud` or `mongo`).

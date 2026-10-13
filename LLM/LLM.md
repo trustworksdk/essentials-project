@@ -20,6 +20,7 @@
 | **GroupId** | `dk.trustworks.essentials` (core), `dk.trustworks.essentials.components` (components)  |
 | **License** | Apache 2.0                                                                             |
 | **Spring Boot** | 4.1.x (Jackson 3 + Jakarta EE 11; Spring Boot 3.x is not supported)                    |
+| **PostgreSQL** | 15+ from 0.60.1: the majors the PostgreSQL community still patches (README § Version Compatibility) |
 | **Philosophy** | Zero-dependency core, `provided` scope integrations                                    |
 | **Scope** | Intra-service coordination (same service, shared DB)                                   |
 
