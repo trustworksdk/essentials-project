@@ -222,7 +222,7 @@ Prefix: `essentials.durable-queues`
 | `polling-delay-interval-increment-factor` | `0.5` | Legacy (centralized=false) |
 | `max-polling-interval` | `2s` | Max backoff |
 | `verbose-tracing` | `false` | Include all ops in traces |
-| `require-active-unit-of-work-for-enqueue` | `false` | `true`: an enqueue (`queueMessage`/`queueMessages`, so `Outbox.sendMessage`, `sendAndDontWait`) outside a `UnitOfWork`/Spring transaction throws `NoActiveUnitOfWorkException`. `false`: it commits on its own, WARN once per call site. Shard-owned engine reads it too |
+| `require-active-unit-of-work-for-enqueue` | `false` | `true`: an enqueue (`queueMessage`/`queueMessages`, so `Outbox.sendMessage`, `sendAndDontWait`) outside a `UnitOfWork`/Spring transaction throws `NoActiveUnitOfWorkException`. `false`: it commits on its own and WARNs once per call site, within a budget of 32 innermost application frames with up to 4 callers each. Shard-owned engine reads it too |
 
 Removed in 0.60.0, ignored if set (since 0.60.1 an ERROR is logged at startup per key, and the metadata marks them `error`): `transactional-mode` (every queue operation is its own transaction - a `fully-transactional` setup changed semantics, trap `ESS-103`), `use-ordered-unordered-query`, `enable-queue-statistics`, `shared-queue-statistics-table-name`, `enable-queue-statistics-ttl`, `queue-statistics-ttl-duration`. MongoDB starter: `transactional-mode`.
 
@@ -417,7 +417,7 @@ Prefix: `essentials.durable-queues`
 | `polling-delay-interval-increment-factor` | `0.5` | Backoff factor |
 | `max-polling-interval` | `2s` | Max backoff |
 | `verbose-tracing` | `false` | Include all ops in traces |
-| `require-active-unit-of-work-for-enqueue` | `false` | `true`: an enqueue (`queueMessage`/`queueMessages`, so `Outbox.sendMessage`, `sendAndDontWait`) outside a `UnitOfWork`/Spring transaction throws `NoActiveUnitOfWorkException`. `false`: it commits on its own, WARN once per call site. |
+| `require-active-unit-of-work-for-enqueue` | `false` | `true`: an enqueue (`queueMessage`/`queueMessages`, so `Outbox.sendMessage`, `sendAndDontWait`) outside a `UnitOfWork`/Spring transaction throws `NoActiveUnitOfWorkException`. `false`: it commits on its own and WARNs once per call site, within a budget of 32 innermost application frames with up to 4 callers each. |
 
 **Note:** No centralized message fetcher (PostgreSQL-only feature)
 

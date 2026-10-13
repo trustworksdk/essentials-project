@@ -87,7 +87,7 @@ the name the framework derives. Worth it only if you would rather a typo fail th
 Spring-aware (the starter wires `SpringTransactionAwareJdbiUnitOfWorkFactory`). 0.60.0 joined only an
 already-bound `UnitOfWork`, so under a plain Spring transaction the enqueue committed on its own and
 survived the rollback. Built without `setUnitOfWorkFactory(...)`, every enqueue commits on its own and
-`build()` WARNs; 0.61 will refuse to build. An enqueue outside any transaction commits on its own and WARNs once per call site;
+`build()` WARNs; 0.61 will refuse to build. An enqueue outside any transaction commits on its own and WARNs once per call site (within a budget of 32 innermost application frames with up to 4 callers each);
 `essentials.durable-queues.require-active-unit-of-work-for-enqueue=true` (or the builder's
 `setRequireActiveUnitOfWorkForEnqueue(true)`, which then needs a factory) makes it throw `NoActiveUnitOfWorkException`.
 
