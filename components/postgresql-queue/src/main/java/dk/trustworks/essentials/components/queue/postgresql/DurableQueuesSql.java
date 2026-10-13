@@ -269,7 +269,7 @@ public class DurableQueuesSql {
                            candidates_rn AS (
                              SELECT
                                q.id,
-                               q.queue_name,
+                               cfg.slots,
                                ROW_NUMBER() OVER (
                                  PARTITION BY q.queue_name
                                  ORDER BY q.next_delivery_ts, q.id
@@ -305,36 +305,40 @@ public class DurableQueuesSql {
                            candidates AS (
                              SELECT c.id
                              FROM candidates_rn c
-                             JOIN queue_config cfg
-                               ON c.queue_name = cfg.queue_name
-                             WHERE c.rn <= cfg.slots
+                             WHERE c.rn <= c.slots
                            ),
 
                            -- 4) Now lock exactly those durable_queues rows
                            --
-                           --    is_being_delivered is re-checked here on purpose. Under READ COMMITTED the
+                           --    The rows are selected by primary-key array, never by joining the candidates - see
+                           --    buildUnorderedSqlStatement(). Joined, a table analyzed while drained is planned as a
+                           --    nested loop comparing every candidate with every row of the queue. ARRAY(...) is
+                           --    evaluated once, so the candidate set is fixed before any row is locked.
+                           --
+                           --    The eligibility predicates are re-checked here on purpose. Under READ COMMITTED the
                            --    candidate CTE above runs against the statement snapshot, so a competing consumer
-                           --    may have claimed a row in between. Repeating the predicate on the locking scan
-                           --    makes Postgres re-evaluate it against the freshly locked row version and drop
-                           --    rows that were claimed in the meantime.
+                           --    may have claimed a row in between - and may even have released it again as a retry
+                           --    or a dead letter. Repeating the predicates on the locking scan makes Postgres
+                           --    re-evaluate them against the freshly locked row version and drop rows that are no
+                           --    longer eligible.
                            locked AS (
                              SELECT q.id
                              FROM {:tableName} q
-                             JOIN candidates c
-                               ON q.id = c.id
-                             WHERE q.is_being_delivered = FALSE
+                             WHERE q.id = ANY(ARRAY(SELECT id FROM candidates))
+                               AND q.is_dead_letter_message = FALSE
+                               AND q.is_being_delivered     = FALSE
+                               AND q.next_delivery_ts      <= :now
                              FOR UPDATE SKIP LOCKED
                            )
 
-                         -- 5) Finally, update & return the locked rows
+                         -- 5) Finally, update & return the locked rows, again by primary-key array
                          UPDATE {:tableName} dq
                          SET
                            total_attempts     = dq.total_attempts + 1,
                            next_delivery_ts   = NULL,
                            is_being_delivered = TRUE,
                            delivery_ts        = :now
-                         FROM locked l
-                         WHERE dq.id = l.id
+                         WHERE dq.id = ANY(ARRAY(SELECT id FROM locked))
                          RETURNING dq.*;
                        """,
                        arg("tableName", sharedQueueTableName),
