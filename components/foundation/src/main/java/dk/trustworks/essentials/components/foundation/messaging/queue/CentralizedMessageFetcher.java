@@ -43,7 +43,15 @@ import static dk.trustworks.essentials.shared.interceptor.InterceptorChain.newIn
 public class CentralizedMessageFetcher implements Lifecycle {
     private static final Logger log = LoggerFactory.getLogger(CentralizedMessageFetcher.class);
     private final DurableQueues                                              durableQueues;
-    private final ScheduledExecutorService                                   scheduler;
+    /**
+     * The poll thread. {@link #stop()} shuts it down for prompt shutdown, so {@link #start()} creates a new one
+     */
+    private volatile ScheduledExecutorService                                scheduler;
+    /**
+     * Held for the duration of every poll. A poll in flight when {@link #stop()} shuts its scheduler down can outlive
+     * it; a quick {@link #start()} must not let the new scheduler's polls run alongside it (see {@link #pollOnce})
+     */
+    private final Object                                                     pollLock = new Object();
     private final ConcurrentMap<QueueName, DurableQueueConsumerRegistration> consumerRegistrations;
     private final AtomicBoolean                                              started;
     private final long                                                       pollingIntervalMs;
@@ -93,13 +101,17 @@ public class CentralizedMessageFetcher implements Lifecycle {
         this.batchedFetchSwitchThreshold = batchedFetchSwitchThreshold;
         this.consumerRegistrations = new ConcurrentHashMap<>();
         this.inProcessOrderedKeys = new ConcurrentHashMap<>();
-        this.scheduler = Executors.newScheduledThreadPool(1, r -> {
+        this.scheduler = newScheduler();
+        this.started = new AtomicBoolean(false);
+    }
+
+    private static ScheduledExecutorService newScheduler() {
+        return Executors.newScheduledThreadPool(1, r -> {
             Thread thread = new Thread(r);
             thread.setName("DurableQueues-CentralizedMessageFetcher");
             thread.setDaemon(true);
             return thread;
         });
-        this.started = new AtomicBoolean(false);
     }
 
     /**
@@ -150,17 +162,26 @@ public class CentralizedMessageFetcher implements Lifecycle {
         inProcessOrderedKeys.remove(queueName);
     }
 
+    /**
+     * Start polling. A fetcher can be started again after {@link #stop()}: the poll thread the stop shut down is
+     * replaced by a new one.
+     */
     @Override
-    public void start() {
+    public synchronized void start() {
         if (started.compareAndSet(false, true)) {
             log.info("Starting CentralizedMessageFetcher with polling interval {} ms", pollingIntervalMs);
 
+            if (scheduler.isShutdown()) {
+                scheduler = newScheduler();
+            }
             scheduler.scheduleAtFixedRate(() -> pollOnce(null), 0, pollingIntervalMs, TimeUnit.MILLISECONDS);
         }
     }
 
     /**
-     * One poll, on the scheduler's single thread - so the periodic polls and the refill polls never overlap.
+     * One poll, on the scheduler's single thread - so the periodic polls and the refill polls never overlap. The
+     * {@link #pollLock} extends that to a poll the previous scheduler still had in flight when {@link #stop()} and a
+     * new {@link #start()} replaced it.
      *
      * @param onlyQueue the queue a refill poll is for, or {@code null} for the periodic poll of every queue
      */
@@ -168,14 +189,19 @@ public class CentralizedMessageFetcher implements Lifecycle {
         if (!started.get()) {
             return;
         }
-        try {
-            fetchAndDistributeMessages(onlyQueue);
-        } catch (Throwable e) {
-            rethrowIfCriticalError(e);
-            if (IOExceptionUtil.isIOException(e)) {
-                log.debug("I/O issue while polling queues", e);
-            } else {
-                log.error("Error during centralized message fetching", e);
+        synchronized (pollLock) {
+            if (!started.get()) {
+                return;
+            }
+            try {
+                fetchAndDistributeMessages(onlyQueue);
+            } catch (Throwable e) {
+                rethrowIfCriticalError(e);
+                if (IOExceptionUtil.isIOException(e)) {
+                    log.debug("I/O issue while polling queues", e);
+                } else {
+                    log.error("Error during centralized message fetching", e);
+                }
             }
         }
     }
@@ -204,8 +230,11 @@ public class CentralizedMessageFetcher implements Lifecycle {
         }
     }
 
+    /**
+     * Stop polling, without waiting for a poll in flight: its thread is interrupted. {@link #start()} resumes polling
+     */
     @Override
-    public void stop() {
+    public synchronized void stop() {
         if (started.compareAndSet(true, false)) {
             log.info("Stopping CentralizedMessageFetcher");
             scheduler.shutdownNow();

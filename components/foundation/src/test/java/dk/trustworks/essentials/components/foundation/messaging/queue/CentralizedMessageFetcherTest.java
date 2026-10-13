@@ -22,7 +22,7 @@ import org.junit.jupiter.api.*;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.*;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.*;
@@ -32,6 +32,8 @@ import static org.mockito.Mockito.*;
  * A consumer that is stopping shuts its worker pool down before it unregisters from the fetcher, and workers finishing
  * in between fire refill polls. A message such a poll claims must be handed straight back, not left marked as being
  * delivered until the stuck-message reset.
+ * <p>
+ * A stopped fetcher can be started again: the stop shuts its poll thread down, and the start replaces it.
  */
 class CentralizedMessageFetcherTest {
     private static final QueueName    QUEUE_NAME = QueueName.of("TestQueue");
@@ -123,6 +125,83 @@ class CentralizedMessageFetcherTest {
 
             verify(durableQueues, never()).getNextMessageReadyForDelivery(any(GetNextMessageReadyForDelivery.class));
         } finally {
+            workerPool.shutdownNow();
+        }
+    }
+
+    @Test
+    void a_stopped_fetcher_polls_again_when_started_again() {
+        when(consumer.isStarted()).thenReturn(true);
+        var workerPool = Executors.newSingleThreadExecutor();
+        when(durableQueues.getNextMessageReadyForDelivery(any(GetNextMessageReadyForDelivery.class))).thenReturn(Optional.empty());
+        fetcher.registerConsumer(QUEUE_NAME, consumer, messageHandler, workerPool, 1);
+
+        try {
+            fetcher.start();
+            verify(durableQueues, timeout(5_000).atLeastOnce()).getNextMessageReadyForDelivery(any(GetNextMessageReadyForDelivery.class));
+            fetcher.stop();
+            assertThat(fetcher.isStarted()).isFalse();
+            clearInvocations(durableQueues);
+
+            fetcher.start();
+
+            assertThat(fetcher.isStarted()).isTrue();
+            verify(durableQueues, timeout(5_000).atLeast(2)).getNextMessageReadyForDelivery(any(GetNextMessageReadyForDelivery.class));
+        } finally {
+            workerPool.shutdownNow();
+        }
+    }
+
+    @Test
+    void a_poll_still_in_flight_from_before_a_stop_does_not_overlap_the_polls_after_the_next_start() throws InterruptedException {
+        when(consumer.isStarted()).thenReturn(true);
+        var workerPool       = Executors.newSingleThreadExecutor();
+        var firstPollEntered = new CountDownLatch(1);
+        var releaseFirstPoll = new CountDownLatch(1);
+        var polls            = new AtomicInteger();
+        var inFlight         = new AtomicInteger();
+        var maxInFlight      = new AtomicInteger();
+        when(durableQueues.getNextMessageReadyForDelivery(any(GetNextMessageReadyForDelivery.class))).thenAnswer(invocation -> {
+            maxInFlight.accumulateAndGet(inFlight.incrementAndGet(), Math::max);
+            try {
+                if (polls.incrementAndGet() == 1) {
+                    firstPollEntered.countDown();
+                    // Ignores the interrupt from stop(), like a database call that does not react to one
+                    var interrupted = false;
+                    while (true) {
+                        try {
+                            releaseFirstPoll.await();
+                            break;
+                        } catch (InterruptedException e) {
+                            interrupted = true;
+                        }
+                    }
+                    if (interrupted) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
+                return Optional.empty();
+            } finally {
+                inFlight.decrementAndGet();
+            }
+        });
+        fetcher.registerConsumer(QUEUE_NAME, consumer, messageHandler, workerPool, 1);
+
+        try {
+            fetcher.start();
+            assertThat(firstPollEntered.await(5, TimeUnit.SECONDS)).isTrue();
+            fetcher.stop();
+            fetcher.start();
+            // The new poll thread waits for the old one's poll
+            Thread.sleep(200);
+            assertThat(polls.get()).isEqualTo(1);
+
+            releaseFirstPoll.countDown();
+
+            verify(durableQueues, timeout(5_000).atLeast(3)).getNextMessageReadyForDelivery(any(GetNextMessageReadyForDelivery.class));
+            assertThat(maxInFlight.get()).isEqualTo(1);
+        } finally {
+            releaseFirstPoll.countDown();
             workerPool.shutdownNow();
         }
     }

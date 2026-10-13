@@ -42,6 +42,8 @@ import static org.assertj.core.api.Assertions.*;
  *     every start, leaving the old one's event bus threads behind</li>
  *     <li>the queues subscribe to its bus once, however often they are started - a listener the application supplied
  *     used to get one more subscriber on every start, so each NOTIFY woke the queue's consumer once per start</li>
+ *     <li>the queues deliver again after a stop and a start on either fetcher - the {@link CentralizedMessageFetcher}
+ *     used to shut its poll thread down for good on a stop, so the next start threw {@link java.util.concurrent.RejectedExecutionException}</li>
  * </ul>
  */
 @Testcontainers
@@ -77,7 +79,40 @@ class PostgresqlDurableQueuesChangeListenerLifecycleIT {
 
     @Test
     void a_builder_made_listener_survives_stop_and_start_with_one_subscriber() {
-        durableQueues = builder().build();
+        aBuilderMadeListenerSurvivesStopAndStartWithOneSubscriber(builder(false));
+    }
+
+    @Test
+    void a_builder_made_listener_survives_stop_and_start_with_one_subscriber_on_the_centralized_fetcher() {
+        aBuilderMadeListenerSurvivesStopAndStartWithOneSubscriber(builder(true));
+    }
+
+    @Test
+    void the_centralized_fetcher_delivers_again_after_stop_and_start() {
+        durableQueues = builder(true).setCentralizedQueuePollingOptimizerFactory(queueName -> QueuePollingOptimizer.None())
+                                     .build();
+        // The other tests leave a message from another node behind
+        durableQueues.purgeQueue(QUEUE);
+        var handled = new AtomicInteger();
+
+        durableQueues.start();
+        consume(handled);
+        unitOfWorkFactory.usingUnitOfWork(() -> durableQueues.queueMessage(QUEUE, Message.of("before the stop")));
+        Awaitility.waitAtMost(Duration.ofSeconds(5)).until(() -> handled.get() == 1);
+
+        durableQueues.stop();
+        durableQueues.start();
+        assertThat(durableQueues.isStarted()).isTrue();
+        // A stop removes the queue's consumers, so it is registered again by its owner
+        consume(handled);
+        unitOfWorkFactory.usingUnitOfWork(() -> durableQueues.queueMessage(QUEUE, Message.of("after the restart")));
+
+        Awaitility.waitAtMost(Duration.ofSeconds(5)).until(() -> handled.get() == 2);
+        assertThat(durableQueues.getTotalMessagesQueuedFor(QUEUE)).isZero();
+    }
+
+    private void aBuilderMadeListenerSurvivesStopAndStartWithOneSubscriber(PostgresqlDurableQueuesBuilder builder) {
+        durableQueues = builder.build();
         var listener = durableQueues.getMultiTableChangeListener().orElseThrow();
 
         durableQueues.start();
@@ -101,7 +136,7 @@ class PostgresqlDurableQueuesChangeListenerLifecycleIT {
 
     @Test
     void close_releases_the_builder_made_listeners_event_bus_for_good() {
-        durableQueues = builder().build();
+        durableQueues = builder(false).build();
         var eventBus = durableQueues.getMultiTableChangeListener().orElseThrow().getEventBus();
         durableQueues.start();
 
@@ -126,7 +161,7 @@ class PostgresqlDurableQueuesChangeListenerLifecycleIT {
                                                .<TableChangeNotification>build();
         listener.start();
         try {
-            durableQueues = builder().setMultiTableChangeListener(listener).build();
+            durableQueues = builder(false).setMultiTableChangeListener(listener).build();
             durableQueues.start();
             durableQueues.stop();
             durableQueues.start();
@@ -143,22 +178,26 @@ class PostgresqlDurableQueuesChangeListenerLifecycleIT {
         }
     }
 
-    private PostgresqlDurableQueuesBuilder builder() {
+    private PostgresqlDurableQueuesBuilder builder(boolean useCentralizedMessageFetcher) {
         return PostgresqlDurableQueues.builder()
                                       .setUnitOfWorkFactory(unitOfWorkFactory)
                                       .setJsonSerializer(EssentialsObjectMappers.createJSONSerializer())
                                       .setSharedQueueTableName(QUEUE_TABLE)
-                                      // The CentralizedMessageFetcher cannot be started again after a stop
-                                      .setUseCentralizedMessageFetcher(false)
-                                      .setQueuePollingOptimizerFactory(consumeFromQueue -> optimizer);
+                                      .setUseCentralizedMessageFetcher(useCentralizedMessageFetcher)
+                                      .setQueuePollingOptimizerFactory(consumeFromQueue -> optimizer)
+                                      .setCentralizedQueuePollingOptimizerFactory(queueName -> optimizer);
     }
 
     private void consume() {
+        consume(new AtomicInteger());
+    }
+
+    private void consume(AtomicInteger handled) {
         durableQueues.consumeFromQueue(ConsumeFromQueue.builder()
                                                        .setQueueName(QUEUE)
                                                        .setRedeliveryPolicy(RedeliveryPolicy.fixedBackoff(Duration.ofMillis(100), 3))
                                                        .setParallelConsumers(1)
-                                                       .setQueueMessageHandler(message -> { })
+                                                       .setQueueMessageHandler(message -> handled.incrementAndGet())
                                                        .build());
     }
 
