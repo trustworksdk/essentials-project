@@ -425,7 +425,10 @@ public abstract class DefaultDurableQueueConsumer<DURABLE_QUEUES extends Durable
                           consumeFromQueue.consumerName,
                           queuedMessage.getTotalDeliveryAttempts(),
                           queuedMessage.getRedeliveryAttempts());
-                durableQueues.acknowledgeMessageAsHandled(queuedMessage.getId());
+                if (operation.getAcknowledgedWithHandler() == null) {
+                    // Not already acknowledged by an interceptor inside the handler's transaction
+                    durableQueues.acknowledgeMessageAsHandled(queuedMessage.getId());
+                }
                 // After the acknowledgement, so the count means "delivered and removed", not "the handler returned"
                 durableQueues.getMessageObserver()
                              .messageHandled(queuedMessage, Duration.ofNanos(System.nanoTime() - handlerStartedAtNanos));

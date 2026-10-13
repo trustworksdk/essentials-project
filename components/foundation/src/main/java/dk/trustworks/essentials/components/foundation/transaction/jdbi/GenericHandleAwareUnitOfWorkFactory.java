@@ -199,6 +199,9 @@ public abstract class GenericHandleAwareUnitOfWorkFactory<UOW extends HandleAwar
                 }
 
                 log.trace("Committing Managed UnitOfWork: {}", info());
+                // Taken before close(), which clears the registered resources. Iterating the live map afterwards
+                // meant no afterCommit callback ever ran with this factory
+                var callbackResources = snapshotOf(unitOfWorkLifecycleCallbackResources);
                 try {
                     handle.commit();
                 } catch (Exception e) {
@@ -208,7 +211,7 @@ public abstract class GenericHandleAwareUnitOfWorkFactory<UOW extends HandleAwar
                     unitOfWorkFactory.removeUnitOfWork();
                 }
                 status = UnitOfWorkStatus.Committed;
-                unitOfWorkLifecycleCallbackResources.forEach((key, resources) -> {
+                callbackResources.forEach((key, resources) -> {
                     try {
                         log.trace("AfterCommit: Calling {} with {} associated resource(s)",
                                   key.getClass().getName(),
@@ -261,9 +264,11 @@ public abstract class GenericHandleAwareUnitOfWorkFactory<UOW extends HandleAwar
                     // Ignore
                 }
                 status = UnitOfWorkStatus.RolledBack;
+                // Taken before close(), which clears the registered resources - see commit()
+                var callbackResources = snapshotOf(unitOfWorkLifecycleCallbackResources);
                 close();
 
-                unitOfWorkLifecycleCallbackResources.entrySet().forEach(unitOfWorkLifecycleCallbackListEntry -> {
+                callbackResources.entrySet().forEach(unitOfWorkLifecycleCallbackListEntry -> {
                     try {
                         log.trace("AfterRollback: Calling {} with {} associated resource(s)",
                                   unitOfWorkLifecycleCallbackListEntry.getKey().getClass().getName(),

@@ -35,6 +35,11 @@ public final class HandleQueuedMessage {
      * The {@link QueuedMessageHandler} configured in the {@link DurableQueues#consumeFromQueue(ConsumeFromQueue)} operation
      */
     public final QueuedMessageHandler messageHandler;
+    /**
+     * The result of acknowledging the message inside the handler's own transaction, or {@code null} when it was not
+     * acknowledged there - see {@link #acknowledgedWithHandler(boolean)}
+     */
+    private volatile Boolean          acknowledgedWithHandler;
 
     /**
      * Create a new builder that produces a new {@link HandleQueuedMessage} instance
@@ -73,6 +78,25 @@ public final class HandleQueuedMessage {
      */
     public QueuedMessageHandler getMessageHandler() {
         return messageHandler;
+    }
+
+    /**
+     * Record that a {@link DurableQueuesInterceptor} acknowledged the message inside the transaction the handler ran
+     * in, so the handler's writes and the acknowledgement commit together. The consumer then skips its own,
+     * separate acknowledgement.
+     *
+     * @param acknowledged what {@link DurableQueues#acknowledgeMessageAsHandled(QueueEntryId)} returned
+     */
+    public void acknowledgedWithHandler(boolean acknowledged) {
+        this.acknowledgedWithHandler = acknowledged;
+    }
+
+    /**
+     * @return the result of acknowledging the message inside the handler's transaction, or {@code null} when the
+     * consumer still has to acknowledge it - see {@link #acknowledgedWithHandler(boolean)}
+     */
+    public Boolean getAcknowledgedWithHandler() {
+        return acknowledgedWithHandler;
     }
 
     @Override

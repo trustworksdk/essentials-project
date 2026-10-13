@@ -344,15 +344,15 @@ class BatchedFetchStrategyIT {
     // ------------------------------------------------------------------------------------------------
 
     /**
-     * Per-queue fetch is ordered-priority: it runs the ordered query first and only falls back to the
-     * unordered query when the ordered query returned nothing. Batched fetch
-     * numbers ordered and unordered candidates in a single oldest-first window, so it also returns unordered
-     * messages while ordered messages are available.
+     * Both strategies return unordered messages alongside ordered ones.
      * <p>
-     * Consequence: crossing the queue-count threshold changes which messages get delivered.
+     * Up to 0.60.0 per-queue fetch ran the unordered query only when the ordered query returned nothing, so while
+     * any ordered message was eligible it returned ordered messages alone - and crossing the queue-count threshold
+     * changed which messages got delivered. Per-queue fetch now fills the slots the ordered query left with
+     * unordered messages, which is what batched fetch's single oldest-first window does.
      */
     @Test
-    void batched_fetch_returns_unordered_messages_alongside_ordered_whereas_per_queue_fetch_prioritises_ordered() {
+    void both_fetch_strategies_return_unordered_messages_alongside_ordered() {
         var queueNames = List.of(QueueName.of("parity-queue-0"), QueueName.of("parity-queue-1"));
         var excludeKeys = queueNames.stream()
                                     .collect(Collectors.toMap(queueName -> queueName,
@@ -372,9 +372,13 @@ class BatchedFetchStrategyIT {
         });
 
         assertThat(perQueueResult)
-                .as("Per-queue fetch only returns ordered messages while any are eligible")
+                .as("Per-queue fetch fills the slots the ordered query left with unordered messages")
                 .containsExactlyInAnyOrder("ordered-eligible-parity-queue-0",
-                                           "ordered-eligible-parity-queue-1");
+                                           "ordered-eligible-parity-queue-1",
+                                           "unordered-a-parity-queue-0",
+                                           "unordered-b-parity-queue-0",
+                                           "unordered-a-parity-queue-1",
+                                           "unordered-b-parity-queue-1");
 
         assertThat(batchedResult)
                 .as("Batched fetch returns everything eligible, ordered and unordered alike")

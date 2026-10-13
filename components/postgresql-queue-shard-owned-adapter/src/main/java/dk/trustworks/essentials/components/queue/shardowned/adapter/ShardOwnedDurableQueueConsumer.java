@@ -26,6 +26,7 @@ import dk.trustworks.essentials.components.queue.shardowned.spi.ConsumerOptions;
 import dk.trustworks.essentials.components.queue.shardowned.spi.MessageHandler;
 import dk.trustworks.essentials.components.queue.shardowned.spi.MessageId;
 import dk.trustworks.essentials.components.queue.shardowned.spi.MessageQueue;
+import dk.trustworks.essentials.components.queue.shardowned.spi.RedeliveryRequested;
 import dk.trustworks.essentials.components.queue.shardowned.spi.Subscription;
 import org.slf4j.*;
 
@@ -195,14 +196,13 @@ class ShardOwnedDurableQueueConsumer implements DurableQueueConsumer {
     }
 
     /**
-     * Thrown to turn {@code markForRedeliveryIn} into the only outcome the engine understands as
-     * "deliver this again". The requested delay is carried for the log line only — the engine
-     * schedules from its own policy, because a handler is never told which message it holds.
+     * Thrown to turn {@code markForRedeliveryIn} into the engine's {@link RedeliveryRequested} outcome: the message
+     * is delivered again after the requested delay, and - as a manual redelivery in the classic
+     * {@code DurableQueues} - the request is never a failure that could dead-letter it.
      */
-    static final class ManualRedeliveryRequested extends RuntimeException {
+    static final class ManualRedeliveryRequested extends RedeliveryRequested {
         ManualRedeliveryRequested(java.time.Duration requestedDelay) {
-            super("The handler asked for redelivery in " + requestedDelay
-                          + "; the engine will reschedule at its own next backoff interval");
+            super(requestedDelay, "The handler asked for redelivery in " + requestedDelay);
         }
     }
 }
