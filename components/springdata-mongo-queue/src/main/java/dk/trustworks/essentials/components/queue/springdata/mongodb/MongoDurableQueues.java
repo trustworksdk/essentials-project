@@ -663,9 +663,11 @@ public final class MongoDurableQueues implements DurableQueues {
                                                                                              .and("isBeingDelivered").is(true)
                                                                                  );
 
+                                                   // Before 0.60 the due time was computed but never stored, so every retry was redelivered at once
                                                    var update = new Update().inc("redeliveryAttempts", 1)
                                                                             .set("isBeingDelivered", false)
                                                                             .set("deliveryTimestamp", null)
+                                                                            .set("nextDeliveryTimestamp", nextDeliveryTimestamp)
                                                                             .set("lastDeliveryError", operation.getCauseForRetry() != null ? DeliveryErrorDescription.describe(operation.getCauseForRetry()) : RetryMessage.MANUALLY_REQUESTED_REDELIVERY);
                                                    var updateResult = mongoTemplate.findAndModify(findMessageToRetry,
                                                                                                   update,
@@ -880,8 +882,11 @@ public final class MongoDurableQueues implements DurableQueues {
                                                            whereCriteria.and("key").not().in(excludedKeys);
                                                        }
 
+                                                       // Lowest key order first, so an ordered message's predecessor is claimed before it. Before
+                                                       // 0.60 the two fields were passed as one ("keyOrder, nextDeliveryTimestamp"), a field no
+                                                       // document has, so claims came in no particular order
                                                        var nextMessageReadyForDeliveryQuery = query(whereCriteria)
-                                                               .with(Sort.by(Sort.Direction.ASC, "keyOrder, nextDeliveryTimestamp"))
+                                                               .with(Sort.by(Sort.Direction.ASC, "keyOrder", "nextDeliveryTimestamp"))
                                                                .limit(1);
 
                                                        var update = new Update().inc("totalDeliveryAttempts", 1)
