@@ -2064,8 +2064,19 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
             associatedResources.stream()
                                .collect(Collectors.groupingBy(LocallyQueuedMessage::queueName, LinkedHashMap::new, Collectors.toList()))
                                .forEach((queueName, scheduled) -> {
-                                   var consumer = durableQueueConsumers.get(queueName);
-                                   if (consumer == null) {
+                                   // The queue's consumer polls either through the centralized message fetcher or
+                                   // on its own (useCentralizedMessageFetcher(false)) - both back off while idle
+                                   DurableQueueConsumerNotifications consumer;
+                                   QueuePollingOptimizer             optimizer;
+                                   var                               centralizedConsumer = durableQueueConsumers.get(queueName);
+                                   var                               traditionalConsumer = traditionalDurableQueueConsumers.get(queueName);
+                                   if (centralizedConsumer != null) {
+                                       consumer = centralizedConsumer;
+                                       optimizer = centralizedConsumer.getQueuePollingOptimizer();
+                                   } else if (traditionalConsumer != null) {
+                                       consumer = traditionalConsumer;
+                                       optimizer = traditionalConsumer.getQueuePollingOptimizer();
+                                   } else {
                                        return;
                                    }
                                    try {
@@ -2083,7 +2094,7 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                                                 .map(LocallyQueuedMessage::dueAt)
                                                 .filter(dueAt -> dueAt != null && dueAt.isAfter(now))
                                                 .distinct()
-                                                .forEach(dueAt -> consumer.getQueuePollingOptimizer().messageScheduledFor(dueAt));
+                                                .forEach(optimizer::messageScheduledFor);
                                    } catch (Exception e) {
                                        log.debug("[{}] Could not signal the local consumer after a commit", queueName, e);
                                    }

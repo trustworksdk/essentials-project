@@ -18,6 +18,8 @@ package dk.trustworks.essentials.components.foundation.messaging.queue;
 import dk.trustworks.essentials.components.foundation.messaging.queue.operations.*;
 import org.slf4j.*;
 
+import java.time.Instant;
+import java.util.concurrent.ConcurrentSkipListSet;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static dk.trustworks.essentials.shared.MessageFormatter.msg;
@@ -34,6 +36,17 @@ public class SimpleQueuePollingOptimizer implements QueuePollingOptimizer {
     private final  long             maxDelayMs;
     private final  ConsumeFromQueue consumeFromQueue;
     private final  long             pollingIntervalMs;
+    /**
+     * When messages known to this node become deliverable - see {@link #messageScheduledFor(Instant)}. Bounded: past
+     * {@link #MAX_TRACKED_DUE_TIMES} the latest are dropped, and those messages wait at most {@code maxDelayMs}
+     */
+    private final  ConcurrentSkipListSet<Long> dueAtEpochMs = new ConcurrentSkipListSet<>();
+    private static final int        MAX_TRACKED_DUE_TIMES = 1_000;
+    /**
+     * Only used when a caller reports a poll without the time its claim ran at (the {@link QueuePollingOptimizer}
+     * methods without a {@code claimedAt}): due times this much older than the report are taken as looked for
+     */
+    private static final long       DUE_TIME_GRACE_MS     = 250;
 
     /**
      * Create a new {@link dk.trustworks.essentials.components.foundation.messaging.queue.SimpleQueuePollingOptimizer}
@@ -70,6 +83,12 @@ public class SimpleQueuePollingOptimizer implements QueuePollingOptimizer {
 
     @Override
     public void queuePollingReturnedNoMessages() {
+        queuePollingReturnedNoMessages(Instant.now().minusMillis(DUE_TIME_GRACE_MS));
+    }
+
+    @Override
+    public void queuePollingReturnedNoMessages(Instant claimedAt) {
+        forgetDueTimesSeenBy(claimedAt);
         var currentDelay = pollingThreadDelay.get();
         if (currentDelay < maxDelayMs) {
             var newDelayMs = currentDelay + delayIncrementMs;
@@ -92,6 +111,8 @@ public class SimpleQueuePollingOptimizer implements QueuePollingOptimizer {
         log.trace("[{}] {} - queuePollingReturnedMessage - resetting pollingThreadDelay: 0 ms",
                   consumeFromQueue.queueName,
                   consumeFromQueue.consumerName);
+        // The delay is reset, so the next poll runs whatever is due by then
+        forgetDueTimesSeenBy(Instant.now().minusMillis(DUE_TIME_GRACE_MS));
         pollingThreadDelay.set(0L);
         shouldSkipPollCallCount.set(0L);
     }
@@ -103,6 +124,15 @@ public class SimpleQueuePollingOptimizer implements QueuePollingOptimizer {
             log.trace("[{}] {} - shouldSkipPolling: false - pollingDelay: 0 ms",
                       consumeFromQueue.queueName,
                       consumeFromQueue.consumerName);
+            return false;
+        }
+        // A message coming due ends the backoff early
+        var earliestDue = dueAtEpochMs.ceiling(Long.MIN_VALUE);
+        if (earliestDue != null && earliestDue <= Instant.now().toEpochMilli()) {
+            log.trace("[{}] {} - shouldSkipPolling: false - a message became deliverable at {}",
+                      consumeFromQueue.queueName,
+                      consumeFromQueue.consumerName,
+                      Instant.ofEpochMilli(earliestDue));
             return false;
         }
         var callCount = shouldSkipPollCallCount.get();
@@ -136,6 +166,31 @@ public class SimpleQueuePollingOptimizer implements QueuePollingOptimizer {
                   queuedMessage);
         pollingThreadDelay.set(0L);
         shouldSkipPollCallCount.set(0L);
+    }
+
+    /**
+     * Poll when a message on this queue becomes deliverable, rather than sleeping past it on the backoff. The
+     * PostgreSQL {@code DurableQueues} reports the due time of each retry, delayed enqueue and delayed resurrection made
+     * by this node here; without it, a retry on a queue that had backed off was delivered up to {@code maxDelayMs}
+     * late. The consumer polls on its
+     * polling interval and asks {@link #shouldSkipPolling()} each time, so the message is claimed within one polling
+     * interval of its due time.
+     */
+    @Override
+    public void messageScheduledFor(Instant dueAt) {
+        dueAtEpochMs.add(dueAt.toEpochMilli());
+        while (dueAtEpochMs.size() > MAX_TRACKED_DUE_TIMES) {
+            dueAtEpochMs.pollLast();
+        }
+    }
+
+    /**
+     * A claim run at {@code claimedAt} looked for every message due at or before it, found or not. Due times are kept
+     * per millisecond, so one in the same millisecond as {@code claimedAt} may still lie after it and is kept for the
+     * next poll
+     */
+    private void forgetDueTimesSeenBy(Instant claimedAt) {
+        dueAtEpochMs.headSet(claimedAt.toEpochMilli(), false).clear();
     }
 
     @Override

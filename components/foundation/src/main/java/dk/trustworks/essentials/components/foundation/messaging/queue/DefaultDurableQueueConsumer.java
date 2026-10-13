@@ -25,7 +25,7 @@ import dk.trustworks.essentials.shared.concurrent.ThreadFactoryBuilder;
 import org.slf4j.*;
 import reactor.core.publisher.Mono;
 
-import java.time.Duration;
+import java.time.*;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.function.Consumer;
@@ -280,6 +280,9 @@ public abstract class DefaultDurableQueueConsumer<DURABLE_QUEUES extends Durable
 
                 // Define a placeholder for the Runnable that will be assigned appropriately later
                 Runnable[] resultRunnable = new Runnable[1];
+                // Read before the claim reads its own now, so a message due by this time was looked for - see
+                // QueuePollingOptimizer#queuePollingReturnedNoMessages(Instant)
+                var claimedNoLaterThan = Instant.now();
 
                 // Execute the Mono immediately for getting the message
                 Mono<Optional<QueuedMessage>> messageMono = Mono.fromCallable(() -> {
@@ -345,7 +348,7 @@ public abstract class DefaultDurableQueueConsumer<DURABLE_QUEUES extends Durable
                                   queueName,
                                   consumeFromQueue.consumerName,
                                   durableQueues.getClass().getSimpleName());
-                        queuePollingOptimizer.queuePollingReturnedNoMessages();
+                        queuePollingOptimizer.queuePollingReturnedNoMessages(claimedNoLaterThan);
                     }
                 });
 
@@ -559,6 +562,14 @@ public abstract class DefaultDurableQueueConsumer<DURABLE_QUEUES extends Durable
     @Override
     public void messageAdded(QueuedMessage queuedMessage) {
         queuePollingOptimizer.messageAdded(queuedMessage);
+    }
+
+    /**
+     * @return the {@link QueuePollingOptimizer} deciding when this consumer polls - e.g. to tell it, through
+     * {@link QueuePollingOptimizer#messageScheduledFor(Instant)}, when a message on its queue becomes deliverable
+     */
+    public QueuePollingOptimizer getQueuePollingOptimizer() {
+        return queuePollingOptimizer;
     }
 
     @Override
