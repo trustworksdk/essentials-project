@@ -170,12 +170,13 @@ default_merge_base() {
 # ---- steps ------------------------------------------------------------------------------------------------------
 # One function per plugin-docs step, in the job's order. Each runs in the directory that CI step ran in.
 
-steps=(llm-sync citations ess-ids plugin-version symlinks slice-lint lint-hook render-slice slice-source slice-index slice-atlas-layout slice-enrich slice-law stack-lint
+steps=(llm-sync citations ess-ids prepare-release plugin-version symlinks slice-lint lint-hook render-slice slice-source slice-index slice-atlas-layout slice-enrich slice-law stack-lint
     init-render review-scan migration-plan docs-search doctor check-patches check-expected eval-graders eval-flags slice-compile-table render-check)
 declare -A step_desc=(
     [llm-sync]="regenerate references/llm/ from LLM/ (sync-plugin-llm.sh) and fail on drift"
     [citations]="only stack-pins.md / stack-contract.md state a pin or an S-requirement; every slice-law § cite resolves (check-citations.py)"
     [ess-ids]="ESS-NNN ids on LLM/LLM-traps.md: unique, contiguous, tombstoned, resolved (check-ess-ids.py)"
+    [prepare-release]="release-notes conversion, reset skeleton, version matcher and CHANGELOG decision (prepare-release.py --self-test)"
     [plugin-version]="a change under essentials-plugin/ moves plugin.json's version, to the pin with an optional -N"
     [symlinks]="no tracked symlinks under essentials-plugin/"
     [slice-lint]="every fixture, golden and script case through slice-lint.py (test_slice_lint.py)"
@@ -249,6 +250,10 @@ step_ess-ids() {
     fi
     x "$repo" uv run --script scripts/check-ess-ids.py --self-test &&
         x "$repo" uv run --script scripts/check-ess-ids.py --baseline "$ref"
+}
+
+step_prepare-release() {
+    x "$repo" uv run --script scripts/prepare-release.py --self-test
 }
 
 step_plugin-version() {
@@ -536,7 +541,7 @@ run_steps_parallel() {
     local jobs=$1
     shift
     local names=("$@") n=$# next=0 printed=0 running=0 i status secs
-    local done_=()
+    local done_=() started_=()
     par_pids=()
     par_tmp=$(mktemp -d "${TMPDIR:-/tmp}/plugin-check.XXXXXX") || die "cannot create a temporary directory"
     trap par_abort INT TERM
@@ -555,10 +560,23 @@ run_steps_parallel() {
                 run_step "${names[$next]}" >"$par_tmp/$next.out" 2>&1 </dev/null
             ) &
             par_pids[next]=$!
+            started_[next]=$(date +%s)
             next=$((next + 1))
             running=$((running + 1))
         done
         for ((i = printed; i < next; i++)); do
+            # A step killed by SIGKILL (the OOM killer, kill -9) never runs its EXIT trap, so no .rc ever appears.
+            # Gone with no .rc (checked again after kill -0: a step that ended normally wrote it before exiting) means
+            # it was killed; write the .rc for it from wait's status, so the step is a FAIL rather than a hang. The note
+            # goes to a file of its own: the step's orphaned children may still be writing .out at their own offset.
+            if [ -z "${done_[i]:-}" ] && [ ! -f "$par_tmp/$i.rc" ] && ! kill -0 "${par_pids[i]}" 2>/dev/null &&
+                [ ! -f "$par_tmp/$i.rc" ]; then
+                wait "${par_pids[i]}" 2>/dev/null
+                status=$?
+                [ "$status" -ne 0 ] || status=1
+                echo "plugin-check: ${names[i]} ended without writing a result (killed? exit $status)" >"$par_tmp/$i.lost"
+                echo "$status $(($(date +%s) - started_[i]))" >"$par_tmp/$i.rc"
+            fi
             if [ -z "${done_[i]:-}" ] && [ -f "$par_tmp/$i.rc" ]; then
                 wait "${par_pids[i]}" 2>/dev/null
                 par_pids[i]=""
@@ -568,6 +586,7 @@ run_steps_parallel() {
         done
         while [ "$printed" -lt "$next" ] && [ -n "${done_[printed]:-}" ]; do
             cat "$par_tmp/$printed.out"
+            [ ! -f "$par_tmp/$printed.lost" ] || cat "$par_tmp/$printed.lost"
             read -r status secs <"$par_tmp/$printed.rc"
             record_step "${names[$printed]}" "$status" "$secs"
             echo
@@ -712,7 +731,7 @@ classify() {
         scripts/plugin-scaffold.sh)
             printf 'matrix\tthe scaffold harness itself\n'
             printf 'slices\tthe scaffold harness itself\n' ;;
-        scripts/plugin-check.sh | scripts/sync-plugin-llm.sh | scripts/check-ess-ids.py | .githooks/pre-commit | .github/workflows/maven.yml)
+        scripts/plugin-check.sh | scripts/sync-plugin-llm.sh | scripts/check-ess-ids.py | scripts/prepare-release.py | .githooks/pre-commit | .github/workflows/maven.yml)
             printf 'quick\tdefines or runs a plugin-docs step\n' ;;
         .claude-plugin/*)
             printf 'quick\tthe marketplace manifest (claude plugin validate . before a release)\n' ;;

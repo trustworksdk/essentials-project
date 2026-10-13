@@ -60,6 +60,10 @@ jobs:
       - name: ESS id catalogue (LLM/LLM-traps.md)
         run: scripts/plugin-check.sh step ess-ids --base HEAD^1
 
+      # The release-notes conversion and reset skeleton prepare-release.py writes; nothing else exercises it between releases.
+      - name: prepare-release self-test
+        run: scripts/plugin-check.sh step prepare-release
+
       # Claude Code updates an installed plugin only when plugin.json's version string changes, so a plugin change
       # without a new version never reaches a user. An LLM/ edit counts: it regenerates references/llm/.
       - name: Plugin version moves with the plugin

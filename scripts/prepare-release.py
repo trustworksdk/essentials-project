@@ -44,7 +44,7 @@ What `prepare-release.py VERSION` does, in order
  4. plugin.json `version` and the essentials.version pin in stack-pins.md become VERSION.
  5. CHANGELOG.md: an unreleased top section is renamed `## VERSION — targets Essentials VERSION`; a
     released one gets a new section above it. Unreleased means its version differs from plugin.json at
-    origin/main; without that ref, say which with --plugin-section rename|new.
+    origin/main, which is fetched first; when the fetch fails, say which with --plugin-section rename|new.
  6. Writes the migration notes skeleton essentials-plugin/references/stack/migrations/<prev m.m>-to-<m.m>.json
     citing the new notes, with a `_todo` key `--check` rejects until the skill has filled the steps.
  7. Moves the tests/migration-plan/already-there fixture to VERSION (it stands for a project on the pin),
@@ -58,6 +58,7 @@ Usage
 -----
     scripts/prepare-release.py 0.60.1 [--plugin-section rename|new]
     scripts/prepare-release.py --check 0.60.1
+    scripts/prepare-release.py --self-test
 
 Exit codes: 0 done / consistent · 1 --check found a problem, or a regenerator failed · 2 could not run.
 Standard library only; Python 3.11+. Run from anywhere inside the repository.
@@ -67,6 +68,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -166,6 +168,32 @@ def pin() -> str | None:
 def origin_plugin_version() -> str | None:
     text = git("show", f"origin/main:{PLUGIN_JSON.as_posix()}", check=False)
     return json.loads(text).get("version") if text else None
+
+
+def fetch_origin_main() -> None:
+    """Brings origin/main up to date before the CHANGELOG decision reads plugin.json there. A stale ref (a plugin
+    release landed since the last fetch) makes the released top section look unreleased, and `rename` would then
+    rewrite a published heading that `--check` cannot tell from a right one."""
+    try:
+        r = subprocess.run(["git", "fetch", "--quiet", "origin", "main"], cwd=ROOT, capture_output=True, text=True,
+                           timeout=60, env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})
+        error = ((r.stderr.strip().splitlines() or [f"exit {r.returncode}"])[0]) if r.returncode != 0 else ""
+    except subprocess.TimeoutExpired:
+        error = "timed out after 60 s"
+    if error:
+        raise UsageError(f"git fetch origin main failed ({error}); whether the CHANGELOG's top section was released "
+                         "is read from origin/main, so it must be current: fetch it, or pass --plugin-section rename|new")
+
+
+def plugin_section_for(top: str, v: str, released: str | None) -> str:
+    """done: the top section already is v · new: it is the release origin/main ships, so v goes above it · rename: it
+    was never released, so it becomes v."""
+    if top == v:
+        return "done"
+    if released is None:
+        raise UsageError("origin/main is not available to tell whether the CHANGELOG's top section "
+                         f"({top}) was released; pass --plugin-section rename|new")
+    return "new" if top == released else "rename"
 
 
 # ---- markdown structure -----------------------------------------------------------------------------------------
@@ -315,8 +343,8 @@ def blurb(prev: str) -> str:
             f"+{short(added)}/−{short(deleted)} lines._")
 
 
-def convert(next_text: str, prev: str, v: str) -> tuple[str, str]:
-    """(release notes, reset NEXT_VERSION_RELEASE.md)."""
+def convert(next_text: str, prev: str, v: str, covers: str) -> tuple[str, str]:
+    """(release notes, reset NEXT_VERSION_RELEASE.md); `covers` is the "Covers everything since" line (blurb)."""
     head, sections = parse_next(next_text)
     so_far = next((p for p in paragraphs(head) if p[0].startswith("**So far:**")), None)
 
@@ -331,7 +359,7 @@ def convert(next_text: str, prev: str, v: str) -> tuple[str, str]:
         kept.append((s.title, [p for p in s.intro if not p[0].startswith("None so far")], subs))
 
     draft = [re.sub(r"^\*\*So far:\*\*\s*", "", so_far[0])] + so_far[1:] if so_far else []
-    notes = [f"# Essentials {v} — Release Notes", "", blurb(prev), "",
+    notes = [f"# Essentials {v} — Release Notes", "", covers, "",
              f"{TODO} replace this comment and the draft below with the release's intro paragraph: what it is, "
              "what a user must do, whether the persisted format changes -->", ""]
     notes += draft + ["", "---", ""]
@@ -412,15 +440,13 @@ def prepare(v: str, plugin_section: str | None) -> int:
     top = CHANGELOG_HEADING.search(read(CHANGELOG))
     if not top:
         raise UsageError(f"{CHANGELOG}: no `## <version> — targets Essentials <pin>` heading")
+    if plugin_section is None and top.group(1) != v:
+        fetch_origin_main()
     released = origin_plugin_version()
     if plugin_section is None:
-        if top.group(1) == v:
-            plugin_section = "done"
-        elif released is None:
-            raise UsageError("origin/main is not available to tell whether the CHANGELOG's top section "
-                             f"({top.group(1)}) was released; pass --plugin-section rename|new")
-        else:
-            plugin_section = "new" if top.group(1) == released else "rename"
+        plugin_section = plugin_section_for(top.group(1), v, released)
+        origin = git("log", "-1", "--format=%h, %cs", "origin/main", check=False).strip() or "absent"
+        print(f"CHANGELOG: top section {top.group(1)}, origin/main ({origin}) ships plugin {released}: {plugin_section}")
 
     changed: list[str] = []
     notes_path = Path(f"docs/RELEASE-NOTES-{v}.md")
@@ -434,7 +460,7 @@ def prepare(v: str, plugin_section: str | None) -> int:
         next_text = read(NEXT)
         if marker != v:
             next_text = version_re(marker).sub(v, next_text)
-        notes, reset = convert(next_text, prev, v)
+        notes, reset = convert(next_text, prev, v, blurb(prev))
         write(notes_path, notes, changed)
         write(NEXT, reset, changed)
 
@@ -622,13 +648,307 @@ def check(v: str) -> int:
     return 1 if problems else 0
 
 
+# ---- --self-test ------------------------------------------------------------------------------------------------
+# convert() runs once per release and rewrites the release's source of truth, so its rules are pinned here rather than
+# discovered on release day: a fixture whose expected notes and reset file are spelled out in full, the version
+# matcher behind the marker rewrite, the CHANGELOG decision, and the real docs/NEXT_VERSION_RELEASE.md converted in
+# memory (nothing is written, nothing is fetched). The fixtures use 9.8.x, a version no release will have, so
+# --check's sweep for a stray unreleased-behaviour marker never finds this file.
+
+SELF_TEST_NEXT = """\
+# Essentials — Next Release (unreleased)
+
+_Working draft. Collects every change since the last release tag, **`9.8.0`**, that a user would notice._
+
+**So far:** one breaking change (§1.1)
+and a bug fix (§3).
+
+---
+
+## Table of contents
+
+1. [Breaking — what you MUST apply](#1-breaking--what-you-must-apply)
+2. [New features](#2-new-features)
+
+---
+
+## 1. Breaking — what you MUST apply
+
+None so far.
+
+### 1.1 ⚠️ Silent behaviour changes
+
+The queue redelivers, as 9.8.1 promised:
+
+```text
+## not a heading
+```
+
+---
+
+## 2. New features
+
+None so far.
+
+---
+
+## 3. Bug fixes
+
+| Area | Fix | Commit |
+|---|---|---|
+| Queues | No longer dead-letters | `abc1234` |
+
+---
+
+## 4. The `essentials` Claude Code plugin
+
+9.8.0 shipped plugin `9.8.0`. Plugin releases that follow it are listed here, newest first;
+the full entries are in [`essentials-plugin/CHANGELOG.md`](../essentials-plugin/CHANGELOG.md).
+
+**`9.8.0-1`**
+
+- The Slice Atlas.
+
+---
+
+## 5. Examples
+
+Not published; listed because they are the reference for how to use the framework.
+
+---
+
+## 6. Documentation
+
+| Doc | Change |
+|---|---|
+"""
+
+# Covers: "None so far" intro dropped under content (§1); a fenced `## ` line that does not split; the marker 9.8.1
+# rewritten in content; an empty section dropped with its TOC line (§2); a table kept with its rows, reset to header
+# and separator (§3); the plugin section kept, its skeleton regenerated for the new version (§4); Examples, standing
+# text only, dropped from the notes and kept in the reset (§5); a header-only table section dropped (§6); the
+# two-line "So far" paragraph as the draft intro.
+SELF_TEST_NOTES = """\
+# Essentials 9.8.2 — Release Notes
+
+_Covers everything since `9.8.0`._
+
+<!-- prepare-release: replace this comment and the draft below with the release's intro paragraph: what it is, what a user must do, whether the persisted format changes -->
+
+one breaking change (§1.1)
+and a bug fix (§3).
+
+---
+
+## Table of contents
+
+1. [Breaking — what you MUST apply](#1-breaking--what-you-must-apply)
+   - [1.1 ⚠️ Silent behaviour changes](#11-️-silent-behaviour-changes)
+3. [Bug fixes](#3-bug-fixes)
+4. [The `essentials` Claude Code plugin](#4-the-essentials-claude-code-plugin)
+
+---
+
+## 1. Breaking — what you MUST apply
+
+### 1.1 ⚠️ Silent behaviour changes
+
+The queue redelivers, as 9.8.2 promised:
+
+```text
+## not a heading
+```
+
+---
+
+## 3. Bug fixes
+
+| Area | Fix | Commit |
+|---|---|---|
+| Queues | No longer dead-letters | `abc1234` |
+
+---
+
+## 4. The `essentials` Claude Code plugin
+
+9.8.0 shipped plugin `9.8.0`. Plugin releases that follow it are listed here, newest first;
+the full entries are in [`essentials-plugin/CHANGELOG.md`](../essentials-plugin/CHANGELOG.md).
+
+**`9.8.0-1`**
+
+- The Slice Atlas.
+"""
+
+SELF_TEST_RESET = """\
+# Essentials — Next Release (unreleased)
+
+_Working draft. Collects every change since the last release tag, **`9.8.2`**, that a user would notice._
+
+**So far:** nothing yet.
+
+---
+
+## Table of contents
+
+1. [Breaking — what you MUST apply](#1-breaking--what-you-must-apply)
+   - [1.1 ⚠️ Silent behaviour changes](#11-️-silent-behaviour-changes)
+2. [New features](#2-new-features)
+3. [Bug fixes](#3-bug-fixes)
+4. [The `essentials` Claude Code plugin](#4-the-essentials-claude-code-plugin)
+5. [Examples](#5-examples)
+6. [Documentation](#6-documentation)
+
+---
+
+## 1. Breaking — what you MUST apply
+
+None so far.
+
+### 1.1 ⚠️ Silent behaviour changes
+
+None so far.
+
+---
+
+## 2. New features
+
+None so far.
+
+---
+
+## 3. Bug fixes
+
+| Area | Fix | Commit |
+|---|---|---|
+
+---
+
+## 4. The `essentials` Claude Code plugin
+
+9.8.2 shipped plugin `9.8.2`. Plugin releases that follow it are listed here, newest first;
+the full entries are in [`essentials-plugin/CHANGELOG.md`](../essentials-plugin/CHANGELOG.md).
+
+---
+
+## 5. Examples
+
+Not published; listed because they are the reference for how to use the framework.
+
+---
+
+## 6. Documentation
+
+| Doc | Change |
+|---|---|
+"""
+
+# (version, text, whole-version match expected)
+VERSION_RE_CASES = [
+    ("9.8.2", "(9.8.2)", True),
+    ("9.8.2", "since 9.8.2.", True),
+    ("9.8.2", "`9.8.2`", True),
+    ("9.8.2", "19.8.2", False),
+    ("9.8.2", "9.8.21", False),
+    ("9.8.2", "9.8.2.1", False),
+    ("9.8.2", "9.8.2-3", False),
+]
+
+# (CHANGELOG top section, release, plugin version on origin/main, decision; None = UsageError)
+PLUGIN_SECTION_CASES = [
+    ("9.8.2", "9.8.2", "9.8.0-7", "done"),
+    ("9.8.0-7", "9.8.2", "9.8.0-7", "new"),
+    ("9.8.0-8", "9.8.2", "9.8.0-7", "rename"),
+    ("9.8.0-8", "9.8.2", None, None),
+]
+
+
+def self_test_real_next(text: str) -> list[str]:
+    """Problems converting the real working draft: lost content, or a reset that is not a fixed point."""
+    m = re.search(r"\*\*`(\d+\.\d+\.\d+)`\*\*", text)
+    if not m:
+        return [f"{NEXT}: no **`X.Y.Z`** last release tag"]
+    prev = m.group(1)
+    v = next_patch(prev)
+    problems: list[str] = []
+    notes, reset = convert(text, prev, v, "_Covers_")
+    have = set(notes.splitlines())
+    _head, sections = parse_next(text)
+    for s in sections:
+        skel = s.skeleton_intro(prev)
+        paras = [p for p in s.intro if not is_placeholder(p, skel)]
+        paras += [p for _, ps in s.subs for p in ps if not p[0].startswith("None so far")]
+        lost = [line for p in paras for line in p if line not in have]
+        if lost:
+            problems.append(f"section `{s.title}`: {len(lost)} line(s) missing from the notes, first: {lost[0][:80]}")
+    reset_titles = {t for _lvl, t in headings(reset)}
+    for s in sections:
+        for t in [s.title] + [st for st, _ in s.subs]:
+            if t not in reset_titles:
+                problems.append(f"reset lost the heading `{t}`")
+    v2 = next_patch(v)
+    notes2, reset2 = convert(reset, v, v2, "_Covers_")
+    kept = [t for lvl, t in headings(notes2) if lvl == 2 and t.lower() != "table of contents"]
+    if kept:
+        problems.append(f"converting the reset file keeps sections {kept}; a reset section must read as empty")
+    if reset2 != version_re(v).sub(v2, reset):
+        problems.append("resetting the reset file changes more than the version: the skeleton is not stable")
+    return problems
+
+
+def self_test() -> int:
+    failures = 0
+
+    def report(name: str, problems: list[str]) -> None:
+        nonlocal failures
+        if not problems:
+            print(f"ok   {name}")
+            return
+        failures += 1
+        print(f"FAIL {name}")
+        for problem in problems:
+            print(f"     {problem}")
+
+    def diff(name: str, got: str, want: str) -> list[str]:
+        if got == want:
+            return []
+        got_lines, want_lines = got.splitlines(), want.splitlines()
+        for i, (g, w) in enumerate(zip(got_lines, want_lines), 1):
+            if g != w:
+                return [f"{name} line {i}: got {g!r}, want {w!r}"]
+        return [f"{name}: {len(got_lines)} lines, want {len(want_lines)}"]
+
+    marker, prev, v = "9.8.1", "9.8.0", "9.8.2"
+    notes, reset = convert(version_re(marker).sub(v, SELF_TEST_NEXT), prev, v, f"_Covers everything since `{prev}`._")
+    report("convert: release notes", diff("notes", notes, SELF_TEST_NOTES))
+    report("convert: reset NEXT_VERSION_RELEASE.md", diff("reset", reset, SELF_TEST_RESET))
+    for ver, text, want in VERSION_RE_CASES:
+        got = bool(version_re(ver).search(text))
+        report(f"version_re({ver}) in {text!r}: {'matches' if want else 'no match'}",
+               [] if got == want else [f"got {'a match' if got else 'no match'}"])
+    for top, ver, released, want in PLUGIN_SECTION_CASES:
+        try:
+            got = plugin_section_for(top, ver, released)
+        except UsageError:
+            got = None
+        report(f"CHANGELOG top {top}, release {ver}, origin/main {released}: {want or 'usage error'}",
+               [] if got == want else [f"got {got or 'usage error'}"])
+    report(f"{NEXT} converts without losing content, and its reset is stable", self_test_real_next(read(NEXT)))
+    print(f"prepare-release --self-test: {failures} failure(s)")
+    return 1 if failures else 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Mechanical release preparation; see the module docstring.")
-    ap.add_argument("version")
+    ap.add_argument("version", nargs="?")
     ap.add_argument("--check", action="store_true", help="change nothing; exit 1 on anything inconsistent")
     ap.add_argument("--plugin-section", choices=("rename", "new"),
                     help="rename the CHANGELOG's top section, or add a new one (default: decided from origin/main)")
+    ap.add_argument("--self-test", action="store_true", help="run the built-in cases and exit; changes nothing")
     args = ap.parse_args()
+    if args.self_test:
+        return self_test()
+    if args.version is None:
+        ap.error("the version is required")
     try:
         vtuple(args.version)
         return check(args.version) if args.check else prepare(args.version, args.plugin_section)
