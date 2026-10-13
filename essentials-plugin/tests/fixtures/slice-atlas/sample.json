@@ -917,7 +917,7 @@
    ],
    "contexts": [
     {
-     "h": 662,
+     "h": 606,
      "id": "billing",
      "w": 828,
      "x": 0,
@@ -1148,6 +1148,14 @@
     {
      "h": 64,
      "segment": "checkout@billing",
+     "slice": "billing.charge_on_order_placed",
+     "w": 208,
+     "x": 130,
+     "y": 498
+    },
+    {
+     "h": 64,
+     "segment": "checkout@billing",
      "slice": "billing.charge_customer",
      "w": 208,
      "x": 350,
@@ -1215,6 +1223,14 @@
      "slice": "orders.refund",
      "w": 208,
      "x": 1078,
+     "y": 2256
+    },
+    {
+     "h": 64,
+     "segment": "~unattached:orders@orders",
+     "slice": "orders.legacy_export",
+     "w": 208,
+     "x": 1298,
      "y": 2256
     }
    ],
@@ -1284,7 +1300,7 @@
        "x": 564
       }
      ],
-     "h": 586,
+     "h": 530,
      "id": "checkout@billing",
      "lanes": [
       {

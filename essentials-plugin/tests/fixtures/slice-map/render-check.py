@@ -669,7 +669,9 @@ def check_issue_selected(rep, root, state, iss, label):
         rep.check(got == target["id"], f"{label}: card title {got!r}, expected {target['id']!r}")
 
 
-def check_atlas_page(ap: AtlasPage, data, ids):
+def check_atlas_page(ap: AtlasPage, data, ids, folded=False):
+    """folded: the page must hold a new per-slice id folded into a context issue, so the diff-issues
+    check of its per-slice wording cannot pass by finding nothing to check."""
     rep = ap.rep
     meta = data.get("meta") or {}
     issues = arr(data.get("issues"))
@@ -751,6 +753,7 @@ def check_atlas_page(ap: AtlasPage, data, ids):
     # folded into a context issue is named by its slice, never by the context's own text.
     d_issues = (data.get("diff") or {}).get("issues") or {}
     new_ids = arr(d_issues.get("new"))
+    folded_checked = 0
     if "diff" in ids and new_ids and ((data.get("diff") or {}).get("before") or {}).get("issuesKnown") is not False:
         root, _ = ap.load("diff issues", "lens=diff&diff.list=1")
         if root is not None:
@@ -772,6 +775,7 @@ def check_atlas_page(ap: AtlasPage, data, ids):
                     row = next((li for li in rows if any(n.tag == "span" and (n.all_text() + " ").startswith(fid + " ")
                                                          for n in li.children)), None)
                     label = next((n.all_text() for n in row.children if n.tag == "button"), "") if row else ""
+                    folded_checked += 1
                     if ctx_issue.get("memberText"):
                         want = f"{sid} {ctx_issue['memberText']}"
                         rep.check(row is not None and label == want,
@@ -780,6 +784,9 @@ def check_atlas_page(ap: AtlasPage, data, ids):
                         rep.check(row is not None and label.startswith(sid + " ") and ctx_issue["text"] not in label,
                                   f"diff issues: folded {fid!r} reads {label!r} — expected its slice and per-slice "
                                   f"wording, not the context issue's text")
+    if folded:
+        rep.check(folded_checked > 0, "diff issues: no new id is folded into a context issue — the check of its "
+                  "per-slice wording ran on nothing")
 
     # A stale id is a toast, never a failure.
     root, _ = ap.load("stale focus", "focus=" + STALE_ID)
@@ -804,8 +811,8 @@ def run_atlas(chrome, template: Path, work: Path, tmp: Path, keep: bool):
         rep.check(not root.find(lambda n: "lens-root" in n.classes), "unrendered: a lens mounted")
     failed += report(rep)
 
-    for name, build in (("atlas-fixture", lambda: build_fixture_page(template, tmp)),
-                        ("atlas-sample", lambda: build_sample_page(template))):
+    for name, build, folded in (("atlas-fixture", lambda: build_fixture_page(template, tmp), False),
+                                ("atlas-sample", lambda: build_sample_page(template), True)):
         text = build()
         data = atlas_data(text)
         page, click_page = work / f"{name}.html", work / f"{name}.click.html"
@@ -813,7 +820,7 @@ def run_atlas(chrome, template: Path, work: Path, tmp: Path, keep: bool):
         pick = issue_to_click(data)
         click_page.write_text(with_probe(text, pick["id"] if pick else None), encoding="utf-8")
         rep = Report(name)
-        check_atlas_page(AtlasPage(rep, chrome, page, click_page, tmp, work if keep else None), data, ids)
+        check_atlas_page(AtlasPage(rep, chrome, page, click_page, tmp, work if keep else None), data, ids, folded)
         failed += report(rep)
     return failed
 

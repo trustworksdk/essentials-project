@@ -602,6 +602,22 @@ class FoldedDiff(unittest.TestCase):
         self.assertEqual(fixed[0]["text"], slice_atlas.AGGREGATED["flow-undeclared"]["slice"])
         self.assertEqual(fixed[0]["fix"], {"route": "author", "bc": "orders"})
 
+    def test_atlas_sample_folds_only_what_aggregate_folds(self):
+        # tests/fixtures/slice-atlas/sample.json is hand-written, and render-check reads its folded context
+        # issue to check the Diff lens's per-slice wording: a fold aggregate() would not make (or would make
+        # differently) tests the page against data no map can hold.
+        d = json.loads((PLUGIN / "tests" / "fixtures" / "slice-atlas" / "sample.json").read_text(encoding="utf-8"))
+        rows = d["slices"]
+        again = slice_atlas.aggregate(list(slice_atlas.unfold(d["issues"], rows).values()), rows)
+
+        def folds(issues):
+            return sorted((i["id"], i.get("members"), i["text"], i.get("memberText")) for i in issues
+                          if i["target"]["kind"] == "context" and i["code"] in slice_atlas.AGGREGATED_CODES)
+
+        self.assertTrue(folds(d["issues"]), "the sample holds no folded context issue for render-check to read")
+        self.assertEqual(folds(again), folds(d["issues"]))
+        self.assertEqual(sorted(i["id"] for i in again), sorted(i["id"] for i in d["issues"]))
+
     def test_a_before_map_without_members_unfolds_from_its_rows(self):
         before, after = self.side(2, 4), self.side(2, 5)  # both folded; before written by older code
         before["issues"][0].pop("members")
