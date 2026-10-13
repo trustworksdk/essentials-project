@@ -23,6 +23,7 @@ import org.slf4j.*;
 
 import java.util.*;
 
+import static dk.trustworks.essentials.shared.Exceptions.rethrowIfCriticalError;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 import static dk.trustworks.essentials.shared.MessageFormatter.msg;
 
@@ -91,23 +92,34 @@ final class EventStoreManagedUnitOfWork extends GenericHandleAwareUnitOfWorkFact
             try {
                 log.trace("AfterCommit PersistedEvents for {} with {} persisted events", callback.getClass().getName(), afterCommitEventsPersisted.size());
                 callback.afterCommit(this, afterCommitEventsPersisted);
-            } catch (RuntimeException e) {
+            } catch (Throwable e) {
+                // The transaction has committed: one failing callback must not keep the events from the others
+                rethrowIfCriticalError(e);
                 log.error(msg("Failed {} failed during afterCommit PersistedEvents", callback.getClass().getName()), e);
             }
         }
         afterCommitEventsPersisted.clear();
     }
 
+    /**
+     * The events persisted in this unit of work were rolled back, including those a completed {@code beforeCommit}
+     * round had already moved on to the after-commit list, so they are reported as rolled back and never as committed
+     */
     @Override
     protected void afterRollback(Throwable cause) {
+        var rolledBackEvents = new ArrayList<PersistedEvent>(afterCommitEventsPersisted.size() + beforeCommitEventsPersisted.size());
+        rolledBackEvents.addAll(afterCommitEventsPersisted);
+        rolledBackEvents.addAll(beforeCommitEventsPersisted);
+        afterCommitEventsPersisted.clear();
+        beforeCommitEventsPersisted.clear();
         for (PersistedEventsCommitLifecycleCallback callback : lifecycleCallbacks) {
             try {
-                log.trace("AfterCommit PersistedEvents for {} with {} persisted events", callback.getClass().getName(), afterCommitEventsPersisted.size());
-                callback.afterCommit(this, afterCommitEventsPersisted);
-            } catch (RuntimeException e) {
-                log.error(msg("Failed {} failed during afterCommit PersistedEvents", callback.getClass().getName()), e);
+                log.trace("AfterRollback PersistedEvents for {} with {} persisted events", callback.getClass().getName(), rolledBackEvents.size());
+                callback.afterRollback(this, rolledBackEvents);
+            } catch (Throwable e) {
+                rethrowIfCriticalError(e);
+                log.error(msg("Failed {} failed during afterRollback PersistedEvents", callback.getClass().getName()), e);
             }
         }
-        afterCommitEventsPersisted.clear();
     }
 }
