@@ -132,6 +132,13 @@ targets, with a `-N` suffix for plugin-only releases.
   service-entity trap descriptions are tightened to match. The review service-entity case now expects the two
   checks stack-lint itself reports as not run on that fixture (`s1-boot-line`, the frontend checks) under "Not run",
   and tolerates `setShipped` named inside the `setCancelled` row, where the new guard makes it a second bypass.
+- **Docs follow the durable-queue changes for Essentials 0.60.1** (`LLM-postgresql-queue.md`,
+  `LLM-postgresql-queue-shard-owned.md`). A handled message is acknowledged inside the handler's transaction, and a
+  failing acknowledgement is classified like a handler exception; a builder-made `PostgresqlDurableQueues` is wired
+  like the starter, with its own change listener, and is `AutoCloseable`; the polling-optimizer defaults and due-time
+  polling; stale statistics on a draining queue table; the ordered-claim statement switch and its threshold;
+  handlers that hold a connection. Shard-owned: attempt counts survive a change of owner, a requested redelivery is
+  not an attempt, and a WARN names `essentials.shard-owned-queue.instance-id` when two live processes share an id.
 - **Docs: supported PostgreSQL is 15+.** `LLM.md` states the floor (the majors the PostgreSQL community still patches)
   and the fenced-lock and shard-owned docs point at it instead of the old 9.5+ and 13+.
 
