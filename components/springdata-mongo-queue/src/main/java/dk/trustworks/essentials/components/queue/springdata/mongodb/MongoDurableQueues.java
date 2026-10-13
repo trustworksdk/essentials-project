@@ -41,6 +41,8 @@ import org.springframework.data.mongodb.core.index.Index;
 import org.springframework.data.mongodb.core.mapping.Document;
 import org.springframework.data.mongodb.core.messaging.*;
 import org.springframework.data.mongodb.core.query.*;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.*;
 import java.time.temporal.ChronoUnit;
@@ -505,6 +507,9 @@ public final class MongoDurableQueues implements DurableQueues {
         var durableQueuedMessage = createDurableQueuedMessage(queueName, isDeadLetterMessage, addedTimestamp, nextDeliveryTimestamp, message);
 
         mongoTemplate.save(durableQueuedMessage, this.sharedQueueCollectionName);
+        if (!isDeadLetterMessage) {
+            signalLocalConsumerWhenDue(queueName, nextDeliveryTimestamp);
+        }
         log.debug("[{}:{}] Queued {}{}message{} with nextDeliveryTimestamp {}",
                   queueName,
                   queueEntryId,
@@ -601,6 +606,7 @@ public final class MongoDurableQueues implements DurableQueues {
                                                                                        queueName);
                                                    }
 
+                                                   signalLocalConsumerWhenDue(queueName, nextDeliveryTimestamp);
                                                    log.debug("[{}] Queued {} Messages with nextDeliveryTimestamp {} and entry-id's: {}",
                                                              queueName,
                                                              payloads.size(),
@@ -680,6 +686,7 @@ public final class MongoDurableQueues implements DurableQueues {
                                                                  queueEntryId,
                                                                  nextDeliveryTimestamp,
                                                                  updateResult);
+                                                       signalLocalConsumerWhenDue(updateResult.queueName, nextDeliveryTimestamp);
                                                        return Optional.of((QueuedMessage) updateResult);
                                                    } else {
                                                        log.error("Failed to Mark Message with id '{}' for Retry", queueEntryId);
@@ -787,6 +794,7 @@ public final class MongoDurableQueues implements DurableQueues {
                                                                  isOrderedMessage ? "(key: " + updateResult.getKey() + ", order: " + updateResult.getKeyOrder() + ")" : "",
                                                                  nextDeliveryTimestamp,
                                                                  updateResult);
+                                                       signalLocalConsumerWhenDue(updateResult.queueName, nextDeliveryTimestamp);
                                                        return Optional.of((QueuedMessage) updateResult);
                                                    } else {
                                                        log.error("Failed to resurrect Dead Letter Message with id '{}'", queueEntryId);
@@ -1042,14 +1050,17 @@ public final class MongoDurableQueues implements DurableQueues {
                                          messageWithTheHighestNextDeliveryTimestamp.getKeyOrder(),
                                          messageWithTheHighestNextDeliveryTimestamp.getNextDeliveryTimestamp());
                         log.debug("** [{}] {}. Message entry after update: {}", updateResult.getQueueName(), reason, updateResult);
+                        signalLocalConsumerWhenDue(queueName, nextDeliveryTimestamp.toInstant());
                     } else {
                         log.error("** Failed to update nextDeliveryTimestamp for message with id '{}'", nextMessageToDeliver.getId());
                     }
 
-                    var updateNextDeliveryTimestamp = new Update().set("nextDeliveryTimestamp", nextDeliveryTimestamp.plus(100, ChronoUnit.MILLIS).toInstant());
+                    var higherOrderNextDeliveryTimestamp = nextDeliveryTimestamp.plus(100, ChronoUnit.MILLIS).toInstant();
+                    var updateNextDeliveryTimestamp      = new Update().set("nextDeliveryTimestamp", higherOrderNextDeliveryTimestamp);
 
                     var updatedResult = mongoTemplate.updateMulti(findOrderedMessagesWithTheSameKeyAndAHigherOrder, updateNextDeliveryTimestamp, this.sharedQueueCollectionName);
                     if (updatedResult.getModifiedCount() > 0) {
+                        signalLocalConsumerWhenDue(queueName, higherOrderNextDeliveryTimestamp);
                         log.debug("** [{}] Updated {} messages nextDeliveryTimestamp to '{}', because Message '{}' with same key '{}' and lower order '{}' has nextDeliveryTimestamp '{}'",
                                   queueName,
                                   updatedResult.getModifiedCount(),
@@ -1311,7 +1322,7 @@ public final class MongoDurableQueues implements DurableQueues {
                                                                                                                              .setDurableQueues(this)
                                                                                                                              .setRemoveDurableQueueConsumer(this::removeQueueConsumer)
                                                                                                                              .setPollingIntervalMs(operation.getPollingInterval().toMillis())
-                                                                                                                             .setQueuePollingOptimizer(createQueuePollingOptimizerFor(operation))
+                                                                                                                             .setQueuePollingOptimizer(queuePollingOptimizerFactory.apply(operation))
                                                                                                                              .setInterceptors(interceptors)
                                                                                                                              .build())).proceed();
             if (started) {
@@ -1338,6 +1349,44 @@ public final class MongoDurableQueues implements DurableQueues {
         return new SimpleQueuePollingOptimizer(operation,
                                                (long) (pollingIntervalMs * 0.5d),
                                                pollingIntervalMs * 20);
+    }
+
+    /**
+     * Tell this node's consumer of {@code queueName} when a message this node scheduled for later becomes deliverable -
+     * a delayed enqueue, a retry, a delayed resurrection - so a consumer that had backed off while idle polls then,
+     * rather than up to its backoff cap later. The change stream does not cover it: it reports the write, which resets
+     * the backoff before the message is due, and the next empty poll backs off again.
+     * <p>
+     * Inside a Spring transaction - which a {@link SpringMongoTransactionAwareUnitOfWork} is - the consumer is told once
+     * it commits, as a message that is rolled back never comes due. Outside one the write has already committed.
+     */
+    private void signalLocalConsumerWhenDue(QueueName queueName, Instant dueAt) {
+        if (dueAt == null || !dueAt.isAfter(Instant.now())) {
+            // Deliverable now - the change stream's messageAdded resets the backoff
+            return;
+        }
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    tellLocalConsumerWhenDue(queueName, dueAt);
+                }
+            });
+        } else {
+            tellLocalConsumerWhenDue(queueName, dueAt);
+        }
+    }
+
+    private void tellLocalConsumerWhenDue(QueueName queueName, Instant dueAt) {
+        var consumer = durableQueueConsumers.get(queueName);
+        if (consumer == null) {
+            return;
+        }
+        try {
+            consumer.getQueuePollingOptimizer().messageScheduledFor(dueAt);
+        } catch (Exception e) {
+            log.debug("[{}] Could not tell the local consumer when a message becomes deliverable", queueName, e);
+        }
     }
 
     final void removeQueueConsumer(DurableQueueConsumer durableQueueConsumer) {

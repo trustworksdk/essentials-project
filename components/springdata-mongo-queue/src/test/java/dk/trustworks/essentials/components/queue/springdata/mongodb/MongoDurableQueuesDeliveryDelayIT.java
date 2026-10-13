@@ -46,7 +46,8 @@ import static org.assertj.core.api.Assertions.*;
  * Until 0.60 a retry never stored its due time, so every Mongo retry was redelivered at once whatever the
  * {@link RedeliveryPolicy} said. And nothing told the consumer's {@link QueuePollingOptimizer} when a delayed message
  * came due, so on a queue that had backed off it waited up to the backoff cap. The consumers here run with a 10 s
- * backoff that a single empty poll reaches, so a message delivered "near its due time" was signalled.
+ * backoff that a single empty poll reaches, so a message delivered "near its due time" was signalled. That backoff
+ * comes from the builder's {@code setQueuePollingOptimizerFactory}, which until 0.60 was ignored.
  */
 @Testcontainers
 @DataMongoTest
@@ -165,5 +166,68 @@ class MongoDurableQueuesDeliveryDelayIT {
         assertThat(Duration.between(firstDelivery, deliveries.get(1))).isGreaterThanOrEqualTo(DELAY.minusMillis(5));
         Awaitility.waitAtMost(Duration.ofSeconds(10))
                   .untilAsserted(() -> assertThat(durableQueues.getTotalMessagesQueuedFor(QUEUE)).isZero());
+    }
+
+    @Test
+    void a_retry_on_a_backed_off_queue_is_delivered_near_its_due_time_not_a_backoff_cap_later() {
+        unitOfWorkFactory.usingUnitOfWork(() -> durableQueues.queueMessage(QUEUE, Message.of("payload")));
+        consume(RedeliveryPolicy.fixedBackoff(DELAY, 3), message -> {
+            if (deliveries.size() == 1) {
+                throw new IllegalStateException("Thrown on purpose - first delivery");
+            }
+        });
+
+        Awaitility.waitAtMost(Duration.ofSeconds(15))
+                  .untilAsserted(() -> assertThat(deliveries).hasSize(2));
+        assertThat(Duration.between(deliveries.get(0), deliveries.get(1))).isBetween(DELAY.minusMillis(5), DELAY.plus(SLACK));
+        assertThat(scheduledFor).hasSize(1);
+    }
+
+    @Test
+    void a_delayed_enqueue_is_delivered_near_its_due_time_and_signalled_only_once_its_unit_of_work_commits() {
+        consumeSucceeding();
+
+        var enqueuedAt = Instant.now();
+        unitOfWorkFactory.usingUnitOfWork(() -> {
+            durableQueues.queueMessage(QUEUE, Message.of("payload"), DELAY);
+            assertThat(scheduledFor).isEmpty();
+        });
+        assertThat(scheduledFor).singleElement()
+                                .satisfies(dueAt -> assertThat(dueAt).isBetween(enqueuedAt.plus(DELAY), Instant.now().plus(DELAY)));
+
+        Awaitility.waitAtMost(Duration.ofSeconds(15))
+                  .untilAsserted(() -> assertThat(deliveries).hasSize(1));
+        assertThat(Duration.between(enqueuedAt, deliveries.getFirst())).isBetween(DELAY.minusMillis(5), DELAY.plus(SLACK));
+    }
+
+    @Test
+    void a_delayed_enqueue_in_a_unit_of_work_that_rolls_back_is_not_signalled() {
+        consumeSucceeding();
+
+        assertThatThrownBy(() -> unitOfWorkFactory.usingUnitOfWork(() -> {
+            durableQueues.queueMessage(QUEUE, Message.of("payload"), DELAY);
+            throw new IllegalStateException("Thrown on purpose - roll back");
+        })).isNotNull();
+
+        assertThat(scheduledFor).isEmpty();
+        assertThat(durableQueues.getTotalMessagesQueuedFor(QUEUE)).isZero();
+    }
+
+    @Test
+    void a_delayed_resurrection_is_delivered_near_its_due_time() {
+        consumeSucceeding();
+        var deadLetterId = unitOfWorkFactory.withUnitOfWork(() -> durableQueues.queueMessageAsDeadLetterMessage(QUEUE,
+                                                                                                                Message.of("payload"),
+                                                                                                                new IllegalStateException("on purpose")));
+        // Let the consumer find nothing and back off
+        Awaitility.await().pollDelay(Duration.ofMillis(500)).until(() -> true);
+
+        var resurrectedAt = Instant.now();
+        assertThat(durableQueues.resurrectDeadLetterMessage(deadLetterId, DELAY)).isPresent();
+        assertThat(scheduledFor).hasSize(1);
+
+        Awaitility.waitAtMost(Duration.ofSeconds(15))
+                  .untilAsserted(() -> assertThat(deliveries).hasSize(1));
+        assertThat(Duration.between(resurrectedAt, deliveries.getFirst())).isBetween(DELAY.minusMillis(5), DELAY.plus(SLACK));
     }
 }
