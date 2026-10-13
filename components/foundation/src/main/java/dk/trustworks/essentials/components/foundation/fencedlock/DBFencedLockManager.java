@@ -29,7 +29,7 @@ import reactor.core.publisher.Mono;
 import java.time.*;
 import java.util.*;
 import java.util.concurrent.*;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.*;
 import java.util.concurrent.locks.ReentrantLock;
 
 import static dk.trustworks.essentials.shared.Exceptions.rethrowIfCriticalError;
@@ -604,17 +604,91 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
                 releaseLock(alreadyAcquiredLock);
             }
         }
-        return withUnitOfWork(uow -> {
-            var lock = lockStorage.lookupLockInDB(this, uow, lockName)
-                                  .orElseGet(() -> lockStorage.createUninitializedLock(this, lockName));
-            return resolveLock(uow, lock);
-        }, e -> {
-            log.debug("[{}] Failed to lookup lock '{}'", lockManagerInstanceId, lockName, e);
-            return Mono.empty();
-        });
+        // Held across the acquire, its commit and recording the outcome locally, so stop() - which releases and clears
+        // every locally recorded lock under the same lock - never runs in between
+        reentrantLock.lock();
+        try {
+            // Set as soon as the acquire statement has succeeded, so a failure of the UnitOfWork after it - its commit -
+            // is told apart from a failure to acquire
+            var acquiredInUnitOfWork = new AtomicReference<LOCK>();
+            var acquiredLock = withUnitOfWork(uow -> {
+                var lock = lockStorage.lookupLockInDB(this, uow, lockName)
+                                      .orElseGet(() -> lockStorage.createUninitializedLock(this, lockName));
+                var acquired = resolveLock(uow, lock);
+                acquiredInUnitOfWork.set(acquired);
+                return acquired;
+            }, e -> {
+                if (acquiredInUnitOfWork.get() == null) {
+                    log.debug("[{}] Failed to lookup lock '{}'", lockManagerInstanceId, lockName, e);
+                } else {
+                    log.debug("[{}] Failed to commit the acquiring of lock '{}' - checking whether it reached the DB", lockManagerInstanceId, lockName, e);
+                }
+                return null;
+            });
+            if (acquiredLock == null && acquiredInUnitOfWork.get() != null) {
+                acquiredLock = resolveAcquireWithUnknownCommitOutcome(acquiredInUnitOfWork.get());
+            }
+            if (acquiredLock == null) {
+                return Mono.empty();
+            }
+            // Only now that the acquire is known to be committed: recorded before the commit, a commit that then failed
+            // left a lock held locally that the DB never gave this instance - see resolveAcquireWithUnknownCommitOutcome
+            locksAcquiredByThisLockManager.put(acquiredLock.getName(), acquiredLock);
+            notify(new LockAcquired(acquiredLock, this));
+            return Mono.just(acquiredLock);
+        } finally {
+            reentrantLock.unlock();
+        }
     }
 
-    private Mono<LOCK> resolveLock(UOW uow, LOCK existingLock) {
+    /**
+     * The acquire statement for {@code attemptedLock} succeeded, but the {@link UnitOfWork} then failed - in practice its
+     * commit: the connection was lost, or (MongoDB, whose driver fails on a pending interrupt) the acquiring thread was
+     * interrupted, as when a shutdown cancels the async acquiring. Whether the acquire reached the DB is then unknown:
+     * <ul>
+     *     <li>if it did, the row is locked by this instance while nothing here knows it - never confirmed, never released,
+     *     blocking every other instance, and this one, until the lock timeout</li>
+     *     <li>if it did not, the lock must not be held locally: another instance may acquire the row with the very fence token
+     *     attempted here, and a local lock carrying it would be released as "lost" at the next confirmation - by lock name
+     *     and token, so releasing the other instance's lock</li>
+     * </ul>
+     * The row is looked up to decide: only a row locked by this instance with the token just issued means the acquire was
+     * committed, and only then is the lock this instance's. A pending interrupt is set aside for the lookup and restored
+     * afterwards. When the lookup fails as well the outcome stays unknown and the lock is not held; a row the acquire did
+     * lock expires after the lock timeout.
+     *
+     * @param attemptedLock the lock as acquired by the acquire statement whose commit failed
+     * @return {@code attemptedLock} if its acquire was committed, otherwise {@code null}
+     */
+    private LOCK resolveAcquireWithUnknownCommitOutcome(LOCK attemptedLock) {
+        var interrupted = Thread.interrupted();
+        try {
+            var lockInDB = withUnitOfWork(uow -> lockStorage.lookupLockInDB(this, uow, attemptedLock.getName()),
+                                          e -> {
+                                              log.debug(msg("[{}] Failed to look up lock '{}' after its acquiring failed to commit - its row, if locked, expires after the lock timeout",
+                                                            lockManagerInstanceId, attemptedLock.getName()), e);
+                                              return Optional.<LOCK>empty();
+                                          });
+            var committed = lockInDB.filter(lock -> Objects.equals(lock.getLockedByLockManagerInstanceId(), lockManagerInstanceId))
+                                    .filter(lock -> Objects.equals(lock.getCurrentToken(), attemptedLock.getCurrentToken()))
+                                    .isPresent();
+            log.debug("[{}] Acquiring of lock '{}' with token {} {} although its commit failed", lockManagerInstanceId, attemptedLock.getName(), attemptedLock.getCurrentToken(),
+                      committed ? "WAS committed - holding the lock" : "was not committed");
+            return committed ? attemptedLock : null;
+        } finally {
+            if (interrupted) {
+                Thread.currentThread().interrupt();
+            }
+        }
+    }
+
+    /**
+     * Runs the acquire statement that fits the lock's state in the DB. Records nothing locally: the {@link UnitOfWork} has
+     * yet to commit
+     *
+     * @return the lock as acquired, or {@code null} if it is held by another instance or another instance got there first
+     */
+    private LOCK resolveLock(UOW uow, LOCK existingLock) {
         requireNonNull(uow, "No uow provided");
         requireNonNull(existingLock, "No existingLock provided");
 
@@ -639,7 +713,7 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
                           newLock);
                 return updateLock(uow, existingLock, newLock);
             } else {
-                return Mono.empty();
+                return null;
             }
         } else {
             if (Objects.equals(existingLock.getCurrentToken(), lockStorage.getUninitializedTokenValue())) {
@@ -658,7 +732,7 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
         }
     }
 
-    private Mono<LOCK> insertLock(UOW uow, LOCK initialLock) {
+    private LOCK insertLock(UOW uow, LOCK initialLock) {
         requireNonNull(uow, "No uow provided");
         requireNonNull(initialLock, "No initialLock provided");
         var now = OffsetDateTime.now(Clock.systemUTC());
@@ -669,18 +743,16 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
         if (insertedSuccessfully) {
             initialLock.markAsLocked(now, lockManagerInstanceId, lockStorage.getInitialTokenValue());
             log.debug("[{}] Acquired lock '{}' for the first time (insert): {}", lockManagerInstanceId, initialLock.getName(), initialLock);
-            locksAcquiredByThisLockManager.put(initialLock.getName(), initialLock);
-            notify(new LockAcquired(initialLock, this));
-            return Mono.just(initialLock);
+            return initialLock;
         } else {
             // We didn't acquire the lock after all
             log.debug("[{}] Failed to acquire lock '{}' for the first time (insert)", lockManagerInstanceId, initialLock.getName());
-            return Mono.empty();
+            return null;
         }
     }
 
 
-    private Mono<LOCK> updateLock(UOW uow, LOCK timedOutLock, LOCK newLockReadyToBeAcquiredLocally) {
+    private LOCK updateLock(UOW uow, LOCK timedOutLock, LOCK newLockReadyToBeAcquiredLocally) {
         requireNonNull(uow, "No uow provided");
         requireNonNull(timedOutLock, "No timedOutLock provided");
         requireNonNull(newLockReadyToBeAcquiredLocally, "No newLockReadyToBeAcquiredLocally provided");
@@ -689,19 +761,17 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
 
         if (updatedSuccessfully) {
             log.debug("[{}] Acquired lock '{}' (update): {}", lockManagerInstanceId, timedOutLock.getName(), newLockReadyToBeAcquiredLocally);
-            locksAcquiredByThisLockManager.put(timedOutLock.getName(), newLockReadyToBeAcquiredLocally);
             newLockReadyToBeAcquiredLocally.markAsLocked(newLockReadyToBeAcquiredLocally.getLockAcquiredTimestamp(),
                                                          newLockReadyToBeAcquiredLocally.getLockedByLockManagerInstanceId(),
                                                          newLockReadyToBeAcquiredLocally.getCurrentToken());
-            notify(new LockAcquired(newLockReadyToBeAcquiredLocally, this));
-            return Mono.just(newLockReadyToBeAcquiredLocally);
+            return newLockReadyToBeAcquiredLocally;
         } else {
             // We didn't acquire the lock after all
             log.debug("[{}] Didn't acquire timed out lock '{}', someone else acquired it or confirmed it in the mean time (update): {}",
                       lockManagerInstanceId,
                       timedOutLock.getName(),
                       lockStorage.lookupLockInDB(this, uow, timedOutLock.getName()));
-            return Mono.empty();
+            return null;
         }
     }
 
