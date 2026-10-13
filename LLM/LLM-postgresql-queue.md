@@ -470,12 +470,6 @@ PostgresqlDurableQueues.builder()
     .build();
 ```
 
-### One claim statement per poll
-
-Since 0.60.1 a poll claims a queue's ordered and unordered messages in one statement: the ordered part takes the
-heads it can, and the unordered part fills the slots it left (`DurableQueuesSql.buildClaimSqlStatement`). A queue that
-never carries ordered messages no longer pays a round trip per poll for an ordered claim that finds nothing.
-
 ### Saturated queues are refilled, not held to the polling interval
 
 The `CentralizedMessageFetcher` claims at most a queue's free worker slots per poll. Up to 0.60.0 it polled once per

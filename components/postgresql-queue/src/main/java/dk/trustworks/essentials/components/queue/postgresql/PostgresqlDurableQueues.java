@@ -1549,24 +1549,43 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                     List<QueuedMessage>  messagesForQueue;
                     MessageMappingResult mappingResult;
 
-                    // Ordered and unordered in one statement: the ordered part takes the heads it can, the unordered
-                    // part fills the slots it left - see DurableQueuesSql.buildClaimSqlStatement
                     var byHeadScan = orderedClaimByHeadScan(queueName);
-                    var claimQ = uow.handle().createQuery(durableQueuesSql.buildClaimSqlStatement(byHeadScan, !excluded.isEmpty()))
-                                    .bind("queueName", queueName)
-                                    .bind("now", now)
-                                    .bind("limit", availableWorkerSlotsForThisQueue);
-                    if (!excluded.isEmpty()) claimQ.bindList("excludeKeys", excluded);
+                    var orderedSql = byHeadScan
+                                     ? durableQueuesSql.buildOrderedHeadScanSqlStatement(!excluded.isEmpty())
+                                     : durableQueuesSql.buildOrderedSqlStatement(!excluded.isEmpty());
+                    var orderedQ = uow.handle().createQuery(orderedSql)
+                                      .bind("queueName", queueName)
+                                      .bind("now", now)
+                                      .bind("limit", availableWorkerSlotsForThisQueue);
+                    if (!excluded.isEmpty()) orderedQ.bindList("excludeKeys", excluded);
 
                     var claimStartedNanos = System.nanoTime();
-                    mappingResult = mapQueryResultsWithExceptionHandling(claimQ);
-                    var orderedClaimed = (int) mappingResult.successfulMessages().stream()
-                                                            .filter(queued -> queued.getMessage() instanceof OrderedMessage)
-                                                            .count();
-                    recordOrderedClaim(queueName, byHeadScan, System.nanoTime() - claimStartedNanos, orderedClaimed,
+                    mappingResult = mapQueryResultsWithExceptionHandling(orderedQ);
+                    recordOrderedClaim(queueName, byHeadScan, System.nanoTime() - claimStartedNanos,
+                                       mappingResult.successfulMessages().size() + mappingResult.failedMappings().size(),
                                        availableWorkerSlotsForThisQueue);
                     messagesForQueue = mappingResult.successfulMessages();
                     handleFailedMappings(queueName, mappingResult);
+
+                    // Fill whatever the ordered claim left free. Running the unordered claim only when the ordered
+                    // one found nothing left unordered messages on a queue that also carries ordered ones waiting a
+                    // whole polling interval whenever a single ordered message was claimed
+                    var slotsLeft = availableWorkerSlotsForThisQueue - messagesForQueue.size();
+                    if (slotsLeft > 0) {
+                        var unorderedSql = durableQueuesSql.buildUnorderedSqlStatement();
+                        var unorderedQ = uow.handle().createQuery(unorderedSql)
+                                            .bind("queueName", queueName)
+                                            .bind("now", now)
+                                            .bind("limit", slotsLeft);
+                        mappingResult = mapQueryResultsWithExceptionHandling(unorderedQ);
+                        if (messagesForQueue.isEmpty()) {
+                            messagesForQueue = mappingResult.successfulMessages();
+                        } else {
+                            messagesForQueue = new ArrayList<>(messagesForQueue);
+                            messagesForQueue.addAll(mappingResult.successfulMessages());
+                        }
+                        handleFailedMappings(queueName, mappingResult);
+                    }
 
                     log.debug("[{}] Batch fetched {} messages with {} slots available",
                               queueName, messagesForQueue.size(), availableWorkerSlotsForThisQueue);

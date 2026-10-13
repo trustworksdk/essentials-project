@@ -24,21 +24,18 @@ import dk.trustworks.essentials.components.foundation.test.EssentialsTestContain
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.JdbiUnitOfWorkFactory;
 import org.awaitility.Awaitility;
 import org.jdbi.v3.core.Jdbi;
-import org.jdbi.v3.core.statement.*;
 import org.junit.jupiter.api.*;
 import org.testcontainers.junit.jupiter.*;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 
 import java.time.Duration;
-import java.util.*;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * Polling with a long backoff cap: a message that becomes due is delivered when it is due, not up to a whole backoff
- * later, and a poll claims ordered and unordered messages in one statement.
+ * later.
  */
 @Testcontainers
 class PostgresqlDurableQueuesDueTimeIT {
@@ -53,15 +50,13 @@ class PostgresqlDurableQueuesDueTimeIT {
     @Container
     private static final PostgreSQLContainer postgreSQLContainer = EssentialsTestContainers.postgres("due-time-db");
 
-    private Jdbi                    jdbi;
     private JdbiUnitOfWorkFactory   unitOfWorkFactory;
     private PostgresqlDurableQueues durableQueues;
     private DurableQueueConsumer    consumer;
 
     @BeforeEach
     void setUp() {
-        jdbi = Jdbi.create(postgreSQLContainer.getJdbcUrl(), postgreSQLContainer.getUsername(), postgreSQLContainer.getPassword());
-        unitOfWorkFactory = new JdbiUnitOfWorkFactory(jdbi);
+        unitOfWorkFactory = new JdbiUnitOfWorkFactory(Jdbi.create(postgreSQLContainer.getJdbcUrl(), postgreSQLContainer.getUsername(), postgreSQLContainer.getPassword()));
         durableQueues = PostgresqlDurableQueues.builder()
                                                .setUnitOfWorkFactory(unitOfWorkFactory)
                                                .setJsonSerializer(EssentialsObjectMappers.createJSONSerializer())
@@ -111,34 +106,6 @@ class PostgresqlDurableQueuesDueTimeIT {
         var late = Duration.ofNanos(deliveredAt.getFirst() - queuedAt).minus(DELAY);
         System.out.printf("%n=== Message delayed %d ms delivered %d ms late ===%n%n", DELAY.toMillis(), late.toMillis());
         assertThat(late).isLessThan(ALLOWED_DELAY);
-    }
-
-    @Test
-    void a_poll_claims_ordered_and_unordered_messages_in_one_statement() {
-        var claimStatements = new AtomicInteger();
-        jdbi.setSqlLogger(new SqlLogger() {
-            @Override
-            public void logBeforeExecution(StatementContext context) {
-                var sql = context.getRenderedSql();
-                if (sql != null && (sql.contains("cte_ordered") || sql.contains("cte_unordered"))) {
-                    claimStatements.incrementAndGet();
-                }
-            }
-        });
-        // Stopped, so the consumer is registered but nothing polls: the test drives the fetch itself
-        durableQueues.stop();
-        consumer = consume(RedeliveryPolicy.fixedBackoff(Duration.ofMillis(100), 3), message -> { });
-        unitOfWorkFactory.usingUnitOfWork(() -> {
-            durableQueues.queueMessage(QUEUE, OrderedMessage.of("ordered", "key-1", 0));
-            durableQueues.queueMessage(QUEUE, Message.of("unordered"));
-        });
-        claimStatements.set(0);
-
-        var fetched = durableQueues.fetchNextBatchOfMessages(List.of(QUEUE), Map.of(QUEUE, Set.of()), Map.of(QUEUE, 4));
-
-        assertThat(fetched).hasSize(2);
-        assertThat(fetched.getFirst().getMessage()).as("ordered messages first").isInstanceOf(OrderedMessage.class);
-        assertThat(claimStatements.get()).isEqualTo(1);
     }
 
     private DurableQueueConsumer consume(RedeliveryPolicy redeliveryPolicy, QueuedMessageHandler handler) {

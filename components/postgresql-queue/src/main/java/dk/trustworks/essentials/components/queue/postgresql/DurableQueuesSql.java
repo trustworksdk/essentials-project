@@ -53,8 +53,29 @@ public class DurableQueuesSql {
         // the whole queue, so a claim cost time proportional to the backlog (185 ms vs 4 ms for 20 000 queued
         // messages and a limit of 128). ARRAY(...) is evaluated once, so the locked id set is fixed before the
         // UPDATE runs. Guarded by PostgresqlDurableQueuesClaimPlanIT.
-        return bind("WITH " + unorderedCandidates(":limit") + "\n" + claim("cte_unordered") + "\nRETURNING q.*;",
-                    arg("tableName", sharedQueueTableName));
+        return bind("""
+                      WITH cte_unordered AS (
+                        SELECT id
+                        FROM {:tableName} q
+                        WHERE
+                             queue_name = :queueName
+                          AND is_dead_letter_message = FALSE
+                          AND is_being_delivered     = FALSE
+                          AND next_delivery_ts <= :now
+                          AND key IS NULL
+                        ORDER BY next_delivery_ts
+                        LIMIT :limit
+                        FOR UPDATE SKIP LOCKED
+                      )
+                      UPDATE {:tableName} q
+                      SET
+                        total_attempts       = q.total_attempts + 1,
+                        next_delivery_ts     = NULL,
+                        is_being_delivered   = TRUE,
+                        delivery_ts          = :now
+                      WHERE q.id = ANY(ARRAY(SELECT id FROM cte_unordered))
+                      RETURNING q.*;
+                    """, arg("tableName", sharedQueueTableName));
     }
 
     /**
@@ -71,8 +92,42 @@ public class DurableQueuesSql {
      */
     public String buildOrderedSqlStatement(boolean hasExclusiveKeys) {
         // UPDATE by primary-key array, not by joining the CTE - see buildUnorderedSqlStatement()
-        return bind("WITH " + orderedCandidates(false, hasExclusiveKeys) + "\n" + claim("cte_ordered") + "\nRETURNING q.*;",
-                    arg("tableName", sharedQueueTableName));
+        return bind("""
+                    WITH cte_ordered AS (
+                               SELECT id
+                               FROM {:tableName} q
+                               WHERE
+                                    queue_name             = :queueName
+                                AND is_dead_letter_message = FALSE
+                                AND is_being_delivered     = FALSE
+                                AND next_delivery_ts      <= :now
+                    
+                                AND key IS NOT NULL
+                    
+                                -- full per-key barrier:
+                                AND NOT EXISTS (
+                                  SELECT 1
+                                  FROM {:tableName} q2
+                                  WHERE q2.key        = q.key
+                                    AND q2.queue_name = q.queue_name
+                                    AND q2.key_order  < q.key_order
+                                )
+                                {:excludeKeys} 
+                     ORDER BY key_order, next_delivery_ts
+                                        LIMIT :limit
+                                        FOR UPDATE SKIP LOCKED
+                                      )
+                                      UPDATE {:tableName} q
+                                      SET
+                                        total_attempts       = q.total_attempts + 1,
+                                        next_delivery_ts     = NULL,
+                                        is_being_delivered   = TRUE,
+                                        delivery_ts          = :now
+                                      WHERE q.id = ANY(ARRAY(SELECT id FROM cte_ordered))
+                                      RETURNING q.*;
+                    """,
+                    arg("tableName", sharedQueueTableName),
+                    arg("excludeKeys", hasExclusiveKeys ? "AND key NOT IN (<excludeKeys>)" : ""));
     }
 
     /**
@@ -94,126 +149,45 @@ public class DurableQueuesSql {
      * @return the SQL statement
      */
     public String buildOrderedHeadScanSqlStatement(boolean hasExclusiveKeys) {
-        return bind("WITH RECURSIVE " + orderedCandidates(true, hasExclusiveKeys) + "\n" + claim("cte_ordered") + "\nRETURNING q.*;",
-                    arg("tableName", sharedQueueTableName));
-    }
-
-    /**
-     * The ordered claim and the unordered claim as one statement, so a poll costs one round trip rather than two.
-     * <p>
-     * The ordered part runs first and takes up to {@code limit} heads; the unordered part fills whatever slots it left.
-     * A queue that carries no ordered messages used to pay a whole round trip per poll for an ordered claim that found
-     * nothing. Both parts see the same snapshot and claim disjoint rows ({@code key IS NOT NULL} against
-     * {@code key IS NULL}), so they cannot contend. Ordered messages are returned first.
-     *
-     * @param orderedByHeadScan whether the ordered part finds heads as {@link #buildOrderedHeadScanSqlStatement} does,
-     *                          rather than as {@link #buildOrderedSqlStatement}
-     * @param hasExclusiveKeys  whether to exclude the keys bound as {@code excludeKeys} from the ordered part
-     * @return the SQL statement
-     */
-    public String buildClaimSqlStatement(boolean orderedByHeadScan, boolean hasExclusiveKeys) {
-        return bind((orderedByHeadScan ? "WITH RECURSIVE " : "WITH ")
-                            + orderedCandidates(orderedByHeadScan, hasExclusiveKeys) + ",\n"
-                            + "ordered AS (\n" + claim("cte_ordered") + "\nRETURNING q.*),\n"
-                            + unorderedCandidates("(SELECT :limit - count(*) FROM ordered)") + ",\n"
-                            + "unordered AS (\n" + claim("cte_unordered") + "\nRETURNING q.*)\n"
-                            + "SELECT * FROM ordered UNION ALL SELECT * FROM unordered;",
-                    arg("tableName", sharedQueueTableName));
-    }
-
-    /**
-     * The unordered candidates, as the CTE {@code cte_unordered}
-     */
-    private static String unorderedCandidates(String limit) {
-        return """
-               cte_unordered AS (
-                 SELECT id
-                 FROM {:tableName} q
-                 WHERE
-                      queue_name = :queueName
-                   AND is_dead_letter_message = FALSE
-                   AND is_being_delivered     = FALSE
-                   AND next_delivery_ts <= :now
-                   AND key IS NULL
-                 ORDER BY next_delivery_ts
-                 LIMIT %s
-                 FOR UPDATE SKIP LOCKED
-               )""".formatted(limit);
-    }
-
-    /**
-     * The ordered candidates - each key's head, if it is eligible - as the CTE {@code cte_ordered}, preceded by the
-     * recursive {@code heads} CTE when found by head scan (which then needs {@code WITH RECURSIVE})
-     */
-    private static String orderedCandidates(boolean byHeadScan, boolean hasExclusiveKeys) {
-        if (byHeadScan) {
-            return """
-                   heads AS (
-                       (SELECT key, key_order
-                        FROM {:tableName}
-                        WHERE queue_name = :queueName AND key IS NOT NULL
-                        ORDER BY key, key_order
-                        LIMIT 1)
-                       UNION ALL
-                       SELECT next_head.key, next_head.key_order
-                       FROM heads h
-                       CROSS JOIN LATERAL (SELECT key, key_order
-                                           FROM {:tableName}
-                                           WHERE queue_name = :queueName AND key > h.key
-                                           ORDER BY key, key_order
-                                           LIMIT 1) next_head
-                   ),
-                   cte_ordered AS (
-                       SELECT q.id
-                       FROM heads h
-                       JOIN {:tableName} q ON q.queue_name = :queueName AND q.key = h.key AND q.key_order = h.key_order
-                       WHERE q.is_dead_letter_message = FALSE
-                         AND q.is_being_delivered     = FALSE
-                         AND q.next_delivery_ts      <= :now
-                         %s
-                       ORDER BY q.key_order, q.next_delivery_ts
-                       LIMIT :limit
-                       FOR UPDATE OF q SKIP LOCKED
-                   )""".formatted(hasExclusiveKeys ? "AND q.key NOT IN (<excludeKeys>)" : "");
-        }
-        return """
-               cte_ordered AS (
-                 SELECT id
-                 FROM {:tableName} q
-                 WHERE
-                      queue_name             = :queueName
-                  AND is_dead_letter_message = FALSE
-                  AND is_being_delivered     = FALSE
-                  AND next_delivery_ts      <= :now
-                  AND key IS NOT NULL
-                  -- full per-key barrier:
-                  AND NOT EXISTS (
-                    SELECT 1
-                    FROM {:tableName} q2
-                    WHERE q2.key        = q.key
-                      AND q2.queue_name = q.queue_name
-                      AND q2.key_order  < q.key_order
-                  )
-                  %s
-                 ORDER BY key_order, next_delivery_ts
-                 LIMIT :limit
-                 FOR UPDATE SKIP LOCKED
-               )""".formatted(hasExclusiveKeys ? "AND key NOT IN (<excludeKeys>)" : "");
-    }
-
-    /**
-     * Marks the rows selected by {@code candidates} as being delivered. Selects them by primary-key array, never by a
-     * join - see {@link #buildUnorderedSqlStatement()}
-     */
-    private static String claim(String candidates) {
-        return """
-               UPDATE {:tableName} q
-               SET
-                 total_attempts       = q.total_attempts + 1,
-                 next_delivery_ts     = NULL,
-                 is_being_delivered   = TRUE,
-                 delivery_ts          = :now
-               WHERE q.id = ANY(ARRAY(SELECT id FROM %s))""".formatted(candidates);
+        return bind("""
+                    WITH RECURSIVE heads AS (
+                        (SELECT key, key_order
+                         FROM {:tableName}
+                         WHERE queue_name = :queueName AND key IS NOT NULL
+                         ORDER BY key, key_order
+                         LIMIT 1)
+                        UNION ALL
+                        SELECT next_head.key, next_head.key_order
+                        FROM heads h
+                        CROSS JOIN LATERAL (SELECT key, key_order
+                                            FROM {:tableName}
+                                            WHERE queue_name = :queueName AND key > h.key
+                                            ORDER BY key, key_order
+                                            LIMIT 1) next_head
+                    ),
+                    cte_ordered AS (
+                        SELECT q.id
+                        FROM heads h
+                        JOIN {:tableName} q ON q.queue_name = :queueName AND q.key = h.key AND q.key_order = h.key_order
+                        WHERE q.is_dead_letter_message = FALSE
+                          AND q.is_being_delivered     = FALSE
+                          AND q.next_delivery_ts      <= :now
+                          {:excludeKeys}
+                        ORDER BY q.key_order, q.next_delivery_ts
+                        LIMIT :limit
+                        FOR UPDATE OF q SKIP LOCKED
+                    )
+                    UPDATE {:tableName} q
+                    SET
+                      total_attempts       = q.total_attempts + 1,
+                      next_delivery_ts     = NULL,
+                      is_being_delivered   = TRUE,
+                      delivery_ts          = :now
+                    WHERE q.id = ANY(ARRAY(SELECT id FROM cte_ordered))
+                    RETURNING q.*;
+                    """,
+                    arg("tableName", sharedQueueTableName),
+                    arg("excludeKeys", hasExclusiveKeys ? "AND q.key NOT IN (<excludeKeys>)" : ""));
     }
 
     /**

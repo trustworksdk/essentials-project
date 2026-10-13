@@ -176,13 +176,6 @@ deliverable, and the queue is polled then. With a 10 s cap, a 6 s retry arrived 
 a 6 s delayed message 29 ms late instead of 3.1 s (`PostgresqlDurableQueuesDueTimeIT`). Spring applications benefit
 too: their default cap is 2 s. A delayed message enqueued by another node still waits at most the cap.
 
-### 2.5 One claim statement per poll (`postgresql-queue`)
-
-A poll ran the ordered claim and then the unordered claim as two statements, so a queue that never carries ordered
-messages paid a round trip per poll for an ordered claim that found nothing. They are now one statement: the
-ordered part takes the heads it can, and the unordered part fills the slots it left. Which messages are claimed does
-not change.
-
 ## 3. Documentation
 
 - The polling-optimizer docs describe the new defaults, and the stale-statistics guidance is next to the claim
