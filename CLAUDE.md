@@ -49,7 +49,7 @@ scripts/test-timings.sh --csv > before.csv            # capture a baseline to di
 
 ## Release notes
 
-**RULE:** every change a framework, plugin or example user would notice adds an entry to `docs/NEXT_VERSION_RELEASE.md` in the same commit — bug fixes and behaviour changes above all. It collects everything since the last release tag; at release it becomes `docs/RELEASE-NOTES-<version>.md` (shape: `RELEASE-NOTES-0.60.0.md`) and is reset. What goes where: the file's header.
+**RULE:** every change a framework, plugin or example user would notice adds an entry to `docs/NEXT_VERSION_RELEASE.md` in the same commit — bug fixes and behaviour changes above all. It collects everything since the last release tag; at release it becomes `docs/RELEASE-NOTES-<version>.md` (shape: `RELEASE-NOTES-0.60.0.md`) and is reset. What goes where: the file's header. Preparing a release: the `prepare-release` skill (`scripts/prepare-release.py`).
 
 ## Critical Gotchas
 

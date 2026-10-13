@@ -621,3 +621,4 @@ Not published; listed because they are the reference for how to use the framewor
   than after them, and `--no-evals` runs everything but the evals (the release then fails).
 - The plugin's must-not-find eval graders name the trap's line and anchor, not only its file, so the judge no
   longer fails a report for a correct finding drawn from another line of the same file.
+- `scripts/prepare-release.py <version>` and the `prepare-release` skill prepare a release up to a local commit: this file becomes `docs/RELEASE-NOTES-<version>.md` and is reset, the plugin version, its CHANGELOG heading and the `essentials.version` pin move, a skeleton of the plugin's migration notes is written and what reads the pin is regenerated. `--check <version>` fails on anything left inconsistent. The skill never tags or pushes.
