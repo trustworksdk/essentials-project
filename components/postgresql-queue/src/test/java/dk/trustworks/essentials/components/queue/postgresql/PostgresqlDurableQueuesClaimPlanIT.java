@@ -53,6 +53,12 @@ class PostgresqlDurableQueuesClaimPlanIT {
     private static final Pattern   JOIN_ON_ID      = Pattern.compile("\\bid = \\w+\\.id\\b");
     private static final Pattern   PRIMARY_KEY_ARRAY_LOOKUP =
             Pattern.compile("\"Index Name\":\\s*\"" + QUEUE_TABLE + "_pkey\",[^}]*?\"Index Cond\":\\s*\"\\(id = ANY ");
+    /**
+     * A Sort or Incremental Sort node with {@code next_delivery_ts} among its sort keys, capturing the rows it returned
+     */
+    private static final Pattern   SORT_ON_NEXT_DELIVERY_TS =
+            Pattern.compile("\"Node Type\":\\s*\"(?:Incremental )?Sort\",[^\\[]*?\"Actual Rows\":\\s*([0-9.]+),[^\\[]*?\"Sort Key\":\\s*\\[[^\\]]*next_delivery_ts");
+    private static final Pattern   ROWS_REMOVED_BY_JOIN_FILTER = Pattern.compile("\"Rows Removed by Join Filter\":\\s*([0-9.]+)");
 
     /**
      * The claim shape before the fix, kept as a control: if it no longer degrades, the test has not recreated
@@ -160,6 +166,22 @@ class PostgresqlDurableQueuesClaimPlanIT {
                 .as("both the locking scan and the UPDATE must select their rows by primary-key array: " + plan)
                 .isEqualTo(2);
         assertThat(plan).as("the claim must still claim a full batch for each queue").contains("\"Actual Rows\": " + 2 * CLAIM_LIMIT);
+
+        // The statement numbered every eligible message of every queue in one ROW_NUMBER() window ordered by
+        // next_delivery_ts, which sorted the whole backlog - 40 000 rows here - on every poll. Each queue's candidates
+        // are now taken under a LIMIT of its slots, so every sort on next_delivery_ts hands on at most one queue's slots.
+        var nextDeliverySortRows = SORT_ON_NEXT_DELIVERY_TS.matcher(plan).results()
+                                                           .map(result -> Double.parseDouble(result.group(1)))
+                                                           .toList();
+        assertThat(nextDeliverySortRows).as("the plan sorts candidates on next_delivery_ts: " + plan).isNotEmpty();
+        assertThat(nextDeliverySortRows).as("every sort on next_delivery_ts is bounded by the slots: " + plan)
+                                        .allMatch(rows -> rows <= CLAIM_LIMIT);
+        // Nor does any join compare rows of the queue with each other: joined back to the table on key and key_order,
+        // the ordered heads were planned as a nested loop over the whole queue and discarded 20 million rows (5 s)
+        var rowsRemovedByJoinFilter = ROWS_REMOVED_BY_JOIN_FILTER.matcher(plan).results()
+                                                                 .mapToDouble(result -> Double.parseDouble(result.group(1)))
+                                                                 .sum();
+        assertThat(rowsRemovedByJoinFilter).as("rows removed by join filters: " + plan).isLessThanOrEqualTo(MESSAGES);
     }
 
     private void createStaleStatistics(Runnable queueBacklog) {

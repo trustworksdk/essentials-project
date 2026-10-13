@@ -1744,8 +1744,8 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                 }
 
                 var mappingResult = mapQueryResultsWithExceptionHandling(query);
-                // No de-duplication is applied here: the batched statement numbers all candidates for a queue in
-                // a single window and updates each row at most once, so a QueueEntryId cannot appear twice.
+                // No de-duplication is applied here: the batched statement selects the rows it updates by primary-key
+                // array and updates each row at most once, so a QueueEntryId cannot appear twice.
                 var messages = mappingResult.successfulMessages();
 
                 if (messages.size() > batchedFetchWarnRowsThreshold) {
