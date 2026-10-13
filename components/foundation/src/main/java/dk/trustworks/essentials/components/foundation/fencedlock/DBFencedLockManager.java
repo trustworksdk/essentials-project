@@ -581,11 +581,35 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
     @Override
     public Optional<FencedLock> tryAcquireLock(LockName lockName, Duration timeout) {
         requireNonNull(timeout, "No timeout value provided");
-        return Optional.ofNullable(
-                _tryAcquireLock(lockName)
-                        .repeatWhenEmpty(longFlux -> longFlux.delayElements(Duration.ofMillis(syncAcquireLockPauseIntervalMs)))
-                        .onErrorReturn(null)
-                        .block(timeout));
+        var deadline = System.nanoTime() + timeout.toNanos();
+        while (true) {
+            var lock = _tryAcquireLock(lockName).block();
+            if (lock != null) {
+                return Optional.of(lock);
+            }
+            var remainingMs = Duration.ofNanos(deadline - System.nanoTime()).toMillis();
+            if (remainingMs <= 0 || !pauseBeforeNextAcquireAttempt(Math.min(remainingMs, syncAcquireLockPauseIntervalMs))) {
+                return Optional.empty();
+            }
+        }
+    }
+
+    /**
+     * The blocking acquires retry on the caller's thread, each attempt asking the DB anew. Not a Reactor
+     * {@code repeatWhenEmpty}: {@link #_tryAcquireLock(LockName)} acquires eagerly, so repeating its {@link Mono} replays the
+     * first attempt's outcome - a contended lock was then never acquired. Nor a Reactor timeout: one cancelling an attempt
+     * still in flight would drop a lock that attempt went on to acquire, leaving it held with no caller to release it
+     *
+     * @return {@code false} if the caller's thread was interrupted while pausing (the interrupt is restored)
+     */
+    private boolean pauseBeforeNextAcquireAttempt(long pauseMs) {
+        try {
+            Thread.sleep(pauseMs);
+            return true;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
     }
 
     private Mono<LOCK> _tryAcquireLock(LockName lockName) {
@@ -783,10 +807,15 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
 
     @Override
     public FencedLock acquireLock(LockName lockName) {
-        return _tryAcquireLock(lockName)
-                .repeatWhenEmpty(longFlux -> longFlux.delayElements(Duration.ofMillis(syncAcquireLockPauseIntervalMs)))
-                .onErrorStop()
-                .block();
+        while (true) {
+            var lock = _tryAcquireLock(lockName).block();
+            if (lock != null) {
+                return lock;
+            }
+            if (!pauseBeforeNextAcquireAttempt(syncAcquireLockPauseIntervalMs)) {
+                throw new IllegalStateException(msg("[{}] Interrupted while waiting to acquire lock '{}'", lockManagerInstanceId, lockName));
+            }
+        }
     }
 
     @Override

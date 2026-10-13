@@ -279,6 +279,39 @@ public abstract class DBFencedLockManagerIT<LOCK_MANAGER extends DBFencedLockMan
     }
 
     @Test
+    void the_blocking_acquires_acquire_a_lock_another_node_releases_while_they_wait() throws Exception {
+        // Given node1 holds the lock
+        var lockName  = LockName.of("blockingAcquireLock");
+        var lockNode1 = lockManagerNode1.acquireLock(lockName);
+        var executor  = Executors.newSingleThreadScheduledExecutor();
+        try {
+            // Then a timed acquire on node2 that runs out returns empty rather than throwing
+            assertThat(lockManagerNode2.tryAcquireLock(lockName, Duration.ofMillis(500))).isEmpty();
+
+            // When node1 releases the lock while node2 waits for it with a timeout
+            executor.schedule(lockNode1::release, 300, TimeUnit.MILLISECONDS);
+            var lockNode2 = lockManagerNode2.tryAcquireLock(lockName, Duration.ofSeconds(10));
+
+            // Then node2 acquires it with the next token
+            assertThat(lockNode2).isPresent();
+            assertThat(lockNode2.get().isLockedByThisLockManagerInstance()).isTrue();
+            assertThat(lockNode2.get().getCurrentToken()).isEqualTo(lockManagerNode1.getInitialTokenValue() + 1);
+
+            // When node2 releases it while node1 waits in the untimed acquire
+            executor.schedule(lockNode2.get()::release, 300, TimeUnit.MILLISECONDS);
+            var lockNode1Again = CompletableFuture.supplyAsync(() -> lockManagerNode1.acquireLock(lockName))
+                                                  .get(10, TimeUnit.SECONDS);
+
+            // Then node1 acquires it again
+            assertThat(lockNode1Again.isLockedByThisLockManagerInstance()).isTrue();
+            assertThat(lockNode1Again.getCurrentToken()).isEqualTo(lockManagerNode1.getInitialTokenValue() + 2);
+            lockNode1Again.release();
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
     void stopping_a_lockManager_releases_all_acquired_locks() {
         // Given
         var lock1 = LockName.of("lock1");
