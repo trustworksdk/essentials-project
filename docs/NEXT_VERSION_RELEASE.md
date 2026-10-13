@@ -390,6 +390,17 @@ after the chain. What changes for you:
   `Jackson3JSONSerializer`, your own replacement bean included, and log one ERROR banner per deviating bean. Boot's
   web mapper is not checked. New property `essentials.json.wire-format-check=warn|fail|off`, default `warn`.
   (N-1, SJ-3, `c9314dc3`)
+- **`UnitOfWork` accessors on every event processor.** `AbstractEventProcessor` - so `ViewEventProcessor`,
+  `EventProcessor` and `InTransactionEventProcessor` - gains `getCurrentUnitOfWork()` (`Optional`),
+  `getRequiredUnitOfWork()` and `getUnitOfWorkFactory()`, all on the event store's own factory, the one the processor
+  handles its messages with. A projection no longer needs a `HandleAwareUnitOfWorkFactory` injected next to its
+  dependencies: inside a `@MessageHandler`, write through `getRequiredUnitOfWork().handle()`; in a constructor or
+  `onSubscriptionsReset`, use `getUnitOfWorkFactory().usingUnitOfWork(uow -> ...)`. `getRequiredUnitOfWork()` never
+  opens a `UnitOfWork`: where none is active - a `@MessageHandler(unitOfWork = UnitOfWorkMode.NONE)` body outside
+  `usingUnitOfWork`/`withUnitOfWork`, a constructor, a reset - it throws `NoActiveUnitOfWorkException`. Purely
+  additive, except that a processor subclass already declaring one of these three method names with an incompatible
+  return type no longer compiles; rename it. There is deliberately no processor `usingUnitOfWork(uow -> ...)` overload:
+  it would make Kotlin's `usingUnitOfWork { ... }` an overload ambiguity.
 
 The plugin's features are in [§4](#4-the-essentials-claude-code-plugin).
 
@@ -489,6 +500,10 @@ Not published; listed because they are the reference for how to use the framewor
   `HandleAwareUnitOfWorkFactory` and use `uow.handle()`, matching the LLM docs, the plugin templates and the other
   examples. A projection's write joins the `UnitOfWork` the event processor already runs the handler in, so a
   `ViewEventProcessor`'s view row commits together with its progress. (`3e0636d2`)
+- **`essentials-trading-demo`: projections no longer take a `UnitOfWorkFactory`.** The five view projections write
+  through the processor's own `getRequiredUnitOfWork().handle()` in their handlers and
+  `getUnitOfWorkFactory().usingUnitOfWork(uow -> ...)` for their DDL and reset, so each constructor takes only its
+  processor dependencies. The queries are unchanged.
 - **`essentials-performance-lab` declares objenesis.** `immutable-jackson3` has it `provided`; the lab's tests got
   it through Mockito, but the packaged application would have failed its first event read.
 - **`postgresql-cqrs`:** the `task` context, on the aggregate lane, drops its `routing/TaskCommand` marker,

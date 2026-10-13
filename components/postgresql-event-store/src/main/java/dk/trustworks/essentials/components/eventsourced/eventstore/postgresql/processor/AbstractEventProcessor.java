@@ -23,6 +23,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.su
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.PersistedEventHandler;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.SubscriptionErrorPolicy;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.SubscriptionResumePoint;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.*;
 import dk.trustworks.essentials.components.foundation.causation.CausationContext;
 import dk.trustworks.essentials.components.foundation.json.JSONDeserializationException;
@@ -210,6 +211,68 @@ public abstract class AbstractEventProcessor implements Lifecycle {
     protected <R> R withUnitOfWork(CheckedSupplier<R> action) {
         requireNonNull(action, "No action provided");
         return eventStore.getUnitOfWorkFactory().withUnitOfWork(action);
+    }
+
+    /**
+     * The {@link UnitOfWork} active on the calling thread, if any.
+     * <p>
+     * Present inside a {@link MessageHandler} running with the default {@link UnitOfWorkMode#REQUIRED} - which is every
+     * handler of a {@link ViewEventProcessor} - and inside {@link #usingUnitOfWork(CheckedRunnable)}/
+     * {@link #withUnitOfWork(CheckedSupplier)}; empty in the body of a {@link UnitOfWorkMode#NONE} handler outside
+     * those wrappers.
+     *
+     * @return the active {@link EventStoreUnitOfWork}, or {@link Optional#empty()} when none is active
+     * @see #getRequiredUnitOfWork()
+     */
+    protected Optional<EventStoreUnitOfWork> getCurrentUnitOfWork() {
+        return eventStore.getUnitOfWorkFactory().getCurrentUnitOfWork();
+    }
+
+    /**
+     * The {@link UnitOfWork} active on the calling thread. Never opens one: where none may be active (a constructor, a
+     * {@link UnitOfWorkMode#NONE} handler), wrap the call in {@link #usingUnitOfWork(CheckedRunnable)} or
+     * {@link #withUnitOfWork(CheckedSupplier)}.
+     * <p>
+     * Inside a {@link MessageHandler} running with the default {@link UnitOfWorkMode#REQUIRED} this is the
+     * {@link UnitOfWork} the message is handled in, so a view write through its JDBI {@link EventStoreUnitOfWork#handle()}
+     * commits together with the processor's progress - without the processor being handed a {@link UnitOfWorkFactory}
+     * of its own:
+     * <pre>{@code
+     * @MessageHandler
+     * void on(PriceUpdated e) {
+     *     getRequiredUnitOfWork().handle()
+     *                            .createUpdate("UPDATE projection_latest_price SET latest_price = :price WHERE instrument_id = :id")
+     *                            .bind("price", e.price().value())
+     *                            .bind("id", e.instrumentId().toString())
+     *                            .execute();
+     * }
+     * }</pre>
+     *
+     * @return the active {@link EventStoreUnitOfWork}
+     * @throws NoActiveUnitOfWorkException if no {@link UnitOfWork} is active on the calling thread
+     * @see #getCurrentUnitOfWork()
+     */
+    protected EventStoreUnitOfWork getRequiredUnitOfWork() {
+        return getCurrentUnitOfWork().orElseThrow(() -> new NoActiveUnitOfWorkException(msg(
+                "No active UnitOfWork in processor '{}' - a @MessageHandler(unitOfWork = UnitOfWorkMode.NONE) method, a constructor or onSubscriptionsReset " +
+                        "has none: wrap the call in usingUnitOfWork(...)/withUnitOfWork(...)",
+                getProcessorName())));
+    }
+
+    /**
+     * The {@link UnitOfWorkFactory} of the {@link EventStore} this processor subscribes to - the same factory the
+     * processor handles its messages with, so a subclass never needs one injected. Prefer
+     * {@link #usingUnitOfWork(CheckedRunnable)}, {@link #withUnitOfWork(CheckedSupplier)} and
+     * {@link #getRequiredUnitOfWork()}; reach for the factory when an action wants the {@link UnitOfWork} handed to it
+     * ({@code getUnitOfWorkFactory().usingUnitOfWork(uow -> ...)}) or to pass it to a collaborator.
+     * <p>
+     * The processor deliberately has no {@code usingUnitOfWork(uow -> ...)} overload of its own: next to the
+     * no-argument one, Kotlin cannot resolve a parameterless lambda ({@code usingUnitOfWork { ... }}) between the two.
+     *
+     * @return the {@link EventStoreUnitOfWorkFactory} of this processor's {@link EventStore}
+     */
+    protected EventStoreUnitOfWorkFactory<EventStoreUnitOfWork> getUnitOfWorkFactory() {
+        return eventStore.getUnitOfWorkFactory();
     }
 
     /**

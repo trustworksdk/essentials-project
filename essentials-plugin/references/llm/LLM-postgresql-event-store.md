@@ -567,8 +567,11 @@ public class InstrumentRiskApprovalProcessor extends EventProcessor {
 |--------|-----------|-----|
 | `usingUnitOfWork(...)` | `void usingUnitOfWork(CheckedRunnable)` | Transactional tail with no result |
 | `withUnitOfWork(...)` | `<R> R withUnitOfWork(CheckedSupplier<R>)` | Transactional tail returning a value |
+| `getCurrentUnitOfWork()` | `Optional<EventStoreUnitOfWork> getCurrentUnitOfWork()` | The active `UnitOfWork`; empty in a `NONE` handler outside the wrappers, a constructor, `onSubscriptionsReset` |
+| `getRequiredUnitOfWork()` | `EventStoreUnitOfWork getRequiredUnitOfWork()` | The active `UnitOfWork`, or `NoActiveUnitOfWorkException` where `getCurrentUnitOfWork()` is empty. Never opens one |
+| `getUnitOfWorkFactory()` | `EventStoreUnitOfWorkFactory<EventStoreUnitOfWork> getUnitOfWorkFactory()` | The event store's factory - the one the processor handles with. For `usingUnitOfWork(uow -> ...)` or to hand to a collaborator |
 
-Both join an already active `UnitOfWork` if there is one. Between the blocking call and the wrapper there is no ambient `UnitOfWork`, so touching a transactional resource there fails fast rather than quietly opening a transaction — loading the aggregate *before* the call is the mistake to watch for.
+`usingUnitOfWork`/`withUnitOfWork` join an already active `UnitOfWork` if there is one. A processor never needs a `UnitOfWorkFactory` injected next to its dependencies: inside a handler use `getRequiredUnitOfWork()`, outside one `getUnitOfWorkFactory()`. There is deliberately no processor `usingUnitOfWork(uow -> ...)` overload: beside the no-argument one, Kotlin's `usingUnitOfWork { ... }` would no longer compile (overload ambiguity). Between the blocking call and the wrapper there is no ambient `UnitOfWork`, so touching a transactional resource there fails fast rather than quietly opening a transaction — loading the aggregate *before* the call is the mistake to watch for.
 
 **Processor support**:
 
@@ -667,6 +670,27 @@ public class OrderDashboard extends ViewEventProcessor {
         // Direct handling (low latency) - on error, queued for retry
         dashboardService.addOrder(event);
     }
+}
+```
+
+**JDBI view writes - use the handler's own `UnitOfWork`, not an injected factory.** Every `ViewEventProcessor` handler runs inside the `UnitOfWork` that also records the processor's progress, so a write through `getRequiredUnitOfWork().handle()` commits or rolls back together with it. A constructor and `onSubscriptionsReset` have no active `UnitOfWork`; open one through `getUnitOfWorkFactory()`:
+```java
+public OrderDashboard(ViewEventProcessorDependencies dependencies) {
+    super(dependencies);                                                   // no UnitOfWorkFactory parameter
+    getUnitOfWorkFactory().usingUnitOfWork(uow -> uow.handle().execute("CREATE TABLE IF NOT EXISTS order_dashboard (...)"));
+}
+
+@MessageHandler
+void handle(OrderCreated event) {
+    getRequiredUnitOfWork().handle()
+                           .createUpdate("INSERT INTO order_dashboard (order_id) VALUES (:orderId) ON CONFLICT DO NOTHING")
+                           .bind("orderId", event.orderId().toString())
+                           .execute();
+}
+
+@Override
+protected void onSubscriptionsReset(AggregateType aggregateType, GlobalEventOrder resubscribeFromAndIncluding) {
+    getUnitOfWorkFactory().usingUnitOfWork(uow -> uow.handle().execute("TRUNCATE TABLE order_dashboard"));
 }
 ```
 
