@@ -16,6 +16,7 @@
 
 package dk.trustworks.essentials.components.foundation.test.fencedlock;
 
+import dk.trustworks.essentials.components.foundation.IOExceptionUtil;
 import dk.trustworks.essentials.components.foundation.fencedlock.*;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.*;
@@ -116,6 +117,24 @@ public abstract class DBFencedLockManagerIT<LOCK_MANAGER extends DBFencedLockMan
      */
     private static final Duration DELETE_ALL_LOCKS_TIMEOUT = Duration.ofSeconds(30);
 
+    /**
+     * Only failures that can clear by themselves are worth the 30 s window: a {@code WriteConflict} (a lock document that
+     * stays write-locked) or an I/O failure (the database still being unreachable). A missing table, a bad statement or a
+     * regression in {@code deleteAllLocksInDB} is permanent and fails at once, with its own stack trace.
+     */
+    private static boolean isRetryableCleanupFailure(Throwable e) {
+        if (IOExceptionUtil.isIOException(e)) {
+            return true;
+        }
+        for (var t = e; t != null; t = t.getCause() == t ? null : t.getCause()) {
+            var message = t.getMessage();
+            if (message != null && (message.contains("WriteConflict") || message.contains("Write Conflict"))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     public static void deleteAllLocksInDBWithRetry(DBFencedLockManager<?, ?> lockManager) {
         var              deadline   = System.nanoTime() + DELETE_ALL_LOCKS_TIMEOUT.toNanos();
         var              attempt    = 0;
@@ -125,6 +144,9 @@ public abstract class DBFencedLockManagerIT<LOCK_MANAGER extends DBFencedLockMan
                 lockManager.deleteAllLocksInDB();
                 return;
             } catch (RuntimeException e) {
+                if (!isRetryableCleanupFailure(e)) {
+                    throw e;
+                }
                 lastFailure = e;
                 attempt++;
                 log.debug("deleteAllLocksInDB attempt {} failed - retrying: {}", attempt, e.getMessage());
