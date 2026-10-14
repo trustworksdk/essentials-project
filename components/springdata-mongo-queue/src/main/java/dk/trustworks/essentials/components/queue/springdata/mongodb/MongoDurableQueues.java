@@ -696,6 +696,44 @@ public final class MongoDurableQueues implements DurableQueues {
     }
 
     @Override
+    public final Optional<QueuedMessage> releaseUndeliveredMessage(ReleaseUndeliveredMessage operation) {
+        requireNonNull(operation, "You must provide a ReleaseUndeliveredMessage instance");
+        operation.validate();
+        return newInterceptorChainForOperation(operation,
+                                               interceptors,
+                                               (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
+                                               () -> {
+                                                   var nextDeliveryTimestamp = Instant.now().plus(operation.getDeliveryDelay());
+                                                   var queueEntryId          = operation.queueEntryId;
+                                                   var findMessageToRelease = query(where("id").is(queueEntryId)
+                                                                                               .and("isBeingDelivered").is(true));
+
+                                                   // Unlike retryMessage, neither redeliveryAttempts nor lastDeliveryError is touched: no handler ran
+                                                   var update = new Update().set("isBeingDelivered", false)
+                                                                            .set("deliveryTimestamp", null)
+                                                                            .set("nextDeliveryTimestamp", nextDeliveryTimestamp);
+                                                   var updateResult = mongoTemplate.findAndModify(findMessageToRelease,
+                                                                                                  update,
+                                                                                                  FindAndModifyOptions.options().returnNew(true),
+                                                                                                  DurableQueuedMessage.class,
+                                                                                                  this.sharedQueueCollectionName);
+                                                   if (updateResult != null) {
+                                                       log.debug("[{}] Released undelivered Message with id '{}' for delivery at {}. Message entry after update: {}",
+                                                                 updateResult.queueName,
+                                                                 queueEntryId,
+                                                                 nextDeliveryTimestamp,
+                                                                 updateResult);
+                                                       signalLocalConsumerWhenDue(updateResult.queueName, nextDeliveryTimestamp);
+                                                       return Optional.of((QueuedMessage) updateResult);
+                                                   } else {
+                                                       // Already acknowledged, deleted or reset by the stuck-message reset - nothing to release
+                                                       log.debug("Didn't release Message with id '{}' as it is no longer being delivered", queueEntryId);
+                                                       return Optional.<QueuedMessage>empty();
+                                                   }
+                                               }).proceed();
+    }
+
+    @Override
     public final Optional<QueuedMessage> markAsDeadLetterMessage(MarkAsDeadLetterMessage operation) {
         requireNonNull(operation, "You must provide a MarkAsDeadLetterMessage instance");
         operation.validate();

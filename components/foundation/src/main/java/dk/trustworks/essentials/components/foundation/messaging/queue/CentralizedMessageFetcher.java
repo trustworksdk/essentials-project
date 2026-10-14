@@ -382,17 +382,17 @@ public class CentralizedMessageFetcher implements Lifecycle {
         var registration = consumerRegistrations.get(queueName);
         if (registration == null) {
             // The consumer was cancelled between the poll that claimed this message and now. There is no
-            // RedeliveryPolicy left to take a delay from, so retry after one polling interval — by which time
+            // RedeliveryPolicy left to take a delay from, so release it for one polling interval — by which time
             // either a consumer has registered again or the message is simply claimed and released once more.
-            log.warn("[{}] Received message {} for unregistered consumer - will retry the message in {} ms",
+            // No handler ran, so the release does not count as a redelivery attempt.
+            log.warn("[{}] Received message {} for unregistered consumer - releasing the message for redelivery in {} ms",
                      queueName,
                      message.getId(),
                      pollingIntervalMs);
             // No worker will release the key, and a consumer registering again would otherwise never be given it
             releaseOrderedKey(queueName, message);
-            durableQueues.retryMessage(message.getId(),
-                                       null,
-                                       Duration.ofMillis(pollingIntervalMs));
+            durableQueues.releaseUndeliveredMessage(message.getId(),
+                                                    Duration.ofMillis(pollingIntervalMs));
             return;
         }
 
@@ -611,7 +611,9 @@ public class CentralizedMessageFetcher implements Lifecycle {
      * could dead-letter a message that never had a fair attempt: the consumer used to do exactly that, because it
      * classified after unregistering and treated the missing registration as a permanent error. The message is
      * handed back for immediate redelivery instead, and whichever consumer takes it next classifies its next
-     * failure as usual. The hand-back counts as a redelivery attempt, because {@code retryMessage} always counts one.
+     * failure as usual. The hand-back counts as a redelivery attempt, because the handler did run: {@code retryMessage}
+     * always counts one. A message that never reached a handler is released without charging an attempt instead, see
+     * {@link #handBackUndelivered}.
      * <p>
      * The write runs with the thread's interrupt flag cleared and restores it afterwards: a handler that caught the
      * interrupt usually re-sets the flag (Kafka does), and the MongoDB driver refuses to check out a connection on an
@@ -626,28 +628,37 @@ public class CentralizedMessageFetcher implements Lifecycle {
     }
 
     /**
-     * Return a message a poll claimed but no worker would take, because its consumer began stopping in between.
+     * Release a message a poll claimed but no worker would take, because its consumer began stopping in between.
      * Without this the message stayed marked as being delivered until the stuck-message reset, a whole
-     * {@code messageHandlingTimeout} later. Like {@link #handBackAfterConsumerStopped}, it is returned for immediate
-     * redelivery and the hand-back counts as a redelivery attempt.
+     * {@code messageHandlingTimeout} later. It is released for immediate redelivery, and because no handler ever saw it
+     * the release does not count as a redelivery attempt and leaves the last delivery error as it was.
      */
     private void handBackUndelivered(QueueName queueName, QueuedMessage message, RejectedExecutionException e) {
-        log.info("[{}:{}] Consumer began stopping before the message reached a worker; returning the message for redelivery. Reason: {}",
+        log.info("[{}:{}] Consumer began stopping before the message reached a worker; releasing the message for redelivery. Reason: {}",
                  queueName,
                  message.getId(),
                  e.getMessage());
-        handBack(message, e);
+        withInterruptFlagCleared(() -> durableQueues.releaseUndeliveredMessage(message.getId(), Duration.ZERO));
     }
 
     /**
-     * Return a message for immediate redelivery, with the thread's interrupt flag cleared for the write - see
-     * {@link #handBackAfterConsumerStopped}
+     * Return a message whose handler ran for immediate redelivery - see {@link #handBackAfterConsumerStopped}
      */
     private void handBack(QueuedMessage message, Throwable e) {
-        var wasInterrupted = Thread.interrupted();
-        try {
+        withInterruptFlagCleared(() -> {
             durableQueues.retryMessage(message.getId(), e, Duration.ZERO);
             durableQueues.getMessageObserver().messageRetried(message, e, Duration.ZERO);
+        });
+    }
+
+    /**
+     * Run a queue write with the thread's interrupt flag cleared, restoring it afterwards - see
+     * {@link #handBackAfterConsumerStopped}
+     */
+    private static void withInterruptFlagCleared(Runnable write) {
+        var wasInterrupted = Thread.interrupted();
+        try {
+            write.run();
         } finally {
             if (wasInterrupted) {
                 Thread.currentThread().interrupt();

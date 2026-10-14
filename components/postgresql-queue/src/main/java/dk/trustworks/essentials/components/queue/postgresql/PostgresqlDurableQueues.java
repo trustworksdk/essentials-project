@@ -1164,6 +1164,32 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                                                }).proceed();
     }
 
+    @Override
+    public Optional<QueuedMessage> releaseUndeliveredMessage(ReleaseUndeliveredMessage operation) {
+        requireNonNull(operation, "You must provide a ReleaseUndeliveredMessage instance");
+        operation.validate();
+        return newInterceptorChainForOperation(operation,
+                                               interceptors,
+                                               (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
+                                               () -> {
+                                                   var nextDeliveryTimestamp = Instant.now().plus(operation.getDeliveryDelay());
+                                                   var result = unitOfWorkFactory.getRequiredUnitOfWork().handle().createQuery(durableQueuesSql.getReleaseUndeliveredMessageSql())
+                                                                                 .bind("nextDeliveryTimestamp", nextDeliveryTimestamp)
+                                                                                 .bind("id", operation.queueEntryId)
+                                                                                 .map(queuedMessageMapper)
+                                                                                 .findOne();
+                                                   if (result.isPresent()) {
+                                                       log.debug("Released undelivered Message with id '{}' for delivery at {}. Message entry after update: {}", operation.queueEntryId, nextDeliveryTimestamp, result.get());
+                                                       signalLocalConsumerAfterCommit(result.get(), nextDeliveryTimestamp);
+                                                       return result;
+                                                   } else {
+                                                       // Already acknowledged, deleted or reset by the stuck-message reset - nothing to release
+                                                       log.debug("Didn't release Message with id '{}' as it is no longer being delivered", operation.queueEntryId);
+                                                       return Optional.<QueuedMessage>empty();
+                                                   }
+                                               }).proceed();
+    }
+
 
     @Override
     public Optional<QueuedMessage> markAsDeadLetterMessage(MarkAsDeadLetterMessage operation) {

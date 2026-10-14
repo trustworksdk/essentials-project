@@ -31,7 +31,8 @@ import static org.mockito.Mockito.*;
 /**
  * A consumer that is stopping shuts its worker pool down before it unregisters from the fetcher, and workers finishing
  * in between fire refill polls. A message such a poll claims must be handed straight back, not left marked as being
- * delivered until the stuck-message reset.
+ * delivered until the stuck-message reset, and released without being charged a redelivery attempt, since no handler
+ * ever saw it.
  * <p>
  * A stopped fetcher can be started again: the stop shuts its poll thread down, and the start replaces it.
  */
@@ -81,7 +82,9 @@ class CentralizedMessageFetcherTest {
 
         fetcher.start();
 
-        verify(durableQueues, timeout(5_000)).retryMessage(eq(MESSAGE_ID), isA(RejectedExecutionException.class), eq(Duration.ZERO));
+        verify(durableQueues, timeout(5_000)).releaseUndeliveredMessage(MESSAGE_ID, Duration.ZERO);
+        // No handler ran, so the hand-back must not be charged as a redelivery attempt
+        verify(durableQueues, never()).retryMessage(any(QueueEntryId.class), any(), any(Duration.class));
         // The slot is free again (a later poll claims) and the ordered key is no longer excluded
         verify(durableQueues, timeout(5_000).atLeast(2)).getNextMessageReadyForDelivery(any(GetNextMessageReadyForDelivery.class));
         assertThat(claims.get(1).getExcludeOrderedMessagesWithKey()).isEmpty();
@@ -104,9 +107,34 @@ class CentralizedMessageFetcherTest {
         try {
             fetcher.start();
 
-            verify(durableQueues, timeout(5_000)).retryMessage(eq(MESSAGE_ID), isA(RejectedExecutionException.class), eq(Duration.ZERO));
+            verify(durableQueues, timeout(5_000)).releaseUndeliveredMessage(MESSAGE_ID, Duration.ZERO);
+            verify(durableQueues, never()).retryMessage(any(QueueEntryId.class), any(), any(Duration.class));
             Thread.sleep(200);
             verify(durableQueues, times(1)).getNextMessageReadyForDelivery(any(GetNextMessageReadyForDelivery.class));
+            verify(messageHandler, never()).handle(any());
+        } finally {
+            workerPool.shutdownNow();
+        }
+    }
+
+    @Test
+    void a_message_claimed_for_a_consumer_that_unregistered_in_between_is_released_without_charging_an_attempt() {
+        when(consumer.isStarted()).thenReturn(true);
+        var workerPool = Executors.newSingleThreadExecutor();
+        var message    = orderedMessage("key-1");
+        when(durableQueues.getNextMessageReadyForDelivery(any(GetNextMessageReadyForDelivery.class))).thenAnswer(invocation -> {
+            // The consumer is cancelled between the poll that claims the message and its hand-off
+            fetcher.unregisterConsumer(QUEUE_NAME);
+            return Optional.of(message);
+        });
+        fetcher.registerConsumer(QUEUE_NAME, consumer, messageHandler, workerPool, 1);
+
+        try {
+            fetcher.start();
+
+            // Released for one polling interval
+            verify(durableQueues, timeout(5_000)).releaseUndeliveredMessage(MESSAGE_ID, Duration.ofMillis(10));
+            verify(durableQueues, never()).retryMessage(any(QueueEntryId.class), any(), any(Duration.class));
             verify(messageHandler, never()).handle(any());
         } finally {
             workerPool.shutdownNow();

@@ -79,6 +79,11 @@ public class SingleOperationTransactionDurableQueuesInterceptor implements Durab
     }
 
     @Override
+    public Optional<QueuedMessage> intercept(ReleaseUndeliveredMessage operation, InterceptorChain<ReleaseUndeliveredMessage, Optional<QueuedMessage>, DurableQueuesInterceptor> interceptorChain) {
+        return unitOfWorkFactory.withUnitOfWork(interceptorChain::proceed);
+    }
+
+    @Override
     public Optional<QueuedMessage> intercept(MarkAsDeadLetterMessage operation, InterceptorChain<MarkAsDeadLetterMessage, Optional<QueuedMessage>, DurableQueuesInterceptor> interceptorChain) {
         return unitOfWorkFactory.withUnitOfWork(interceptorChain::proceed);
     }

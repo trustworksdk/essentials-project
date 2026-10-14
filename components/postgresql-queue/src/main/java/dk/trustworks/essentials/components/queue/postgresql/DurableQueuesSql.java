@@ -698,6 +698,24 @@ public class DurableQueuesSql {
     }
 
     /**
+     * SQL statement for releasing a message that is being delivered but never reached a message handler.
+     * Unlike {@link #getRetryMessageSql()} it leaves {@code redelivery_attempts} and {@code last_delivery_error} untouched.
+     *
+     * @return SQL statement for releasing an undelivered message
+     */
+    public String getReleaseUndeliveredMessageSql() {
+        return bind("""
+                    UPDATE {:tableName} SET
+                    next_delivery_ts = :nextDeliveryTimestamp,
+                    is_being_delivered = FALSE,
+                    delivery_ts = NULL
+                    WHERE id = :id AND is_being_delivered
+                    RETURNING *
+                    """,
+                    arg("tableName", sharedQueueTableName));
+    }
+
+    /**
      * SQL statement for getting the mark as dead letter message sql.
      *
      * @return SQL statement for getting the mark as dead letter message sql

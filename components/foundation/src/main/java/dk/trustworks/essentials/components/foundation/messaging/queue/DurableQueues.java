@@ -536,6 +536,40 @@ public interface DurableQueues extends Lifecycle {
     Optional<QueuedMessage> retryMessage(RetryMessage operation);
 
     /**
+     * Release a message that was claimed for delivery but never reached a message handler, so it can be delivered again
+     * after the specified <code>deliveryDelay</code> (called by the {@link DurableQueueConsumer} machinery, e.g. when a consumer
+     * began stopping between claiming a message and handing it to a worker).<br>
+     * Unlike {@link #retryMessage(QueueEntryId, Throwable, Duration)} the release is not a delivery attempt:
+     * {@link QueuedMessage#getRedeliveryAttempts()} and {@link QueuedMessage#getLastDeliveryError()} are left untouched.
+     *
+     * @param queueEntryId  the unique id of the message to release
+     * @param deliveryDelay how long the queue will wait until it delivers the message again
+     * @return the released {@link QueuedMessage} wrapped in an {@link Optional} if the operation was successful, otherwise it returns an {@link Optional#empty()}
+     * (e.g. if the message is no longer marked as being delivered)
+     */
+    default Optional<QueuedMessage> releaseUndeliveredMessage(QueueEntryId queueEntryId,
+                                                              Duration deliveryDelay) {
+        return releaseUndeliveredMessage(new ReleaseUndeliveredMessage(queueEntryId,
+                                                                       deliveryDelay));
+    }
+
+    /**
+     * Release a message that was claimed for delivery but never reached a message handler - see
+     * {@link #releaseUndeliveredMessage(QueueEntryId, Duration)}.<br>
+     * The default implementation exists so that {@link DurableQueues} implementations written before this operation was added
+     * keep compiling: it falls back to {@link #retryMessage(QueueEntryId, Throwable, Duration)}, which counts the release
+     * as a redelivery attempt. Implementations should override it to release the message without charging an attempt.
+     *
+     * @param operation the {@link ReleaseUndeliveredMessage} operation
+     * @return the released {@link QueuedMessage} wrapped in an {@link Optional} if the operation was successful, otherwise it returns an {@link Optional#empty()}
+     */
+    default Optional<QueuedMessage> releaseUndeliveredMessage(ReleaseUndeliveredMessage operation) {
+        requireNonNull(operation, "You must provide a ReleaseUndeliveredMessage instance");
+        operation.validate();
+        return retryMessage(operation.getQueueEntryId(), null, operation.getDeliveryDelay());
+    }
+
+    /**
      * Mark an already Queued Message as a Dead Letter Message (or Poison Message).<br>
      * Dead Letter Messages won't be delivered to any {@link DurableQueueConsumer} (called by the {@link DurableQueueConsumer})<br>
      * To deliver a Dead Letter Message you must first resurrect the message using {@link #resurrectDeadLetterMessage(QueueEntryId, Duration)}<br>

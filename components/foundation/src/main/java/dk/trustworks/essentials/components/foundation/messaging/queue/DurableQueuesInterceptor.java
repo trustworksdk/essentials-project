@@ -129,6 +129,17 @@ public interface DurableQueuesInterceptor extends Interceptor {
     }
 
     /**
+     * Intercept {@link ReleaseUndeliveredMessage} calls
+     *
+     * @param operation        the operation
+     * @param interceptorChain the interceptor chain (call {@link InterceptorChain#proceed()} to continue the processing chain)
+     * @return the released {@link QueuedMessage} wrapped in an {@link Optional} if the operation was successful, otherwise it returns an {@link Optional#empty()}
+     */
+    default Optional<QueuedMessage> intercept(ReleaseUndeliveredMessage operation, InterceptorChain<ReleaseUndeliveredMessage, Optional<QueuedMessage>, DurableQueuesInterceptor> interceptorChain) {
+        return interceptorChain.proceed();
+    }
+
+    /**
      * Intercept {@link MarkAsDeadLetterMessage} calls
      *
      * @param operation        the operation
