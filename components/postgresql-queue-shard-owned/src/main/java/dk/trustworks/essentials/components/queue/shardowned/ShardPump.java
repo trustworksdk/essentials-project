@@ -109,14 +109,58 @@ final class ShardPump implements Runnable {
         return owners.size();
     }
 
+    /**
+     * Serve until {@code running} is cleared.
+     * <p>
+     * <b>Stopping and dying are told apart by {@code running}, not by how {@link #serve()} ended.</b> On an orderly stop
+     * the pump serves none of its shards any more, so none of them is awaiting a takeover here, and its stalls are
+     * forgotten. A pump that ends while {@code running} is still set has died: something outside the per-owner guards
+     * threw (an {@code Error}, or an unchecked exception from {@code needsAttention}, say). Nothing restarts it and the
+     * heartbeat keeps renewing every lease it held, so its shards stay leased to this instance and are served by nobody.
+     * Its stalls are then left counted in {@link ShardOwnerMetrics#shardsAwaitingTakeover}: forgetting them zeroed the one
+     * metric for a leased-but-unserved shard exactly when that had got worse. The death is logged at ERROR here because
+     * {@link ShardRuntime} submits the pump to an executor whose {@code Future} nobody reads, so the throwable would
+     * otherwise vanish; it is still rethrown. Those stalls are forgotten once the runtime stops
+     * ({@link #forgetStallsAfterExit()}), because the stop ends the leases the dead pump was keeping.
+     * <p>
+     * One exception to telling them apart by {@code running}: the flag is shared across a runtime's restarts. A pump that
+     * outlived {@link ShardRuntime#stop()}'s wait and leaves {@code serve()} only after a {@link ShardRuntime#start()} reads
+     * the new run's {@code running} as set, so it logs a death that was really a late stop and keeps its stalls counted.
+     */
     @Override
     public void run() {
+        Throwable died = null;
         try {
             serve();
+        } catch (Throwable e) {
+            died = e;
+            throw e;
         } finally {
-            // This pump serves none of its shards any more, so none of them is awaiting a takeover here.
-            stalls.forgetAll();
+            if (running.get()) {
+                log.error("{} died while its runtime is still running. The {} shard(s) it serves stay leased to this instance "
+                                  + "and deliver nothing: the heartbeat keeps renewing their leases, so no other instance takes "
+                                  + "them over, and nothing restarts the pump. Restart the ShardRuntime (or the application). "
+                                  + "Shards whose takeover was failing stay counted in shardsAwaitingTakeover until the "
+                                  + "runtime stops",
+                          name, owners.size(), died);
+            } else {
+                stalls.forgetAll();
+            }
         }
+    }
+
+    /**
+     * The runtime has stopped and this pump's thread has ended, so none of its shards is served by it any more: forget its
+     * stalls. A no-op for a pump that stopped in order, which forgot them on its way out. A pump that had died while the
+     * runtime ran kept them counted ({@link #run()}); without this they stayed in
+     * {@link ShardOwnerMetrics#shardsAwaitingTakeover}, which outlives the runtime, for the rest of the process, so the
+     * restart its own ERROR recommends never cleared the count and the observer was never told the stall ended.
+     * <p>
+     * Call it only once the pump's thread is known to have ended ({@code ExecutorService.awaitTermination} returned
+     * {@code true}): the stall map belongs to the pump's thread, and its termination is what makes another thread's read safe.
+     */
+    void forgetStallsAfterExit() {
+        stalls.forgetAll();
     }
 
     private void serve() {

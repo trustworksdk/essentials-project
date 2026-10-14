@@ -134,7 +134,10 @@ public final class ShardOwnerMetrics {
      * completes, or when the lease ends once the pump next reaches the database. A lease that ends while
      * the pump is reconnecting stays counted here until then. Meanwhile {@code unownedShards} shows the
      * shard only if the lease was released and nobody has taken it yet; if another instance took it over,
-     * the shard counts as owned there, and this count is one too high until the pump reconnects.
+     * the shard counts as owned there, and this count is one too high until the pump reconnects. It falls
+     * when the pump stops with its runtime, but not when the pump thread dies while the runtime runs: its
+     * shards then stay leased and unserved, and the death is logged at ERROR. A dead pump's shards stop
+     * counting when that runtime stops.
      * <p>
      * Readable through {@link ShardOwnedQueue#metrics()}. A {@code PostgresqlMessageQueue} keeps its
      * metrics private; for a queue used through {@code MessageQueue} the same transitions reach

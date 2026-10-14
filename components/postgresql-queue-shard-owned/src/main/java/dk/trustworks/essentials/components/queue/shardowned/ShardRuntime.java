@@ -337,7 +337,12 @@ public final class ShardRuntime implements Lifecycle, AutoCloseable {
             if (shutdownBudget != null && shutdownBudget.get().compareTo(pumpWait) < 0) {
                 pumpWait = shutdownBudget.get();
             }
-            if (!pumpExecutor.awaitTermination(pumpWait.toMillis(), TimeUnit.MILLISECONDS)) {
+            if (pumpExecutor.awaitTermination(pumpWait.toMillis(), TimeUnit.MILLISECONDS)) {
+                // Every pump thread has ended, so their stall maps are safe to read from here. A pump that died while the
+                // runtime ran kept its stalled shards counted (ShardPump.run); this stop ends those leases, so forget them.
+                pumps.forEach(ShardPump::forgetStallsAfterExit);
+            } else {
+                // A pump still in its loop forgets its own stalls when it leaves it, since running is false now.
                 pumpExecutor.shutdownNow();
             }
         } catch (InterruptedException e) {
