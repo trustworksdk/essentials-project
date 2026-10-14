@@ -375,7 +375,7 @@ class EssentialsRunReportTest {
             var latest       = start.plus(Duration.ofMinutes(10L * (periods - 1)));
             assertThat(rendered)
                     .contains("runtime findings were also not collected in 2 more periods between " + firstDropped + " and " + lastDropped.plus(Duration.ofMinutes(5))
-                              + ", not listed - the report lists at most " + EssentialsRunReport.MAX_UNCOLLECTED_PERIODS + " periods")
+                              + ", not listed - the report lists at most " + EssentialsRunReport.MAX_UNCOLLECTED_PERIODS + " ended periods")
                     .contains("runtime findings were not collected from " + latest + " until " + latest.plus(Duration.ofMinutes(5)) + ":")
                     .doesNotContain("from " + firstDropped + " until")
                     .doesNotContain("from " + lastDropped + " until");

@@ -103,7 +103,9 @@ import static dk.trustworks.essentials.shared.interceptor.InterceptorChain.newIn
  * Two consequences worth knowing before writing one:
  * <ul>
  *     <li><b>{@link GetNextMessageReadyForDelivery} is never intercepted</b>, because it throws
- *         (below). It is the one operation of the twenty-one an interceptor cannot observe here.</li>
+ *         (below). Together with {@code ReleaseUndeliveredMessage} (next item) it is an operation an interceptor cannot observe here.</li>
+ *     <li><b>{@code ReleaseUndeliveredMessage} is not intercepted as such</b>: this class inherits the default of {@link DurableQueues},
+ *         which falls back to {@code retryMessage}, so an interceptor sees a {@code RetryMessage} instead.</li>
  *     <li><b>A {@code HandleQueuedMessage} interceptor receives the partial message.</b> On the
  *         delivery path the engine hands over {@code (key, payload, payloadType)} only, so
  *         {@link ShardOwnedQueuedMessage#getId()} and {@code getTotalDeliveryAttempts()} throw rather

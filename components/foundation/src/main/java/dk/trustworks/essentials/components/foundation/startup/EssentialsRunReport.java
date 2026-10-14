@@ -402,7 +402,7 @@ public final class EssentialsRunReport {
         for (var i = 0; i < uncollected.size(); i++) {
             if (droppedUncollected > 0 && i == uncollected.size() - 1) {
                 all.add("runtime findings were also not collected in " + plural(droppedUncollected, "more period") + " between " + droppedUncollectedFrom
-                        + " and " + droppedUncollectedUntil + ", not listed - the report lists at most " + MAX_UNCOLLECTED_PERIODS + " periods");
+                        + " and " + droppedUncollectedUntil + ", not listed - the report lists at most " + MAX_UNCOLLECTED_PERIODS + " ended periods");
             }
             all.add(describe(uncollected.get(i)));
         }

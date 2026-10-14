@@ -570,7 +570,7 @@ unaffected: the interface's `Instant` overloads still call its no-arg methods. (
   outside a `UnitOfWork`, a `ViewEventProcessor` started later) is added to the context's report when that context
   is the only one open in the JVM; in a test JVM with several contexts open it is only logged by its check. When a second report registers, one INFO
   line says so, and the run report and the periodic block name the period in which runtime findings were not
-  collected, rather than reporting "no findings" for it. At most 20 such periods are listed: the first 19 and the
+  collected, rather than reporting "no findings" for it. At most 20 such ended periods are listed, plus the one under way: the first 19 and the
   latest, with one line counting the ones in between ("also not collected in K more periods between X and Y"), so
   the report never claims findings went uncollected while they were collected. A periodic block that carries only that period, and no new
   findings, is logged at INFO, not WARN. A report registered twice stays registered until both

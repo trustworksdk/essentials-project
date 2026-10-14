@@ -559,6 +559,10 @@ public interface DurableQueues extends Lifecycle {
      * The default implementation exists so that {@link DurableQueues} implementations written before this operation was added
      * keep compiling: it falls back to {@link #retryMessage(QueueEntryId, Throwable, Duration)}, which counts the release
      * as a redelivery attempt. Implementations should override it to release the message without charging an attempt.
+     * <p>
+     * The fallback has two further side effects: because it passes no cause, the message's last delivery error is overwritten with
+     * {@link RetryMessage#MANUALLY_REQUESTED_REDELIVERY} (as for any {@code retryMessage} call without a cause), and the operation reaches
+     * {@link DurableQueuesInterceptor}s as a {@link RetryMessage}, never as a {@link ReleaseUndeliveredMessage}.
      *
      * @param operation the {@link ReleaseUndeliveredMessage} operation
      * @return the released {@link QueuedMessage} wrapped in an {@link Optional} if the operation was successful, otherwise it returns an {@link Optional#empty()}
