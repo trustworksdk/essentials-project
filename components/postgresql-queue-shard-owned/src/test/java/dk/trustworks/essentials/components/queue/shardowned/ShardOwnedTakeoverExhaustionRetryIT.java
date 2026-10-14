@@ -30,7 +30,7 @@ import java.sql.*;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.*;
 
 import static dk.trustworks.essentials.components.queue.shardowned.ShardOwnedSchema.*;
 import static org.assertj.core.api.Assertions.*;
@@ -48,6 +48,11 @@ import static org.awaitility.Awaitility.await;
  *     logged that at WARN. A pass runs every takeover before it pumps any shard, so the throw ended each pass before
  *     any shard was pumped, and every shard the pump served stalled, whatever its position among the pump's
  *     owners.</li>
+ *     <li>An owner whose takeover failed is not pumped until it completes. On the ordered lane that is what keeps a key
+ *     behind its dead letter: the blocks are loaded at the end of {@code onTakeover}, after the exhaustion pass, so a
+ *     failed pass has not loaded them.</li>
+ *     <li>An unchecked exception from {@code onTakeover} is retried the same way, and does not end the pump thread. It
+ *     used to, and every shard on the pump stalled with it.</li>
  *     <li>While it keeps failing, the shard is leased but not served, which {@code QueueHealth.unownedShards} cannot
  *     see. The owner's metrics must report it ({@code shardsAwaitingTakeover}, {@code takeoverFailures}), and it is
  *     logged at ERROR once rather than on every retry. It used to log a stack trace per retry and count nothing.
@@ -218,9 +223,7 @@ class ShardOwnedTakeoverExhaustionRetryIT {
             assertThat(failingMetrics.shardsAwaitingTakeover.get()).as("cleared once the takeover completed").isZero();
             assertThat(pumpErrors()).as("no further ERROR once it recovered").hasSize(1);
         } finally {
-            running.set(false);
-            pump.wakeup().signal();
-            thread.join(Duration.ofSeconds(10));
+            stopPump(running, pump, thread);
         }
     }
 
@@ -282,9 +285,7 @@ class ShardOwnedTakeoverExhaustionRetryIT {
                                .isLessThan(Duration.ofMillis(2_500));
             assertThat(failingMetrics.shardsAwaitingTakeover.get()).as("still failing throughout").isEqualTo(1);
         } finally {
-            running.set(false);
-            pump.wakeup().signal();
-            thread.join(Duration.ofSeconds(10));
+            stopPump(running, pump, thread);
         }
     }
 
@@ -326,14 +327,227 @@ class ShardOwnedTakeoverExhaustionRetryIT {
                    .untilAsserted(() -> assertThat(endedMetrics.shardsAwaitingTakeover.get()).as("cleared when the lease ended").isZero());
             assertThat(stoppedMetrics.shardsAwaitingTakeover.get()).as("the other stall is untouched").isEqualTo(1);
         } finally {
-            running.set(false);
-            pump.wakeup().signal();
-            thread.join(Duration.ofSeconds(10));
+            stopPump(running, pump, thread);
         }
-        assertThat(thread.isAlive()).isFalse();
         // The pump stopped with the takeover still failing: none of its shards is served by it any more
         assertThat(stoppedMetrics.shardsAwaitingTakeover.get()).as("cleared when the pump stopped").isZero();
         assertThat(stoppedMetrics.takeoverFailures.sum()).as("a running total, not cleared").isGreaterThan(0);
+    }
+
+    /**
+     * {@code OrderedShardOwner.onTakeover} loads the dead-letter and retry blocks after the exhaustion pass, so while that
+     * pass keeps failing the owner does not know key-1 is blocked. Pumped anyway, it would deliver key-1's second message
+     * past the dead letter of its first. Once the pass succeeds the message is parked behind that dead letter instead.
+     */
+    @Test
+    void a_pump_does_not_dispatch_an_ordered_shard_before_its_takeover_has_loaded_the_dead_letter_blocks() throws Exception {
+        // key-1: its first message is already dead-lettered, so its second must never be delivered
+        insertDeadLetter("key-1", 0, 1);
+        insertOrdered("key-1", 1, 2, 0);
+        // key-2: the takeover charge brings it to the limit, so the exhaustion pass must move it - and is refused
+        insertOrdered("key-2", 0, 3, MAX_ATTEMPTS - 1);
+        // key-3: nothing holds it. Delivered once the takeover completes, which proves the owner is pumped from then on
+        insertOrdered("key-3", 0, 4, 0);
+        var deliveredKeys = new CopyOnWriteArrayList<String>();
+        var ownerMetrics  = metrics();
+        var owner = new OrderedShardOwner(storage, SHARD, storage.acquireLease("ordered", SHARD, OWNER, 60_000).orElseThrow(),
+                                          ShardOwnerSettings.defaults(), (id, key, payload, type) -> deliveredKeys.add(key), ownerMetrics,
+                                          RedeliveryPolicy.fixed(Duration.ofSeconds(1), MAX_ATTEMPTS), OWNER, new ShardWakeup(),
+                                          HandlerDispatch.inline(), false);
+        var pumpMetrics = new ShardOwnerMetrics();
+        var running     = new AtomicBoolean(true);
+        var pump        = new ShardPump(storage, ShardOwnerSettings.defaults(), pumpMetrics, running, new AtomicBoolean(false),
+                                        "pump-under-test", Optional::empty);
+        failDeadLetterInserts(true);
+        pump.add(owner);
+        var thread = Thread.ofPlatform().name("pump-under-test").start(pump);
+        try {
+            // Fail fast: an owner pumped too early delivers its rows, and then the retried pass finds nothing left to move
+            await().atMost(Duration.ofSeconds(15))
+                   .failFast("pumped before its takeover had loaded the dead-letter blocks",
+                             () -> assertThat(deliveredKeys).as("delivered while the takeover was failing").isEmpty())
+                   .untilAsserted(() -> assertThat(ownerMetrics.takeoverFailures.sum()).as("the failing takeover is retried").isGreaterThan(2));
+            // Read after the wait, never as its condition: a refusal is counted inside the INSERT, before its takeover failure is
+            assertThat(deadLetterInsertRefusals()).as("the takeover failed at the injected refusal, not something else").isGreaterThan(2);
+            assertThat(deadLetterError(3)).as("the injected failure must reach the exhaustion pass").isEmpty();
+            assertThat(deliveredKeys).as("not pumped before its takeover has loaded the dead-letter blocks").isEmpty();
+
+            failDeadLetterInserts(false);
+            await().atMost(Duration.ofSeconds(15))
+                   .untilAsserted(() -> {
+                       assertThat(deliveredKeys).as("pumped once its takeover completed").containsExactly("key-3");
+                       assertThat(blockedByKeyOrder(2)).as("parked behind key-1's dead letter, never delivered").contains(0L);
+                   });
+            assertThat(deadLetterError(3)).contains(ShardOwnedStorage.EXHAUSTED_BY_TAKEOVERS);
+            assertThat(pumpMetrics.connectionFailures.sum()).as("a failing statement is not a lost connection").isZero();
+        } finally {
+            stopPump(running, pump, thread);
+        }
+    }
+
+    /**
+     * The pump's other takeover failure: an unchecked exception rather than a failing statement. It used to end the pump
+     * thread, and every shard on the pump with it, while the heartbeat went on renewing their leases. Thrown while
+     * {@code failTakeover} is set rather than for a fixed number of calls, so the test decides when the takeover
+     * completes and can observe the other shard delivering in the meantime.
+     */
+    @Test
+    void a_pump_survives_a_takeover_that_throws_and_retries_it_while_serving_its_other_shards() throws Exception {
+        insertUnordered(1, 0, null);
+        var otherShard = SHARD + 1;
+        try (var connection = dataSource.getConnection()) {
+            storage.enqueueBatch(connection, otherShard, List.of(new byte[]{1}, new byte[]{2}, new byte[]{3}), 1);
+        }
+        var throwingDeliveries = new CopyOnWriteArrayList<MessageId>();
+        var otherDeliveries    = new CopyOnWriteArrayList<MessageId>();
+        var throwingMetrics    = metrics();
+        var failTakeover       = new AtomicBoolean(true);
+        var takeoverCalls      = new AtomicInteger();
+        var throwing = new ThrowingTakeover(new ShardOwner(storage, SHARD, storage.acquireLease("unordered", SHARD, OWNER, 60_000).orElseThrow(),
+                                                           ShardOwnerSettings.defaults(), (id, payload, type) -> throwingDeliveries.add(id),
+                                                           throwingMetrics, RedeliveryPolicy.fixed(Duration.ofSeconds(1), MAX_ATTEMPTS),
+                                                           new ShardWakeup(), OWNER, HandlerDispatch.inline(), false),
+                                            failTakeover, takeoverCalls);
+        var other = new ShardOwner(storage, otherShard, storage.acquireLease("unordered", otherShard, OWNER, 60_000).orElseThrow(),
+                                   ShardOwnerSettings.defaults(), (id, payload, type) -> otherDeliveries.add(id), metrics(),
+                                   RedeliveryPolicy.fixed(Duration.ofSeconds(1), MAX_ATTEMPTS), new ShardWakeup(), OWNER,
+                                   HandlerDispatch.inline(), false);
+        var pumpMetrics = new ShardOwnerMetrics();
+        var running     = new AtomicBoolean(true);
+        var pump        = new ShardPump(storage, ShardOwnerSettings.defaults(), pumpMetrics, running, new AtomicBoolean(false),
+                                        "pump-under-test", Optional::empty);
+        pump.add(throwing);
+        pump.add(other);
+        var thread = Thread.ofPlatform().name("pump-under-test").start(pump);
+        try {
+            await().atMost(Duration.ofSeconds(15))
+                   .untilAsserted(() -> {
+                       assertThat(otherDeliveries).as("the other shard keeps delivering").hasSize(3);
+                       assertThat(takeoverCalls.get()).as("the throwing takeover is retried").isGreaterThan(2);
+                       // Inside the wait: a call is counted before it throws, its failure only after the pump has handled it
+                       assertThat(throwingMetrics.takeoverFailures.sum()).as("every failed attempt is counted").isGreaterThan(2);
+                   });
+            assertThat(thread.isAlive()).as("an unchecked exception from a takeover does not end the pump").isTrue();
+            assertThat(throwingDeliveries).as("not pumped before its takeover has completed").isEmpty();
+            assertThat(throwingMetrics.shardsAwaitingTakeover.get()).as("the stalled shard is reported").isEqualTo(1);
+            assertThat(pumpErrors()).as("one ERROR for the stalled takeover, not one per retry").hasSize(1);
+            assertThat(pumpErrors().getFirst().getFormattedMessage()).contains("threw during its takeover");
+
+            failTakeover.set(false);
+            await().atMost(Duration.ofSeconds(15))
+                   .untilAsserted(() -> assertThat(throwingDeliveries).as("delivers once its takeover completes")
+                                                                      .containsExactly(new MessageId(MessageId.Lane.UNORDERED, SHARD, 1)));
+            assertThat(thread.isAlive()).isTrue();
+            assertThat(throwingMetrics.shardsAwaitingTakeover.get()).as("cleared once the takeover completed").isZero();
+            assertThat(pumpMetrics.connectionFailures.sum()).as("an unchecked exception is not a lost connection").isZero();
+        } finally {
+            stopPump(running, pump, thread);
+        }
+    }
+
+    /**
+     * A real owner whose {@code onTakeover} throws an unchecked exception while {@code fail} is set, and otherwise delegates
+     * every call.
+     */
+    private static final class ThrowingTakeover implements LeasedOwner {
+        private final LeasedOwner   delegate;
+        private final AtomicBoolean fail;
+        private final AtomicInteger calls;
+
+        ThrowingTakeover(LeasedOwner delegate, AtomicBoolean fail, AtomicInteger calls) {
+            this.delegate = delegate;
+            this.fail = fail;
+            this.calls = calls;
+        }
+
+        @Override
+        public void onTakeover(Connection connection) throws SQLException {
+            calls.incrementAndGet();
+            if (fail.get()) {
+                throw new IllegalStateException("injected takeover failure");
+            }
+            delegate.onTakeover(connection);
+        }
+
+        @Override
+        public int pumpOnce(Connection connection) throws SQLException {
+            return delegate.pumpOnce(connection);
+        }
+
+        @Override
+        public boolean needsAttention() {
+            return delegate.needsAttention();
+        }
+
+        @Override
+        public void flushOnStop(Connection connection) throws SQLException {
+            delegate.flushOnStop(connection);
+        }
+
+        @Override
+        public long parkDeadlineMillis() {
+            return delegate.parkDeadlineMillis();
+        }
+
+        @Override
+        public int shard() {
+            return delegate.shard();
+        }
+
+        @Override
+        public short queueId() {
+            return delegate.queueId();
+        }
+
+        @Override
+        public ShardOwnerMetrics ownerMetrics() {
+            return delegate.ownerMetrics();
+        }
+
+        @Override
+        public long fence() {
+            return delegate.fence();
+        }
+
+        @Override
+        public String lane() {
+            return delegate.lane();
+        }
+
+        @Override
+        public boolean leaseHeld() {
+            return delegate.leaseHeld();
+        }
+
+        @Override
+        public void beginDraining() {
+            delegate.beginDraining();
+        }
+
+        @Override
+        public int inFlight() {
+            return delegate.inFlight();
+        }
+
+        @Override
+        public void onLeaseEnded(LeaseEnd reason) {
+            delegate.onLeaseEnded(reason);
+        }
+
+        @Override
+        public boolean deliveryPermitted() {
+            return delegate.deliveryPermitted();
+        }
+    }
+
+    /**
+     * Asserted, not assumed: a pump that does not exit when {@code running} is cleared would otherwise let the test pass
+     * and leak its thread, and the pooled connection it holds, into the tests that follow.
+     */
+    private static void stopPump(AtomicBoolean running, ShardPump pump, Thread thread) throws InterruptedException {
+        running.set(false);
+        pump.wakeup().signal();
+        assertThat(thread.join(Duration.ofSeconds(10))).as("the pump stops when running is cleared").isTrue();
     }
 
     /**
@@ -436,6 +650,36 @@ class ShardOwnedTakeoverExhaustionRetryIT {
             statement.setLong(5, seq);
             statement.setInt(6, attempts);
             statement.executeUpdate();
+        }
+    }
+
+    private void insertDeadLetter(String key, long keyOrder, long seq) throws SQLException {
+        try (var connection = dataSource.getConnection();
+             var statement = connection.prepareStatement(
+                     "INSERT INTO " + DLQ_TABLE + " (queue_id, shard, source_lane, msg_key, key_order, seq, payload, payload_type, attempts, last_error)"
+                             + " VALUES (?, ?, 'ordered', ?, ?, ?, '\\x00'::bytea, 1, 1, 'failed')")) {
+            statement.setShort(1, QUEUE_ID);
+            statement.setInt(2, SHARD);
+            statement.setString(3, key);
+            statement.setLong(4, keyOrder);
+            statement.setLong(5, seq);
+            statement.executeUpdate();
+        }
+    }
+
+    /**
+     * @return the dead letter's {@code blocked_by_key_order}: empty when there is no dead letter for {@code seq}, or it
+     * was dead-lettered by a failure of its own rather than parked behind another
+     */
+    private Optional<Long> blockedByKeyOrder(long seq) throws SQLException {
+        try (var connection = dataSource.getConnection();
+             var statement = connection.prepareStatement("SELECT blocked_by_key_order FROM " + DLQ_TABLE + " WHERE queue_id = ? AND shard = ? AND seq = ?")) {
+            statement.setShort(1, QUEUE_ID);
+            statement.setInt(2, SHARD);
+            statement.setLong(3, seq);
+            try (var resultSet = statement.executeQuery()) {
+                return resultSet.next() ? Optional.ofNullable(resultSet.getObject(1, Long.class)) : Optional.empty();
+            }
         }
     }
 
