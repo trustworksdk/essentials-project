@@ -350,10 +350,6 @@ public final class ListenNotify {
     }
 
     /**
-     * {@code pg_trigger.tgtype} of an {@code AFTER ... FOR EACH ROW} trigger on {@code operations}: the row bit plus one
-     * bit per operation (PostgreSQL's {@code TRIGGER_TYPE_*} constants in {@code catalog/pg_trigger.h})
-     */
-    /**
      * {@link PostgresqlUtil#checkIsValidTableOrColumnName(String)}, minus the schema-qualified form it also accepts: the
      * table name is pasted into the notify function's name, the trigger's name and the LISTEN channel, none of which can
      * carry a schema, so {@code schema.table} would otherwise fail later with a SQL syntax error - or create the function
@@ -367,6 +363,10 @@ public final class ListenNotify {
         }
     }
 
+    /**
+     * {@code pg_trigger.tgtype} of an {@code AFTER ... FOR EACH ROW} trigger on {@code operations}: the row bit plus one
+     * bit per operation (PostgreSQL's {@code TRIGGER_TYPE_*} constants in {@code catalog/pg_trigger.h})
+     */
     private static int rowTriggerType(List<SqlOperation> operations) {
         var type = 1;
         for (var operation : EnumSet.copyOf(operations)) {

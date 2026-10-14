@@ -255,6 +255,8 @@ public class EssentialsComponentsProperties {
     }
 
     public static class MultiTableChangeListenerProperties {
+        // Literal, not PostgresqlDurableQueuesBuilder.DEFAULT_CHANGE_LISTENER_POLLING_INTERVAL: the configuration processor only
+        // records a default it can read from a literal. EssentialsComponentsPropertiesDefaultsTest keeps the two equal
         private Duration pollingInterval              = Duration.ofMillis(50);
         private boolean  filterDuplicateNotifications = true;
         private boolean  dedicatedConnection          = false;
@@ -324,6 +326,8 @@ public class EssentialsComponentsProperties {
         private String sharedQueueTableName           = PostgresqlDurableQueues.DEFAULT_DURABLE_QUEUES_TABLE_NAME;
 
         private Double            pollingDelayIntervalIncrementFactor      = 0.5d;
+        // Literal, not PostgresqlDurableQueues.DEFAULT_MAX_POLLING_INTERVAL, for the configuration metadata - see
+        // EssentialsComponentsPropertiesDefaultsTest
         private Duration          maxPollingInterval                       = Duration.ofMillis(2000);
         private Duration          messageHandlingTimeout                   = Duration.ofSeconds(30);
         private boolean           useCentralizedMessageFetcher             = true;

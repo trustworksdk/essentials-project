@@ -590,14 +590,6 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
     }
 
     /**
-     * Renew the leases this instance holds, at a third of their lifetime.
-     * <p>
-     * A third rather than a half so that a single missed renewal — a GC pause, a slow query, a blip
-     * on the connection — does not cost the shard. An owner whose renewal is refused has been
-     * superseded and stops immediately; it does not wait to find out at acknowledgement time,
-     * because by then it may have dispatched work its successor is also dispatching.
-     */
-    /**
      * Another live process heartbeats under this instance id. Both then count as one instance in the rebalance and
      * keep taking the same shards from each other - safe, because the fence refuses the loser's writes, but the queue
      * churns. Typically an instance id configured explicitly to the same value in two processes, or derived from
@@ -616,6 +608,14 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         }
     }
 
+    /**
+     * Renew the leases this instance holds, at a third of their lifetime.
+     * <p>
+     * A third rather than a half so that a single missed renewal — a GC pause, a slow query, a blip
+     * on the connection — does not cost the shard. An owner whose renewal is refused has been
+     * superseded and stops immediately; it does not wait to find out at acknowledgement time,
+     * because by then it may have dispatched work its successor is also dispatching.
+     */
     private void startHeartbeat() {
         var interval = Math.max(200L, leaseTtlMillis / 3);
         heartbeat = runtime.scheduleHeartbeat(() -> {
