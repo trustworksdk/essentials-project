@@ -239,6 +239,16 @@ final class ShardOwner implements LeasedOwner {
     }
 
     @Override
+    public short queueId() {
+        return storage.queueId();
+    }
+
+    @Override
+    public ShardOwnerMetrics ownerMetrics() {
+        return metrics;
+    }
+
+    @Override
     public boolean needsAttention() {
         if (wakeup.consume()) {
             metrics.wakeupsHonoured.increment();

@@ -852,7 +852,13 @@ Three deliberate shapes in that binding:
 reports the shard count, how many shards of each lane hold a live lease, and how many instances are
 heartbeating — two cheap queries against the lease and membership tables. `unownedShards()` is the
 number to alert on: zero in steady state, briefly non-zero while shards move, persistently non-zero
-when messages are sitting in shards nobody reads.
+when messages are sitting in shards nobody reads. It cannot see a shard that is leased but not served:
+one whose takeover keeps failing on a healthy connection, which the pump retries without limit while it
+keeps the lease (`ShardPump.takeOver`). Each instance logs such a shard at ERROR when it starts and once a
+minute while it lasts, and counts it in its `ShardOwnerMetrics.shardsAwaitingTakeover`; where those metrics
+are reachable, alert on that next to `unownedShards()`. Only `ShardOwnedQueue.metrics()` exposes them:
+`PostgresqlMessageQueue` keeps its `ShardOwnerMetrics` private, so through `MessageQueue` (the Spring starter,
+the `DurableQueues` adapter) the ERROR log is the only signal.
 
 That distinction is not academic. Every ownership failure this engine has had — a fair share computed
 against instances that had departed, two processes disagreeing about the shard count, a consumer

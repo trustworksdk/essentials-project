@@ -52,19 +52,9 @@ import java.util.*;
  */
 interface BatchReadableOwner extends LeasedOwner {
 
-    /**
-     * The queue this owner's rows live in. A pump serves several; a batched statement binds one.
-     */
-    short queueId();
-
-    /**
-     * This owner's queue-scoped counters, which are NOT the pump's.
-     * <p>
-     * {@code ShardRuntime} builds its own {@link ShardOwnerMetrics} for the pumps, so anything a pump
-     * counts on its own handle is invisible to {@code queue.metrics()} — the same shape of mistake as
-     * binding the pump's queue id. Work done on a queue's behalf is counted on that queue.
-     */
-    ShardOwnerMetrics ownerMetrics();
+    // queueId() and ownerMetrics() live on LeasedOwner: the pump also needs them for owners that are not
+    // batch-readable, to count a failing takeover on the queue it belongs to. A batched statement binds one
+    // queue id.
 
     /**
      * Where this owner's next cursor read would start.

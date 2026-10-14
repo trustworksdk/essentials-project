@@ -63,6 +63,11 @@ final class ShardPump implements Runnable {
      * an unreachable database fail acquisition with the same exception, and the fixes are unrelated.
      */
     private final Supplier<Optional<String>>        poolExhaustion;
+    /**
+     * Shards whose takeover keeps failing. Kept across reconnects, unlike {@code takenOver}: a shard is still
+     * not served while the pump reconnects.
+     */
+    private final TakeoverStalls                    stalls;
 
     ShardPump(ShardOwnedStorage storage, ShardOwnerSettings settings, ShardOwnerMetrics metrics,
               AtomicBoolean running, AtomicBoolean flushOnExit, String name,
@@ -74,6 +79,7 @@ final class ShardPump implements Runnable {
         this.flushOnExit = requireNonNull(flushOnExit, "No flushOnExit flag provided");
         this.name = requireNonNull(name, "No name provided");
         this.poolExhaustion = requireNonNull(poolExhaustion, "No poolExhaustion provided");
+        this.stalls = new TakeoverStalls(name);
     }
 
     /**
@@ -100,6 +106,15 @@ final class ShardPump implements Runnable {
 
     @Override
     public void run() {
+        try {
+            serve();
+        } finally {
+            // This pump serves none of its shards any more, so none of them is awaiting a takeover here.
+            stalls.forgetAll();
+        }
+    }
+
+    private void serve() {
         while (running.get()) {
             try (var connection = storage.connection()) {
                 // Reset per connection, not per owner: after a reconnect every owner has to bump
@@ -177,6 +192,7 @@ final class ShardPump implements Runnable {
                             return false;
                         }
                         takenOver.remove(owner);
+                        stalls.forget(owner);
                         return true;
                     });
 
@@ -237,6 +253,16 @@ final class ShardPump implements Runnable {
      * {@code takenOver}, so the next pass retries its takeover, and the other shards keep running. The
      * owners keep the retry cheap: the attempt charge is recorded the moment it commits and the
      * exhaustion pass is cleared only once it has run, so retrying neither charges twice nor skips it.
+     * <p>
+     * <b>Retrying has no bound.</b> While the takeover keeps failing, the shard stays leased to this instance and
+     * delivers nothing, and no other instance takes it (why: {@link LeasedOwner#onTakeover}).
+     * {@code QueueHealth.unownedShards()} does not count it, because it is leased. Watch
+     * {@link ShardOwnerMetrics#shardsAwaitingTakeover} in {@link ShardOwnedQueue#metrics()} next to it (a
+     * {@code PostgresqlMessageQueue} keeps those metrics private, so through {@code MessageQueue} only the ERROR
+     * log shows it):
+     * {@link TakeoverStalls} counts the shard there from its first failure until the takeover completes, counts
+     * every failure in {@link ShardOwnerMetrics#takeoverFailures}, and logs the first failure at ERROR, repeats
+     * at DEBUG and at ERROR once a minute.
      *
      * @return whether the takeover completed
      * @throws SQLException only when the connection itself is broken - the reconnect loop's case
@@ -244,19 +270,18 @@ final class ShardPump implements Runnable {
     private boolean takeOver(Connection connection, LeasedOwner owner, Set<LeasedOwner> takenOver) throws SQLException {
         try {
             owner.onTakeover(connection);
+            stalls.completed(owner);
             return true;
         } catch (RuntimeException e) {
             takenOver.remove(owner);
-            log.error("{}: shard {} threw during its takeover; retrying it, continuing with the other shards",
-                      name, owner.shard(), e);
+            stalls.failed(owner, "threw during its takeover", e);
             return false;
         } catch (SQLException e) {
             if (!connection.isValid(1)) {
                 throw e;
             }
             takenOver.remove(owner);
-            log.error("{}: shard {}'s takeover failed on a healthy connection; retrying it, continuing with the "
-                              + "other shards", name, owner.shard(), e);
+            stalls.failed(owner, "failed its takeover on a healthy connection", e);
             return false;
         }
     }

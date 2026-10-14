@@ -115,6 +115,31 @@ public final class ShardOwnerMetrics {
      */
     public final LongAdder     takeoverAttemptBumps             = new LongAdder();
     /**
+     * Takeovers ({@code onTakeover}) that failed with the connection still healthy: a statement the
+     * database refused, or an unchecked exception. Each is retried on the pump's next pass, with no
+     * limit, so a takeover that keeps failing raises this by about five a second. See
+     * {@link #shardsAwaitingTakeover} for how many shards are stuck now.
+     */
+    public final LongAdder     takeoverFailures                 = new LongAdder();
+    /**
+     * Shards this instance holds a lease on but does not serve, because their takeover has failed and
+     * has not yet completed. Alert on it being above zero, next to {@code QueueHealth.unownedShards()}.
+     * <p>
+     * {@code unownedShards} cannot see these shards: it reads the lease table, and a shard here is
+     * leased. The heartbeat keeps renewing the lease, so no other instance takes the shard either, and
+     * it delivers nothing until the cause clears. A failure caused by data (a trigger or constraint
+     * refusing the takeover's dead-letter move) does not clear on its own. The ERROR log names the
+     * shard and the cause. Rises on a shard's first failed takeover and falls when the takeover
+     * completes, or when the lease ends once the pump next reaches the database. A lease that ends while
+     * the pump is reconnecting stays counted here until then. Meanwhile {@code unownedShards} shows the
+     * shard only if the lease was released and nobody has taken it yet; if another instance took it over,
+     * the shard counts as owned there, and this count is one too high until the pump reconnects.
+     * <p>
+     * Readable through {@link ShardOwnedQueue#metrics()}. A {@code PostgresqlMessageQueue} keeps its
+     * metrics private, so for a queue used through {@code MessageQueue} the ERROR log is the only signal.
+     */
+    public final AtomicInteger shardsAwaitingTakeover           = new AtomicInteger();
+    /**
      * Messages whose handler returned while the thread was interrupted. Not acknowledged, because an
      * interrupted handler cannot be assumed to have finished — see {@code ShardOwner.deliver}.
      */
@@ -283,6 +308,8 @@ public final class ShardOwnerMetrics {
         snapshot.put("ackFlushes", ackFlushes.sum());
         snapshot.put("handlerFailures", handlerFailures.sum());
         snapshot.put("takeoverAttemptBumps", takeoverAttemptBumps.sum());
+        snapshot.put("takeoverFailures", takeoverFailures.sum());
+        snapshot.put("shardsAwaitingTakeover", shardsAwaitingTakeover.get());
         snapshot.put("abandonedOnInterrupt", abandonedOnInterrupt.sum());
         snapshot.put("orderViolations", orderViolations.sum());
         snapshot.put("keysBlockedByDeadLetter", keysBlockedByDeadLetter.sum());

@@ -717,7 +717,8 @@ if (!health.fullyOwned()) {
 unordered, `orderedUnits` for ordered. Depth tells you how much work is waiting; it cannot tell a queue nobody
 is consuming from a queue that is merely busy, and those diverge only slowly. It is zero in steady
 state, briefly non-zero while shards move between instances, and persistently non-zero when messages
-sit in shards nobody reads.
+sit in shards nobody reads. It cannot see a shard that is leased but not served — one whose takeover
+keeps failing; see `shardsAwaitingTakeover` below.
 
 `liveInstances` below your running process count means **colliding instance ids** — two processes
 sharing one id count as one instance and are each allowed half the shards.
@@ -742,7 +743,7 @@ queue.addObserver(observer);
 Both bindings are **opt-in and cached**, because a gauge is polled on every scrape and these are
 database queries — hence the `maxAge` argument.
 
-### Two engine-level metrics worth watching
+### Three engine-level metrics worth watching
 
 **`ShardOwnerMetrics.deliveryPauses`.** An instance that has not been able to confirm its own liveness
 within four fifths of `leaseTtl` stops dispatching until it can — at the full lease the rest of the
@@ -756,6 +757,16 @@ unit to. A surplus instance holds nothing, delivers nothing and reports no error
 like an instance whose queue is quiet, so this is the only way to tell. The engine also logs a warning
 naming the queue, the instance count and the space when the condition starts, and another when it
 clears. A value that *persists* means the queue was created with a space too small for the deployment.
+
+**`ShardOwnerMetrics.shardsAwaitingTakeover`.** Shards this instance holds a lease on but does not serve,
+because taking them over keeps failing with the database connection still healthy (for example a trigger
+or constraint refusing the takeover's dead-letter move). The takeover is retried every 200 ms with no
+limit and the lease is kept, so no other instance takes the shard and it delivers nothing until the cause
+is fixed. `unownedShards` cannot see this, because the shard is leased: alert on this one being above zero
+next to it. `takeoverFailures` counts the failed attempts, and the log carries one ERROR with the cause
+when it starts and one a minute while it lasts. Only the engine-level `ShardOwnedQueue.metrics()` exposes
+these counters: a `PostgresqlMessageQueue` keeps its `ShardOwnerMetrics` private, so through `MessageQueue`
+(and the Spring starter and the `DurableQueues` adapter built on it) that ERROR log is the only signal.
 
 ## Interceptors and Observers
 

@@ -401,7 +401,8 @@ The concurrency sweep uses a 2 ms handler. A handler that returns immediately is
 **Alert on `unownedShards()`.** Depth tells you how much work is waiting; it cannot tell a queue
 nobody is consuming from a queue that is merely busy, and those diverge only slowly. Zero in steady
 state, briefly non-zero while shards move between instances, persistently non-zero when messages are
-in shards nobody reads.
+in shards nobody reads. It does **not** see a shard that is leased but not served — one whose takeover
+keeps failing; see `shardsAwaitingTakeover` below.
 
 `liveInstances` below your running process count means colliding instance ids — two processes sharing
 one id count as one instance and are each allowed half the shards.
@@ -410,7 +411,7 @@ Via Micrometer, `bindQueueHealth(queue, maxAge)` publishes:
 
 | Meter | Read it for |
 |---|---|
-| `essentials.queue.shards.unowned` | **the alert** — messages in shards nobody is reading |
+| `essentials.queue.shards.unowned` | **the alert** for shards nobody holds — messages in shards nobody is reading. Blind to a held shard that is not served (`shardsAwaitingTakeover` below) |
 | `essentials.queue.shards.owned` (tag `lane`) | coverage per lane |
 | `essentials.queue.instances` | scale events, and id collisions |
 | `essentials.queue.depth` (tag `lane`) | backlog, via `bindQueueDepth` |
@@ -433,7 +434,7 @@ essentials:
 
 The gauges read the database, so every instance reports the same cluster-wide value: aggregate them with `max by (queue)`, not `sum`. Event meters are per instance and do sum.
 
-**`ShardOwnerMetrics.deliveryPauses`** is the other one to watch. An instance that has not been able
+**`ShardOwnerMetrics.deliveryPauses`** is another one to watch. An instance that has not been able
 to confirm its own liveness within four fifths of `leaseTtl` stops dispatching until it can — by then the rest of the
 cluster already considers its units takeable, so anything it delivered would be work a successor is
 doing too. Nothing is lost and it resumes on its own at the next successful heartbeat; a non-zero
@@ -449,6 +450,18 @@ condition starts, and another when it clears. Nothing is lost or reordered while
 resolves itself when the instance count drops; a value that *persists* means the queue was created
 with a space too small for the deployment, and on the ordered lane that space cannot be changed
 afterwards.
+
+**`ShardOwnerMetrics.shardsAwaitingTakeover`** covers what `unownedShards` cannot: shards this instance
+holds a lease on but does not serve, because taking them over keeps failing with the connection still
+healthy (typically a trigger or constraint refusing the takeover's dead-letter move). The takeover is
+retried every 200 ms with no limit and the lease is kept, so no other instance takes the shard and it
+delivers nothing until the cause is fixed — a data-caused failure does not clear on its own. Alert on it
+being above zero next to `unownedShards`; `takeoverFailures` counts the failed attempts. The engine logs
+one ERROR with the cause when it starts, one a minute while it lasts, and an INFO when it recovers.
+**Where to read it:** these metrics are exposed only by the engine-level `ShardOwnedQueue.metrics()`.
+`PostgresqlMessageQueue` keeps its `ShardOwnerMetrics` private, so through `MessageQueue` — including the
+Spring starter and the `DurableQueues` adapter — the ERROR log (logger `dk.trustworks.essentials.components.queue.shardowned.ShardPump`) is the
+only signal; alert on it there.
 
 ## Administrative API
 

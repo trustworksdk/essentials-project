@@ -61,6 +61,19 @@ interface LeasedOwner {
      * Called once per connection, including after a reconnect - and, when it throws on a healthy connection,
      * again on the pump's next pass until it completes. {@link #pumpOnce} is not called before it has completed,
      * so it must be safe to call again after failing part way through.
+     * <p>
+     * <b>Retrying has no bound, and the shard stays leased while it fails.</b> The owner is not ended: the
+     * heartbeat keeps renewing its lease, so no other instance takes the shard, and the shard delivers nothing.
+     * That is deliberate. A failure caused by data, such as a trigger or constraint refusing the exhaustion
+     * dead-letter move, is database-wide: releasing the shard would only hand the same failure to the next
+     * instance and move the shard back and forth between instances. A failing {@link #pumpOnce} is also retried
+     * with the lease kept, but it has none of the signal below: it is logged at ERROR each time it fails and
+     * counted nowhere. Because the shard is leased, {@code QueueHealth.unownedShards()} does not count it. The signal is
+     * {@link ShardOwnerMetrics#shardsAwaitingTakeover} on this owner's {@link #ownerMetrics()} (readable through
+     * {@link ShardOwnedQueue#metrics()}; a {@code PostgresqlMessageQueue} keeps its metrics private), together
+     * with {@link ShardOwnerMetrics#takeoverFailures} and an ERROR naming the shard (repeated at most once a
+     * minute while it keeps failing), which is the only signal through {@code MessageQueue}. It clears when the
+     * takeover completes or the lease ends.
      */
     void onTakeover(Connection connection) throws SQLException;
 
@@ -77,6 +90,20 @@ interface LeasedOwner {
 
 
     int shard();
+
+    /**
+     * The queue this owner's rows live in. A pump serves several queues, and shard numbers repeat across them.
+     */
+    short queueId();
+
+    /**
+     * This owner's queue-scoped counters, which are NOT the pump's.
+     * <p>
+     * {@code ShardRuntime} builds its own {@link ShardOwnerMetrics} for the pumps, so anything a pump
+     * counts on its own handle is invisible to {@code queue.metrics()} — the same shape of mistake as
+     * binding the pump's queue id. Work done on a queue's behalf is counted on that queue.
+     */
+    ShardOwnerMetrics ownerMetrics();
 
     long fence();
 
