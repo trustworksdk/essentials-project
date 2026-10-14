@@ -29,9 +29,9 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * One pump's shards whose takeover has failed and not yet completed. Each of these shards is leased but not
  * served.
  * <p>
- * {@link ShardPump} retries a failing {@link LeasedOwner#onTakeover} every 200 ms, with no limit, and keeps
- * the shard (why: {@link LeasedOwner#onTakeover}). Without this, every retry logged a full ERROR stack trace,
- * about five a second for as long as the takeover failed. No counter recorded it, and
+ * {@link ShardPump} retries a failing {@link LeasedOwner#onTakeover} {@link ShardPump#TAKEOVER_RETRY_NANOS} after
+ * each failure, with no limit, and keeps the shard (why: {@link LeasedOwner#onTakeover}). Without this, every retry
+ * logged a full ERROR stack trace, about five a second for as long as the takeover failed. No counter recorded it, and
  * {@code QueueHealth.unownedShards()} cannot see the shard because it is leased, so that log flood was the
  * only sign.
  * <p>
@@ -42,24 +42,40 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * two transitions also go to the consumer's observer, {@link QueueObserver#takeoverStalled}, which reaches every
  * observer registered on a {@code MessageQueue}. {@code MicrometerQueueObserver} publishes it as the gauge
  * {@code essentials.queue.shards.awaiting.takeover}, and the Spring starter binds that observer to every queue,
- * the {@code DurableQueues} adapter's included, whenever there is a {@code MeterRegistry}. The log follows
- * the {@code BlockedKeyReport}/{@code LeaseOverrun} pattern: an ERROR with the stack trace on a shard's first
- * failure, a one-line DEBUG on repeats (no stack trace: they come five a second), and one ERROR a minute
- * with the stack trace and the count while it keeps failing. An INFO when it recovers.
+ * the {@code DurableQueues} adapter's included, whenever there is a {@code MeterRegistry}.
+ * <p>
+ * The log follows the {@code BlockedKeyReport}/{@code LeaseOverrun} pattern: at most one ERROR a minute <b>per
+ * queue</b>, with the stack trace, naming one shard and counting the others; everything else at DEBUG, one line
+ * without a stack trace. The window is on the owner's metrics ({@link ShardOwnerMetrics#nextTakeoverStallErrorNanos}),
+ * shared by every pump serving the queue, not on a {@code Stall}. Per shard was not enough, for the reason
+ * {@code BlockedKeyReport} gives for keys: what makes a takeover fail is rarely one shard's. A trigger or constraint
+ * refusing the dead-letter move is database-wide, and an {@code onTakeover} bug throws for every owner, so after a crash
+ * or rebalance one instance taking over 64 ordered units and its unordered shards logged some 70 stack-trace ERRORs at
+ * once, then 70 a minute. Now the first failure of a stall gets the ERROR when the window is open, and a repeat gets it
+ * once the window has passed; either way the line counts the queue's other stalled shards, which
+ * {@link ShardOwnerMetrics#shardsAwaitingTakeover} holds exactly. Once no shard of the queue is stalled the window
+ * reopens, so the next stall is reported in full at once. An INFO for each shard when it recovers.
  * <p>
  * The observer call is the one observer call the engine catches ({@link QueueObserver#takeoverStalled} says
  * why): what it throws is logged at ERROR and the pump goes on. The counters are updated before it, so a
  * throwing observer cannot leave them out of step.
  * <p>
- * Confined to the pump's thread, so nothing here is synchronised. The counters it writes are shared with the
- * other pumps serving the same queue, which is why they are atomics.
+ * Confined to the pump's thread, so nothing here is synchronised. The counters it writes and the ERROR window are
+ * shared with the other pumps serving the same queue, which is why they are atomics and the window is taken by CAS.
  * <p>
  * Logged under {@link ShardPump}'s logger, where the takeover failure has always been logged, so existing log
  * configuration keeps applying to it.
  */
 final class TakeoverStalls {
-    private static final Logger log               = LoggerFactory.getLogger(ShardPump.class);
-    static final         long   ERROR_EVERY_NANOS = TimeUnit.MINUTES.toNanos(1);
+    private static final Logger log                   = LoggerFactory.getLogger(ShardPump.class);
+    static final         long   ERROR_EVERY_NANOS     = TimeUnit.MINUTES.toNanos(1);
+    /**
+     * {@link ShardOwnerMetrics#nextTakeoverStallErrorNanos} while the window is open regardless of the clock: before the
+     * queue's first stall, and again once none of its shards is stalled. A sentinel rather than a time, because the clock
+     * is injected and a time taken from {@code System.nanoTime()} when the metrics were built means nothing against it.
+     */
+    static final         long   NO_STALL_ERROR_LOGGED = Long.MIN_VALUE;
+    private static final long   RETRY_MILLIS          = TimeUnit.NANOSECONDS.toMillis(ShardPump.TAKEOVER_RETRY_NANOS);
 
     private final String                              pumpName;
     private final LongSupplier                        nanoTime;
@@ -80,17 +96,15 @@ final class TakeoverStalls {
     private static final class Stall {
         final long sinceNanos;
         long       failures;
-        long       nextErrorNanos;
 
         Stall(long sinceNanos) {
             this.sinceNanos = sinceNanos;
             this.failures = 1;
-            this.nextErrorNanos = sinceNanos + ERROR_EVERY_NANOS;
         }
     }
 
     /**
-     * The owner's takeover failed and is retried by the pump 200 ms later.
+     * The owner's takeover failed and is retried by the pump {@link ShardPump#TAKEOVER_RETRY_NANOS} later.
      *
      * @param what  how it failed, completing "queue Q, lane shard S ..." and "the latest ...", e.g.
      *              "threw during its takeover"
@@ -103,34 +117,72 @@ final class TakeoverStalls {
         var stall = stalls.get(owner);
         if (stall == null) {
             stalls.put(owner, new Stall(now));
-            metrics.shardsAwaitingTakeover.incrementAndGet();
-            log.error("{}: queue {}, {} shard {} {}. The shard stays leased to this instance and delivers nothing "
-                              + "until its takeover completes; the takeover is retried every 200 ms with no limit, "
-                              + "and the pump keeps serving its other shards. "
-                              + "QueueHealth.unownedShards does not count this shard. ShardOwnedQueue.metrics() reports "
-                              + "it under shardsAwaitingTakeover, and every attempt under takeoverFailures; through "
-                              + "MessageQueue it is reported to QueueObserver.takeoverStalled; the gauge "
-                              + "essentials.queue.shards.awaiting.takeover exists only where a MicrometerQueueObserver is "
-                              + "registered on the queue (the Spring starter registers one when there is a MeterRegistry). "
-                              + "Repeats are logged at DEBUG, and at ERROR "
-                              + "once a minute while it keeps failing",
-                      pumpName, owner.queueId(), owner.lane(), owner.shard(), what, cause);
+            // Counted before the window is tried, so the count the ERROR gives is never short of this shard.
+            var awaiting = metrics.shardsAwaitingTakeover.incrementAndGet();
+            if (takeErrorWindow(metrics, now)) {
+                log.error("{}: queue {}, {} shard {} {}. The shard stays leased to this instance and delivers nothing "
+                                  + "until its takeover completes; the takeover is retried every {} ms with no limit, "
+                                  + "and the pump keeps serving its other shards. {} other shard(s) on this queue are also "
+                                  + "awaiting their takeover. "
+                                  + "QueueHealth.unownedShards does not count this shard. ShardOwnedQueue.metrics() reports "
+                                  + "it under shardsAwaitingTakeover, and every attempt under takeoverFailures; through "
+                                  + "MessageQueue it is reported to QueueObserver.takeoverStalled; the gauge "
+                                  + "essentials.queue.shards.awaiting.takeover exists only where a MicrometerQueueObserver is "
+                                  + "registered on the queue (the Spring starter registers one when there is a MeterRegistry). "
+                                  + "Every failed attempt, on any shard, is logged at DEBUG, and at ERROR at most once a "
+                                  + "minute per queue while any shard of it keeps failing",
+                          pumpName, owner.queueId(), owner.lane(), owner.shard(), what, RETRY_MILLIS, othersThan(awaiting), cause);
+            } else {
+                // Another shard of this queue had the ERROR within the minute, most likely for the same cause.
+                log.debug("{}: queue {}, {} shard {} {}; the shard stays leased and delivers nothing until its takeover "
+                                  + "completes, retried every {} ms ({} shard(s) on this queue now awaiting their takeover): {}",
+                          pumpName, owner.queueId(), owner.lane(), owner.shard(), what, RETRY_MILLIS, awaiting, String.valueOf(cause));
+            }
             notifyObserver(owner, true);
             return;
         }
         stall.failures++;
-        if (now - stall.nextErrorNanos >= 0) {
-            stall.nextErrorNanos = now + ERROR_EVERY_NANOS;
+        if (takeErrorWindow(metrics, now)) {
             log.error("{}: queue {}, {} shard {} has still not completed its takeover: {} failed attempt(s) in {} s; "
                               + "the latest {}. The shard stays leased to this instance and has delivered nothing since. "
-                              + "Logged at most once a minute",
+                              + "{} other shard(s) on this queue are also awaiting their takeover. "
+                              + "Logged at most once a minute per queue",
                       pumpName, owner.queueId(), owner.lane(), owner.shard(), stall.failures,
-                      TimeUnit.NANOSECONDS.toSeconds(now - stall.sinceNanos), what, cause);
+                      TimeUnit.NANOSECONDS.toSeconds(now - stall.sinceNanos), what,
+                      othersThan(metrics.shardsAwaitingTakeover.get()), cause);
         } else {
-            // No stack trace: a repeat comes every 200 ms (five a second), and the first and the once-a-minute
-            // ERRORs carry it. The cause's own string still says what failed.
+            // No stack trace: a repeat comes every TAKEOVER_RETRY_NANOS per shard, and the queue's once-a-minute ERROR
+            // carries one. The cause's own string still says what failed.
             log.debug("{}: queue {}, {} shard {} {} (failed attempt {}): {}",
                       pumpName, owner.queueId(), owner.lane(), owner.shard(), what, stall.failures, String.valueOf(cause));
+        }
+    }
+
+    /**
+     * Whether this failure gets the queue's ERROR: the window is open (never taken, or reopened by every stall ending) or
+     * a minute has passed since it was last taken, and this pump won the CAS against the others serving the queue.
+     */
+    private static boolean takeErrorWindow(ShardOwnerMetrics metrics, long now) {
+        var next = metrics.nextTakeoverStallErrorNanos.get();
+        return (next == NO_STALL_ERROR_LOGGED || now - next >= 0)
+                && metrics.nextTakeoverStallErrorNanos.compareAndSet(next, now + ERROR_EVERY_NANOS);
+    }
+
+    /**
+     * The queue's stalled shards other than the one being logged. Floored at zero: the count is shared with other pumps,
+     * which may have taken their own shards out of it since this one was counted.
+     */
+    private static int othersThan(int awaiting) {
+        return Math.max(0, awaiting - 1);
+    }
+
+    /**
+     * One shard of the queue fewer is awaiting its takeover. When that was the last, the ERROR window reopens, so the
+     * queue's next stall is reported in full at once rather than up to a minute later at DEBUG.
+     */
+    private static void noLongerAwaiting(ShardOwnerMetrics metrics) {
+        if (metrics.shardsAwaitingTakeover.decrementAndGet() == 0) {
+            metrics.nextTakeoverStallErrorNanos.set(NO_STALL_ERROR_LOGGED);
         }
     }
 
@@ -142,7 +194,7 @@ final class TakeoverStalls {
         if (stall == null) {
             return;
         }
-        owner.ownerMetrics().shardsAwaitingTakeover.decrementAndGet();
+        noLongerAwaiting(owner.ownerMetrics());
         log.info("{}: queue {}, {} shard {} completed its takeover after {} failed attempt(s) in {} s and is delivering "
                          + "again",
                  pumpName, owner.queueId(), owner.lane(), owner.shard(), stall.failures,
@@ -156,7 +208,7 @@ final class TakeoverStalls {
      */
     void forget(LeasedOwner owner) {
         if (stalls.remove(owner) != null) {
-            owner.ownerMetrics().shardsAwaitingTakeover.decrementAndGet();
+            noLongerAwaiting(owner.ownerMetrics());
             notifyObserver(owner, false);
         }
     }

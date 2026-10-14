@@ -284,8 +284,8 @@ final class ShardPump implements Runnable {
      * {@code MessageQueue}, the observer callback {@code QueueObserver.takeoverStalled} (Micrometer:
      * {@code essentials.queue.shards.awaiting.takeover}):
      * {@link TakeoverStalls} counts the shard there from its first failure until the takeover completes, tells the
-     * observer at both ends, counts every failure in {@link ShardOwnerMetrics#takeoverFailures}, and logs the first
-     * failure at ERROR, repeats at DEBUG and at ERROR once a minute.
+     * observer at both ends, counts every failure in {@link ShardOwnerMetrics#takeoverFailures}, and logs at ERROR at
+     * most once a minute per queue, naming one shard and counting the others, and every failure at DEBUG.
      *
      * @return whether the takeover completed
      * @throws SQLException only when the connection itself is broken - the reconnect loop's case

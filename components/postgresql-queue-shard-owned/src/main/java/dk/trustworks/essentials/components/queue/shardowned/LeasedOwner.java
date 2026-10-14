@@ -59,7 +59,7 @@ interface LeasedOwner {
 
     /**
      * Called once per connection, including after a reconnect - and, when it throws on a healthy connection,
-     * again by the pump every 200 ms until it completes. {@link #pumpOnce} is not called before it has completed,
+     * again by the pump {@link ShardPump#TAKEOVER_RETRY_NANOS} after each failure until it completes. {@link #pumpOnce} is not called before it has completed,
      * so it must be safe to call again after failing part way through.
      * <p>
      * <b>Retrying has no bound, and the shard stays leased while it fails.</b> The owner is not ended: the
@@ -73,8 +73,8 @@ interface LeasedOwner {
      * {@link ShardOwnedQueue#metrics()}; a {@code PostgresqlMessageQueue} keeps its metrics private, so through
      * {@code MessageQueue} it is the observer callback {@code QueueObserver.takeoverStalled}, published by
      * Micrometer as {@code essentials.queue.shards.awaiting.takeover}), together with
-     * {@link ShardOwnerMetrics#takeoverFailures} and an ERROR naming the shard (repeated at most once a minute
-     * while it keeps failing). It clears when the takeover completes or the lease ends.
+     * {@link ShardOwnerMetrics#takeoverFailures} and an ERROR at most once a minute per queue, naming one stalled
+     * shard and counting the others (see {@link TakeoverStalls}). It clears when the takeover completes or the lease ends.
      */
     void onTakeover(Connection connection) throws SQLException;
 

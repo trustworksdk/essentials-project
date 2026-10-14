@@ -116,8 +116,8 @@ public final class ShardOwnerMetrics {
     public final LongAdder     takeoverAttemptBumps             = new LongAdder();
     /**
      * Takeovers ({@code onTakeover}) that failed with the connection still healthy: a statement the
-     * database refused, or an unchecked exception. Each is retried on the pump's next pass, with no
-     * limit, so a takeover that keeps failing raises this by about five a second. See
+     * database refused, or an unchecked exception. Each is retried {@code ShardPump.TAKEOVER_RETRY_NANOS}
+     * (200 ms) later, with no limit, so a takeover that keeps failing raises this by about five a second. See
      * {@link #shardsAwaitingTakeover} for how many shards are stuck now.
      */
     public final LongAdder     takeoverFailures                 = new LongAdder();
@@ -128,8 +128,9 @@ public final class ShardOwnerMetrics {
      * {@code unownedShards} cannot see these shards: it reads the lease table, and a shard here is
      * leased. The heartbeat keeps renewing the lease, so no other instance takes the shard either, and
      * it delivers nothing until the cause clears. A failure caused by data (a trigger or constraint
-     * refusing the takeover's dead-letter move) does not clear on its own. The ERROR log names the
-     * shard and the cause. Rises on a shard's first failed takeover and falls when the takeover
+     * refusing the takeover's dead-letter move) does not clear on its own. The ERROR log, at most one a
+     * minute per queue, names one shard and the cause and counts the others; every shard is logged at
+     * DEBUG, and this count is exact. Rises on a shard's first failed takeover and falls when the takeover
      * completes, or when the lease ends once the pump next reaches the database. A lease that ends while
      * the pump is reconnecting stays counted here until then. Meanwhile {@code unownedShards} shows the
      * shard only if the lease was released and nobody has taken it yet; if another instance took it over,
@@ -270,6 +271,14 @@ public final class ShardOwnerMetrics {
 
     /** Keys blocked since that WARN was last logged, which the next one reports as a count. */
     final LongAdder blockedKeysSinceLastWarning = new LongAdder();
+
+    /**
+     * Rate limit for the ERROR that reports a stalled takeover, per queue rather than per shard: what makes one shard's
+     * takeover fail usually makes them all fail. {@link TakeoverStalls#NO_STALL_ERROR_LOGGED} until the first, and again
+     * once no shard of the queue is awaiting its takeover. See {@code TakeoverStalls}.
+     */
+    final java.util.concurrent.atomic.AtomicLong nextTakeoverStallErrorNanos =
+            new java.util.concurrent.atomic.AtomicLong(TakeoverStalls.NO_STALL_ERROR_LOGGED);
 
     /**
      * The operator-facing subset, as a stable shape.

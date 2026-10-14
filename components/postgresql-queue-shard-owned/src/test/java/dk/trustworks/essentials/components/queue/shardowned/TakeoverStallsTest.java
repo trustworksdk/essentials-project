@@ -25,14 +25,15 @@ import org.slf4j.LoggerFactory;
 
 import java.sql.*;
 import java.util.*;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * A takeover that keeps failing is retried on every pump pass, about five times a second, while its shard stays
- * leased and unserved. That state must be counted where {@code ShardOwnedQueue.metrics()} sees it, and logged at ERROR
- * once a minute at most, not once per retry.
+ * A takeover that keeps failing is retried {@link ShardPump#TAKEOVER_RETRY_NANOS} after each failure, about five times
+ * a second, while its shard stays leased and unserved. That state must be counted where {@code ShardOwnedQueue.metrics()}
+ * sees it, and logged at ERROR once a minute at most per queue: not once per retry, and not once per shard.
  */
 class TakeoverStallsTest {
 
@@ -117,6 +118,79 @@ class TakeoverStallsTest {
         stalls.failed(owner, "threw during its takeover", new IllegalStateException("broken"));
         assertThat(levels().getLast()).isEqualTo(Level.ERROR);
         assertThat(metrics.shardsAwaitingTakeover.get()).isEqualTo(1);
+    }
+
+    /**
+     * What makes a takeover fail is rarely one shard's: a trigger or constraint refusing the dead-letter move is
+     * database-wide, and an {@code onTakeover} bug throws for every owner. After a crash or rebalance one instance takes
+     * over dozens of shards at once, often on more than one pump. Throttled per shard, that logged a stack-trace ERROR for
+     * each of them, then one a minute for each. Throttled per queue (on the shared metrics), it is one ERROR a minute
+     * that names one shard and counts the others; {@code shardsAwaitingTakeover} stays exact.
+     */
+    @Test
+    void shards_stalling_together_are_logged_at_error_once_a_minute_per_queue_not_once_per_shard() {
+        var metrics   = new ShardOwnerMetrics();
+        var pumpZero  = new TakeoverStalls("pump-0", clock::get);
+        var pumpOne   = new TakeoverStalls("pump-1", clock::get);
+        var first     = new StubOwner((short) 4, 0, metrics, "ordered");
+        var second    = new StubOwner((short) 4, 1, metrics, "ordered");
+        var third     = new StubOwner((short) 4, 2, metrics);
+        var start     = clock.get();
+
+        pumpZero.failed(first, "threw during its takeover", new IllegalStateException("broken"));
+        pumpZero.failed(second, "threw during its takeover", new IllegalStateException("broken"));
+        pumpOne.failed(third, "threw during its takeover", new IllegalStateException("broken"));
+        assertThat(metrics.shardsAwaitingTakeover.get()).as("still exact, per shard").isEqualTo(3);
+        assertThat(levels()).as("one ERROR for the queue, the others at DEBUG").containsExactly(Level.ERROR, Level.DEBUG, Level.DEBUG);
+        assertThat(logged.list.getFirst().getFormattedMessage())
+                .contains("pump-0: queue 4, ordered shard 0 threw during its takeover")
+                .contains("0 other shard(s) on this queue are also awaiting their takeover");
+        assertThat(logged.list.get(1).getFormattedMessage())
+                .contains("pump-0: queue 4, ordered shard 1 threw during its takeover")
+                .contains("java.lang.IllegalStateException: broken");
+        assertThat(logged.list.get(1).getThrowableProxy()).as("no stack trace at DEBUG").isNull();
+
+        // Retried for a minute: all DEBUG
+        for (var retry = 0; retry < 5; retry++) {
+            clock.addAndGet(ShardPump.TAKEOVER_RETRY_NANOS);
+            pumpZero.failed(first, "threw during its takeover", new IllegalStateException("broken"));
+            pumpZero.failed(second, "threw during its takeover", new IllegalStateException("broken"));
+            pumpOne.failed(third, "threw during its takeover", new IllegalStateException("broken"));
+        }
+        assertThat(levels().stream().filter(Level.ERROR::equals).count()).isEqualTo(1);
+
+        // A minute on, the first shard to retry gets the queue's one ERROR, counting the other two
+        clock.set(start + TakeoverStalls.ERROR_EVERY_NANOS);
+        var before = logged.list.size();
+        pumpOne.failed(third, "threw during its takeover", new IllegalStateException("broken"));
+        pumpZero.failed(first, "threw during its takeover", new IllegalStateException("broken"));
+        pumpZero.failed(second, "threw during its takeover", new IllegalStateException("broken"));
+        var minuteLater = logged.list.subList(before, logged.list.size());
+        assertThat(minuteLater.stream().map(ILoggingEvent::getLevel).toList()).containsExactly(Level.ERROR, Level.DEBUG, Level.DEBUG);
+        assertThat(minuteLater.getFirst().getFormattedMessage())
+                .contains("pump-1: queue 4, unordered shard 2 has still not completed its takeover: 7 failed attempt(s) in 60 s")
+                .contains("2 other shard(s) on this queue are also awaiting their takeover");
+        assertThat(minuteLater.getFirst().getThrowableProxy()).as("the periodic ERROR carries the stack trace").isNotNull();
+
+        // Once no shard on the queue is stalled, the next stall is reported in full again
+        pumpZero.completed(first);
+        pumpZero.completed(second);
+        pumpOne.completed(third);
+        assertThat(metrics.shardsAwaitingTakeover.get()).isZero();
+        clock.addAndGet(ShardPump.TAKEOVER_RETRY_NANOS);
+        pumpZero.failed(second, "threw during its takeover", new IllegalStateException("broken"));
+        assertThat(levels().getLast()).isEqualTo(Level.ERROR);
+        assertThat(logged.list.getLast().getFormattedMessage()).contains("queue 4, ordered shard 1 threw during its takeover");
+    }
+
+    @Test
+    void the_logs_state_the_retry_interval_the_pump_actually_uses() {
+        var stalls = new TakeoverStalls("pump-0", clock::get);
+
+        stalls.failed(new StubOwner((short) 1, 0, new ShardOwnerMetrics()), "threw during its takeover", new IllegalStateException("broken"));
+
+        assertThat(logged.list.getFirst().getFormattedMessage())
+                .contains("the takeover is retried every " + TimeUnit.NANOSECONDS.toMillis(ShardPump.TAKEOVER_RETRY_NANOS) + " ms with no limit");
     }
 
     @Test
