@@ -280,12 +280,12 @@ final class ShardPump implements Runnable {
      * <b>Retrying has no bound.</b> While the takeover keeps failing, the shard stays leased to this instance and
      * delivers nothing, and no other instance takes it (why: {@link LeasedOwner#onTakeover}).
      * {@code QueueHealth.unownedShards()} does not count it, because it is leased. Watch
-     * {@link ShardOwnerMetrics#shardsAwaitingTakeover} in {@link ShardOwnedQueue#metrics()} next to it (a
-     * {@code PostgresqlMessageQueue} keeps those metrics private, so through {@code MessageQueue} only the ERROR
-     * log shows it):
-     * {@link TakeoverStalls} counts the shard there from its first failure until the takeover completes, counts
-     * every failure in {@link ShardOwnerMetrics#takeoverFailures}, and logs the first failure at ERROR, repeats
-     * at DEBUG and at ERROR once a minute.
+     * {@link ShardOwnerMetrics#shardsAwaitingTakeover} in {@link ShardOwnedQueue#metrics()} next to it, or, through
+     * {@code MessageQueue}, the observer callback {@code QueueObserver.takeoverStalled} (Micrometer:
+     * {@code essentials.queue.shards.awaiting.takeover}):
+     * {@link TakeoverStalls} counts the shard there from its first failure until the takeover completes, tells the
+     * observer at both ends, counts every failure in {@link ShardOwnerMetrics#takeoverFailures}, and logs the first
+     * failure at ERROR, repeats at DEBUG and at ERROR once a minute.
      *
      * @return whether the takeover completed
      * @throws SQLException only when the connection itself is broken - the reconnect loop's case

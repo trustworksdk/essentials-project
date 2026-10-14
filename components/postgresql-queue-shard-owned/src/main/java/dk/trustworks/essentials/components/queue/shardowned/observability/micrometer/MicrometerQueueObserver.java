@@ -40,7 +40,8 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * depth is different: it is a query, not an event, and Micrometer polls a gauge on every scrape. A
  * naive depth gauge would put {@code 2 x shardCount + 1} queries on the database per scrape per
  * process. So depth is opt-in through {@link #bindQueueDepth}, and behind a cache whose age the
- * caller chooses.
+ * caller chooses. The one gauge registered here regardless, {@link #SHARDS_AWAITING_TAKEOVER_GAUGE}, is
+ * fed by events too (a stall starting and ending), so a scrape reads a number in memory, not the database.
  * <p>
  * <b>What the tags deliberately do not include.</b> There is no tag for the ordering key. Keys are
  * unbounded — one per customer, per order, per aggregate — and a tag value per key is the classic way
@@ -66,6 +67,21 @@ public final class MicrometerQueueObserver implements QueueObserver {
      * sitting in shards nobody reads.
      */
     public static final String SHARDS_UNOWNED_GAUGE = "essentials.queue.shards.unowned";
+    /**
+     * Shards, across both lanes, that this instance holds a lease on but does not serve, because their
+     * takeover keeps failing. <b>Alert on it above zero, next to {@link #SHARDS_UNOWNED_GAUGE}</b>, which
+     * cannot see these: they are leased. Fed by {@link #takeoverStalled}, so unlike the depth and health
+     * gauges it costs no query and is always registered. Per process: sum it across instances.
+     * <p>
+     * It counts only the stalls this observer saw start. An observer registered while a shard is already
+     * stalled reads that shard only from its next stall; the end of the one it missed does not take the
+     * gauge below zero.
+     * <p>
+     * Its value comes from the first observer registered under its tags, as with any gauge, so give each
+     * queue's observer its queue tag (the Spring starter does); two queues sharing one tag set would publish
+     * only the first queue's count.
+     */
+    public static final String SHARDS_AWAITING_TAKEOVER_GAUGE = "essentials.queue.shards.awaiting.takeover";
     /**
      * Instances heartbeating for this queue. Below the number of running processes means colliding ids.
      */
@@ -97,7 +113,17 @@ public final class MicrometerQueueObserver implements QueueObserver {
     private final Counter deadLetters;
     private final Counter shardsAcquired;
     private final Counter shardsReleased;
+    /**
+     * Shards whose takeover is failing now. Held by the gauge's supplier, which is a strong reference.
+     */
+    private final AtomicInteger shardsAwaitingTakeover = new AtomicInteger();
 
+    /**
+     * No tags. Fine for one queue per {@code registry}; with more, prefer {@link #MicrometerQueueObserver(MeterRegistry, QueueName)}.
+     * Untagged, every queue's counters and timer add into one series, and the
+     * {@link #SHARDS_AWAITING_TAKEOVER_GAUGE} gauge is worse: a gauge reads from the first observer registered under its
+     * tags, so a second untagged observer on the same registry publishes nothing for its queue's stalled takeovers.
+     */
     public MicrometerQueueObserver(MeterRegistry registry) {
         this(registry, List.of());
     }
@@ -136,6 +162,11 @@ public final class MicrometerQueueObserver implements QueueObserver {
                                   .tags(this.commonTags)
                                   .publishPercentileHistogram()
                                   .register(registry);
+        // Supplier form, for the reason spelled out on the depth gauge helper.
+        Gauge.builder(SHARDS_AWAITING_TAKEOVER_GAUGE, shardsAwaitingTakeover::get)
+             .description("shards leased by this instance but not served, because their takeover keeps failing")
+             .tags(this.commonTags)
+             .register(registry);
     }
 
     private Counter counter(String name, String description, Tag... tags) {
@@ -172,6 +203,17 @@ public final class MicrometerQueueObserver implements QueueObserver {
     @Override
     public void shardOwnershipChanged(int shard, boolean acquired) {
         (acquired ? shardsAcquired : shardsReleased).increment();
+    }
+
+    @Override
+    public void takeoverStalled(MessageId.Lane lane, int shard, boolean stalled) {
+        if (stalled) {
+            shardsAwaitingTakeover.incrementAndGet();
+        } else {
+            // Clamped at zero: an observer registered while a shard was already stalled is told only that the stall
+            // ended, and a shard count of -1 would hide the next real stall behind a reading of zero.
+            shardsAwaitingTakeover.updateAndGet(n -> Math.max(0, n - 1));
+        }
     }
 
     /**

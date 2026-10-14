@@ -136,7 +136,9 @@ public final class ShardOwnerMetrics {
      * the shard counts as owned there, and this count is one too high until the pump reconnects.
      * <p>
      * Readable through {@link ShardOwnedQueue#metrics()}. A {@code PostgresqlMessageQueue} keeps its
-     * metrics private, so for a queue used through {@code MessageQueue} the ERROR log is the only signal.
+     * metrics private; for a queue used through {@code MessageQueue} the same transitions reach
+     * {@link QueueObserver#takeoverStalled}, which {@code MicrometerQueueObserver} publishes as
+     * {@code essentials.queue.shards.awaiting.takeover}.
      */
     public final AtomicInteger shardsAwaitingTakeover           = new AtomicInteger();
     /**

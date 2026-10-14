@@ -16,6 +16,7 @@
 
 package dk.trustworks.essentials.components.queue.shardowned;
 
+import dk.trustworks.essentials.components.queue.shardowned.spi.*;
 import org.slf4j.*;
 
 import java.util.*;
@@ -37,12 +38,18 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * Now each failure is counted in {@link ShardOwnerMetrics#takeoverFailures}, and a shard is counted in
  * {@link ShardOwnerMetrics#shardsAwaitingTakeover} from its first failure until its takeover completes or
  * its lease ends. Both are on the owner's metrics, not the pump's, because pump metrics are invisible to
- * {@link ShardOwnedQueue#metrics()}. That is the only public accessor for them: a
- * {@code PostgresqlMessageQueue} keeps its metrics private, so for a queue used through {@code MessageQueue}
- * (the Spring starter, the {@code DurableQueues} adapter) the log below is the only signal. The log follows
+ * {@link ShardOwnedQueue#metrics()}. A {@code PostgresqlMessageQueue} keeps those metrics private, so the same
+ * two transitions also go to the consumer's observer, {@link QueueObserver#takeoverStalled}, which reaches every
+ * observer registered on a {@code MessageQueue}. {@code MicrometerQueueObserver} publishes it as the gauge
+ * {@code essentials.queue.shards.awaiting.takeover}, and the Spring starter binds that observer to every queue,
+ * the {@code DurableQueues} adapter's included, whenever there is a {@code MeterRegistry}. The log follows
  * the {@code BlockedKeyReport}/{@code LeaseOverrun} pattern: an ERROR with the stack trace on a shard's first
  * failure, a one-line DEBUG on repeats (no stack trace: they come five a second), and one ERROR a minute
  * with the stack trace and the count while it keeps failing. An INFO when it recovers.
+ * <p>
+ * The observer call is the one observer call the engine catches ({@link QueueObserver#takeoverStalled} says
+ * why): what it throws is logged at ERROR and the pump goes on. The counters are updated before it, so a
+ * throwing observer cannot leave them out of step.
  * <p>
  * Confined to the pump's thread, so nothing here is synchronised. The counters it writes are shared with the
  * other pumps serving the same queue, which is why they are atomics.
@@ -102,9 +109,13 @@ final class TakeoverStalls {
                               + "and the pump keeps serving its other shards. "
                               + "QueueHealth.unownedShards does not count this shard. ShardOwnedQueue.metrics() reports "
                               + "it under shardsAwaitingTakeover, and every attempt under takeoverFailures; through "
-                              + "MessageQueue this log is the only signal. Repeats are logged at DEBUG, and at ERROR "
+                              + "MessageQueue it is reported to QueueObserver.takeoverStalled; the gauge "
+                              + "essentials.queue.shards.awaiting.takeover exists only where a MicrometerQueueObserver is "
+                              + "registered on the queue (the Spring starter registers one when there is a MeterRegistry). "
+                              + "Repeats are logged at DEBUG, and at ERROR "
                               + "once a minute while it keeps failing",
                       pumpName, owner.queueId(), owner.lane(), owner.shard(), what, cause);
+            notifyObserver(owner, true);
             return;
         }
         stall.failures++;
@@ -136,6 +147,7 @@ final class TakeoverStalls {
                          + "again",
                  pumpName, owner.queueId(), owner.lane(), owner.shard(), stall.failures,
                  TimeUnit.NANOSECONDS.toSeconds(nanoTime.getAsLong() - stall.sinceNanos));
+        notifyObserver(owner, false);
     }
 
     /**
@@ -145,6 +157,7 @@ final class TakeoverStalls {
     void forget(LeasedOwner owner) {
         if (stalls.remove(owner) != null) {
             owner.ownerMetrics().shardsAwaitingTakeover.decrementAndGet();
+            notifyObserver(owner, false);
         }
     }
 
@@ -154,6 +167,24 @@ final class TakeoverStalls {
     void forgetAll() {
         for (var owner : List.copyOf(stalls.keySet())) {
             forget(owner);
+        }
+    }
+
+    /**
+     * Caught, unlike every other observer call: this one runs on the pump's thread outside its per-owner guard (from
+     * {@code ShardPump.takeOver}, its lease-ended cleanup and its exit), so a throw would end the thread and stop every
+     * shard it serves. Called once per transition, never per retry, so an observer that always throws logs twice per
+     * stall, not five times a second.
+     */
+    private void notifyObserver(LeasedOwner owner, boolean stalled) {
+        var lane = "ordered".equals(owner.lane()) ? MessageId.Lane.ORDERED : MessageId.Lane.UNORDERED;
+        try {
+            owner.ownerMetrics().observer().takeoverStalled(lane, owner.shard(), stalled);
+        } catch (RuntimeException e) {
+            log.error("{}: queue {}, {} shard {}: QueueObserver.takeoverStalled(stalled={}) threw. That is a bug in the "
+                              + "observer; the pump keeps running, but what the observer reports for this shard may now "
+                              + "be wrong",
+                      pumpName, owner.queueId(), owner.lane(), owner.shard(), stalled, e);
         }
     }
 }

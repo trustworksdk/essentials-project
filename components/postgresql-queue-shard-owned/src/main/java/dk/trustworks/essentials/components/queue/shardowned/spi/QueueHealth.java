@@ -35,11 +35,11 @@ package dk.trustworks.essentials.components.queue.shardowned.spi;
  * failing on a healthy connection (say, a trigger or constraint refusing the takeover's dead-letter
  * move) keeps the lease and retries without limit, and the shard delivers nothing meanwhile. The
  * instance logs that at ERROR, naming the queue and the shard, when it starts and once a minute while
- * it lasts. It also counts the shard in {@code ShardOwnerMetrics.shardsAwaitingTakeover}, but only the
- * engine-level {@code ShardOwnedQueue.metrics()} exposes those metrics: there, alert on it being above
- * zero alongside this one. A {@link MessageQueue} does not expose them (nor do the Spring starter and
- * the {@code DurableQueues} adapter, which are built on it), so through it the ERROR log is the only
- * signal.
+ * it lasts. It also counts the shard in {@code ShardOwnerMetrics.shardsAwaitingTakeover} (read through the
+ * engine-level {@code ShardOwnedQueue.metrics()}) and reports it to {@link QueueObserver#takeoverStalled},
+ * which reaches a {@link MessageQueue}'s observers; {@code MicrometerQueueObserver} publishes it as
+ * {@code essentials.queue.shards.awaiting.takeover}, bound by the Spring starter to every queue, the
+ * {@code DurableQueues} adapter's included. Alert on that being above zero alongside this one.
  *
  * @param shardCount     shards configured for this queue, per lane
  * @param unorderedOwned unordered shards with a live lease right now

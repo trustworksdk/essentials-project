@@ -402,7 +402,7 @@ The concurrency sweep uses a 2 ms handler. A handler that returns immediately is
 nobody is consuming from a queue that is merely busy, and those diverge only slowly. Zero in steady
 state, briefly non-zero while shards move between instances, persistently non-zero when messages are
 in shards nobody reads. It does **not** see a shard that is leased but not served — one whose takeover
-keeps failing; see `shardsAwaitingTakeover` below.
+keeps failing; see `essentials.queue.shards.awaiting.takeover` and `shardsAwaitingTakeover` below.
 
 `liveInstances` below your running process count means colliding instance ids — two processes sharing
 one id count as one instance and are each allowed half the shards.
@@ -411,7 +411,7 @@ Via Micrometer, `bindQueueHealth(queue, maxAge)` publishes:
 
 | Meter | Read it for |
 |---|---|
-| `essentials.queue.shards.unowned` | **the alert** for shards nobody holds — messages in shards nobody is reading. Blind to a held shard that is not served (`shardsAwaitingTakeover` below) |
+| `essentials.queue.shards.unowned` | **the alert** for shards nobody holds — messages in shards nobody is reading. Blind to a held shard that is not served (`essentials.queue.shards.awaiting.takeover` below) |
 | `essentials.queue.shards.owned` (tag `lane`) | coverage per lane |
 | `essentials.queue.instances` | scale events, and id collisions |
 | `essentials.queue.depth` (tag `lane`) | backlog, via `bindQueueDepth` |
@@ -420,7 +420,9 @@ Via Micrometer, `bindQueueHealth(queue, maxAge)` publishes:
 
 Both bindings are opt-in and cached, because a gauge is polled on every scrape and these are queries.
 
-**In Spring Boot** the starter binds a `MicrometerQueueObserver` to every queue `ShardOwnedQueueFactory` builds whenever a `MeterRegistry` exists — tagged `queue=<name>` — so the event meters (`essentials.queue.enqueued`, `.delivery`, `.delivery.failures`, `.retries`, `.deadletters`, `.shard.ownership`) need no code. The gauges stay opt-in:
+One gauge needs no binding, because it costs no query: `essentials.queue.shards.awaiting.takeover` is registered by the `MicrometerQueueObserver` constructor and fed by the `QueueObserver.takeoverStalled` callback. It counts shards **this instance** holds a lease on but does not serve because their takeover keeps failing — the blind spot of `shards.unowned`. **Alert on it above zero next to `shards.unowned`**; it is per instance, so aggregate it with `sum by (queue)`.
+
+**In Spring Boot** the starter binds a `MicrometerQueueObserver` to every queue `ShardOwnedQueueFactory` builds whenever a `MeterRegistry` exists — tagged `queue=<name>` — so the event meters (`essentials.queue.enqueued`, `.delivery`, `.delivery.failures`, `.retries`, `.deadletters`, `.shard.ownership`) and the `essentials.queue.shards.awaiting.takeover` gauge need no code; that includes the queues the `DurableQueues` adapter runs on. The gauges stay opt-in:
 
 ```yaml
 essentials:
@@ -432,7 +434,7 @@ essentials:
       gauge-max-age: 10s     # scrapes inside the window share one query round
 ```
 
-The gauges read the database, so every instance reports the same cluster-wide value: aggregate them with `max by (queue)`, not `sum`. Event meters are per instance and do sum.
+The opt-in gauges read the database, so every instance reports the same cluster-wide value: aggregate them with `max by (queue)`, not `sum`. Event meters, and `shards.awaiting.takeover`, are per instance and do sum.
 
 **`ShardOwnerMetrics.deliveryPauses`** is another one to watch. An instance that has not been able
 to confirm its own liveness within four fifths of `leaseTtl` stops dispatching until it can — by then the rest of the
@@ -458,10 +460,14 @@ retried every 200 ms with no limit and the lease is kept, so no other instance t
 delivers nothing until the cause is fixed — a data-caused failure does not clear on its own. Alert on it
 being above zero next to `unownedShards`; `takeoverFailures` counts the failed attempts. The engine logs
 one ERROR with the cause when it starts, one a minute while it lasts, and an INFO when it recovers.
-**Where to read it:** these metrics are exposed only by the engine-level `ShardOwnedQueue.metrics()`.
-`PostgresqlMessageQueue` keeps its `ShardOwnerMetrics` private, so through `MessageQueue` — including the
-Spring starter and the `DurableQueues` adapter — the ERROR log (logger `dk.trustworks.essentials.components.queue.shardowned.ShardPump`) is the
-only signal; alert on it there.
+**Where to read it:** `ShardOwnerMetrics` is exposed only by the engine-level `ShardOwnedQueue.metrics()`;
+`PostgresqlMessageQueue` keeps it private. Through `MessageQueue` — including the Spring starter and the
+`DurableQueues` adapter — the same stall reaches `QueueObserver.takeoverStalled(lane, shard, stalled)`
+(`true` once when it starts, `false` once when it ends; never per retry), which `MicrometerQueueObserver`
+publishes as `essentials.queue.shards.awaiting.takeover`. Alert on that. The ERROR log (logger
+`dk.trustworks.essentials.components.queue.shardowned.ShardPump`) names the shard and the cause.
+`takeoverStalled` is the one callback whose exceptions the engine catches and logs, because it runs on the
+pump thread.
 
 ## Administrative API
 

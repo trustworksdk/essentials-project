@@ -838,7 +838,7 @@ processed one are indistinguishable — so it is stated rather than left to be d
 
 ## 12. Observability
 
-`QueueObserver` is the consumer-facing SPI: `enqueued`, `aroundDelivery`, `delivered`, `deliveryFailed`, `retryScheduled`, `deadLettered`, `shardOwnershipChanged`. `ShardOwnerMetrics` carries both the engine's own counters and the consumer's observer, so one object threads both audiences through the owners' constructors.
+`QueueObserver` is the consumer-facing SPI: `enqueued`, `aroundDelivery`, `delivered`, `deliveryFailed`, `retryScheduled`, `deadLettered`, `shardOwnershipChanged`, `takeoverStalled`. `ShardOwnerMetrics` carries both the engine's own counters and the consumer's observer, so one object threads both audiences through the owners' constructors.
 
 `MicrometerQueueObserver` binds `QueueObserver` to a `MeterRegistry`. `micrometer-core` is `provided`, per the project rule that third-party integrations are not transitive.
 
@@ -855,10 +855,14 @@ number to alert on: zero in steady state, briefly non-zero while shards move, pe
 when messages are sitting in shards nobody reads. It cannot see a shard that is leased but not served:
 one whose takeover keeps failing on a healthy connection, which the pump retries without limit while it
 keeps the lease (`ShardPump.takeOver`). Each instance logs such a shard at ERROR when it starts and once a
-minute while it lasts, and counts it in its `ShardOwnerMetrics.shardsAwaitingTakeover`; where those metrics
-are reachable, alert on that next to `unownedShards()`. Only `ShardOwnedQueue.metrics()` exposes them:
-`PostgresqlMessageQueue` keeps its `ShardOwnerMetrics` private, so through `MessageQueue` (the Spring starter,
-the `DurableQueues` adapter) the ERROR log is the only signal.
+minute while it lasts, counts it in its `ShardOwnerMetrics.shardsAwaitingTakeover` (read through
+`ShardOwnedQueue.metrics()`; `PostgresqlMessageQueue` keeps its `ShardOwnerMetrics` private), and reports
+the stall starting and ending to `QueueObserver.takeoverStalled`, which reaches every observer on a
+`MessageQueue`. `MicrometerQueueObserver` publishes that as `essentials.queue.shards.awaiting.takeover`,
+registered eagerly and fed by the callback, so it costs no query; the Spring starter binds it to every queue,
+the `DurableQueues` adapter's included. Alert on it above zero next to `unownedShards()`.
+`takeoverStalled` is the one observer callback the engine catches: it runs on a pump thread outside the
+per-shard guard, where a throw would end the thread and every shard it serves.
 
 That distinction is not academic. Every ownership failure this engine has had — a fair share computed
 against instances that had departed, two processes disagreeing about the shard count, a consumer

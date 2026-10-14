@@ -34,7 +34,7 @@ package dk.trustworks.essentials.components.queue.shardowned.spi;
  * Every method has a default, so implementing one concern does not mean stubbing the others. The
  * engine calls these on its own threads and does not catch what they throw — an observer that fails
  * is a bug in the observer, and swallowing it would hide the bug while corrupting the measurement it
- * was installed to produce.
+ * was installed to produce. The exception is {@link #takeoverStalled}, which says why.
  * <p>
  * No Micrometer dependency here, deliberately: this module stays free of a metrics framework, and a
  * Micrometer binding is a thin adapter a consumer declares itself. The project treats third-party
@@ -74,5 +74,28 @@ public interface QueueObserver {
      * A shard was taken or lost, which is the signal that consumers are moving.
      */
     default void shardOwnershipChanged(int shard, boolean acquired) {
+    }
+
+    /**
+     * A shard this instance holds a lease on has stopped, or started again, being served because its
+     * takeover failed or then completed.
+     * <p>
+     * {@code stalled == true} on the shard's first failed takeover. The pump retries the takeover every
+     * 200 ms with no limit and keeps the lease, so the shard delivers nothing in the meantime and no other
+     * instance takes it; {@link QueueHealth#unownedShards()} cannot see it, because it is leased. A failure
+     * caused by data (a trigger or constraint refusing the takeover's dead-letter move) does not clear on its
+     * own. {@code stalled == false} once, when the takeover completes or the lease ends with it still failing.
+     * The retries in between are not reported here. So a count of {@code true} minus {@code false} calls is
+     * the number of shards stalled right now, which {@code MicrometerQueueObserver} publishes as
+     * {@code essentials.queue.shards.awaiting.takeover}.
+     * <p>
+     * The lane is given, unlike {@link #shardOwnershipChanged}, because shard numbers repeat across the two
+     * lanes and a stalled shard is one to look up, not only to count.
+     * <p>
+     * <b>The one callback the engine catches.</b> It is called on a pump thread outside the per-shard guard
+     * that keeps one shard's failure from ending the thread, so a throw here would stop every shard that pump
+     * serves. What it throws is logged at ERROR instead, and the pump goes on.
+     */
+    default void takeoverStalled(MessageId.Lane lane, int shard, boolean stalled) {
     }
 }

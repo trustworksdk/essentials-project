@@ -19,6 +19,7 @@ package dk.trustworks.essentials.components.queue.shardowned;
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
+import dk.trustworks.essentials.components.queue.shardowned.spi.*;
 import org.junit.jupiter.api.*;
 import org.slf4j.LoggerFactory;
 
@@ -67,7 +68,9 @@ class TakeoverStallsTest {
         assertThat(logged.list.getFirst().getFormattedMessage())
                 .contains("pump-0: queue 3, unordered shard 5 failed its takeover on a healthy connection")
                 .contains("ShardOwnedQueue.metrics() reports it under shardsAwaitingTakeover")
-                .contains("through MessageQueue this log is the only signal");
+                .contains("through MessageQueue it is reported to QueueObserver.takeoverStalled")
+                .contains("essentials.queue.shards.awaiting.takeover exists only where a MicrometerQueueObserver is registered")
+                .contains("the Spring starter registers one");
         assertThat(logged.list.getFirst().getThrowableProxy()).as("the first carries the stack trace").isNotNull();
 
         // Retried every 200 ms: counted, logged at DEBUG, and still one shard awaiting
@@ -149,11 +152,80 @@ class TakeoverStallsTest {
         assertThat(metrics.takeoverFailures.sum()).isEqualTo(3);
     }
 
+    /**
+     * {@code ShardOwnerMetrics} is private behind a {@code MessageQueue}, so the observer is how the Spring starter and the
+     * adapter see a stall. Told once when it starts and once when it ends, never per retry, and with the lane, since shard
+     * numbers repeat across lanes.
+     */
+    @Test
+    void the_observer_is_told_when_a_stall_starts_and_when_it_ends_but_not_on_every_retry() {
+        var told    = new ArrayList<String>();
+        var metrics = new ShardOwnerMetrics(new QueueObserver() {
+            @Override
+            public void takeoverStalled(MessageId.Lane lane, int shard, boolean stalled) {
+                told.add(lane + "/" + shard + "=" + stalled);
+            }
+        });
+        var completes = new StubOwner((short) 1, 4, metrics);
+        var leaseEnds = new StubOwner((short) 1, 5, metrics);
+        var pumpStops = new StubOwner((short) 1, 6, metrics, "ordered");
+        var stalls    = new TakeoverStalls("pump-0", clock::get);
+
+        for (var retry = 0; retry < 3; retry++) {
+            stalls.failed(completes, "threw during its takeover", new IllegalStateException("broken"));
+            stalls.failed(leaseEnds, "threw during its takeover", new IllegalStateException("broken"));
+            stalls.failed(pumpStops, "threw during its takeover", new IllegalStateException("broken"));
+        }
+        assertThat(told).as("once per stall, not per retry").containsExactly("UNORDERED/4=true", "UNORDERED/5=true", "ORDERED/6=true");
+
+        stalls.completed(completes);
+        stalls.forget(leaseEnds);
+        stalls.forgetAll();
+        assertThat(told).as("every stall ends, whichever way").containsExactly("UNORDERED/4=true", "UNORDERED/5=true", "ORDERED/6=true",
+                                                                                "UNORDERED/4=false", "UNORDERED/5=false", "ORDERED/6=false");
+    }
+
+    /**
+     * Called on the pump's thread outside its per-owner guard: a throw here used to have nowhere to go but out of the pump,
+     * ending the thread and every shard it serves. Caught and logged instead, and the counters stay right.
+     */
+    @Test
+    void an_observer_that_throws_does_not_escape_to_the_pump_and_leaves_the_counters_right() {
+        var metrics = new ShardOwnerMetrics(new QueueObserver() {
+            @Override
+            public void takeoverStalled(MessageId.Lane lane, int shard, boolean stalled) {
+                throw new IllegalStateException("observer bug");
+            }
+        });
+        var owner  = new StubOwner((short) 2, 3, metrics);
+        var stalls = new TakeoverStalls("pump-0", clock::get);
+
+        stalls.failed(owner, "threw during its takeover", new IllegalStateException("broken"));
+        assertThat(metrics.shardsAwaitingTakeover.get()).isEqualTo(1);
+        stalls.completed(owner);
+        assertThat(metrics.shardsAwaitingTakeover.get()).isZero();
+        stalls.failed(owner, "threw during its takeover", new IllegalStateException("broken"));
+        stalls.forgetAll();
+        assertThat(metrics.shardsAwaitingTakeover.get()).isZero();
+
+        var observerErrors = logged.list.stream()
+                                        .filter(event -> event.getLevel() == Level.ERROR)
+                                        .filter(event -> event.getFormattedMessage().contains("That is a bug in the observer"))
+                                        .toList();
+        assertThat(observerErrors).as("each throw is logged, naming the queue and shard").hasSize(4);
+        assertThat(observerErrors.getFirst().getFormattedMessage()).contains("queue 2, unordered shard 3").contains("stalled=true");
+        assertThat(observerErrors.getFirst().getThrowableProxy().getMessage()).isEqualTo("observer bug");
+    }
+
     private List<Level> levels() {
         return logged.list.stream().map(ILoggingEvent::getLevel).toList();
     }
 
-    private record StubOwner(short queueId, int shard, ShardOwnerMetrics ownerMetrics) implements LeasedOwner {
+    private record StubOwner(short queueId, int shard, ShardOwnerMetrics ownerMetrics, String lane) implements LeasedOwner {
+        StubOwner(short queueId, int shard, ShardOwnerMetrics ownerMetrics) {
+            this(queueId, shard, ownerMetrics, "unordered");
+        }
+
         @Override
         public int pumpOnce(Connection connection) {
             return 0;
@@ -180,11 +252,6 @@ class TakeoverStallsTest {
         @Override
         public long fence() {
             return 1;
-        }
-
-        @Override
-        public String lane() {
-            return "unordered";
         }
 
         @Override

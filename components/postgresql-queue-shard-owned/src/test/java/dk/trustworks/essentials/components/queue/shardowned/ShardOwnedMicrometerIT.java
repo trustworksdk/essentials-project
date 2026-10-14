@@ -149,6 +149,92 @@ class ShardOwnedMicrometerIT {
     }
 
     /**
+     * A shard whose takeover keeps failing is leased and unserved, so {@code shards.unowned} cannot see it, and the
+     * engine's own count of it ({@code ShardOwnerMetrics.shardsAwaitingTakeover}) is private behind a
+     * {@code MessageQueue}. Before {@code QueueObserver.takeoverStalled}, a starter or adapter user had only the ERROR log.
+     * Driven by a real failing takeover - the takeover's dead-letter move refused by a trigger - through the
+     * {@code MessageQueue} the starter wires, not by calling the observer. A throwing observer registered ahead of the
+     * Micrometer one pins the fan-out's guarantee: every observer hears both ends of the stall, whatever an earlier one throws.
+     */
+    @Test
+    void a_takeover_that_keeps_failing_shows_on_the_awaiting_takeover_gauge_until_it_completes() throws Exception {
+        var maxAttempts = 3;
+        // Shard 0 holds a row one attempt short of the limit, and its lease names an instance that is gone. Taking it
+        // over is therefore unclean: the takeover charges the row to the limit and must dead-letter it, which the
+        // trigger refuses, so the takeover fails and is retried every 200 ms
+        try (var connection = dataSource.getConnection();
+             var statement = connection.prepareStatement(
+                     "INSERT INTO " + ShardOwnedSchema.UNORDERED_TABLE + " (queue_id, shard, seq, payload, payload_type, attempts)"
+                             + " VALUES (?, 0, 1, '\\x00'::bytea, 1, ?)")) {
+            statement.setShort(1, QUEUE_ID);
+            statement.setInt(2, maxAttempts - 1);
+            statement.executeUpdate();
+        }
+        assertThat(new ShardOwnedStorage(dataSource, QUEUE_ID).acquireLease("unordered", 0, "crashed-instance", 60_000)).isPresent();
+        failDeadLetterInserts(true);
+
+        try (var queue = new PostgresqlMessageQueue(dataSource, QUEUE_ID, SHARD_COUNT, "stall-1")) {
+            // Registered first, and throwing on every call: the fan-out must still tell the Micrometer observer behind
+            // it both ends of the stall, or the gauge never rises - or, if only the end were lost, never falls again
+            var brokenObserverCalls = new AtomicInteger();
+            queue.addObserver(new QueueObserver() {
+                @Override
+                public void takeoverStalled(MessageId.Lane lane, int shard, boolean stalled) {
+                    brokenObserverCalls.incrementAndGet();
+                    throw new IllegalStateException("broken observer");
+                }
+            });
+            queue.addObserver(new MicrometerQueueObserver(registry, List.of(Tag.of(MicrometerQueueObserver.QUEUE_TAG, "orders"))));
+            var gauge = registry.find(MicrometerQueueObserver.SHARDS_AWAITING_TAKEOVER_GAUGE).tag(MicrometerQueueObserver.QUEUE_TAG, "orders").gauge();
+            assertThat(gauge).as("registered eagerly, so an alert can exist before the incident does").isNotNull();
+            assertThat(gauge.value()).isZero();
+
+            var subscription = queue.consume((messageId, key, payload, payloadType) -> {
+            }, new ConsumerOptions(8, Integer.MAX_VALUE, maxAttempts, RetryBackoff.exponential(Duration.ofMillis(20), 1.0d, Duration.ofSeconds(1))));
+
+            Awaitility.await().atMost(Duration.ofSeconds(30))
+                      .untilAsserted(() -> assertThat(gauge.value()).as("the stalled shard is published").isEqualTo(1.0d));
+            // Still one a second later: told once per stall, not once per retry (five a second)
+            Thread.sleep(1_000);
+            assertThat(gauge.value()).isEqualTo(1.0d);
+            assertThat(counter(MicrometerQueueObserver.DEAD_LETTER_COUNTER, "queue", "orders"))
+                    .as("the injected failure must be what stalls the takeover").isZero();
+
+            failDeadLetterInserts(false);
+            Awaitility.await().atMost(Duration.ofSeconds(30))
+                      .untilAsserted(() -> {
+                          assertThat(gauge.value()).as("and drops to zero once the takeover completes").isZero();
+                          assertThat(counter(MicrometerQueueObserver.DEAD_LETTER_COUNTER, "queue", "orders"))
+                                  .as("the completed takeover parked the exhausted row").isEqualTo(1.0d);
+                      });
+            assertThat(brokenObserverCalls.get()).as("the throwing observer was told the start and the end as well").isEqualTo(2);
+            subscription.close();
+        }
+    }
+
+    /**
+     * A trigger rather than a broken statement: the takeover's own dead-letter move has to be the thing that fails. A
+     * revoked privilege would not do: the test role owns the table.
+     */
+    private void failDeadLetterInserts(boolean fail) throws java.sql.SQLException {
+        try (var connection = dataSource.getConnection();
+             var statement = connection.createStatement()) {
+            if (fail) {
+                statement.execute("""
+                                  CREATE OR REPLACE FUNCTION fail_dead_letter_insert() RETURNS trigger AS $$
+                                  BEGIN
+                                      RAISE EXCEPTION 'injected dead-letter failure';
+                                  END
+                                  $$ LANGUAGE plpgsql""");
+                statement.execute("CREATE TRIGGER fail_dead_letter_insert BEFORE INSERT ON " + ShardOwnedSchema.DLQ_TABLE
+                                          + " FOR EACH ROW EXECUTE FUNCTION fail_dead_letter_insert()");
+            } else {
+                statement.execute("DROP TRIGGER fail_dead_letter_insert ON " + ShardOwnedSchema.DLQ_TABLE);
+            }
+        }
+    }
+
+    /**
      * Depth is a query, not an event, so it is opt-in and cached. Both halves matter: the gauge has to
      * report the real depth, and it must not issue a query per scrape.
      */

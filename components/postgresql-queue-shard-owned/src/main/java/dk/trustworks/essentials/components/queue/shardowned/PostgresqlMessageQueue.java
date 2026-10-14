@@ -219,6 +219,31 @@ public final class PostgresqlMessageQueue implements MessageQueue {
         public void shardOwnershipChanged(int shard, boolean acquired) {
             notifyObservers(observer -> observer.shardOwnershipChanged(shard, acquired));
         }
+
+        /**
+         * Every observer is told even when an earlier one throws: the engine catches this callback (see
+         * {@link QueueObserver#takeoverStalled}), so stopping at the first throw would leave the observers after it
+         * with a stall they never hear about, or one that never ends. The first exception is rethrown once all have
+         * been told, for the engine to log.
+         */
+        @Override
+        public void takeoverStalled(MessageId.Lane lane, int shard, boolean stalled) {
+            RuntimeException first = null;
+            for (var observer : observers) {
+                try {
+                    observer.takeoverStalled(lane, shard, stalled);
+                } catch (RuntimeException e) {
+                    if (first == null) {
+                        first = e;
+                    } else {
+                        first.addSuppressed(e);
+                    }
+                }
+            }
+            if (first != null) {
+                throw first;
+            }
+        }
     };
 
     @Override

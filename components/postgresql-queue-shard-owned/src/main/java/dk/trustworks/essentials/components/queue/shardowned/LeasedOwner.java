@@ -70,10 +70,11 @@ interface LeasedOwner {
      * with the lease kept, but it has none of the signal below: it is logged at ERROR each time it fails and
      * counted nowhere. Because the shard is leased, {@code QueueHealth.unownedShards()} does not count it. The signal is
      * {@link ShardOwnerMetrics#shardsAwaitingTakeover} on this owner's {@link #ownerMetrics()} (readable through
-     * {@link ShardOwnedQueue#metrics()}; a {@code PostgresqlMessageQueue} keeps its metrics private), together
-     * with {@link ShardOwnerMetrics#takeoverFailures} and an ERROR naming the shard (repeated at most once a
-     * minute while it keeps failing), which is the only signal through {@code MessageQueue}. It clears when the
-     * takeover completes or the lease ends.
+     * {@link ShardOwnedQueue#metrics()}; a {@code PostgresqlMessageQueue} keeps its metrics private, so through
+     * {@code MessageQueue} it is the observer callback {@code QueueObserver.takeoverStalled}, published by
+     * Micrometer as {@code essentials.queue.shards.awaiting.takeover}), together with
+     * {@link ShardOwnerMetrics#takeoverFailures} and an ERROR naming the shard (repeated at most once a minute
+     * while it keeps failing). It clears when the takeover completes or the lease ends.
      */
     void onTakeover(Connection connection) throws SQLException;
 

@@ -223,6 +223,10 @@ class ShardOwnedQueueAutoConfigurationIT {
                     assertThat(registry.find("essentials.queue.depth").gauges())
                             .describedAs("the gauges that cost queries stay off unless asked for")
                             .isEmpty();
+                    // Costs no query, so it is always there: the one way a starter user sees a shard whose takeover keeps
+                    // failing, which shards.unowned cannot (the engine's own metrics are private behind MessageQueue)
+                    assertThat(registry.get("essentials.queue.shards.awaiting.takeover").tag("queue", "orders").gauge().value()).isZero();
+                    assertThat(registry.get("essentials.queue.shards.awaiting.takeover").tag("queue", "shipments").gauge().value()).isZero();
                 });
     }
 

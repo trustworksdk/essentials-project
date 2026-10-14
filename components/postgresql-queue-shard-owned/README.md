@@ -718,7 +718,7 @@ unordered, `orderedUnits` for ordered. Depth tells you how much work is waiting;
 is consuming from a queue that is merely busy, and those diverge only slowly. It is zero in steady
 state, briefly non-zero while shards move between instances, and persistently non-zero when messages
 sit in shards nobody reads. It cannot see a shard that is leased but not served — one whose takeover
-keeps failing; see `shardsAwaitingTakeover` below.
+keeps failing; see `essentials.queue.shards.awaiting.takeover` and `shardsAwaitingTakeover` below.
 
 `liveInstances` below your running process count means **colliding instance ids** — two processes
 sharing one id count as one instance and are each allowed half the shards.
@@ -735,13 +735,16 @@ queue.addObserver(observer);
 | Meter | Read it for |
 |---|---|
 | `essentials.queue.shards.unowned` | **the alert** — messages in shards nobody is reading |
+| `essentials.queue.shards.awaiting.takeover` | **the alert** for what `shards.unowned` cannot see — shards this instance holds but does not serve, because their takeover keeps failing |
 | `essentials.queue.shards.owned` (tag `lane`) | coverage per lane |
 | `essentials.queue.instances` | scale events, and id collisions |
 | `essentials.queue.depth` (tag `lane`) | backlog |
 | `essentials.queue.enqueued` / `.delivery` / `.delivery.failures` / `.retries` / `.deadletters` | throughput and failure rates |
 
 Both bindings are **opt-in and cached**, because a gauge is polled on every scrape and these are
-database queries — hence the `maxAge` argument.
+database queries — hence the `maxAge` argument. `shards.awaiting.takeover` needs neither: it is
+registered by the constructor and fed by the `QueueObserver.takeoverStalled` callback, so it costs no query.
+It is per instance; sum it across instances.
 
 ### Three engine-level metrics worth watching
 
@@ -765,8 +768,10 @@ limit and the lease is kept, so no other instance takes the shard and it deliver
 is fixed. `unownedShards` cannot see this, because the shard is leased: alert on this one being above zero
 next to it. `takeoverFailures` counts the failed attempts, and the log carries one ERROR with the cause
 when it starts and one a minute while it lasts. Only the engine-level `ShardOwnedQueue.metrics()` exposes
-these counters: a `PostgresqlMessageQueue` keeps its `ShardOwnerMetrics` private, so through `MessageQueue`
-(and the Spring starter and the `DurableQueues` adapter built on it) that ERROR log is the only signal.
+these counters, since a `PostgresqlMessageQueue` keeps its `ShardOwnerMetrics` private. Through `MessageQueue`
+(and the Spring starter and the `DurableQueues` adapter built on it) the same stall reaches
+`QueueObserver.takeoverStalled`, once when it starts and once when it ends, which `MicrometerQueueObserver`
+publishes as `essentials.queue.shards.awaiting.takeover`.
 
 ## Interceptors and Observers
 
