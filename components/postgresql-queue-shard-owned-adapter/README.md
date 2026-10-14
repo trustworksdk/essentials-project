@@ -268,9 +268,10 @@ as a constant delay.
 > to both the limit and the backoff — the engine's first retry asks for `calculateNextRedeliveryDelay(0)`.
 
 **`markForRedeliveryIn(delay)` redelivers after `delay`.** The adapter ends the delivery with the
-engine's `RedeliveryRequested` outcome, which the engine schedules at the requested delay. The attempt
-is counted, but — as with a manual redelivery in `PostgresqlDurableQueues` — the request never
-dead-letters the message.
+engine's `RedeliveryRequested` outcome, which the engine schedules at the requested delay. The request
+is not an attempt: it does not raise the redelivery count, does not use up the redelivery policy's
+budget, and never dead-letters the message — unlike a manual redelivery in `PostgresqlDurableQueues`,
+which counts.
 
 **`resurrectDeadLetterMessage` returns empty even on success.** The message re-enters at a fresh
 sequence, so its `QueueEntryId` changes and the old one no longer addresses it.
