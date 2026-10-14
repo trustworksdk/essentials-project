@@ -67,8 +67,9 @@ interface LeasedOwner {
      * That is deliberate. A failure caused by data, such as a trigger or constraint refusing the exhaustion
      * dead-letter move, is database-wide: releasing the shard would only hand the same failure to the next
      * instance and move the shard back and forth between instances. A failing {@link #pumpOnce} is also retried
-     * with the lease kept, but it has none of the signal below: it is logged at ERROR each time it fails and
-     * counted nowhere. Because the shard is leased, {@code QueueHealth.unownedShards()} does not count it. The signal is
+     * with the lease kept; it is counted in {@link ShardOwnerMetrics#pumpFailures} and logged at ERROR at most once a
+     * minute per queue (see {@link PumpFailures}), but it has no current-state count like the one below.
+     * Because the shard is leased, {@code QueueHealth.unownedShards()} does not count it. The signal for a takeover is
      * {@link ShardOwnerMetrics#shardsAwaitingTakeover} on this owner's {@link #ownerMetrics()} (readable through
      * {@link ShardOwnedQueue#metrics()}; a {@code PostgresqlMessageQueue} keeps its metrics private, so through
      * {@code MessageQueue} it is the observer callback {@code QueueObserver.takeoverStalled}, published by

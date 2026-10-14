@@ -146,6 +146,24 @@ public final class ShardOwnerMetrics {
      */
     public final AtomicInteger shardsAwaitingTakeover           = new AtomicInteger();
     /**
+     * Delivery passes ({@code pumpOnce}) for a shard that failed with the connection still healthy: a statement the
+     * database refused, or an unchecked exception from the engine. Not a handler failing, which is
+     * {@link #handlerFailures}. The shard stays leased and the pass is tried again on the pump's next pass, with no limit,
+     * so a shard whose reads or acknowledgements are permanently refused delivers nothing while this keeps rising - and,
+     * like a stalled takeover, {@code QueueHealth.unownedShards()} cannot see it because the shard is leased. Alert on
+     * its rate. The ERROR log, at most one a minute per queue, names one shard and the cause; every failure is logged at
+     * DEBUG, and a shard whose pass succeeds again after failing gets an INFO. See {@code PumpFailures}.
+     */
+    public final LongAdder     pumpFailures                     = new LongAdder();
+    /**
+     * Ordered-lane batched reads (one statement per queue per pass, for two or more attentive shards) that failed. Each
+     * shard then reads for itself in its own pass, so nothing stops delivering because of this alone, but the read is tried
+     * again on the next pass: a read the database keeps refusing (a revoked grant) rises with every pass, and the shards'
+     * own reads usually fail too, under {@link #pumpFailures}. Logged at WARN with the stack trace at most once a minute per
+     * queue, every failure at DEBUG, and an INFO when the queue's batched read succeeds again. See {@code PumpFailures}.
+     */
+    public final LongAdder     batchedReadFailures              = new LongAdder();
+    /**
      * Messages whose handler returned while the thread was interrupted. Not acknowledged, because an
      * interrupted handler cannot be assumed to have finished — see {@code ShardOwner.deliver}.
      */
@@ -284,6 +302,22 @@ public final class ShardOwnerMetrics {
             new java.util.concurrent.atomic.AtomicLong(TakeoverStalls.NO_STALL_ERROR_LOGGED);
 
     /**
+     * Rate limit for the ERROR that reports a failing delivery pass, per queue for the same reason as
+     * {@link #nextTakeoverStallErrorNanos}. {@link TakeoverStalls#NO_STALL_ERROR_LOGGED} until the first. See
+     * {@code PumpFailures}.
+     */
+    final java.util.concurrent.atomic.AtomicLong nextPumpFailureErrorNanos =
+            new java.util.concurrent.atomic.AtomicLong(TakeoverStalls.NO_STALL_ERROR_LOGGED);
+
+    /**
+     * Rate limit for the WARN that reports a failing ordered-lane batched read ({@link #batchedReadFailures}), per queue:
+     * every pump serving the queue issues its own. {@link TakeoverStalls#NO_STALL_ERROR_LOGGED} until the first. See
+     * {@code PumpFailures}.
+     */
+    final java.util.concurrent.atomic.AtomicLong nextBatchedReadWarningNanos =
+            new java.util.concurrent.atomic.AtomicLong(TakeoverStalls.NO_STALL_ERROR_LOGGED);
+
+    /**
      * The operator-facing subset, as a stable shape.
      * <p>
      * {@link #snapshot()} stays the full map for tests and debugging; this is what the admin API
@@ -324,6 +358,8 @@ public final class ShardOwnerMetrics {
         snapshot.put("takeoverAttemptBumps", takeoverAttemptBumps.sum());
         snapshot.put("takeoverFailures", takeoverFailures.sum());
         snapshot.put("shardsAwaitingTakeover", shardsAwaitingTakeover.get());
+        snapshot.put("pumpFailures", pumpFailures.sum());
+        snapshot.put("batchedReadFailures", batchedReadFailures.sum());
         snapshot.put("abandonedOnInterrupt", abandonedOnInterrupt.sum());
         snapshot.put("orderViolations", orderViolations.sum());
         snapshot.put("keysBlockedByDeadLetter", keysBlockedByDeadLetter.sum());

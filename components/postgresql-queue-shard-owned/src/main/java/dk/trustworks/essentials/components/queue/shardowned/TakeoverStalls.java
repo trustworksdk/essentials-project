@@ -21,6 +21,7 @@ import org.slf4j.*;
 
 import java.util.*;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.LongSupplier;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
@@ -163,9 +164,18 @@ final class TakeoverStalls {
      * a minute has passed since it was last taken, and this pump won the CAS against the others serving the queue.
      */
     private static boolean takeErrorWindow(ShardOwnerMetrics metrics, long now) {
-        var next = metrics.nextTakeoverStallErrorNanos.get();
+        return takeErrorWindow(metrics.nextTakeoverStallErrorNanos, now);
+    }
+
+    /**
+     * Take a once-a-minute ERROR window shared by every pump serving a queue: open when {@code window} holds
+     * {@link #NO_STALL_ERROR_LOGGED} or a time that has passed, and taken by whichever pump wins the CAS. Also used by
+     * {@link PumpFailures}, for the same reason.
+     */
+    static boolean takeErrorWindow(AtomicLong window, long now) {
+        var next = window.get();
         return (next == NO_STALL_ERROR_LOGGED || now - next >= 0)
-                && metrics.nextTakeoverStallErrorNanos.compareAndSet(next, now + ERROR_EVERY_NANOS);
+                && window.compareAndSet(next, now + ERROR_EVERY_NANOS);
     }
 
     /**

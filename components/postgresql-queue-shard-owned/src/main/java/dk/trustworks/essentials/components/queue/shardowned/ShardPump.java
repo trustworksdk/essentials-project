@@ -73,6 +73,11 @@ final class ShardPump implements Runnable {
      * not served while the pump reconnects.
      */
     private final TakeoverStalls                    stalls;
+    /**
+     * Shards whose delivery pass keeps failing, and queues whose ordered-lane batched read does. Kept across reconnects,
+     * like {@code stalls}.
+     */
+    private final PumpFailures                      pumpFailures;
 
     ShardPump(ShardOwnedStorage storage, ShardOwnerSettings settings, ShardOwnerMetrics metrics,
               AtomicBoolean running, AtomicBoolean flushOnExit, String name,
@@ -85,6 +90,7 @@ final class ShardPump implements Runnable {
         this.name = requireNonNull(name, "No name provided");
         this.poolExhaustion = requireNonNull(poolExhaustion, "No poolExhaustion provided");
         this.stalls = new TakeoverStalls(name);
+        this.pumpFailures = new PumpFailures(name);
     }
 
     /**
@@ -224,13 +230,16 @@ final class ShardPump implements Runnable {
                     for (var owner : attentive) {
                         try {
                             delivered += owner.pumpOnce(connection);
+                            pumpFailures.succeeded(owner);
                         } catch (RuntimeException e) {
                             // One thread now serves several shards, so an unchecked exception from
                             // one owner used to end the thread and stall every shard beside it —
                             // silently, because the lease went on being renewed. Whatever is wrong
                             // with this owner is its own problem; the rest keep running.
-                            log.error("{}: shard {} threw; continuing with the other shards",
-                                      name, owner.shard(), e);
+                            //
+                            // Counted and rate-limited (PumpFailures): it is retried on every pass with the
+                            // lease kept, and a stack trace per pass was a log flood with no counter behind it.
+                            pumpFailures.failed(owner, "threw during delivery", e);
                         } catch (SQLException e) {
                             // A failing STATEMENT is not a failing CONNECTION, and conflating them
                             // is worse than either. Letting this reach the reconnect loop below made
@@ -246,8 +255,7 @@ final class ShardPump implements Runnable {
                                 throw e;
                             }
                             statementFailed = true;
-                            log.error("{}: shard {} issued a statement that failed on a healthy "
-                                              + "connection; continuing with the other shards", name, owner.shard(), e);
+                            pumpFailures.failed(owner, "issued a statement that failed on a healthy connection", e);
                         }
                     }
                     owners.removeIf(owner -> {
@@ -257,6 +265,7 @@ final class ShardPump implements Runnable {
                         takenOver.remove(owner);
                         takeoverRetryAtNanos.remove(owner);
                         stalls.forget(owner);
+                        pumpFailures.forget(owner);
                         return true;
                     });
 
@@ -363,7 +372,9 @@ final class ShardPump implements Runnable {
      * batched statement queries a queue that does not exist and returns nothing, silently.
      * <p>
      * <b>Failure is not failure of the pass.</b> Owners are left without a batch and read for
-     * themselves, exactly as before this existed.
+     * themselves, exactly as before this existed. The batched read is tried again on the next pass, so a failure is
+     * counted in {@link ShardOwnerMetrics#batchedReadFailures} and logged through {@link PumpFailures}: a WARN with the
+     * stack trace at most once a minute per queue, DEBUG otherwise.
      */
     private void batchRead(Connection connection, List<LeasedOwner> attentive) {
         var byQueue = new HashMap<Short, List<BatchReadableOwner>>();
@@ -379,9 +390,12 @@ final class ShardPump implements Runnable {
             }
             try {
                 batchReadQueue(connection, entry.getKey(), entry.getValue());
+                pumpFailures.batchedReadSucceeded(entry.getKey());
             } catch (SQLException | RuntimeException e) {
-                log.warn("{}: batched read for queue {} failed; those shards read for themselves this "
-                                 + "pass", name, entry.getKey(), e);
+                // Counted and rate-limited (PumpFailures): it is tried again on every pass, and a stack trace per pass
+                // was a log flood beside the throttled pumpOnce ERROR. On the queue's metrics: every owner in the batch
+                // shares them.
+                pumpFailures.batchedReadFailed(entry.getKey(), entry.getValue().getFirst().ownerMetrics(), e);
             }
         }
     }
