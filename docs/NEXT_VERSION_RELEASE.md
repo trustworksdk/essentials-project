@@ -407,9 +407,17 @@ Spring Boot applications see no change: the starter passes its own listener. (`a
   is not yet visible (a delayed message, or a retry waiting out its backoff) is never charged. Neither are the rows of
   a key held by an earlier retry in backoff, a pending requested redelivery or a dead letter, nor a row a pull
   session holds; the same rows are never dead-lettered at takeover either.
-- **A message that has taken its owner down `maxAttempts` times is dead-lettered at takeover**, with an error saying
-  that no failure was ever recorded for it. On the ordered lane its key is blocked behind it, as for any dead letter.
-  The `takeoverAttemptBumps` metric drops to zero for clean handovers and to a few rows for crashes.
+- **A message that has taken its owner down `maxAttempts` times is dead-lettered at takeover.** The same pass parks a
+  message a pull session failed up to the limit, because a session failure counts an attempt but never dead-letters.
+  The stored error (`ShardOwnedStorage.EXHAUSTED_BY_TAKEOVERS`, also the cause message `QueueObserver.deadLettered`
+  receives) says the message reached its attempt limit when the shard was taken over, and that an error a pull session
+  recorded before that is not kept: a live row has no column for it. On the ordered lane its key is blocked behind it,
+  as for any dead letter. The `takeoverAttemptBumps` metric drops to zero for clean handovers and to a few rows for
+  crashes.
+- **A takeover charges once, even when its dead-letter pass fails.** The charge is recorded as soon as it commits. If
+  the dead-letter pass after it fails, for example on a dropped connection, only that pass is retried, on the pump's
+  next reconnect; the window is not charged a second time. A later plain reconnect never reruns the pass, so it cannot
+  dead-letter a message the owner is itself delivering on its last attempt. Both lanes.
 - **`QueuedMessage.markForRedeliveryIn(delay)` honours the delay and is not an attempt** through the shard-owned
   adapter. It used to be treated as a failure: the delay was ignored in favour of the policy's backoff, and enough
   requests dead-lettered a healthy message. Now only the message's visibility moves: the redelivery count does not
@@ -424,7 +432,7 @@ Spring Boot applications see no change: the starter passes its own listener. (`a
   failure write is fenced by the session's shard lease, or guarded by its row lease, so a superseded session can no
   longer push out a message's visibility.
 
-(`a4f541e4`, `f9fdd99b`, N-16 `dacd9ebb`)
+(`a4f541e4`, `f9fdd99b`, N-16 `dacd9ebb`, `5486c812`)
 
 #### 1.1.19 A rollback-only Spring transaction is rolled back on commit, and its queued message retried
 

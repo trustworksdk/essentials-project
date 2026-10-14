@@ -745,7 +745,8 @@ final class OrderedShardOwner implements BatchReadableOwner {
 
     /**
      * Failure path for a key. Either schedule a retry that keeps the key blocked, or park the
-     * message and let the key move on — a dead letter must not stall its key forever.
+     * message as a dead letter, which keeps the key blocked behind it until the dead letter is
+     * resurrected or deleted.
      */
     private void onFailure(String key, long keyOrder, ShardOwnedStorage.OrderedRow row, Throwable cause) {
         try (var connection = storage.connection()) {
