@@ -143,7 +143,7 @@ class ShardOwnedTakeoverExhaustionRetryIT {
             owner.onTakeover(connection);
         }
         assertThat(attempts(UNORDERED_TABLE, 3)).as("not charged by a reconnect").isEqualTo(MAX_ATTEMPTS);
-        assertThat(deadLetterError(3)).as("not dead-lettered by a reconnect").isEmpty();
+        assertThat(deadLetterError(MessageId.Lane.UNORDERED, 3)).as("not dead-lettered by a reconnect").isEmpty();
     }
 
     @Test
@@ -162,7 +162,7 @@ class ShardOwnedTakeoverExhaustionRetryIT {
             owner.onTakeover(connection);
         }
         assertThat(attempts(ORDERED_TABLE, 3)).as("not charged by a reconnect").isEqualTo(MAX_ATTEMPTS);
-        assertThat(deadLetterError(3)).as("not dead-lettered by a reconnect").isEmpty();
+        assertThat(deadLetterError(MessageId.Lane.ORDERED, 3)).as("not dead-lettered by a reconnect").isEmpty();
     }
 
     @Test
@@ -210,7 +210,7 @@ class ShardOwnedTakeoverExhaustionRetryIT {
                     .isLessThan(30);
             assertThat(pumpMetrics.connectionFailures.sum()).as("a failing statement is not a lost connection").isZero();
             assertThat(failingDeliveries).as("not pumped before its takeover has completed").isEmpty();
-            assertThat(deadLetterError(1)).as("the injected failure must reach the dead-letter move").isEmpty();
+            assertThat(deadLetterError(MessageId.Lane.UNORDERED, 1)).as("the injected failure must reach the dead-letter move").isEmpty();
             assertThat(pumpErrors()).as("one ERROR for the stalled takeover, not one per retry").hasSize(1);
             // Leased but not served, so QueueHealth.unownedShards cannot see it: the owner's metrics must
             assertThat(failingMetrics.shardsAwaitingTakeover.get()).as("the stalled shard is reported").isEqualTo(1);
@@ -223,7 +223,7 @@ class ShardOwnedTakeoverExhaustionRetryIT {
             failDeadLetterInserts(false);
             await().atMost(Duration.ofSeconds(15))
                    .untilAsserted(() -> {
-                       assertThat(deadLetterError(1)).contains(ShardOwnedStorage.EXHAUSTED_BY_TAKEOVERS);
+                       assertThat(deadLetterError(MessageId.Lane.UNORDERED, 1)).contains(ShardOwnedStorage.EXHAUSTED_BY_TAKEOVERS);
                        assertThat(failingDeliveries).containsExactly(new MessageId(MessageId.Lane.UNORDERED, SHARD, 2));
                    });
             assertThat(failingMetrics.takeoverAttemptBumps.sum()).as("seq 1 and 2 charged once, however often the pass was retried")
@@ -413,7 +413,7 @@ class ShardOwnedTakeoverExhaustionRetryIT {
                            assertThat(takeoverStallTransitions).as("the stall ended once").containsExactly(true, false);
                            assertThat(takeoverRecoveries()).as("one recovery INFO").hasSize(1);
                        });
-                assertThat(deadLetterError(1)).as("the takeover completed").contains(ShardOwnedStorage.EXHAUSTED_BY_TAKEOVERS);
+                assertThat(deadLetterError(MessageId.Lane.UNORDERED, 1)).as("the takeover completed").contains(ShardOwnedStorage.EXHAUSTED_BY_TAKEOVERS);
                 // TakeoverStalls.completed's arguments: pump, queue, lane, shard, failed attempts, seconds
                 assertThat(takeoverRecoveries().getFirst().getArgumentArray()[4])
                         .as("the recovery counts every failed attempt, on both connections")
@@ -460,7 +460,7 @@ class ShardOwnedTakeoverExhaustionRetryIT {
                    .untilAsserted(() -> assertThat(ownerMetrics.takeoverFailures.sum()).as("the failing takeover is retried").isGreaterThan(2));
             // Read after the wait, never as its condition: a refusal is counted inside the INSERT, before its takeover failure is
             assertThat(deadLetterInsertRefusals()).as("the takeover failed at the injected refusal, not something else").isGreaterThan(2);
-            assertThat(deadLetterError(3)).as("the injected failure must reach the exhaustion pass").isEmpty();
+            assertThat(deadLetterError(MessageId.Lane.ORDERED, 3)).as("the injected failure must reach the exhaustion pass").isEmpty();
             assertThat(deliveredKeys).as("not pumped before its takeover has loaded the dead-letter blocks").isEmpty();
 
             failDeadLetterInserts(false);
@@ -469,7 +469,7 @@ class ShardOwnedTakeoverExhaustionRetryIT {
                        assertThat(deliveredKeys).as("pumped once its takeover completed").containsExactly("key-3");
                        assertThat(blockedByKeyOrder(2)).as("parked behind key-1's dead letter, never delivered").contains(0L);
                    });
-            assertThat(deadLetterError(3)).contains(ShardOwnedStorage.EXHAUSTED_BY_TAKEOVERS);
+            assertThat(deadLetterError(MessageId.Lane.ORDERED, 3)).contains(ShardOwnedStorage.EXHAUSTED_BY_TAKEOVERS);
             assertThat(pumpMetrics.connectionFailures.sum()).as("a failing statement is not a lost connection").isZero();
         } finally {
             stopPump(running, pump, thread);
@@ -655,7 +655,7 @@ class ShardOwnedTakeoverExhaustionRetryIT {
         }
         assertThat(attempts(table, 1)).as("charged, and still live").isEqualTo(MAX_ATTEMPTS);
         assertThat(attempts(table, 2)).isEqualTo(1);
-        assertThat(deadLetterError(1)).isEmpty();
+        assertThat(deadLetterError(lane, 1)).isEmpty();
 
         // The pump reconnects and calls onTakeover again
         failDeadLetterInserts(false);
@@ -664,7 +664,7 @@ class ShardOwnedTakeoverExhaustionRetryIT {
         }
         assertThat(attempts(table, 2)).as("the window carries exactly one charge").isEqualTo(1);
         assertThat(attempts(table, 1)).as("moved out of the live lane").isZero();
-        assertThat(deadLetterError(1)).contains(ShardOwnedStorage.EXHAUSTED_BY_TAKEOVERS);
+        assertThat(deadLetterError(lane, 1)).contains(ShardOwnedStorage.EXHAUSTED_BY_TAKEOVERS);
         assertThat(ShardOwnedStorage.EXHAUSTED_BY_TAKEOVERS).doesNotContain("without a failure ever being recorded");
         assertThat(deadLettered).containsExactly(new DeadLettered(new MessageId(lane, SHARD, 1), MAX_ATTEMPTS,
                                                                   ShardOwnedStorage.EXHAUSTED_BY_TAKEOVERS));
@@ -804,12 +804,16 @@ class ShardOwnedTakeoverExhaustionRetryIT {
     }
 
     /**
-     * @return the dead letter's {@code blocked_by_key_order}: empty when there is no dead letter for {@code seq}, or it
-     * was dead-lettered by a failure of its own rather than parked behind another
+     * Addressed by {@code (shard, seq, source_lane)}, like every dead letter: {@code blocked_by_key_order} is an
+     * ordered-lane column, and an unordered dead letter can share an ordered one's {@code (shard, seq)}.
+     *
+     * @return the ordered dead letter's {@code blocked_by_key_order}: empty when there is no ordered dead letter for
+     * {@code seq}, or it was dead-lettered by a failure of its own rather than parked behind another
      */
     private Optional<Long> blockedByKeyOrder(long seq) throws SQLException {
         try (var connection = dataSource.getConnection();
-             var statement = connection.prepareStatement("SELECT blocked_by_key_order FROM " + DLQ_TABLE + " WHERE queue_id = ? AND shard = ? AND seq = ?")) {
+             var statement = connection.prepareStatement("SELECT blocked_by_key_order FROM " + DLQ_TABLE
+                                                                 + " WHERE queue_id = ? AND shard = ? AND seq = ? AND source_lane = 'ordered'")) {
             statement.setShort(1, QUEUE_ID);
             statement.setInt(2, SHARD);
             statement.setLong(3, seq);
@@ -847,12 +851,18 @@ class ShardOwnedTakeoverExhaustionRetryIT {
         }
     }
 
-    private Optional<String> deadLetterError(long seq) throws SQLException {
+    /**
+     * Addressed by {@code (shard, seq, source_lane)}, like every dead letter: unordered seqs are per shard and ordered
+     * seqs per queue, so one {@code (shard, seq)} can be parked in both lanes.
+     */
+    private Optional<String> deadLetterError(MessageId.Lane lane, long seq) throws SQLException {
         try (var connection = dataSource.getConnection();
-             var statement = connection.prepareStatement("SELECT last_error FROM " + DLQ_TABLE + " WHERE queue_id = ? AND shard = ? AND seq = ?")) {
+             var statement = connection.prepareStatement("SELECT last_error FROM " + DLQ_TABLE
+                                                                 + " WHERE queue_id = ? AND shard = ? AND seq = ? AND source_lane = ?")) {
             statement.setShort(1, QUEUE_ID);
             statement.setInt(2, SHARD);
             statement.setLong(3, seq);
+            statement.setString(4, lane == MessageId.Lane.ORDERED ? "ordered" : "unordered");
             try (var resultSet = statement.executeQuery()) {
                 return resultSet.next() ? Optional.of(resultSet.getString(1)) : Optional.empty();
             }
