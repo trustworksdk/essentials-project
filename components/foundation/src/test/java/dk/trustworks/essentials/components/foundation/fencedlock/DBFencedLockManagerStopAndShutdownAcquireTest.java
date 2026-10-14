@@ -27,6 +27,7 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 
 /**
  * Blocking acquires against a lock manager that is stopping, or has begun shutting down: they must not touch the DB once
@@ -93,6 +94,76 @@ class DBFencedLockManagerStopAndShutdownAcquireTest {
 
         assertThat(storage.lookups.get()).isEqualTo(lookupsBefore);
         assertThat(storage.rows).doesNotContainKey(LOCK_NAME);
+    }
+
+    @Test
+    void a_lock_this_manager_already_holds_is_still_returned_once_shutdown_has_started() {
+        // Given node holds the lock when shutdown starts
+        var lock = node.tryAcquireLock(LOCK_NAME).orElseThrow();
+        node.shutdownStarting(ShutdownContext.startingNow(Duration.ofSeconds(10)));
+        var lookupsBefore = storage.lookups.get();
+
+        // Then every blocking acquire returns the lock it holds, without asking the DB
+        assertThat(node.tryAcquireLock(LOCK_NAME)).containsSame(lock);
+        assertThat(node.tryAcquireLock(LOCK_NAME, Duration.ofSeconds(5))).containsSame(lock);
+        assertThat(node.acquireLock(LOCK_NAME)).isSameAs(lock);
+        assertThat(storage.lookups.get()).isEqualTo(lookupsBefore);
+    }
+
+    @Test
+    void a_timed_acquire_stops_waiting_for_the_lock_managers_lock_at_its_timeout() throws Exception {
+        // Given another call holds the lock manager's lock, waiting on a slow DB read
+        var gate = new CountDownLatch(1);
+        storage.blockedLookupName = OTHER_LOCK;
+        storage.blockedLookupGate = gate;
+        var holder = executor.submit(() -> node.isLockAcquired(OTHER_LOCK));
+        try {
+            Awaitility.await().atMost(Duration.ofSeconds(5)).until(() -> storage.lookups.get() == 1);
+
+            // When a timed acquire runs while the lock manager's lock is still held
+            var acquired = assertTimeoutPreemptively(Duration.ofSeconds(2), () -> node.tryAcquireLock(LOCK_NAME, Duration.ofMillis(300)));
+
+            // Then it gave up at its timeout, long before the holder finished, and acquired nothing
+            assertThat(acquired).isEmpty();
+            assertThat(storage.rows).doesNotContainKey(LOCK_NAME);
+        } finally {
+            gate.countDown();
+        }
+        assertThat(holder.get(5, TimeUnit.SECONDS)).isFalse();
+    }
+
+    @Test
+    void an_interrupted_timed_acquire_waiting_for_the_lock_managers_lock_returns_empty_and_keeps_the_interrupt() throws Exception {
+        // Given another call holds the lock manager's lock, waiting on a slow DB read
+        var gate = new CountDownLatch(1);
+        storage.blockedLookupName = OTHER_LOCK;
+        storage.blockedLookupGate = gate;
+        var holder = executor.submit(() -> node.isLockAcquired(OTHER_LOCK));
+        try {
+            Awaitility.await().atMost(Duration.ofSeconds(5)).until(() -> storage.lookups.get() == 1);
+
+            // And a timed acquire is waiting for the lock manager's lock
+            var acquired = new AtomicReference<Optional<FencedLock>>();
+            var interruptPendingAfterwards = new AtomicReference<Boolean>();
+            var acquirer = startThread("acquirer", () -> {
+                acquired.set(node.tryAcquireLock(LOCK_NAME, Duration.ofSeconds(30)));
+                interruptPendingAfterwards.set(Thread.currentThread().isInterrupted());
+            });
+            Awaitility.await().atMost(Duration.ofSeconds(5)).until(() -> acquirer.getState() == Thread.State.TIMED_WAITING);
+
+            // When the waiting thread is interrupted
+            acquirer.interrupt();
+            acquirer.join(5000);
+
+            // Then the acquire returned empty while the holder was still busy, leaving the interrupt pending
+            assertThat(acquirer.isAlive()).isFalse();
+            assertThat(acquired.get()).isEmpty();
+            assertThat(interruptPendingAfterwards.get()).isTrue();
+            assertThat(storage.rows).doesNotContainKey(LOCK_NAME);
+        } finally {
+            gate.countDown();
+        }
+        assertThat(holder.get(5, TimeUnit.SECONDS)).isFalse();
     }
 
     @Test

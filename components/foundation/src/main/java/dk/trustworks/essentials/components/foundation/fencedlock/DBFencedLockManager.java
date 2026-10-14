@@ -637,21 +637,22 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
         if (!started) {
             throw new IllegalStateException(msg("The {} isn't started", this.getClass().getSimpleName()));
         }
+        log.debug("[{}] Attempting to acquire lock '{}'", lockManagerInstanceId, lockName);
+        var alreadyAcquiredLock = locksAcquiredByThisLockManager.get(lockName);
+        var alreadyAcquiredLockIsValid = alreadyAcquiredLock != null && alreadyAcquiredLock.isLocked() && !isLockTimedOut(alreadyAcquiredLock);
+        if (alreadyAcquiredLockIsValid && alreadyAcquiredLock.isLockedByThisLockManagerInstance()) {
+            // Returned during shutdown as well: it needs no database work, and the lock is still this manager's until
+            // shutdown releases it
+            log.debug("[{}] Returned cached locally acquired lock '{}", lockManagerInstanceId, lockName);
+            return Mono.just(alreadyAcquiredLock);
+        }
         if (shutdown != null) {
             // Like acquireLockAsync and the async ticks: no new database work once shutdown has started
             log.debug("[{}] Shutting down - not attempting to acquire lock '{}'", lockManagerInstanceId, lockName);
             return Mono.empty();
         }
-
-        log.debug("[{}] Attempting to acquire lock '{}'", lockManagerInstanceId, lockName);
-        var alreadyAcquiredLock = locksAcquiredByThisLockManager.get(lockName);
-        if (alreadyAcquiredLock != null && alreadyAcquiredLock.isLocked() && !isLockTimedOut(alreadyAcquiredLock)) {
-            if (alreadyAcquiredLock.isLockedByThisLockManagerInstance()) {
-                log.debug("[{}] Returned cached locally acquired lock '{}", lockManagerInstanceId, lockName);
-                return Mono.just(alreadyAcquiredLock);
-            } else {
-                releaseLock(alreadyAcquiredLock);
-            }
+        if (alreadyAcquiredLockIsValid) {
+            releaseLock(alreadyAcquiredLock);
         }
         // Held across the acquire, its commit and recording the outcome locally, so stop() - which releases and clears
         // every locally recorded lock under the same lock - never runs in between. It can have run before, while this thread

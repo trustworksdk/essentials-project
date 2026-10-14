@@ -21,7 +21,9 @@ import dk.trustworks.essentials.components.foundation.fencedlock.*;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.*;
 
+import java.sql.SQLException;
 import java.time.*;
+import java.util.Set;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.slf4j.*;
@@ -118,18 +120,60 @@ public abstract class DBFencedLockManagerIT<LOCK_MANAGER extends DBFencedLockMan
     private static final Duration DELETE_ALL_LOCKS_TIMEOUT = Duration.ofSeconds(30);
 
     /**
-     * Only failures that can clear by themselves are worth the 30 s window: a {@code WriteConflict} (a lock document that
-     * stays write-locked) or an I/O failure (the database still being unreachable). A missing table, a bad statement or a
-     * regression in {@code deleteAllLocksInDB} is permanent and fails at once, with its own stack trace.
+     * PostgreSQL SQL states that clear by themselves: {@code 40001} serialization failure, {@code 40P01} deadlock detected and
+     * {@code 55P03} lock not available
+     */
+    private static final Set<String> TRANSIENT_POSTGRESQL_SQL_STATES = Set.of("40001", "40P01", "55P03");
+
+    /**
+     * Only failures that can clear by themselves are worth the 30 s window, matched anywhere in the cause chain:
+     * <ul>
+     *     <li>an I/O failure - the database still being unreachable</li>
+     *     <li>a {@code WriteConflict} - a lock document that stays write-locked</li>
+     *     <li>on MongoDB, an exception labelled {@code TransientTransactionError}, or a server-selection timeout</li>
+     *     <li>on PostgreSQL, an {@link SQLException} with one of the {@link #TRANSIENT_POSTGRESQL_SQL_STATES}</li>
+     * </ul>
+     * A missing table, a bad statement or a regression in {@code deleteAllLocksInDB} is permanent and fails at once, with its
+     * own stack trace.
      */
     private static boolean isRetryableCleanupFailure(Throwable e) {
         if (IOExceptionUtil.isIOException(e)) {
             return true;
         }
-        for (var t = e; t != null; t = t.getCause() == t ? null : t.getCause()) {
+        var depth = 0;
+        for (var t = e; t != null && depth < 100; t = t.getCause() == t ? null : t.getCause(), depth++) {
             var message = t.getMessage();
             if (message != null && (message.contains("WriteConflict") || message.contains("Write Conflict"))) {
                 return true;
+            }
+            if (t instanceof SQLException sqlException && TRANSIENT_POSTGRESQL_SQL_STATES.contains(sqlException.getSQLState())) {
+                return true;
+            }
+            if (isTransientMongoFailure(t)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Matched by class name and reflection: foundation-test does not depend on the MongoDB driver, and must not gain a
+     * dependency on it for a test helper that the PostgreSQL ITs share. A {@code MongoTimeoutException} is what server
+     * selection throws when no suitable server is reachable in time.
+     */
+    private static boolean isTransientMongoFailure(Throwable t) {
+        for (Class<?> type = t.getClass(); type != null; type = type.getSuperclass()) {
+            switch (type.getName()) {
+                case "com.mongodb.MongoTimeoutException":
+                    return true;
+                case "com.mongodb.MongoException":
+                    try {
+                        return Boolean.TRUE.equals(type.getMethod("hasErrorLabel", String.class).invoke(t, "TransientTransactionError"));
+                    } catch (ReflectiveOperationException | RuntimeException reflectionFailure) {
+                        return false;
+                    }
+                default:
+                    break;
             }
         }
         return false;
