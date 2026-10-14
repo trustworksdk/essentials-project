@@ -33,7 +33,7 @@ single-document transactions. The `TransactionalMode` enum that used to make thi
 0.60; `FullyTransactional` was documented as broken for retries and dead-lettering.
 
 - `messageHandlingTimeout` drives stuck-message reset; `builder()` defaults it to `DEFAULT_MESSAGE_HANDLING_TIMEOUT` (30s). Reset runs lazily per poll cycle when the timeout elapsed.
-- Optional `SpringMongoTransactionAwareUnitOfWorkFactory` (needs a replica set): each message is handled in its own UoW, and `queueMessage` inside a caller's UoW joins it (Outbox). Ack/retry/dead-letter stay separate transactions.
+- Optional `SpringMongoTransactionAwareUnitOfWorkFactory` (needs a replica set): `queueMessage` inside a caller's UoW joins it (Outbox). The handler is NOT wrapped in a UoW (no counterpart of postgresql-queue's `SingleOperationTransactionDurableQueuesInterceptor`): a handler that wants its writes transactional opens one itself (`MongoSpringRollbackOnlyTransactionInQueuedMessageHandlerIT`). Parity: roadmap RW-4. Ack/retry/dead-letter stay separate transactions.
 
 ## Polling & Notification
 

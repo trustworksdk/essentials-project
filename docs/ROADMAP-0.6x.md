@@ -9,6 +9,8 @@ The open fixes and improvements planned for the 0.6x line. Every item here was c
   patch and minor releases are additive.
 - The id in parentheses after each title (e.g. `ES-4`, `N-9`) is a stable label from the 0.60.0 maintainer review;
   `NW-n` ids come from the 2026-10-13 test-speed wave, whose flaky-test fixes surfaced them.
+  `RW-n` ids come from the 2026-10-14 fix waves for the `feat-slice-atlas` code review; each names the review finding
+  (`F-NNN`) it came from, so the finding can be closed when the item ships.
   Put it in the commit message that fixes the item, so the history can be searched by it.
 - When an item ships, delete it here and add its entry to `docs/NEXT_VERSION_RELEASE.md` in the same commit. When an
   item is partly done, rewrite it to say only what remains.
@@ -45,6 +47,19 @@ creation fails naming it when it is missing (SB-2).
 ## P1: 0.60.x patch releases
 
 Bug fixes only; no API breaks. Everything planned here shipped in 0.60.1.
+
+**`afterRollback` is never called on the Spring event-store unit of work (RW-1).**
+- **Problem:** `SpringTransactionAwareEventStoreUnitOfWorkFactory` does not override
+  `afterRollbackAfterCallingLifecycleCallbackResources`, so `PersistedEventsCommitLifecycleCallback#afterRollback` is
+  never called on the Spring path, for any rollback. `EventStoreManagedUnitOfWork` (the JDBI path) calls it, and
+  `EventStoreEventBus` implements it.
+- **Consequence:** a callback that undoes in-memory work when events it saw in `beforeCommit` are rolled back is never
+  told about the rollback in a Spring application. Found while pinning F-122: the assertion that the callback received
+  the rolled-back event in `afterRollback` fails.
+- **Fix:** override the method so it hands the units of work's `beforeCommitEventsPersisted` and
+  `afterCommitEventsPersisted` to each callback's `afterRollback`, then clears them. Put the `afterRollback` assertion
+  back into `SpringTransactionAwareEventStoreUnitOfWorkFactory_RollbackOnlyIT` (its recording callback needs an
+  `afterRollbackEvents` list). User-visible: release-notes entry under bug fixes.
 
 ---
 
@@ -98,6 +113,31 @@ aggregate's whole event stream on every command and cannot use snapshots. Long-l
 with every event. `EventStreamDecider.handle(COMMAND, List<EVENT>)` receives raw history rather than folded state, so
 a snapshot cannot simply be swapped in. **Fix:** add a state-based decider variant that decides over the `STATE`
 folded by `EventStreamEvolver`, wired with an optional `AggregateSnapshotRepository`.
+
+**The snapshot store reports `EventOrder(-1)` instead of "no snapshot" (RW-2).**
+`PostgresqlAggregateSnapshotStore.findMostRecentLastIncludedEventOrder` runs `SELECT coalesce(MAX(...), -1)`, so for an
+aggregate with no snapshot it returns `Optional.of(EventOrder(-1))`; the `AggregateSnapshotStore` javadoc promises an
+empty `Optional`. The built-in `AddNewAggregateSnapshotStrategy` maps empty to -1 itself, so it behaves the same either
+way, but a custom strategy that tests `isPresent()` believes a snapshot exists. Present since 2022. **Fix:** return
+empty when no row matches (drop the `coalesce`, map a null `MAX` to empty), with a test on both stores' implementations.
+It changes what a custom strategy receives, so it belongs in a minor with a release-notes entry. Found while writing
+`AsyncAggregateSnapshotRepositoryAfterCommitIT` (F-121).
+
+**One type-argument resolver, in `shared` (RW-5; review F-093, F-095, F-096).**
+- **Problem:** 0.60.1 fixed command-type resolution for deciders in a module-local helper,
+  `EventStreamDeciderCommandTypes.resolveCommandTypeArgument`, which walks superclasses and sub-interfaces and maps type
+  variables through each parameterisation. The general resolver it replaced,
+  `GenericType.resolveGenericTypeForInterface` in `shared`, keeps the old limitation: it inspects only the class's own
+  `getGenericInterfaces()`. It is still used by `modern.AggregateRoot.resolveStateImplementationClass` and
+  `SpringTransactionAwareUnitOfWorkFactory.resolveUnitOfWorkType`.
+- **Consequence:** a subclass of a concrete aggregate (`class SpecialOrder extends Order`, where `Order implements
+  WithState<...>`) still fails with an `IllegalStateException`. And the helper was made `public`, in the regular
+  `adapters` package, only so the parent package can call it, so consumers can now compile against it; no LLM doc
+  mentions it.
+- **Fix:** an additive `GenericType` method returning `Optional`, for example
+  `resolveTypeArgument(Class<?> forType, Class<?> genericSupertype, int typeArgumentIndex)`, used by all three callers.
+  Then make `EventStreamDeciderCommandTypes` package-private again. It became `public` on the unreleased 0.60.1 line,
+  marked internal only in its javadoc: if 0.60.1 ships with it public, deprecate it for removal instead of hiding it.
 
 ### Observability
 
@@ -156,6 +196,30 @@ first; if confirmed, apply each table's changes in its own transaction, or take 
 - Do not build it on `MultiTableChangeListener`. Reuse the LISTEN-connection loop it got in 0.60.1 (liveness probe,
   re-LISTEN on reconnect, close on stop) by extracting it.
 
+**Keep a pull session's error on a shard-owned live row (RW-3; review F-128).** A pull session's failure
+(`RowLeaseQueueSession.fail`, `ShardQueueSession`) counts an attempt but discards the error, because the live lanes have
+no `last_error` column. When such a message later reaches its limit at a takeover, the takeover's dead-letter pass can
+only store the generic `EXHAUSTED_BY_TAKEOVERS` text (reworded in 0.60.1 so it no longer claims that no failure was
+recorded). **Fix:** add `last_error text` to both live tables (`ALTER TABLE ... ADD COLUMN IF NOT EXISTS` in
+`ShardOwnedSchema`, and the adapter's `ShardOwnedSchemaContributor`); have the session fail paths and the owner's retry
+path store `DeliveryErrorText` (`failSessionRow`, `countAndScheduleRetryIfOwned`); and have the takeover move write
+`COALESCE(stored error, EXHAUSTED_BY_TAKEOVERS)`. Check the schema golden tests and the WAL cost of the wider row on the
+failure path only.
+
+**A MongoDB queue handler does not run in a unit of work (RW-4).** `PostgresqlDurableQueues` handles each message in a
+unit of work of its own (`SingleOperationTransactionDurableQueuesInterceptor`), so a handler's writes commit or roll
+back with the message's outcome. `MongoDurableQueues` has no counterpart, and `DefaultDurableQueueConsumer` opens none,
+so with `SpringMongoTransactionAwareUnitOfWorkFactory` a handler's writes are transactional only if the handler opens a
+unit of work itself (`MongoSpringRollbackOnlyTransactionInQueuedMessageHandlerIT` does exactly that). The module's
+`CLAUDE.md` claimed parity until 2026-10-14. **Fix:** decide between parity (a handle-message interceptor for
+`MongoDurableQueues` when a transaction-aware factory is configured, opt-in in a minor because it changes when a
+handler's writes commit) and documenting the difference in `LLM/LLM-springdata-mongo-queue.md`.
+
+**A configurable timeout for the queue consumer's fetch (RW-6; review F-007).** `DefaultDurableQueueConsumer`'s poll
+has a commented-out `.timeout(Duration.ofSeconds(5))` and a `TODO: In the future support configurable timeout`. A fetch
+that hangs (a stalled connection without a socket timeout) holds the consumer's poll thread indefinitely. **Fix:** an
+optional fetch timeout on `ConsumeFromQueue`, unset by default, and remove the TODO.
+
 ### Fenced locks
 
 **Exclusive acquire (QL-1).** Add `tryAcquireLockExclusively(LockName)`. It returns empty when this manager instance
@@ -178,7 +242,7 @@ locks already held; today the only mitigation is a `lockTimeOut` well above the 
 round trips, documented on the field. Give confirmation its own lock, or do the DB work outside the lock and take it
 only to update `locksAcquiredByThisLockManager`. Either way the protected `usingUnitOfWork`/`withUnitOfWork` helpers
 change what they guarantee to subclasses, so check every in-repo subclass and say so in the release notes. Needs the
-fenced-lock ITs on PostgreSQL and MongoDB, and a test with a slow storage that shows confirmation is no longer held up.
+fenced-lock ITs on PostgreSQL and MongoDB, and a test with a slow storage that shows confirmation is no longer held up. Review finding F-078 (`feat-slice-atlas`) is this item.
 
 ### Value types
 
@@ -217,6 +281,23 @@ Everything planned here before 2026-10-13 shipped in 0.60.1.
   instance that lost a lock can win it again through its still-running `acquireLockAsync`, under the next fence token.
   That is correct fencing, and `DBFencedLockManagerIT` now accepts either instance as the new holder, but the fenced
   lock docs (`LLM-foundation.md`, the module READMEs) do not say so. Say it, next to the fence-token explanation.
+- **The coupled contract of `transientGapsReadFrom` (RW-7; review F-113).** `AwaitedGapInspector.transientGapsReadFrom()`
+  lets an inspector claim that its `isAwaitedAsGap` already reads a gap handler's transient gaps, and `CdcEventStore`
+  then skips its own read. The javadoc describes only the safe direction. Add: "Return a gap handler only if
+  `isAwaitedAsGap` reads that handler's transient gaps on every call; otherwise a decorating `CdcEventStore` skips
+  them and `awaitProcessed` can report an event still awaited as a gap as processed. When in doubt, return empty."
+  State the same "forward both or neither" rule where decorators are told to forward `isAwaitedAsGap`, and in the
+  decorator note in `LLM/LLM-postgresql-event-store.md`.
+- **The run report's lock order (RW-8; review F-106).** `EssentialsRunReport` takes the static `REGISTERED` monitor and
+  then a report's `lock` (`registerAsRunReport`/`deregister` → `recomputeRunReport`); nothing takes them the other way
+  round today, and nothing says it must not. State it in the `REGISTERED` field and class javadoc ("REGISTERED, then a
+  report's lock; never take REGISTERED while holding a report's lock"), and pin it with a test that registers and
+  closes a second report in a loop while another thread renders the first, under `assertTimeoutPreemptively`.
+- **Two 0.60.1 changes the LLM docs do not mention yet (RW-9).** `DurableQueues.releaseUndeliveredMessage` (a message
+  that never reached a handler is handed back without charging an attempt; F-116) belongs in `LLM/LLM-foundation.md`'s
+  durable-queues section, and the root cause in shard-owned dead letters (`DeliveryErrorText`; F-130) in
+  `LLM/LLM-postgresql-queue-shard-owned.md`. Both were left out of the review fixes because an `LLM/` edit needs a
+  `plugin.json` version bump; ship them with the next plugin release.
 
 ---
 
@@ -307,6 +388,11 @@ need no release-notes entry beyond §7 and can ship in any release.
 - **Confirm the `review-service-entity` expectation fix (NW-12).** `gen-not-run` failed in all three runs before its
   expectations were corrected (NR1/NR2), and has been run once since. Run that case three times and confirm it passes
   every time.
+- **One completion protocol in `plugin-check.sh`'s parallel steps (RW-10; review F-114).** `run_steps_parallel`
+  learns that a step finished from a `.rc` file the step's EXIT trap writes, and since 0.60.1 also from `kill -0` plus
+  `wait PID` when that file never appears (a SIGKILL). The second path alone covers every case on bash 4.4+, the
+  script's floor: `wait PID` returns the status for a normal exit, `exit` and a kill (128+signal). Drop the trap
+  protocol, or say in a comment why it must stay.
 
 ---
 

@@ -613,7 +613,7 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
 
     /**
      * The blocking acquires retry on the caller's thread, each attempt asking the DB anew. Not a Reactor
-     * {@code repeatWhenEmpty}: {@link #_tryAcquireLock(LockName)} acquires eagerly, so repeating its {@link Mono} replays the
+     * {@code repeatWhenEmpty}: {@link #_tryAcquireLock(LockName, long)} acquires eagerly, so repeating its {@link Mono} replays the
      * first attempt's outcome - a contended lock was then never acquired. Nor a Reactor timeout: one cancelling an attempt
      * still in flight would drop a lock that attempt went on to acquire, leaving it held with no caller to release it
      *
