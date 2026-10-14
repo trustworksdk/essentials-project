@@ -28,7 +28,9 @@ import java.util.concurrent.atomic.AtomicInteger;
  * and those messages wait for the optimizer's own backoff instead. The bound is enforced against a counter kept next to
  * the set rather than {@link ConcurrentSkipListSet#size()}, which walks the whole set. The counter is exact once
  * concurrent calls have returned and may lag the set by the calls in flight, so the set can exceed the bound by at most
- * the number of threads scheduling at the same time.
+ * the number of threads scheduling at the same time. A forget that has removed an entry but not yet decremented the
+ * counter can also make a schedule at the bound drop one extra, latest, due time, so the set can briefly sit one below
+ * the bound; that message waits for the optimizer's backoff.
  */
 final class DueTimes {
     static final int MAX_TRACKED_DUE_TIMES = 1_000;
