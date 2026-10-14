@@ -53,8 +53,9 @@ import static org.awaitility.Awaitility.await;
  */
 @Testcontainers
 class AsyncAggregateSnapshotRepositoryAfterCommitIT {
-    private static final AggregateType ORDERS        = AggregateType.of("Orders");
-    private static final Duration      SNAPSHOT_WAIT = Duration.ofSeconds(5);
+    private static final AggregateType                  ORDERS            = AggregateType.of("Orders");
+    private static final Duration                       SNAPSHOT_WAIT     = Duration.ofSeconds(5);
+    private static final AsyncAggregateSnapshotSettings SNAPSHOT_SETTINGS = AsyncAggregateSnapshotSettings.asynchronous();
 
     /**
      * Shared by every test method. Each test works on its own random {@link OrderId}, so the event and snapshot rows left
@@ -98,7 +99,7 @@ class AsyncAggregateSnapshotRepositoryAfterCommitIT {
                                                              .setJsonSerializer(aggregateEventStreamConfigurationFactory.jsonSerializer)
                                                              .setAddNewSnapshotStrategy(AddNewAggregateSnapshotStrategy.updateOnEachAggregateUpdate())
                                                              .setSnapshotDeletionStrategy(AggregateSnapshotDeletionStrategy.keepAllHistoricSnapshots())
-                                                             .setSettings(AsyncAggregateSnapshotSettings.asynchronous())
+                                                             .setSettings(SNAPSHOT_SETTINGS)
                                                              .setUnitOfWorkFactory(unitOfWorkFactory)
                                                              .build();
         snapshotRepository.start();
@@ -180,9 +181,29 @@ class AsyncAggregateSnapshotRepositoryAfterCommitIT {
         unitOfWork.rollback(new RuntimeException("Simulated failure after the events were appended"));
         assertThat(unitOfWorkFactory.getCurrentUnitOfWork()).isEmpty();
 
-        await().during(Duration.ofMillis(500))
-               .atMost(Duration.ofSeconds(2))
-               .until(() -> snapshotStore.loadSnapshot(ORDERS, orderId, EventOrder.MAX_EVENT_ORDER, Order.class).isEmpty());
+        // Drain barrier instead of a fixed quiet window: AsyncAggregateSnapshotSettings.asynchronous() runs ONE worker thread,
+        // which takes tasks in submission order. So a snapshot write dispatched by the rolled-back unit of work - the
+        // regression this test guards against - would run before the write of a unit of work committed after it. Once that
+        // later snapshot is visible, the rolled-back aggregate's snapshot would be visible too.
+        assertThat(SNAPSHOT_SETTINGS.workerThreads()).as("the drain barrier below relies on a single worker thread").isEqualTo(1);
+        var barrierOrderId = OrderId.random();
+        var barrierOrder   = new Order(barrierOrderId, CustomerId.random(), 5678);
+        barrierOrder.addProduct(ProductId.random(), 1);
+        var barrierEventsToPersist = barrierOrder.getUncommittedChanges();
+        barrierOrder.markChangesAsCommitted();
+
+        unitOfWorkFactory.usingUnitOfWork(() -> {
+            var barrierPersistedEvents = eventStore.appendToStream(ORDERS,
+                                                                   barrierEventsToPersist.aggregateId,
+                                                                   barrierEventsToPersist.eventOrderOfLastRehydratedEvent,
+                                                                   barrierEventsToPersist.events);
+            snapshotRepository.aggregateUpdated(barrierOrder, barrierPersistedEvents);
+        });
+
+        await().atMost(SNAPSHOT_WAIT)
+               .untilAsserted(() -> assertThat(snapshotStore.loadSnapshot(ORDERS, barrierOrderId, EventOrder.MAX_EVENT_ORDER, Order.class)).isPresent());
+
+        assertThat(snapshotStore.loadSnapshot(ORDERS, orderId, EventOrder.MAX_EVENT_ORDER, Order.class)).isEmpty();
         assertThat(snapshotStore.loadAllSnapshots(ORDERS, orderId, Order.class, false)).isEmpty();
     }
 }
