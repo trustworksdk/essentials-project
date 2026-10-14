@@ -684,7 +684,7 @@ final class ShardOwner implements LeasedOwner {
         metrics.observer().deliveryFailed(null, attempts, cause);
         if (redeliveryPolicy.isExhausted(attempts)) {
             var moved = storage.moveToDeadLetterIfOwned(connection, ShardOwnedSchema.UNORDERED_TABLE, "unordered", shard,
-                                                        row.seq(), cause.getClass().getName() + ": " + cause.getMessage(),
+                                                        row.seq(), DeliveryErrorText.describe(cause),
                                                         instanceId, fence);
             synchronized (stateLock) {
                 attemptsBySeq.remove(row.seq());

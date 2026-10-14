@@ -745,7 +745,7 @@ final class OrderedShardOwner implements BatchReadableOwner {
             metrics.observer().deliveryFailed(key, attempts, cause);
             if (redeliveryPolicy.isExhausted(attempts)) {
                 var moved = storage.moveToDeadLetterIfOwned(connection, ShardOwnedSchema.ORDERED_TABLE, "ordered", shard,
-                                                            row.seq(), cause.getClass().getName() + ": " + cause.getMessage(),
+                                                            row.seq(), DeliveryErrorText.describe(cause),
                                                             instanceId, fence);
                 if (!moved && leaseLost(key, row, "dead-letter")) {
                     return;

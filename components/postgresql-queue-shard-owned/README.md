@@ -250,7 +250,10 @@ queue.getMessage(messageId).ifPresent(m -> log.warn("attempt {} of {}, enqueued 
 ```
 
 The last delivery error is not on `QueuedMessage`; it is on `DeadLetter(id, key, payload, payloadType,
-attempts, lastError)`, read through `deadLetters(offset, limit)`.
+attempts, lastError)`, read through `deadLetters(offset, limit)`. `lastError` is the failing
+exception as `<type>: <message>`; when the handler's exception reached the engine wrapped, it starts
+with a `Root cause: <type>: <message>` line for the innermost cause, followed by the outermost
+exception — the same summary `PostgresqlDurableQueues` puts in front of its stored stack trace.
 
 That is a cost paid per lookup by the handler that wants it, rather than per message by everyone.
 
