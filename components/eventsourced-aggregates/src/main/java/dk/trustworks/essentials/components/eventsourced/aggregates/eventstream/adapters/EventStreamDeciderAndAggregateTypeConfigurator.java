@@ -414,7 +414,7 @@ public class EventStreamDeciderAndAggregateTypeConfigurator {
                 // The checkers don't WARN about a decider whose command type they cannot resolve, since they are asked once per aggregate type
                 // and per check - so the guidance for that case is given here, once
                 var unresolvableCommandTypeHint = EventStreamDeciderCommandTypes.resolveCommandTypeArgument(decider.getClass()).isEmpty()
-                                                  && aggregateTypeConfigurations.stream().anyMatch(config -> config.deciderSupportsAggregateTypeChecker() instanceof EventStreamDeciderSupportsAggregateTypeChecker.HandlesCommandsThatInheritFromCommandType)
+                                                  && anyCheckerResolvesCommandTypes()
                                                   ? " The decider's COMMAND type argument couldn't be resolved, so a HandlesCommandsThatInheritFromCommandType checker can't claim it: " +
                                                     "declare the decider as a class that gives EventStreamDecider a concrete COMMAND type argument " +
                                                     "(directly, through a sub-interface or through a generic base class) - not a raw type, an unbound type variable or a JDK dynamic proxy."
@@ -445,6 +445,21 @@ public class EventStreamDeciderAndAggregateTypeConfigurator {
         }
 
         return decidersByAggregateType;
+    }
+
+    /**
+     * Whether any aggregate type configuration claims deciders by their resolved COMMAND type argument - the condition for
+     * giving the "COMMAND type argument couldn't be resolved" guidance when no checker claims a decider.<br>
+     * Only a checker that <b>is</b> a {@link EventStreamDeciderSupportsAggregateTypeChecker.HandlesCommandsThatInheritFromCommandType}
+     * is detected: a lambda or composite checker that wraps or delegates to one is opaque here, so such a configuration gets no
+     * guidance. This is the one place to widen the test if composite checkers become a supported pattern.
+     *
+     * @return true if at least one configuration's checker is a {@link EventStreamDeciderSupportsAggregateTypeChecker.HandlesCommandsThatInheritFromCommandType}
+     */
+    private boolean anyCheckerResolvesCommandTypes() {
+        return aggregateTypeConfigurations.stream()
+                                          .anyMatch(config -> config.deciderSupportsAggregateTypeChecker()
+                                                  instanceof EventStreamDeciderSupportsAggregateTypeChecker.HandlesCommandsThatInheritFromCommandType);
     }
 
     /**
