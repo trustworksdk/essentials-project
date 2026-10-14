@@ -85,8 +85,9 @@ What you may notice:
 
 - **Fewer dead letters after a deploy or restart.** Ones you have seen with `InterruptException` /
   `InterruptedException` in their cause after a shutdown were this bug; they can be resurrected.
-- **The hand-back counts as one redelivery attempt**, because `retryMessage` always counts one. A message caught
-  by several shutdowns uses one attempt of its budget per shutdown.
+- **The hand-back counts as one redelivery attempt**, because the handler did run (`retryMessage` always counts
+  one). A message caught by several shutdowns uses one attempt of its budget per shutdown. A message that was
+  claimed but never reached a handler is released without being charged (§3).
 - **The handler may run again for the same message.** That was always possible under at-least-once delivery;
   previously the message was parked instead.
 
@@ -606,6 +607,12 @@ unaffected: the interface's `Instant` overloads still call its no-arg methods. (
   `PostgresqlDurableQueues.DEFAULT_ORDERED_CLAIM_SLOW_THRESHOLD`): how slow an ordered claim must be to count towards
   switching statements (§3). (`7e80c23c`)
 - **`PostgresqlDurableQueues` implements `AutoCloseable`** (§1.1.17). (`7e80c23c`)
+- **`DurableQueues.releaseUndeliveredMessage(QueueEntryId, Duration)`** (operation `ReleaseUndeliveredMessage`,
+  interceptable via `DurableQueuesInterceptor.intercept(ReleaseUndeliveredMessage, …)`): returns a claimed message
+  that never reached a handler to the queue without charging a redelivery attempt or touching its last delivery
+  error; it returns empty when the message is no longer marked as being delivered. Both consumers use it when they
+  stop (§3). A `default` method that falls back to `retryMessage`, so a custom `DurableQueues` implementation keeps
+  compiling but should override it; `PostgresqlDurableQueues` and `MongoDurableQueues` do. (`c2cca365`)
 - **`DefaultDurableQueueConsumer.getQueuePollingOptimizer()`**, and `SimpleQueuePollingOptimizer` implements
   `messageScheduledFor` and `queuePollingReturnedNoMessages(Instant)` (§3). (`6777b8b9`)
 - **Shard-owned engine: `spi.RedeliveryRequested(delay)`.** A handler throws it to ask for redelivery after `delay`
@@ -660,7 +667,8 @@ The plugin's features are in [§4](#4-the-essentials-claude-code-plugin).
 | Durable queues (MongoDB) | A retry ignored the `RedeliveryPolicy`'s delay: `retryMessage` computed the next delivery time but never stored it, so every retry was redelivered at once and a failing handler used up its attempts within milliseconds. Present since at least 0.40.24. Retries now wait their delay; see [§1.1.20](#1120-mongodb-retries-wait-their-redelivery-delay) | `6027fe61` |
 | Durable queues (MongoDB) | A retry, delayed enqueue or delayed resurrection made by this node could wait out the polling backoff after it came due (up to 20× the polling interval). The queue's optimizer is now told when such a message becomes deliverable, after the transaction commits: with a 10 s cap, a 2 s retry arrived after 10.2 s and now arrives within its delay plus one polling interval (`MongoDurableQueuesDeliveryDelayIT`) | `dd27e2ba` |
 | Durable queues (MongoDB) | `MongoDurableQueuesBuilder.setQueuePollingOptimizerFactory(...)` was ignored, so the default `SimpleQueuePollingOptimizer` always applied; the factory is now used. `LLM-springdata-mongo-queue.md` also stated the default backoff wrongly: it is 50% of the consumer's polling interval per empty poll, capped at 20× the polling interval | `dd27e2ba` |
-| Durable queues (PostgreSQL) | A poll that ran while a consumer was stopping could claim a message and hand it to the consumer's already shut-down worker pool, leaving the message marked as being delivered until `messageHandlingTimeout`. A stopping consumer is no longer polled, and a message its pool refuses is handed back for redelivery at once, as in §1.1.1; the hand-back counts as a redelivery attempt. An ordered message's key is now also released when its consumer had already unregistered, so a consumer registering again is given that key | `994c4928` |
+| Durable queues (PostgreSQL) | A poll that ran while a consumer was stopping could claim a message and hand it to the consumer's already shut-down worker pool, leaving the message marked as being delivered until `messageHandlingTimeout`. A stopping consumer is no longer polled, and a message its pool refuses is handed back for redelivery at once, as in §1.1.1; it is released without being charged a redelivery attempt. An ordered message's key is now also released when its consumer had already unregistered, so a consumer registering again is given that key | `994c4928`, `c2cca365` |
+| Durable queues (PostgreSQL, MongoDB) | A message claimed for a consumer that never ran it was mishandled. On the centralized fetcher, a claim for a consumer that had just unregistered was returned with `retryMessage`, which charged a redelivery attempt and cleared the last delivery error, so every restart could use up part of a message's redelivery budget. On the per-consumer path (MongoDB, and PostgreSQL with the centralized fetcher off), a message the poll claimed just as the consumer stopped stayed marked as being delivered until `messageHandlingTimeout`. Both are now released at once with the new `DurableQueues.releaseUndeliveredMessage(...)` (§2), which leaves `redeliveryAttempts` and `lastDeliveryError` as they were. A message whose handler ran when the stop interrupted it is still charged, as in §1.1.1 | `c2cca365`, `6e510f66` |
 | Durable queues (PostgreSQL) | A `PostgresqlDurableQueues` on the default centralized message fetcher could not be started again after `stop()`: `start()` threw `RejectedExecutionException` and left the instance reporting itself started without polling. It now restarts. As before, a stop cancels the queues' consumers, and their owners register new ones (`Inbox`, `Outbox` and event processors do); after `close()`, `start()` still throws | `f934c8e2` |
 | Durable queues (shard-owned) | An owner that had lost a shard could still record a failure: retry and dead-letter writes lacked the lease check that acknowledgements have, so a superseded owner could push out the visibility of, or dead-letter, a message its successor was delivering. They now carry it, as do a pull session's failure writes | `a4f541e4`, `f9fdd99b` |
 | Durable queues (shard-owned) | Each read of the unordered lane fetched up to `readBatchSize` (500) rows, payloads included, though only as many as there were free handlers could be dispatched; the rest were read again next time, about 24 rows per delivered message. Reads are now capped at 64 rows, or twice the free handlers if that is more, about 4 rows per message. Drain time is unchanged; this saves database and network I/O | `e06910c2` |
