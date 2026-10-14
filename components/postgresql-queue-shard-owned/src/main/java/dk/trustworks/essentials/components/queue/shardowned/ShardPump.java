@@ -48,7 +48,12 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * marked lost, and the loop exits.
  */
 final class ShardPump implements Runnable {
-    private static final Logger log = LoggerFactory.getLogger(ShardPump.class);
+    private static final Logger log                  = LoggerFactory.getLogger(ShardPump.class);
+    /**
+     * How long a shard whose takeover failed waits before the pump retries it. Paced like a failing statement, and for
+     * the same reason (a permanent failure would otherwise spin), but per shard: the pump's other shards are not paced.
+     */
+    static final         long   TAKEOVER_RETRY_NANOS = TimeUnit.MILLISECONDS.toNanos(200L);
 
     private final ShardOwnedStorage                 storage;
     private final ShardOwnerSettings                settings;
@@ -120,6 +125,9 @@ final class ShardPump implements Runnable {
                 // Reset per connection, not per owner: after a reconnect every owner has to bump
                 // attempts again, because the takeover it is recovering from may be its own.
                 var takenOver = Collections.newSetFromMap(new IdentityHashMap<LeasedOwner, Boolean>());
+                // When each owner whose takeover failed may try again (System.nanoTime()). Reset with takenOver: after
+                // a reconnect every takeover is retried at once.
+                var takeoverRetryAtNanos = new IdentityHashMap<LeasedOwner, Long>();
 
                 while (running.get()) {
                     var delivered       = 0;
@@ -133,12 +141,23 @@ final class ShardPump implements Runnable {
                         // routinely not the pump's first — and bumping after it had already delivered
                         // and acknowledged found nothing to bump, which is what a crashed owner's
                         // successor depends on to stop an infinite redelivery loop.
-                        if (takenOver.add(owner) && !takeOver(connection, owner, takenOver)) {
+                        if (!takenOver.contains(owner)) {
                             // Not pumped until its takeover has completed: onTakeover is what positions
                             // the cursor and, on the ordered lane, loads the dead-letter and retry blocks
-                            // the first dispatch must already respect. Retried on the next pass.
-                            statementFailed = true;
-                            continue;
+                            // the first dispatch must already respect.
+                            var retryAt = takeoverRetryAtNanos.get(owner);
+                            if (retryAt != null && System.nanoTime() - retryAt < 0) {
+                                continue;
+                            }
+                            takenOver.add(owner);
+                            if (!takeOver(connection, owner, takenOver)) {
+                                // Paced per owner, never by pacing the pass: that held every other shard on this
+                                // pump to one pass per 200 ms for as long as the takeover kept failing. park()
+                                // wakes in time for the retry.
+                                takeoverRetryAtNanos.put(owner, System.nanoTime() + TAKEOVER_RETRY_NANOS);
+                                continue;
+                            }
+                            takeoverRetryAtNanos.remove(owner);
                         }
                         if (!owner.leaseHeld()) {
                             continue;
@@ -192,6 +211,7 @@ final class ShardPump implements Runnable {
                             return false;
                         }
                         takenOver.remove(owner);
+                        takeoverRetryAtNanos.remove(owner);
                         stalls.forget(owner);
                         return true;
                     });
@@ -201,10 +221,10 @@ final class ShardPump implements Runnable {
                         // fails permanently — a blocked delete, a full disk, a broken constraint —
                         // otherwise spins this loop as fast as the database can refuse it: measured
                         // at 8 405 stack traces in one test run. Not reconnecting was right; not
-                        // pacing was not.
+                        // pacing was not. A failing takeover is paced per owner instead (takeoverRetryAtNanos).
                         TimeUnit.MILLISECONDS.sleep(200L);
                     } else if (delivered == 0) {
-                        park();
+                        park(takenOver, takeoverRetryAtNanos);
                     }
                 }
                 if (flushOnExit.get()) {
@@ -250,7 +270,10 @@ final class ShardPump implements Runnable {
      * this pump serves stopped delivering for as long as the pass kept failing: a pass runs every
      * takeover before it pumps any owner, so the throw ended each pass before any owner was pumped,
      * wherever the failing owner sat among them. Now the owner is taken out of
-     * {@code takenOver}, so the next pass retries its takeover, and the other shards keep running. The
+     * {@code takenOver} and its takeover is retried {@link #TAKEOVER_RETRY_NANOS} (200 ms) later, while the other shards
+     * keep running at their full rate: the wait is the failing owner's alone, and the pump parks on it like on any other
+     * owner deadline. Pacing the pass instead, as a failing {@code pumpOnce} statement does, held every other shard on
+     * this pump to one pass per 200 ms for as long as the takeover failed. The
      * owners keep the retry cheap: the attempt charge is recorded the moment it commits and the
      * exhaustion pass is cleared only once it has run, so retrying neither charges twice nor skips it.
      * <p>
@@ -365,16 +388,34 @@ final class ShardPump implements Runnable {
     /**
      * Park until a hint arrives or the backstop fires, shortened by the soonest deadline any of this
      * pump's owners has — a retry falling due on one shard must not be delayed by the others being
-     * quiet.
+     * quiet. A failed takeover's retry is one of those deadlines, and the only one an owner awaiting its takeover has.
+     *
+     * @param takenOver            the owners whose takeover has completed on this connection; only their own
+     *                             {@link LeasedOwner#parkDeadlineMillis()} counts
+     * @param takeoverRetryAtNanos when each owner whose takeover failed may retry it ({@link System#nanoTime()})
      */
-    private void park() throws InterruptedException {
+    private void park(Set<LeasedOwner> takenOver, Map<LeasedOwner, Long> takeoverRetryAtNanos) throws InterruptedException {
         // The ceiling, not the backstop. `pollBackstop` used to floor every park at 500ms, which put
         // a fixed query rate under a process however quiet it was; the owners' own deadlines already
         // account for their sweeps, retries and flushes, and a notification wakes this pump
         // immediately regardless of how long it intended to sleep.
         var wait = Math.max(settings.pollBackstopMillis(), settings.maxSweepIntervalNanos() / 1_000_000L);
         for (var owner : owners) {
+            // An owner awaiting its takeover is not pumped, so its own deadlines mean nothing yet - and it has never
+            // swept, so its sweep always reads as overdue and its deadline as 0. Folding it in parked the pump 1 ms
+            // at a time, about a thousand passes a second, for as long as the takeover kept failing.
+            if (!takenOver.contains(owner)) {
+                continue;
+            }
             var deadline = owner.parkDeadlineMillis();
+            if (deadline < wait) {
+                wait = Math.max(1L, deadline);
+            }
+        }
+        var now = System.nanoTime();
+        for (var retryAt : takeoverRetryAtNanos.values()) {
+            // Rounded up, so the pump does not wake just short of the retry and park again
+            var deadline = Math.max(0L, (retryAt - now + 999_999L) / 1_000_000L);
             if (deadline < wait) {
                 wait = Math.max(1L, deadline);
             }

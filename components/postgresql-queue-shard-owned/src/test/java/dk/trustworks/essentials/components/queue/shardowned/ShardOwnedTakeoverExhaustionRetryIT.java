@@ -40,10 +40,11 @@ import static org.awaitility.Awaitility.await;
  * A takeover's charge is made once per ownership, and the exhaustion dead-letter pass that follows it is retried until
  * it has run once - but only then. Mostly driven through {@code onTakeover} on an owner built by hand, with the
  * dead-letter insert made to fail by a trigger: the move throws, and {@code onTakeover} is called again on the same
- * owner, which is what the pump does - on its next pass while the connection is healthy, after a reconnect when not.
+ * owner, which is what the pump does - 200 ms later while the connection is healthy, after a reconnect when not.
  * <ul>
  *     <li>On a healthy connection the pump must retry the pass without reconnecting, and keep serving its other
- *     shards meanwhile. It used to treat the failure as a lost connection: it reconnected several times a second and
+ *     shards meanwhile, at their full rate: only the failing shard's retry is paced, not the pump's passes. It used
+ *     to treat the failure as a lost connection: it reconnected several times a second and
  *     logged that at WARN. A pass runs every takeover before it pumps any shard, so the throw ended each pass before
  *     any shard was pumped, and every shard the pump served stalled, whatever its position among the pump's
  *     owners.</li>
@@ -180,9 +181,17 @@ class ShardOwnedTakeoverExhaustionRetryIT {
         try {
             await().atMost(Duration.ofSeconds(15))
                    .untilAsserted(() -> assertThat(otherDeliveries).as("the other shard keeps delivering").hasSize(3));
-            // Long enough for several retries of the failing pass, each paced at 200 ms
+            await().atMost(Duration.ofSeconds(10))
+                   .untilAsserted(() -> assertThat(deadLetterInsertRefusals()).as("the failing pass is retried, 200 ms apart")
+                                                                              .isGreaterThan(1));
+            // Paced, not spinning: the failing owner never ran a sweep, so its own park deadline is always 0, and
+            // folding it in parked the pump for 1 ms at a time (about 1 000 timed-out parks a second) while the
+            // takeover failed. Its only deadline is its takeover retry: about five a second.
+            var backstopPollsBefore = pumpMetrics.backstopPolls.sum();
             Thread.sleep(1_000);
-            assertThat(deadLetterInsertRefusals()).as("the failing pass is retried on the pump's next passes").isGreaterThan(1);
+            assertThat(pumpMetrics.backstopPolls.sum() - backstopPollsBefore)
+                    .as("the pump parks until the failing takeover's retry is due, not 1 ms at a time")
+                    .isLessThan(30);
             assertThat(pumpMetrics.connectionFailures.sum()).as("a failing statement is not a lost connection").isZero();
             assertThat(failingDeliveries).as("not pumped before its takeover has completed").isEmpty();
             assertThat(deadLetterError(1)).as("the injected failure must reach the dead-letter move").isEmpty();
@@ -208,6 +217,70 @@ class ShardOwnedTakeoverExhaustionRetryIT {
             assertThat(pumpMetrics.connectionFailures.sum()).isZero();
             assertThat(failingMetrics.shardsAwaitingTakeover.get()).as("cleared once the takeover completed").isZero();
             assertThat(pumpErrors()).as("no further ERROR once it recovered").hasSize(1);
+        } finally {
+            running.set(false);
+            pump.wakeup().signal();
+            thread.join(Duration.ofSeconds(10));
+        }
+    }
+
+    /**
+     * The failing shard's takeover is paced, not the pump. Pacing the whole pump at one pass per 200 ms while one takeover
+     * kept failing let the other shards run only at that rate: a backlog that takes a pass per row drained at five rows a
+     * second instead of back to back.
+     */
+    @Test
+    void a_failing_takeover_does_not_slow_the_other_shards_on_its_pump() throws Exception {
+        insertUnordered(1, MAX_ATTEMPTS - 1, null);
+        var otherShard        = SHARD + 1;
+        var otherDeliveries   = new CopyOnWriteArrayList<MessageId>();
+        var failingMetrics    = metrics();
+        var running           = new AtomicBoolean(true);
+        var pump              = new ShardPump(storage, ShardOwnerSettings.defaults(), new ShardOwnerMetrics(), running,
+                                              new AtomicBoolean(false), "pump-under-test", Optional::empty);
+        var otherWakeup       = new ShardWakeup(pump.wakeup());
+        var defaults          = ShardOwnerSettings.defaults();
+        // One row per read, so draining the backlog takes one pump pass per row
+        var onePerRead        = new ShardOwnerSettings(1, defaults.ackBatchSize(), defaults.ackFlushInterval(), defaults.chaseDelay(),
+                                                       defaults.holeExpiry(), defaults.sweepInterval(), defaults.maxHolesPerChase(),
+                                                       defaults.keyConcurrency(), defaults.pollBackstop(), defaults.maxSweepInterval(),
+                                                       defaults.pumpThreads(), defaults.shedGrace(), defaults.leaseTtl(),
+                                                       defaults.watermarkCap());
+        var failing = new ShardOwner(storage, SHARD, storage.acquireLease("unordered", SHARD, OWNER, 60_000).orElseThrow(),
+                                     defaults, (id, payload, type) -> { }, failingMetrics,
+                                     RedeliveryPolicy.fixed(Duration.ofSeconds(1), MAX_ATTEMPTS), new ShardWakeup(pump.wakeup()), OWNER,
+                                     HandlerDispatch.inline(), false);
+        var other = new ShardOwner(storage, otherShard, storage.acquireLease("unordered", otherShard, OWNER, 60_000).orElseThrow(),
+                                   onePerRead, (id, payload, type) -> otherDeliveries.add(id), metrics(),
+                                   RedeliveryPolicy.fixed(Duration.ofSeconds(1), MAX_ATTEMPTS), otherWakeup, OWNER,
+                                   HandlerDispatch.inline(), false);
+        failDeadLetterInserts(true);
+        pump.add(failing);
+        pump.add(other);
+        var thread = Thread.ofPlatform().name("pump-under-test").start(pump);
+        try {
+            await().atMost(Duration.ofSeconds(15))
+                   .untilAsserted(() -> assertThat(failingMetrics.takeoverFailures.sum()).as("the takeover keeps failing").isGreaterThan(1));
+
+            // Enqueued while the takeover is failing, and announced the way the listener would
+            var backlog = 25;
+            var payloads = new ArrayList<byte[]>();
+            for (var index = 0; index < backlog; index++) {
+                payloads.add(new byte[]{(byte) index});
+            }
+            var startedNanos = System.nanoTime();
+            try (var connection = dataSource.getConnection()) {
+                storage.enqueueBatch(connection, otherShard, payloads, 1);
+            }
+            otherWakeup.signal();
+            await().atMost(Duration.ofSeconds(15))
+                   .untilAsserted(() -> assertThat(otherDeliveries).hasSize(backlog));
+            var elapsed = Duration.ofNanos(System.nanoTime() - startedNanos);
+
+            // Paced at one pass per 200 ms, 25 passes take at least 4.8 s; back to back, a fraction of that
+            assertThat(elapsed).as("the other shard drains its backlog at full speed, not one pass per 200 ms")
+                               .isLessThan(Duration.ofMillis(2_500));
+            assertThat(failingMetrics.shardsAwaitingTakeover.get()).as("still failing throughout").isEqualTo(1);
         } finally {
             running.set(false);
             pump.wakeup().signal();

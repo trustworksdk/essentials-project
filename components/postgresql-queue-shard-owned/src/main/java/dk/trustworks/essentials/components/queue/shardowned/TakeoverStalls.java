@@ -28,7 +28,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * One pump's shards whose takeover has failed and not yet completed. Each of these shards is leased but not
  * served.
  * <p>
- * {@link ShardPump} retries a failing {@link LeasedOwner#onTakeover} on every pass, with no limit, and keeps
+ * {@link ShardPump} retries a failing {@link LeasedOwner#onTakeover} every 200 ms, with no limit, and keeps
  * the shard (why: {@link LeasedOwner#onTakeover}). Without this, every retry logged a full ERROR stack trace,
  * about five a second for as long as the takeover failed. No counter recorded it, and
  * {@code QueueHealth.unownedShards()} cannot see the shard because it is leased, so that log flood was the
@@ -83,7 +83,7 @@ final class TakeoverStalls {
     }
 
     /**
-     * The owner's takeover failed and is retried on the pump's next pass.
+     * The owner's takeover failed and is retried by the pump 200 ms later.
      *
      * @param what  how it failed, completing "queue Q, lane shard S ..." and "the latest ...", e.g.
      *              "threw during its takeover"
@@ -98,8 +98,8 @@ final class TakeoverStalls {
             stalls.put(owner, new Stall(now));
             metrics.shardsAwaitingTakeover.incrementAndGet();
             log.error("{}: queue {}, {} shard {} {}. The shard stays leased to this instance and delivers nothing "
-                              + "until its takeover completes; the takeover is retried on every pass of this pump "
-                              + "(every 200 ms) with no limit, and the pump keeps serving its other shards. "
+                              + "until its takeover completes; the takeover is retried every 200 ms with no limit, "
+                              + "and the pump keeps serving its other shards. "
                               + "QueueHealth.unownedShards does not count this shard. ShardOwnedQueue.metrics() reports "
                               + "it under shardsAwaitingTakeover, and every attempt under takeoverFailures; through "
                               + "MessageQueue this log is the only signal. Repeats are logged at DEBUG, and at ERROR "
@@ -116,7 +116,7 @@ final class TakeoverStalls {
                       pumpName, owner.queueId(), owner.lane(), owner.shard(), stall.failures,
                       TimeUnit.NANOSECONDS.toSeconds(now - stall.sinceNanos), what, cause);
         } else {
-            // No stack trace: a repeat comes every pass (five a second), and the first and the once-a-minute
+            // No stack trace: a repeat comes every 200 ms (five a second), and the first and the once-a-minute
             // ERRORs carry it. The cause's own string still says what failed.
             log.debug("{}: queue {}, {} shard {} {} (failed attempt {}): {}",
                       pumpName, owner.queueId(), owner.lane(), owner.shard(), what, stall.failures, String.valueOf(cause));
