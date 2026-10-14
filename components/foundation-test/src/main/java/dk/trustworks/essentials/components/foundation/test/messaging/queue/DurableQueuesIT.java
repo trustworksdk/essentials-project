@@ -109,11 +109,11 @@ public abstract class DurableQueuesIT<DURABLE_QUEUES extends DurableQueues, UOW 
         // Given
         var queueName = QueueName.of("TestQueue");
         var message1 = Message.of(new OrderEvent.OrderAdded(OrderId.random(), CustomerId.random(), 1234));
-        var addedMessageId = durableQueues.queueMessage(queueName, message1);
-        assertThat(durableQueues.getNextMessageReadyForDelivery(queueName)).isPresent();
+        var addedMessageId = withDurableQueue(() -> durableQueues.queueMessage(queueName, message1));
+        assertThat(withDurableQueue(() -> durableQueues.getNextMessageReadyForDelivery(queueName))).isPresent();
 
         // When
-        var released = durableQueues.releaseUndeliveredMessage(addedMessageId, Duration.ZERO);
+        var released = withDurableQueue(() -> durableQueues.releaseUndeliveredMessage(addedMessageId, Duration.ZERO));
 
         // Then
         assertThat(released).isPresent();
@@ -121,24 +121,24 @@ public abstract class DurableQueuesIT<DURABLE_QUEUES extends DurableQueues, UOW 
         assertThat(released.get().getRedeliveryAttempts()).isEqualTo(0);
         assertThat(released.get().getLastDeliveryError()).isNull();
         // A message that is no longer being delivered is not released again
-        assertThat(durableQueues.releaseUndeliveredMessage(addedMessageId, Duration.ZERO)).isEmpty();
+        assertThat(withDurableQueue(() -> durableQueues.releaseUndeliveredMessage(addedMessageId, Duration.ZERO))).isEmpty();
 
         // And it is redelivered, still uncharged
-        var redelivered = durableQueues.getNextMessageReadyForDelivery(queueName);
+        var redelivered = withDurableQueue(() -> durableQueues.getNextMessageReadyForDelivery(queueName));
         assertThat(redelivered).isPresent();
         assertThat((CharSequence) redelivered.get().getId()).isEqualTo(addedMessageId);
         assertThat(redelivered.get().getRedeliveryAttempts()).isEqualTo(0);
 
         // When a real attempt fails, and the next delivery is released before reaching a handler
-        durableQueues.retryMessage(addedMessageId, new RuntimeException("Handler failed"), Duration.ZERO);
-        assertThat(durableQueues.getNextMessageReadyForDelivery(queueName)).isPresent();
-        released = durableQueues.releaseUndeliveredMessage(addedMessageId, Duration.ZERO);
+        usingDurableQueue(() -> durableQueues.retryMessage(addedMessageId, new RuntimeException("Handler failed"), Duration.ZERO));
+        assertThat(withDurableQueue(() -> durableQueues.getNextMessageReadyForDelivery(queueName))).isPresent();
+        released = withDurableQueue(() -> durableQueues.releaseUndeliveredMessage(addedMessageId, Duration.ZERO));
 
         // Then only the real attempt is counted, and its error is kept
         assertThat(released).isPresent();
         assertThat(released.get().getRedeliveryAttempts()).isEqualTo(1);
         assertThat(released.get().getLastDeliveryError()).contains("Handler failed");
-        assertThat(durableQueues.getNextMessageReadyForDelivery(queueName)).isPresent();
+        assertThat(withDurableQueue(() -> durableQueues.getNextMessageReadyForDelivery(queueName))).isPresent();
     }
 
     @Test
