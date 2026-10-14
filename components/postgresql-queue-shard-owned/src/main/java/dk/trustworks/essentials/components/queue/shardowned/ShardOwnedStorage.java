@@ -621,15 +621,6 @@ public final class ShardOwnedStorage {
     }
 
     /**
-     * Fencing: a write only lands if the writer still holds the lease it was issued under.
-     * <p>
-     * A lease is a time-based guarantee, and a stop-the-world pause or a clock jump can make an owner
-     * believe it still holds a shard that has already moved. Without this clause such an owner would
-     * delete messages the new owner is about to deliver — silent loss, at exactly the moment the
-     * system is already in trouble. One extra index lookup on the lease table's primary key, per
-     * batch rather than per message.
-     */
-    /**
      * The fence check of {@link #stillOwnedClause()} for either lane, against a row aliased {@code alias}.
      * Binds three parameters, in order: the lane, the owner and the fence.
      */
@@ -643,6 +634,15 @@ public final class ShardOwnedStorage {
         return ORDERED_TABLE.equals(table) ? "ordered" : "unordered";
     }
 
+    /**
+     * Fencing: a write only lands if the writer still holds the lease it was issued under.
+     * <p>
+     * A lease is a time-based guarantee, and a stop-the-world pause or a clock jump can make an owner
+     * believe it still holds a shard that has already moved. Without this clause such an owner would
+     * delete messages the new owner is about to deliver — silent loss, at exactly the moment the
+     * system is already in trouble. One extra index lookup on the lease table's primary key, per
+     * batch rather than per message.
+     */
     private static String stillOwnedClause() {
         return " AND EXISTS (SELECT 1 FROM " + LEASE_TABLE + " l"
                 + " WHERE l.queue_id = u.queue_id AND l.lane = 'unordered' AND l.shard = u.shard"
@@ -996,11 +996,18 @@ public final class ShardOwnedStorage {
     }
 
     /**
-     * The error recorded for a message dead-lettered by {@link #exhaustedAfterTakeover}: no failure was ever
-     * recorded for it, because its handler never returned or its owner lost the shard before it could record one.
+     * The error recorded for a message dead-lettered by {@link #exhaustedAfterTakeover}, and the message of the cause
+     * the owners hand to {@code QueueObserver.deadLettered} for it.
+     * <p>
+     * It must hold for every row that pass can park, and the pass cannot tell them apart. Usually no failure was ever
+     * recorded for the message - its handler never returned, or its owner lost the shard before recording one - but
+     * a pull session's failure counts on the same row and does not dead-letter, so some of the attempts may have
+     * failed. The live lanes keep no error text, so there is none to carry over. The text used to say that no failure
+     * was ever recorded, which was false for such a row.
      */
-    public static final String EXHAUSTED_BY_TAKEOVERS = "Exhausted its attempts without a failure ever being recorded: "
-            + "each delivery ended with the delivering process stopping (crashed or killed) or losing the shard";
+    public static final String EXHAUSTED_BY_TAKEOVERS = "Reached its attempt limit when the shard was taken over: an earlier "
+            + "delivery ended with its process stopping (crashed or killed) or losing the shard, and any error a pull "
+            + "session recorded before that is not kept on a live row";
 
     /**
      * Bulk attempt increment on takeover.
@@ -1053,9 +1060,12 @@ public final class ShardOwnedStorage {
     }
 
     /**
-     * The rows a takeover has charged up to the redelivery policy's limit, within the same window
-     * {@link #bumpAttemptsOnTakeover} charges. Their handler never completed - the delivering process stopped every
-     * time - so no failure will ever be recorded for them, and without this they would be redelivered forever.
+     * The visible rows at or past the redelivery policy's limit, read right after a takeover's charge. Not only the
+     * rows {@link #bumpAttemptsOnTakeover} charged: any row at the limit that nobody holds, which includes one a pull
+     * session failed up to it, since a session's failure counts on the row and never dead-letters. Most are messages
+     * whose handler never completed - the delivering process stopped every time - so no failure will ever be
+     * recorded for them, and without this they would be redelivered forever. They are parked with
+     * {@link #EXHAUSTED_BY_TAKEOVERS}, whose text holds for both kinds.
      * <p>
      * Never a row nobody could have been delivering: one a live pull session holds, or an ordered row whose key is
      * held behind a retry in backoff or a dead letter. Those are not charged either, so one that reads as exhausted

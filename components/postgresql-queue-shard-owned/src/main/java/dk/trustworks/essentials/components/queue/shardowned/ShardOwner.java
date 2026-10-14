@@ -163,9 +163,19 @@ final class ShardOwner implements LeasedOwner {
     /**
      * Whether the takeover charge has been made - or is not owed, because the previous owner released the shard
      * cleanly. {@link #onTakeover} runs once per pump connection, a reconnect included, and charging again on
-     * every reconnect cost the in-flight window an attempt each time the database blipped.
+     * every reconnect cost the in-flight window an attempt each time the database blipped. Set as soon as the
+     * charge has committed, not after the exhaustion pass that follows it: a pass that failed left the charge
+     * unrecorded, and the reconnect that retried it charged the window a second time.
      */
     private boolean takeoverCharged;
+
+    /**
+     * Whether the exhaustion dead-letter pass that follows the takeover charge has yet to complete. Set with
+     * {@link #takeoverCharged} and cleared once the pass has run, so a pass that failed is retried on the next
+     * pump connection - and only then. A plain reconnect, with no new charge behind it, must not run the pass: it
+     * would park a message this owner is itself delivering on its last attempt.
+     */
+    private boolean exhaustionPending;
 
     ShardOwner(ShardOwnedStorage storage,
                int shard,
@@ -273,11 +283,16 @@ final class ShardOwner implements LeasedOwner {
             sweepPinnedUntilNanos = System.nanoTime() + settings.holeExpiry().toNanos();
             cursorPositioned = true;
         }
-        if (takeoverCharged) {
+        if (!takeoverCharged) {
+            metrics.takeoverAttemptBumps.add(storage.bumpAttemptsOnTakeover(connection, shard, fence, dispatch.capacity(),
+                                                                            settings.ackBatchSize()));
+            // The bump has committed: record it before anything else can fail, or the next call charges again
+            takeoverCharged = true;
+            exhaustionPending = true;
+        }
+        if (!exhaustionPending) {
             return;
         }
-        metrics.takeoverAttemptBumps.add(storage.bumpAttemptsOnTakeover(connection, shard, fence, dispatch.capacity(),
-                                                                        settings.ackBatchSize()));
         // A message whose handler took the process down every time never fails, so the failure path never parks
         // it. The charge above is the only count it has; once that reaches the policy's limit it is parked here.
         for (var seq : storage.exhaustedAfterTakeover(connection, ShardOwnedSchema.UNORDERED_TABLE, shard,
@@ -289,7 +304,7 @@ final class ShardOwner implements LeasedOwner {
                 metrics.deadLettered.increment();
             }
         }
-        takeoverCharged = true;
+        exhaustionPending = false;
     }
 
     @Override

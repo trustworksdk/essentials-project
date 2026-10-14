@@ -265,9 +265,16 @@ final class OrderedShardOwner implements BatchReadableOwner {
     private long lastAckFlushNanos;
 
     /**
-     * Whether the takeover charge has been made, or is not owed - see {@code ShardOwner#takeoverCharged}
+     * Whether the takeover charge has been made, or is not owed - see {@code ShardOwner#takeoverCharged}. Set as
+     * soon as the charge has committed.
      */
     private boolean takeoverCharged;
+
+    /**
+     * Whether the exhaustion dead-letter pass that follows the takeover charge has yet to complete - see
+     * {@code ShardOwner#exhaustionPending}.
+     */
+    private boolean exhaustionPending;
 
     OrderedShardOwner(ShardOwnedStorage storage,
                       int shard,
@@ -333,6 +340,11 @@ final class OrderedShardOwner implements BatchReadableOwner {
     public void onTakeover(Connection connection) throws SQLException {
         if (!takeoverCharged) {
             metrics.takeoverAttemptBumps.add(storage.bumpOrderedAttemptsOnTakeover(connection, shard, settings.ackBatchSize()));
+            // The bump has committed: record it before anything else can fail, or the next call charges again
+            takeoverCharged = true;
+            exhaustionPending = true;
+        }
+        if (exhaustionPending) {
             // A message whose handler took the process down every time never fails - see ShardOwner#onTakeover.
             // Parked before the blocks are read below, so its key is blocked from the first dispatch
             for (var seq : storage.exhaustedAfterTakeover(connection, ShardOwnedSchema.ORDERED_TABLE, shard,
@@ -345,7 +357,7 @@ final class OrderedShardOwner implements BatchReadableOwner {
                     metrics.deadLettered.increment();
                 }
             }
-            takeoverCharged = true;
+            exhaustionPending = false;
         }
         // Before the first pumpOnce, so the first dispatch already knows which keys are blocked. A
         // successor that learned this later would deliver past a dead letter in the window, which is
@@ -716,10 +728,6 @@ final class OrderedShardOwner implements BatchReadableOwner {
     }
 
     /**
-     * Failure path for a key. Either schedule a retry that keeps the key blocked, or park the
-     * message and let the key move on — a dead letter must not stall its key forever.
-     */
-    /**
      * Count this attempt, continuing from the count stored on the row the first time it fails under this owner -
      * see {@code ShardOwner#countAttempt}
      */
@@ -735,6 +743,10 @@ final class OrderedShardOwner implements BatchReadableOwner {
         return attempts;
     }
 
+    /**
+     * Failure path for a key. Either schedule a retry that keeps the key blocked, or park the
+     * message and let the key move on — a dead letter must not stall its key forever.
+     */
     private void onFailure(String key, long keyOrder, ShardOwnedStorage.OrderedRow row, Throwable cause) {
         try (var connection = storage.connection()) {
             if (cause instanceof RedeliveryRequested request) {
