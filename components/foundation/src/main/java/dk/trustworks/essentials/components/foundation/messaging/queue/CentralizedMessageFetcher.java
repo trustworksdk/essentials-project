@@ -446,6 +446,8 @@ public class CentralizedMessageFetcher implements Lifecycle {
                                  message.getId(),
                                  ex.getMessage());
                     }
+                } else if (operation.getAcknowledgedWithHandler() == null && returnedInterruptedByStop(registration.consumer.isStarted())) {
+                    handBackInterruptedOnStop(queueName, message);
                 } else {
                     log.debug("[{}:{}] Message handled successfully, acknowledging",
                               queueName,
@@ -625,6 +627,27 @@ public class CentralizedMessageFetcher implements Lifecycle {
                  message.getId(),
                  e.getMessage());
         handBack(message, e);
+    }
+
+    /**
+     * Return a message whose handler returned normally but with the interrupt flag set after its consumer began
+     * stopping, instead of acknowledging it. The handler has not necessarily finished its work - it may have caught
+     * the stop's interrupt and given up - so acknowledging would delete a message that was never processed. Handed
+     * back like {@link #handBackAfterConsumerStopped} (one redelivery attempt, no delay), with a cause saying why - see
+     * {@link ConsumerQueueWrites}. A failed hand-back is only logged: the stuck-message reset still returns the message.
+     */
+    private void handBackInterruptedOnStop(QueueName queueName, QueuedMessage message) {
+        log.info("[{}:{}] Handler returned while interrupted by its consumer stopping; returning the message for redelivery instead of acknowledging it",
+                 queueName,
+                 message.getId());
+        try {
+            handBack(message, returnedInterruptedByStopCause());
+        } catch (Exception ex) {
+            log.warn("[{}:{}] Could not return the message for redelivery; it is redelivered after the messageHandlingTimeout: {}",
+                     queueName,
+                     message.getId(),
+                     ex.getMessage());
+        }
     }
 
     /**

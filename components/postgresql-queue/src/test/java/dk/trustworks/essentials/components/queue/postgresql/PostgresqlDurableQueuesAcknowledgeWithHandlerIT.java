@@ -166,11 +166,14 @@ abstract class PostgresqlDurableQueuesAcknowledgeWithHandlerIT {
     }
 
     /**
-     * Stopping a consumer interrupts its handler. A handler that catches the interrupt and returns normally has
-     * handled its message: the message is acknowledged with the handler's writes, once, and not delivered again.
+     * Stopping a consumer interrupts its handler. A handler that catches the interrupt and returns normally with the
+     * flag re-set has not necessarily finished its work, so its message is not acknowledged - neither inside its unit
+     * of work nor by the consumer - but handed back for the next consumer, the hand-back counting one attempt. The
+     * handler did return normally, so its unit of work commits its writes; the redelivery may repeat them, as
+     * at-least-once delivery always allows.
      */
     @Test
-    void a_handler_that_returns_normally_after_the_consumer_stopped_has_its_message_acknowledged_once() {
+    void a_handler_that_returns_while_interrupted_by_the_consumer_stopping_has_its_message_handed_back_not_acknowledged() {
         var acknowledgements = new AtomicInteger();
         durableQueues.addInterceptor(onAcknowledge(chain -> {
             acknowledgements.incrementAndGet();
@@ -186,7 +189,7 @@ abstract class PostgresqlDurableQueuesAcknowledgeWithHandlerIT {
                 handlerStarted.countDown();
                 Thread.sleep(Duration.ofSeconds(60));
             } catch (InterruptedException e) {
-                // The handler's work is done; it only keeps the interrupt for whoever runs next on this thread
+                // Gives up on its work and keeps the interrupt, as well-behaved code does (Kafka does)
                 Thread.currentThread().interrupt();
             } finally {
                 handlerFinished.countDown();
@@ -199,16 +202,20 @@ abstract class PostgresqlDurableQueuesAcknowledgeWithHandlerIT {
 
         awaitLatch(handlerFinished);
         Awaitility.waitAtMost(Duration.ofSeconds(10))
-                  .untilAsserted(() -> assertThat(durableQueues.getQueuedMessage(queueEntryId)).as("the row is gone").isEmpty());
-        assertThat(handlerWrites()).as("committed together with the acknowledgement").isEqualTo(1);
+                  .untilAsserted(() -> assertThat(durableQueues.getQueuedMessage(queueEntryId))
+                          .as("handed back for redelivery, the hand-back counting one attempt")
+                          .hasValueSatisfying(queued -> {
+                              assertThat(queued.isBeingDelivered()).isFalse();
+                              assertThat(queued.getRedeliveryAttempts()).isEqualTo(1);
+                          }));
+        assertThat(acknowledgements.get()).as("not acknowledged").isZero();
+        assertThat(handlerWrites()).as("the handler returned normally, so its unit of work committed").isEqualTo(1);
         assertThat(durableQueues.getTotalDeadLetterMessagesQueuedFor(QUEUE)).isZero();
 
         consumer = consume(message -> deliveries.incrementAndGet());
-        Awaitility.await()
-                  .during(Duration.ofSeconds(1))
-                  .atMost(Duration.ofSeconds(5))
-                  .until(() -> deliveries.get() == 1);
-        assertThat(acknowledgements.get()).as("acknowledged exactly once").isEqualTo(1);
+        awaitQueueEmpty();
+        assertThat(deliveries.get()).as("delivered again to the next consumer").isEqualTo(2);
+        assertThat(acknowledgements.get()).as("acknowledged once, by the next consumer").isEqualTo(1);
     }
 
     /**

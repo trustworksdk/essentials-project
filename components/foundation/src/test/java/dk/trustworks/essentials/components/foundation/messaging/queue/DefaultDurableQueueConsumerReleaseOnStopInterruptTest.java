@@ -40,6 +40,9 @@ import static org.mockito.Mockito.*;
  *     <li>the release of a message its poll claimed after the consumer began stopping - and a release that throws is
  *     only logged: the stuck-message reset returns the message</li>
  *     <li>the acknowledgement, retry and dead-letter mark after a handler that caught the interrupt re-set the flag</li>
+ *     <li>the hand-back of a message whose handler returned while interrupted by the consumer stopping - such a message
+ *     is not acknowledged, as its handler may not have finished its work (one that returns with the flag clear while
+ *     the consumer is stopping is acknowledged)</li>
  * </ul>
  */
 class DefaultDurableQueueConsumerReleaseOnStopInterruptTest {
@@ -91,7 +94,68 @@ class DefaultDurableQueueConsumerReleaseOnStopInterruptTest {
     }
 
     @Test
-    void the_acknowledgement_after_a_handler_re_set_the_interrupt_flag_runs_with_the_flag_cleared_and_restores_it() throws InterruptedException {
+    void a_handler_that_returns_while_interrupted_by_the_consumer_stopping_has_its_message_handed_back_not_acknowledged() throws InterruptedException {
+        var durableQueues          = mock(DurableQueues.class);
+        var interruptedDuringRetry = new AtomicReference<Boolean>();
+        var retried                = new CountDownLatch(1);
+        var observer               = mock(DurableQueueMessageObserver.class);
+        when(durableQueues.getMessageObserver()).thenReturn(observer);
+        when(durableQueues.retryMessage(eq(MESSAGE_ID), any(), any(Duration.class))).thenAnswer(recordInterruptFlag(interruptedDuringRetry, retried, Optional.empty()));
+        var consumerRef = new AtomicReference<DefaultDurableQueueConsumer<?, ?, ?>>();
+        // Like a handler that caught stop()'s interrupt, re-set the flag and returned without finishing its work
+        var consumer = consumerDelivering(durableQueues, queuedMessage(), message -> {
+            consumerRef.get().stop();
+            Thread.currentThread().interrupt();
+        });
+        consumerRef.set(consumer);
+
+        consumer.start();
+        try {
+            assertThat(retried.await(5, TimeUnit.SECONDS)).as("the message is handed back").isTrue();
+            assertThat(interruptedDuringRetry.get()).as("the interrupt flag is cleared while the hand-back is written").isFalse();
+            verify(durableQueues).retryMessage(eq(MESSAGE_ID), any(InterruptedException.class), eq(Duration.ZERO));
+            verify(durableQueues, never()).acknowledgeMessageAsHandled(any(QueueEntryId.class));
+            verify(observer, never()).messageHandled(any(QueuedMessage.class), any(Duration.class));
+        } finally {
+            consumer.stop();
+        }
+    }
+
+    @Test
+    void a_handler_that_returns_with_the_interrupt_flag_clear_after_the_consumer_began_stopping_is_acknowledged() throws InterruptedException {
+        var durableQueues = mock(DurableQueues.class);
+        var acknowledged  = new CountDownLatch(1);
+        var handled       = new CountDownLatch(1);
+        when(durableQueues.acknowledgeMessageAsHandled(MESSAGE_ID)).thenAnswer(invocation -> {
+            acknowledged.countDown();
+            return true;
+        });
+        when(durableQueues.getMessageObserver()).thenReturn(new DurableQueueMessageObserver() {
+            @Override
+            public void messageHandled(QueuedMessage message, Duration handlerDuration) {
+                handled.countDown();
+            }
+        });
+        var consumerRef = new AtomicReference<DefaultDurableQueueConsumer<?, ?, ?>>();
+        // The consumer is stopping, but the handler finished its work and returned with the flag clear
+        var consumer = consumerDelivering(durableQueues, queuedMessage(), message -> {
+            consumerRef.get().stop();
+            Thread.interrupted();
+        });
+        consumerRef.set(consumer);
+
+        consumer.start();
+        try {
+            assertThat(acknowledged.await(5, TimeUnit.SECONDS)).as("the message is acknowledged").isTrue();
+            assertThat(handled.await(5, TimeUnit.SECONDS)).as("the observer is told the message was handled").isTrue();
+            verify(durableQueues, never()).retryMessage(any(QueueEntryId.class), any(), any(Duration.class));
+        } finally {
+            consumer.stop();
+        }
+    }
+
+    @Test
+    void the_acknowledgement_after_a_handler_re_set_the_interrupt_flag_while_its_consumer_is_running_runs_with_the_flag_cleared_and_restores_it() throws InterruptedException {
         var durableQueues        = mock(DurableQueues.class);
         var interruptedDuringAck = new AtomicReference<Boolean>();
         var interruptedAfterAck  = new AtomicReference<Boolean>();

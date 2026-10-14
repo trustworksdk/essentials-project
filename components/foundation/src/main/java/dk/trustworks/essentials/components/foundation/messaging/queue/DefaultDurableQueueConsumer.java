@@ -431,7 +431,15 @@ public abstract class DefaultDurableQueueConsumer<DURABLE_QUEUES extends Durable
                           queuedMessage.getRedeliveryAttempts());
                 if (operation.getAcknowledgedWithHandler() == null) {
                     // Not already acknowledged by an interceptor inside the handler's transaction
-                    // Interrupt flag cleared: a handler that caught stop()'s interrupt, re-set the flag and returned still gets acknowledged
+                    if (ConsumerQueueWrites.returnedInterruptedByStop(started)) {
+                        // A handler that returned while stop() had interrupted it may not have finished its work:
+                        // hand the message back rather than delete it unprocessed - see ConsumerQueueWrites
+                        LOG.info("[{}:{}] {} - Handler returned while interrupted by the consumer stopping; returning the message for redelivery instead of acknowledging it",
+                                 queueName,
+                                 queuedMessage.getId(),
+                                 consumeFromQueue.consumerName);
+                        return retryMessage(queuedMessage, ConsumerQueueWrites.returnedInterruptedByStopCause(), Duration.ZERO);
+                    }
                     ConsumerQueueWrites.withInterruptFlagCleared(() -> durableQueues.acknowledgeMessageAsHandled(queuedMessage.getId()));
                 }
                 // After the acknowledgement, so the count means "delivered and removed", not "the handler returned"

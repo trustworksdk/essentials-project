@@ -125,10 +125,16 @@ public class SingleOperationTransactionDurableQueuesInterceptor implements Durab
      * when the unit of work is marked rollback-only: the handler's writes are then discarded, and an acknowledgement
      * inside the same transaction would be discarded with them, turning a consumed message into one redelivered
      * after every {@code messageHandlingTimeout}.
+     * <p>
+     * Also left to the consumer when the handler returned with the thread's interrupt flag set. A consumer's
+     * {@code stop()} interrupts its delivery threads, and a handler that returns while interrupted may not have
+     * finished its work: the consumer, which knows whether it is stopping, then hands the message back instead of
+     * acknowledging it. Acknowledging here would delete the message before the consumer could decide.
      */
     private void acknowledgeWithHandler(HandleQueuedMessage operation, HandleAwareUnitOfWork unitOfWork) {
         var message = operation.getMessage();
-        if (durableQueues == null || message.isManuallyMarkedForRedelivery() || unitOfWork.status() == UnitOfWorkStatus.MarkedForRollbackOnly) {
+        if (durableQueues == null || message.isManuallyMarkedForRedelivery() || unitOfWork.status() == UnitOfWorkStatus.MarkedForRollbackOnly
+                || Thread.currentThread().isInterrupted()) {
             return;
         }
         operation.acknowledgedWithHandler(durableQueues.acknowledgeMessageAsHandled(message.getId()));
