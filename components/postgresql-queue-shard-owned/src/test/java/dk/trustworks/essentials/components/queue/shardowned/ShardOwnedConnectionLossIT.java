@@ -102,7 +102,10 @@ class ShardOwnedConnectionLossIT {
                               .as("every shard must resume delivering after its connection was cut")
                               .isEqualTo(50L));
 
+            // remaining() borrows from the same pool, which can still hold a connection this test terminated:
+            // the first borrow then fails, as the engine's own reads did, and the next one gets a fresh connection
             Awaitility.await().atMost(Duration.ofSeconds(30))
+                      .ignoreExceptionsInstanceOf(SQLException.class)
                       .untilAsserted(() -> assertThat(queue.remaining()).isZero());
         }
     }
