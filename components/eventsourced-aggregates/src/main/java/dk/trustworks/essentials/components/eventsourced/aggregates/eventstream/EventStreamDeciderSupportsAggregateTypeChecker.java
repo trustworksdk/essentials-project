@@ -103,8 +103,9 @@ public interface EventStreamDeciderSupportsAggregateTypeChecker {
          * is resolved alike.
          * <p>
          * A decider whose command type cannot be resolved - a class implementing the raw {@link EventStreamDecider}, a
-         * JDK dynamic proxy, or a generic class whose {@code COMMAND} type variable no subclass binds - is not supported: this returns {@code false} and logs a WARN, so another
-         * aggregate type's checker may still claim it, and a decider no checker claims fails the configuration.
+         * JDK dynamic proxy, or a generic class whose {@code COMMAND} type variable no subclass binds - is not supported: this returns {@code false} and logs at DEBUG, so another
+         * aggregate type's checker may still claim it. A decider no checker claims fails the configuration, and that exception names the decider and explains how to declare it.
+         * {@code supports} is called once per aggregate type and per check, so it does not WARN itself.
          *
          * @param decider The decider to check. Must not be null.
          * @return {@code true} if the decider's command type is, or inherits from, the configured command type
@@ -116,11 +117,9 @@ public interface EventStreamDeciderSupportsAggregateTypeChecker {
 
             var resolvedCommandType = EventStreamDeciderCommandTypes.resolveCommandTypeArgument(decider.getClass());
             if (resolvedCommandType.isEmpty()) {
-                log.warn("Couldn't resolve the command type of EventStreamDecider '{}' - so it isn't supported by '{}'. " +
-                                 "Declare the decider as a class that gives EventStreamDecider a concrete COMMAND type argument " +
-                                 "(directly, through a sub-interface or through a generic base class) - not a raw type, an unbound type variable or a JDK dynamic proxy",
-                         decider.getClass().getName(),
-                         this);
+                log.debug("Couldn't resolve the command type of EventStreamDecider '{}' - so it isn't supported by '{}'",
+                          decider.getClass().getName(),
+                          this);
                 return false;
             }
             var commandTypeTheDeciderHandles = resolvedCommandType.get();

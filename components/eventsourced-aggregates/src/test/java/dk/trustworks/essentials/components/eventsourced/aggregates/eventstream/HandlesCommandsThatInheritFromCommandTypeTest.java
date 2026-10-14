@@ -81,12 +81,20 @@ class HandlesCommandsThatInheritFromCommandTypeTest {
     }
 
     @Test
-    void a_decider_whose_command_type_cannot_be_resolved_is_not_supported_and_warned_about() {
+    void a_decider_subclassed_without_type_arguments_like_a_CGLIB_proxy_is_supported() {
+        // A CGLIB proxy (e.g. a Spring @Transactional bean) is a generated subclass of the decider class that repeats no type arguments
+        assertThat(orderChecker.supports(new CglibStyleDirectCreateOrderDecider())).isTrue();
+        assertThat(orderChecker.supports(new CglibStyleBaseClassCreateOrderDecider())).isTrue();
+        assertThat(new HandlesCommandsThatInheritFromCommandType(ShipmentCommand.class).supports(new CglibStyleDirectCreateOrderDecider())).isFalse();
+        assertThat(logAppender.list).filteredOn(event -> event.getLevel().isGreaterOrEqual(Level.WARN)).isEmpty();
+    }
+
+    @Test
+    void a_decider_whose_command_type_cannot_be_resolved_is_not_supported_and_not_warned_about() {
+        // supports is asked once per aggregate type and per check, so it logs at DEBUG; the configuration's exception reports the decider once
         assertThat(orderChecker.supports(new RawTypeDecider())).isFalse();
         assertThat(orderChecker.supports(new UnboundGenericDecider<CreateOrder>())).isFalse();
-        assertThat(logAppender.list).filteredOn(event -> event.getLevel() == Level.WARN)
-                                    .hasSize(2)
-                                    .allSatisfy(event -> assertThat(event.getFormattedMessage()).contains("Couldn't resolve the command type of EventStreamDecider"));
+        assertThat(logAppender.list).filteredOn(event -> event.getLevel().isGreaterOrEqual(Level.WARN)).isEmpty();
     }
 
     @Test
@@ -148,6 +156,18 @@ class HandlesCommandsThatInheritFromCommandTypeTest {
         public boolean canHandle(Class<?> command) {
             return CreateOrder.class.isAssignableFrom(command);
         }
+    }
+
+    /**
+     * Shaped like the CGLIB proxy of {@link DirectCreateOrderDecider}: a subclass that gives no type arguments of its own.
+     */
+    public static class CglibStyleDirectCreateOrderDecider extends DirectCreateOrderDecider {
+    }
+
+    /**
+     * Shaped like the CGLIB proxy of {@link BaseClassCreateOrderDecider}.
+     */
+    public static class CglibStyleBaseClassCreateOrderDecider extends BaseClassCreateOrderDecider {
     }
 
     public interface OrderEventDecider<E> extends EventStreamDecider<CreateOrder, E> {

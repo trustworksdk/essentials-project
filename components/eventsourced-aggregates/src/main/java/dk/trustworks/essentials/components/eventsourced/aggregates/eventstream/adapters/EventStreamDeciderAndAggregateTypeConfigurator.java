@@ -411,10 +411,18 @@ public class EventStreamDeciderAndAggregateTypeConfigurator {
                                                                     .toList();
 
             if (matchingAggregateTypes.isEmpty()) {
+                // The checkers don't WARN about a decider whose command type they cannot resolve, since they are asked once per aggregate type
+                // and per check - so the guidance for that case is given here, once
+                var unresolvableCommandTypeHint = EventStreamDeciderCommandTypes.resolveCommandTypeArgument(decider.getClass()).isEmpty()
+                                                  ? " The decider's COMMAND type argument couldn't be resolved, so a HandlesCommandsThatInheritFromCommandType checker can't claim it: " +
+                                                    "declare the decider as a class that gives EventStreamDecider a concrete COMMAND type argument " +
+                                                    "(directly, through a sub-interface or through a generic base class) - not a raw type, an unbound type variable or a JDK dynamic proxy."
+                                                  : "";
                 throw new IllegalStateException(
                         msg("Couldn't resolve which AggregateType that EventStreamDecider '{}' works with. " +
-                                              "Make sure the decider's canHandle method or the aggregate type checker is properly configured.",
-                                      decider.getClass().getName()));
+                                              "Make sure the decider's canHandle method or the aggregate type checker is properly configured.{}",
+                                      decider.getClass().getName(),
+                                      unresolvableCommandTypeHint));
             }
 
             if (matchingAggregateTypes.size() > 1) {
