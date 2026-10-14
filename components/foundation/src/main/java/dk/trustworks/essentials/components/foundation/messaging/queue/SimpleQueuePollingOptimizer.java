@@ -27,6 +27,13 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
 /**
  * The {@link dk.trustworks.essentials.components.foundation.messaging.queue.SimpleQueuePollingOptimizer} supports extending the polling sleep time (i.e. the time between calls to
  * {@link DurableQueues#getNextMessageReadyForDelivery(GetNextMessageReadyForDelivery)}) up until a given threshold for a given queue consumer
+ * <p>
+ * <b>Subclassing:</b> the framework reports an empty poll through {@link #queuePollingReturnedNoMessages(Instant)},
+ * which carries the claim's time, and never through {@link #queuePollingReturnedNoMessages()}. A subclass that reacts
+ * to an empty poll must override the {@code Instant} overload; an override of only the form without a claim time is
+ * never called by the framework. That form is therefore deprecated on this class. A poll that claimed messages is
+ * reported through {@link #queuePollingReturnedMessages(java.util.List, Instant)}, which this class does not override,
+ * so the {@link QueuePollingOptimizer} default still forwards it to {@link #queuePollingReturnedMessages(java.util.List)}.
  */
 public class SimpleQueuePollingOptimizer implements QueuePollingOptimizer {
     private static Logger           log                     = LoggerFactory.getLogger(dk.trustworks.essentials.components.foundation.messaging.queue.SimpleQueuePollingOptimizer.class);
@@ -52,7 +59,7 @@ public class SimpleQueuePollingOptimizer implements QueuePollingOptimizer {
      * Create a new {@link dk.trustworks.essentials.components.foundation.messaging.queue.SimpleQueuePollingOptimizer}
      *
      * @param consumeFromQueue the {@link ConsumeFromQueue} command
-     * @param delayIncrementMs when ever {@link QueuePollingOptimizer#queuePollingReturnedNoMessages()} is called
+     * @param delayIncrementMs when ever {@link QueuePollingOptimizer#queuePollingReturnedNoMessages(Instant)} is called
      *                         the delay between calls to {@link DurableQueues#getNextMessageReadyForDelivery(GetNextMessageReadyForDelivery)}
      *                         will be increased by <code>delayIncrementMs</code><br>
      *                         If {@link QueuePollingOptimizer#messageAdded(QueuedMessage)} or {@link QueuePollingOptimizer#queuePollingReturnedMessage(QueuedMessage)}
@@ -81,6 +88,17 @@ public class SimpleQueuePollingOptimizer implements QueuePollingOptimizer {
         }
     }
 
+    /**
+     * Reports an empty poll without the time its claim ran at, by delegating to
+     * {@link #queuePollingReturnedNoMessages(Instant)} with a claim time slightly in the past.
+     *
+     * @deprecated the framework only calls {@link #queuePollingReturnedNoMessages(Instant)}, so a subclass must override
+     * that overload - an override of this method is never called by the framework. Callers should report the claim's
+     * time through {@link #queuePollingReturnedNoMessages(Instant)} as well. Only deprecated on this class: the method
+     * on {@link QueuePollingOptimizer} stays, as its {@code Instant} overload delegates to it for implementations that
+     * do not track due times.
+     */
+    @Deprecated(since = "0.60.1")
     @Override
     public void queuePollingReturnedNoMessages() {
         queuePollingReturnedNoMessages(Instant.now().minusMillis(DUE_TIME_GRACE_MS));

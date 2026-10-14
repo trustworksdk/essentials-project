@@ -23,6 +23,16 @@ import java.util.concurrent.ConcurrentSkipListSet;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicLong;
 
+/**
+ * A {@link QueuePollingOptimizer} that backs off exponentially, with jitter, while polls come back empty and polls
+ * again as soon as work is seen or a message known to this node becomes due - see {@link #messageScheduledFor(Instant)}.
+ * <p>
+ * <b>Subclassing:</b> the framework reports each poll through the overloads that carry the claim's time -
+ * {@link #queuePollingReturnedNoMessages(Instant)} and {@link #queuePollingReturnedMessages(List, Instant)} - and never
+ * through {@link #queuePollingReturnedNoMessages()} or {@link #queuePollingReturnedMessages(List)}. A subclass that
+ * reacts to a poll result must override the {@code Instant} overloads; an override of only the forms without a claim
+ * time is never called by the framework. Those forms are therefore deprecated on this class.
+ */
 public class CentralizedQueuePollingOptimizer implements QueuePollingOptimizer {
     private static final Logger log = LoggerFactory.getLogger(CentralizedQueuePollingOptimizer.class);
 
@@ -88,6 +98,17 @@ public class CentralizedQueuePollingOptimizer implements QueuePollingOptimizer {
         return skip;
     }
 
+    /**
+     * Reports an empty poll without the time its claim ran at, by delegating to
+     * {@link #queuePollingReturnedNoMessages(Instant)} with a claim time slightly in the past.
+     *
+     * @deprecated the framework only calls {@link #queuePollingReturnedNoMessages(Instant)}, so a subclass must override
+     * that overload - an override of this method is never called by the framework. Callers should report the claim's
+     * time through {@link #queuePollingReturnedNoMessages(Instant)} as well. Only deprecated on this class: the method
+     * on {@link QueuePollingOptimizer} stays, as its {@code Instant} overload delegates to it for implementations that
+     * do not track due times.
+     */
+    @Deprecated(since = "0.60.1")
     @Override
     public void queuePollingReturnedNoMessages() {
         queuePollingReturnedNoMessages(Instant.now().minusMillis(DUE_TIME_GRACE_MS));
@@ -121,6 +142,17 @@ public class CentralizedQueuePollingOptimizer implements QueuePollingOptimizer {
                 queueName, queuedMessage.getId(), initialDelayMs);
     }
 
+    /**
+     * Reports a poll that claimed messages without the time its claim ran at, by delegating to
+     * {@link #queuePollingReturnedMessages(List, Instant)} with a claim time slightly in the past.
+     *
+     * @deprecated the framework only calls {@link #queuePollingReturnedMessages(List, Instant)}, so a subclass must
+     * override that overload - an override of this method is never called by the framework. Callers should report the
+     * claim's time through {@link #queuePollingReturnedMessages(List, Instant)} as well. Only deprecated on this class:
+     * the method on {@link QueuePollingOptimizer} stays, as its {@code Instant} overload delegates to it for
+     * implementations that do not track due times.
+     */
+    @Deprecated(since = "0.60.1")
     @Override
     public void queuePollingReturnedMessages(List<QueuedMessage> queuedMessages) {
         queuePollingReturnedMessages(queuedMessages, Instant.now().minusMillis(DUE_TIME_GRACE_MS));
