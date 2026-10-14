@@ -348,6 +348,44 @@ class EssentialsRunReportTest {
         }
     }
 
+    @Test
+    void beyond_the_cap_periods_without_a_run_report_are_counted_not_merged_across_the_time_findings_were_collected() {
+        var clock     = new MutableClock(Instant.parse("2026-10-12T08:00:00Z"));
+        var first     = new EssentialsRunReport(10, clock);
+        var second    = new EssentialsRunReport(10, clock);
+        var periods   = EssentialsRunReport.MAX_UNCOLLECTED_PERIODS + 2;
+        var start     = Instant.parse("2026-10-12T09:00:00Z");
+        try (var ignored = first.registerAsRunReport()) {
+            // Period i runs from 09:00 + 10i minutes to 09:05 + 10i minutes; findings are collected in the gaps between
+            for (var i = 0; i < periods; i++) {
+                clock.now = start.plus(Duration.ofMinutes(10L * i));
+                var secondRegistration = second.registerAsRunReport();
+                clock.now = clock.now.plus(Duration.ofMinutes(5));
+                secondRegistration.close();
+            }
+
+            var rendered = first.renderRunReport();
+            var kept     = EssentialsRunReport.MAX_UNCOLLECTED_PERIODS - 1;
+            for (var i = 0; i < kept; i++) {
+                var from = start.plus(Duration.ofMinutes(10L * i));
+                assertThat(rendered).contains("runtime findings were not collected from " + from + " until " + from.plus(Duration.ofMinutes(5)) + ":");
+            }
+            var firstDropped = start.plus(Duration.ofMinutes(10L * kept));
+            var lastDropped  = start.plus(Duration.ofMinutes(10L * (periods - 2)));
+            var latest       = start.plus(Duration.ofMinutes(10L * (periods - 1)));
+            assertThat(rendered)
+                    .contains("runtime findings were also not collected in 2 more periods between " + firstDropped + " and " + lastDropped.plus(Duration.ofMinutes(5))
+                              + ", not listed - the report lists at most " + EssentialsRunReport.MAX_UNCOLLECTED_PERIODS + " periods")
+                    .contains("runtime findings were not collected from " + latest + " until " + latest.plus(Duration.ofMinutes(5)) + ":")
+                    .doesNotContain("from " + firstDropped + " until")
+                    .doesNotContain("from " + lastDropped + " until");
+            // Exactly the first periods and the latest are listed, in order, with the summary before the latest
+            assertThat(rendered.split("runtime findings were not collected from ", -1)).hasSize(EssentialsRunReport.MAX_UNCOLLECTED_PERIODS + 1);
+            assertThat(rendered.indexOf("2 more periods")).isLessThan(rendered.indexOf("from " + latest));
+            assertThat(rendered.indexOf("from " + start.plus(Duration.ofMinutes(10L * (kept - 1))))).isLessThan(rendered.indexOf("2 more periods"));
+        }
+    }
+
     private static final class MutableClock extends Clock {
         private volatile Instant now;
 

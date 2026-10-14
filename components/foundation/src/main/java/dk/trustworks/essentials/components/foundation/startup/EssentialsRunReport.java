@@ -78,7 +78,10 @@ public final class EssentialsRunReport {
      */
     public static final int DEFAULT_MAX_DISTINCT_FINDINGS = 500;
 
-    private static final int MAX_UNCOLLECTED_PERIODS = 20;
+    /**
+     * How many periods without a run report a report lists one by one. Package-private for tests.
+     */
+    static final int MAX_UNCOLLECTED_PERIODS = 20;
 
     private static final Logger                                log        = LoggerFactory.getLogger(EssentialsRunReport.class);
     /**
@@ -194,9 +197,16 @@ public final class EssentialsRunReport {
     private       long                overflowCountPrinted;
     /**
      * The periods in which this report was registered but not the run report, because another was too, oldest first,
-     * at most {@link #MAX_UNCOLLECTED_PERIODS}. Guarded by {@link #lock}.
+     * at most {@link #MAX_UNCOLLECTED_PERIODS}: once full, the first ones and the latest one. Guarded by {@link #lock}.
      */
     private final List<UncollectedPeriod> uncollected = new ArrayList<>();
+    /**
+     * How many ended periods were dropped from between the first kept ones and the latest, because
+     * {@link #uncollected} was full, and the span they lie in. Guarded by {@link #lock}.
+     */
+    private       long                    droppedUncollected;
+    private       Instant                 droppedUncollectedFrom;
+    private       Instant                 droppedUncollectedUntil;
     /**
      * The period under way, or {@code null}. Guarded by {@link #lock}.
      */
@@ -367,25 +377,38 @@ public final class EssentialsRunReport {
             }
             var ended = openUncollected.withEnd(now);
             openUncollected = null;
-            if (uncollected.size() < MAX_UNCOLLECTED_PERIODS) {
-                uncollected.add(ended);
-            } else {
-                var last = uncollected.removeLast();
-                uncollected.add(new UncollectedPeriod(last.from(), ended.until(), Math.max(last.registered(), ended.registered())));
+            if (uncollected.size() == MAX_UNCOLLECTED_PERIODS) {
+                // Keep the first periods and the latest, each as it was, and only count the ones in between - merging
+                // two periods would claim findings were not collected in the interval between them, when they were
+                var dropped = uncollected.removeLast();
+                if (droppedUncollected == 0) {
+                    droppedUncollectedFrom = dropped.from();
+                }
+                droppedUncollectedUntil = dropped.until();
+                droppedUncollected++;
             }
+            uncollected.add(ended);
             uncollectedVersion++;
         }
     }
 
     /**
      * Callers hold {@link #lock}
+     *
+     * @return one description per period, oldest first, with the dropped periods summarised in their place
      */
-    private List<UncollectedPeriod> uncollectedPeriods() {
-        if (openUncollected == null) {
-            return List.copyOf(uncollected);
+    private List<String> uncollectedPeriods() {
+        var all = new ArrayList<String>();
+        for (var i = 0; i < uncollected.size(); i++) {
+            if (droppedUncollected > 0 && i == uncollected.size() - 1) {
+                all.add("runtime findings were also not collected in " + plural(droppedUncollected, "more period") + " between " + droppedUncollectedFrom
+                        + " and " + droppedUncollectedUntil + ", not listed - the report lists at most " + MAX_UNCOLLECTED_PERIODS + " periods");
+            }
+            all.add(describe(uncollected.get(i)));
         }
-        var all = new ArrayList<>(uncollected);
-        all.add(openUncollected);
+        if (openUncollected != null) {
+            all.add(describe(openUncollected));
+        }
         return all;
     }
 
@@ -594,11 +617,11 @@ public final class EssentialsRunReport {
         }
     }
 
-    private String render(List<Occurrences> occurrences, long overflow, boolean withOccurrences, String headline, String scope, String empty, List<UncollectedPeriod> notCollected) {
+    private String render(List<Occurrences> occurrences, long overflow, boolean withOccurrences, String headline, String scope, String empty, List<String> notCollected) {
         if (occurrences.isEmpty() && overflow == 0) {
             return notCollected.isEmpty()
                    ? headline + empty
-                   : headline + (empty.isEmpty() ? "" : empty + ", but ") + notCollected.stream().map(EssentialsRunReport::describe).collect(Collectors.joining("; "));
+                   : headline + (empty.isEmpty() ? "" : empty + ", but ") + String.join("; ", notCollected);
         }
         var block  = new StringBuilder();
         var banner = "=".repeat(120);
@@ -636,7 +659,7 @@ public final class EssentialsRunReport {
                  .append(maxDistinctFindings).append(" distinct findings\n");
         }
         for (var period : notCollected) {
-            block.append("Note: ").append(describe(period)).append('\n');
+            block.append("Note: ").append(period).append('\n');
         }
         return block.append(banner).toString();
     }
