@@ -631,6 +631,11 @@ unaffected: the interface's `Instant` overloads still call its no-arg methods. (
   (`a4f541e4`, `f9fdd99b`)
 - **Shard-owned engine metrics:** `sharedInstanceIdHeartbeats` (§3) and `cursorRowsRead`, the rows the unordered
   lane's reads returned; divided by `delivered` it is the read amplification. (`d54671a6`, `e06910c2`)
+- **`Exceptions.prependRootCauseLine(Throwable, String)`** and **`Exceptions.ROOT_CAUSE_PREFIX`** (`shared`): put a
+  `Root cause: <root cause's toString()>` line in front of a description of a wrapped throwable, and return the
+  description unchanged for one that is not wrapped. It is the line the PostgreSQL, MongoDB and shard-owned queues
+  write in front of a stored delivery error (§1.1.15), now rendered in one place, so it cannot drift between them;
+  the stored text is unchanged. `DeliveryErrorDescription.ROOT_CAUSE_PREFIX` stays, with the same value.
 
 The plugin's features are in [§4](#4-the-essentials-claude-code-plugin).
 

@@ -29,12 +29,16 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * "Caused by:" sections further down. When the throwable is wrapped, the text therefore starts with a one-line
  * summary of the root cause, followed by the complete, unaltered stack trace, so nothing is lost.
  * An unwrapped throwable is rendered exactly as {@link Exceptions#getStackTrace(Throwable)} renders it.
+ * <p>
+ * The summary line is {@link Exceptions#prependRootCauseLine(Throwable, String)}'s, which the shard-owned engine
+ * uses for its dead letters too, so the line has one shape across every queue engine.
  */
 public final class DeliveryErrorDescription {
     /**
      * Prefix of the root-cause summary line that precedes the stack trace of a wrapped throwable
+     * (the same value as {@link Exceptions#ROOT_CAUSE_PREFIX})
      */
-    public static final String ROOT_CAUSE_PREFIX = "Root cause: ";
+    public static final String ROOT_CAUSE_PREFIX = Exceptions.ROOT_CAUSE_PREFIX;
 
     private DeliveryErrorDescription() {
     }
@@ -45,11 +49,6 @@ public final class DeliveryErrorDescription {
      */
     public static String describe(Throwable cause) {
         requireNonNull(cause, "No cause provided");
-        var stackTrace = Exceptions.getStackTrace(cause);
-        var rootCause  = Exceptions.getRootCause(cause);
-        if (rootCause == cause) {
-            return stackTrace;
-        }
-        return ROOT_CAUSE_PREFIX + rootCause + System.lineSeparator() + stackTrace;
+        return Exceptions.prependRootCauseLine(cause, Exceptions.getStackTrace(cause));
     }
 }

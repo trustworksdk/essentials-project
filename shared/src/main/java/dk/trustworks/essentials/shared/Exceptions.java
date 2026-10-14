@@ -23,6 +23,12 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 public final class Exceptions {
     /**
+     * Prefix of the line {@link #prependRootCauseLine(Throwable, String)} puts in front of the description of a
+     * wrapped throwable
+     */
+    public static final String ROOT_CAUSE_PREFIX = "Root cause: ";
+
+    /**
      * Allows us to sneaky throw a checked exception without having to wrap it<br>
      * Use with caution
      */
@@ -67,6 +73,31 @@ public final class Exceptions {
         }
 
         return lastValidCause;
+    }
+
+    /**
+     * Puts a one-line summary of <code>throwable</code>'s root cause (see {@link #getRootCause(Throwable)}) in front of
+     * <code>description</code>, when <code>throwable</code> wraps another throwable.
+     * <p>
+     * A wrapped exception's own text names the wrapper and hides why the operation failed, so a stored or logged
+     * description of it is easier to read when it leads with the root cause. The line is {@value #ROOT_CAUSE_PREFIX},
+     * followed by the root cause's {@link Throwable#toString()} ({@code <type>: <message>}, or just {@code <type>}
+     * when the root cause has no message) and {@link System#lineSeparator()}. The caller decides what
+     * <code>description</code> is, e.g. {@link #getStackTrace(Throwable)} or <code>throwable.toString()</code>.
+     *
+     * @param throwable   the throwable <code>description</code> describes
+     * @param description the text describing <code>throwable</code>
+     * @return <code>description</code> unchanged when <code>throwable</code> has no cause; otherwise the root-cause
+     * line followed by <code>description</code>
+     */
+    public static String prependRootCauseLine(Throwable throwable, String description) {
+        requireNonNull(throwable, "You must supply an exception");
+        requireNonNull(description, "You must supply a description");
+        var rootCause = getRootCause(throwable);
+        if (rootCause == throwable) {
+            return description;
+        }
+        return ROOT_CAUSE_PREFIX + rootCause + System.lineSeparator() + description;
     }
 
     /**

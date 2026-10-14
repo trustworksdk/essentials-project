@@ -16,6 +16,7 @@
 
 package dk.trustworks.essentials.components.queue.shardowned;
 
+import dk.trustworks.essentials.shared.Exceptions;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -50,7 +51,7 @@ class DeliveryErrorTextTest {
         outer.initCause(inner);
 
         assertThat(DeliveryErrorText.describe(outer))
-                .startsWith(DeliveryErrorText.ROOT_CAUSE_PREFIX + "java.lang.IllegalStateException: inner")
+                .startsWith(Exceptions.ROOT_CAUSE_PREFIX + "java.lang.IllegalStateException: inner")
                 .endsWith("java.lang.RuntimeException: outer");
     }
 }

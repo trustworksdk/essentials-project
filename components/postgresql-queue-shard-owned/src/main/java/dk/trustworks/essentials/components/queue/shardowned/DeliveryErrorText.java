@@ -25,36 +25,23 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * <p>
  * A handler's own exception usually reaches the owner wrapped - by the adapter's unit of work, by reflection, or by
  * the application itself - so the outermost throwable alone names a wrapper and hides the reason the message failed.
- * When the throwable is wrapped, the text therefore starts with a {@value #ROOT_CAUSE_PREFIX} line naming the root
- * cause, followed by the outermost throwable as before. An unwrapped throwable is rendered exactly as it always was.
- * This is the same summary the database-backed durable queues put in front of their stored stack trace; the engine
- * renders it itself because it does not depend on {@code foundation}.
+ * When the throwable is wrapped, the text therefore starts with a {@value Exceptions#ROOT_CAUSE_PREFIX} line naming
+ * the root cause, followed by the outermost throwable as before. An unwrapped throwable is rendered exactly as it
+ * always was. The root-cause line is {@link Exceptions#prependRootCauseLine(Throwable, String)}'s, the same line the
+ * database-backed durable queues put in front of their stored stack trace; only the body differs: the engine stores
+ * the outermost throwable's {@link Throwable#toString()}, not a stack trace.
  */
 final class DeliveryErrorText {
-    /**
-     * Prefix of the root-cause line that precedes the outermost throwable when that throwable is wrapped
-     */
-    static final String ROOT_CAUSE_PREFIX = "Root cause: ";
-
     private DeliveryErrorText() {
     }
 
     /**
      * @param cause the delivery error
-     * @return {@code <type>: <message>} of <code>cause</code>, preceded by a root-cause line of the same shape when
-     * <code>cause</code> wraps another throwable
+     * @return the {@link Throwable#toString()} of <code>cause</code> ({@code <type>: <message>}), preceded by a
+     * root-cause line of the same shape when <code>cause</code> wraps another throwable
      */
     static String describe(Throwable cause) {
         requireNonNull(cause, "No cause provided");
-        var outermost = oneLine(cause);
-        var rootCause = Exceptions.getRootCause(cause);
-        if (rootCause == cause) {
-            return outermost;
-        }
-        return ROOT_CAUSE_PREFIX + oneLine(rootCause) + System.lineSeparator() + outermost;
-    }
-
-    private static String oneLine(Throwable throwable) {
-        return String.valueOf(throwable);
+        return Exceptions.prependRootCauseLine(cause, cause.toString());
     }
 }
