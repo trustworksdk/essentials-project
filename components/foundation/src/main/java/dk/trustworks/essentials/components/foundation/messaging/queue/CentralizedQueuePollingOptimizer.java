@@ -19,7 +19,6 @@ import org.slf4j.*;
 
 import java.time.Instant;
 import java.util.List;
-import java.util.concurrent.ConcurrentSkipListSet;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -46,17 +45,9 @@ public class CentralizedQueuePollingOptimizer implements QueuePollingOptimizer {
     private final AtomicLong nextAllowedPollEpochMs = new AtomicLong();
     /**
      * When messages known to this node become deliverable - see {@link #messageScheduledFor(Instant)}. Bounded: past
-     * {@link #MAX_TRACKED_DUE_TIMES} the latest are dropped, and those messages wait at most the backoff cap
+     * {@link DueTimes#MAX_TRACKED_DUE_TIMES} the latest are dropped, and those messages wait at most the backoff cap
      */
-    private final ConcurrentSkipListSet<Long> dueAtEpochMs = new ConcurrentSkipListSet<>();
-    private static final int MAX_TRACKED_DUE_TIMES = 1_000;
-    /**
-     * Only used when a caller reports a poll without the time its claim ran at (the {@link QueuePollingOptimizer}
-     * methods without a {@code claimedAt}): due times this much older than the report are taken as looked for. With
-     * the claim's time, due times are forgotten up to exactly that - a poll of many queues can reach a queue long after
-     * its claim's {@code now} was read, so a fixed grace could forget a due time its claim had not yet seen
-     */
-    private static final long DUE_TIME_GRACE_MS = 250;
+    private final DueTimes dueTimes = new DueTimes();
 
     /**
      * @param queueName       the queue this optimizer is for
@@ -91,8 +82,7 @@ public class CentralizedQueuePollingOptimizer implements QueuePollingOptimizer {
         long now = Instant.now().toEpochMilli();
         long next = nextAllowedPollEpochMs.get();
         // A message coming due ends the backoff early
-        var earliestDue = dueAtEpochMs.ceiling(Long.MIN_VALUE);
-        boolean skip = now < next && (earliestDue == null || now < earliestDue);
+        boolean skip = now < next && !dueTimes.hasDueBy(now);
         log.trace("[{}] shouldSkipPolling? {} (now={}, nextAllowed={})",
                 queueName, skip, now, next);
         return skip;
@@ -111,12 +101,12 @@ public class CentralizedQueuePollingOptimizer implements QueuePollingOptimizer {
     @Deprecated(since = "0.60.1")
     @Override
     public void queuePollingReturnedNoMessages() {
-        queuePollingReturnedNoMessages(Instant.now().minusMillis(DUE_TIME_GRACE_MS));
+        queuePollingReturnedNoMessages(DueTimes.assumedClaimTime());
     }
 
     @Override
     public void queuePollingReturnedNoMessages(Instant claimedAt) {
-        forgetDueTimesSeenBy(claimedAt);
+        dueTimes.forgetSeenBy(claimedAt);
         long prevDelay = currentDelayMs.get();
         long rawNext = (long)(prevDelay * backoffFactor);
         long capped  = Math.min(maxDelayMs, rawNext);
@@ -135,7 +125,7 @@ public class CentralizedQueuePollingOptimizer implements QueuePollingOptimizer {
 
     @Override
     public void queuePollingReturnedMessage(QueuedMessage queuedMessage) {
-        forgetDueTimesSeenBy(Instant.now().minusMillis(DUE_TIME_GRACE_MS));
+        dueTimes.forgetSeenByNowMinusGrace();
         currentDelayMs.set(initialDelayMs);
         nextAllowedPollEpochMs.set(Instant.now().toEpochMilli());
         log.trace("[{}] got message '{}' → reset delay to '{}' ms",
@@ -155,12 +145,12 @@ public class CentralizedQueuePollingOptimizer implements QueuePollingOptimizer {
     @Deprecated(since = "0.60.1")
     @Override
     public void queuePollingReturnedMessages(List<QueuedMessage> queuedMessages) {
-        queuePollingReturnedMessages(queuedMessages, Instant.now().minusMillis(DUE_TIME_GRACE_MS));
+        queuePollingReturnedMessages(queuedMessages, DueTimes.assumedClaimTime());
     }
 
     @Override
     public void queuePollingReturnedMessages(List<QueuedMessage> queuedMessages, Instant claimedAt) {
-        forgetDueTimesSeenBy(claimedAt);
+        dueTimes.forgetSeenBy(claimedAt);
         currentDelayMs.set(initialDelayMs);
         nextAllowedPollEpochMs.set(Instant.now().toEpochMilli());
         log.trace("[{}] got '{}' messages  → reset delay to '{}' ms",
@@ -182,19 +172,7 @@ public class CentralizedQueuePollingOptimizer implements QueuePollingOptimizer {
      */
     @Override
     public void messageScheduledFor(Instant dueAt) {
-        dueAtEpochMs.add(dueAt.toEpochMilli());
-        while (dueAtEpochMs.size() > MAX_TRACKED_DUE_TIMES) {
-            dueAtEpochMs.pollLast();
-        }
-    }
-
-    /**
-     * A claim run at {@code claimedAt} looked for every message due at or before it, found or not. Due times are kept
-     * per millisecond, so one in the same millisecond as {@code claimedAt} may still lie after it and is kept for the
-     * next poll
-     */
-    private void forgetDueTimesSeenBy(Instant claimedAt) {
-        dueAtEpochMs.headSet(claimedAt.toEpochMilli(), false).clear();
+        dueTimes.schedule(dueAt);
     }
 
     @Override
