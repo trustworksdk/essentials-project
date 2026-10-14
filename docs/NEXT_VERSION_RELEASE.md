@@ -339,9 +339,11 @@ run, because the mode was always `NORMAL`; it is fixed too. (`5603a596`)
 A handler's exception reaches the queue wrapped, typically as
 `UnitOfWorkException → ReflectionException → InvocationTargetException → yours`, so the stored
 `last_delivery_error` began with `UnitOfWorkException`. When the exception is wrapped, the stored text now starts
-with one line, `Root cause: <type>: <message>`, followed by the complete, unchanged stack trace. An exception that is
-not wrapped is stored exactly as before. Anything that parses the first line of `getLastDeliveryError()` sees the new
-summary line. (`5603a596`)
+with `Root cause: <type>: <message>` and a line break, followed by the complete, unchanged stack trace. An exception
+that is not wrapped is stored exactly as before. Anything that parses the first line of `getLastDeliveryError()` sees
+the new summary. The summary is the root cause's message verbatim, so it spans several lines when that message does
+(PostgreSQL errors often carry `Detail:` or `Where:` lines); the first line alone is not always the whole root cause.
+(`5603a596`)
 
 The shard-owned engine does the same for its dead letters, on both lanes. It stored only the outermost throwable as
 `last_error`, so `DeadLetter.lastError()` (and `QueuedMessage.getLastDeliveryError()` through the `DurableQueues`

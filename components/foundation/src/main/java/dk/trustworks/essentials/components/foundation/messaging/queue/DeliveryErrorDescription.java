@@ -26,12 +26,14 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * A {@code @MessageHandler} throw reaches the queue wrapped in the framework's own exceptions —
  * {@code UnitOfWorkException → ReflectionException → InvocationTargetException → yours} — so the first line of the
  * plain stack trace almost always reads "UnitOfWorkException", and the handler's own exception sits several
- * "Caused by:" sections further down. When the throwable is wrapped, the text therefore starts with a one-line
+ * "Caused by:" sections further down. When the throwable is wrapped, the text therefore starts with a
  * summary of the root cause, followed by the complete, unaltered stack trace, so nothing is lost.
- * An unwrapped throwable is rendered exactly as {@link Exceptions#getStackTrace(Throwable)} renders it.
+ * The summary is the root cause's {@code toString()}, which may span several lines (PostgreSQL errors, for example,
+ * often carry {@code Detail:} or {@code Where:} lines), so the first line of the text is not necessarily the whole
+ * root cause. An unwrapped throwable is rendered exactly as {@link Exceptions#getStackTrace(Throwable)} renders it.
  * <p>
- * The summary line is {@link Exceptions#prependRootCauseLine(Throwable, String)}'s, which the shard-owned engine
- * uses for its dead letters too, so the line has one shape across every queue engine.
+ * The summary is {@link Exceptions#prependRootCauseLine(Throwable, String)}'s, which the shard-owned engine
+ * uses for its dead letters too, so the summary has one shape across every queue engine.
  */
 public final class DeliveryErrorDescription {
     /**

@@ -76,14 +76,18 @@ public final class Exceptions {
     }
 
     /**
-     * Puts a one-line summary of <code>throwable</code>'s root cause (see {@link #getRootCause(Throwable)}) in front of
+     * Puts a summary of <code>throwable</code>'s root cause (see {@link #getRootCause(Throwable)}) in front of
      * <code>description</code>, when <code>throwable</code> wraps another throwable.
      * <p>
      * A wrapped exception's own text names the wrapper and hides why the operation failed, so a stored or logged
-     * description of it is easier to read when it leads with the root cause. The line is {@value #ROOT_CAUSE_PREFIX},
+     * description of it is easier to read when it leads with the root cause. The summary is {@value #ROOT_CAUSE_PREFIX},
      * followed by the root cause's {@link Throwable#toString()} ({@code <type>: <message>}, or just {@code <type>}
      * when the root cause has no message) and {@link System#lineSeparator()}. The caller decides what
      * <code>description</code> is, e.g. {@link #getStackTrace(Throwable)} or <code>throwable.toString()</code>.
+     * <p>
+     * The summary is not guaranteed to be a single line: the root cause's message is used verbatim, and may itself
+     * contain line breaks — PostgreSQL errors, for example, often carry {@code Detail:} or {@code Where:} lines. Do not
+     * take only the first line of the result as the complete root cause.
      *
      * @param throwable   the throwable <code>description</code> describes
      * @param description the text describing <code>throwable</code>
