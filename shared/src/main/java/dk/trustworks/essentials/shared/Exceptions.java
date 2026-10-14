@@ -23,8 +23,8 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 public final class Exceptions {
     /**
-     * Prefix of the line {@link #prependRootCauseLine(Throwable, String)} puts in front of the description of a
-     * wrapped throwable
+     * Prefix of the root-cause summary {@link #prependRootCauseSummary(Throwable, String)} puts in front of the
+     * description of a wrapped throwable
      */
     public static final String ROOT_CAUSE_PREFIX = "Root cause: ";
 
@@ -92,9 +92,9 @@ public final class Exceptions {
      * @param throwable   the throwable <code>description</code> describes
      * @param description the text describing <code>throwable</code>
      * @return <code>description</code> unchanged when <code>throwable</code> has no cause; otherwise the root-cause
-     * line followed by <code>description</code>
+     * summary followed by <code>description</code>
      */
-    public static String prependRootCauseLine(Throwable throwable, String description) {
+    public static String prependRootCauseSummary(Throwable throwable, String description) {
         requireNonNull(throwable, "You must supply an exception");
         requireNonNull(description, "You must supply a description");
         var rootCause = getRootCause(throwable);

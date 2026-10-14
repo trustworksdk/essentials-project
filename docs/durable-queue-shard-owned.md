@@ -86,7 +86,7 @@ Shared choices across both lanes:
 
 ### 2.2 The cold lane
 
-**`shard_queue_dead_letter`** holds messages the redelivery policy gave up on. It carries `source_lane`, the original `shard` and `seq`, the key and key order where they apply, `attempts`, `last_error` and `dead_lettered_at`. `last_error` is the failing exception as `<type>: <message>`, preceded by a `Root cause: <type>: <message>` line when that exception wraps another — a handler's own exception usually arrives inside the framework's wrappers, and until 0.60.1 only the outermost one was recorded. Keeping dead letters out of the live lanes is what lets an acknowledged row simply vanish rather than becoming a flag the live queries have to filter on.
+**`shard_queue_dead_letter`** holds messages the redelivery policy gave up on. It carries `source_lane`, the original `shard` and `seq`, the key and key order where they apply, `attempts`, `last_error` and `dead_lettered_at`. `last_error` is the failing exception as `<type>: <message>`, preceded by a `Root cause: <type>: <message>` summary when that exception wraps another — a handler's own exception usually arrives inside the framework's wrappers, and until 0.60.1 only the outermost one was recorded. The summary spans several lines when the root cause's message does (PostgreSQL `Detail:`/`Where:` lines), so the first line alone is not always the whole root cause. Keeping dead letters out of the live lanes is what lets an acknowledged row simply vanish rather than becoming a flag the live queries have to filter on.
 
 The payload here is `bytea` like everywhere else. Payloads are opaque bytes end to end in this engine, so a `jsonb` dead-letter column would mean inventing a decode nothing else has.
 

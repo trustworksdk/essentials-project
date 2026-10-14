@@ -165,55 +165,64 @@ public class ExceptionsTest {
     }
 
     @Test
-    void prependRootCauseLine_returnsTheDescriptionUnchanged_whenTheThrowableIsNotWrapped() {
+    void prependRootCauseSummary_returnsTheDescriptionUnchanged_whenTheThrowableIsNotWrapped() {
         var exception = new IllegalStateException("boom");
 
-        assertThat(Exceptions.prependRootCauseLine(exception, "the description")).isEqualTo("the description");
+        assertThat(Exceptions.prependRootCauseSummary(exception, "the description")).isEqualTo("the description");
     }
 
     @Test
-    void prependRootCauseLine_leadsWithTheRootCause_whenTheThrowableIsWrappedOnce() {
+    void prependRootCauseSummary_leadsWithTheRootCause_whenTheThrowableIsWrappedOnce() {
         var exception = new RuntimeException("wrapper", new IllegalStateException("the real reason"));
 
-        assertThat(Exceptions.prependRootCauseLine(exception, "the description"))
+        assertThat(Exceptions.prependRootCauseSummary(exception, "the description"))
                 .isEqualTo(Exceptions.ROOT_CAUSE_PREFIX + "java.lang.IllegalStateException: the real reason" + System.lineSeparator()
                                    + "the description");
     }
 
     @Test
-    void prependRootCauseLine_namesTheInnermostCause_whenTheThrowableIsWrappedSeveralTimes() {
+    void prependRootCauseSummary_namesTheInnermostCause_whenTheThrowableIsWrappedSeveralTimes() {
         var exception = new RuntimeException("outer",
                                              new IllegalArgumentException("middle",
                                                                           new IllegalStateException("the real reason")));
 
-        assertThat(Exceptions.prependRootCauseLine(exception, "the description"))
+        assertThat(Exceptions.prependRootCauseSummary(exception, "the description"))
                 .isEqualTo("Root cause: java.lang.IllegalStateException: the real reason" + System.lineSeparator()
                                    + "the description");
     }
 
     @Test
-    void prependRootCauseLine_rendersOnlyTheType_whenTheRootCauseHasNoMessage() {
+    void prependRootCauseSummary_rendersOnlyTheType_whenTheRootCauseHasNoMessage() {
         var exception = new RuntimeException("wrapper", new IllegalStateException());
 
-        assertThat(Exceptions.prependRootCauseLine(exception, "the description"))
+        assertThat(Exceptions.prependRootCauseSummary(exception, "the description"))
                 .isEqualTo("Root cause: java.lang.IllegalStateException" + System.lineSeparator() + "the description");
     }
 
     @Test
-    void prependRootCauseLine_doesNotLoop_onACauseCycle() {
+    void prependRootCauseSummary_keepsAMultiLineRootCauseMessageVerbatim() {
+        var rootCauseMessage = "ERROR: duplicate key value" + System.lineSeparator() + "  Detail: Key (id)=(1) already exists.";
+        var exception        = new RuntimeException("wrapper", new IllegalStateException(rootCauseMessage));
+
+        assertThat(Exceptions.prependRootCauseSummary(exception, "the description"))
+                .isEqualTo("Root cause: java.lang.IllegalStateException: " + rootCauseMessage + System.lineSeparator() + "the description");
+    }
+
+    @Test
+    void prependRootCauseSummary_doesNotLoop_onACauseCycle() {
         var outer = new RuntimeException("outer");
         var inner = new IllegalStateException("inner", outer);
         outer.initCause(inner);
 
-        assertThat(Exceptions.prependRootCauseLine(outer, "the description"))
+        assertThat(Exceptions.prependRootCauseSummary(outer, "the description"))
                 .isEqualTo("Root cause: java.lang.IllegalStateException: inner" + System.lineSeparator() + "the description");
     }
 
     @Test
-    void prependRootCauseLine_rejectsMissingArguments() {
-        assertThatThrownBy(() -> Exceptions.prependRootCauseLine(null, "the description"))
+    void prependRootCauseSummary_rejectsMissingArguments() {
+        assertThatThrownBy(() -> Exceptions.prependRootCauseSummary(null, "the description"))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> Exceptions.prependRootCauseLine(new RuntimeException(), null))
+        assertThatThrownBy(() -> Exceptions.prependRootCauseSummary(new RuntimeException(), null))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 }
