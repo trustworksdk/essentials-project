@@ -643,7 +643,7 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
         if (alreadyAcquiredLockIsValid && alreadyAcquiredLock.isLockedByThisLockManagerInstance()) {
             // Returned during shutdown as well: it needs no database work, and the lock is still this manager's until
             // shutdown releases it
-            log.debug("[{}] Returned cached locally acquired lock '{}", lockManagerInstanceId, lockName);
+            log.debug("[{}] Returned cached locally acquired lock '{}'", lockManagerInstanceId, lockName);
             return Mono.just(alreadyAcquiredLock);
         }
         if (shutdown != null) {

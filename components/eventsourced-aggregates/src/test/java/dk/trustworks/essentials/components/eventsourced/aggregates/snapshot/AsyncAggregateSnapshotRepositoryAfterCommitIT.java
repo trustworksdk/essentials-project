@@ -180,8 +180,8 @@ class AsyncAggregateSnapshotRepositoryAfterCommitIT {
         unitOfWork.rollback(new RuntimeException("Simulated failure after the events were appended"));
         assertThat(unitOfWorkFactory.getCurrentUnitOfWork()).isEmpty();
 
-        await().during(SNAPSHOT_WAIT)
-               .atMost(SNAPSHOT_WAIT.plusSeconds(2))
+        await().during(Duration.ofMillis(500))
+               .atMost(Duration.ofSeconds(2))
                .until(() -> snapshotStore.loadSnapshot(ORDERS, orderId, EventOrder.MAX_EVENT_ORDER, Order.class).isEmpty());
         assertThat(snapshotStore.loadAllSnapshots(ORDERS, orderId, Order.class, false)).isEmpty();
     }
