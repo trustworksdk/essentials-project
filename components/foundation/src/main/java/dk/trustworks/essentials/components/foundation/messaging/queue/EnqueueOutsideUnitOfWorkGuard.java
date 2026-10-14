@@ -50,7 +50,11 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  *         variants are not logged. The first call site of the last innermost frame is followed by one line saying
  *         further call sites are not logged. Once that frame is charged, the guard still walks the stack, so a frame
  *         charged earlier keeps logging its remaining caller variants, but it stops once every charged frame has used
- *         its variants.</li>
+ *         its variants, or after {@value #MAX_FRUITLESS_STACK_WALKS_AFTER_FRAME_CAP} walks past the cap that logged
+ *         nothing, whichever comes first. The second bound is what normally applies: a frame with fewer callers than
+ *         its variants would otherwise keep every later enqueue walking the stack. A caller variant of a charged frame
+ *         first reached after that is not logged. Before the cap is reached every enqueue outside a unit of work is
+ *         walked, since a new innermost frame can still be logged.</li>
  *     <li>Required ({@link #setRequireActiveUnitOfWork(boolean)}, in Spring Boot the property
  *         {@value #REQUIRE_ACTIVE_UNIT_OF_WORK_FOR_ENQUEUE_PROPERTY}): the enqueue fails with a
  *         {@link NoActiveUnitOfWorkException} and nothing is queued. Note that this includes every framework caller that
@@ -78,19 +82,18 @@ public final class EnqueueOutsideUnitOfWorkGuard {
     public static final int MAX_WARNED_INNERMOST_FRAMES = 32;
 
     /**
-     * The historical name of {@link #MAX_WARNED_INNERMOST_FRAMES}: it caps innermost application frames, not call
-     * sites - the WARNs are bounded by that times {@value #MAX_WARNED_CALLERS_PER_INNERMOST_FRAME}.
-     *
-     * @deprecated use {@link #MAX_WARNED_INNERMOST_FRAMES}
-     */
-    @Deprecated
-    public static final int MAX_WARNED_CALL_SITES = MAX_WARNED_INNERMOST_FRAMES;
-
-    /**
      * How many call sites (callers' variants) sharing one innermost application frame are logged - only the first of
      * them counts against {@link #MAX_WARNED_INNERMOST_FRAMES}
      */
     static final int MAX_WARNED_CALLERS_PER_INNERMOST_FRAME = 4;
+
+    /**
+     * How many stack walks that log nothing the guard makes once every one of the {@link #MAX_WARNED_INNERMOST_FRAMES}
+     * slots is charged, before it stops walking the stack. Without it the walking only stops once every charged frame
+     * has logged all its {@link #MAX_WARNED_CALLERS_PER_INNERMOST_FRAME} caller variants, which a frame with fewer
+     * callers never does - so in practice every later enqueue outside a unit of work would keep paying one walk.
+     */
+    static final int MAX_FRUITLESS_STACK_WALKS_AFTER_FRAME_CAP = 10_000;
 
     /**
      * How many application frames, innermost first, make up one call site
@@ -144,6 +147,11 @@ public final class EnqueueOutsideUnitOfWorkGuard {
      * every slot charged and exhausted, nothing more can be logged, so the guard stops walking the stack.
      */
     private final    AtomicInteger                              exhaustedInnermostFrameCount   = new AtomicInteger();
+    /**
+     * Stack walks made with every slot already charged that logged nothing. At
+     * {@link #MAX_FRUITLESS_STACK_WALKS_AFTER_FRAME_CAP} the guard stops walking the stack.
+     */
+    private final    AtomicInteger                              fruitlessWalksAfterFrameCap    = new AtomicInteger();
     private volatile boolean                                    requireActiveUnitOfWork;
 
     /**
@@ -208,31 +216,46 @@ public final class EnqueueOutsideUnitOfWorkGuard {
                                                   + REQUIRE_ACTIVE_UNIT_OF_WORK_FOR_ENQUEUE_PROPERTY + "' is enabled. "
                                                   + "Enqueue inside unitOfWorkFactory.usingUnitOfWork(...) or a Spring @Transactional/TransactionTemplate.");
         }
-        if (exhaustedInnermostFrameCount.get() >= MAX_WARNED_INNERMOST_FRAMES) {
-            // Every slot is charged and has used its caller variants: no stack walk at all
+        if (exhaustedInnermostFrameCount.get() >= MAX_WARNED_INNERMOST_FRAMES
+                || fruitlessWalksAfterFrameCap.get() >= MAX_FRUITLESS_STACK_WALKS_AFTER_FRAME_CAP) {
+            // Every slot is charged and has used its caller variants, or the walks past the cap have stopped finding
+            // anything new: no stack walk at all
             return;
         }
+        var frameCapReached = chargedInnermostFrameCount.get() >= MAX_WARNED_INNERMOST_FRAMES;
+        if (!warnIfNotYetLogged(queueName, frameCapReached) && frameCapReached) {
+            fruitlessWalksAfterFrameCap.incrementAndGet();
+        }
+    }
+
+    /**
+     * Walk the stack and log the call site, unless it was logged before or the budget is used up.
+     *
+     * @param frameCapReached whether every slot was charged before the walk - a new innermost frame is then never charged
+     * @return whether the call site was logged
+     */
+    private boolean warnIfNotYetLogged(QueueName queueName, boolean frameCapReached) {
         var callSite       = callSite();
         var key            = callSite.key();
         var innermostFrame = key.isEmpty() ? UNKNOWN_FRAME : key.getFirst();
-        var charge = chargedInnermostFrameCount.get() >= MAX_WARNED_INNERMOST_FRAMES
-                     ? chargedInnermostFrames.get(innermostFrame) // all slots taken: a new innermost frame is never charged
+        var charge = frameCapReached
+                     ? chargedInnermostFrames.get(innermostFrame)
                      : chargedInnermostFrames.computeIfAbsent(innermostFrame, frame -> new Charge(chargedInnermostFrameCount.incrementAndGet()));
         if (charge == null || charge.slot() > MAX_WARNED_INNERMOST_FRAMES) {
-            // Lost the race for the last slot
-            return;
+            // A new innermost frame past the cap, or lost the race for the last slot
+            return false;
         }
         if (charge.callersWarned().get() >= MAX_WARNED_CALLERS_PER_INNERMOST_FRAME) {
             // This innermost frame has used its caller variants
-            return;
+            return false;
         }
         if (!warnedCallSites.add(key)) {
-            return;
+            return false;
         }
         var caller = charge.callersWarned().incrementAndGet();
         if (caller > MAX_WARNED_CALLERS_PER_INNERMOST_FRAME) {
             // Lost the race for this innermost frame's last caller variant
-            return;
+            return false;
         }
         if (caller == MAX_WARNED_CALLERS_PER_INNERMOST_FRAME) {
             exhaustedInnermostFrameCount.incrementAndGet();
@@ -242,6 +265,7 @@ public final class EnqueueOutsideUnitOfWorkGuard {
             log.warn("[{}] Messages have been enqueued outside a UnitOfWork/transaction from {} innermost application frames - further call sites are not logged (frames already listed may still log up to {} of their callers)",
                      queueName, MAX_WARNED_INNERMOST_FRAMES, MAX_WARNED_CALLERS_PER_INNERMOST_FRAME);
         }
+        return true;
     }
 
     /**

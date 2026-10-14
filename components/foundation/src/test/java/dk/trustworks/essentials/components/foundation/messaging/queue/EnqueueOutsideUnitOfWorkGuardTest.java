@@ -30,6 +30,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import java.sql.SQLException;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -63,6 +64,18 @@ class EnqueueOutsideUnitOfWorkGuardTest {
         application.add(EnqueueOutsideUnitOfWorkGuardTest.class.getName());
         Arrays.stream(applicationClasses).map(Class::getName).forEach(application::add);
         return new EnqueueOutsideUnitOfWorkGuard(DurableQueues.class, className -> !application.contains(className));
+    }
+
+    /**
+     * As {@link #guardWithApplicationClasses(Class[])}, counting in {@code consultations} each time the guard asks
+     * whether a frame is a framework class - which it only does while walking the stack
+     */
+    private static EnqueueOutsideUnitOfWorkGuard guardCountingStackWalks(AtomicInteger consultations) {
+        var application = EnqueueOutsideUnitOfWorkGuardTest.class.getName();
+        return new EnqueueOutsideUnitOfWorkGuard(DurableQueues.class, className -> {
+            consultations.incrementAndGet();
+            return !application.equals(className);
+        });
     }
 
     @Test
@@ -245,6 +258,78 @@ class EnqueueOutsideUnitOfWorkGuardTest {
         assertThat(warnings()).as("a new innermost frame past the cap is not logged").hasSize(1 + (max - 1) + 1 + (EnqueueOutsideUnitOfWorkGuard.MAX_WARNED_CALLERS_PER_INNERMOST_FRAME - 1));
     }
 
+    @Test
+    void once_every_charged_frame_has_used_its_caller_variants_the_stack_is_no_longer_walked() {
+        var consultations = new AtomicInteger();
+        var guard         = guardCountingStackWalks(consultations);
+        var max           = EnqueueOutsideUnitOfWorkGuard.MAX_WARNED_INNERMOST_FRAMES;
+        var variants      = EnqueueOutsideUnitOfWorkGuard.MAX_WARNED_CALLERS_PER_INNERMOST_FRAME;
+        assertThat(variants).as("enqueueAt tells apart " + DISTINCT_CALLERS + " callers, one kept unused").isLessThan(DISTINCT_CALLERS);
+        for (var site = 0; site < max; site++) {
+            for (var caller = 0; caller < variants; caller++) {
+                enqueueAt(guard, site, caller);
+            }
+        }
+        assertThat(warnings()).as("every caller variant of every frame, and the 'further' line").hasSize(max * variants + 1);
+
+        consultations.set(0);
+        enqueueAt(guard, 0, 0);
+        enqueueAt(guard, 0, variants);
+        enqueueAt(guard, max, 0);
+
+        assertThat(consultations).as("nothing more can be logged, so no stack walk").hasValue(0);
+        assertThat(warnings()).hasSize(max * variants + 1);
+    }
+
+    @Test
+    void while_a_charged_frame_has_caller_variants_left_the_stack_is_still_walked() {
+        var consultations = new AtomicInteger();
+        var guard         = guardCountingStackWalks(consultations);
+        var max           = EnqueueOutsideUnitOfWorkGuard.MAX_WARNED_INNERMOST_FRAMES;
+        var variants      = EnqueueOutsideUnitOfWorkGuard.MAX_WARNED_CALLERS_PER_INNERMOST_FRAME;
+        assertThat(variants).isLessThanOrEqualTo(DISTINCT_CALLERS);
+        for (var site = 0; site < max; site++) {
+            var callers = site == max - 1 ? variants - 1 : variants;
+            for (var caller = 0; caller < callers; caller++) {
+                enqueueAt(guard, site, caller);
+            }
+        }
+        assertThat(warnings()).as("one caller variant short of the full budget, plus the 'further' line").hasSize(max * variants);
+
+        consultations.set(0);
+        enqueueAt(guard, 0, 0);
+        assertThat(consultations).as("the last frame still has a caller variant left").hasPositiveValue();
+
+        enqueueAt(guard, max - 1, variants - 1);
+        assertThat(warnings()).as("and it is logged").hasSize(max * variants + 1);
+        assertThat(warnings().getLast()).contains("enqueueFromCallSiteThroughCaller").contains("enqueueAt");
+    }
+
+    @Test
+    void past_the_frame_cap_the_stack_walks_that_log_nothing_are_bounded() {
+        var consultations = new AtomicInteger();
+        var guard         = guardCountingStackWalks(consultations);
+        var max           = EnqueueOutsideUnitOfWorkGuard.MAX_WARNED_INNERMOST_FRAMES;
+        var bound         = EnqueueOutsideUnitOfWorkGuard.MAX_FRUITLESS_STACK_WALKS_AFTER_FRAME_CAP;
+        for (var site = 0; site < max; site++) {
+            enqueueAt(guard, site, 0);
+        }
+        assertThat(warnings()).as("one caller of each frame - none has used its caller variants - and the 'further' line").hasSize(max + 1);
+
+        for (var walk = 0; walk < bound - 1; walk++) {
+            enqueueAt(guard, walk % (max + 1), 0); // the frames already logged, and a new one past the cap
+        }
+        consultations.set(0);
+        enqueueAt(guard, 0, 0);
+        assertThat(consultations).as("the last walk within the bound").hasPositiveValue();
+
+        consultations.set(0);
+        enqueueAt(guard, 0, 0);
+        enqueueAt(guard, 0, 1);
+        assertThat(consultations).as("past the bound, no stack walk").hasValue(0);
+        assertThat(warnings()).as("so a caller variant first reached now is not logged").hasSize(max + 1);
+    }
+
     @RepeatedTest(40)
     void the_caller_variant_budget_holds_when_threads_race_through_one_wrapper() throws InterruptedException {
         var guard  = guardWithApplicationClasses(ApplicationGateway.class);
@@ -403,6 +488,37 @@ class EnqueueOutsideUnitOfWorkGuardTest {
             case 62 -> guard.checkEnqueue(QUEUE, false);
             default -> guard.checkEnqueue(QUEUE, false);
         }
+    }
+
+    /**
+     * How many distinct callers {@link #enqueueFromCallSiteThroughCaller(EnqueueOutsideUnitOfWorkGuard, int, int)} has
+     */
+    private static final int DISTINCT_CALLERS = 8;
+
+    /**
+     * {@link #enqueueFromCallSite(EnqueueOutsideUnitOfWorkGuard, int)}'s innermost frame for {@code site}, reached from
+     * a distinct caller per {@code caller} (0-7): one call instruction per caller, so the call-site key differs per
+     * caller while the innermost frame stays the same
+     */
+    private static void enqueueFromCallSiteThroughCaller(EnqueueOutsideUnitOfWorkGuard guard, int site, int caller) {
+        switch (caller) {
+            case 0 -> enqueueFromCallSite(guard, site);
+            case 1 -> enqueueFromCallSite(guard, site);
+            case 2 -> enqueueFromCallSite(guard, site);
+            case 3 -> enqueueFromCallSite(guard, site);
+            case 4 -> enqueueFromCallSite(guard, site);
+            case 5 -> enqueueFromCallSite(guard, site);
+            case 6 -> enqueueFromCallSite(guard, site);
+            default -> enqueueFromCallSite(guard, site);
+        }
+    }
+
+    /**
+     * Enqueue from a call site keyed on {@code site} and {@code caller} alone: the key's third frame is this method, not
+     * the test calling it, so the same arguments from anywhere in a test are the same call site
+     */
+    private static void enqueueAt(EnqueueOutsideUnitOfWorkGuard guard, int site, int caller) {
+        enqueueFromCallSiteThroughCaller(guard, site, caller);
     }
 
     /**
