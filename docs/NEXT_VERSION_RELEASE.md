@@ -9,7 +9,7 @@ _Add an entry in the same commit as the change. Cite the commit or PR. Write it 
 changes for them, and what they must do, if anything. Purely internal refactors, test-only changes and CI
 plumbing that no user sees go in §7 at most, as one line._
 
-**So far:** no breaking change, twenty framework changes with a behaviour change (§1.1, §1.1.13–§1.1.20 in the
+**So far:** no breaking change, twenty-one framework changes with a behaviour change (§1.1, §1.1.13–§1.1.21 in the
 durable queues and units of work), additive features (§2), bug fixes (§3), plugin releases `0.60.0-6` and `0.60.0-7`, and example and tooling updates. Nothing here requires a migration
 step, except one for `essentials.schema.mode=validate` deployments: re-run `emit` and apply the script before the
 first start (§1). Supported PostgreSQL is now 15+ (§1). The persisted
@@ -156,16 +156,17 @@ Four new WARN log lines. Nothing else changes, but each points at a setup that d
   names all three frames. The budget is counted per innermost application frame, not per call site: up to 32 such
   frames are logged per `DurableQueues` instance, each with up to 4 of its callers, so one wrapper reached from many
   callers cannot use the budget up and hide every other call site. The 32nd frame is followed by one line saying
-  further ones are not. A frame charged before that keeps logging its remaining callers afterwards, so the check
-  stops looking at the stack only once every charged frame has used all 4; until then each enqueue outside a unit of
-  work costs one stack walk. The cap is `EnqueueOutsideUnitOfWorkGuard.MAX_WARNED_INNERMOST_FRAMES`;
-  `MAX_WARNED_CALL_SITES` is a deprecated alias with the same value. Keying on the call site
+  further ones are not. A frame charged before that keeps logging its remaining callers afterwards, so after the
+  32nd frame the check keeps looking at the stack until every charged frame has used all 4, or until 10 000
+  enqueues past that point have logged nothing new, whichever comes first; a caller first reached after that is
+  not logged. Until then each enqueue outside a unit of work costs one stack walk. The cap is
+  `EnqueueOutsideUnitOfWorkGuard.MAX_WARNED_INNERMOST_FRAMES`. Keying on the call site
   means a deliberate standalone enqueue (`sendAndDontWait` from a controller, say) cannot use up the only WARN and
   hide an `Outbox.sendMessage` elsewhere. Each such call site is also listed in
   the run report (§2), at start-up and while the application runs. The enqueue commits on its own, so a later rollback of your business change does not undo it. This
   covers `Outbox.sendMessage` and `DurableLocalCommandBus.sendAndDontWait` called outside a transaction. To make it
   fail instead, set `essentials.durable-queues.require-active-unit-of-work-for-enqueue=true` (§2).
-  (RN-2, `3c783626`, `8d349587`, `fb8559c9`, `c9e566bd`)
+  (RN-2, `3c783626`, `8d349587`, `fb8559c9`, `c9e566bd`, `14dad969`)
 - **A shard-owned queue built without a UnitOfWork factory.** Building `ShardOwnedDurableQueues` without
   `setUnitOfWorkFactory(...)` logs a WARN that every enqueue commits on its own. The 0.61 release will refuse to
   build it. The starters always set one. (N-15, `4248f0b3`)
@@ -332,7 +333,7 @@ branched on the delivery mode now sees the correct value. Fixing it exposed a la
 dead letter in `PostgresqlDurableQueues` would have thrown `ClassCastException` from its log line. That code had never
 run, because the mode was always `NORMAL`; it is fixed too. (`5603a596`)
 
-#### 1.1.15 Stored delivery errors start with the root cause (PostgreSQL and MongoDB queues)
+#### 1.1.15 Stored delivery errors start with the root cause (PostgreSQL, MongoDB and shard-owned queues)
 
 A handler's exception reaches the queue wrapped, typically as
 `UnitOfWorkException → ReflectionException → InvocationTargetException → yours`, so the stored
@@ -340,6 +341,13 @@ A handler's exception reaches the queue wrapped, typically as
 with one line, `Root cause: <type>: <message>`, followed by the complete, unchanged stack trace. An exception that is
 not wrapped is stored exactly as before. Anything that parses the first line of `getLastDeliveryError()` sees the new
 summary line. (`5603a596`)
+
+The shard-owned engine does the same for its dead letters, on both lanes. It stored only the outermost throwable as
+`last_error`, so `DeadLetter.lastError()` (and `QueuedMessage.getLastDeliveryError()` through the `DurableQueues`
+adapter) named the wrapper and nothing about why the message failed. When the exception is wrapped, the text now
+starts with a `Root cause: <type>: <message>` line, followed by the outermost `<type>: <message>` as before; the
+engine still stores no stack trace. An unwrapped exception is recorded unchanged, and existing dead letters keep the
+text they were stored with. (`9411139c`)
 
 #### 1.1.16 A handled message is acknowledged inside the handler's transaction (`PostgresqlDurableQueues`)
 
@@ -445,6 +453,16 @@ named `"keyOrder, nextDeliveryTimestamp"`, which no document has, so claims came
 ordering was never affected, but in a queue holding both kinds, unordered messages are now taken before ordered ones,
 and keys with lower orders first, as on PostgreSQL. (`6027fe61`)
 
+#### 1.1.21 A polling-optimizer subclass must override the claim-time callbacks
+
+The queues now report a poll's result through `queuePollingReturnedNoMessages(Instant claimedAt)` and
+`queuePollingReturnedMessages(List, Instant claimedAt)` (§2). A subclass of `CentralizedQueuePollingOptimizer` or
+`SimpleQueuePollingOptimizer` that overrides only the no-arg `queuePollingReturnedNoMessages()` (or, on the
+centralized optimizer, `queuePollingReturnedMessages(List)`) compiles as before but is no longer called. Override
+the `Instant claimedAt` overloads instead; the no-arg forms are `@Deprecated(since = "0.60.1")` on these two classes,
+so an existing override now gets a deprecation warning. A `QueuePollingOptimizer` implemented from scratch is
+unaffected: the interface's `Instant` overloads still call its no-arg methods. (`d42c4bc3`)
+
 ---
 
 ## 2. New features
@@ -543,7 +561,9 @@ and keys with lower orders first, as on PostgreSQL. (`6027fe61`)
   outside a `UnitOfWork`, a `ViewEventProcessor` started later) is added to the context's report when that context
   is the only one open in the JVM; in a test JVM with several contexts open it is only logged by its check. When a second report registers, one INFO
   line says so, and the run report and the periodic block name the period in which runtime findings were not
-  collected, rather than reporting "no findings" for it. A periodic block that carries only that period, and no new
+  collected, rather than reporting "no findings" for it. At most 20 such periods are listed: the first 19 and the
+  latest, with one line counting the ones in between ("also not collected in K more periods between X and Y"), so
+  the report never claims findings went uncollected while they were collected. A periodic block that carries only that period, and no new
   findings, is logged at INFO, not WARN. A report registered twice stays registered until both
   registrations are closed. Every
   `essentials.run-report.new-findings-interval` (default `5m`; `0` turns it off) the findings not logged before
@@ -552,7 +572,7 @@ and keys with lower orders first, as on PostgreSQL. (`6027fe61`)
   lost (SIGTERM, log shipping), which is why the periodic block exists. Identical findings are kept once with a
   count; at most 500 distinct findings are kept, further ones only counted. Without Spring,
   `EssentialsRunReport.registerAsRunReport()`, `logNewFindings()` and `logRunReport()` do the same. A check that
-  cannot run now logs its own failure at ERROR instead of DEBUG. (`552576f1`, `b4614eca`, `d99a3602`, `b3fb8379`)
+  cannot run now logs its own failure at ERROR instead of DEBUG. (`552576f1`, `b4614eca`, `d99a3602`, `b3fb8379`, `31264d1a`)
 - **Wire-format check for mappers Essentials did not build.**
   `EssentialsObjectMappers.findWireFormatDeviations(ObjectMapper)` round-trips small probe types and compares them
   with the 0.50 bytes (field access, getter and `is`-getter visibility, ISO dates, numeric durations,
@@ -579,7 +599,9 @@ and keys with lower orders first, as on PostgreSQL. (`6027fe61`)
   retry, a delayed enqueue or a delayed resurrection becomes deliverable, so a backed-off queue polls then. Also
   `queuePollingReturnedNoMessages(Instant claimedAt)` and `queuePollingReturnedMessages(List, Instant claimedAt)`,
   which tell it when the claim ran; by default they call the existing methods. A custom optimizer that ignores all
-  three keeps working. (`7a742881`, `13461645`)
+  three keeps working. The framework now only calls the `Instant` overloads, so a subclass of
+  `CentralizedQueuePollingOptimizer` or `SimpleQueuePollingOptimizer` must override those (§1.1.21); the no-arg forms
+  are `@Deprecated(since = "0.60.1")` on those two classes. (`7a742881`, `13461645`, `d42c4bc3`)
 - **`PostgresqlDurableQueuesBuilder.setOrderedClaimSlowThreshold(Duration)`** (default 10 ms,
   `PostgresqlDurableQueues.DEFAULT_ORDERED_CLAIM_SLOW_THRESHOLD`): how slow an ordered claim must be to count towards
   switching statements (§3). (`7e80c23c`)
@@ -627,8 +649,8 @@ The plugin's features are in [§4](#4-the-essentials-claude-code-plugin).
 | Fenced locks | A fenced lock could stay locked for `lock-time-out` (15 s by default) after a shutdown that raced its acquisition. When an application shut down while a lock was being acquired asynchronously (for example the scheduler's lock while its jobs were being scheduled), the shutdown cancelled the acquiring tick with an interrupt, and the release attempted during shutdown then failed at once on that same interrupt (WARN "Shutdown cleanup '... release fenced lock ...' failed: InterruptedException"). Other instances, and a restarted instance with the same instance id, could not take the lock until it timed out. Shutdown cleanup now sets a pending interrupt aside for its bounded attempt and restores it afterwards | `c3bfa0bd` |
 | Fenced locks | A fenced lock whose acquire failed at commit time was mishandled. If the commit had reached the database anyway (connection lost while waiting for the reply, or on MongoDB the acquiring thread interrupted by a shutdown), the lock stayed held by this instance for as long as it ran and its `lockAcquired` callback was never called. If the commit had not reached the database, `tryAcquireLock` on the same manager still returned the lock as held, and once another instance had acquired it the next lock confirmation could release that other instance's lock. Cause: the lock was recorded as acquired before its commit. It is now recorded only after the commit succeeds; when the commit fails, the lock row is looked up and the lock is held only if the row carries this instance's id and fence token | `47428143` |
 | Fenced locks | `FencedLockManager.tryAcquireLock(lockName, timeout)` on the PostgreSQL and MongoDB lock managers threw `NullPointerException: fallbackValue must not be null` on every call. Closing the books (`ClosingBooksManager`) takes its lock that way, so with a real lock manager it never ran: every poll logged "Closing books manager poll failed" and counted as `failed`. And `acquireLock(lockName)` on a lock another instance held never returned, even after that instance released it: each retry replayed the first attempt's result instead of asking the database again. Both now retry on the caller's thread and query the database on every attempt; the timed acquire returns empty when its timeout runs out | `e4585f84` |
-| Fenced locks | A blocking `acquireLock(name)` or `tryAcquireLock(name, timeout)` kept querying the database after shutdown had started, and one that was waiting while the lock manager stopped could still take the lock, leaving its row held by a manager that no longer confirmed it until `lock-time-out` passed. Both now give up: `tryAcquireLock` returns empty and `acquireLock` throws `IllegalStateException`. The timeout of `tryAcquireLock(name, timeout)` now also bounds the wait behind the manager's own lock-confirmation work, though not a database round trip already in flight. During shutdown, checking whether a failed acquire commit reached the database is a single bounded attempt | `f1840271` |
-| Event-stream deciders | `EventStreamDeciderSupportsAggregateTypeChecker.HandlesCommandsThatInheritFromCommandType` failed the configuration with an `IllegalStateException` for a decider declared through a sub-interface (`implements OrderDecider`, where `OrderDecider extends EventStreamDecider<OrderCommand, OrderEvent>`), through a generic abstract base class, or as a CGLIB-proxied bean; and a sub-interface that changes the type-argument order was matched on the wrong argument. It now finds the command type in all of these. A decider whose command type cannot be resolved (a raw type, an unbound type variable, a JDK dynamic proxy) is reported as not supported, with a WARN, instead of throwing; if no other checker claims it, configuration still fails as before. Present since the checker was added (0.40.25) | `abb1228d` |
+| Fenced locks | A blocking `acquireLock(name)` or `tryAcquireLock(name, timeout)` kept querying the database after shutdown had started, and one that was waiting while the lock manager stopped could still take the lock, leaving its row held by a manager that no longer confirmed it until `lock-time-out` passed. Both now give up: `tryAcquireLock` returns empty and `acquireLock` throws `IllegalStateException`. A lock this manager instance already holds is still returned by both, without a database look-up, so a component re-checking its own lock during shutdown does not conclude it lost it. The timeout of `tryAcquireLock(name, timeout)` now also bounds the wait behind the manager's own lock-confirmation work, though not a database round trip already in flight. During shutdown, checking whether a failed acquire commit reached the database is a single bounded attempt | `f1840271`, `0f5e1eec` |
+| Event-stream deciders | `EventStreamDeciderSupportsAggregateTypeChecker.HandlesCommandsThatInheritFromCommandType` failed the configuration with an `IllegalStateException` for a decider declared through a sub-interface (`implements OrderDecider`, where `OrderDecider extends EventStreamDecider<OrderCommand, OrderEvent>`), through a generic abstract base class, or as a CGLIB-proxied bean; and a sub-interface that changes the type-argument order was matched on the wrong argument. It now finds the command type in all of these. A decider whose command type cannot be resolved (a raw type, an unbound type variable, a JDK dynamic proxy) is reported as not supported instead of throwing (logged at DEBUG, so it is not repeated once per aggregate type); if no other checker claims it, configuration still fails as before, and that exception now says how to declare the decider's COMMAND type argument. Present since the checker was added (0.40.25) | `abb1228d`, `8ffb68b6` |
 | Scheduler | A job registered with `DefaultEssentialsScheduler` while the scheduler was acquiring its fenced lock could be silently dropped: it stayed in the job list but was never scheduled until the lock was next re-acquired. This typically hit a `@TTLJob` whose `PostgresqlTTLManager` started at the same moment, so its TTL delete never ran. Registration now waits for the lock callback to finish and always sees the lock state it leaves | `35fafdaa` |
 | Durable queues (PostgreSQL) | A busy queue was held to one poll per polling interval. A poll claims at most a queue's free worker slots, so a queue was capped at `parallelConsumers / pollingInterval` messages per second however fast its handler was: 400 msg/s for 8 consumers at the default 20 ms. A queue whose poll filled every free slot is now polled again as soon as half its workers are free: 2 000 messages, 8 consumers and 200 ms polling drained in 3.3 s instead of 50 s (`PostgresqlDurableQueuesSaturationIT`). A poll whose ordered claim finds fewer messages than there are free slots also fills the remaining slots with unordered messages in the same poll, rather than leaving them for the next poll | `abeca59c`, `b60f9faa` |
 | Durable queues (PostgreSQL) | Claims slowed down in proportion to the backlog after a queue table had drained. Once a drained table was analyzed, PostgreSQL planned the claim's `UPDATE … FROM cte WHERE q.id = cte.id` as a nested loop over the whole queue: 185 ms instead of 4 ms per claim at 20 000 queued messages. The claim statements now select their rows by primary-key array (`WHERE q.id = ANY(ARRAY(…))`), the opt-in batched fetch's included: one batched poll over two queues of 20 000 messages each took 37.6 s in that state and now takes 111 ms (140 ms instead of 409 ms with fresh statistics). The batched fetch's locking step now also re-checks dead-letter status and `next_delivery_ts`, so a message another consumer released as a retry or dead letter in that window can no longer be claimed early. The ordered claim's per-key ordering check can still be planned badly under the same conditions, so keep the statistics of a regularly draining ordered queue table fresh (`LLM-postgresql-queue.md` § Stale statistics on a draining queue table) | `5603a596`, `4827aff8` |
