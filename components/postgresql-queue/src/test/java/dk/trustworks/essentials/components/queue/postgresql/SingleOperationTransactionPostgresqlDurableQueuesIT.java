@@ -104,8 +104,6 @@ abstract class SingleOperationTransactionPostgresqlDurableQueuesIT extends Durab
         assertThat(durableQueues.getTotalMessagesQueuedFor(queueName)).isEqualTo(0);
     }
 
-
-
     @Test
     void test_SingleOperationTransaction_timeout_messages_gets_automatically_retried() throws InterruptedException {
         // Given
@@ -123,7 +121,6 @@ abstract class SingleOperationTransactionPostgresqlDurableQueuesIT extends Durab
         assertThat(nextMessage).isPresent();
         assertThat((CharSequence) nextMessage.get().getId()).isEqualTo(addedMessageId);
         assertThat(nextMessage.get().getMessage()).isEqualTo(message1);
-
 
         // Confirm the message is marked as being handled
         assertThat(durableQueues.getNextMessageReadyForDelivery(queueName)).isEmpty();
