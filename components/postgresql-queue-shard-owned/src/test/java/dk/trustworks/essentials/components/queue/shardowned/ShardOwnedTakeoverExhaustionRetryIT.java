@@ -56,7 +56,9 @@ import static org.awaitility.Awaitility.await;
  *     <li>While it keeps failing, the shard is leased but not served, which {@code QueueHealth.unownedShards} cannot
  *     see. The owner's metrics must report it ({@code shardsAwaitingTakeover}, {@code takeoverFailures}), and it is
  *     logged at ERROR once rather than on every retry. It used to log a stack trace per retry and count nothing.
- *     The count falls again when the shard's lease ends or its pump stops, the takeover still failing.</li>
+ *     The count falls again when the shard's lease ends or its pump stops, the takeover still failing. A stall
+ *     outlives the pump's connection: after a reconnect the shard is still counted once, and its stall neither ends
+ *     nor starts again.</li>
  *     <li>The retry must not charge the window a second time. The flag used to be set only after the pass, so a
  *     pass that failed left the charge unrecorded and every reconnect charged again.</li>
  *     <li>A plain reconnect after the pass has run must not run it again: it would dead-letter a row this owner
@@ -73,6 +75,10 @@ class ShardOwnedTakeoverExhaustionRetryIT {
     private static final int    SHARD        = 0;
     private static final int    MAX_ATTEMPTS = 3;
     private static final String OWNER        = "owner-1";
+    /**
+     * The {@code application_name} of a pump pool kept apart from the test's own, so its backends can be terminated alone.
+     */
+    private static final String PUMP_APPLICATION_NAME = "takeover-retry-pump";
 
     @Container
     static PostgreSQLContainer postgres = LabPostgres.create();
@@ -80,6 +86,10 @@ class ShardOwnedTakeoverExhaustionRetryIT {
     private HikariDataSource  dataSource;
     private ShardOwnedStorage storage;
     private List<DeadLettered> deadLettered;
+    /**
+     * Every {@code QueueObserver.takeoverStalled} call's {@code stalled}, in order, from every owner built by {@link #metrics()}.
+     */
+    private List<Boolean> takeoverStallTransitions;
     private ListAppender<ILoggingEvent>   pumpLog;
     private ch.qos.logback.classic.Logger pumpLogger;
 
@@ -95,6 +105,7 @@ class ShardOwnedTakeoverExhaustionRetryIT {
         ShardOwnedSchema.registerQueue(dataSource, QUEUE_ID, SHARD_COUNT);
         storage = new ShardOwnedStorage(dataSource, QUEUE_ID);
         deadLettered = new CopyOnWriteArrayList<>();
+        takeoverStallTransitions = new CopyOnWriteArrayList<>();
         pumpLog = new ListAppender<>();
         pumpLog.start();
         pumpLogger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(ShardPump.class);
@@ -332,6 +343,86 @@ class ShardOwnedTakeoverExhaustionRetryIT {
         // The pump stopped with the takeover still failing: none of its shards is served by it any more
         assertThat(stoppedMetrics.shardsAwaitingTakeover.get()).as("cleared when the pump stopped").isZero();
         assertThat(stoppedMetrics.takeoverFailures.sum()).as("a running total, not cleared").isGreaterThan(0);
+    }
+
+    /**
+     * A stall outlives the connection it began on. {@code ShardPump} keeps its {@code TakeoverStalls} for its own lifetime
+     * but {@code takenOver} and {@code takeoverRetryAtNanos} per connection, so after a reconnect the stalled shard's
+     * takeover is retried at once and fails again into the same stall. It must still be counted once. Stalls kept per
+     * connection would count it twice and never clear the first; stalls forgotten on reconnect would tell the observer
+     * the stall had ended, report it as a new one, and recover with an attempt count that has lost the first connection's.
+     * <p>
+     * Only the pump's backends are terminated: it gets a pool of its own under {@link #PUMP_APPLICATION_NAME}, so the
+     * test's own reads and the trigger switch are not disturbed.
+     */
+    @Test
+    void a_stalled_takeover_stays_counted_once_across_a_pump_reconnect() throws Exception {
+        insertUnordered(1, MAX_ATTEMPTS - 1, null);
+        var pumpConfig = new HikariConfig();
+        pumpConfig.setJdbcUrl(postgres.getJdbcUrl());
+        pumpConfig.setUsername(postgres.getUsername());
+        pumpConfig.setPassword(postgres.getPassword());
+        pumpConfig.setMaximumPoolSize(2);
+        pumpConfig.addDataSourceProperty("ApplicationName", PUMP_APPLICATION_NAME);
+        try (var pumpDataSource = new HikariDataSource(pumpConfig)) {
+            var pumpStorage    = new ShardOwnedStorage(pumpDataSource, QUEUE_ID);
+            var failingMetrics = metrics();
+            var failing = new ShardOwner(pumpStorage, SHARD, storage.acquireLease("unordered", SHARD, OWNER, 60_000).orElseThrow(),
+                                         ShardOwnerSettings.defaults(), (id, payload, type) -> { }, failingMetrics,
+                                         RedeliveryPolicy.fixed(Duration.ofSeconds(1), MAX_ATTEMPTS), new ShardWakeup(), OWNER,
+                                         HandlerDispatch.inline(), false);
+            var pumpMetrics = new ShardOwnerMetrics();
+            var running     = new AtomicBoolean(true);
+            var pump        = new ShardPump(pumpStorage, ShardOwnerSettings.defaults(), pumpMetrics, running, new AtomicBoolean(false),
+                                            "pump-under-test", Optional::empty);
+            failDeadLetterInserts(true);
+            pump.add(failing);
+            var thread = Thread.ofPlatform().name("pump-under-test").start(pump);
+            try {
+                await().atMost(Duration.ofSeconds(15))
+                       .untilAsserted(() -> {
+                           assertThat(failingMetrics.shardsAwaitingTakeover.get()).isEqualTo(1);
+                           assertThat(failingMetrics.takeoverFailures.sum()).as("retried on the first connection").isGreaterThan(1);
+                       });
+                assertThat(pumpMetrics.connectionFailures.sum()).as("still on its first connection").isZero();
+                var refusalsBeforeReconnect = deadLetterInsertRefusals();
+
+                assertThat(terminateBackends(PUMP_APPLICATION_NAME)).as("the pump's connection is cut").isPositive();
+                await().atMost(Duration.ofSeconds(15))
+                       .untilAsserted(() -> assertThat(pumpMetrics.connectionFailures.sum()).as("the pump reconnects").isPositive());
+                // Counted after the old connection failed, so any failure from here on is a new connection's
+                var failuresBeforeRetry = failingMetrics.takeoverFailures.sum();
+                await().atMost(Duration.ofSeconds(15))
+                       .untilAsserted(() -> assertThat(failingMetrics.takeoverFailures.sum()).as("the takeover fails again after the reconnect")
+                                                                                         .isGreaterThan(failuresBeforeRetry));
+                // Read after the wait, never as its condition: a refusal is counted inside the INSERT, before its takeover failure is
+                assertThat(deadLetterInsertRefusals()).as("failed again at the injected refusal, not at the lost connection")
+                                                      .isGreaterThan(refusalsBeforeReconnect);
+                assertThat(thread.isAlive()).isTrue();
+                assertThat(failingMetrics.shardsAwaitingTakeover.get()).as("counted once, not once per connection").isEqualTo(1);
+                assertThat(takeoverStallTransitions).as("the observer is told the stall began, once, and not that it ended")
+                                                    .containsExactly(true);
+                assertThat(firstTakeoverFailureReports()).as("one stall across the reconnect, reported as it began and never again")
+                                                         .hasSize(1);
+                assertThat(pumpErrors()).as("one ERROR for the stalled takeover").hasSize(1);
+
+                failDeadLetterInserts(false);
+                await().atMost(Duration.ofSeconds(15))
+                       .untilAsserted(() -> {
+                           assertThat(failingMetrics.shardsAwaitingTakeover.get()).as("cleared once the takeover completed").isZero();
+                           assertThat(takeoverStallTransitions).as("the stall ended once").containsExactly(true, false);
+                           assertThat(takeoverRecoveries()).as("one recovery INFO").hasSize(1);
+                       });
+                assertThat(deadLetterError(1)).as("the takeover completed").contains(ShardOwnedStorage.EXHAUSTED_BY_TAKEOVERS);
+                // TakeoverStalls.completed's arguments: pump, queue, lane, shard, failed attempts, seconds
+                assertThat(takeoverRecoveries().getFirst().getArgumentArray()[4])
+                        .as("the recovery counts every failed attempt, on both connections")
+                        .isEqualTo(failingMetrics.takeoverFailures.sum());
+                assertThat(pumpErrors()).as("no further ERROR once it recovered").hasSize(1);
+            } finally {
+                stopPump(running, pump, thread);
+            }
+        }
     }
 
     /**
@@ -584,11 +675,51 @@ class ShardOwnedTakeoverExhaustionRetryIT {
      * while the test reads.
      */
     private List<ILoggingEvent> pumpErrors() {
-        List<ILoggingEvent> logged;
+        return pumpLogged().stream().filter(event -> event.getLevel() == Level.ERROR).toList();
+    }
+
+    /**
+     * {@code TakeoverStalls.failed} reporting a stall's first failure: at ERROR when the queue's window is open, else at
+     * DEBUG. Told apart from a repeat by the message pattern, not the level.
+     */
+    private List<ILoggingEvent> firstTakeoverFailureReports() {
+        return pumpLogged().stream()
+                           .filter(event -> event.getMessage().contains("the takeover is retried every")
+                                   || event.getMessage().contains("now awaiting their takeover"))
+                           .toList();
+    }
+
+    /**
+     * {@code TakeoverStalls.completed}'s INFO.
+     */
+    private List<ILoggingEvent> takeoverRecoveries() {
+        return pumpLogged().stream()
+                           .filter(event -> event.getLevel() == Level.INFO && event.getMessage().contains("completed its takeover"))
+                           .toList();
+    }
+
+    private List<ILoggingEvent> pumpLogged() {
         synchronized (pumpLog) {
-            logged = new ArrayList<>(pumpLog.list);
+            return new ArrayList<>(pumpLog.list);
         }
-        return logged.stream().filter(event -> event.getLevel() == Level.ERROR).toList();
+    }
+
+    /**
+     * Terminate every backend of this database connected under {@code applicationName}.
+     *
+     * @return how many were signalled
+     */
+    private int terminateBackends(String applicationName) throws SQLException {
+        try (var connection = dataSource.getConnection();
+             var statement = connection.prepareStatement(
+                     "SELECT count(pg_terminate_backend(pid)) FROM pg_stat_activity"
+                             + " WHERE datname = current_database() AND application_name = ? AND pid <> pg_backend_pid()")) {
+            statement.setString(1, applicationName);
+            try (var resultSet = statement.executeQuery()) {
+                resultSet.next();
+                return resultSet.getInt(1);
+            }
+        }
     }
 
     private ShardOwnerMetrics metrics() {
@@ -596,6 +727,11 @@ class ShardOwnedTakeoverExhaustionRetryIT {
             @Override
             public void deadLettered(MessageId id, int attempts, Throwable cause) {
                 deadLettered.add(new DeadLettered(id, attempts, cause.getMessage()));
+            }
+
+            @Override
+            public void takeoverStalled(MessageId.Lane lane, int shard, boolean stalled) {
+                takeoverStallTransitions.add(stalled);
             }
         });
     }
