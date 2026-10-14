@@ -55,6 +55,6 @@ final class DeliveryErrorText {
     }
 
     private static String oneLine(Throwable throwable) {
-        return throwable.getClass().getName() + ": " + throwable.getMessage();
+        return String.valueOf(throwable);
     }
 }

@@ -105,7 +105,9 @@ class ShardOwnedConnectionLossIT {
             // remaining() borrows from the same pool, which can still hold a connection this test terminated:
             // the first borrow then fails, as the engine's own reads did, and the next one gets a fresh connection
             Awaitility.await().atMost(Duration.ofSeconds(30))
-                      .ignoreExceptionsInstanceOf(SQLException.class)
+                      .ignoreExceptionsMatching(e -> e instanceof SQLException sql
+                                                     && sql.getSQLState() != null
+                                                     && (sql.getSQLState().startsWith("08") || sql.getSQLState().equals("57P01")))
                       .untilAsserted(() -> assertThat(queue.remaining()).isZero());
         }
     }
