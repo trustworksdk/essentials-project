@@ -26,16 +26,23 @@ import java.sql.*;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static dk.trustworks.essentials.components.queue.shardowned.ShardOwnedSchema.*;
 import static org.assertj.core.api.Assertions.*;
+import static org.awaitility.Awaitility.await;
 
 /**
- * A takeover's charge is made once per ownership, and the exhaustion dead-letter pass that follows it is retried on
- * the next pump connection until it has run once - but only then. Driven through {@code onTakeover} on an owner
- * built by hand, with the dead-letter insert made to fail by a trigger, which is how the pump meets it: the move
- * throws, the pump reconnects, and {@code onTakeover} is called again on the same owner.
+ * A takeover's charge is made once per ownership, and the exhaustion dead-letter pass that follows it is retried until
+ * it has run once - but only then. Mostly driven through {@code onTakeover} on an owner built by hand, with the
+ * dead-letter insert made to fail by a trigger: the move throws, and {@code onTakeover} is called again on the same
+ * owner, which is what the pump does - on its next pass while the connection is healthy, after a reconnect when not.
  * <ul>
+ *     <li>On a healthy connection the pump must retry the pass without reconnecting, and keep serving its other
+ *     shards meanwhile. It used to treat the failure as a lost connection: it reconnected several times a second and
+ *     logged that at WARN. A pass runs every takeover before it pumps any shard, so the throw ended each pass before
+ *     any shard was pumped, and every shard the pump served stalled, whatever its position among the pump's
+ *     owners.</li>
  *     <li>The retry must not charge the window a second time. The flag used to be set only after the pass, so a
  *     pass that failed left the charge unrecorded and every reconnect charged again.</li>
  *     <li>A plain reconnect after the pass has run must not run it again: it would dead-letter a row this owner
@@ -124,6 +131,62 @@ class ShardOwnedTakeoverExhaustionRetryIT {
         assertThat(deadLetterError(3)).as("not dead-lettered by a reconnect").isEmpty();
     }
 
+    @Test
+    void a_pump_retries_a_failing_dead_letter_pass_on_a_healthy_connection_and_keeps_serving_its_other_shards() throws Exception {
+        // Shard 0: seq 1 reaches the limit with the takeover charge, seq 2 is charged once and then delivered
+        insertUnordered(1, MAX_ATTEMPTS - 1, null);
+        insertUnordered(2, 0, null);
+        var otherShard = SHARD + 1;
+        try (var connection = dataSource.getConnection()) {
+            storage.enqueueBatch(connection, otherShard, List.of(new byte[]{1}, new byte[]{2}, new byte[]{3}), 1);
+        }
+        var failingDeliveries = new CopyOnWriteArrayList<MessageId>();
+        var otherDeliveries   = new CopyOnWriteArrayList<MessageId>();
+        var failingMetrics    = metrics();
+        var failing = new ShardOwner(storage, SHARD, storage.acquireLease("unordered", SHARD, OWNER, 60_000).orElseThrow(),
+                                     ShardOwnerSettings.defaults(), (id, payload, type) -> failingDeliveries.add(id), failingMetrics,
+                                     RedeliveryPolicy.fixed(Duration.ofSeconds(1), MAX_ATTEMPTS), new ShardWakeup(), OWNER,
+                                     HandlerDispatch.inline(), false);
+        var other = new ShardOwner(storage, otherShard, storage.acquireLease("unordered", otherShard, OWNER, 60_000).orElseThrow(),
+                                   ShardOwnerSettings.defaults(), (id, payload, type) -> otherDeliveries.add(id), metrics(),
+                                   RedeliveryPolicy.fixed(Duration.ofSeconds(1), MAX_ATTEMPTS), new ShardWakeup(), OWNER,
+                                   HandlerDispatch.inline(), false);
+        var pumpMetrics = new ShardOwnerMetrics();
+        var running     = new AtomicBoolean(true);
+        var pump        = new ShardPump(storage, ShardOwnerSettings.defaults(), pumpMetrics, running, new AtomicBoolean(false),
+                                        "pump-under-test", Optional::empty);
+        failDeadLetterInserts(true);
+        pump.add(failing);
+        pump.add(other);
+        var thread = Thread.ofPlatform().name("pump-under-test").start(pump);
+        try {
+            await().atMost(Duration.ofSeconds(15))
+                   .untilAsserted(() -> assertThat(otherDeliveries).as("the other shard keeps delivering").hasSize(3));
+            // Long enough for several retries of the failing pass, each paced at 200 ms
+            Thread.sleep(1_000);
+            assertThat(deadLetterInsertRefusals()).as("the failing pass is retried on the pump's next passes").isGreaterThan(1);
+            assertThat(pumpMetrics.connectionFailures.sum()).as("a failing statement is not a lost connection").isZero();
+            assertThat(failingDeliveries).as("not pumped before its takeover has completed").isEmpty();
+            assertThat(deadLetterError(1)).as("the injected failure must reach the dead-letter move").isEmpty();
+
+            failDeadLetterInserts(false);
+            await().atMost(Duration.ofSeconds(15))
+                   .untilAsserted(() -> {
+                       assertThat(deadLetterError(1)).contains(ShardOwnedStorage.EXHAUSTED_BY_TAKEOVERS);
+                       assertThat(failingDeliveries).containsExactly(new MessageId(MessageId.Lane.UNORDERED, SHARD, 2));
+                   });
+            assertThat(failingMetrics.takeoverAttemptBumps.sum()).as("seq 1 and 2 charged once, however often the pass was retried")
+                                                                 .isEqualTo(2);
+            assertThat(deadLettered).containsExactly(new DeadLettered(new MessageId(MessageId.Lane.UNORDERED, SHARD, 1), MAX_ATTEMPTS,
+                                                                      ShardOwnedStorage.EXHAUSTED_BY_TAKEOVERS));
+            assertThat(pumpMetrics.connectionFailures.sum()).isZero();
+        } finally {
+            running.set(false);
+            pump.wakeup().signal();
+            thread.join(Duration.ofSeconds(10));
+        }
+    }
+
     /**
      * Seq 1 is one charge short of the limit and seq 2 has never been charged. The first {@code onTakeover} charges
      * both and then fails to park seq 1; the second must park it without charging seq 2 again.
@@ -172,9 +235,13 @@ class ShardOwnedTakeoverExhaustionRetryIT {
         try (var connection = dataSource.getConnection();
              var statement = connection.createStatement()) {
             if (fail) {
+                // A sequence, because nextval survives the rollback the refusal causes: it counts the refused inserts
+                statement.execute("DROP SEQUENCE IF EXISTS dead_letter_insert_refusals");
+                statement.execute("CREATE SEQUENCE dead_letter_insert_refusals");
                 statement.execute("""
                                   CREATE OR REPLACE FUNCTION fail_dead_letter_insert() RETURNS trigger AS $$
                                   BEGIN
+                                      PERFORM nextval('dead_letter_insert_refusals');
                                       RAISE EXCEPTION 'injected dead-letter failure';
                                   END
                                   $$ LANGUAGE plpgsql""");
@@ -183,6 +250,16 @@ class ShardOwnedTakeoverExhaustionRetryIT {
             } else {
                 statement.execute("DROP TRIGGER fail_dead_letter_insert ON " + DLQ_TABLE);
             }
+        }
+    }
+
+    private long deadLetterInsertRefusals() throws SQLException {
+        try (var connection = dataSource.getConnection();
+             var statement = connection.createStatement();
+             var result = statement.executeQuery(
+                     "SELECT CASE WHEN is_called THEN last_value ELSE 0 END FROM dead_letter_insert_refusals")) {
+            result.next();
+            return result.getLong(1);
         }
     }
 

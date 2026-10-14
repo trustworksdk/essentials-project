@@ -162,18 +162,20 @@ final class ShardOwner implements LeasedOwner {
 
     /**
      * Whether the takeover charge has been made - or is not owed, because the previous owner released the shard
-     * cleanly. {@link #onTakeover} runs once per pump connection, a reconnect included, and charging again on
-     * every reconnect cost the in-flight window an attempt each time the database blipped. Set as soon as the
-     * charge has committed, not after the exhaustion pass that follows it: a pass that failed left the charge
-     * unrecorded, and the reconnect that retried it charged the window a second time.
+     * cleanly. {@link #onTakeover} runs once per pump connection, a reconnect included, and again on every pump
+     * pass until it has completed; charging again on every reconnect cost the in-flight window an attempt each
+     * time the database blipped. Set as soon as the charge has committed, not after the exhaustion pass that
+     * follows it: a pass that failed left the charge unrecorded, and the call that retried it charged the window
+     * a second time.
      */
     private boolean takeoverCharged;
 
     /**
      * Whether the exhaustion dead-letter pass that follows the takeover charge has yet to complete. Set with
-     * {@link #takeoverCharged} and cleared once the pass has run, so a pass that failed is retried on the next
-     * pump connection - and only then. A plain reconnect, with no new charge behind it, must not run the pass: it
-     * would park a message this owner is itself delivering on its last attempt.
+     * {@link #takeoverCharged} and cleared once the pass has run, so a pass that failed is retried - on the pump's
+     * next pass while the connection is healthy, which keeps the pump serving its other shards meanwhile, or on
+     * the next connection when it is not - and only then. A plain reconnect, with no new charge behind it, must
+     * not run the pass: it would park a message this owner is itself delivering on its last attempt.
      */
     private boolean exhaustionPending;
 

@@ -118,8 +118,12 @@ final class ShardPump implements Runnable {
                         // routinely not the pump's first — and bumping after it had already delivered
                         // and acknowledged found nothing to bump, which is what a crashed owner's
                         // successor depends on to stop an infinite redelivery loop.
-                        if (takenOver.add(owner)) {
-                            owner.onTakeover(connection);
+                        if (takenOver.add(owner) && !takeOver(connection, owner, takenOver)) {
+                            // Not pumped until its takeover has completed: onTakeover is what positions
+                            // the cursor and, on the ordered lane, loads the dead-letter and retry blocks
+                            // the first dispatch must already respect. Retried on the next pass.
+                            statementFailed = true;
+                            continue;
                         }
                         if (!owner.leaseHeld()) {
                             continue;
@@ -217,6 +221,43 @@ final class ShardPump implements Runnable {
                     return;
                 }
             }
+        }
+    }
+
+    /**
+     * Run one owner's {@link LeasedOwner#onTakeover}, treating a failure the way a failing
+     * {@link LeasedOwner#pumpOnce} is treated: a failing STATEMENT is not a failing CONNECTION.
+     * <p>
+     * A takeover pass that failed on a healthy connection - an exhaustion dead-letter move refused by a
+     * constraint or a trigger, say - used to reach the reconnect loop. It was retried there, but only
+     * by reconnecting several times a second, logged at WARN as a lost connection, and every shard
+     * this pump serves stopped delivering for as long as the pass kept failing: a pass runs every
+     * takeover before it pumps any owner, so the throw ended each pass before any owner was pumped,
+     * wherever the failing owner sat among them. Now the owner is taken out of
+     * {@code takenOver}, so the next pass retries its takeover, and the other shards keep running. The
+     * owners keep the retry cheap: the attempt charge is recorded the moment it commits and the
+     * exhaustion pass is cleared only once it has run, so retrying neither charges twice nor skips it.
+     *
+     * @return whether the takeover completed
+     * @throws SQLException only when the connection itself is broken - the reconnect loop's case
+     */
+    private boolean takeOver(Connection connection, LeasedOwner owner, Set<LeasedOwner> takenOver) throws SQLException {
+        try {
+            owner.onTakeover(connection);
+            return true;
+        } catch (RuntimeException e) {
+            takenOver.remove(owner);
+            log.error("{}: shard {} threw during its takeover; retrying it, continuing with the other shards",
+                      name, owner.shard(), e);
+            return false;
+        } catch (SQLException e) {
+            if (!connection.isValid(1)) {
+                throw e;
+            }
+            takenOver.remove(owner);
+            log.error("{}: shard {}'s takeover failed on a healthy connection; retrying it, continuing with the "
+                              + "other shards", name, owner.shard(), e);
+            return false;
         }
     }
 

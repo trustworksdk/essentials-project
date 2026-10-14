@@ -58,7 +58,9 @@ interface LeasedOwner {
     boolean needsAttention();
 
     /**
-     * Called once per connection, including after a reconnect.
+     * Called once per connection, including after a reconnect - and, when it throws on a healthy connection,
+     * again on the pump's next pass until it completes. {@link #pumpOnce} is not called before it has completed,
+     * so it must be safe to call again after failing part way through.
      */
     void onTakeover(Connection connection) throws SQLException;
 
