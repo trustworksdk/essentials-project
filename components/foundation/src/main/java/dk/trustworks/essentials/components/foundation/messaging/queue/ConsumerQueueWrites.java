@@ -23,6 +23,12 @@ import java.util.function.Supplier;
  * the thread's interrupt flag cleared, and the flag is restored afterwards. A handler that caught the interrupt usually
  * re-sets the flag (Kafka does), and the MongoDB driver refuses to check out a connection on an interrupted thread,
  * which would leave the message marked as being delivered until the stuck-message reset.
+ * <p>
+ * {@link DefaultDurableQueueConsumer} and {@link CentralizedMessageFetcher} send every write that ends a delivery
+ * through it: the acknowledgement, the retry (a handler failure or a manual redelivery request), the dead-letter mark,
+ * and the release or hand-back of a message after {@code stop()}. The acknowledgement needs it as much as the hand-back
+ * does: a handler that caught the interrupt, re-set the flag and returned normally would otherwise leave a handled
+ * message to be delivered again.
  */
 final class ConsumerQueueWrites {
     private ConsumerQueueWrites() {
@@ -34,14 +40,10 @@ final class ConsumerQueueWrites {
      * @param write the queue write
      */
     static void withInterruptFlagCleared(Runnable write) {
-        var wasInterrupted = Thread.interrupted();
-        try {
+        callWithInterruptFlagCleared(() -> {
             write.run();
-        } finally {
-            if (wasInterrupted) {
-                Thread.currentThread().interrupt();
-            }
-        }
+            return null;
+        });
     }
 
     /**

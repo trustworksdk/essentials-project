@@ -28,7 +28,7 @@ import java.util.stream.Collectors;
 import static dk.trustworks.essentials.shared.Exceptions.rethrowIfCriticalError;
 import static dk.trustworks.essentials.shared.FailFast.*;
 import static dk.trustworks.essentials.shared.interceptor.InterceptorChain.newInterceptorChainForOperation;
-import static dk.trustworks.essentials.components.foundation.messaging.queue.ConsumerQueueWrites.withInterruptFlagCleared;
+import static dk.trustworks.essentials.components.foundation.messaging.queue.ConsumerQueueWrites.*;
 
 /**
  * Centralized message fetcher that fetches messages from queues using a single polling thread
@@ -435,9 +435,9 @@ public class CentralizedMessageFetcher implements Lifecycle {
                               message.getId());
 
                     try {
-                        durableQueues.retryMessage(message.getId(),
-                                                   null,
-                                                   message.getRedeliveryDelay());
+                        withInterruptFlagCleared(() -> durableQueues.retryMessage(message.getId(),
+                                                                                  null,
+                                                                                  message.getRedeliveryDelay()));
                         durableQueues.getMessageObserver().messageRedeliveryRequested(message);
                     } catch (Exception ex) {
                         // If retry fails due to connectivity issues, then it will be picked up by resetMessagesStuckBeingDelivered
@@ -456,7 +456,7 @@ public class CentralizedMessageFetcher implements Lifecycle {
                         var     acknowledgedWithHandler = operation.getAcknowledgedWithHandler();
                         boolean acknowledged            = acknowledgedWithHandler != null
                                                           ? acknowledgedWithHandler
-                                                          : durableQueues.acknowledgeMessageAsHandled(message.getId());
+                                                          : callWithInterruptFlagCleared(() -> durableQueues.acknowledgeMessageAsHandled(message.getId()));
                         if (!acknowledged) {
                             // Message was already acknowledged or deleted
                             log.debug("[{}:{}] Message acknowledgment reported message already handled or deleted",
@@ -493,7 +493,7 @@ public class CentralizedMessageFetcher implements Lifecycle {
                                   e.getMessage(),
                                   e);
 
-                        durableQueues.markAsDeadLetterMessage(message.getId(), e);
+                        withInterruptFlagCleared(() -> durableQueues.markAsDeadLetterMessage(message.getId(), e));
                         durableQueues.getMessageObserver().messageDeadLettered(message, e, decision.outcome());
                     } else {
                         // Redelivery
@@ -506,7 +506,7 @@ public class CentralizedMessageFetcher implements Lifecycle {
                                   redeliveryDelay,
                                   e.getMessage());
 
-                        durableQueues.retryMessage(message.getId(), e, redeliveryDelay);
+                        withInterruptFlagCleared(() -> durableQueues.retryMessage(message.getId(), e, redeliveryDelay));
                         durableQueues.getMessageObserver().messageRetried(message, e, redeliveryDelay);
                     }
                 } catch (Exception retryEx) {

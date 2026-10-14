@@ -431,7 +431,8 @@ public abstract class DefaultDurableQueueConsumer<DURABLE_QUEUES extends Durable
                           queuedMessage.getRedeliveryAttempts());
                 if (operation.getAcknowledgedWithHandler() == null) {
                     // Not already acknowledged by an interceptor inside the handler's transaction
-                    durableQueues.acknowledgeMessageAsHandled(queuedMessage.getId());
+                    // Interrupt flag cleared: a handler that caught stop()'s interrupt, re-set the flag and returned still gets acknowledged
+                    ConsumerQueueWrites.withInterruptFlagCleared(() -> durableQueues.acknowledgeMessageAsHandled(queuedMessage.getId()));
                 }
                 // After the acknowledgement, so the count means "delivered and removed", not "the handler returned"
                 durableQueues.getMessageObserver()
@@ -445,14 +446,13 @@ public abstract class DefaultDurableQueueConsumer<DURABLE_QUEUES extends Durable
                 // stop() interrupts the delivery threads, so this failure may be that interrupt rather than anything the
                 // message did. Classifying it could dead-letter a message that never had a fair attempt: hand it back, and
                 // let whichever consumer takes it next classify its next failure. Same rule as CentralizedMessageFetcher.
-                // The write runs with the interrupt flag cleared: a handler usually re-sets it (Kafka does), and the
-                // MongoDB driver refuses a connection on an interrupted thread, leaving the message stuck "being delivered".
+                // retryMessage writes with the interrupt flag cleared, as every queue write here does - see ConsumerQueueWrites.
                 LOG.info("[{}:{}] {} - Handler failed after the consumer began stopping; returning the message for redelivery. Error: {}",
                          queueName,
                          queuedMessage.getId(),
                          consumeFromQueue.consumerName,
                          e.getMessage());
-                return ConsumerQueueWrites.callWithInterruptFlagCleared(() -> retryMessage(queuedMessage, e, Duration.ZERO));
+                return retryMessage(queuedMessage, e, Duration.ZERO);
             }
             var decision         = MessageDeliveryClassifier.classify(queuedMessage, e, consumeFromQueue.getRedeliveryPolicy());
             var isPermanentError = decision.outcome() == MessageDeliveryOutcome.PERMANENT_ERROR;
@@ -477,7 +477,7 @@ public abstract class DefaultDurableQueueConsumer<DURABLE_QUEUES extends Durable
                 }
 
                 try {
-                    durableQueues.markAsDeadLetterMessage(queuedMessage.getId(), e);
+                    ConsumerQueueWrites.withInterruptFlagCleared(() -> durableQueues.markAsDeadLetterMessage(queuedMessage.getId(), e));
                     durableQueues.getMessageObserver().messageDeadLettered(queuedMessage, e, decision.outcome());
                     orderedMessageDeliveryThreads.remove(Thread.currentThread());
                     return () -> queuePollingOptimizer.queuePollingReturnedMessage(queuedMessage);
@@ -544,9 +544,9 @@ public abstract class DefaultDurableQueueConsumer<DURABLE_QUEUES extends Durable
         }
         try {
             // Don't update the polling optimizer as the message stays in the queue
-            durableQueues.retryMessage(queuedMessage.getId(),
-                                       e,
-                                       redeliveryDelay);
+            ConsumerQueueWrites.withInterruptFlagCleared(() -> durableQueues.retryMessage(queuedMessage.getId(),
+                                                                                          e,
+                                                                                          redeliveryDelay));
             if (e != null) {
                 // A null cause means the handler asked for redelivery, which messageRedeliveryRequested already reported
                 durableQueues.getMessageObserver().messageRetried(queuedMessage, e, redeliveryDelay);

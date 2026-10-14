@@ -16,6 +16,7 @@
 
 package dk.trustworks.essentials.components.foundation.messaging.queue;
 
+import dk.trustworks.essentials.components.foundation.messaging.RedeliveryPolicy;
 import dk.trustworks.essentials.components.foundation.messaging.queue.operations.GetNextMessageReadyForDelivery;
 import org.junit.jupiter.api.*;
 
@@ -35,6 +36,9 @@ import static org.mockito.Mockito.*;
  * ever saw it.
  * <p>
  * A stopped fetcher can be started again: the stop shuts its poll thread down, and the start replaces it.
+ * <p>
+ * The acknowledgement, retry (manual or after a failure) and dead-letter mark after a handler that caught the interrupt and re-set the flag run
+ * with the flag cleared - see {@link ConsumerQueueWrites}.
  */
 class CentralizedMessageFetcherTest {
     private static final QueueName    QUEUE_NAME = QueueName.of("TestQueue");
@@ -230,6 +234,97 @@ class CentralizedMessageFetcherTest {
             assertThat(maxInFlight.get()).isEqualTo(1);
         } finally {
             releaseFirstPoll.countDown();
+            workerPool.shutdownNow();
+        }
+    }
+
+    @Test
+    void the_acknowledgement_after_a_handler_re_set_the_interrupt_flag_runs_with_the_flag_cleared() throws InterruptedException {
+        var interruptedDuringAck = new AtomicReference<Boolean>();
+        var acknowledged         = new CountDownLatch(1);
+        when(durableQueues.acknowledgeMessageAsHandled(MESSAGE_ID)).thenAnswer(invocation -> {
+            interruptedDuringAck.set(Thread.currentThread().isInterrupted());
+            acknowledged.countDown();
+            return true;
+        });
+
+        assertThatQueueWriteRunsWithInterruptFlagCleared(orderedMessage("key-1"), invocation -> null, acknowledged, interruptedDuringAck);
+    }
+
+    @Test
+    void a_manual_redelivery_request_after_a_handler_re_set_the_interrupt_flag_is_written_with_the_flag_cleared() throws InterruptedException {
+        var interruptedDuringRetry = new AtomicReference<Boolean>();
+        var retried                = new CountDownLatch(1);
+        when(durableQueues.retryMessage(eq(MESSAGE_ID), isNull(), any(Duration.class))).thenAnswer(invocation -> {
+            interruptedDuringRetry.set(Thread.currentThread().isInterrupted());
+            retried.countDown();
+            return Optional.empty();
+        });
+        var message = orderedMessage("key-1");
+        when(message.isManuallyMarkedForRedelivery()).thenReturn(true);
+        when(message.getRedeliveryDelay()).thenReturn(Duration.ofMillis(5));
+
+        assertThatQueueWriteRunsWithInterruptFlagCleared(message, invocation -> null, retried, interruptedDuringRetry);
+    }
+
+    @Test
+    void the_retry_of_a_failed_handler_that_re_set_the_interrupt_flag_is_written_with_the_flag_cleared() throws InterruptedException {
+        when(consumer.getRedeliveryPolicy()).thenReturn(RedeliveryPolicy.fixedBackoff(Duration.ofMillis(100), 1));
+        var interruptedDuringRetry = new AtomicReference<Boolean>();
+        var retried                = new CountDownLatch(1);
+        when(durableQueues.retryMessage(eq(MESSAGE_ID), any(), any(Duration.class))).thenAnswer(invocation -> {
+            interruptedDuringRetry.set(Thread.currentThread().isInterrupted());
+            retried.countDown();
+            return Optional.empty();
+        });
+
+        assertThatQueueWriteRunsWithInterruptFlagCleared(orderedMessage("key-1"), invocation -> {
+            throw new RuntimeException("Simulated transient handler failure");
+        }, retried, interruptedDuringRetry);
+    }
+
+    @Test
+    void the_dead_letter_mark_after_a_handler_re_set_the_interrupt_flag_is_written_with_the_flag_cleared() throws InterruptedException {
+        when(consumer.getRedeliveryPolicy()).thenReturn(RedeliveryPolicy.fixedBackoff(Duration.ofMillis(100), 1));
+        var interruptedDuringDeadLetter = new AtomicReference<Boolean>();
+        var deadLettered                = new CountDownLatch(1);
+        when(durableQueues.markAsDeadLetterMessage(eq(MESSAGE_ID), any(Throwable.class))).thenAnswer(invocation -> {
+            interruptedDuringDeadLetter.set(Thread.currentThread().isInterrupted());
+            deadLettered.countDown();
+            return Optional.empty();
+        });
+
+        // On the built-in permanent-error list, so the message is dead-lettered on its first delivery
+        assertThatQueueWriteRunsWithInterruptFlagCleared(orderedMessage("key-1"), invocation -> {
+            throw new IllegalArgumentException("Simulated permanent handler failure");
+        }, deadLettered, interruptedDuringDeadLetter);
+    }
+
+    /**
+     * Deliver one message to a handler that re-sets the interrupt flag - as a handler that caught {@code stop()}'s
+     * interrupt does - and then behaves as {@code thenHandler} does, and check the queue write it leads to
+     */
+    private void assertThatQueueWriteRunsWithInterruptFlagCleared(QueuedMessage message,
+                                                                  org.mockito.stubbing.Answer<Void> thenHandler,
+                                                                  CountDownLatch written,
+                                                                  AtomicReference<Boolean> interruptedDuringWrite) throws InterruptedException {
+        when(consumer.isStarted()).thenReturn(true);
+        var workerPool = Executors.newSingleThreadExecutor();
+        var claimed    = new AtomicBoolean();
+        when(durableQueues.getNextMessageReadyForDelivery(any(GetNextMessageReadyForDelivery.class)))
+                .thenAnswer(invocation -> claimed.compareAndSet(false, true) ? Optional.of(message) : Optional.empty());
+        doAnswer(invocation -> {
+            Thread.currentThread().interrupt();
+            return thenHandler.answer(invocation);
+        }).when(messageHandler).handle(message);
+        fetcher.registerConsumer(QUEUE_NAME, consumer, messageHandler, workerPool, 1);
+
+        try {
+            fetcher.start();
+
+            assertThat(written.await(5, TimeUnit.SECONDS)).as("the queue write is made").isTrue();
+            assertThat(interruptedDuringWrite.get()).as("the interrupt flag is cleared while the queue write runs").isFalse();
+        } finally {
             workerPool.shutdownNow();
         }
     }
