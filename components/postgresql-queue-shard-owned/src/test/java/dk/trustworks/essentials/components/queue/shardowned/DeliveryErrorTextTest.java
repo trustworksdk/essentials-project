@@ -34,6 +34,12 @@ class DeliveryErrorTextTest {
     }
 
     @Test
+    void an_unwrapped_throwable_without_a_message_is_rendered_as_its_type() {
+        assertThat(DeliveryErrorText.describe(new IllegalStateException()))
+                .isEqualTo("java.lang.IllegalStateException");
+    }
+
+    @Test
     void a_wrapped_throwable_starts_with_its_root_cause() {
         var cause = new RuntimeException("wrapper",
                                          new IllegalArgumentException("middle",

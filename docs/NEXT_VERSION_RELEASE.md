@@ -346,9 +346,11 @@ summary line. (`5603a596`)
 The shard-owned engine does the same for its dead letters, on both lanes. It stored only the outermost throwable as
 `last_error`, so `DeadLetter.lastError()` (and `QueuedMessage.getLastDeliveryError()` through the `DurableQueues`
 adapter) named the wrapper and nothing about why the message failed. When the exception is wrapped, the text now
-starts with a `Root cause: <type>: <message>` line, followed by the outermost `<type>: <message>` as before; the
-engine still stores no stack trace. An unwrapped exception is recorded unchanged, and existing dead letters keep the
-text they were stored with. (`9411139c`)
+starts with a `Root cause: <type>: <message>` line, followed by the outermost throwable; the engine still stores no
+stack trace. Each throwable is now rendered by its `toString()`. That matches the previous `<type>: <message>` except
+for an exception without a message, now stored as `<type>` alone instead of `<type>: null`, and one that overrides
+`toString()` or `getLocalizedMessage()`, now stored in its own format. Existing dead letters keep the text they were
+stored with. (`9411139c`)
 
 #### 1.1.16 A handled message is acknowledged inside the handler's transaction (`PostgresqlDurableQueues`)
 
@@ -635,7 +637,9 @@ unaffected: the interface's `Instant` overloads still call its no-arg methods. (
   `Root cause: <root cause's toString()>` line in front of a description of a wrapped throwable, and return the
   description unchanged for one that is not wrapped. It is the line the PostgreSQL, MongoDB and shard-owned queues
   write in front of a stored delivery error (§1.1.15), now rendered in one place, so it cannot drift between them;
-  the stored text is unchanged. `DeliveryErrorDescription.ROOT_CAUSE_PREFIX` stays, with the same value.
+  the PostgreSQL and MongoDB stored text is unchanged, and the shard-owned text changes only as §1.1.15 describes
+  (`<type>` alone for an exception without a message). `DeliveryErrorDescription.ROOT_CAUSE_PREFIX` stays, with the
+  same value.
 
 The plugin's features are in [§4](#4-the-essentials-claude-code-plugin).
 

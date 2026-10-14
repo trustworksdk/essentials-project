@@ -26,10 +26,13 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * A handler's own exception usually reaches the owner wrapped - by the adapter's unit of work, by reflection, or by
  * the application itself - so the outermost throwable alone names a wrapper and hides the reason the message failed.
  * When the throwable is wrapped, the text therefore starts with a {@value Exceptions#ROOT_CAUSE_PREFIX} line naming
- * the root cause, followed by the outermost throwable as before. An unwrapped throwable is rendered exactly as it
- * always was. The root-cause line is {@link Exceptions#prependRootCauseLine(Throwable, String)}'s, the same line the
- * database-backed durable queues put in front of their stored stack trace; only the body differs: the engine stores
- * the outermost throwable's {@link Throwable#toString()}, not a stack trace.
+ * the root cause, followed by the outermost throwable. An unwrapped throwable is stored as its
+ * {@link Throwable#toString()} alone. That matches 0.60.0's {@code <type>: <message>} except for a throwable without a
+ * message, now stored as {@code <type>} rather than {@code <type>: null}, and one that overrides
+ * {@link Throwable#toString()} or {@link Throwable#getLocalizedMessage()}, now stored in its own format. The root-cause
+ * line is {@link Exceptions#prependRootCauseLine(Throwable, String)}'s, the same line the database-backed durable
+ * queues put in front of their stored stack trace; only the body differs: the engine stores the outermost throwable's
+ * {@link Throwable#toString()}, not a stack trace.
  */
 final class DeliveryErrorText {
     private DeliveryErrorText() {
@@ -37,8 +40,8 @@ final class DeliveryErrorText {
 
     /**
      * @param cause the delivery error
-     * @return the {@link Throwable#toString()} of <code>cause</code> ({@code <type>: <message>}), preceded by a
-     * root-cause line of the same shape when <code>cause</code> wraps another throwable
+     * @return the {@link Throwable#toString()} of <code>cause</code> ({@code <type>: <message>}, or {@code <type>}
+     * alone when it has no message), preceded by a root-cause line of the same shape when <code>cause</code> wraps another throwable
      */
     static String describe(Throwable cause) {
         requireNonNull(cause, "No cause provided");
