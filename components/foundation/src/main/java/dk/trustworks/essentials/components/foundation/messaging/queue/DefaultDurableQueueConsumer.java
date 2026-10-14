@@ -452,14 +452,7 @@ public abstract class DefaultDurableQueueConsumer<DURABLE_QUEUES extends Durable
                          queuedMessage.getId(),
                          consumeFromQueue.consumerName,
                          e.getMessage());
-                var wasInterrupted = Thread.interrupted();
-                try {
-                    return retryMessage(queuedMessage, e, Duration.ZERO);
-                } finally {
-                    if (wasInterrupted) {
-                        Thread.currentThread().interrupt();
-                    }
-                }
+                return ConsumerQueueWrites.callWithInterruptFlagCleared(() -> retryMessage(queuedMessage, e, Duration.ZERO));
             }
             var decision         = MessageDeliveryClassifier.classify(queuedMessage, e, consumeFromQueue.getRedeliveryPolicy());
             var isPermanentError = decision.outcome() == MessageDeliveryOutcome.PERMANENT_ERROR;
@@ -525,9 +518,8 @@ public abstract class DefaultDurableQueueConsumer<DURABLE_QUEUES extends Durable
      * still returns the message.
      */
     private void releaseUndeliveredMessage(QueuedMessage queuedMessage) {
-        var wasInterrupted = Thread.interrupted();
         try {
-            durableQueues.releaseUndeliveredMessage(queuedMessage.getId(), Duration.ZERO);
+            ConsumerQueueWrites.withInterruptFlagCleared(() -> durableQueues.releaseUndeliveredMessage(queuedMessage.getId(), Duration.ZERO));
         } catch (Throwable e) {
             rethrowIfCriticalError(e);
             LOG.warn(msg("[{}:{}] {} - Failed to release the undelivered message; it is redelivered after the messageHandlingTimeout",
@@ -535,10 +527,6 @@ public abstract class DefaultDurableQueueConsumer<DURABLE_QUEUES extends Durable
                          queuedMessage.getId(),
                          consumeFromQueue.consumerName),
                      e);
-        } finally {
-            if (wasInterrupted) {
-                Thread.currentThread().interrupt();
-            }
         }
     }
 

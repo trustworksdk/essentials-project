@@ -28,6 +28,7 @@ import java.util.stream.Collectors;
 import static dk.trustworks.essentials.shared.Exceptions.rethrowIfCriticalError;
 import static dk.trustworks.essentials.shared.FailFast.*;
 import static dk.trustworks.essentials.shared.interceptor.InterceptorChain.newInterceptorChainForOperation;
+import static dk.trustworks.essentials.components.foundation.messaging.queue.ConsumerQueueWrites.withInterruptFlagCleared;
 
 /**
  * Centralized message fetcher that fetches messages from queues using a single polling thread
@@ -391,8 +392,7 @@ public class CentralizedMessageFetcher implements Lifecycle {
                      pollingIntervalMs);
             // No worker will release the key, and a consumer registering again would otherwise never be given it
             releaseOrderedKey(queueName, message);
-            durableQueues.releaseUndeliveredMessage(message.getId(),
-                                                    Duration.ofMillis(pollingIntervalMs));
+            withInterruptFlagCleared(() -> durableQueues.releaseUndeliveredMessage(message.getId(), Duration.ofMillis(pollingIntervalMs)));
             return;
         }
 
@@ -649,21 +649,6 @@ public class CentralizedMessageFetcher implements Lifecycle {
             durableQueues.retryMessage(message.getId(), e, Duration.ZERO);
             durableQueues.getMessageObserver().messageRetried(message, e, Duration.ZERO);
         });
-    }
-
-    /**
-     * Run a queue write with the thread's interrupt flag cleared, restoring it afterwards - see
-     * {@link #handBackAfterConsumerStopped}
-     */
-    private static void withInterruptFlagCleared(Runnable write) {
-        var wasInterrupted = Thread.interrupted();
-        try {
-            write.run();
-        } finally {
-            if (wasInterrupted) {
-                Thread.currentThread().interrupt();
-            }
-        }
     }
 
     public boolean containsConsumerFor(QueueName queueName) {
