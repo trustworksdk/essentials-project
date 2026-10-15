@@ -41,27 +41,17 @@ class HandleQueuedMessageTest {
 
         assertThat(built.consumerState()).isEqualTo(ConsumerState.UNKNOWN);
         assertThat(constructed.consumerState()).isEqualTo(ConsumerState.UNKNOWN);
-        assertThat(constructed.isConsumerKnownToBeStarted()).isFalse();
-        assertThat(constructed.isConsumerKnownToBeStopping()).isFalse();
     }
 
     @Test
     void the_consumer_state_is_read_once_per_call() {
         // A consumer that is stopping on the first read and started again from then on (a restart): one call gives one
-        // consistent answer, where two separate boolean questions could each read a different state
+        // consistent answer, where two separate reads could each see a different state
         var reads     = new AtomicInteger();
         var operation = handleQueuedMessage(() -> reads.getAndIncrement() != 0);
 
         assertThat(operation.consumerState()).isEqualTo(ConsumerState.STOPPING);
         assertThat(reads.get()).isEqualTo(1);
-    }
-
-    @Test
-    void the_boolean_shorthands_agree_with_the_consumer_state() {
-        assertThat(handleQueuedMessage(() -> true).isConsumerKnownToBeStarted()).isTrue();
-        assertThat(handleQueuedMessage(() -> true).isConsumerKnownToBeStopping()).isFalse();
-        assertThat(handleQueuedMessage(() -> false).isConsumerKnownToBeStarted()).isFalse();
-        assertThat(handleQueuedMessage(() -> false).isConsumerKnownToBeStopping()).isTrue();
     }
 
     private static HandleQueuedMessage handleQueuedMessage(BooleanSupplier consumerStarted) {

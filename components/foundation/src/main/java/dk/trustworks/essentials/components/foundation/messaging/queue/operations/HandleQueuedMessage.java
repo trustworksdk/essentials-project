@@ -108,10 +108,8 @@ public final class HandleQueuedMessage {
      * returns with the thread's interrupt flag set was not interrupted by a stop when this is
      * {@link ConsumerState#STARTED}, and may not have finished its work when this is {@link ConsumerState#STOPPING}.
      * <p>
-     * Ask this once and branch on the answer rather than calling {@link #isConsumerKnownToBeStarted()} and
-     * {@link #isConsumerKnownToBeStopping()} in turn: each of those reads the state again, and a consumer can stop -
-     * or, once stopped, be started again - between the two reads, so the pair can say "neither" for a consumer whose
-     * state is known.
+     * Every call reads the live state again, and a consumer can stop - or, once stopped, be started again - between
+     * two calls. Ask once and branch on the answer.
      *
      * @return {@link ConsumerState#STARTED} or {@link ConsumerState#STOPPING}; {@link ConsumerState#UNKNOWN} when the
      * operation was created without a consumer state
@@ -121,30 +119,6 @@ public final class HandleQueuedMessage {
             return ConsumerState.UNKNOWN;
         }
         return consumerStarted.getAsBoolean() ? ConsumerState.STARTED : ConsumerState.STOPPING;
-    }
-
-    /**
-     * Whether the consumer delivering the message is, right now, known to be started - shorthand for
-     * {@code consumerState() == ConsumerState.STARTED}. A caller that needs to tell started from stopping should ask
-     * {@link #consumerState()} once instead of combining this with {@link #isConsumerKnownToBeStopping()}.
-     *
-     * @return {@code true} when the consumer is known to be started; {@code false} when it is stopping, or when the
-     * operation was created without a consumer state
-     */
-    public boolean isConsumerKnownToBeStarted() {
-        return consumerState() == ConsumerState.STARTED;
-    }
-
-    /**
-     * Whether the consumer delivering the message is, right now, known to be stopping (or stopped) - shorthand for
-     * {@code consumerState() == ConsumerState.STOPPING}. A caller that needs to tell started from stopping should ask
-     * {@link #consumerState()} once instead of combining this with {@link #isConsumerKnownToBeStarted()}.
-     *
-     * @return {@code true} when the consumer is known to be stopping; {@code false} when it is started, or when the
-     * operation was created without a consumer state
-     */
-    public boolean isConsumerKnownToBeStopping() {
-        return consumerState() == ConsumerState.STOPPING;
     }
 
     /**

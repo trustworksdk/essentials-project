@@ -671,14 +671,13 @@ unaffected: the interface's `Instant` overloads still call its no-arg methods. (
   so `QueueStatistics` and the Micrometer retried counter do not count them. (`c2cca365`)
 - **`HandleQueuedMessage` carries the delivering consumer's state**: `consumerState()`, returning
   `HandleQueuedMessage.ConsumerState` `STARTED`, `STOPPING` or `UNKNOWN` from a single live read (a `stop()` can begin
-  while the handler runs), with `isConsumerKnownToBeStarted()` and `isConsumerKnownToBeStopping()` as shorthands for
-  one state each - ask `consumerState()` once rather than both, as each re-reads the state and a consumer can stop or
-  restart between the two. Set through `HandleQueuedMessage.builder().setConsumerStarted(BooleanSupplier)`. Both
+  while the handler runs; each call re-reads it, so ask once and branch on the answer). Set through
+  `HandleQueuedMessage.builder().setConsumerStarted(BooleanSupplier)`. Both
   consumers set it, so a `DurableQueuesInterceptor` on `HandleQueuedMessage` can tell a handler interrupted by its
   consumer stopping from one that re-set the interrupt flag for a reason of its own;
   `SingleOperationTransactionDurableQueuesInterceptor` uses it to acknowledge the latter inside the handler's
   transaction, and to roll back the former's writes (§1.1.1). An operation built with the existing constructor, as the
-  shard-owned adapter does, answers `UNKNOWN` (and `false` to both shorthands).
+  shard-owned adapter does, answers `UNKNOWN`.
 - **`DefaultDurableQueueConsumer.getQueuePollingOptimizer()`**, and `SimpleQueuePollingOptimizer` implements
   `messageScheduledFor` and `queuePollingReturnedNoMessages(Instant)` (§3). (`6777b8b9`)
 - **Shard-owned engine: `spi.RedeliveryRequested(delay)`.** A handler throws it to ask for redelivery after `delay`
