@@ -171,12 +171,13 @@ public final class ShardOwnerMetrics {
      * shard then reads for itself in its own pass, so nothing stops delivering because of this alone, but the read is tried
      * again on the next pass: a read the database keeps refusing (a revoked grant) rises with every pass, and the shards'
      * own reads usually fail too, under {@link #pumpFailures}. Logged at WARN with the stack trace at most once a minute per
-     * queue, every failure at DEBUG, and an INFO when the queue's batched read succeeds again. See {@code PumpFailures}.
+     * subscription (these metrics: one per queue unless a queue has several), naming the queue and the shards read for,
+     * every failure at DEBUG, and an INFO when the subscription's batched read succeeds again. See {@code PumpFailures}.
      * <p>
      * Readable only through {@link ShardOwnedQueue#metrics()}. A {@code PostgresqlMessageQueue} keeps its metrics private
      * and no {@code QueueObserver} callback reports this, so for a queue used through {@code MessageQueue} (the Spring
      * starter, the {@code DurableQueues} adapter) the {@code ShardPump} WARN log is the only signal: at most one a minute
-     * per queue.
+     * per subscription.
      */
     public final LongAdder     batchedReadFailures              = new LongAdder();
     /**
@@ -370,8 +371,9 @@ public final class ShardOwnerMetrics {
             new java.util.concurrent.atomic.AtomicLong(ErrorWindow.NEVER_TAKEN);
 
     /**
-     * Rate limit for the WARN that reports a failing ordered-lane batched read ({@link #batchedReadFailures}), per queue:
-     * every pump serving the queue issues its own. {@link ErrorWindow#NEVER_TAKEN} until the first. See
+     * Rate limit for the WARN that reports a failing ordered-lane batched read ({@link #batchedReadFailures}), per
+     * subscription, since these metrics are one subscription's (one per queue unless a queue has several): every pump
+     * serving the subscription issues its own batched read, and they share this window. {@link ErrorWindow#NEVER_TAKEN} until the first. See
      * {@code PumpFailures}.
      */
     final java.util.concurrent.atomic.AtomicLong nextBatchedReadWarningNanos =

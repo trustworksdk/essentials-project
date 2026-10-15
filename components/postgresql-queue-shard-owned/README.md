@@ -788,8 +788,9 @@ the pump reconnects 200 ms later, but while it persists it can deliver nothing f
 `shardsOnDeadPumps` counts shards on a pump thread a critical error (`VirtualMachineError`, `LinkageError`)
 ended: nothing restarts it and their leases keep being renewed, so they deliver nothing until the
 `ShardRuntime` restarts; alert on it above zero. The log carries at most one ERROR a minute per queue for
-`pumpFailures` (naming one shard), a WARN on the same terms for `batchedReadFailures`, at most one ERROR a
-minute per pump for `pumpLoopFailures`, and one ERROR when a pump dies; every other failure at DEBUG, and an
+`pumpFailures` (naming one shard), at most one WARN a minute per subscription for `batchedReadFailures`
+(naming the queue and the shards it read for; one subscription per queue unless you `consume()` a queue twice
+in one process), at most one ERROR a minute per pump for `pumpLoopFailures`, and one ERROR when a pump dies; every other failure at DEBUG, and an
 INFO on recovery. All four are readable only through `ShardOwnedQueue.metrics()`: a `PostgresqlMessageQueue`
 keeps its metrics private and no `QueueObserver` callback reports them, so through `MessageQueue` (the Spring
 starter, the `DurableQueues` adapter) those `ShardPump` log lines are the only signal.

@@ -263,7 +263,7 @@ class ShardPumpDeliveryFailureTest {
                 .containsOnlyOnce(Level.WARN)
                 .hasSize(first.passes.get());
         assertThat(aboutBatch.getFirst().getFormattedMessage())
-                .contains("pump-0: batched read for queue 9 failed")
+                .contains("pump-0: batched read for queue 9 (shards [0, 1]) failed")
                 .contains("batchedReadFailures");
         assertThat(aboutBatch.getFirst().getThrowableProxy()).as("the first carries the stack trace").isNotNull();
         assertThat(aboutBatch.getLast().getThrowableProxy()).as("a repeat carries none").isNull();
@@ -297,6 +297,10 @@ class ShardPumpDeliveryFailureTest {
                                   .filter(event -> event.getLevel() == Level.WARN)
                                   .toList();
         assertThat(warnings).as("each subscription takes its own WARN window").hasSize(2);
+        assertThat(warnings.stream().map(ILoggingEvent::getFormattedMessage).toList())
+                .as("each WARN names its subscription's shards, so the two can be told apart")
+                .anySatisfy(message -> assertThat(message).contains("batched read for queue 9 (shards [0, 1]) failed"))
+                .anySatisfy(message -> assertThat(message).contains("batched read for queue 9 (shards [2, 3]) failed"));
         assertThat(first.pumpLoopFailures.sum() + second.pumpLoopFailures.sum()).isZero();
     }
 

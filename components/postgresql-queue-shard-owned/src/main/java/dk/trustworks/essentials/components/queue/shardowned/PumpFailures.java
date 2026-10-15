@@ -47,9 +47,9 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * The ordered lane's <b>batched read</b> ({@link ShardPump}'s one statement per queue for two or more attentive shards,
  * issued before their passes) meets the same causes and is retried on the same passes, so it is reported here too: every
  * failure counted in {@link ShardOwnerMetrics#batchedReadFailures}, a WARN with the stack trace at most once a minute per
- * queue ({@link ShardOwnerMetrics#nextBatchedReadWarningNanos}; per subscription when a queue has several, see
- * {@link BatchedRead}), DEBUG otherwise, an INFO when the queue's batched read
- * succeeds again. A WARN, not an ERROR: the shards then read for themselves, so the batched read failing stops nothing on
+ * <b>subscription</b> ({@link ShardOwnerMetrics#nextBatchedReadWarningNanos}, shared by every pump serving it; one per
+ * queue unless a queue has several, see {@link BatchedRead}), naming the queue and the shards read for, DEBUG otherwise,
+ * an INFO when the subscription's batched read succeeds again. A WARN, not an ERROR: the shards then read for themselves, so the batched read failing stops nothing on
  * its own; when they cannot either, their own failures are the ERROR above. Before this a revoked grant on the ordered
  * lane still logged a stack trace on every pass, from the batched read, next to the throttled ERROR.
  * <p>
@@ -180,11 +180,16 @@ final class PumpFailures {
     /**
      * The ordered lane's batched read for a queue failed; its shards read for themselves this pass, and the pump tries the
      * batched read again on the next pass whose attentive shards of the batch number two or more.
+     * <p>
+     * Every line names the batch's shards as well as its queue: a queue with two subscriptions in one process has a
+     * batched read, a count and a WARN window per subscription, and the queue id alone made their lines identical. The
+     * subscriptions compete for the queue's leases, so they never hold the same shard, and the shards tell them apart.
      *
-     * @param batch the batch whose statement failed; counted, and its WARN window taken, on {@link BatchedRead#metrics()}
-     * @param cause the failure
+     * @param batch  the batch whose statement failed; counted, and its WARN window taken, on {@link BatchedRead#metrics()}
+     * @param owners the owners the statement read for, named in the log line by their shards
+     * @param cause  the failure
      */
-    void batchedReadFailed(BatchedRead batch, Throwable cause) {
+    void batchedReadFailed(BatchedRead batch, List<? extends LeasedOwner> owners, Throwable cause) {
         var queueId = batch.queueId();
         var metrics = batch.metrics();
         metrics.batchedReadFailures.increment();
@@ -197,27 +202,41 @@ final class PumpFailures {
             current.failures++;
         }
         if (ErrorWindow.take(metrics.nextBatchedReadWarningNanos, now)) {
-            log.warn("{}: batched read for queue {} failed; those shards read for themselves this pass. {} failed batched "
+            log.warn("{}: batched read for queue {} (shards {}) failed; those shards read for themselves this pass. {} failed batched "
                              + "read(s) in a row over {} s; it is tried again on every pass. ShardOwnedQueue.metrics() counts "
                              + "every failure under batchedReadFailures. Every failure is logged at DEBUG, and at WARN at most "
-                             + "once a minute per queue",
-                     pumpName, queueId, current.failures, TimeUnit.NANOSECONDS.toSeconds(now - current.sinceNanos), cause);
+                             + "once a minute per subscription (the consumer reading these shards)",
+                     pumpName, queueId, shardsOf(owners), current.failures, TimeUnit.NANOSECONDS.toSeconds(now - current.sinceNanos), cause);
         } else {
-            // No stack trace: a repeat can come on every pass, and the queue's once-a-minute WARN carries one.
-            log.debug("{}: batched read for queue {} failed (failure {} in a row); those shards read for themselves this pass: {}",
-                      pumpName, queueId, current.failures, String.valueOf(cause));
+            // No stack trace: a repeat can come on every pass, and the subscription's once-a-minute WARN carries one.
+            log.debug("{}: batched read for queue {} (shards {}) failed (failure {} in a row); those shards read for themselves this pass: {}",
+                      pumpName, queueId, shardsOf(owners), current.failures, String.valueOf(cause));
         }
     }
 
     /**
      * The ordered lane's batched read for a batch completed. A no-op unless it had been failing on this pump.
+     *
+     * @param batch  the batch whose statement completed
+     * @param owners the owners the statement read for, named in the recovery line by their shards (only read when it is
+     *               logged, so the pass that finds nothing to report builds nothing)
      */
-    void batchedReadSucceeded(BatchedRead batch) {
+    void batchedReadSucceeded(BatchedRead batch, List<? extends LeasedOwner> owners) {
         var current = failingBatchedReads.remove(batch);
         if (current == null) {
             return;
         }
-        log.info("{}: batched read for queue {} succeeds again after {} failure(s) in {} s",
-                 pumpName, batch.queueId(), current.failures, TimeUnit.NANOSECONDS.toSeconds(nanoTime.getAsLong() - current.sinceNanos));
+        log.info("{}: batched read for queue {} (shards {}) succeeds again after {} failure(s) in {} s",
+                 pumpName, batch.queueId(), shardsOf(owners), current.failures,
+                 TimeUnit.NANOSECONDS.toSeconds(nanoTime.getAsLong() - current.sinceNanos));
+    }
+
+    /**
+     * The shards of a batch's owners, ascending, e.g. {@code [1, 4, 7]}: what tells two subscriptions' batched reads on one
+     * queue apart in the log. The shards present vary from pass to pass (only attentive owners are batched), but each
+     * belongs to exactly one subscription.
+     */
+    private static String shardsOf(List<? extends LeasedOwner> owners) {
+        return Arrays.toString(owners.stream().mapToInt(LeasedOwner::shard).sorted().toArray());
     }
 }

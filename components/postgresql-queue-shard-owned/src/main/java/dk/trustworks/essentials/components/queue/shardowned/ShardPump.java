@@ -669,7 +669,8 @@ final class ShardPump implements Runnable {
      * <b>Failure is not failure of the pass.</b> Owners are left without a batch and read for
      * themselves, exactly as before this existed. The batched read is tried again on the next pass, so a failure is
      * counted in {@link ShardOwnerMetrics#batchedReadFailures} and logged through {@link PumpFailures}: a WARN with the
-     * stack trace at most once a minute per queue (per subscription when a queue has several), DEBUG otherwise.
+     * stack trace at most once a minute per subscription (one per queue unless a queue has several), naming the queue
+     * and the batch's shards, DEBUG otherwise.
      */
     private void batchRead(Connection connection, List<LeasedOwner> attentive) {
         var batches = new LinkedHashMap<PumpFailures.BatchedRead, List<BatchReadableOwner>>();
@@ -688,7 +689,7 @@ final class ShardPump implements Runnable {
             var batch = entry.getKey();
             try {
                 batchReadQueue(connection, batch, entry.getValue());
-                pumpFailures.batchedReadSucceeded(batch);
+                pumpFailures.batchedReadSucceeded(batch, entry.getValue());
             } catch (SQLException | RuntimeException | Error e) {
                 // A non-critical Error too: the batched read calls owner code (batchReadCursor, batchSweepDue,
                 // applyBatchRead), and an AssertionError from it reached serve()'s outer catch, which ended the pass
@@ -698,7 +699,7 @@ final class ShardPump implements Runnable {
                 // Counted and rate-limited (PumpFailures): it is tried again on every pass, and a stack trace per pass
                 // was a log flood beside the throttled pumpOnce ERROR. On the batch's own metrics: grouped by them.
                 Exceptions.rethrowIfCriticalError(e);
-                pumpFailures.batchedReadFailed(batch, e);
+                pumpFailures.batchedReadFailed(batch, entry.getValue(), e);
             }
         }
     }

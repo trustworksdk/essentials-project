@@ -151,28 +151,32 @@ class PumpFailuresTest {
 
     /**
      * The ordered lane's batched read is retried on every pass too, by every pump serving the queue. One WARN a minute per
-     * queue, every failure counted, and an INFO once it succeeds again.
+     * subscription (here one per queue, each queue having one), every failure counted, and an INFO once it succeeds again.
      */
     @Test
-    void a_failing_batched_read_is_counted_every_time_and_logged_at_warn_once_a_minute_per_queue() {
+    void a_failing_batched_read_is_counted_every_time_and_logged_at_warn_once_a_minute_per_subscription() {
         var metrics  = new ShardOwnerMetrics();
         var other    = new ShardOwnerMetrics();
         var pumpZero = new PumpFailures("pump-0", clock::get);
         var pumpOne  = new PumpFailures("pump-1", clock::get);
 
-        pumpZero.batchedReadFailed(new PumpFailures.BatchedRead((short) 6, metrics), new SQLException("permission denied"));
+        pumpZero.batchedReadFailed(new PumpFailures.BatchedRead((short) 6, metrics), owners((short) 6, 0, 1), new SQLException("permission denied"));
         assertThat(levels()).containsExactly(Level.WARN);
         assertThat(logged.list.getFirst().getFormattedMessage())
-                .contains("pump-0: batched read for queue 6 failed; those shards read for themselves this pass")
+                .contains("pump-0: batched read for queue 6 (shards [0, 1]) failed; those shards read for themselves this pass")
                 .contains("1 failed batched read(s) in a row")
                 .contains("batchedReadFailures");
+        assertThat(logged.list.getFirst().getFormattedMessage())
+                .as("the window the WARN describes is the subscription's, not the queue's")
+                .contains("at WARN at most once a minute per subscription (the consumer reading these shards)")
+                .doesNotContain("per queue");
         assertThat(logged.list.getFirst().getThrowableProxy()).as("the first carries the stack trace").isNotNull();
 
         clock.addAndGet(200_000_000L);
-        pumpZero.batchedReadFailed(new PumpFailures.BatchedRead((short) 6, metrics), new SQLException("permission denied"));
-        pumpOne.batchedReadFailed(new PumpFailures.BatchedRead((short) 6, metrics), new SQLException("permission denied"));
-        pumpOne.batchedReadFailed(new PumpFailures.BatchedRead((short) 7, other), new SQLException("permission denied"));
-        assertThat(levels()).as("one WARN per queue, across pumps").containsExactly(Level.WARN, Level.DEBUG, Level.DEBUG, Level.WARN);
+        pumpZero.batchedReadFailed(new PumpFailures.BatchedRead((short) 6, metrics), owners((short) 6, 0, 1), new SQLException("permission denied"));
+        pumpOne.batchedReadFailed(new PumpFailures.BatchedRead((short) 6, metrics), owners((short) 6, 0, 1), new SQLException("permission denied"));
+        pumpOne.batchedReadFailed(new PumpFailures.BatchedRead((short) 7, other), owners((short) 7, 2, 3), new SQLException("permission denied"));
+        assertThat(levels()).as("one WARN per subscription, across pumps").containsExactly(Level.WARN, Level.DEBUG, Level.DEBUG, Level.WARN);
         assertThat(logged.list.get(1).getThrowableProxy()).isNull();
         assertThat(logged.list.get(1).getFormattedMessage()).contains("(failure 2 in a row)").contains("java.sql.SQLException: permission denied");
         assertThat(metrics.batchedReadFailures.sum()).isEqualTo(3);
@@ -180,21 +184,21 @@ class PumpFailuresTest {
         assertThat(other.batchedReadFailures.sum()).isEqualTo(1);
         assertThat(metrics.pumpFailures.sum()).as("not a failed delivery pass").isZero();
 
-        // A minute after the queue's WARN: one more, with the stack trace
+        // A minute after the subscription's WARN: one more, with the stack trace
         clock.set(1_000_000_000L + ErrorWindow.EVERY_NANOS);
-        pumpZero.batchedReadFailed(new PumpFailures.BatchedRead((short) 6, metrics), new SQLException("permission denied"));
+        pumpZero.batchedReadFailed(new PumpFailures.BatchedRead((short) 6, metrics), owners((short) 6, 0, 1), new SQLException("permission denied"));
         assertThat(levels().getLast()).isEqualTo(Level.WARN);
         assertThat(logged.list.getLast().getFormattedMessage()).contains("3 failed batched read(s) in a row over 60 s");
         assertThat(logged.list.getLast().getThrowableProxy()).isNotNull();
 
-        pumpZero.batchedReadSucceeded(new PumpFailures.BatchedRead((short) 6, metrics));
+        pumpZero.batchedReadSucceeded(new PumpFailures.BatchedRead((short) 6, metrics), owners((short) 6, 0, 1));
         assertThat(levels().getLast()).isEqualTo(Level.INFO);
-        assertThat(logged.list.getLast().getFormattedMessage()).contains("pump-0: batched read for queue 6 succeeds again after 3 failure(s) in 60 s");
+        assertThat(logged.list.getLast().getFormattedMessage()).contains("pump-0: batched read for queue 6 (shards [0, 1]) succeeds again after 3 failure(s) in 60 s");
 
         // Not failing on this pump (any more): nothing to report
         var before = logged.list.size();
-        pumpZero.batchedReadSucceeded(new PumpFailures.BatchedRead((short) 6, metrics));
-        pumpZero.batchedReadSucceeded(new PumpFailures.BatchedRead((short) 7, other));
+        pumpZero.batchedReadSucceeded(new PumpFailures.BatchedRead((short) 6, metrics), owners((short) 6, 0, 1));
+        pumpZero.batchedReadSucceeded(new PumpFailures.BatchedRead((short) 7, other), owners((short) 7, 2, 3));
         assertThat(logged.list).hasSize(before);
     }
 
@@ -208,19 +212,32 @@ class PumpFailuresTest {
         var second = new ShardOwnerMetrics();
         var pump   = new PumpFailures("pump-0", clock::get);
 
-        pump.batchedReadFailed(new PumpFailures.BatchedRead((short) 6, first), new SQLException("permission denied"));
-        pump.batchedReadFailed(new PumpFailures.BatchedRead((short) 6, second), new SQLException("permission denied"));
-        pump.batchedReadFailed(new PumpFailures.BatchedRead((short) 6, first), new SQLException("permission denied"));
+        pump.batchedReadFailed(new PumpFailures.BatchedRead((short) 6, first), owners((short) 6, 0, 1), new SQLException("permission denied"));
+        pump.batchedReadFailed(new PumpFailures.BatchedRead((short) 6, second), owners((short) 6, 2, 3), new SQLException("permission denied"));
+        pump.batchedReadFailed(new PumpFailures.BatchedRead((short) 6, first), owners((short) 6, 0, 1), new SQLException("permission denied"));
         assertThat(levels()).as("a WARN window per subscription").containsExactly(Level.WARN, Level.WARN, Level.DEBUG);
+        assertThat(logged.list.get(0).getFormattedMessage()).as("the first subscription's WARN names its shards")
+                                                            .contains("batched read for queue 6 (shards [0, 1]) failed");
+        assertThat(logged.list.get(1).getFormattedMessage()).as("the second's names its own, so the two can be told apart")
+                                                            .contains("batched read for queue 6 (shards [2, 3]) failed")
+                                                            .isNotEqualTo(logged.list.get(0).getFormattedMessage());
+        assertThat(logged.list.get(2).getFormattedMessage()).as("the DEBUG too").contains("batched read for queue 6 (shards [0, 1]) failed");
         assertThat(logged.list.get(1).getFormattedMessage()).as("its own run, not the first's").contains("1 failed batched read(s) in a row");
         assertThat(first.batchedReadFailures.sum()).isEqualTo(2);
         assertThat(second.batchedReadFailures.sum()).isEqualTo(1);
 
-        pump.batchedReadSucceeded(new PumpFailures.BatchedRead((short) 6, second));
-        assertThat(logged.list.getLast().getFormattedMessage()).contains("succeeds again after 1 failure(s)");
-        pump.batchedReadSucceeded(new PumpFailures.BatchedRead((short) 6, first));
+        pump.batchedReadSucceeded(new PumpFailures.BatchedRead((short) 6, second), owners((short) 6, 2, 3));
+        assertThat(logged.list.getLast().getFormattedMessage()).contains("batched read for queue 6 (shards [2, 3]) succeeds again after 1 failure(s)");
+        pump.batchedReadSucceeded(new PumpFailures.BatchedRead((short) 6, first), owners((short) 6, 0, 1));
         assertThat(logged.list.getLast().getFormattedMessage()).as("the first is still failing until it recovers itself")
-                                                              .contains("succeeds again after 2 failure(s)");
+                                                              .contains("batched read for queue 6 (shards [0, 1]) succeeds again after 2 failure(s)");
+    }
+
+    /**
+     * A batch's owners: the batched-read lines name a batch by their shards, so the stubs need only a queue and a shard.
+     */
+    private static List<LeasedOwner> owners(short queueId, int... shards) {
+        return Arrays.stream(shards).<LeasedOwner>mapToObj(shard -> new StubOwner(queueId, shard, new ShardOwnerMetrics())).toList();
     }
 
     private List<Level> levels() {

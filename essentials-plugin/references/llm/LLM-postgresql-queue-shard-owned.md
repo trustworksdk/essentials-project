@@ -483,7 +483,8 @@ Four more `ShardOwnerMetrics` cover a shard that is leased but delivers nothing 
   DEBUG; an INFO when the shard's pass succeeds again.
 - **`batchedReadFailures`** counts the ordered lane's per-queue batched reads that failed. The shards then
   read for themselves, so this alone stops nothing; when they cannot either, their failures count under
-  `pumpFailures`. Logged at WARN at most once a minute per queue, DEBUG otherwise, INFO on recovery.
+  `pumpFailures`. Logged at WARN at most once a minute per subscription (one per queue unless the queue is
+  consumed twice in one process), naming the queue and the shards read for; DEBUG otherwise, INFO on recovery.
 - **`pumpLoopFailures`** counts pump passes ended by something thrown outside the per-shard guards: the
   connection pool, the pump's own bookkeeping, or an owner's `parkDeadlineMillis`. An owner's failing
   delivery pass, takeover or selection checks (`leaseHeld`, `deliveryPermitted`, `needsAttention`) count
