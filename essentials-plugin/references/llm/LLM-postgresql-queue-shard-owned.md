@@ -471,6 +471,32 @@ queue's other stalled shards.
 `takeoverStalled` is the one callback whose exceptions the engine catches and logs, because it runs on the
 pump thread.
 
+Four more `ShardOwnerMetrics` cover a shard that is leased but delivers nothing for another reason, which
+`unownedShards` cannot see either:
+
+- **`pumpFailures`** counts delivery passes for a shard that failed with the connection still healthy (a
+  statement the database refused, or an exception from the engine; not a handler failing, which is
+  `handlerFailures`). The shard keeps its lease and its pass is retried 200 ms later with no limit, so a
+  shard whose reads or acknowledgements are permanently refused delivers nothing while this rises by about
+  five a second. Alert on its rate. Logged at ERROR with the stack trace at most once a minute per queue,
+  naming one shard; every failure at DEBUG; an INFO when the shard's pass succeeds again.
+- **`batchedReadFailures`** counts the ordered lane's per-queue batched reads that failed. The shards then
+  read for themselves, so this alone stops nothing; when they cannot either, their failures count under
+  `pumpFailures`. Logged at WARN at most once a minute per queue, DEBUG otherwise, INFO on recovery.
+- **`pumpLoopFailures`** counts pump passes ended by something thrown outside the per-shard guards (an
+  owner's selection checks, the pump's own bookkeeping). The pump reconnects 200 ms later and goes on
+  serving, but while it persists it can deliver nothing for every shard it serves. Logged at ERROR at most
+  once a minute per pump.
+- **`shardsOnDeadPumps`** counts shards placed on a pump thread that a critical error (`VirtualMachineError`,
+  `LinkageError`) ended. Nothing restarts the pump and the heartbeat keeps renewing those leases, so they
+  deliver nothing until the `ShardRuntime` (or the application) restarts. Alert on it above zero, next to
+  `shardsAwaitingTakeover`. The pump logs one ERROR naming itself and how many shards it leaves unserved.
+
+**Where to read them:** only through `ShardOwnedQueue.metrics()`. `PostgresqlMessageQueue` keeps its metrics
+private and no `QueueObserver` callback reports any of the four, so through `MessageQueue` (the Spring starter,
+the `DurableQueues` adapter) the `ShardPump` log lines above are the only signal. Alert on the ERROR lines from
+logger `dk.trustworks.essentials.components.queue.shardowned.ShardPump`.
+
 ## Administrative API
 
 `ShardOwnedQueuesApi` is the operator surface over the engine. Registry-scoped (every operation takes

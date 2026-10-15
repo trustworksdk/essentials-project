@@ -156,6 +156,12 @@ public final class ShardOwnerMetrics {
      * like a stalled takeover, {@code QueueHealth.unownedShards()} cannot see it because the shard is leased. Alert on
      * its rate. The ERROR log, at most one a minute per queue, names one shard and the cause; every failure is logged at
      * DEBUG, and a shard whose pass succeeds again after failing gets an INFO. See {@code PumpFailures}.
+     * <p>
+     * Readable only through {@link ShardOwnedQueue#metrics()}. A {@code PostgresqlMessageQueue} keeps its metrics private
+     * and no {@code QueueObserver} callback reports a failing pass (unlike {@link #shardsAwaitingTakeover}, which reaches
+     * {@code QueueObserver.takeoverStalled}), so for a queue used through {@code MessageQueue} (the Spring starter, the
+     * {@code DurableQueues} adapter) the {@code ShardPump} ERROR log is the only signal: at most one a minute per queue,
+     * naming one shard.
      */
     public final LongAdder     pumpFailures                     = new LongAdder();
     /**
@@ -164,6 +170,11 @@ public final class ShardOwnerMetrics {
      * again on the next pass: a read the database keeps refusing (a revoked grant) rises with every pass, and the shards'
      * own reads usually fail too, under {@link #pumpFailures}. Logged at WARN with the stack trace at most once a minute per
      * queue, every failure at DEBUG, and an INFO when the queue's batched read succeeds again. See {@code PumpFailures}.
+     * <p>
+     * Readable only through {@link ShardOwnedQueue#metrics()}. A {@code PostgresqlMessageQueue} keeps its metrics private
+     * and no {@code QueueObserver} callback reports this, so for a queue used through {@code MessageQueue} (the Spring
+     * starter, the {@code DurableQueues} adapter) the {@code ShardPump} WARN log is the only signal: at most one a minute
+     * per queue.
      */
     public final LongAdder     batchedReadFailures              = new LongAdder();
     /**

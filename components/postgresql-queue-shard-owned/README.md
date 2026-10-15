@@ -748,7 +748,7 @@ database queries — hence the `maxAge` argument. `shards.awaiting.takeover` nee
 registered by the constructor and fed by the `QueueObserver.takeoverStalled` callback, so it costs no query.
 It is per instance; sum it across instances.
 
-### Three engine-level metrics worth watching
+### Engine-level metrics worth watching
 
 **`ShardOwnerMetrics.deliveryPauses`.** An instance that has not been able to confirm its own liveness
 within four fifths of `leaseTtl` stops dispatching until it can — at the full lease the rest of the
@@ -776,6 +776,23 @@ these counters, since a `PostgresqlMessageQueue` keeps its `ShardOwnerMetrics` p
 (and the Spring starter and the `DurableQueues` adapter built on it) the same stall reaches
 `QueueObserver.takeoverStalled`, once when it starts and once when it ends, which `MicrometerQueueObserver`
 publishes as `essentials.queue.shards.awaiting.takeover`.
+
+**`ShardOwnerMetrics.pumpFailures`, `batchedReadFailures`, `pumpLoopFailures` and `shardsOnDeadPumps`.**
+Each covers a shard that is leased but delivers nothing for a reason other than a stalled takeover, which
+`unownedShards` cannot see either. `pumpFailures` counts delivery passes that failed with the connection still
+healthy (a refused statement, an exception from the engine; not a handler failing): the shard keeps its lease
+and is retried 200 ms later with no limit, so alert on its rate. `batchedReadFailures` counts the ordered lane's
+failed per-queue batched reads; the shards then read for themselves, and when they cannot either it shows in
+`pumpFailures`. `pumpLoopFailures` counts pump passes ended by something thrown outside the per-shard guards;
+the pump reconnects 200 ms later, but while it persists it can deliver nothing for every shard it serves.
+`shardsOnDeadPumps` counts shards on a pump thread a critical error (`VirtualMachineError`, `LinkageError`)
+ended: nothing restarts it and their leases keep being renewed, so they deliver nothing until the
+`ShardRuntime` restarts; alert on it above zero. The log carries at most one ERROR a minute per queue for
+`pumpFailures` (naming one shard), a WARN on the same terms for `batchedReadFailures`, at most one ERROR a
+minute per pump for `pumpLoopFailures`, and one ERROR when a pump dies; every other failure at DEBUG, and an
+INFO on recovery. All four are readable only through `ShardOwnedQueue.metrics()`: a `PostgresqlMessageQueue`
+keeps its metrics private and no `QueueObserver` callback reports them, so through `MessageQueue` (the Spring
+starter, the `DurableQueues` adapter) those `ShardPump` log lines are the only signal.
 
 ## Interceptors and Observers
 
