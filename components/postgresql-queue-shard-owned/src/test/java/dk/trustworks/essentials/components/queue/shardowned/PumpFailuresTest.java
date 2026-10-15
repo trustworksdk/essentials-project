@@ -22,10 +22,11 @@ import ch.qos.logback.core.read.ListAppender;
 import org.junit.jupiter.api.*;
 import org.slf4j.LoggerFactory;
 
+import java.lang.reflect.*;
 import java.sql.*;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.*;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -296,6 +297,73 @@ class PumpFailuresTest {
         pump.batchedReadSucceeded(new PumpFailures.BatchedRead((short) 6, first), owners((short) 6, 0, 1));
         assertThat(logged.list.getLast().getFormattedMessage()).as("the first is still failing until it recovers itself")
                                                               .contains("batched read for queue 6 (shards [0, 1]) succeeds again after 2 failure(s)");
+    }
+
+    /**
+     * A repeat failure comes on every pass, so with DEBUG off it must build nothing for the line it does not write: not the
+     * batch's shard list, not the cause's string. Still counted.
+     */
+    @Test
+    void a_repeat_failure_builds_no_debug_arguments_while_debug_is_off() {
+        pumpLogger.setLevel(Level.INFO);
+        var metrics    = new ShardOwnerMetrics();
+        var pump       = new PumpFailures("pump-0", clock::get);
+        var shardReads = new AtomicInteger();
+        var batch      = new PumpFailures.BatchedRead((short) 6, metrics);
+        var owners     = countingShardReads(shardReads, owners((short) 6, 0, 1));
+
+        pump.batchedReadFailed(batch, owners, new SQLException("permission denied"));
+        assertThat(levels()).containsExactly(Level.WARN);
+        assertThat(shardReads.get()).as("the WARN names the shards").isPositive();
+
+        shardReads.set(0);
+        var cause = new CountingToString("permission denied");
+        clock.addAndGet(200_000_000L);
+        pump.batchedReadFailed(batch, owners, cause);
+        assertThat(metrics.batchedReadFailures.sum()).isEqualTo(2);
+        assertThat(levels()).as("the repeat is not written").containsExactly(Level.WARN);
+        assertThat(shardReads.get()).as("so the shard list is not built").isZero();
+        assertThat(cause.rendered.get()).as("nor the cause's string").isZero();
+
+        var owner = new StubOwner((short) 3, 5, metrics);
+        pump.failed(owner, "threw during delivery", new IllegalStateException("broken"));
+        assertThat(levels()).containsExactly(Level.WARN, Level.ERROR);
+        var passCause = new CountingToString("broken");
+        clock.addAndGet(200_000_000L);
+        pump.failed(owner, "threw during delivery", passCause);
+        assertThat(metrics.pumpFailures.sum()).isEqualTo(2);
+        assertThat(levels()).containsExactly(Level.WARN, Level.ERROR);
+        assertThat(passCause.rendered.get()).as("a repeat failed pass builds nothing either").isZero();
+    }
+
+    /**
+     * The owners again, each counting how often its shard is read: the only way the batched-read lines use them.
+     */
+    private static List<LeasedOwner> countingShardReads(AtomicInteger reads, List<LeasedOwner> owners) {
+        return owners.stream().map(owner -> (LeasedOwner) Proxy.newProxyInstance(LeasedOwner.class.getClassLoader(), new Class<?>[]{LeasedOwner.class}, (proxy, method, args) -> {
+            if (method.getName().equals("shard")) {
+                reads.incrementAndGet();
+            }
+            try {
+                return method.invoke(owner, args);
+            } catch (InvocationTargetException e) {
+                throw e.getCause();
+            }
+        })).toList();
+    }
+
+    private static final class CountingToString extends SQLException {
+        private final AtomicInteger rendered = new AtomicInteger();
+
+        CountingToString(String reason) {
+            super(reason);
+        }
+
+        @Override
+        public String toString() {
+            rendered.incrementAndGet();
+            return super.toString();
+        }
     }
 
     /**

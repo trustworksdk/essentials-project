@@ -196,9 +196,10 @@ final class PumpFailures {
                       pumpName, owner.queueId(), owner.lane(), owner.shard(), what, current.failures,
                       TimeUnit.NANOSECONDS.toSeconds(now - current.sinceNanos),
                       TimeUnit.NANOSECONDS.toMillis(ShardPump.PUMP_RETRY_NANOS), cause);
-        } else {
+        } else if (log.isDebugEnabled()) {
             // No stack trace: a repeat comes every PUMP_RETRY_NANOS (200 ms) at the soonest, per failing shard, and the
-            // subscription's once-a-minute ERROR carries one. The cause's own string still says what failed.
+            // subscription's once-a-minute ERROR carries one. The cause's own string still says what failed; guarded, so
+            // that string is only built when the line is written.
             log.debug("{}: queue {}, {} shard {} {} (failed pass {} in a row): {}",
                       pumpName, owner.queueId(), owner.lane(), owner.shard(), what, current.failures, String.valueOf(cause));
         }
@@ -256,8 +257,9 @@ final class PumpFailures {
                              + "every failure under batchedReadFailures. Every failure is logged at DEBUG, and at WARN at most "
                              + "once a minute per subscription (the consumer reading these shards)",
                      pumpName, queueId, shardsOf(owners), current.failures, TimeUnit.NANOSECONDS.toSeconds(now - current.sinceNanos), cause);
-        } else {
+        } else if (log.isDebugEnabled()) {
             // No stack trace: a repeat can come on every pass, and the subscription's once-a-minute WARN carries one.
+            // Guarded: the shard list and the cause's string are built per call, and this is the path that repeats.
             log.debug("{}: batched read for queue {} (shards {}) failed (failure {} in a row); those shards read for themselves this pass: {}",
                       pumpName, queueId, shardsOf(owners), current.failures, String.valueOf(cause));
         }
