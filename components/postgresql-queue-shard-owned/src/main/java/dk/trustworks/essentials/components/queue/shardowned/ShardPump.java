@@ -58,11 +58,17 @@ final class ShardPump implements Runnable {
      */
     static final         long   TAKEOVER_RETRY_NANOS = TimeUnit.MILLISECONDS.toNanos(200L);
     /**
-     * How long a shard whose delivery pass ({@link LeasedOwner#pumpOnce}) failed on a healthy connection, or threw, waits
-     * before the pump pumps it again. Per shard, never by pacing the pass: a 200 ms sleep after a failed pass held every
-     * other shard on the pump, across every queue it serves, to five passes a second for as long as the one shard failed.
+     * How long a shard whose delivery pass ({@link LeasedOwner#pumpOnce}) failed on a healthy connection, or threw, or
+     * whose selection checks threw, waits before the pump pumps it again. Per shard, never by pacing the pass: a 200 ms
+     * sleep after a failed pass held every other shard on the pump, across every queue it serves, to five passes a
+     * second for as long as the one shard failed.
      */
     static final         long   PUMP_RETRY_NANOS     = TimeUnit.MILLISECONDS.toNanos(200L);
+    /**
+     * How long the pump waits before it reconnects after a lost connection or a pass that ended outside the per-owner
+     * guards ({@link #serve()}). Paced, or a failure that does not clear spins the loop as fast as it can throw.
+     */
+    static final         long   RECONNECT_NANOS      = TimeUnit.MILLISECONDS.toNanos(200L);
 
     private final ShardOwnedStorage                 storage;
     private final ShardOwnerSettings                settings;
@@ -185,14 +191,19 @@ final class ShardPump implements Runnable {
      * Serve until {@code running} is cleared.
      * <p>
      * <b>The recovery rule: a pump does not die of anything a retry could cure.</b> A failing statement, or an unchecked
-     * exception or non-critical {@code Error} from one owner's {@code pumpOnce} or {@code onTakeover}, is that owner's
-     * alone: the per-owner guards count it ({@link PumpFailures}, {@link TakeoverStalls}) and the other owners keep being
-     * served. A lost connection, and anything thrown outside those guards (from {@code needsAttention}, {@code leaseHeld}
-     * or {@code deliveryPermitted}, the pump's own bookkeeping, an observer), end the pass: {@link #serve()} reconnects
-     * 200 ms later and runs every owner's takeover again, which the owners make safe (it already runs on every reconnect).
-     * Only a critical error ({@code VirtualMachineError},
-     * {@code LinkageError}: see {@link Exceptions#isCriticalError}) ends the thread, because the JVM is then in no state to
-     * trust a retry - nor to hand the pump's shards to another pump, which the same cause could kill in turn.
+     * exception or non-critical {@code Error} from one owner's {@code pumpOnce}, {@code onTakeover}, selection checks
+     * ({@code leaseHeld}, {@code deliveryPermitted}, {@code needsAttention}) or stop-time {@code flushOnStop}, is that
+     * owner's alone: the per-owner guards count it ({@link PumpFailures}, {@link TakeoverStalls}; a failed flush is logged)
+     * and the other owners keep being served. A lost connection, and anything thrown outside those guards (by the pool,
+     * the pump's own bookkeeping, or an owner's {@code parkDeadlineMillis}), end the pass: {@link #serve()} reconnects
+     * {@link #RECONNECT_NANOS} (200 ms) later and runs every owner's takeover again, which the owners make safe (it already
+     * runs on every reconnect), and the pass counts in {@link ShardOwnerMetrics#pumpLoopFailures}. {@code parkDeadlineMillis}
+     * is asked only on a pass that delivered nothing, after every attentive owner was pumped, so a throw there costs no
+     * delivery on that pass; but while it persists every such idle pass ends that way, so the pump reconnects and reruns
+     * every takeover about five times a second, and a message arriving meanwhile waits for the reconnect rather than
+     * being woken for. Only a critical error ({@code VirtualMachineError}, {@code LinkageError}: see
+     * {@link Exceptions#isCriticalError}) ends the thread, because the JVM is then in no state to trust a retry - nor to
+     * hand the pump's shards to another pump, which the same cause could kill in turn.
      * <p>
      * <b>Stopping and dying are told apart by {@code running}, not by how {@link #serve()} ended.</b> On an orderly stop
      * the pump serves none of its shards any more, so none of them is awaiting a takeover here, and its stalls are
@@ -340,17 +351,28 @@ final class ShardPump implements Runnable {
                             }
                             pumpRetryAtNanos.remove(owner);
                         }
-                        if (!owner.leaseHeld()) {
-                            continue;
-                        }
-                        // BEFORE needsAttention, which consumes the shard's wake-up flag. Skipping
-                        // after it would swallow the signal and leave the shard waiting for the
-                        // backstop once delivery is permitted again.
-                        if (!owner.deliveryPermitted()) {
-                            continue;
-                        }
-                        // The wake-up was for one of this pump's shards, not all of them.
-                        if (!owner.needsAttention()) {
+                        try {
+                            if (!owner.leaseHeld()) {
+                                continue;
+                            }
+                            // BEFORE needsAttention, which consumes the shard's wake-up flag. Skipping
+                            // after it would swallow the signal and leave the shard waiting for the
+                            // backstop once delivery is permitted again.
+                            if (!owner.deliveryPermitted()) {
+                                continue;
+                            }
+                            // The wake-up was for one of this pump's shards, not all of them.
+                            if (!owner.needsAttention()) {
+                                continue;
+                            }
+                        } catch (RuntimeException | Error e) {
+                            // The owner's own code, so the owner's own failure, guarded like pumpOnce below. Left to the
+                            // outer catch it ended the pass before any owner was pumped and reconnected, rerunning every
+                            // owner's takeover: one owner's bug stopped every shard on the pump for as long as it threw.
+                            // Retried PUMP_RETRY_NANOS later; a critical error still ends the pump (run()).
+                            Exceptions.rethrowIfCriticalError(e);
+                            pumpFailures.failed(owner, "threw while being selected", e);
+                            pumpRetryAtNanos.put(owner, System.nanoTime() + PUMP_RETRY_NANOS);
                             continue;
                         }
                         attentive.add(owner);
@@ -403,7 +425,7 @@ final class ShardPump implements Runnable {
                         }
                     }
                     owners.removeIf(owner -> {
-                        if (owner.leaseHeld()) {
+                        if (stillLeased(owner, pumpRetryAtNanos)) {
                             return false;
                         }
                         takenOver.remove(owner);
@@ -413,18 +435,25 @@ final class ShardPump implements Runnable {
                         pumpFailures.forget(owner);
                         return true;
                     });
+                    // Asked BEFORE the pass is reported complete: parkDeadlineMillis is an owner call outside the
+                    // per-owner guards, so a throw from it ends this pass (the outer catch). Reported first, a
+                    // parkDeadlineMillis that kept throwing logged "completed again" at INFO on every pass and reset the
+                    // count of failed passes in a row to one each time.
+                    var parkMillis = delivered == 0 ? parkMillis(takenOver, takeoverRetryAtNanos, pumpRetryAtNanos) : 0L;
                     if (loopFailures > 0) {
                         log.info("{}: a pass completed again after {} failed pass(es)", name, loopFailures);
                         loopFailures = 0;
                     }
 
                     if (delivered == 0) {
-                        park(takenOver, takeoverRetryAtNanos, pumpRetryAtNanos);
+                        park(parkMillis);
                     }
                 }
                 if (flushOnExit.get()) {
                     for (var owner : owners) {
-                        owner.flushOnStop(connection);
+                        if (!flushOnStop(connection, owner)) {
+                            break;
+                        }
                     }
                 }
                 return;
@@ -432,6 +461,13 @@ final class ShardPump implements Runnable {
                 Thread.currentThread().interrupt();
                 return;
             } catch (SQLException e) {
+                if (!running.get()) {
+                    // Stopping: there is no reconnect to announce, and losing the connection on the way out is not a
+                    // connection failure the pump recovers from. What it had not flushed is redelivered by the shards'
+                    // next owners (at-least-once).
+                    log.warn("{} lost its connection while stopping", name, e);
+                    return;
+                }
                 metrics.connectionFailures.increment();
                 // Asked for any SQLException, not only a timeout type: pools disagree on what they
                 // throw when full (Hikari a SQLTransientConnectionException, DBCP2 and Tomcat plain
@@ -446,24 +482,29 @@ final class ShardPump implements Runnable {
                     log.warn("{} lost its connection; reconnecting", name, e);
                 }
                 try {
-                    TimeUnit.MILLISECONDS.sleep(200L);
+                    TimeUnit.NANOSECONDS.sleep(RECONNECT_NANOS);
                 } catch (InterruptedException interrupted) {
                     Thread.currentThread().interrupt();
                     return;
                 }
             } catch (RuntimeException | Error e) {
-                // Thrown outside every per-owner guard: from needsAttention, leaseHeld or deliveryPermitted, from the
-                // pump's own bookkeeping, from an observer, or from flushOnStop. Ending the thread here used to leave
+                // Thrown outside every per-owner guard: by the pool handing out the connection, from the pump's own
+                // bookkeeping, or from an owner's parkDeadlineMillis (asked only on a pass that delivered nothing, after
+                // every attentive owner was pumped; while it keeps throwing, every idle pass ends here, reconnects and
+                // reruns every owner's takeover - run() says what that costs). Ending the thread here used to leave
                 // every shard on this pump leased and served by nobody, for something a retry may well cure; so it is
                 // treated like a lost connection. A critical error still ends the pump (run() says what follows).
                 Exceptions.rethrowIfCriticalError(e);
-                passFailed(e);
                 if (!running.get()) {
+                    // Stopping: there is no reconnect and no takeover to announce, and a stop is not a failed pass.
+                    log.warn("{}: a pass ended on an exception thrown outside its per-shard guards while the pump was stopping",
+                             name, e);
                     return;
                 }
+                passFailed(e);
                 try {
                     // Paced like the reconnect, or a failure that does not clear spins the loop as fast as it can throw.
-                    TimeUnit.MILLISECONDS.sleep(200L);
+                    TimeUnit.NANOSECONDS.sleep(RECONNECT_NANOS);
                 } catch (InterruptedException interrupted) {
                     Thread.currentThread().interrupt();
                     return;
@@ -491,14 +532,71 @@ final class ShardPump implements Runnable {
         if (ErrorWindow.isOpen(nextLoopFailureErrorNanos, now)) {
             nextLoopFailureErrorNanos = now + ErrorWindow.EVERY_NANOS;
             log.error("{}: a pass ended on an exception thrown outside its per-shard guards ({} failed pass(es) in a row). "
-                              + "The pump reconnects in 200 ms and runs the takeover of each of its {} shard(s) again; while "
+                              + "The pump reconnects in {} ms and runs the takeover of each of its {} shard(s) again; while "
                               + "the cause persists those shards deliver little or nothing, and QueueHealth.unownedShards does "
                               + "not count them because they stay leased. Counted in pumpLoopFailures; logged at ERROR at most "
                               + "once a minute per pump, every failure at DEBUG",
-                      name, loopFailures, owners.size(), e);
+                      name, loopFailures, TimeUnit.NANOSECONDS.toMillis(RECONNECT_NANOS), owners.size(), e);
         } else {
             log.debug("{}: a pass ended on an exception thrown outside its per-shard guards ({} failed pass(es) in a row): {}",
                       name, loopFailures, String.valueOf(e));
+        }
+    }
+
+    /**
+     * {@link LeasedOwner#leaseHeld()} for the end-of-pass sweep that drops owners whose lease ended. A throw keeps the owner
+     * and is its own failure, as in the selection checks: escaping here, it ended every pass after the selection guard had
+     * already caught the same throw. Charged only when the owner is not already waiting out a retry, so a lease check
+     * that keeps throwing is counted once per retry, by whichever of the two asks first.
+     */
+    private boolean stillLeased(LeasedOwner owner, Map<LeasedOwner, Long> pumpRetryAtNanos) {
+        try {
+            return owner.leaseHeld();
+        } catch (RuntimeException | Error e) {
+            Exceptions.rethrowIfCriticalError(e);
+            if (!pumpRetryAtNanos.containsKey(owner)) {
+                pumpFailures.failed(owner, "threw while being selected", e);
+                pumpRetryAtNanos.put(owner, System.nanoTime() + PUMP_RETRY_NANOS);
+            }
+            return true;
+        }
+    }
+
+    /**
+     * Flush one owner's acknowledgements as the pump stops. A failure is that owner's alone: logged at WARN, and the next
+     * owner is flushed. Escaping, it skipped every owner after this one, and reached {@link #serve()}'s outer catch,
+     * which counted the stop as a failed pass in {@code pumpLoopFailures} and logged at ERROR a reconnect that never
+     * came. What is not flushed is redelivered by the shard's next owner (at-least-once).
+     *
+     * @return whether the next owner can be flushed: {@code false} once the connection itself is broken
+     */
+    private boolean flushOnStop(Connection connection, LeasedOwner owner) {
+        try {
+            owner.flushOnStop(connection);
+            return true;
+        } catch (RuntimeException | Error e) {
+            Exceptions.rethrowIfCriticalError(e);
+            log.warn("{}: flushing the acknowledgements of queue {}, {} shard {} on stop failed; flushing the others",
+                     name, owner.queueId(), owner.lane(), owner.shard(), e);
+            return true;
+        } catch (SQLException e) {
+            if (isValid(connection)) {
+                log.warn("{}: flushing the acknowledgements of queue {}, {} shard {} on stop failed; flushing the others",
+                         name, owner.queueId(), owner.lane(), owner.shard(), e);
+                return true;
+            }
+            log.warn("{}: lost its connection flushing the acknowledgements of queue {}, {} shard {} on stop; the shards "
+                             + "not flushed yet are not flushed, and their next owners redeliver what was not acknowledged",
+                     name, owner.queueId(), owner.lane(), owner.shard(), e);
+            return false;
+        }
+    }
+
+    private static boolean isValid(Connection connection) {
+        try {
+            return connection.isValid(1);
+        } catch (SQLException e) {
+            return false;
         }
     }
 
@@ -650,7 +748,7 @@ final class ShardPump implements Runnable {
     }
 
     /**
-     * Park until a hint arrives or the backstop fires, shortened by the soonest deadline any of this
+     * How long to park: until the backstop, shortened by the soonest deadline any of this
      * pump's owners has — a retry falling due on one shard must not be delayed by the others being
      * quiet. A failed takeover's retry is one of those deadlines, and the only one an owner awaiting its takeover has; a
      * failed delivery pass's retry is the only one an owner waiting to be pumped again has.
@@ -660,9 +758,10 @@ final class ShardPump implements Runnable {
      * @param takeoverRetryAtNanos when each owner whose takeover failed may retry it ({@link System#nanoTime()})
      * @param pumpRetryAtNanos     when each owner whose delivery pass failed may be pumped again ({@link System#nanoTime()});
      *                             their own {@link LeasedOwner#parkDeadlineMillis()} does not count until then
+     * @return the wait in milliseconds, never below 1
      */
-    private void park(Set<LeasedOwner> takenOver, Map<LeasedOwner, Long> takeoverRetryAtNanos,
-                      Map<LeasedOwner, Long> pumpRetryAtNanos) throws InterruptedException {
+    private long parkMillis(Set<LeasedOwner> takenOver, Map<LeasedOwner, Long> takeoverRetryAtNanos,
+                            Map<LeasedOwner, Long> pumpRetryAtNanos) {
         // The ceiling, not the backstop. `pollBackstop` used to floor every park at 500ms, which put
         // a fixed query rate under a process however quiet it was; the owners' own deadlines already
         // account for their sweeps, retries and flushes, and a notification wakes this pump
@@ -687,7 +786,13 @@ final class ShardPump implements Runnable {
         }
         var now = System.nanoTime();
         wait = untilSoonestRetry(takeoverRetryAtNanos, now, wait);
-        wait = untilSoonestRetry(pumpRetryAtNanos, now, wait);
+        return untilSoonestRetry(pumpRetryAtNanos, now, wait);
+    }
+
+    /**
+     * Park until a hint arrives or {@code wait} ({@link #parkMillis}) runs out.
+     */
+    private void park(long wait) throws InterruptedException {
         // The honoured/backstop counters are kept by the owners now, in needsAttention, where it is
         // known which shard a wake-up was actually for. Counting them here would count one wake-up
         // per pump regardless of how many shards it served.

@@ -476,17 +476,21 @@ Four more `ShardOwnerMetrics` cover a shard that is leased but delivers nothing 
 
 - **`pumpFailures`** counts delivery passes for a shard that failed with the connection still healthy (a
   statement the database refused, or an exception from the engine; not a handler failing, which is
-  `handlerFailures`). The shard keeps its lease and its pass is retried 200 ms later with no limit, so a
-  shard whose reads or acknowledgements are permanently refused delivers nothing while this rises by about
-  five a second. Alert on its rate. Logged at ERROR with the stack trace at most once a minute per queue,
+  `handlerFailures`), and the checks deciding whether to serve the shard when they throw. The shard keeps
+  its lease and its pass is retried 200 ms later with no limit, so a shard whose reads or acknowledgements
+  are permanently refused delivers nothing while this rises by about five a second. Alert on its rate. Logged at ERROR with the stack trace at most once a minute per queue,
   naming one shard; every failure at DEBUG; an INFO when the shard's pass succeeds again.
 - **`batchedReadFailures`** counts the ordered lane's per-queue batched reads that failed. The shards then
   read for themselves, so this alone stops nothing; when they cannot either, their failures count under
   `pumpFailures`. Logged at WARN at most once a minute per queue, DEBUG otherwise, INFO on recovery.
-- **`pumpLoopFailures`** counts pump passes ended by something thrown outside the per-shard guards (an
-  owner's selection checks, the pump's own bookkeeping). The pump reconnects 200 ms later and goes on
-  serving, but while it persists it can deliver nothing for every shard it serves. Logged at ERROR at most
-  once a minute per pump.
+- **`pumpLoopFailures`** counts pump passes ended by something thrown outside the per-shard guards: the
+  connection pool, the pump's own bookkeeping, or an owner's `parkDeadlineMillis`. An owner's failing
+  delivery pass, takeover or selection checks (`leaseHeld`, `deliveryPermitted`, `needsAttention`) count
+  under `pumpFailures` / `takeoverFailures` instead. The pump reconnects 200 ms later, reruns every shard's
+  takeover and goes on serving. While a pool failure persists it delivers nothing for any shard it serves;
+  while a `parkDeadlineMillis` keeps throwing, every pass that delivered nothing ends this way, so the pump
+  reconnects and reruns every takeover about five times a second and new messages wait up to 200 ms.
+  Logged at ERROR at most once a minute per pump.
 - **`shardsOnDeadPumps`** counts shards placed on a pump thread that a critical error (`VirtualMachineError`,
   `LinkageError`) ended. Nothing restarts the pump and the heartbeat keeps renewing those leases, so they
   deliver nothing until the `ShardRuntime` (or the application) restarts. Alert on it above zero, next to

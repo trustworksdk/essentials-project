@@ -21,6 +21,8 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import dk.trustworks.essentials.components.queue.shardowned.spi.*;
 import org.junit.jupiter.api.*;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.postgresql.PGConnection;
 import org.slf4j.LoggerFactory;
 
@@ -101,32 +103,39 @@ class ShardPumpExitTest {
     }
 
     /**
-     * Anything a retry could cure no longer ends the pump. An {@code AssertionError} from {@code needsAttention} is outside
-     * every per-shard guard; it used to end the thread and leave every shard on the pump leased and served by nobody.
+     * Anything a retry could cure no longer ends the pump. An {@code AssertionError} thrown outside every per-shard guard
+     * - here by the pool handing out the pump's connection - used to end the thread and leave every shard on the pump
+     * leased and served by nobody.
      */
     @Test
     void a_pump_whose_pass_throws_a_non_critical_error_reconnects_and_keeps_serving_its_shards() throws InterruptedException {
         var metrics     = new ShardOwnerMetrics();
         var pumpMetrics = new ShardOwnerMetrics();
         var running     = new AtomicBoolean(true);
-        var pump        = pump(running, pumpMetrics);
-        var failing     = new StubOwner((short) 7, 1, metrics, Behaviour.FAILS);
+        var pump        = pump(new ShardOwnedStorage(failingDataSource(1, new CopyOnWriteArrayList<>()), PUMP_QUEUE_ID), running,
+                               pumpMetrics, new AtomicBoolean(false));
+        var first       = new StubOwner((short) 7, 1, metrics, Behaviour.SERVED);
         var beside      = new StubOwner((short) 7, 2, metrics, Behaviour.SERVED);
-        pump.add(failing);
+        pump.add(first);
         pump.add(beside);
         var thread = Thread.ofPlatform().name("pump-under-test").start(pump);
         try {
-            await().atMost(Duration.ofSeconds(10)).until(() -> beside.pumped.get() > 0 && failing.pumped.get() > 0);
+            await().atMost(Duration.ofSeconds(10)).until(() -> beside.pumped.get() > 0 && first.pumped.get() > 0);
 
             assertThat(thread.isAlive()).as("the pump is still running").isTrue();
             assertThat(pump.isDead()).isFalse();
             assertThat(metrics.pumpLoopFailures.sum()).as("counted on the queue's metrics").isEqualTo(1);
             assertThat(pumpMetrics.pumpLoopFailures.sum()).as("and on the runtime's").isEqualTo(1);
-            assertThat(failing.takeovers.get()).as("the reconnect ran the takeover again").isEqualTo(2);
+            assertThat(first.takeovers.get()).as("taken over on the connection the pump reconnected with").isEqualTo(1);
             assertThat(metrics.shardsOnDeadPumps.get()).isZero();
             var errors = loggedEvents().stream().filter(event -> event.getLevel() == Level.ERROR).toList();
             assertThat(errors).hasSize(1);
-            assertThat(errors.getFirst().getFormattedMessage()).contains("pump-0").contains("pumpLoopFailures").doesNotContain("died");
+            assertThat(errors.getFirst().getFormattedMessage())
+                    .contains("pump-0")
+                    .contains("pumpLoopFailures")
+                    .as("states the reconnect pace actually used")
+                    .contains("reconnects in " + TimeUnit.NANOSECONDS.toMillis(ShardPump.RECONNECT_NANOS) + " ms")
+                    .doesNotContain("died");
             assertThat(errors.getFirst().getThrowableProxy().getMessage()).isEqualTo(StubOwner.PASS_FAILURE.getMessage());
         } finally {
             running.set(false);
@@ -143,21 +152,23 @@ class ShardPumpExitTest {
     void a_pass_failure_that_persists_is_paced_and_logged_at_error_once() throws InterruptedException {
         pumpLogger.setLevel(Level.DEBUG);
         var failures = 5;
+        var failedAt = new CopyOnWriteArrayList<Long>();
         var metrics  = new ShardOwnerMetrics();
         var running  = new AtomicBoolean(true);
-        var pump     = pump(running);
-        var failing  = new StubOwner((short) 7, 1, metrics, Behaviour.FAILS, failures);
-        pump.add(failing);
+        var pump     = pump(new ShardOwnedStorage(failingDataSource(failures, failedAt), PUMP_QUEUE_ID), running,
+                            new ShardOwnerMetrics(), new AtomicBoolean(false));
+        var served   = new StubOwner((short) 7, 1, metrics, Behaviour.SERVED);
+        pump.add(served);
         var thread = Thread.ofPlatform().name("pump-under-test").start(pump);
         try {
             // The INFO follows the pass that completed, so it is what to wait for.
             await().atMost(Duration.ofSeconds(10))
                    .until(() -> loggedEvents().stream().anyMatch(event -> event.getLevel() == Level.INFO));
 
-            assertThat(failing.pumped.get()).as("served once the failure cleared").isPositive();
+            assertThat(served.pumped.get()).as("served once the failure cleared").isPositive();
             assertThat(metrics.pumpLoopFailures.sum()).isEqualTo(failures);
-            assertThat(failing.failedAt).hasSize(failures);
-            assertThat(Duration.ofNanos(failing.failedAt.getLast() - failing.failedAt.getFirst()))
+            assertThat(failedAt).hasSize(failures);
+            assertThat(Duration.ofNanos(failedAt.getLast() - failedAt.getFirst()))
                     .as("paced at 200 ms per failed pass, not spinning")
                     .isGreaterThanOrEqualTo(Duration.ofMillis((failures - 1) * 190L));
             var passFailures = loggedEvents().stream()
@@ -235,6 +246,261 @@ class ShardPumpExitTest {
             assertThat(metrics.pumpLoopFailures.sum()).as("not a failed pass").isZero();
             assertThat(pumpMetrics.pumpLoopFailures.sum()).isZero();
             assertThat(beside.takeovers.get()).as("no reconnect reran the sibling's takeover").isEqualTo(1);
+            assertThat(thread.isAlive()).isTrue();
+        } finally {
+            running.set(false);
+            pump.wakeup().signal();
+            assertThat(thread.join(Duration.ofSeconds(10))).isTrue();
+        }
+    }
+
+    /**
+     * A selection check ({@code leaseHeld}, {@code deliveryPermitted}, {@code needsAttention}) that keeps throwing is its
+     * owner's failure alone, like a throwing {@code pumpOnce}. It used to end the pass in {@code serve()}'s outer catch:
+     * no owner on the pump was pumped, and the pump reconnected and reran every owner's takeover five times a second for
+     * as long as it threw, so one owner's bug stopped every shard of every queue on the pump.
+     */
+    @ParameterizedTest
+    @EnumSource(value = Behaviour.class, names = {"LEASE_CHECK_ERRORS", "PERMIT_ERRORS", "ATTENTION_ERRORS"})
+    void an_owner_whose_selection_check_keeps_throwing_does_not_hold_up_its_sibling(Behaviour behaviour) throws InterruptedException {
+        var metrics     = new ShardOwnerMetrics();
+        var pumpMetrics = new ShardOwnerMetrics();
+        var running     = new AtomicBoolean(true);
+        var pump        = pump(running, pumpMetrics);
+        var failing     = new StubOwner((short) 7, 1, metrics, behaviour);
+        var beside      = new StubOwner((short) 7, 2, metrics, Behaviour.SERVED);
+        pump.add(failing);
+        pump.add(beside);
+        var startedAt = System.nanoTime();
+        var thread    = Thread.ofPlatform().name("pump-under-test").start(pump);
+        try {
+            await().atMost(Duration.ofSeconds(10)).until(() -> metrics.pumpFailures.sum() >= 3 && beside.pumped.get() >= 3);
+
+            // Read before the clock, so the bound can only be generous. Each charge sets a retry PUMP_RETRY_NANOS out
+            // and the next charge waits for it, so the n-th charge comes at least (n - 1) retries after the start. A
+            // check charged twice per retry (the selection guard and the end-of-pass lease sweep both counting the same
+            // throw) breaks the bound by its third charge.
+            var charged = metrics.pumpFailures.sum();
+            var elapsed = System.nanoTime() - startedAt;
+            assertThat(charged).as("charged once per retry, not by every check that saw the throw")
+                               .isLessThanOrEqualTo(elapsed / ShardPump.PUMP_RETRY_NANOS + 1);
+            assertThat(metrics.pumpLoopFailures.sum()).as("not a failed pass").isZero();
+            assertThat(pumpMetrics.pumpLoopFailures.sum()).isZero();
+            assertThat(failing.pumped.get()).as("never selected, so never pumped").isZero();
+            assertThat(failing.takeovers.get()).as("no reconnect reran the takeovers").isEqualTo(1);
+            assertThat(beside.takeovers.get()).isEqualTo(1);
+            assertThat(pump.shardsServed()).as("an owner whose lease check throws is kept, and retried").isEqualTo(2);
+            assertThat(thread.isAlive()).isTrue();
+            assertThat(pump.isDead()).isFalse();
+            assertThat(loggedEvents().stream().map(ILoggingEvent::getFormattedMessage))
+                    .anyMatch(message -> message.contains("shard 1 threw while being selected"))
+                    .noneMatch(message -> message.contains("outside its per-shard guards"));
+        } finally {
+            running.set(false);
+            pump.wakeup().signal();
+            assertThat(thread.join(Duration.ofSeconds(10))).isTrue();
+        }
+    }
+
+    /**
+     * A stopping pump flushes every owner's acknowledgements, past one whose flush throws, and does not report the throw
+     * as a failed pass: the pump is stopping, so it neither reconnects nor runs any takeover again. The throw used to
+     * reach {@code serve()}'s outer catch, which skipped the owners after it, counted a {@code pumpLoopFailures} and
+     * logged at ERROR a reconnect that never came.
+     */
+    @Test
+    void a_stopping_pump_flushes_every_owner_past_one_whose_flush_throws() throws InterruptedException {
+        var stopped = stopFlushing(healthyDataSource(), Behaviour.FLUSH_ERRORS);
+
+        assertThat(stopped.beside().flushes.get()).as("the owner after it is still flushed").isEqualTo(1);
+        var warned = assertStopNotCountedAndWarnedOnce(stopped);
+        assertThat(warned.getFormattedMessage()).contains("pump-0").contains("queue 7, unordered shard 1").contains("on stop failed");
+        assertThat(warned.getThrowableProxy().getMessage()).isEqualTo(StubOwner.OWNER_ERROR.getMessage());
+    }
+
+    /**
+     * A flush statement the database refuses on a healthy connection is that owner's alone too: the owners after it are
+     * still flushed. It used to reach {@code serve()}'s {@code SQLException} catch, which skipped them, counted a
+     * {@code connectionFailures} and logged a reconnect that never came.
+     */
+    @Test
+    void a_stopping_pump_flushes_every_owner_past_one_whose_flush_statement_fails_on_a_healthy_connection() throws InterruptedException {
+        var stopped = stopFlushing(healthyDataSource(), Behaviour.FLUSH_STATEMENT_FAILS);
+
+        assertThat(stopped.beside().flushes.get()).as("the owner after it is still flushed").isEqualTo(1);
+        var warned = assertStopNotCountedAndWarnedOnce(stopped);
+        assertThat(warned.getFormattedMessage()).contains("pump-0").contains("queue 7, unordered shard 1").contains("on stop failed");
+        assertThat(warned.getThrowableProxy().getMessage()).isEqualTo(StubOwner.STATEMENT_FAILURE.getMessage());
+    }
+
+    /**
+     * A flush that fails because the connection itself is gone ends the flushing: every later flush would fail the same
+     * way, so the pump says so once, names what it could not flush, and stops.
+     */
+    @Test
+    void a_stopping_pump_that_loses_its_connection_while_flushing_stops_flushing() throws InterruptedException {
+        var stopped = stopFlushing(invalidDataSource(), Behaviour.FLUSH_STATEMENT_FAILS);
+
+        assertThat(stopped.beside().flushes.get()).as("nothing is flushed on a broken connection").isZero();
+        var warned = assertStopNotCountedAndWarnedOnce(stopped);
+        assertThat(warned.getFormattedMessage()).contains("pump-0").contains("lost its connection flushing").contains("queue 7, unordered shard 1");
+        assertThat(warned.getThrowableProxy().getMessage()).isEqualTo(StubOwner.STATEMENT_FAILURE.getMessage());
+    }
+
+    /**
+     * Run a pump serving an owner with {@code behaviour}, then a {@link Behaviour#SERVED} one, and stop it with
+     * {@code flushOnExit} set.
+     */
+    private StoppedPump stopFlushing(DataSource dataSource, Behaviour behaviour) throws InterruptedException {
+        var metrics     = new ShardOwnerMetrics();
+        var pumpMetrics = new ShardOwnerMetrics();
+        var running     = new AtomicBoolean(true);
+        var pump        = pump(new ShardOwnedStorage(dataSource, PUMP_QUEUE_ID), running, pumpMetrics, new AtomicBoolean(true));
+        var failing     = new StubOwner((short) 7, 1, metrics, behaviour);
+        var beside      = new StubOwner((short) 7, 2, metrics, Behaviour.SERVED);
+        pump.add(failing);
+        pump.add(beside);
+        var thread = Thread.ofPlatform().name("pump-under-test").start(pump);
+        await().atMost(Duration.ofSeconds(10)).until(() -> failing.pumped.get() > 0 && beside.pumped.get() > 0);
+
+        running.set(false);
+        pump.wakeup().signal();
+        assertThat(thread.join(Duration.ofSeconds(10))).as("the pump stops when running is cleared").isTrue();
+        assertThat(failing.flushes.get()).as("premise: the failing owner's flush was tried").isEqualTo(1);
+        return new StoppedPump(pump, beside, metrics, pumpMetrics);
+    }
+
+    private record StoppedPump(ShardPump pump, StubOwner beside, ShardOwnerMetrics metrics, ShardOwnerMetrics pumpMetrics) {
+    }
+
+    /**
+     * A stop is neither a failed pass nor a lost connection to recover from, and announces no reconnect.
+     *
+     * @return the one WARN the pump logged
+     */
+    private ILoggingEvent assertStopNotCountedAndWarnedOnce(StoppedPump stopped) {
+        assertThat(stopped.metrics().pumpLoopFailures.sum()).as("a stop is not a failed pass").isZero();
+        assertThat(stopped.pumpMetrics().pumpLoopFailures.sum()).isZero();
+        assertThat(stopped.pumpMetrics().connectionFailures.sum()).as("nor a lost connection the pump recovers from").isZero();
+        assertThat(stopped.pump().isDead()).isFalse();
+        assertThat(loggedEvents().stream().filter(event -> event.getLevel() == Level.ERROR)).as("no reconnect announced").isEmpty();
+        var warned = loggedEvents().stream().filter(event -> event.getLevel() == Level.WARN).toList();
+        assertThat(warned).hasSize(1);
+        assertThat(warned.getFirst().getFormattedMessage()).doesNotContain("reconnecting");
+        return warned.getFirst();
+    }
+
+    /**
+     * Thrown outside every per-owner guard while the pump is stopping, here by an owner's {@code parkDeadlineMillis}: the
+     * pump exits without counting a failed pass or announcing a reconnect that will not come.
+     */
+    @Test
+    void a_pass_that_fails_as_the_pump_stops_is_not_counted_as_a_failed_pass() throws InterruptedException {
+        var metrics     = new ShardOwnerMetrics();
+        var pumpMetrics = new ShardOwnerMetrics();
+        var running     = new AtomicBoolean(true);
+        var pump        = pump(running, pumpMetrics);
+        var stopping    = new StubOwner((short) 7, 1, metrics, Behaviour.PARK_ERRORS_AS_IT_STOPS);
+        stopping.beforeFailing = () -> running.set(false);
+        pump.add(stopping);
+        var thread = Thread.ofPlatform().name("pump-under-test").start(pump);
+        assertThat(thread.join(Duration.ofSeconds(10))).as("the pump stops when running is cleared").isTrue();
+
+        assertThat(stopping.pumped.get()).as("premise: the pass got as far as parking").isEqualTo(1);
+        var warned = assertStopNotCountedAndWarnedOnce(new StoppedPump(pump, stopping, metrics, pumpMetrics));
+        assertThat(warned.getFormattedMessage()).contains("pump-0").contains("while the pump was stopping");
+        assertThat(warned.getThrowableProxy().getMessage()).isEqualTo(StubOwner.PASS_FAILURE.getMessage());
+    }
+
+    /**
+     * A connection lost while the pump is stopping is not a connection failure the pump recovers from: it exits, so it
+     * neither counts {@code connectionFailures} nor says it is reconnecting.
+     */
+    @Test
+    void a_pump_that_loses_its_connection_as_it_stops_neither_counts_it_nor_says_it_reconnects() throws InterruptedException {
+        var metrics     = new ShardOwnerMetrics();
+        var pumpMetrics = new ShardOwnerMetrics();
+        var running     = new AtomicBoolean(true);
+        var pump        = pump(new ShardOwnedStorage(invalidDataSource(), PUMP_QUEUE_ID), running, pumpMetrics, new AtomicBoolean(false));
+        var stopping    = new StubOwner((short) 7, 1, metrics, Behaviour.DELIVERY_STATEMENT_FAILS_AS_IT_STOPS);
+        stopping.beforeFailing = () -> running.set(false);
+        pump.add(stopping);
+        var thread = Thread.ofPlatform().name("pump-under-test").start(pump);
+        assertThat(thread.join(Duration.ofSeconds(10))).as("the pump stops when running is cleared").isTrue();
+
+        assertThat(stopping.pumped.get()).as("premise: the failing pass ran").isEqualTo(1);
+        var warned = assertStopNotCountedAndWarnedOnce(new StoppedPump(pump, stopping, metrics, pumpMetrics));
+        assertThat(warned.getFormattedMessage()).contains("pump-0").contains("lost its connection while stopping");
+        assertThat(warned.getThrowableProxy().getMessage()).isEqualTo(StubOwner.STATEMENT_FAILURE.getMessage());
+    }
+
+    /**
+     * {@code parkDeadlineMillis} is left outside the per-owner guards, so a throw from it ends the pass after every owner
+     * has been pumped: the pump reconnects and runs every owner's takeover again, on the connection it reconnected with.
+     */
+    @Test
+    void a_pass_ended_by_an_owners_park_deadline_reconnects_and_reruns_every_takeover() throws InterruptedException {
+        var metrics     = new ShardOwnerMetrics();
+        var pumpMetrics = new ShardOwnerMetrics();
+        var running     = new AtomicBoolean(true);
+        var pump        = pump(running, pumpMetrics);
+        var failing     = new StubOwner((short) 7, 1, metrics, Behaviour.PARK_ERRORS_ONCE);
+        var beside      = new StubOwner((short) 7, 2, metrics, Behaviour.SERVED);
+        pump.add(failing);
+        pump.add(beside);
+        var thread = Thread.ofPlatform().name("pump-under-test").start(pump);
+        try {
+            await().atMost(Duration.ofSeconds(10))
+                   .until(() -> loggedEvents().stream().anyMatch(event -> event.getLevel() == Level.INFO));
+
+            assertThat(metrics.pumpLoopFailures.sum()).as("one failed pass").isEqualTo(1);
+            assertThat(pumpMetrics.pumpLoopFailures.sum()).isEqualTo(1);
+            assertThat(failing.takeovers.get()).as("taken over again on the connection the pump reconnected with").isEqualTo(2);
+            assertThat(beside.takeovers.get()).as("every owner's takeover reran, not only the failing one's").isEqualTo(2);
+            assertThat(failing.pumped.get()).as("pumped before the throw, and after the reconnect").isGreaterThanOrEqualTo(2);
+            assertThat(beside.pumped.get()).isGreaterThanOrEqualTo(2);
+            assertThat(metrics.pumpFailures.sum()).as("not charged to the owner").isZero();
+            var errors = loggedEvents().stream().filter(event -> event.getLevel() == Level.ERROR).toList();
+            assertThat(errors).hasSize(1);
+            assertThat(errors.getFirst().getFormattedMessage()).contains("pump-0").contains("2 shard(s)").contains("pumpLoopFailures");
+            assertThat(errors.getFirst().getThrowableProxy().getMessage()).isEqualTo(StubOwner.PASS_FAILURE.getMessage());
+            assertThat(thread.isAlive()).isTrue();
+            assertThat(pump.isDead()).isFalse();
+        } finally {
+            running.set(false);
+            pump.wakeup().signal();
+            assertThat(thread.join(Duration.ofSeconds(10))).isTrue();
+        }
+    }
+
+    /**
+     * A {@code parkDeadlineMillis} that keeps throwing ends every pass that delivered nothing, each one reconnecting and
+     * rerunning every takeover, and is reported as the run of failed passes it is. The pass used to be reported complete
+     * before it parked: an INFO "completed again" on every pass, and a count of failed passes in a row that never got
+     * past one.
+     */
+    @Test
+    void a_park_deadline_that_keeps_throwing_is_reported_as_one_run_of_failed_passes() throws InterruptedException {
+        pumpLogger.setLevel(Level.DEBUG);
+        var metrics     = new ShardOwnerMetrics();
+        var pumpMetrics = new ShardOwnerMetrics();
+        var running     = new AtomicBoolean(true);
+        var pump        = pump(running, pumpMetrics);
+        var failing     = new StubOwner((short) 7, 1, metrics, Behaviour.PARK_ERRORS);
+        var beside      = new StubOwner((short) 7, 2, metrics, Behaviour.SERVED);
+        pump.add(failing);
+        pump.add(beside);
+        var thread = Thread.ofPlatform().name("pump-under-test").start(pump);
+        try {
+            await().atMost(Duration.ofSeconds(10)).until(() -> metrics.pumpLoopFailures.sum() >= 3);
+
+            assertThat(beside.pumped.get()).as("each pass still pumps before it fails").isGreaterThanOrEqualTo(3);
+            assertThat(beside.takeovers.get()).as("each failed pass reran every takeover").isGreaterThanOrEqualTo(3);
+            assertThat(loggedEvents().stream().map(ILoggingEvent::getFormattedMessage))
+                    .as("no pass is reported complete while it keeps failing")
+                    .noneMatch(message -> message.contains("completed again"))
+                    .anyMatch(message -> message.contains("(3 failed pass(es) in a row)"));
+            assertThat(loggedEvents().stream().filter(event -> event.getLevel() == Level.ERROR)).hasSize(1);
             assertThat(thread.isAlive()).isTrue();
         } finally {
             running.set(false);
@@ -474,8 +740,12 @@ class ShardPumpExitTest {
     }
 
     private static ShardPump pump(AtomicBoolean running, ShardOwnerMetrics pumpMetrics) {
-        return new ShardPump(new ShardOwnedStorage(healthyDataSource(), PUMP_QUEUE_ID), ShardOwnerSettings.defaults(),
-                             pumpMetrics, running, new AtomicBoolean(false), "pump-0", Optional::empty);
+        return pump(new ShardOwnedStorage(healthyDataSource(), PUMP_QUEUE_ID), running, pumpMetrics, new AtomicBoolean(false));
+    }
+
+    private static ShardPump pump(ShardOwnedStorage storage, AtomicBoolean running, ShardOwnerMetrics pumpMetrics,
+                                  AtomicBoolean flushOnExit) {
+        return new ShardPump(storage, ShardOwnerSettings.defaults(), pumpMetrics, running, flushOnExit, "pump-0", Optional::empty);
     }
 
     private static QueueObserver observer(List<String> told) {
@@ -491,9 +761,21 @@ class ShardPumpExitTest {
      * Hands out connections that are valid and do nothing: the stub owners never issue a statement.
      */
     private static DataSource healthyDataSource() {
+        return stubDataSource(true);
+    }
+
+    /**
+     * Like {@link #healthyDataSource()}, except that its connection reports itself broken when asked: what the pump asks
+     * once a statement fails, to tell a failing statement from a lost connection.
+     */
+    private static DataSource invalidDataSource() {
+        return stubDataSource(false);
+    }
+
+    private static DataSource stubDataSource(boolean valid) {
         var connection = (Connection) Proxy.newProxyInstance(ShardPumpExitTest.class.getClassLoader(), new Class<?>[]{Connection.class},
                                                              (proxy, method, args) -> switch (method.getName()) {
-                                                                 case "isValid" -> true;
+                                                                 case "isValid" -> valid;
                                                                  case "close" -> null;
                                                                  case "isClosed" -> false;
                                                                  case "hashCode" -> System.identityHashCode(proxy);
@@ -507,6 +789,30 @@ class ShardPumpExitTest {
                                                        case "hashCode" -> System.identityHashCode(proxy);
                                                        case "equals" -> proxy == args[0];
                                                        case "toString" -> "stub data source";
+                                                       default -> throw new UnsupportedOperationException(method.getName());
+                                                   });
+    }
+
+    /**
+     * Like {@link #healthyDataSource()}, except that its first {@code failures} connections are refused with a
+     * non-critical {@code Error} ({@link StubOwner#PASS_FAILURE}), recording when ({@link System#nanoTime()}) in
+     * {@code failedAt}: a pass that fails outside every per-shard guard.
+     */
+    private static DataSource failingDataSource(int failures, List<Long> failedAt) {
+        var healthy      = healthyDataSource();
+        var failuresLeft = new AtomicInteger(failures);
+        return (DataSource) Proxy.newProxyInstance(ShardPumpExitTest.class.getClassLoader(), new Class<?>[]{DataSource.class},
+                                                   (proxy, method, args) -> switch (method.getName()) {
+                                                       case "getConnection" -> {
+                                                           if (failuresLeft.getAndDecrement() > 0) {
+                                                               failedAt.add(System.nanoTime());
+                                                               throw StubOwner.PASS_FAILURE;
+                                                           }
+                                                           yield healthy.getConnection();
+                                                       }
+                                                       case "hashCode" -> System.identityHashCode(proxy);
+                                                       case "equals" -> proxy == args[0];
+                                                       case "toString" -> "stub failing data source";
                                                        default -> throw new UnsupportedOperationException(method.getName());
                                                    });
     }
@@ -568,10 +874,45 @@ class ShardPumpExitTest {
          */
         DIES,
         /**
-         * Taken over, then throws a non-critical {@code Error} from {@code needsAttention} on its first {@code failures}
-         * calls, outside every per-shard guard; served from then on.
+         * Taken over, then throws a non-critical {@code Error} from {@code leaseHeld} every time.
          */
-        FAILS,
+        LEASE_CHECK_ERRORS,
+        /**
+         * Taken over, then throws a non-critical {@code Error} from {@code deliveryPermitted} every time.
+         */
+        PERMIT_ERRORS,
+        /**
+         * Taken over, then throws a non-critical {@code Error} from {@code needsAttention} every time.
+         */
+        ATTENTION_ERRORS,
+        /**
+         * Served, and its {@code flushOnStop} throws a non-critical {@code Error}.
+         */
+        FLUSH_ERRORS,
+        /**
+         * Served, and its {@code flushOnStop} throws an {@code SQLException} ({@link StubOwner#STATEMENT_FAILURE}).
+         */
+        FLUSH_STATEMENT_FAILS,
+        /**
+         * Served, and its {@code parkDeadlineMillis} throws a non-critical {@code Error} ({@link StubOwner#PASS_FAILURE})
+         * the first time it is asked.
+         */
+        PARK_ERRORS_ONCE,
+        /**
+         * Served, and its {@code parkDeadlineMillis} throws a non-critical {@code Error} ({@link StubOwner#PASS_FAILURE})
+         * every time.
+         */
+        PARK_ERRORS,
+        /**
+         * Served, and its {@code parkDeadlineMillis} runs {@code beforeFailing} (which stops the pump) and then throws a
+         * non-critical {@code Error} ({@link StubOwner#PASS_FAILURE}).
+         */
+        PARK_ERRORS_AS_IT_STOPS,
+        /**
+         * Taken over and attentive, and its {@code pumpOnce} runs {@code beforeFailing} (which stops the pump) and then
+         * throws an {@code SQLException} ({@link StubOwner#STATEMENT_FAILURE}).
+         */
+        DELIVERY_STATEMENT_FAILS_AS_IT_STOPS,
         /**
          * Taken over and served: always attentive, delivering nothing.
          */
@@ -595,41 +936,42 @@ class ShardPumpExitTest {
         static final LinkageError   DEATH        = new LinkageError("pump bug");
         static final AssertionError PASS_FAILURE = new AssertionError("pass bug");
         static final AssertionError OWNER_ERROR  = new AssertionError("owner bug");
+        static final SQLException   STATEMENT_FAILURE = new SQLException("statement refused");
 
         private final short             queueId;
         private final int               shard;
         private final ShardOwnerMetrics ownerMetrics;
         private final Behaviour         behaviour;
-        private final AtomicInteger     failuresLeft;
         final         AtomicInteger     pumped    = new AtomicInteger();
         /**
          * Passes whose {@code pumpOnce} has returned: for {@link Behaviour#BLOCKS}, only once {@code released}.
          */
         final         AtomicInteger     returned  = new AtomicInteger();
         final         AtomicInteger     takeovers = new AtomicInteger();
-        /**
-         * When each {@link Behaviour#FAILS} failure was thrown ({@link System#nanoTime()}).
-         */
-        final         List<Long>        failedAt  = new CopyOnWriteArrayList<>();
+        final         AtomicInteger     flushes   = new AtomicInteger();
         final         CountDownLatch    released  = new CountDownLatch(1);
+        final         AtomicInteger     parks     = new AtomicInteger();
+        /**
+         * Run just before the {@code *_AS_IT_STOPS} behaviours throw.
+         */
+        volatile      Runnable          beforeFailing = () -> {};
 
         StubOwner(short queueId, int shard, ShardOwnerMetrics ownerMetrics, Behaviour behaviour) {
-            this(queueId, shard, ownerMetrics, behaviour, 1);
-        }
-
-        StubOwner(short queueId, int shard, ShardOwnerMetrics ownerMetrics, Behaviour behaviour, int failures) {
             this.queueId = queueId;
             this.shard = shard;
             this.ownerMetrics = ownerMetrics;
             this.behaviour = behaviour;
-            this.failuresLeft = new AtomicInteger(failures);
         }
 
         @Override
-        public int pumpOnce(Connection connection) {
+        public int pumpOnce(Connection connection) throws SQLException {
             pumped.incrementAndGet();
             if (behaviour == Behaviour.DELIVERY_ERRORS) {
                 throw OWNER_ERROR;
+            }
+            if (behaviour == Behaviour.DELIVERY_STATEMENT_FAILS_AS_IT_STOPS) {
+                beforeFailing.run();
+                throw STATEMENT_FAILURE;
             }
             if (behaviour == Behaviour.BLOCKS) {
                 var interrupted = false;
@@ -652,14 +994,9 @@ class ShardPumpExitTest {
         public boolean needsAttention() {
             return switch (behaviour) {
                 case DIES -> throw DEATH;
-                case FAILS -> {
-                    if (failuresLeft.getAndDecrement() > 0) {
-                        failedAt.add(System.nanoTime());
-                        throw PASS_FAILURE;
-                    }
-                    yield true;
-                }
-                case SERVED, BLOCKS, DELIVERY_ERRORS -> true;
+                case ATTENTION_ERRORS -> throw OWNER_ERROR;
+                case SERVED, BLOCKS, DELIVERY_ERRORS, FLUSH_ERRORS, FLUSH_STATEMENT_FAILS, LEASE_CHECK_ERRORS, PERMIT_ERRORS,
+                     PARK_ERRORS_ONCE, PARK_ERRORS, PARK_ERRORS_AS_IT_STOPS, DELIVERY_STATEMENT_FAILS_AS_IT_STOPS -> true;
                 case TAKEOVER_FAILS, TAKEOVER_ERRORS -> false;
             };
         }
@@ -676,12 +1013,34 @@ class ShardPumpExitTest {
         }
 
         @Override
-        public void flushOnStop(Connection connection) {
+        public void flushOnStop(Connection connection) throws SQLException {
+            flushes.incrementAndGet();
+            if (behaviour == Behaviour.FLUSH_ERRORS) {
+                throw OWNER_ERROR;
+            }
+            if (behaviour == Behaviour.FLUSH_STATEMENT_FAILS) {
+                throw STATEMENT_FAILURE;
+            }
         }
 
         @Override
         public long parkDeadlineMillis() {
-            return behaviour == Behaviour.DELIVERY_ERRORS ? 20L : Long.MAX_VALUE;
+            var asked = parks.incrementAndGet();
+            return switch (behaviour) {
+                case DELIVERY_ERRORS -> 20L;
+                case PARK_ERRORS -> throw PASS_FAILURE;
+                case PARK_ERRORS_ONCE -> {
+                    if (asked == 1) {
+                        throw PASS_FAILURE;
+                    }
+                    yield Long.MAX_VALUE;
+                }
+                case PARK_ERRORS_AS_IT_STOPS -> {
+                    beforeFailing.run();
+                    throw PASS_FAILURE;
+                }
+                default -> Long.MAX_VALUE;
+            };
         }
 
         @Override
@@ -711,6 +1070,17 @@ class ShardPumpExitTest {
 
         @Override
         public boolean leaseHeld() {
+            if (behaviour == Behaviour.LEASE_CHECK_ERRORS) {
+                throw OWNER_ERROR;
+            }
+            return true;
+        }
+
+        @Override
+        public boolean deliveryPermitted() {
+            if (behaviour == Behaviour.PERMIT_ERRORS) {
+                throw OWNER_ERROR;
+            }
             return true;
         }
 

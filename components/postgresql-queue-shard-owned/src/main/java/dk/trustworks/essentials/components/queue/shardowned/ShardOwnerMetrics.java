@@ -149,7 +149,9 @@ public final class ShardOwnerMetrics {
     /**
      * Delivery passes ({@code pumpOnce}) for a shard that failed with the connection still healthy: a statement the
      * database refused, or an unchecked exception or non-critical {@code Error} from the engine. Not a handler failing, which is
-     * {@link #handlerFailures}. The shard stays leased and its pass is tried again 200 ms later at the earliest
+     * {@link #handlerFailures}. The checks that decide whether the shard is pumped at all ({@code leaseHeld},
+     * {@code deliveryPermitted}, {@code needsAttention}) count here too when they throw, paced the same way. The shard
+     * stays leased and its pass is tried again 200 ms later at the earliest
      * ({@code ShardPump.PUMP_RETRY_NANOS}), with no limit, while the pump's other shards keep their own rate. So a shard
      * whose reads or acknowledgements are permanently refused delivers nothing while this rises by up to about five a
      * second per failing shard, whatever the pump's pass rate - and,
@@ -179,18 +181,21 @@ public final class ShardOwnerMetrics {
     public final LongAdder     batchedReadFailures              = new LongAdder();
     /**
      * Pump passes that ended because something outside the pump's per-shard guards threw: an unchecked exception or a
-     * non-critical {@code Error} from an owner's selection checks ({@code needsAttention}, {@code leaseHeld},
-     * {@code deliveryPermitted}) or from the pump's own bookkeeping. One owner's {@code pumpOnce} or {@code onTakeover}
-     * throwing is not counted here: that is the owner's alone ({@link #pumpFailures}, {@link #takeoverFailures}). The pump
-     * treats it like a lost connection: it reconnects 200 ms later, runs every shard's takeover again (safe, it runs on
-     * every reconnect) and goes on serving. Counted on the metrics of every queue the pump serves, since a pass is not one
-     * queue's, and on the runtime's own.
+     * non-critical {@code Error} from the connection pool, from the pump's own bookkeeping, or from an owner's
+     * {@code parkDeadlineMillis}. One owner's {@code pumpOnce}, {@code onTakeover} or selection checks
+     * ({@code leaseHeld}, {@code deliveryPermitted}, {@code needsAttention}) throwing is not counted here: that is the
+     * owner's alone ({@link #pumpFailures}, {@link #takeoverFailures}). The pump treats it like a lost connection: it
+     * reconnects 200 ms later, runs every shard's takeover again (safe, it runs on every reconnect) and goes on serving.
+     * Counted on the metrics of every queue the pump serves, since a pass is not one queue's, and on the runtime's own. A
+     * pump that is stopping counts nothing here: it logs the throw at WARN and exits.
      * <p>
-     * What a steadily rising count costs depends on where it is thrown. The selection checks run for every owner before
-     * any owner is pumped, so a throw there ends the pass before any shard on the pump delivers: while it persists, the
-     * pump delivers nothing, for every shard it serves. A throw from the pump's later bookkeeping costs the pass it ends,
-     * so the pump delivers at most one pass every 200 ms. The ERROR log is at most once a minute per pump, every failure
-     * at DEBUG, an INFO when a pass completes again. See {@code ShardPump.serve}.
+     * What a steadily rising count costs depends on where it is thrown. A pool that keeps failing ends every pass before
+     * any shard on the pump delivers: while it persists, the pump delivers nothing, for every shard it serves. An owner's
+     * {@code parkDeadlineMillis} is asked only on a pass that delivered nothing, after every attentive shard was pumped:
+     * while it keeps throwing, every idle pass ends in a reconnect that reruns every shard's takeover, about five times a
+     * second, and a message arriving meanwhile waits up to 200 ms for the reconnect instead of being woken for. The ERROR
+     * log is at most once a minute per pump, every failure at DEBUG, an INFO when a pass completes again. See
+     * {@code ShardPump.serve}.
      * <p>
      * Readable only through {@link ShardOwnedQueue#metrics()}. A {@code PostgresqlMessageQueue} keeps its metrics private
      * and no {@code QueueObserver} callback reports this, so for a queue used through {@code MessageQueue} (the Spring
