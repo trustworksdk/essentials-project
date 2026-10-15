@@ -404,6 +404,10 @@ Two rules the pump enforces that are easy to get wrong:
 
 On `SQLException` the pump reconnects rather than exiting, paced at 200 ms. The retrying is bounded by the lease: if the database is genuinely gone the heartbeat cannot renew either, every owner is marked lost, and the loop exits. A pump that dies is worse than a crash, because a crash gets noticed and restarted while a queue that quietly stops delivering does not.
 
+So nothing a retry could cure ends a pump. An unchecked exception or a non-critical `Error` from one owner's `pumpOnce` or `onTakeover` is that owner's alone: counted (`pumpFailures`, `takeoverFailures`) and retried, while the pump's other owners keep being served. Anything thrown outside those per-owner guards — from `needsAttention`, `leaseHeld` or `deliveryPermitted`, from the pump's own bookkeeping or from an observer — ends only the pass: the pump reconnects 200 ms later, runs every owner's takeover again (safe: it already runs on every reconnect) and counts the pass in `ShardOwnerMetrics.pumpLoopFailures`, with at most one ERROR a minute per pump. A selection check that keeps throwing therefore stops the whole pump delivering until it clears. Only a critical error (`VirtualMachineError`, `LinkageError`) ends the thread. Such a pump is marked dead: it logs an ERROR, the runtime routes newly acquired shards to its live pumps, and the shards it still holds — leased, renewed by the heartbeat, served by nobody — are counted in `ShardOwnerMetrics.shardsOnDeadPumps`, which `QueueHealth.unownedShards()` cannot see. The count is of shards placed on the dead pump, so one whose lease a rebalance ends stays counted until the runtime stops. The cure is restarting the `ShardRuntime` (or the application); its stop drops the dead pump's counts.
+
+Both metrics are readable only through `ShardOwnedQueue.metrics()`. `PostgresqlMessageQueue` keeps its metrics private and no `QueueObserver` callback reports a dead pump, so through `MessageQueue` (the Spring starter, the `DurableQueues` adapter) the pump's ERROR line is the only signal — unlike a stalled takeover, which reaches `QueueObserver.takeoverStalled`. Whether to add one is open: §18.3.
+
 ---
 
 ## 4. Enqueue
@@ -1413,6 +1417,18 @@ a contract compatibility-checked at `1.0.0`. Both are logged on transition, and 
 anything holding the `ShardOwnerMetrics`.
 *Reopen when* an operator needs them without log access, or an alert wants them per queue rather than
 per process — at which point they go through the contract properly rather than being appended to it.
+
+**A `QueueObserver` signal for a dead pump.** `ShardOwnerMetrics.shardsOnDeadPumps` and
+`pumpLoopFailures` (§3) are readable only through `ShardOwnedQueue.metrics()`: `PostgresqlMessageQueue`
+keeps its `ShardOwnerMetrics` private, and no observer callback reports either. So through
+`MessageQueue` — the Spring starter, the `DurableQueues` adapter — a pump that died on a critical error
+is reported by its ERROR line alone, while a stalled takeover reaches `QueueObserver.takeoverStalled`
+(published as `essentials.queue.shards.awaiting.takeover`). Open, not
+settled: a callback beside `takeoverStalled` plus its Micrometer gauge would close it, and it widens
+`QueueObserver` — every implementor's surface — for a state reached only on a `VirtualMachineError` or
+`LinkageError`, which usually takes more than one pump down with it.
+*Reopen when* a deployment on the starter or the adapter needs to alert on a dead pump without log
+access, or a dead pump is seen in practice from a cause the process survives.
 
 **Bridging `DurableQueuesInterceptor` onto the engine's chain.** Considered and rejected while building
 the adapter's interception, which runs the chain around the adapter's own methods instead. The engine's

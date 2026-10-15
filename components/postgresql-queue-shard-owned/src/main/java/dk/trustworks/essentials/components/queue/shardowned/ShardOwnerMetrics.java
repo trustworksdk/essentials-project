@@ -135,9 +135,10 @@ public final class ShardOwnerMetrics {
      * the pump is reconnecting stays counted here until then. Meanwhile {@code unownedShards} shows the
      * shard only if the lease was released and nobody has taken it yet; if another instance took it over,
      * the shard counts as owned there, and this count is one too high until the pump reconnects. It falls
-     * when the pump stops with its runtime, but not when the pump thread dies while the runtime runs: its
-     * shards then stay leased and unserved, and the death is logged at ERROR. A dead pump's shards stop
-     * counting when that runtime stops.
+     * when the pump stops with its runtime, but not when the pump thread dies (on a critical error) while the
+     * runtime runs: its shards then stay leased and unserved, the death is logged at ERROR, and every shard
+     * on it is counted in {@link #shardsOnDeadPumps}. A dead pump's shards stop counting in both when that
+     * runtime stops.
      * <p>
      * Readable through {@link ShardOwnedQueue#metrics()}. A {@code PostgresqlMessageQueue} keeps its
      * metrics private; for a queue used through {@code MessageQueue} the same transitions reach
@@ -147,7 +148,7 @@ public final class ShardOwnerMetrics {
     public final AtomicInteger shardsAwaitingTakeover           = new AtomicInteger();
     /**
      * Delivery passes ({@code pumpOnce}) for a shard that failed with the connection still healthy: a statement the
-     * database refused, or an unchecked exception from the engine. Not a handler failing, which is
+     * database refused, or an unchecked exception or non-critical {@code Error} from the engine. Not a handler failing, which is
      * {@link #handlerFailures}. The shard stays leased and the pass is tried again on the pump's next pass, with no limit,
      * so a shard whose reads or acknowledgements are permanently refused delivers nothing while this keeps rising - and,
      * like a stalled takeover, {@code QueueHealth.unownedShards()} cannot see it because the shard is leased. Alert on
@@ -163,6 +164,47 @@ public final class ShardOwnerMetrics {
      * queue, every failure at DEBUG, and an INFO when the queue's batched read succeeds again. See {@code PumpFailures}.
      */
     public final LongAdder     batchedReadFailures              = new LongAdder();
+    /**
+     * Pump passes that ended because something outside the pump's per-shard guards threw: an unchecked exception or a
+     * non-critical {@code Error} from an owner's selection checks ({@code needsAttention}, {@code leaseHeld},
+     * {@code deliveryPermitted}) or from the pump's own bookkeeping. One owner's {@code pumpOnce} or {@code onTakeover}
+     * throwing is not counted here: that is the owner's alone ({@link #pumpFailures}, {@link #takeoverFailures}). The pump
+     * treats it like a lost connection: it reconnects 200 ms later, runs every shard's takeover again (safe, it runs on
+     * every reconnect) and goes on serving. Counted on the metrics of every queue the pump serves, since a pass is not one
+     * queue's, and on the runtime's own.
+     * <p>
+     * What a steadily rising count costs depends on where it is thrown. The selection checks run for every owner before
+     * any owner is pumped, so a throw there ends the pass before any shard on the pump delivers: while it persists, the
+     * pump delivers nothing, for every shard it serves. A throw from the pump's later bookkeeping costs the pass it ends,
+     * so the pump delivers at most one pass every 200 ms. The ERROR log is at most once a minute per pump, every failure
+     * at DEBUG, an INFO when a pass completes again. See {@code ShardPump.serve}.
+     * <p>
+     * Readable only through {@link ShardOwnedQueue#metrics()}. A {@code PostgresqlMessageQueue} keeps its metrics private
+     * and no {@code QueueObserver} callback reports this, so for a queue used through {@code MessageQueue} (the Spring
+     * starter, the {@code DurableQueues} adapter) the ERROR log is the only signal.
+     */
+    public final LongAdder     pumpLoopFailures                 = new LongAdder();
+    /**
+     * Shards of this queue that sit on a pump thread that has died, counted from the death (or from being handed to the
+     * dead pump, when no live one was left) until the runtime stops. A pump dies only on a critical error
+     * ({@code VirtualMachineError}, {@code LinkageError}): everything else it reconnects from ({@link #pumpLoopFailures}).
+     * Nothing restarts it, and the heartbeat keeps renewing these shards' leases, so no other instance takes them and they
+     * deliver nothing until the {@code ShardRuntime} (or the application) is restarted. {@code QueueHealth.unownedShards()}
+     * cannot see them, because they are leased. Alert on it above zero, next to {@link #shardsAwaitingTakeover}. Shards
+     * acquired after the death go to the runtime's live pumps and are not counted, unless every pump is dead.
+     * <p>
+     * It counts shards placed on the dead pump, not leases held: a dead pump never drops an owner, so a shard stays
+     * counted after its lease ends - released by rebalancing (fair share, an ordered shed) or by its queue stopping - until
+     * the runtime stops. If this instance acquires such a shard again, it is served on a live pump and still counted
+     * here. Falls to zero when the runtime stops, which ends the leases the dead pump was keeping.
+     * <p>
+     * Readable only through {@link ShardOwnedQueue#metrics()}. A {@code PostgresqlMessageQueue} keeps its metrics private
+     * and no {@code QueueObserver} callback reports a dead pump (unlike {@link #shardsAwaitingTakeover}, which reaches
+     * {@code QueueObserver.takeoverStalled}), so for a queue used through {@code MessageQueue} (the Spring starter, the
+     * {@code DurableQueues} adapter) the pump's ERROR log is the only signal. Whether to add one is open:
+     * {@code docs/durable-queue-shard-owned.md} §18.3.
+     */
+    public final AtomicInteger shardsOnDeadPumps                = new AtomicInteger();
     /**
      * Messages whose handler returned while the thread was interrupted. Not acknowledged, because an
      * interrupted handler cannot be assumed to have finished — see {@code ShardOwner.deliver}.
@@ -360,6 +402,8 @@ public final class ShardOwnerMetrics {
         snapshot.put("shardsAwaitingTakeover", shardsAwaitingTakeover.get());
         snapshot.put("pumpFailures", pumpFailures.sum());
         snapshot.put("batchedReadFailures", batchedReadFailures.sum());
+        snapshot.put("pumpLoopFailures", pumpLoopFailures.sum());
+        snapshot.put("shardsOnDeadPumps", shardsOnDeadPumps.get());
         snapshot.put("abandonedOnInterrupt", abandonedOnInterrupt.sum());
         snapshot.put("orderViolations", orderViolations.sum());
         snapshot.put("keysBlockedByDeadLetter", keysBlockedByDeadLetter.sum());

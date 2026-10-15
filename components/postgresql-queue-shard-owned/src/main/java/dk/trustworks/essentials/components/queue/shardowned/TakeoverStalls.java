@@ -225,7 +225,7 @@ final class TakeoverStalls {
 
     /**
      * The pump is stopping in order ({@code running} cleared), or it had died and its runtime has since stopped
-     * ({@link ShardPump#forgetStallsAfterExit()}): none of its shards is served by it any more. Not called when the pump
+     * ({@link ShardPump#forgetAfterExit()}): none of its shards is served by it any more. Not called when the pump
      * dies while the runtime runs, because its shards then stay leased and unserved (why: {@link ShardPump#run}).
      */
     void forgetAll() {
