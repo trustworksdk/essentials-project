@@ -552,6 +552,45 @@ class ShardPumpExitTest {
     }
 
     /**
+     * A dying pump reads as dead only once every owner it held is ended and counted, so whoever waits on
+     * {@code isDead()} reads the whole {@code shardsOnDeadPumps}. It set the flag first and counted after, so a reader
+     * could see the death with part of the count. And an owner the death has ended reads as on a dead pump from that
+     * moment, before the pump reads as dead: an unordered one's lease is no longer held, and a queue whose rebalance saw
+     * it as neither dropped it with its lease row unreleased.
+     */
+    @Test
+    void a_dying_pump_reads_as_dead_only_once_it_has_counted_every_owner_and_an_ended_owner_is_on_a_dead_pump_at_once() {
+        var metrics = new ShardOwnerMetrics();
+        var runtime = new ShardRuntime(listenableDataSource(), pumps(1), new ShardOwnerMetrics());
+        try {
+            var first  = new StubOwner((short) 7, 1, metrics, Behaviour.SERVED);
+            var second = new StubOwner((short) 7, 2, metrics, Behaviour.SERVED);
+            var pump   = runtime.pumpFor((short) 7, "unordered", 1);
+            // Recorded while the death is being recorded: the first owner is ended first, before the second is counted.
+            var deadWhenFirstEnded       = new AtomicReference<Boolean>();
+            var countedWhenFirstEnded    = new AtomicInteger(-1);
+            var onDeadPumpWhenFirstEnded = new AtomicReference<Boolean>();
+            first.onEnded = () -> {
+                deadWhenFirstEnded.set(pump.isDead());
+                countedWhenFirstEnded.set(metrics.shardsOnDeadPumps.get());
+                onDeadPumpWhenFirstEnded.set(runtime.onDeadPump(first));
+            };
+            runtime.place((short) 7, "unordered", 1).register(first);
+            runtime.place((short) 7, "unordered", 2).register(second);
+            runtime.place((short) 7, "unordered", 3).register(new StubOwner((short) 7, 3, metrics, Behaviour.DIES));
+
+            awaitDeath("pump-0", pump);
+
+            assertThat(metrics.shardsOnDeadPumps.get()).as("every owner counted once the pump reads as dead").isEqualTo(3);
+            assertThat(countedWhenFirstEnded.get()).as("premise: the death was being recorded, not yet complete").isEqualTo(1);
+            assertThat(deadWhenFirstEnded.get()).as("not dead while the count is partial").isFalse();
+            assertThat(onDeadPumpWhenFirstEnded.get()).as("an ended owner is on a dead pump from its end").isTrue();
+        } finally {
+            runtime.stop();
+        }
+    }
+
+    /**
      * Handing a dead pump's shard back is what stops it counting: in {@code shardsOnDeadPumps}, and in
      * {@code shardsAwaitingTakeover} with the observer told the stall ended, when its takeover was failing. It is no longer
      * the pump's, and none of the others is touched.
@@ -962,7 +1001,8 @@ class ShardPumpExitTest {
 
     /**
      * {@link #awaitDeath(String)}, then until {@code pump} has marked itself dead: the ERROR is logged before
-     * {@code markDead()} runs, so the line alone does not say that the pump reads as dead yet.
+     * {@code markDead()} runs, so the line alone does not say that the pump reads as dead yet. Once it does, every owner
+     * it held is ended and counted in {@code shardsOnDeadPumps}: {@code markDead()} sets the flag last.
      */
     private void awaitDeath(String pumpName, ShardPump pump) {
         awaitDeath(pumpName);
@@ -1216,6 +1256,10 @@ class ShardPumpExitTest {
          * Run just before the {@code *_AS_IT_STOPS} behaviours throw.
          */
         volatile      Runnable          beforeFailing = () -> {};
+        /**
+         * Run after each {@code onLeaseEnded} is recorded.
+         */
+        volatile      Runnable          onEnded       = () -> {};
 
         StubOwner(short queueId, int shard, ShardOwnerMetrics ownerMetrics, Behaviour behaviour) {
             this(queueId, shard, ownerMetrics, behaviour, "unordered");
@@ -1363,6 +1407,7 @@ class ShardPumpExitTest {
         @Override
         public void onLeaseEnded(LeaseEnd reason) {
             ended.add(reason);
+            onEnded.run();
         }
     }
 }

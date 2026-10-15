@@ -261,7 +261,7 @@ class ShardOwnedDeadPumpHandBackIT {
                 var fencesBefore = fences("ordered", doomedUnits);
                 assertThat(doomedUnits.size()).as("premise: the dead pump serves other units too").isGreaterThan(1);
 
-                failOrderedLeaseReleases(true);
+                failLeaseReleases("ordered", true);
                 try {
                     kill(doomed);
 
@@ -276,7 +276,7 @@ class ShardOwnedDeadPumpHandBackIT {
                     Thread.sleep(1_500);
                     assertNoneTakenAgain(queue, doomedUnits, fencesBefore, "once the key has left its handler");
                 } finally {
-                    failOrderedLeaseReleases(false);
+                    failLeaseReleases("ordered", false);
                 }
 
                 Awaitility.await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
@@ -293,7 +293,7 @@ class ShardOwnedDeadPumpHandBackIT {
                         () -> assertThat(delivered).as("the key is served again on a live pump").contains("HOLD-1"));
             } finally {
                 release.countDown();
-                failOrderedLeaseReleases(false);
+                failLeaseReleases("ordered", false);
                 queue.stop();
             }
         }
@@ -389,6 +389,151 @@ class ShardOwnedDeadPumpHandBackIT {
         }
     }
 
+    /**
+     * An unordered shard whose hand-back keeps failing still counts towards its instance's fair share, and is retried
+     * until its release succeeds.
+     * <p>
+     * Its owner's lease ended in memory as the pump died, and the unordered acquire loop counted only owners whose lease
+     * was held. So while the release kept failing, the instance took one free shard more per dead row, on top of its fair
+     * share. A single instance cannot show it, because its fair share is every shard. Here there are two instances, and the
+     * second is capped at one shard, so a shard stays free for the first to over-take. The release is made to fail by a
+     * trigger, every time, until the trigger is dropped.
+     */
+    @Test
+    void an_unordered_shard_whose_hand_back_fails_is_retried_without_exceeding_the_fair_share() throws Exception {
+        var settings  = settings(2);
+        var fairShare = SHARD_COUNT / 2;
+        try (var firstRuntime = new ShardRuntime(dataSource, settings); var secondRuntime = new ShardRuntime(dataSource, settings)) {
+            var first  = queue(firstRuntime, "fair-first");
+            var second = queue(secondRuntime, "fair-second");
+            try {
+                first.startConsuming((messageId, payload, payloadType) -> { }, settings, SHARD_COUNT);
+                second.startConsuming((messageId, payload, payloadType) -> { }, settings, 1);
+                Awaitility.await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
+                    assertThat(unitsLeasedTo("unordered", "fair-first")).as("premise: the first holds its fair share").hasSize(fairShare);
+                    assertThat(unitsLeasedTo("unordered", "fair-second")).as("premise: the second holds its cap").hasSize(1);
+                });
+                assertThat(unitsLeasedTo("unordered", null)).as("premise: a shard is free to over-take").isNotEmpty();
+                var firstShards  = unitsLeasedTo("unordered", "fair-first");
+                var doomed       = firstRuntime.pumpFor(QUEUE_ID, "unordered", firstShards.getFirst());
+                var deadShards   = firstShards.stream().filter(shard -> firstRuntime.pumpFor(QUEUE_ID, "unordered", shard) == doomed).toList();
+                var fencesBefore = fences("unordered", deadShards);
+
+                failLeaseReleases("unordered", true);
+                try {
+                    kill(doomed);
+
+                    // Several heartbeats (a third of the 1 s lease each), every hand-back failing, sampled throughout.
+                    var until = System.nanoTime() + Duration.ofMillis(1_500).toNanos();
+                    while (System.nanoTime() < until) {
+                        assertThat(unitsLeasedTo("unordered", "fair-first")).as("never more lease rows than the fair share").hasSizeLessThanOrEqualTo(fairShare);
+                        Thread.sleep(50);
+                    }
+                    for (var shard : deadShards) {
+                        assertThat(ownerOf("unordered", shard)).as("shard %d still leased: its release failed", shard).isEqualTo("fair-first");
+                        assertThat(fenceOf("unordered", shard)).as("shard %d not taken again", shard).isEqualTo(fencesBefore.get(shard));
+                    }
+                    assertThat(first.metrics().shardsOnDeadPumps.get()).as("still on the dead pump: no hand-back has succeeded").isEqualTo(deadShards.size());
+                } finally {
+                    failLeaseReleases("unordered", false);
+                }
+
+                Awaitility.await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
+                    for (var shard : deadShards) {
+                        assertThat(fenceOf("unordered", shard)).as("shard %d handed back and taken again exactly once", shard)
+                                                               .isEqualTo(fencesBefore.get(shard) + 1);
+                        assertThat(ownerOf("unordered", shard)).isEqualTo("fair-first");
+                    }
+                    assertThat(first.metrics().shardsOnDeadPumps.get()).isZero();
+                });
+                assertThat(unitsLeasedTo("unordered", "fair-first")).as("back at its fair share, on live pumps").hasSize(fairShare);
+            } finally {
+                failLeaseReleases("unordered", false);
+                second.stop();
+                first.stop();
+            }
+        }
+    }
+
+    /**
+     * An ordered unit that finished its shed before its pump died, and whose hand-back then fails, is released by the shed
+     * instead, and is no longer counted on the dead pump.
+     * <p>
+     * The shed's release dropped the unit from the queue without telling the runtime, so it stayed counted in
+     * {@code shardsOnDeadPumps} until the runtime stopped, with nothing left that would hand it back. Here a second live
+     * instance that holds nothing halves the fair share, so this instance sheds its upper half. Every ordered release is
+     * refused at first, so the units that finished shedding are still held when the pump dies. Then only a release of
+     * several units at once is refused. That is the dead-pump hand-back's, which fails, while the same tick's shed releases
+     * its units one at a time and succeeds.
+     */
+    @Test
+    void an_ordered_unit_that_finished_shedding_before_its_pump_died_is_no_longer_counted_once_the_shed_releases_it() throws Exception {
+        var settings = settings(2);
+        var units    = ShardOwnedSchema.ORDERED_UNITS;
+        var phantom  = Executors.newSingleThreadScheduledExecutor();
+        try (var runtime = new ShardRuntime(dataSource, settings)) {
+            var queue = queue(runtime, "dead-pump-shed");
+            try {
+                queue.startConsumingOrdered((messageId, key, payload, payloadType) -> { }, settings, SHARD_COUNT);
+                assertThat(queue.shardsHeld()).as("premise: one instance holds every unit").isEqualTo(units);
+                var shed         = new ArrayList<Integer>();
+                for (var unit = units / 2; unit < units; unit++) {
+                    shed.add(unit);
+                }
+                var doomed       = runtime.pumpFor(QUEUE_ID, "ordered", units - 1);
+                var doomedUnits  = unitsOn(runtime, doomed, "ordered", units);
+                var shedOnDoomed = doomedUnits.stream().filter(shed::contains).toList();
+                var keptOnDoomed = doomedUnits.stream().filter(unit -> !shed.contains(unit)).toList();
+                assertThat(keptOnDoomed).as("premise: the hand-back releases several units at once").hasSizeGreaterThan(1);
+                var fencesBefore = fences("ordered", keptOnDoomed);
+
+                failLeaseReleases("ordered", true);
+                try {
+                    phantom.scheduleAtFixedRate(() -> {
+                        try {
+                            queue.storage().heartbeatInstance("phantom");
+                        } catch (Exception ignored) {
+                            // The next beat retries; a missed one only delays the shed.
+                        }
+                    }, 0, 100, TimeUnit.MILLISECONDS);
+                    Awaitility.await().atMost(Duration.ofSeconds(20))
+                              .until(() -> queue.metrics().shedsCompleted.sum() >= shed.size());
+                    assertThat(unitsLeasedTo("ordered", "dead-pump-shed")).as("premise: no shed unit released yet").hasSize(units);
+
+                    kill(doomed);
+                    assertThat(queue.metrics().shardsOnDeadPumps.get()).as("premise: on the dead pump").isEqualTo(doomedUnits.size());
+
+                    failLeaseReleases("ordered", false);
+                    failMultiUnitOrderedReleases(true);
+                    Awaitility.await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
+                        assertThat(unitsLeasedTo("ordered", null)).as("the shed released every unit it had finished with").containsAll(shed);
+                        assertThat(queue.metrics().shardsOnDeadPumps.get()).as("those on the dead pump are no longer counted there")
+                                                                           .isEqualTo(keptOnDoomed.size());
+                    });
+                    for (var unit : keptOnDoomed) {
+                        assertThat(ownerOf("ordered", unit)).as("unit %d still leased: the hand-back keeps failing", unit).isEqualTo("dead-pump-shed");
+                    }
+                } finally {
+                    failLeaseReleases("ordered", false);
+                    failMultiUnitOrderedReleases(false);
+                }
+
+                Awaitility.await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
+                    for (var unit : keptOnDoomed) {
+                        assertThat(fenceOf("ordered", unit)).as("unit %d handed back and taken again exactly once", unit)
+                                                            .isEqualTo(fencesBefore.get(unit) + 1);
+                    }
+                    assertThat(queue.metrics().shardsOnDeadPumps.get()).isZero();
+                });
+            } finally {
+                phantom.shutdownNow();
+                failLeaseReleases("ordered", false);
+                failMultiUnitOrderedReleases(false);
+                queue.stop();
+            }
+        }
+    }
+
     private ShardOwnedQueue queue(ShardRuntime runtime, String instanceId) {
         return ShardOwnedQueue.builder().setDataSource(dataSource).setQueueId(QUEUE_ID).setShardCount(SHARD_COUNT)
                               .setInstanceId(instanceId).setRuntime(runtime).build();
@@ -409,20 +554,41 @@ class ShardOwnedDeadPumpHandBackIT {
     }
 
     /**
-     * Make every release of an ordered lease row fail, as a database error would, or stop doing so. A trigger rather than a
-     * revoked grant: the test's role owns the table, and an owner keeps every privilege.
+     * Make every release of a lease row on {@code lane} fail, as a database error would, or stop doing so. A trigger rather
+     * than a revoked grant: the test's role owns the table, and an owner keeps every privilege.
      */
-    private void failOrderedLeaseReleases(boolean fail) throws Exception {
+    private void failLeaseReleases(String lane, boolean fail) throws Exception {
         try (var connection = dataSource.getConnection(); var statement = connection.createStatement()) {
             if (fail) {
-                statement.execute("CREATE OR REPLACE FUNCTION fail_ordered_lease_release() RETURNS trigger AS $$ BEGIN "
-                                          + "IF NEW.lane = 'ordered' AND NEW.owner IS NULL AND OLD.owner IS NOT NULL THEN "
-                                          + "RAISE EXCEPTION 'simulated failure releasing ordered unit %', OLD.shard; END IF; "
+                statement.execute("CREATE OR REPLACE FUNCTION fail_lease_release() RETURNS trigger AS $$ BEGIN "
+                                          + "IF NEW.lane = TG_ARGV[0] AND NEW.owner IS NULL AND OLD.owner IS NOT NULL THEN "
+                                          + "RAISE EXCEPTION 'simulated failure releasing % unit %', NEW.lane, OLD.shard; END IF; "
                                           + "RETURN NEW; END $$ LANGUAGE plpgsql");
-                statement.execute("CREATE TRIGGER fail_ordered_lease_release BEFORE UPDATE ON " + ShardOwnedSchema.LEASE_TABLE
-                                          + " FOR EACH ROW EXECUTE FUNCTION fail_ordered_lease_release()");
+                statement.execute("CREATE TRIGGER fail_lease_release BEFORE UPDATE ON " + ShardOwnedSchema.LEASE_TABLE
+                                          + " FOR EACH ROW EXECUTE FUNCTION fail_lease_release('" + lane + "')");
             } else {
-                statement.execute("DROP TRIGGER IF EXISTS fail_ordered_lease_release ON " + ShardOwnedSchema.LEASE_TABLE);
+                statement.execute("DROP TRIGGER IF EXISTS fail_lease_release ON " + ShardOwnedSchema.LEASE_TABLE);
+            }
+        }
+    }
+
+    /**
+     * Make a statement that releases more than one ordered lease row fail, or stop doing so: the dead-pump hand-back,
+     * which releases a pump's units in one statement, fails while a release of one unit at a time succeeds.
+     */
+    private void failMultiUnitOrderedReleases(boolean fail) throws Exception {
+        try (var connection = dataSource.getConnection(); var statement = connection.createStatement()) {
+            if (fail) {
+                statement.execute("CREATE OR REPLACE FUNCTION fail_multi_unit_release() RETURNS trigger AS $$ BEGIN "
+                                          + "IF (SELECT count(*) FROM released_new n JOIN released_old o USING (queue_id, lane, shard) "
+                                          + "WHERE n.lane = 'ordered' AND n.owner IS NULL AND o.owner IS NOT NULL) > 1 THEN "
+                                          + "RAISE EXCEPTION 'simulated failure releasing several ordered units'; END IF; "
+                                          + "RETURN NULL; END $$ LANGUAGE plpgsql");
+                statement.execute("CREATE TRIGGER fail_multi_unit_release AFTER UPDATE ON " + ShardOwnedSchema.LEASE_TABLE
+                                          + " REFERENCING OLD TABLE AS released_old NEW TABLE AS released_new"
+                                          + " FOR EACH STATEMENT EXECUTE FUNCTION fail_multi_unit_release()");
+            } else {
+                statement.execute("DROP TRIGGER IF EXISTS fail_multi_unit_release ON " + ShardOwnedSchema.LEASE_TABLE);
             }
         }
     }
@@ -489,6 +655,27 @@ class ShardOwnedDeadPumpHandBackIT {
             try (var resultSet = statement.executeQuery()) {
                 resultSet.next();
                 return resultSet.getString(1);
+            }
+        }
+    }
+
+    /**
+     * The units of {@code lane} whose lease row names {@code instanceId}, or no instance when it is {@code null}.
+     */
+    private List<Integer> unitsLeasedTo(String lane, String instanceId) throws Exception {
+        try (var connection = dataSource.getConnection();
+             var statement = connection.prepareStatement("SELECT shard FROM " + ShardOwnedSchema.LEASE_TABLE
+                                                                 + " WHERE queue_id = ? AND lane = ? AND owner IS NOT DISTINCT FROM CAST(? AS text)"
+                                                                 + " ORDER BY shard")) {
+            statement.setShort(1, QUEUE_ID);
+            statement.setString(2, lane);
+            statement.setString(3, instanceId);
+            try (var resultSet = statement.executeQuery()) {
+                var units = new ArrayList<Integer>();
+                while (resultSet.next()) {
+                    units.add(resultSet.getInt(1));
+                }
+                return units;
             }
         }
     }

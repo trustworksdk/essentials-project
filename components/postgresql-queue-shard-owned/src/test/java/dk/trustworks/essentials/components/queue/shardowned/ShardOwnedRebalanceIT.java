@@ -156,4 +156,109 @@ class ShardOwnedRebalanceIT {
                               .isEqualTo(50L));
         }
     }
+
+    /**
+     * A shard given up to the fair share whose lease release fails stays with its owner, served, and is released once the
+     * release succeeds.
+     * <p>
+     * The owner was ended before its lease was released, so a failed release left it ended with the lease still naming
+     * this instance. The next heartbeat dropped it as a lost lease, and the shard was then served by nobody: no other
+     * instance may take a lease a live instance holds, and this one, at its fair share, took nothing more. The release is
+     * made to fail by a trigger, every time, until the trigger is dropped; a sequence the trigger draws from before it
+     * raises (a sequence is not rolled back) proves the release was attempted, and retried.
+     */
+    @Test
+    void an_unordered_shard_whose_shed_release_fails_stays_served_until_the_release_succeeds() throws Exception {
+        var firstReceived  = new CopyOnWriteArrayList<String>();
+        var secondReceived = new CopyOnWriteArrayList<String>();
+        try (var first = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "shed-fail-1")) {
+            first.startConsuming((messageId, payload, payloadType) -> firstReceived.add(new String(payload, StandardCharsets.UTF_8)),
+                                 FAST, SHARD_COUNT);
+            Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(first.shardsHeld()).isEqualTo(SHARD_COUNT));
+
+            failUnorderedLeaseReleases(true);
+            try (var second = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "shed-fail-2")) {
+                try {
+                    second.startConsuming((messageId, payload, payloadType) -> secondReceived.add(new String(payload, StandardCharsets.UTF_8)),
+                                          FAST, SHARD_COUNT);
+                    Awaitility.await().atMost(Duration.ofSeconds(10)).until(() -> releaseAttempts() >= 2);
+
+                    // Several more heartbeats (a third of the 1 s lease each), every release failing, sampled throughout.
+                    var until = System.nanoTime() + Duration.ofMillis(1_500).toNanos();
+                    while (System.nanoTime() < until) {
+                        assertThat(unitsLeasedTo("shed-fail-1")).as("premise: every release failed").isEqualTo(SHARD_COUNT);
+                        assertThat(first.shardsHeld()).as("every shard leased to the first is still served by it").isEqualTo(SHARD_COUNT);
+                        Thread.sleep(50);
+                    }
+                    assertThat(first.metrics().shardsReleased.sum()).as("no release has succeeded").isZero();
+                    assertThat(second.shardsHeld()).as("premise: nothing was free to take").isZero();
+
+                    var payloads = new ArrayList<byte[]>();
+                    for (var index = 0; index < SHARD_COUNT * 5; index++) {
+                        payloads.add(("held-" + index).getBytes(StandardCharsets.UTF_8));
+                    }
+                    first.enqueue(payloads, 1);
+                    Awaitility.await().atMost(Duration.ofSeconds(20)).untilAsserted(
+                            () -> assertThat(new HashSet<>(firstReceived)).as("every shard delivers while its release keeps failing")
+                                                                          .hasSize(SHARD_COUNT * 5));
+                } finally {
+                    failUnorderedLeaseReleases(false);
+                }
+
+                Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> {
+                    assertThat(first.shardsHeld()).isEqualTo(SHARD_COUNT / 2);
+                    assertThat(second.shardsHeld()).isEqualTo(SHARD_COUNT / 2);
+                    assertThat(unitsLeasedTo("shed-fail-1")).as("the first's leases match what it serves").isEqualTo(SHARD_COUNT / 2);
+                });
+            }
+        }
+    }
+
+    /**
+     * Make every release of an unordered lease row fail, as a database error would, or stop doing so. A trigger rather than
+     * a revoked grant: the test's role owns the table, and an owner keeps every privilege. Each refused release first draws
+     * from {@code release_attempts}, which {@link #releaseAttempts()} reads.
+     */
+    private void failUnorderedLeaseReleases(boolean fail) throws Exception {
+        try (var connection = dataSource.getConnection(); var statement = connection.createStatement()) {
+            if (fail) {
+                statement.execute("DROP SEQUENCE IF EXISTS release_attempts");
+                statement.execute("CREATE SEQUENCE release_attempts");
+                statement.execute("CREATE OR REPLACE FUNCTION fail_unordered_lease_release() RETURNS trigger AS $$ BEGIN "
+                                          + "IF NEW.lane = 'unordered' AND NEW.owner IS NULL AND OLD.owner IS NOT NULL THEN "
+                                          + "PERFORM nextval('release_attempts'); "
+                                          + "RAISE EXCEPTION 'simulated failure releasing unordered shard %', OLD.shard; END IF; "
+                                          + "RETURN NEW; END $$ LANGUAGE plpgsql");
+                statement.execute("CREATE TRIGGER fail_unordered_lease_release BEFORE UPDATE ON " + ShardOwnedSchema.LEASE_TABLE
+                                          + " FOR EACH ROW EXECUTE FUNCTION fail_unordered_lease_release()");
+            } else {
+                statement.execute("DROP TRIGGER IF EXISTS fail_unordered_lease_release ON " + ShardOwnedSchema.LEASE_TABLE);
+            }
+        }
+    }
+
+    /**
+     * How many unordered lease releases the trigger has refused.
+     */
+    private long releaseAttempts() throws Exception {
+        try (var connection = dataSource.getConnection();
+             var statement = connection.createStatement();
+             var resultSet = statement.executeQuery("SELECT CASE WHEN is_called THEN last_value ELSE 0 END FROM release_attempts")) {
+            resultSet.next();
+            return resultSet.getLong(1);
+        }
+    }
+
+    private int unitsLeasedTo(String instanceId) throws Exception {
+        try (var connection = dataSource.getConnection();
+             var statement = connection.prepareStatement("SELECT count(*) FROM " + ShardOwnedSchema.LEASE_TABLE
+                                                                 + " WHERE queue_id = ? AND lane = 'unordered' AND owner = ?")) {
+            statement.setShort(1, QUEUE_ID);
+            statement.setString(2, instanceId);
+            try (var resultSet = statement.executeQuery()) {
+                resultSet.next();
+                return resultSet.getInt(1);
+            }
+        }
+    }
 }

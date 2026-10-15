@@ -176,7 +176,8 @@ final class ShardPump implements Runnable {
 
     /**
      * Whether this pump's thread ended on a critical error while its runtime was running ({@link #run()}). A dead pump
-     * serves nothing, and {@link ShardRuntime} routes new shards to the live ones.
+     * serves nothing, and {@link ShardRuntime} routes new shards to the live ones. True only once every owner it held has
+     * been ended and counted ({@link #markDead()}).
      */
     boolean isDead() {
         return dead;
@@ -184,7 +185,8 @@ final class ShardPump implements Runnable {
 
     /**
      * Whether {@code owner} sits on this pump, which has died, and its queue has not handed its lease back yet
-     * ({@link #handedBack}): an owner its queue's heartbeat has to release.
+     * ({@link #handedBack}): an owner its queue's heartbeat has to release. Answers from {@link #countedDead} under
+     * {@link #deathLock}, so it is true as soon as the owner has been ended by the death, before {@link #isDead()} is.
      */
     boolean awaitsHandBack(LeasedOwner owner) {
         synchronized (deathLock) {
@@ -310,15 +312,21 @@ final class ShardPump implements Runnable {
     }
 
     /**
-     * The pump has died while its runtime runs: route new shards elsewhere ({@link #dead}), and end every owner on it
-     * ({@link #endOnDeadPump}) so its queue hands the lease back ({@link #run()} says why).
+     * The pump has died while its runtime runs: end every owner on it ({@link #endOnDeadPump}) so its queue hands the
+     * lease back ({@link #run()} says why), and route new shards elsewhere ({@link #dead}).
+     * <p>
+     * {@link #dead} is set LAST, after every owner is counted and ended: {@link #isDead()} reads it without the lock, so
+     * whoever sees the pump dead also sees every owner it held counted in {@link ShardOwnerMetrics#shardsOnDeadPumps}.
+     * Set first, a reader could see the death with only part of the count. Nothing is lost by the owners being ended
+     * before the flag: {@link #add} decides under the lock, and {@link ShardRuntime#onDeadPump} asks
+     * {@link #awaitsHandBack} (under the lock) rather than {@link #isDead()}.
      */
     private void markDead() {
         synchronized (deathLock) {
-            dead = true;
             for (var owner : owners) {
                 endOnDeadPump(owner);
             }
+            dead = true;
         }
     }
 

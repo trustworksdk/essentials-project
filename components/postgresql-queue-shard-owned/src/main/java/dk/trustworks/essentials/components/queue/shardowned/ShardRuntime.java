@@ -308,10 +308,14 @@ public final class ShardRuntime implements Lifecycle, AutoCloseable {
      * Whether {@code owner} sits on a pump that has died, and its queue has not handed its lease back yet
      * ({@link #handedBack}). The pump ended it when it died ({@link ShardPump#run()}); what is left is the queue's: release
      * the lease, an ordered one once no key is in a handler.
+     * <p>
+     * Asks each pump's {@link ShardPump#awaitsHandBack} alone, not gated on {@link ShardPump#isDead()}: a dying pump ends
+     * its owners before it reads as dead, so a gate let an unordered owner read as neither holding its lease nor on a dead
+     * pump while the death was being recorded, and {@code ShardOwnedQueue.rebalance} drop it with its lease row unreleased.
      */
     boolean onDeadPump(LeasedOwner owner) {
         for (var pump : pumps) {
-            if (pump.isDead() && pump.awaitsHandBack(owner)) {
+            if (pump.awaitsHandBack(owner)) {
                 return true;
             }
         }

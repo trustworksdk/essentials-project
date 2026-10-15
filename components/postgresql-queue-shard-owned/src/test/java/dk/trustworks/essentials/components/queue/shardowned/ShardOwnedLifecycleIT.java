@@ -16,10 +16,13 @@
 
 package dk.trustworks.essentials.components.queue.shardowned;
 
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.zaxxer.hikari.*;
 import dk.trustworks.essentials.components.queue.shardowned.spi.*;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.*;
+import org.slf4j.LoggerFactory;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
@@ -313,6 +316,66 @@ class ShardOwnedLifecycleIT {
                 resultSet.next();
                 return resultSet.getInt(1) > 0;
             }
+        }
+    }
+
+    /**
+     * A heartbeat tick still running when the queue stops on a borrowed shared runtime finishes quietly. {@code stop()}
+     * cancels the heartbeat without interrupting a tick already running, then lets go of the runtime, and the tick's
+     * rebalance read the field it had just nulled: a NullPointerException, logged as "Rebalance failed" with a stack trace
+     * during an ordinary shutdown. The tick is held inside its own membership heartbeat by a trigger that sleeps, so the
+     * stop happens part-way through it; the test holds a second borrow, so the shared runtime outlives the queue.
+     */
+    @Test
+    void a_heartbeat_tick_overlapping_stop_on_a_borrowed_shared_runtime_finishes_without_a_null_pointer() throws Exception {
+        var settings    = settingsWithShedGrace(Duration.ofSeconds(1));
+        var logged      = new ListAppender<ILoggingEvent>();
+        var queueLogger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(ShardOwnedQueue.class);
+        logged.start();
+        queueLogger.addAppender(logged);
+        ShardRuntime.acquireShared(dataSource, settings);
+        try {
+            var queue = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "stop-mid-tick");
+            queue.startConsuming((messageId, payload, payloadType) -> { }, settings, SHARD_COUNT);
+            try (var connection = dataSource.getConnection(); var statement = connection.createStatement()) {
+                statement.execute("CREATE OR REPLACE FUNCTION slow_heartbeat() RETURNS trigger AS $$ BEGIN "
+                                          + "PERFORM pg_sleep(1.5); RETURN NEW; END $$ LANGUAGE plpgsql");
+                statement.execute("CREATE TRIGGER slow_heartbeat BEFORE UPDATE ON " + ShardOwnedSchema.INSTANCE_TABLE
+                                          + " FOR EACH ROW WHEN (OLD.instance_id = 'stop-mid-tick') EXECUTE FUNCTION slow_heartbeat()");
+            }
+            try {
+                Awaitility.await().atMost(Duration.ofSeconds(10)).until(this::aHeartbeatIsSleeping);
+
+                queue.stop();
+
+                Awaitility.await().atMost(Duration.ofSeconds(10)).until(() -> !aHeartbeatIsSleeping());
+                // The rest of the tick - the lease check, the hand-back and the rebalance - is a few statements.
+                Thread.sleep(500);
+            } finally {
+                try (var connection = dataSource.getConnection(); var statement = connection.createStatement()) {
+                    statement.execute("DROP TRIGGER IF EXISTS slow_heartbeat ON " + ShardOwnedSchema.INSTANCE_TABLE);
+                }
+                queue.stop();
+            }
+            var nullPointers = logged.list.stream()
+                                          .filter(event -> event.getThrowableProxy() != null)
+                                          .filter(event -> NullPointerException.class.getName().equals(event.getThrowableProxy().getClassName()))
+                                          .map(ILoggingEvent::getFormattedMessage)
+                                          .toList();
+            assertThat(nullPointers).as("the tick overlapping the stop met no released runtime").isEmpty();
+            assertThat(logged.list).extracting(ILoggingEvent::getFormattedMessage).doesNotContain("Rebalance failed");
+        } finally {
+            ShardRuntime.releaseShared(dataSource);
+            queueLogger.detachAppender(logged);
+        }
+    }
+
+    private boolean aHeartbeatIsSleeping() throws Exception {
+        try (var connection = dataSource.getConnection();
+             var statement = connection.createStatement();
+             var resultSet = statement.executeQuery("SELECT count(*) FROM pg_stat_activity WHERE wait_event = 'PgSleep'")) {
+            resultSet.next();
+            return resultSet.getInt(1) > 0;
         }
     }
 
