@@ -69,6 +69,13 @@ final class ShardPump implements Runnable {
      * guards ({@link #serve()}). Paced, or a failure that does not clear spins the loop as fast as it can throw.
      */
     static final         long   RECONNECT_NANOS      = TimeUnit.MILLISECONDS.toNanos(200L);
+    /**
+     * How long, in seconds, {@link Connection#isValid(int)} may take to tell a failing statement from a failing
+     * connection after a {@link SQLException}. Short because the pump - and every shard it serves - waits on the answer,
+     * and a connection that cannot answer a validity probe within a second is treated as broken: reconnecting is the cure
+     * either way.
+     */
+    static final         int    CONNECTION_VALIDITY_TIMEOUT_SECONDS = 1;
 
     private final ShardOwnedStorage                 storage;
     private final ShardOwnerSettings                settings;
@@ -492,7 +499,7 @@ final class ShardPump implements Runnable {
                             // So ask the connection whether it is actually broken. If it is, rethrow
                             // and let the reconnect loop do its job; if it is not, this is a bug in
                             // one owner's SQL and it is treated like any other bug in one owner.
-                            if (!connection.isValid(1)) {
+                            if (!connection.isValid(CONNECTION_VALIDITY_TIMEOUT_SECONDS)) {
                                 throw e;
                             }
                             pumpFailures.failed(owner, "issued a statement that failed on a healthy connection", e);
@@ -661,13 +668,11 @@ final class ShardPump implements Runnable {
             return true;
         } catch (RuntimeException | Error e) {
             Exceptions.rethrowIfCriticalError(e);
-            log.warn("{}: flushing the acknowledgements of queue {}, {} shard {} on stop failed; flushing the others",
-                     name, owner.queueId(), owner.lane(), owner.shard(), e);
+            warnFlushOnStopFailed(owner, e);
             return true;
         } catch (SQLException e) {
             if (isValid(connection)) {
-                log.warn("{}: flushing the acknowledgements of queue {}, {} shard {} on stop failed; flushing the others",
-                         name, owner.queueId(), owner.lane(), owner.shard(), e);
+                warnFlushOnStopFailed(owner, e);
                 return true;
             }
             log.warn("{}: lost its connection flushing the acknowledgements of queue {}, {} shard {} on stop; the shards "
@@ -677,9 +682,21 @@ final class ShardPump implements Runnable {
         }
     }
 
+    /**
+     * One owner's stop-time flush failed while the connection is still usable: the next owner is flushed.
+     */
+    private void warnFlushOnStopFailed(LeasedOwner owner, Throwable cause) {
+        log.warn("{}: flushing the acknowledgements of queue {}, {} shard {} on stop failed; flushing the others",
+                 name, owner.queueId(), owner.lane(), owner.shard(), cause);
+    }
+
+    /**
+     * {@link Connection#isValid(int)} for {@link #flushOnStop}, where a probe that itself throws counts as a broken
+     * connection. The pass's own probes call {@code isValid} directly so that throw reaches the reconnect loop.
+     */
     private static boolean isValid(Connection connection) {
         try {
-            return connection.isValid(1);
+            return connection.isValid(CONNECTION_VALIDITY_TIMEOUT_SECONDS);
         } catch (SQLException e) {
             return false;
         }
@@ -728,7 +745,7 @@ final class ShardPump implements Runnable {
             stalls.failed(owner, "threw during its takeover", e);
             return false;
         } catch (SQLException e) {
-            if (!connection.isValid(1)) {
+            if (!connection.isValid(CONNECTION_VALIDITY_TIMEOUT_SECONDS)) {
                 throw e;
             }
             takenOver.remove(owner);
