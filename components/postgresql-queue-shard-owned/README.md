@@ -768,8 +768,10 @@ because taking them over keeps failing with the database connection still health
 or constraint refusing the takeover's dead-letter move). The takeover is retried every 200 ms with no
 limit and the lease is kept, so no other instance takes the shard and it delivers nothing until the cause
 is fixed. `unownedShards` cannot see this, because the shard is leased: alert on this one being above zero
-next to it. `takeoverFailures` counts the failed attempts, and the log carries one ERROR with the cause
-when it starts and one a minute while it lasts. Only the engine-level `ShardOwnedQueue.metrics()` exposes
+next to it. `takeoverFailures` counts the failed attempts. The log carries at most one ERROR a minute per
+queue, with the cause, naming one stalled shard and counting the others (a cause that fails one takeover
+usually fails them all); every failed attempt is logged at DEBUG, and an INFO for each shard when it
+recovers. Only the engine-level `ShardOwnedQueue.metrics()` exposes
 these counters, since a `PostgresqlMessageQueue` keeps its `ShardOwnerMetrics` private. Through `MessageQueue`
 (and the Spring starter and the `DurableQueues` adapter built on it) the same stall reaches
 `QueueObserver.takeoverStalled`, once when it starts and once when it ends, which `MicrometerQueueObserver`
