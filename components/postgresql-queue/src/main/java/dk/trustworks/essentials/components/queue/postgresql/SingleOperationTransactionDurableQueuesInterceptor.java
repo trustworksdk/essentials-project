@@ -126,18 +126,37 @@ public class SingleOperationTransactionDurableQueuesInterceptor implements Durab
      * inside the same transaction would be discarded with them, turning a consumed message into one redelivered
      * after every {@code messageHandlingTimeout}.
      * <p>
-     * Also left to the consumer when the handler returned with the thread's interrupt flag set. A consumer's
-     * {@code stop()} interrupts its delivery threads, and a handler that returns while interrupted may not have
-     * finished its work: the consumer, which knows whether it is stopping, then hands the message back instead of
-     * acknowledging it. Acknowledging here would delete the message before the consumer could decide.
+     * A handler that returned with the thread's interrupt flag set is acknowledged here only while its consumer is
+     * known to be started ({@link HandleQueuedMessage#isConsumerKnownToBeStarted()}): a consumer's {@code stop()}
+     * marks it as stopping before it interrupts its delivery threads, so that handler re-set the flag for a reason of
+     * its own and finished its work. The acknowledgement is then written with the flag cleared, as the consumer's own
+     * would be (a connection pool may refuse an interrupted thread), and the flag is restored afterwards.
+     * <p>
+     * Left to the consumer when the handler returned with the flag set while its consumer is stopping: it may not
+     * have finished its work, and the consumer hands the message back instead of acknowledging it. Acknowledging here
+     * would delete the message before the consumer could decide. Also left to the consumer when the operation does
+     * not know the consumer's state, as there a stop's interrupt cannot be told from any other.
      */
     private void acknowledgeWithHandler(HandleQueuedMessage operation, HandleAwareUnitOfWork unitOfWork) {
         var message = operation.getMessage();
-        if (durableQueues == null || message.isManuallyMarkedForRedelivery() || unitOfWork.status() == UnitOfWorkStatus.MarkedForRollbackOnly
-                || Thread.currentThread().isInterrupted()) {
+        if (durableQueues == null || message.isManuallyMarkedForRedelivery() || unitOfWork.status() == UnitOfWorkStatus.MarkedForRollbackOnly) {
             return;
         }
-        operation.acknowledgedWithHandler(durableQueues.acknowledgeMessageAsHandled(message.getId()));
+        if (!Thread.currentThread().isInterrupted()) {
+            operation.acknowledgedWithHandler(durableQueues.acknowledgeMessageAsHandled(message.getId()));
+            return;
+        }
+        if (!operation.isConsumerKnownToBeStarted()) {
+            return;
+        }
+        var wasInterrupted = Thread.interrupted();
+        try {
+            operation.acknowledgedWithHandler(durableQueues.acknowledgeMessageAsHandled(message.getId()));
+        } finally {
+            if (wasInterrupted) {
+                Thread.currentThread().interrupt();
+            }
+        }
     }
 
     @Override

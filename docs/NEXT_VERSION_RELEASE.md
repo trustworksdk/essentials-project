@@ -89,7 +89,8 @@ is handed back the same way, with an `InterruptedException` saying so as its las
 acknowledging it`. Before, PostgreSQL usually acknowledged it, deleting a message whose work may never have been done;
 MongoDB failed that acknowledgement on the interrupted thread, so the message came back only after
 `messageHandlingTimeout`. A handler that returns with the flag set while its consumer is still running is acknowledged
-as before, and so is one that returns with the flag clear while its consumer is stopping. This is narrower than the
+as before, on PostgreSQL inside the handler's own transaction (§1.1.16), with the flag cleared for that write and
+restored afterwards; so is one that returns with the flag clear while its consumer is stopping. This is narrower than the
 shard-owned engine's rule (`abandonedOnInterrupt`): that engine refuses to acknowledge on the interrupt flag alone,
 stopping or not, and charges no attempt, leaving the message to the next owner. Here the flag must be set *and* the
 consumer stopping, and the hand-back counts one redelivery attempt, as below.
@@ -107,7 +108,8 @@ What you may notice:
 Commit `6ba568b5`. Pinned by `DurableQueuesIT.a_message_whose_handler_is_interrupted_by_the_consumer_stopping_is_redelivered_not_dead_lettered`
 (PostgreSQL traditional and centralized, both transactional variants, and MongoDB). The handler that returns
 while interrupted: commit `4f573f0d`, pinned by `PostgresqlDurableQueuesAcknowledgeWithHandlerIT.a_handler_that_returns_while_interrupted_by_the_consumer_stopping_has_its_message_handed_back_not_acknowledged`
-and the consumers' unit tests.
+and the consumers' unit tests. The handler that re-sets the flag while its consumer runs is pinned by
+`PostgresqlDurableQueuesAcknowledgeWithHandlerIT.a_handler_that_returns_while_interrupted_while_its_consumer_is_running_is_acknowledged_in_its_unit_of_work`.
 
 #### 1.1.2 A public `is`-getter no longer adds a property to persisted JSON
 
@@ -643,6 +645,13 @@ unaffected: the interface's `Instant` overloads still call its no-arg methods. (
   compiling but should override it; `PostgresqlDurableQueues` and `MongoDurableQueues` do. A release is not a
   delivery outcome: shutdown releases are no longer reported to the `DurableQueueMessageObserver` as `messageRetried`,
   so `QueueStatistics` and the Micrometer retried counter do not count them. (`c2cca365`)
+- **`HandleQueuedMessage` carries the delivering consumer's state**: `isConsumerKnownToBeStarted()` and
+  `isConsumerKnownToBeStopping()`, read live (a `stop()` can begin while the handler runs), set through
+  `HandleQueuedMessage.builder().setConsumerStarted(BooleanSupplier)`. Both consumers set it, so a
+  `DurableQueuesInterceptor` on `HandleQueuedMessage` can tell a handler interrupted by its consumer stopping from one
+  that re-set the interrupt flag for a reason of its own; `SingleOperationTransactionDurableQueuesInterceptor` uses it
+  to acknowledge the latter inside the handler's transaction (§1.1.1). An operation built with the existing
+  constructor, as the shard-owned adapter does, answers `false` to both.
 - **`DefaultDurableQueueConsumer.getQueuePollingOptimizer()`**, and `SimpleQueuePollingOptimizer` implements
   `messageScheduledFor` and `queuePollingReturnedNoMessages(Instant)` (§3). (`6777b8b9`)
 - **Shard-owned engine: `spi.RedeliveryRequested(delay)`.** A handler throws it to ask for redelivery after `delay`

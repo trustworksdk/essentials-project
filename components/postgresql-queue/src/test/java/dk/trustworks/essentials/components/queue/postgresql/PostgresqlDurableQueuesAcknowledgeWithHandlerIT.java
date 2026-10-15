@@ -166,6 +166,44 @@ abstract class PostgresqlDurableQueuesAcknowledgeWithHandlerIT {
     }
 
     /**
+     * A handler that re-sets the thread's interrupt flag while its consumer is running was not interrupted by a stop:
+     * it finished its work, so its message is acknowledged inside its unit of work, committing with its writes, as
+     * when the flag is clear. The interrupt flag it left is still set when the delivery ends.
+     */
+    @Test
+    void a_handler_that_returns_while_interrupted_while_its_consumer_is_running_is_acknowledged_in_its_unit_of_work() {
+        var handlerUnitOfWork                   = new AtomicReference<UnitOfWork>();
+        var acknowledgeUnitOfWork               = new AtomicReference<UnitOfWork>();
+        var handlerWritesCommittedAtAcknowledge = new AtomicLong(-1);
+        var acknowledgements                    = new AtomicInteger();
+        durableQueues.addInterceptor(onAcknowledge(chain -> {
+            acknowledgements.incrementAndGet();
+            acknowledgeUnitOfWork.set(unitOfWorkFactory.getCurrentUnitOfWork().orElse(null));
+            handlerWritesCommittedAtAcknowledge.set(handlerWrites());
+            return chain.proceed();
+        }));
+        var deliveries = new AtomicInteger();
+
+        consumer = consume(message -> {
+            deliveries.incrementAndGet();
+            handlerUnitOfWork.set(unitOfWorkFactory.getRequiredUnitOfWork());
+            writeFromHandler(message);
+            // Re-sets the flag for a reason of its own; nothing is stopping
+            Thread.currentThread().interrupt();
+        });
+        var queueEntryId = enqueue();
+
+        awaitQueueEmpty();
+        assertThat(acknowledgeUnitOfWork.get()).as("acknowledged in the handler's unit of work").isNotNull().isSameAs(handlerUnitOfWork.get());
+        assertThat(handlerWritesCommittedAtAcknowledge.get()).as("the handler's write was not yet committed when the acknowledgement ran").isZero();
+        assertThat(handlerWrites()).as("committed together with the acknowledgement").isEqualTo(1);
+        assertThat(acknowledgements.get()).as("acknowledged once, not again by the consumer").isEqualTo(1);
+        assertThat(deliveries.get()).isEqualTo(1);
+        assertThat(durableQueues.getQueuedMessage(queueEntryId)).isEmpty();
+        assertThat(durableQueues.getTotalDeadLetterMessagesQueuedFor(QUEUE)).isZero();
+    }
+
+    /**
      * Stopping a consumer interrupts its handler. A handler that catches the interrupt and returns normally with the
      * flag re-set has not necessarily finished its work, so its message is not acknowledged - neither inside its unit
      * of work nor by the consumer - but handed back for the next consumer, the hand-back counting one attempt. The

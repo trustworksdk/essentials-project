@@ -419,7 +419,11 @@ public class CentralizedMessageFetcher implements Lifecycle {
         registration.workerPool.submit(() -> {
             var handlerStartedAtNanos = System.nanoTime();
             try {
-                var operation = new HandleQueuedMessage(message, registration.messageHandler);
+                var operation = HandleQueuedMessage.builder()
+                                                   .setMessage(message)
+                                                   .setMessageHandler(registration.messageHandler)
+                                                   .setConsumerStarted(registration.consumer::isStarted)
+                                                   .build();
                 newInterceptorChainForOperation(operation,
                                                 interceptors,
                                                 (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),

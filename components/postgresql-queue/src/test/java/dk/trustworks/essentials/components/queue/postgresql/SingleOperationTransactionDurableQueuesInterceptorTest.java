@@ -24,6 +24,9 @@ import dk.trustworks.essentials.shared.functional.CheckedFunction;
 import dk.trustworks.essentials.shared.interceptor.InterceptorChain;
 import org.junit.jupiter.api.*;
 
+import java.util.concurrent.atomic.*;
+import java.util.function.BooleanSupplier;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
@@ -71,20 +74,73 @@ class SingleOperationTransactionDurableQueuesInterceptorTest {
     }
 
     @Test
-    void a_handler_that_returns_while_interrupted_leaves_the_acknowledgement_to_the_consumer() {
-        var operation = handleQueuedMessage();
+    void a_handler_that_returns_while_interrupted_by_its_consumer_stopping_leaves_the_acknowledgement_to_the_consumer() {
+        var consumerStarted = new AtomicBoolean(true);
+        var operation       = handleQueuedMessage(consumerStarted::get);
 
-        // Like a handler that caught a stop()'s interrupt, re-set the flag and returned without finishing its work
-        interceptor.intercept(operation, handlerChain(() -> Thread.currentThread().interrupt()));
+        // Like a handler that stop() interrupted, which caught it, re-set the flag and returned without finishing its work.
+        // stop() marks the consumer as no longer started before it interrupts the delivery threads
+        interceptor.intercept(operation, handlerChain(() -> {
+            consumerStarted.set(false);
+            Thread.currentThread().interrupt();
+        }));
 
-        assertThat(operation.getAcknowledgedWithHandler()).as("the consumer decides: acknowledge, or hand back when it is stopping").isNull();
+        assertThat(operation.getAcknowledgedWithHandler()).as("the consumer hands the message back").isNull();
         verify(durableQueues, never()).acknowledgeMessageAsHandled(any(QueueEntryId.class));
     }
 
+    @Test
+    void a_handler_that_returns_while_interrupted_while_its_consumer_is_running_is_acknowledged_inside_its_transaction() {
+        var operation         = handleQueuedMessage(() -> true);
+        var flagDuringAckRef  = new AtomicReference<Boolean>();
+        when(durableQueues.acknowledgeMessageAsHandled(MESSAGE_ID)).thenAnswer(invocation -> {
+            flagDuringAckRef.set(Thread.currentThread().isInterrupted());
+            return true;
+        });
+
+        // A handler that re-set the flag for a reason of its own; nothing is stopping
+        interceptor.intercept(operation, handlerChain(() -> Thread.currentThread().interrupt()));
+
+        assertThat(operation.getAcknowledgedWithHandler()).as("acknowledged in the handler's transaction, committing with its writes").isTrue();
+        verify(durableQueues).acknowledgeMessageAsHandled(MESSAGE_ID);
+        assertThat(flagDuringAckRef.get()).as("the acknowledgement is written with the interrupt flag cleared").isFalse();
+        assertThat(Thread.currentThread().isInterrupted()).as("the handler's interrupt flag is restored afterwards").isTrue();
+    }
+
+    @Test
+    void a_handler_that_returns_while_interrupted_when_the_consumer_state_is_unknown_leaves_the_acknowledgement_to_the_consumer() {
+        // Built without a consumer state, as the shard-owned adapter does
+        var operation = handleQueuedMessage(null);
+
+        interceptor.intercept(operation, handlerChain(() -> Thread.currentThread().interrupt()));
+
+        assertThat(operation.getAcknowledgedWithHandler()).as("cannot tell a stop's interrupt from any other: the consumer decides").isNull();
+        verify(durableQueues, never()).acknowledgeMessageAsHandled(any(QueueEntryId.class));
+    }
+
+    @Test
+    void a_handler_that_returns_with_the_flag_clear_while_its_consumer_is_stopping_is_acknowledged_inside_its_transaction() {
+        var operation = handleQueuedMessage(() -> false);
+
+        interceptor.intercept(operation, handlerChain(() -> {
+        }));
+
+        assertThat(operation.getAcknowledgedWithHandler()).isTrue();
+        verify(durableQueues).acknowledgeMessageAsHandled(MESSAGE_ID);
+    }
+
     private static HandleQueuedMessage handleQueuedMessage() {
+        return handleQueuedMessage(() -> true);
+    }
+
+    private static HandleQueuedMessage handleQueuedMessage(BooleanSupplier consumerStarted) {
         var message = mock(QueuedMessage.class);
         when(message.getId()).thenReturn(MESSAGE_ID);
-        return new HandleQueuedMessage(message, mock(QueuedMessageHandler.class));
+        return HandleQueuedMessage.builder()
+                                  .setMessage(message)
+                                  .setMessageHandler(mock(QueuedMessageHandler.class))
+                                  .setConsumerStarted(consumerStarted)
+                                  .build();
     }
 
     @SuppressWarnings("unchecked")

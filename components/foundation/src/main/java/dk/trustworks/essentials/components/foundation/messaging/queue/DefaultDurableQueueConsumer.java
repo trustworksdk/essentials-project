@@ -405,7 +405,11 @@ public abstract class DefaultDurableQueueConsumer<DURABLE_QUEUES extends Durable
         }
         var handlerStartedAtNanos = System.nanoTime();
         try {
-            var operation = new HandleQueuedMessage(queuedMessage, consumeFromQueue.queueMessageHandler);
+            var operation = HandleQueuedMessage.builder()
+                                               .setMessage(queuedMessage)
+                                               .setMessageHandler(consumeFromQueue.queueMessageHandler)
+                                               .setConsumerStarted(this::isStarted)
+                                               .build();
             newInterceptorChainForOperation(operation,
                                             interceptors,
                                             (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
