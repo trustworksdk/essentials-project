@@ -117,23 +117,30 @@ public final class MicrometerQueueObserver implements QueueObserver {
     private final Counter shardsAcquired;
     private final Counter shardsReleased;
     /**
-     * The count behind each registered {@link #SHARDS_AWAITING_TAKEOVER_GAUGE} gauge, keyed by the gauge
-     * {@code register} returned. Micrometer hands every observer with the same registry and (post-filter)
-     * tags the gauge the first one registered, and that gauge reads only the first one's supplier; so the
-     * count lives here, one per gauge, and every observer that gets the gauge adds into it. Keying by the
-     * returned gauge rather than by registry and tags gets tag order, registry common tags and meter
-     * filters right without restating Micrometer's rules.
+     * The count behind each registered {@link #SHARDS_AWAITING_TAKEOVER_GAUGE} gauge, keyed by its registry and
+     * then by the gauge {@code register} returned. Micrometer hands every observer with the same registry and
+     * (post-filter) tags the gauge the first one registered, and that gauge reads only the first one's supplier;
+     * so the count lives here, one per gauge, and every observer that gets the gauge adds into it. Keying by the
+     * returned gauge rather than by tags gets tag order, registry common tags and meter filters right without
+     * restating Micrometer's rules.
      * <p>
-     * Weak keys: an entry lasts as long as its gauge is registered. Guarded by itself, so registering and
-     * recording the count is one step for concurrent constructors.
+     * Registry first, because a meter's {@code equals} compares ids alone: gauges with the same name and tags in
+     * two registries are equal keys, and one flat map let an observer on one registry replace the entry of the
+     * other's gauge, leaving a later observer there with a count its gauge never reads. {@code MeterRegistry}
+     * does not override {@code equals}, so the outer map tells registries apart by identity.
+     * <p>
+     * Weak keys at both levels: an entry lasts as long as its registry, and within it as long as its gauge is
+     * registered. Neither a gauge nor its count refers back to the registry, so the inner map does not keep its
+     * own key alive. Guarded by itself, so registering and recording the count is one step for concurrent
+     * constructors.
      */
-    private static final Map<Gauge, SharedStallCount> AWAITING_TAKEOVER_COUNTS = new WeakHashMap<>();
+    private static final Map<MeterRegistry, Map<Gauge, SharedStallCount>> AWAITING_TAKEOVER_COUNTS = new WeakHashMap<>();
 
     /**
-     * {@link #AWAITING_TAKEOVER_COUNTS}' value. It names its gauge by identity because a meter's
-     * {@code equals} compares ids: a gauge removed from the registry and registered again is a new gauge
-     * reading a new count, which an equal key alone would not tell apart. A weak reference, or the value
-     * would hold its own key and the entry would never go.
+     * The value in {@link #AWAITING_TAKEOVER_COUNTS}' per-registry map. It names its gauge by identity because a
+     * meter's {@code equals} compares ids: a gauge removed from the registry and registered again is a new gauge
+     * reading a new count, which an equal key alone would not tell apart. A weak reference, or the value would
+     * hold its own key and the entry would never go.
      */
     private record SharedStallCount(WeakReference<Gauge> gauge, AtomicInteger count) {
     }
@@ -209,14 +216,15 @@ public final class MicrometerQueueObserver implements QueueObserver {
                              .description("shards leased by this instance but not served, because their takeover keeps failing")
                              .tags(tags)
                              .register(registry);
-            var shared = AWAITING_TAKEOVER_COUNTS.get(gauge);
+            var countsInRegistry = AWAITING_TAKEOVER_COUNTS.computeIfAbsent(registry, r -> new WeakHashMap<>());
+            var shared = countsInRegistry.get(gauge);
             if (shared != null && shared.gauge().get() == gauge) {
                 return shared.count();
             }
             // Removed first: put() on an equal key keeps the OLD key object, whose collection would then drop
             // this entry while the new gauge is still registered.
-            AWAITING_TAKEOVER_COUNTS.remove(gauge);
-            AWAITING_TAKEOVER_COUNTS.put(gauge, new SharedStallCount(new WeakReference<>(gauge), candidate));
+            countsInRegistry.remove(gauge);
+            countsInRegistry.put(gauge, new SharedStallCount(new WeakReference<>(gauge), candidate));
             return candidate;
         }
     }

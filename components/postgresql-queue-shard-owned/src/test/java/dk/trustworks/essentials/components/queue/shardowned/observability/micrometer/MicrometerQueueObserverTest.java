@@ -116,6 +116,29 @@ class MicrometerQueueObserverTest {
     }
 
     /**
+     * Gauges from two registries with the same name and tags are equal meters. Interleaving observers on them must not
+     * let one registry's gauge take the other's count: the second observer on the first registry gets that registry's
+     * gauge back, and its stalls must show there.
+     */
+    @Test
+    void an_observer_on_another_registry_with_the_same_tags_does_not_detach_a_later_observer_from_its_gauge() {
+        var registry = new SimpleMeterRegistry();
+        var otherRegistry = new SimpleMeterRegistry();
+        var first = new MicrometerQueueObserver(registry, QueueName.of("orders"));
+        var elsewhere = new MicrometerQueueObserver(otherRegistry, QueueName.of("orders"));
+        var second = new MicrometerQueueObserver(registry, QueueName.of("orders"));
+
+        second.takeoverStalled(MessageId.Lane.ORDERED, 3, true);
+        assertThat(awaitingTakeover(registry, "orders")).as("the second observer's stall, on its own registry").isEqualTo(1.0);
+        assertThat(awaitingTakeover(otherRegistry, "orders")).as("not on the other registry").isZero();
+
+        first.takeoverStalled(MessageId.Lane.UNORDERED, 1, true);
+        elsewhere.takeoverStalled(MessageId.Lane.ORDERED, 4, true);
+        assertThat(awaitingTakeover(registry, "orders")).isEqualTo(2.0);
+        assertThat(awaitingTakeover(otherRegistry, "orders")).isEqualTo(1.0);
+    }
+
+    /**
      * The retired first observer is gone and collected, its replacement only ever told about stalls: the gauge must read
      * the replacement's count, neither the retired observer's zero nor {@code NaN}.
      */
