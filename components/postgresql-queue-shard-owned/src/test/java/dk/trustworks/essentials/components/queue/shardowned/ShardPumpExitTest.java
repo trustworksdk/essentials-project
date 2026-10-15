@@ -18,6 +18,7 @@ package dk.trustworks.essentials.components.queue.shardowned;
 
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.AppenderBase;
 import ch.qos.logback.core.read.ListAppender;
 import dk.trustworks.essentials.components.queue.shardowned.spi.*;
 import org.junit.jupiter.api.*;
@@ -361,11 +362,15 @@ class ShardPumpExitTest {
         pump.add(failing);
         pump.add(beside);
         var thread = Thread.ofPlatform().name("pump-under-test").start(pump);
-        await().atMost(Duration.ofSeconds(10)).until(() -> failing.pumped.get() > 0 && beside.pumped.get() > 0);
+        try {
+            await().atMost(Duration.ofSeconds(10)).until(() -> failing.pumped.get() > 0 && beside.pumped.get() > 0);
 
-        running.set(false);
-        pump.wakeup().signal();
-        assertThat(thread.join(Duration.ofSeconds(10))).as("the pump stops when running is cleared").isTrue();
+            running.set(false);
+            pump.wakeup().signal();
+            assertThat(thread.join(Duration.ofSeconds(10))).as("the pump stops when running is cleared").isTrue();
+        } finally {
+            stopPump(running, pump, thread);
+        }
         assertThat(failing.flushes.get()).as("premise: the failing owner's flush was tried").isEqualTo(1);
         return new StoppedPump(pump, beside, metrics, pumpMetrics);
     }
@@ -404,7 +409,11 @@ class ShardPumpExitTest {
         stopping.beforeFailing = () -> running.set(false);
         pump.add(stopping);
         var thread = Thread.ofPlatform().name("pump-under-test").start(pump);
-        assertThat(thread.join(Duration.ofSeconds(10))).as("the pump stops when running is cleared").isTrue();
+        try {
+            assertThat(thread.join(Duration.ofSeconds(10))).as("the pump stops when running is cleared").isTrue();
+        } finally {
+            stopPump(running, pump, thread);
+        }
 
         assertThat(stopping.pumped.get()).as("premise: the pass got as far as parking").isEqualTo(1);
         var warned = assertStopNotCountedAndWarnedOnce(new StoppedPump(pump, stopping, metrics, pumpMetrics));
@@ -426,7 +435,11 @@ class ShardPumpExitTest {
         stopping.beforeFailing = () -> running.set(false);
         pump.add(stopping);
         var thread = Thread.ofPlatform().name("pump-under-test").start(pump);
-        assertThat(thread.join(Duration.ofSeconds(10))).as("the pump stops when running is cleared").isTrue();
+        try {
+            assertThat(thread.join(Duration.ofSeconds(10))).as("the pump stops when running is cleared").isTrue();
+        } finally {
+            stopPump(running, pump, thread);
+        }
 
         assertThat(stopping.pumped.get()).as("premise: the failing pass ran").isEqualTo(1);
         var warned = assertStopNotCountedAndWarnedOnce(new StoppedPump(pump, stopping, metrics, pumpMetrics));
@@ -517,11 +530,15 @@ class ShardPumpExitTest {
         var pump    = pump(running);
         pump.add(new StubOwner((short) 7, 1, metrics, Behaviour.TAKEOVER_FAILS));
         var thread = Thread.ofPlatform().name("pump-under-test").start(pump);
-        await().atMost(Duration.ofSeconds(10)).until(() -> metrics.shardsAwaitingTakeover.get() == 1);
+        try {
+            await().atMost(Duration.ofSeconds(10)).until(() -> metrics.shardsAwaitingTakeover.get() == 1);
 
-        running.set(false);
-        pump.wakeup().signal();
-        assertThat(thread.join(Duration.ofSeconds(10))).as("the pump stops when running is cleared").isTrue();
+            running.set(false);
+            pump.wakeup().signal();
+            assertThat(thread.join(Duration.ofSeconds(10))).as("the pump stops when running is cleared").isTrue();
+        } finally {
+            stopPump(running, pump, thread);
+        }
 
         assertThat(metrics.shardsAwaitingTakeover.get()).as("none of its shards is served by it any more").isZero();
         assertThat(told).containsExactly("UNORDERED/1=true", "UNORDERED/1=false");
@@ -663,6 +680,69 @@ class ShardPumpExitTest {
     }
 
     /**
+     * A pump that is dying as its runtime stops forgets its own counts once it ends. Held in its death's ERROR - after it
+     * read {@code running} as set, before it marked itself dead - it has not exited when the stop asks every pump to
+     * forget, so the stop's {@code forgetAfterExit} is a no-op; it then marks itself dead and counts its shards with
+     * {@code running} already cleared. Only its own late {@code forgetAfterExit} drops them: without it they stayed
+     * counted in {@code shardsOnDeadPumps} and {@code shardsAwaitingTakeover} for the rest of the process.
+     */
+    @Test
+    void a_pump_dying_while_its_runtime_stops_forgets_its_own_counts() throws InterruptedException {
+        var told     = new CopyOnWriteArrayList<String>();
+        var metrics  = new ShardOwnerMetrics(observer(told));
+        var held     = new CountDownLatch(1);
+        var released = new CountDownLatch(1);
+        var holdDeath = new AppenderBase<ILoggingEvent>() {
+            @Override
+            protected void append(ILoggingEvent event) {
+                if (event.getLevel() != Level.ERROR || !event.getFormattedMessage().contains("pump-0 died")) {
+                    return;
+                }
+                held.countDown();
+                // Uninterruptibly: the stop's shutdownNow() interrupts the pump thread while it is held here.
+                var interrupted = false;
+                while (released.getCount() > 0) {
+                    try {
+                        released.await();
+                    } catch (InterruptedException e) {
+                        interrupted = true;
+                    }
+                }
+                if (interrupted) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        };
+        holdDeath.start();
+        pumpLogger.addAppender(holdDeath);
+        var runtime = new ShardRuntime(listenableDataSource(), pumps(1), new ShardOwnerMetrics());
+        try {
+            var pump = runtime.pumpFor((short) 7, "unordered", 1);
+            runtime.register((short) 7, "unordered", 1, new StubOwner((short) 7, 1, metrics, Behaviour.TAKEOVER_FAILS));
+            await().atMost(Duration.ofSeconds(10)).until(() -> metrics.shardsAwaitingTakeover.get() == 1);
+            runtime.register((short) 7, "unordered", 2, new StubOwner((short) 7, 2, metrics, Behaviour.DIES));
+            assertThat(held.await(10, TimeUnit.SECONDS)).as("premise: the pump is held in its death's ERROR").isTrue();
+
+            runtime.shutdownStarting(() -> Duration.ofMillis(100));
+            runtime.stop();
+            assertThat(pump.hasExited()).as("premise: the pump had not exited when the stop asked it to forget").isFalse();
+            assertThat(pump.isDead()).as("premise: nor marked itself dead").isFalse();
+
+            released.countDown();
+            await().atMost(Duration.ofSeconds(10)).until(pump::hasExited);
+
+            assertThat(pump.isDead()).as("premise: it died, with running already cleared").isTrue();
+            assertThat(metrics.shardsOnDeadPumps.get()).as("the stop ended the leases the dead pump was keeping").isZero();
+            assertThat(metrics.shardsAwaitingTakeover.get()).isZero();
+            assertThat(told).containsExactly("UNORDERED/1=true", "UNORDERED/1=false");
+        } finally {
+            released.countDown();
+            runtime.stop();
+            pumpLogger.detachAppender(holdDeath);
+        }
+    }
+
+    /**
      * A pump that outlives a stop's wait and leaves its loop after the runtime has started again exits in order. Each run
      * hands its pumps a running flag of its own; with the runtime's shared one, set again by the restart, the old pump read
      * it as set, took its exit for a death, logged one and counted its shards in {@code shardsOnDeadPumps}, where nothing
@@ -705,6 +785,22 @@ class ShardPumpExitTest {
     private List<ILoggingEvent> loggedEvents() {
         synchronized (logged) {
             return List.copyOf(logged.list);
+        }
+    }
+
+    /**
+     * Stop a pump the test started on {@code thread}, so a test that failed before its pump stopped does not leave it
+     * running into the next test, whose log capture it would write to. A no-op on a pump that has already stopped.
+     * <p>
+     * Cleanup only, so it asserts nothing: called from a {@code finally}, an assertion here would replace the test's own
+     * failure (an Awaitility timeout, or the in-test join's assertion) with a second report of the same stuck pump.
+     */
+    private static void stopPump(AtomicBoolean running, ShardPump pump, Thread thread) throws InterruptedException {
+        running.set(false);
+        pump.wakeup().signal();
+        if (!thread.join(Duration.ofSeconds(10))) {
+            thread.interrupt();
+            thread.join(Duration.ofSeconds(5));
         }
     }
 
