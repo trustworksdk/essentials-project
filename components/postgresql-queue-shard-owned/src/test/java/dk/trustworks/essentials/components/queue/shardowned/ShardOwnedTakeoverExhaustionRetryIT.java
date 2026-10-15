@@ -414,10 +414,9 @@ class ShardOwnedTakeoverExhaustionRetryIT {
                            assertThat(takeoverRecoveries()).as("one recovery INFO").hasSize(1);
                        });
                 assertThat(deadLetterError(MessageId.Lane.UNORDERED, 1)).as("the takeover completed").contains(ShardOwnedStorage.EXHAUSTED_BY_TAKEOVERS);
-                // TakeoverStalls.completed's arguments: pump, queue, lane, shard, failed attempts, seconds
-                assertThat(takeoverRecoveries().getFirst().getArgumentArray()[4])
+                assertThat(takeoverRecoveries().getFirst().getFormattedMessage())
                         .as("the recovery counts every failed attempt, on both connections")
-                        .isEqualTo(failingMetrics.takeoverFailures.sum());
+                        .contains("completed its takeover after " + failingMetrics.takeoverFailures.sum() + " failed attempt(s)");
                 assertThat(pumpErrors()).as("no further ERROR once it recovered").hasSize(1);
             } finally {
                 stopPump(running, pump, thread);
