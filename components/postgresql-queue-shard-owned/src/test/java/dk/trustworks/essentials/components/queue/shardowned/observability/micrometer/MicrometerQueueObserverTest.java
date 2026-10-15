@@ -64,6 +64,42 @@ class MicrometerQueueObserverTest {
     }
 
     @Test
+    void the_end_of_a_missed_stall_does_not_cancel_another_shard_the_same_observer_saw_stall() {
+        var registry = new SimpleMeterRegistry();
+        // Registered while ordered shard 3 was already stalled: it sees shard 5 stall, then only the end of shard 3's.
+        var observer = new MicrometerQueueObserver(registry);
+
+        observer.takeoverStalled(MessageId.Lane.ORDERED, 5, true);
+        observer.takeoverStalled(MessageId.Lane.ORDERED, 3, false);
+        assertThat(awaitingTakeover(registry)).as("shard 5 is still stalled").isEqualTo(1.0);
+
+        // Shard numbers repeat across the lanes: the unordered lane's shard 5 is another shard.
+        observer.takeoverStalled(MessageId.Lane.UNORDERED, 5, false);
+        assertThat(awaitingTakeover(registry)).as("an end on the other lane is not the ordered shard's").isEqualTo(1.0);
+
+        observer.takeoverStalled(MessageId.Lane.ORDERED, 5, false);
+        assertThat(awaitingTakeover(registry)).isZero();
+    }
+
+    @Test
+    void one_observer_told_about_the_same_shard_by_two_queues_counts_both_stalls() {
+        var registry = new SimpleMeterRegistry();
+        // One observer attached to two queues: each has its own ordered shard 3.
+        var observer = new MicrometerQueueObserver(registry);
+
+        observer.takeoverStalled(MessageId.Lane.ORDERED, 3, true);
+        observer.takeoverStalled(MessageId.Lane.ORDERED, 3, true);
+        assertThat(awaitingTakeover(registry)).isEqualTo(2.0);
+
+        observer.takeoverStalled(MessageId.Lane.ORDERED, 3, false);
+        assertThat(awaitingTakeover(registry)).as("the other queue's shard 3 is still stalled").isEqualTo(1.0);
+
+        observer.takeoverStalled(MessageId.Lane.ORDERED, 3, false);
+        observer.takeoverStalled(MessageId.Lane.ORDERED, 3, false);
+        assertThat(awaitingTakeover(registry)).as("an end with no start left is not counted").isZero();
+    }
+
+    @Test
     void observers_sharing_a_registry_and_tag_set_publish_the_sum_of_their_stalls() {
         var registry = new SimpleMeterRegistry();
         var first = new MicrometerQueueObserver(registry, QueueName.of("orders"));
@@ -79,7 +115,7 @@ class MicrometerQueueObserverTest {
         first.takeoverStalled(MessageId.Lane.UNORDERED, 1, false);
         assertThat(awaitingTakeover(registry)).isEqualTo(1.0);
 
-        // The first never saw this stall start: its own floor keeps it from ending the second observer's stall.
+        // The first never saw this stall start: it has no start of its own to end, which keeps it from ending the second observer's stall.
         first.takeoverStalled(MessageId.Lane.ORDERED, 3, false);
         assertThat(awaitingTakeover(registry)).as("an observer only ends stalls it saw start").isEqualTo(1.0);
 

@@ -24,7 +24,7 @@ import java.lang.ref.WeakReference;
 import java.sql.SQLException;
 import java.time.Duration;
 import java.util.*;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
@@ -76,7 +76,10 @@ public final class MicrometerQueueObserver implements QueueObserver {
      * <p>
      * It counts only the stalls an observer saw start. An observer registered while a shard is already
      * stalled reads that shard only from its next stall; the end of the one it missed does not take the
-     * gauge below zero, nor end a stall another observer reported.
+     * gauge below zero, nor end a stall of another shard, or one another observer reported. Stalls are
+     * told apart by lane and shard, which is all the callback carries: one observer attached to two queues
+     * counts both queues' stalls of the same shard, but the end of one it missed on one queue can still end
+     * the same shard's stall it saw on the other.
      * <p>
      * Every observer on one registry with the same tags adds into this one gauge, whichever was registered
      * first: an observer rebuilt for a re-created queue, or one bound by hand next to the starter's, publishes
@@ -152,10 +155,19 @@ public final class MicrometerQueueObserver implements QueueObserver {
     private final AtomicInteger shardsAwaitingTakeover;
     /**
      * This observer's share of {@link #shardsAwaitingTakeover}: the stalls it was told started and not
-     * yet told ended. The floor at zero is applied here, per observer, so an observer that missed a stall's
-     * start cannot end a stall another observer reported.
+     * yet told ended, counted per lane and shard. An end is taken off the shared count only when this
+     * observer saw that same shard's stall start, so an observer that missed a stall's start cannot end a
+     * stall another observer reported, nor one of another shard it reported itself. A count rather than a
+     * set, because one observer attached to two queues is told about each queue's shard 3. An entry goes
+     * when its count reaches zero.
      */
-    private final AtomicInteger stallsSeenStarting = new AtomicInteger();
+    private final ConcurrentMap<Stall, Integer> stallsSeenStarting = new ConcurrentHashMap<>();
+
+    /**
+     * A stalled shard as {@link #takeoverStalled} names it: shard numbers repeat across the two lanes.
+     */
+    private record Stall(MessageId.Lane lane, int shard) {
+    }
 
     /**
      * No tags. Fine for one queue per {@code registry}; with more, prefer {@link #MicrometerQueueObserver(MeterRegistry, QueueName)}.
@@ -267,17 +279,30 @@ public final class MicrometerQueueObserver implements QueueObserver {
 
     @Override
     public void takeoverStalled(MessageId.Lane lane, int shard, boolean stalled) {
+        var stall = new Stall(lane, shard);
         if (stalled) {
             // Shared count first, own second: the end below takes one off the shared count only after taking it off
             // this observer's own, so the shared count can never be read below zero, even mid-update.
             shardsAwaitingTakeover.incrementAndGet();
-            stallsSeenStarting.incrementAndGet();
-        } else if (stallsSeenStarting.getAndUpdate(n -> Math.max(0, n - 1)) > 0) {
-            // Clamped at zero per observer: an observer registered while a shard was already stalled is told only that
-            // the stall ended. Taking that off the shared count would cancel another observer's stall, or read -1 and
-            // hide the next real stall behind a reading of zero.
+            stallsSeenStarting.merge(stall, 1, Integer::sum);
+        } else if (endSeenStall(stall)) {
+            // Only a stall this observer saw start: one registered while a shard was already stalled is told only that
+            // the stall ended. Taking that off the shared count would cancel a stall of another shard, or another
+            // observer's, or read -1 and hide the next real stall behind a reading of zero.
             shardsAwaitingTakeover.decrementAndGet();
         }
+    }
+
+    /**
+     * Take one off this observer's count for {@code stall}, and say whether there was one to take.
+     */
+    private boolean endSeenStall(Stall stall) {
+        var ended = new boolean[1];
+        stallsSeenStarting.computeIfPresent(stall, (key, count) -> {
+            ended[0] = true;
+            return count > 1 ? count - 1 : null;
+        });
+        return ended[0];
     }
 
     /**

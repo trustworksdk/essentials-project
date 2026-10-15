@@ -712,7 +712,9 @@ unaffected: the interface's `Instant` overloads still call its no-arg methods. (
   and feeds it from the callback, so it costs no query; the Spring starter binds it to every queue whenever a
   `MeterRegistry` exists, the `DurableQueues` adapter's queues included. Every `MicrometerQueueObserver` on one
   registry with the same tags adds into the one gauge, so an observer re-created for a queue, or bound by hand next
-  to the starter's, still publishes its stalls rather than leaving the gauge on the first observer's count. It is the signal `QueueHealth.unownedShards`
+  to the starter's, still publishes its stalls rather than leaving the gauge on the first observer's count. An observer
+  takes a stall off the gauge only when it saw that lane and shard's stall start: one created while a shard was already
+  stalled is told only that stall's end, and ignores it rather than ending another shard's stall. It is the signal `QueueHealth.unownedShards`
   and `essentials.queue.shards.unowned` cannot give: alert on it above zero next to them, summed across instances.
   A `default` method, so existing observers keep compiling. Unlike the other callbacks, an exception it throws, or a
   non-critical `Error` (an `AssertionError`, say), is caught and logged at ERROR, because it runs on a pump thread
