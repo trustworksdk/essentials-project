@@ -131,23 +131,25 @@ cover every `UnitOfWorkMode.NONE` handler. A handler that returns with the inter
 transaction only while its consumer is known to be started (it re-set the flag for a reason of its own). While its
 consumer is stopping it may have given up part-way, so its unit of work is marked rollback-only - its writes are
 discarded - and the consumer hands the message back for redelivery instead of acknowledging it; the rollback is not a
-handler failure, so it is never classified or dead-lettered (the hand-back counts one redelivery attempt). When the operation does not know the consumer's state, its writes commit and the message is left to the
-consumer unacknowledged. The rollback reaches only a handler run in the queue's own unit of work: a boundary-owning
-handler keeps whatever it committed before returning and is still handed back, so the redelivery runs it again on top
-of its own partial writes - it must be idempotent across a partial run. A crash before the commit still redelivers,
-so handlers should stay idempotent.
+handler failure, so it is never classified or dead-lettered (the hand-back counts one redelivery attempt). When the
+operation does not know the consumer's state, its writes commit and the message is left to the consumer
+unacknowledged. The rollback reaches only a handler run in the queue's own unit of work: a boundary-owning handler
+keeps whatever it committed before returning and is still handed back, so the redelivery runs it again on top of its
+own partial writes - it must be idempotent across a partial run. A crash before the commit still redelivers, so
+handlers should stay idempotent.
 
 An enqueue **outside** any `UnitOfWork` or Spring transaction commits on its own and is not undone by a later
 rollback of the caller's work - e.g. `Outbox.sendMessage` called before the business transaction starts. The first
-enqueue from a call site logs a WARN with its stack trace, for up to 4 call sites per innermost application frame and up to 32 such
-frames per `DurableQueues`; past that budget enqueues are not logged, so a silent enqueue is not proof of a transaction. A call site is the
-first three stack frames outside Essentials, the JDK, Reactor, Kotlin and Spring, so two callers of one application wrapper (a gateway
-around `Outbox.sendMessage`) are two call sites, but they share that wrapper's budget of 4. Opt in to failing instead with
-`setRequireActiveUnitOfWorkForEnqueue(true)` on the builder, or in Spring Boot
-`essentials.durable-queues.require-active-unit-of-work-for-enqueue=true`: such an enqueue then throws
-`NoActiveUnitOfWorkException` and queues nothing. A plain Spring `@Transactional`/`TransactionTemplate` counts as
-active. `Inbox.addMessageReceived` opens a `UnitOfWork` itself and is unaffected; `DurableLocalCommandBus.sendAndDontWait`
-outside a transaction is not. Dead-letter enqueues are never checked.
+enqueue from a call site logs a WARN with its stack trace, for up to 4 call sites per innermost application frame and
+up to 32 such frames per `DurableQueues`; past that budget enqueues are not logged, so a silent enqueue is not proof
+of a transaction. A call site is the first three stack frames outside Essentials, the JDK, Reactor, Kotlin and
+Spring, so two callers of one application wrapper (a gateway around `Outbox.sendMessage`) are two call sites, but
+they share that wrapper's budget of 4. Opt in to failing instead with `setRequireActiveUnitOfWorkForEnqueue(true)` on
+the builder, or in Spring Boot `essentials.durable-queues.require-active-unit-of-work-for-enqueue=true`: such an
+enqueue then throws `NoActiveUnitOfWorkException` and queues nothing. A plain Spring
+`@Transactional`/`TransactionTemplate` counts as active. `Inbox.addMessageReceived` opens a `UnitOfWork` itself and
+is unaffected; `DurableLocalCommandBus.sendAndDontWait` outside a transaction is not. Dead-letter enqueues are never
+checked.
 
 ## Polling Mechanisms
 
@@ -205,10 +207,11 @@ Continuous polling at fixed intervals wastes DB resources when queues are idle. 
 
 **The builder is wired like the Spring Boot starter.** Since 0.60.1, `PostgresqlDurableQueues.builder()` creates a
 `MultiTableChangeListener` when none is set (LISTEN/NOTIFY on the queue table, polled every 50 ms; it holds one
-connection, is started and stopped with the queues, and is released by `close()`), and the default `CentralizedQueuePollingOptimizer` uses the
-starter's values: start at the polling interval, ×1.5 per empty poll, ±10% jitter, capped at 2 s. A builder-made
-instance therefore behaves like a Spring one. `.setCreateMultiTableChangeListener(false)` keeps the old wiring: no
-LISTEN/NOTIFY and no backoff, every queue polled every interval - a queue only backs off where something can wake it.
+connection, is started and stopped with the queues, and is released by `close()`), and the default
+`CentralizedQueuePollingOptimizer` uses the starter's values: start at the polling interval, ×1.5 per empty poll,
+±10% jitter, capped at 2 s. A builder-made instance therefore behaves like a Spring one.
+`.setCreateMultiTableChangeListener(false)` keeps the old wiring: no LISTEN/NOTIFY and no backoff, every queue polled
+every interval - a queue only backs off where something can wake it.
 
 ### SimpleQueuePollingOptimizer
 

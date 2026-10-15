@@ -478,8 +478,9 @@ Four more `ShardOwnerMetrics` cover a shard that is leased but delivers nothing 
   statement the database refused, or an exception from the engine; not a handler failing, which is
   `handlerFailures`), and the checks deciding whether to serve the shard when they throw. The shard keeps
   its lease and its pass is retried 200 ms later with no limit, so a shard whose reads or acknowledgements
-  are permanently refused delivers nothing while this rises by about five a second. Alert on its rate. Logged at ERROR with the stack trace at most once a minute per queue,
-  naming one shard; every failure at DEBUG; an INFO when the shard's pass succeeds again.
+  are permanently refused delivers nothing while this rises by about five a second. Alert on its rate.
+  Logged at ERROR with the stack trace at most once a minute per queue, naming one shard; every failure at
+  DEBUG; an INFO when the shard's pass succeeds again.
 - **`batchedReadFailures`** counts the ordered lane's per-queue batched reads that failed. The shards then
   read for themselves, so this alone stops nothing; when they cannot either, their failures count under
   `pumpFailures`. Logged at WARN at most once a minute per queue, DEBUG otherwise, INFO on recovery.
