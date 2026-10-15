@@ -18,6 +18,7 @@ package dk.trustworks.essentials.components.queue.shardowned;
 
 import dk.trustworks.essentials.components.queue.shardowned.spi.*;
 import dk.trustworks.essentials.components.queue.shardowned.spi.operations.*;
+import dk.trustworks.essentials.shared.Exceptions;
 import dk.trustworks.essentials.shared.interceptor.*;
 
 import org.slf4j.*;
@@ -197,9 +198,10 @@ public final class PostgresqlMessageQueue implements MessageQueue {
 
     /**
      * The registered observers as a single one, reading the list live so an observer registered after
-     * {@link #consume} still sees events. Handed to the engine, which has no notion of a list.
+     * {@link #consume} still sees events. Handed to the engine, which has no notion of a list. Package-private so
+     * {@code TakeoverStalledFanOutTest} can drive it without a database.
      */
-    private final QueueObserver fanOut = new QueueObserver() {
+    final QueueObserver fanOut = new QueueObserver() {
         @Override
         public void deliveryFailed(String key, int attempt, Throwable cause) {
             notifyObservers(observer -> observer.deliveryFailed(key, attempt, cause));
@@ -224,15 +226,17 @@ public final class PostgresqlMessageQueue implements MessageQueue {
          * Every observer is told even when an earlier one throws: the engine catches this callback (see
          * {@link QueueObserver#takeoverStalled}), so stopping at the first throw would leave the observers after it
          * with a stall they never hear about, or one that never ends. The first exception is rethrown once all have
-         * been told, for the engine to log.
+         * been told, for the engine to log. A non-critical {@code Error} (an {@code AssertionError}, say) is treated
+         * the same way; a critical one (VirtualMachineError, LinkageError) propagates at once.
          */
         @Override
         public void takeoverStalled(MessageId.Lane lane, int shard, boolean stalled) {
-            RuntimeException first = null;
+            Throwable first = null;
             for (var observer : observers) {
                 try {
                     observer.takeoverStalled(lane, shard, stalled);
-                } catch (RuntimeException e) {
+                } catch (RuntimeException | Error e) {
+                    Exceptions.rethrowIfCriticalError(e);
                     if (first == null) {
                         first = e;
                     } else {
@@ -240,8 +244,12 @@ public final class PostgresqlMessageQueue implements MessageQueue {
                     }
                 }
             }
+            // Only a RuntimeException or an Error can have been caught above
+            if (first instanceof RuntimeException e) {
+                throw e;
+            }
             if (first != null) {
-                throw first;
+                throw (Error) first;
             }
         }
     };

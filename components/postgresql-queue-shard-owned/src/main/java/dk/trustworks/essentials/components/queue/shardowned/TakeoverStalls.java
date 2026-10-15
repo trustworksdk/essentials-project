@@ -17,6 +17,7 @@
 package dk.trustworks.essentials.components.queue.shardowned;
 
 import dk.trustworks.essentials.components.queue.shardowned.spi.*;
+import dk.trustworks.essentials.shared.Exceptions;
 import org.slf4j.*;
 
 import java.util.*;
@@ -58,7 +59,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * reopens, so the next stall is reported in full at once. An INFO for each shard when it recovers.
  * <p>
  * The observer call is the one observer call the engine catches ({@link QueueObserver#takeoverStalled} says
- * why): what it throws is logged at ERROR and the pump goes on. The counters are updated before it, so a
+ * why): what it throws, a non-critical {@code Error} included, is logged at ERROR and the pump goes on. The counters are updated before it, so a
  * throwing observer cannot leave them out of step.
  * <p>
  * Confined to the pump's thread, so nothing here is synchronised. The counters it writes and the ERROR window are
@@ -244,7 +245,11 @@ final class TakeoverStalls {
         var lane = "ordered".equals(owner.lane()) ? MessageId.Lane.ORDERED : MessageId.Lane.UNORDERED;
         try {
             owner.ownerMetrics().observer().takeoverStalled(lane, owner.shard(), stalled);
-        } catch (RuntimeException e) {
+        } catch (RuntimeException | Error e) {
+            // A non-critical Error (an AssertionError from a test double, say) is an observer bug like any other, and would
+            // end the pump just the same. A critical one (VirtualMachineError, LinkageError) still propagates, as it does
+            // from the per-owner guards.
+            Exceptions.rethrowIfCriticalError(e);
             log.error("{}: queue {}, {} shard {}: QueueObserver.takeoverStalled(stalled={}) threw. That is a bug in the "
                               + "observer; the pump keeps running, but what the observer reports for this shard may now "
                               + "be wrong",

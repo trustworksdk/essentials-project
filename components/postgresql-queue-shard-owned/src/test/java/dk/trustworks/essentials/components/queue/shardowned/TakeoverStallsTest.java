@@ -26,9 +26,9 @@ import org.slf4j.LoggerFactory;
 import java.sql.*;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.*;
 
-import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.*;
 
 /**
  * A takeover that keeps failing is retried {@link ShardPump#TAKEOVER_RETRY_NANOS} after each failure, about five times
@@ -289,6 +289,46 @@ class TakeoverStallsTest {
         assertThat(observerErrors).as("each throw is logged, naming the queue and shard").hasSize(4);
         assertThat(observerErrors.getFirst().getFormattedMessage()).contains("queue 2, unordered shard 3").contains("stalled=true");
         assertThat(observerErrors.getFirst().getThrowableProxy().getMessage()).isEqualTo("observer bug");
+    }
+
+    /**
+     * A non-critical {@code Error} (an {@code AssertionError} from a test double, say) is an observer bug like any
+     * {@code RuntimeException}: caught only the latter, it escaped to the pump thread outside its per-owner guard, ended
+     * the pump and left every shard it served leased and unserved. A critical one (a {@code LinkageError}, a
+     * {@code VirtualMachineError}) still propagates, as it does from the owners' handler paths.
+     */
+    @Test
+    void an_observer_throwing_a_non_critical_error_does_not_escape_to_the_pump_but_a_critical_one_does() {
+        var throwing = new AtomicReference<Error>(new AssertionError("observer test double"));
+        var metrics = new ShardOwnerMetrics(new QueueObserver() {
+            @Override
+            public void takeoverStalled(MessageId.Lane lane, int shard, boolean stalled) {
+                throw throwing.get();
+            }
+        });
+        var owner  = new StubOwner((short) 2, 3, metrics);
+        var stalls = new TakeoverStalls("pump-0", clock::get);
+
+        stalls.failed(owner, "threw during its takeover", new IllegalStateException("broken"));
+        assertThat(metrics.shardsAwaitingTakeover.get()).isEqualTo(1);
+        stalls.completed(owner);
+        assertThat(metrics.shardsAwaitingTakeover.get()).isZero();
+        stalls.failed(owner, "threw during its takeover", new IllegalStateException("broken"));
+        stalls.forget(owner);
+        assertThat(metrics.shardsAwaitingTakeover.get()).isZero();
+
+        var observerErrors = logged.list.stream()
+                                        .filter(event -> event.getLevel() == Level.ERROR)
+                                        .filter(event -> event.getFormattedMessage().contains("That is a bug in the observer"))
+                                        .toList();
+        assertThat(observerErrors).as("each throw is logged like a RuntimeException").hasSize(4);
+        assertThat(observerErrors.getFirst().getThrowableProxy().getClassName()).isEqualTo(AssertionError.class.getName());
+
+        var critical = new LinkageError("critical");
+        throwing.set(critical);
+        assertThatThrownBy(() -> stalls.failed(owner, "threw during its takeover", new IllegalStateException("broken")))
+                .isSameAs(critical);
+        assertThat(metrics.shardsAwaitingTakeover.get()).as("counted before the observer is told").isEqualTo(1);
     }
 
     private List<Level> levels() {

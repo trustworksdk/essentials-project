@@ -94,7 +94,8 @@ public interface QueueObserver {
      * <p>
      * <b>The one callback the engine catches.</b> It is called on a pump thread outside the per-shard guard
      * that keeps one shard's failure from ending the thread, so a throw here would stop every shard that pump
-     * serves. What it throws is logged at ERROR instead, and the pump goes on.
+     * serves. What it throws, a non-critical {@code Error} included, is logged at ERROR instead, and the pump goes on;
+     * only a critical error ({@code VirtualMachineError}, {@code LinkageError}) propagates.
      */
     default void takeoverStalled(MessageId.Lane lane, int shard, boolean stalled) {
     }

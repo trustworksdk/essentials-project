@@ -682,8 +682,10 @@ unaffected: the interface's `Instant` overloads still call its no-arg methods. (
   and feeds it from the callback, so it costs no query; the Spring starter binds it to every queue whenever a
   `MeterRegistry` exists, the `DurableQueues` adapter's queues included. It is the signal `QueueHealth.unownedShards`
   and `essentials.queue.shards.unowned` cannot give: alert on it above zero next to them, summed across instances.
-  A `default` method, so existing observers keep compiling. Unlike the other callbacks, an exception it throws is
-  caught and logged at ERROR, because it runs on a pump thread that serves other shards (§3). (`5b480fca`)
+  A `default` method, so existing observers keep compiling. Unlike the other callbacks, an exception it throws, or a
+  non-critical `Error` (an `AssertionError`, say), is caught and logged at ERROR, because it runs on a pump thread
+  that serves other shards (§3), and every other registered observer is still told; only a critical error
+  (`VirtualMachineError`, `LinkageError`) propagates. (`5b480fca`)
 - **`Exceptions.prependRootCauseSummary(Throwable, String)`** and **`Exceptions.ROOT_CAUSE_PREFIX`** (`shared`): put a
   `Root cause: <root cause's toString()>` summary in front of a description of a wrapped throwable, and return the
   description unchanged for one that is not wrapped. The summary spans several lines when the root cause's message
