@@ -87,7 +87,7 @@ class TakeoverStallsTest {
                 .contains("(failed attempt 6): java.sql.SQLException: refused");
 
         // A minute after the first ERROR: one more, carrying the count
-        clock.set(1_000_000_000L + TakeoverStalls.ERROR_EVERY_NANOS);
+        clock.set(1_000_000_000L + ErrorWindow.EVERY_NANOS);
         stalls.failed(owner, "threw during its takeover", new IllegalStateException("broken"));
         assertThat(levels().getLast()).isEqualTo(Level.ERROR);
         assertThat(logged.list.getLast().getFormattedMessage())
@@ -101,7 +101,7 @@ class TakeoverStallsTest {
         assertThat(levels().getLast()).isEqualTo(Level.DEBUG);
 
         // ... until a minute after the second ERROR
-        clock.set(1_000_000_000L + 2 * TakeoverStalls.ERROR_EVERY_NANOS);
+        clock.set(1_000_000_000L + 2 * ErrorWindow.EVERY_NANOS);
         stalls.failed(owner, "threw during its takeover", new IllegalStateException("broken"));
         assertThat(levels().getLast()).isEqualTo(Level.ERROR);
         assertThat(logged.list.getLast().getFormattedMessage())
@@ -160,7 +160,7 @@ class TakeoverStallsTest {
         assertThat(levels().stream().filter(Level.ERROR::equals).count()).isEqualTo(1);
 
         // A minute on, the first shard to retry gets the queue's one ERROR, counting the other two
-        clock.set(start + TakeoverStalls.ERROR_EVERY_NANOS);
+        clock.set(start + ErrorWindow.EVERY_NANOS);
         var before = logged.list.size();
         pumpOne.failed(third, "threw during its takeover", new IllegalStateException("broken"));
         pumpZero.failed(first, "threw during its takeover", new IllegalStateException("broken"));
@@ -181,6 +181,53 @@ class TakeoverStallsTest {
         pumpZero.failed(second, "threw during its takeover", new IllegalStateException("broken"));
         assertThat(levels().getLast()).isEqualTo(Level.ERROR);
         assertThat(logged.list.getLast().getFormattedMessage()).contains("queue 4, ordered shard 1 threw during its takeover");
+    }
+
+    /**
+     * The queue's last stall ending reopens the window, but between its count reaching zero and the reopen, a pump on
+     * another thread can count a new stall and take the window for that stall's ERROR. Reopening unconditionally then
+     * undid that take, and the new stall's next retry, {@link ShardPump#TAKEOVER_RETRY_NANOS} later, logged a second
+     * stack-trace ERROR within the minute. The interleaving is forced by running the other pump's failure from inside the
+     * ending stall's decrement, which is exactly where the other thread can run.
+     */
+    @Test
+    void a_stall_ending_does_not_reopen_the_window_another_pump_took_after_the_count_reached_zero() {
+        var metrics = new ShardOwnerMetrics();
+        var window  = metrics.nextTakeoverStallErrorNanos;
+        var other   = new StubOwner((short) 4, 1, metrics);
+        var pumpOne = new TakeoverStalls("pump-1", clock::get);
+        // The ending stall had the queue's ERROR more than a minute ago, so the window is open again by the clock
+        assertThat(ErrorWindow.take(window, clock.get())).isTrue();
+        clock.addAndGet(ErrorWindow.EVERY_NANOS + TimeUnit.SECONDS.toNanos(1));
+
+        var endingStall = new AtomicInteger(1);
+        TakeoverStalls.noLongerAwaiting(() -> {
+            var left = endingStall.decrementAndGet();
+            pumpOne.failed(other, "threw during its takeover", new IllegalStateException("broken"));
+            return left;
+        }, window);
+        assertThat(levels()).as("the other pump's new stall took the window").containsExactly(Level.ERROR);
+
+        clock.addAndGet(ShardPump.TAKEOVER_RETRY_NANOS);
+        pumpOne.failed(other, "threw during its takeover", new IllegalStateException("broken"));
+        assertThat(levels()).as("its retry inside the minute is at DEBUG, not a second ERROR").containsExactly(Level.ERROR, Level.DEBUG);
+    }
+
+    /**
+     * The other half: with nothing taking the window in between, the last stall ending does reopen it, so the next stall
+     * is reported in full at once even inside the minute.
+     */
+    @Test
+    void the_last_stall_ending_reopens_the_window_when_nobody_took_it_since() {
+        var window = new AtomicLong(ErrorWindow.NEVER_TAKEN);
+        assertThat(ErrorWindow.take(window, clock.get())).isTrue();
+
+        var awaiting = new AtomicInteger(2);
+        TakeoverStalls.noLongerAwaiting(awaiting::decrementAndGet, window);
+        assertThat(ErrorWindow.isOpen(window.get(), clock.get())).as("another shard still stalled: stays closed").isFalse();
+
+        TakeoverStalls.noLongerAwaiting(awaiting::decrementAndGet, window);
+        assertThat(window.get()).isEqualTo(ErrorWindow.NEVER_TAKEN);
     }
 
     @Test

@@ -84,7 +84,7 @@ class PumpFailuresTest {
         assertThat(logged.list.getLast().getFormattedMessage()).contains("(failed pass 6 in a row): java.sql.SQLException: refused");
 
         // A minute after the first ERROR: one more, with the stack trace and the run so far
-        clock.set(1_000_000_000L + TakeoverStalls.ERROR_EVERY_NANOS);
+        clock.set(1_000_000_000L + ErrorWindow.EVERY_NANOS);
         failures.failed(owner, "threw during delivery", new IllegalStateException("broken"));
         assertThat(levels().getLast()).isEqualTo(Level.ERROR);
         assertThat(logged.list.getLast().getFormattedMessage())
@@ -181,7 +181,7 @@ class PumpFailuresTest {
         assertThat(metrics.pumpFailures.sum()).as("not a failed delivery pass").isZero();
 
         // A minute after the queue's WARN: one more, with the stack trace
-        clock.set(1_000_000_000L + TakeoverStalls.ERROR_EVERY_NANOS);
+        clock.set(1_000_000_000L + ErrorWindow.EVERY_NANOS);
         pumpZero.batchedReadFailed((short) 6, metrics, new SQLException("permission denied"));
         assertThat(levels().getLast()).isEqualTo(Level.WARN);
         assertThat(logged.list.getLast().getFormattedMessage()).contains("3 failed batched read(s) in a row over 60 s");

@@ -23,7 +23,7 @@ import org.slf4j.*;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.function.LongSupplier;
+import java.util.function.*;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
@@ -69,15 +69,8 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * configuration keeps applying to it.
  */
 final class TakeoverStalls {
-    private static final Logger log                   = LoggerFactory.getLogger(ShardPump.class);
-    static final         long   ERROR_EVERY_NANOS     = TimeUnit.MINUTES.toNanos(1);
-    /**
-     * {@link ShardOwnerMetrics#nextTakeoverStallErrorNanos} while the window is open regardless of the clock: before the
-     * queue's first stall, and again once none of its shards is stalled. A sentinel rather than a time, because the clock
-     * is injected and a time taken from {@code System.nanoTime()} when the metrics were built means nothing against it.
-     */
-    static final         long   NO_STALL_ERROR_LOGGED = Long.MIN_VALUE;
-    private static final long   RETRY_MILLIS          = TimeUnit.NANOSECONDS.toMillis(ShardPump.TAKEOVER_RETRY_NANOS);
+    private static final Logger log          = LoggerFactory.getLogger(ShardPump.class);
+    private static final long   RETRY_MILLIS = TimeUnit.NANOSECONDS.toMillis(ShardPump.TAKEOVER_RETRY_NANOS);
 
     private final String                              pumpName;
     private final LongSupplier                        nanoTime;
@@ -165,18 +158,7 @@ final class TakeoverStalls {
      * a minute has passed since it was last taken, and this pump won the CAS against the others serving the queue.
      */
     private static boolean takeErrorWindow(ShardOwnerMetrics metrics, long now) {
-        return takeErrorWindow(metrics.nextTakeoverStallErrorNanos, now);
-    }
-
-    /**
-     * Take a once-a-minute ERROR window shared by every pump serving a queue: open when {@code window} holds
-     * {@link #NO_STALL_ERROR_LOGGED} or a time that has passed, and taken by whichever pump wins the CAS. Also used by
-     * {@link PumpFailures}, for the same reason.
-     */
-    static boolean takeErrorWindow(AtomicLong window, long now) {
-        var next = window.get();
-        return (next == NO_STALL_ERROR_LOGGED || now - next >= 0)
-                && window.compareAndSet(next, now + ERROR_EVERY_NANOS);
+        return ErrorWindow.take(metrics.nextTakeoverStallErrorNanos, now);
     }
 
     /**
@@ -188,12 +170,30 @@ final class TakeoverStalls {
     }
 
     /**
-     * One shard of the queue fewer is awaiting its takeover. When that was the last, the ERROR window reopens, so the
-     * queue's next stall is reported in full at once rather than up to a minute later at DEBUG.
+     * One shard of the queue fewer is awaiting its takeover. When that was the last, the ERROR window reopens, unless
+     * another pump has taken it since, so the queue's next stall is reported in full at once rather than up to a minute
+     * later at DEBUG.
      */
     private static void noLongerAwaiting(ShardOwnerMetrics metrics) {
-        if (metrics.shardsAwaitingTakeover.decrementAndGet() == 0) {
-            metrics.nextTakeoverStallErrorNanos.set(NO_STALL_ERROR_LOGGED);
+        noLongerAwaiting(metrics.shardsAwaitingTakeover::decrementAndGet, metrics.nextTakeoverStallErrorNanos);
+    }
+
+    /**
+     * {@link #noLongerAwaiting(ShardOwnerMetrics)} on its two parts, so a test can run another pump between them.
+     * <p>
+     * The window is read before the count goes down, and reopened only if it still holds that value. Between the count
+     * reaching zero and the reopen, a pump on another thread can count a new stall and take the window for its ERROR;
+     * reopening unconditionally undid that take, and the new stall's next retry logged a second stack-trace ERROR within
+     * the minute. A pump that took the window before the read counted its stall first, so the count does not reach zero
+     * here; one that takes it after the read changes it, so the reopen does nothing.
+     *
+     * @param countDown takes this shard out of the queue's count of shards awaiting their takeover, returning what is left
+     * @param window    the queue's {@link ShardOwnerMetrics#nextTakeoverStallErrorNanos}
+     */
+    static void noLongerAwaiting(IntSupplier countDown, AtomicLong window) {
+        var seen = window.get();
+        if (countDown.getAsInt() == 0) {
+            ErrorWindow.reopen(window, seen);
         }
     }
 

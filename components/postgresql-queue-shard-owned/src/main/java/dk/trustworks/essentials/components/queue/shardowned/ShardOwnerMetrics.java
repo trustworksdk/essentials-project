@@ -350,27 +350,27 @@ public final class ShardOwnerMetrics {
 
     /**
      * Rate limit for the ERROR that reports a stalled takeover, per queue rather than per shard: what makes one shard's
-     * takeover fail usually makes them all fail. {@link TakeoverStalls#NO_STALL_ERROR_LOGGED} until the first, and again
+     * takeover fail usually makes them all fail. {@link ErrorWindow#NEVER_TAKEN} until the first, and again
      * once no shard of the queue is awaiting its takeover. See {@code TakeoverStalls}.
      */
     final java.util.concurrent.atomic.AtomicLong nextTakeoverStallErrorNanos =
-            new java.util.concurrent.atomic.AtomicLong(TakeoverStalls.NO_STALL_ERROR_LOGGED);
+            new java.util.concurrent.atomic.AtomicLong(ErrorWindow.NEVER_TAKEN);
 
     /**
      * Rate limit for the ERROR that reports a failing delivery pass, per queue for the same reason as
-     * {@link #nextTakeoverStallErrorNanos}. {@link TakeoverStalls#NO_STALL_ERROR_LOGGED} until the first. See
+     * {@link #nextTakeoverStallErrorNanos}. {@link ErrorWindow#NEVER_TAKEN} until the first. See
      * {@code PumpFailures}.
      */
     final java.util.concurrent.atomic.AtomicLong nextPumpFailureErrorNanos =
-            new java.util.concurrent.atomic.AtomicLong(TakeoverStalls.NO_STALL_ERROR_LOGGED);
+            new java.util.concurrent.atomic.AtomicLong(ErrorWindow.NEVER_TAKEN);
 
     /**
      * Rate limit for the WARN that reports a failing ordered-lane batched read ({@link #batchedReadFailures}), per queue:
-     * every pump serving the queue issues its own. {@link TakeoverStalls#NO_STALL_ERROR_LOGGED} until the first. See
+     * every pump serving the queue issues its own. {@link ErrorWindow#NEVER_TAKEN} until the first. See
      * {@code PumpFailures}.
      */
     final java.util.concurrent.atomic.AtomicLong nextBatchedReadWarningNanos =
-            new java.util.concurrent.atomic.AtomicLong(TakeoverStalls.NO_STALL_ERROR_LOGGED);
+            new java.util.concurrent.atomic.AtomicLong(ErrorWindow.NEVER_TAKEN);
 
     /**
      * The operator-facing subset, as a stable shape.

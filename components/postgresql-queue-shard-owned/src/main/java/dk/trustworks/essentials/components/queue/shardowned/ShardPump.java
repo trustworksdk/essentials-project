@@ -114,9 +114,9 @@ final class ShardPump implements Runnable {
     private          boolean                        forgotten;
     /**
      * When the next pass failure may be logged at ERROR ({@link System#nanoTime()}), or
-     * {@link TakeoverStalls#NO_STALL_ERROR_LOGGED} before the first. Pump thread only.
+     * {@link ErrorWindow#NEVER_TAKEN} before the first. Pump thread only.
      */
-    private          long                           nextLoopFailureErrorNanos = TakeoverStalls.NO_STALL_ERROR_LOGGED;
+    private          long                           nextLoopFailureErrorNanos = ErrorWindow.NEVER_TAKEN;
     /**
      * Passes that failed since the last one that completed. Pump thread only.
      */
@@ -488,8 +488,8 @@ final class ShardPump implements Runnable {
         charged.forEach(queueMetrics -> queueMetrics.pumpLoopFailures.increment());
         loopFailures++;
         var now = System.nanoTime();
-        if (nextLoopFailureErrorNanos == TakeoverStalls.NO_STALL_ERROR_LOGGED || now - nextLoopFailureErrorNanos >= 0) {
-            nextLoopFailureErrorNanos = now + TakeoverStalls.ERROR_EVERY_NANOS;
+        if (ErrorWindow.isOpen(nextLoopFailureErrorNanos, now)) {
+            nextLoopFailureErrorNanos = now + ErrorWindow.EVERY_NANOS;
             log.error("{}: a pass ended on an exception thrown outside its per-shard guards ({} failed pass(es) in a row). "
                               + "The pump reconnects in 200 ms and runs the takeover of each of its {} shard(s) again; while "
                               + "the cause persists those shards deliver little or nothing, and QueueHealth.unownedShards does "

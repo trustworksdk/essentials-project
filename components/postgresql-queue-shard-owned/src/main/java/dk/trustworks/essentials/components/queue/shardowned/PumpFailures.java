@@ -110,7 +110,7 @@ final class PumpFailures {
         } else {
             current.failures++;
         }
-        if (TakeoverStalls.takeErrorWindow(metrics.nextPumpFailureErrorNanos, now)) {
+        if (ErrorWindow.take(metrics.nextPumpFailureErrorNanos, now)) {
             log.error("{}: queue {}, {} shard {} {}; continuing with the other shards. {} failed pass(es) in a row over {} s. "
                               + "The shard stays leased to this instance and its pass is tried again {} ms later at the "
                               + "earliest, with no limit, while the pump's other shards keep their own rate; while it keeps "
@@ -168,7 +168,7 @@ final class PumpFailures {
         } else {
             current.failures++;
         }
-        if (TakeoverStalls.takeErrorWindow(metrics.nextBatchedReadWarningNanos, now)) {
+        if (ErrorWindow.take(metrics.nextBatchedReadWarningNanos, now)) {
             log.warn("{}: batched read for queue {} failed; those shards read for themselves this pass. {} failed batched "
                              + "read(s) in a row over {} s; it is tried again on every pass. ShardOwnedQueue.metrics() counts "
                              + "every failure under batchedReadFailures. Every failure is logged at DEBUG, and at WARN at most "
