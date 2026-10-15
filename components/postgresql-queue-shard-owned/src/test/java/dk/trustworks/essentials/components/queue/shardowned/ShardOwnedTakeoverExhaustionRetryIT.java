@@ -218,7 +218,7 @@ class ShardOwnedTakeoverExhaustionRetryIT {
             assertThat(failingMetrics.snapshot()).containsEntry("shardsAwaitingTakeover", 1);
             assertThat(otherMetrics.shardsAwaitingTakeover.get()).isZero();
             assertThat(otherMetrics.takeoverFailures.sum()).isZero();
-            assertThat(pumpMetrics.takeoverFailures.sum()).as("counted on the queue's metrics, not the pump's").isZero();
+            assertThat(pumpMetrics.takeoverFailures.sum()).as("counted on the subscription's metrics, not the pump's").isZero();
 
             failDeadLetterInserts(false);
             await().atMost(Duration.ofSeconds(15))
@@ -678,8 +678,8 @@ class ShardOwnedTakeoverExhaustionRetryIT {
     }
 
     /**
-     * {@code TakeoverStalls.failed} reporting a stall's first failure: at ERROR when the queue's window is open, else at
-     * DEBUG. Told apart from a repeat by the message pattern, not the level.
+     * {@code TakeoverStalls.failed} reporting a stall's first failure: at ERROR when the subscription's window is open,
+     * else at DEBUG. Told apart from a repeat by the message pattern, not the level.
      */
     private List<ILoggingEvent> firstTakeoverFailureReports() {
         return pumpLogged().stream()
