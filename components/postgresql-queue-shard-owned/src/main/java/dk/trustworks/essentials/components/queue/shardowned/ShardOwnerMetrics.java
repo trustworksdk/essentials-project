@@ -149,8 +149,10 @@ public final class ShardOwnerMetrics {
     /**
      * Delivery passes ({@code pumpOnce}) for a shard that failed with the connection still healthy: a statement the
      * database refused, or an unchecked exception or non-critical {@code Error} from the engine. Not a handler failing, which is
-     * {@link #handlerFailures}. The shard stays leased and the pass is tried again on the pump's next pass, with no limit,
-     * so a shard whose reads or acknowledgements are permanently refused delivers nothing while this keeps rising - and,
+     * {@link #handlerFailures}. The shard stays leased and its pass is tried again 200 ms later at the earliest
+     * ({@code ShardPump.PUMP_RETRY_NANOS}), with no limit, while the pump's other shards keep their own rate. So a shard
+     * whose reads or acknowledgements are permanently refused delivers nothing while this rises by up to about five a
+     * second per failing shard, whatever the pump's pass rate - and,
      * like a stalled takeover, {@code QueueHealth.unownedShards()} cannot see it because the shard is leased. Alert on
      * its rate. The ERROR log, at most one a minute per queue, names one shard and the cause; every failure is logged at
      * DEBUG, and a shard whose pass succeeds again after failing gets an INFO. See {@code PumpFailures}.

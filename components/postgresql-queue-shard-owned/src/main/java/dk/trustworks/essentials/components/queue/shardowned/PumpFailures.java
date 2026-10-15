@@ -27,12 +27,13 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 /**
  * One pump's shards whose delivery pass ({@link LeasedOwner#pumpOnce}) has failed and not yet succeeded since.
  * <p>
- * {@link ShardPump} keeps such a shard and tries its pass again on the next pass, with no limit and with the lease kept,
- * the same as a failing takeover ({@link TakeoverStalls}). A pass that keeps failing - a read or acknowledgement the
- * database refuses, an engine bug throwing - holds the shard and delivers nothing from it, and
- * {@code QueueHealth.unownedShards()} cannot see it because the shard is leased. Before this, every failed pass logged a
- * full stack trace at ERROR (five a second on the statement path, paced by the pump's 200 ms sleep) and no counter
- * recorded it.
+ * {@link ShardPump} keeps such a shard and tries its pass again {@link ShardPump#PUMP_RETRY_NANOS} (200 ms) later, with
+ * no limit and with the lease kept, the same as a failing takeover ({@link TakeoverStalls}). Only the failing shard
+ * waits: the pump's other shards, of every queue it serves, are pumped at their own rate meanwhile. It used to sleep
+ * 200 ms after any pass in which a statement failed, which held every shard on the pump to five passes a second for as
+ * long as one kept failing. A pass that keeps failing - a read or acknowledgement the database refuses, an engine bug
+ * throwing - holds the shard and delivers nothing from it, and {@code QueueHealth.unownedShards()} cannot see it because
+ * the shard is leased. Before this, every failed pass logged a full stack trace at ERROR and no counter recorded it.
  * <p>
  * Now every failure is counted in {@link ShardOwnerMetrics#pumpFailures} on the owner's metrics, so
  * {@link ShardOwnedQueue#metrics()} sees it. The log follows {@link TakeoverStalls}: at most one ERROR a minute <b>per
@@ -92,7 +93,8 @@ final class PumpFailures {
     }
 
     /**
-     * The owner's delivery pass failed with the connection still healthy; the pump tries it again on its next pass.
+     * The owner's delivery pass failed with the connection still healthy; the pump tries it again
+     * {@link ShardPump#PUMP_RETRY_NANOS} later, and serves its other owners meanwhile.
      *
      * @param what  how it failed, completing "queue Q, lane shard S ...", e.g. "threw during delivery"
      * @param cause the failure
@@ -110,15 +112,18 @@ final class PumpFailures {
         }
         if (TakeoverStalls.takeErrorWindow(metrics.nextPumpFailureErrorNanos, now)) {
             log.error("{}: queue {}, {} shard {} {}; continuing with the other shards. {} failed pass(es) in a row over {} s. "
-                              + "The shard stays leased to this instance and its pass is tried again on the pump's next pass, "
-                              + "with no limit; while it keeps failing the shard delivers nothing, and QueueHealth.unownedShards "
+                              + "The shard stays leased to this instance and its pass is tried again {} ms later at the "
+                              + "earliest, with no limit, while the pump's other shards keep their own rate; while it keeps "
+                              + "failing the shard "
+                              + "delivers nothing, and QueueHealth.unownedShards "
                               + "does not count it. ShardOwnedQueue.metrics() counts every failure under pumpFailures. Every "
                               + "failure, on any shard, is logged at DEBUG, and at ERROR at most once a minute per queue",
                       pumpName, owner.queueId(), owner.lane(), owner.shard(), what, current.failures,
-                      TimeUnit.NANOSECONDS.toSeconds(now - current.sinceNanos), cause);
+                      TimeUnit.NANOSECONDS.toSeconds(now - current.sinceNanos),
+                      TimeUnit.NANOSECONDS.toMillis(ShardPump.PUMP_RETRY_NANOS), cause);
         } else {
-            // No stack trace: a repeat can come on every pass, and the queue's once-a-minute ERROR carries one. The
-            // cause's own string still says what failed.
+            // No stack trace: a repeat comes every PUMP_RETRY_NANOS (200 ms) at the soonest, per failing shard, and the
+            // queue's once-a-minute ERROR carries one. The cause's own string still says what failed.
             log.debug("{}: queue {}, {} shard {} {} (failed pass {} in a row): {}",
                       pumpName, owner.queueId(), owner.lane(), owner.shard(), what, current.failures, String.valueOf(cause));
         }

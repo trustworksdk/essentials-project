@@ -35,11 +35,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
 /**
- * A delivery pass ({@link LeasedOwner#pumpOnce}) that keeps failing on a healthy connection is retried on the pump's next
- * pass with the lease kept, so the shard is held and delivers nothing, and {@code QueueHealth.unownedShards} cannot see
- * it. It used to log a full stack trace at ERROR on every pass - five a second on the statement path, paced by the 200 ms
- * sleep - and count nothing. Now every failure is counted in {@link ShardOwnerMetrics#pumpFailures} on the owner's
- * metrics, and logged at ERROR once a minute per queue at most, with DEBUG for the rest.
+ * A delivery pass ({@link LeasedOwner#pumpOnce}) that keeps failing on a healthy connection is retried
+ * {@link ShardPump#PUMP_RETRY_NANOS} later with the lease kept, so the shard is held and delivers nothing, and
+ * {@code QueueHealth.unownedShards} cannot see it. It used to log a full stack trace at ERROR on every pass and count
+ * nothing. Now every failure is counted in {@link ShardOwnerMetrics#pumpFailures} on the owner's metrics, and logged at
+ * ERROR once a minute per queue at most, with DEBUG for the rest. Only the failing shard is paced; its siblings on the
+ * same pump are not.
  */
 class ShardPumpDeliveryFailureTest {
     private static final short PUMP_QUEUE_ID = 0;
@@ -114,6 +115,110 @@ class ShardPumpDeliveryFailureTest {
         assertThat(aboutShard.stream().map(ILoggingEvent::getLevel).toList())
                 .containsExactly(Level.ERROR, Level.DEBUG, Level.DEBUG, Level.INFO);
         assertThat(aboutShard.getLast().getFormattedMessage()).contains("delivering again after 3 failed pass(es)");
+    }
+
+    /**
+     * One shard's failing statement is that shard's problem, not its pump's. A failing pass used to pace the whole pump
+     * with a 200 ms sleep after the pass, so every other shard on it - across every queue it serves - was held to five
+     * passes a second for as long as the one shard kept failing. Now only the failing shard is paced: it is retried
+     * {@link ShardPump#PUMP_RETRY_NANOS} later, and its sibling keeps being served at its full rate.
+     */
+    @Test
+    void a_healthy_shard_keeps_delivering_while_a_sibling_statement_keeps_failing() throws InterruptedException {
+        a_healthy_shard_keeps_delivering_while_a_sibling_fails_with(() -> new SQLException("permission denied"));
+    }
+
+    /**
+     * The unchecked variant. It was never pass-paced, but nothing paced the failing shard either: it was retried on every
+     * pass, as fast as its siblings kept the pump busy. It is now paced like a failing statement, per shard.
+     */
+    @Test
+    void a_healthy_shard_keeps_delivering_while_a_sibling_pass_keeps_throwing() throws InterruptedException {
+        a_healthy_shard_keeps_delivering_while_a_sibling_fails_with(() -> new IllegalStateException("pass refused"));
+    }
+
+    private void a_healthy_shard_keeps_delivering_while_a_sibling_fails_with(Supplier<Exception> failure) throws InterruptedException {
+        var metrics = new ShardOwnerMetrics();
+        var failing = new StubOwner((short) 7, 1, metrics, failure, Integer.MAX_VALUE);
+        var healthy = new DeliveringStubOwner((short) 7, 2, metrics);
+
+        var startedAt = System.nanoTime();
+        runUntil(() -> System.nanoTime() - startedAt >= TimeUnit.SECONDS.toNanos(1), failing, healthy);
+        var ranForMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt);
+
+        assertThat(healthy.passes.get())
+                .as("the healthy shard is pumped at its own rate, not five times a second (ran %d ms)", ranForMillis)
+                .isGreaterThanOrEqualTo(50);
+        assertThat(metrics.pumpFailures.sum()).as("only the failing shard's passes are counted").isEqualTo(failing.passes.get());
+        var retryMillis = TimeUnit.NANOSECONDS.toMillis(ShardPump.PUMP_RETRY_NANOS);
+        assertThat(failing.passes.get())
+                .as("the failing shard is retried every %d ms, neither abandoned nor on every pass (ran %d ms)", retryMillis, ranForMillis)
+                .isGreaterThanOrEqualTo(2)
+                .isLessThanOrEqualTo((int) (ranForMillis / retryMillis) + 2);
+        assertThat(aboutShard(2)).as("nothing is logged about the healthy shard").isEmpty();
+    }
+
+    /**
+     * A shard waiting out a failed pass is not pumped before its retry, so its own park deadline must not wake the pump:
+     * it is typically 0 by then (the acknowledgement that failed is still pending), and folding it in parked the pump
+     * 1 ms at a time, about a thousand passes a second, for as long as the shard kept failing. With an idle sibling
+     * nothing else wakes the pump, so it passes about once per {@link ShardPump#PUMP_RETRY_NANOS}.
+     */
+    @Test
+    void a_shard_waiting_out_a_failed_pass_does_not_wake_the_pump_on_its_own_deadline() throws InterruptedException {
+        var metrics = new ShardOwnerMetrics();
+        var failing = new StubOwner((short) 7, 1, metrics, () -> new IllegalStateException("pass refused"), Integer.MAX_VALUE) {
+            @Override
+            public long parkDeadlineMillis() {
+                return 0L;
+            }
+        };
+        var idle = new IdleStubOwner((short) 7, 2, metrics);
+
+        var startedAt = System.nanoTime();
+        runUntil(() -> System.nanoTime() - startedAt >= TimeUnit.SECONDS.toNanos(1), failing, idle);
+        var ranForMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt);
+
+        var retryMillis = TimeUnit.NANOSECONDS.toMillis(ShardPump.PUMP_RETRY_NANOS);
+        assertThat(failing.passes.get()).as("the failing shard is still retried (ran %d ms)", ranForMillis).isGreaterThanOrEqualTo(2);
+        assertThat(idle.attentionAsked.get())
+                .as("one pump pass per %d ms retry, not one per millisecond (ran %d ms)", retryMillis, ranForMillis)
+                .isLessThanOrEqualTo((int) (ranForMillis / retryMillis) + 3);
+    }
+
+    /**
+     * A retry that has fallen due is dropped before the shard's lease, delivery and attention checks, not only when the
+     * shard is pumped. Left in place for a shard that then has nothing to do, it was 0 ms away on every later park, so
+     * the pump woke every millisecond for it until the shard next needed attention.
+     */
+    @Test
+    void a_due_retry_is_dropped_even_when_the_shard_then_needs_no_attention() throws InterruptedException {
+        var metrics = new ShardOwnerMetrics();
+        var failing = new StubOwner((short) 7, 1, metrics, () -> new IllegalStateException("pass refused"), Integer.MAX_VALUE) {
+            private final AtomicBoolean asked = new AtomicBoolean();
+
+            @Override
+            public boolean needsAttention() {
+                // Once: the pass fails, and by the time its retry falls due there is nothing left to do
+                return asked.compareAndSet(false, true);
+            }
+
+            @Override
+            public long parkDeadlineMillis() {
+                return IdleStubOwner.FAR_DEADLINE_MILLIS;
+            }
+        };
+        var idle = new IdleStubOwner((short) 7, 2, metrics);
+
+        var startedAt = System.nanoTime();
+        runUntil(() -> System.nanoTime() - startedAt >= TimeUnit.SECONDS.toNanos(1), failing, idle);
+        var ranForMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt);
+
+        var retryMillis = TimeUnit.NANOSECONDS.toMillis(ShardPump.PUMP_RETRY_NANOS);
+        assertThat(failing.passes.get()).as("pumped once, when it needed attention").isEqualTo(1);
+        assertThat(idle.attentionAsked.get())
+                .as("the pump parks on its owners' deadlines once the retry is due, not every millisecond (ran %d ms)", ranForMillis)
+                .isLessThanOrEqualTo((int) (ranForMillis / retryMillis) + 3);
     }
 
     private void runUntil(Callable<Boolean> done, LeasedOwner... owners) throws InterruptedException {
@@ -289,6 +394,45 @@ class ShardPumpDeliveryFailureTest {
 
         @Override
         public void onLeaseEnded(LeaseEnd reason) {
+        }
+    }
+
+    /**
+     * A shard with work on every pass: each pass delivers one message, so the pump does not park while it is served.
+     */
+    private static final class DeliveringStubOwner extends StubOwner {
+        DeliveringStubOwner(short queueId, int shard, ShardOwnerMetrics metrics) {
+            super(queueId, shard, metrics, () -> new IllegalStateException("never thrown"), 0);
+        }
+
+        @Override
+        public int pumpOnce(Connection connection) {
+            passes.incrementAndGet();
+            return 1;
+        }
+    }
+
+    /**
+     * A shard with nothing to do and a far park deadline, so it never wakes the pump itself. It is asked
+     * {@code needsAttention} once per pass, which makes {@link #attentionAsked} the pump's pass count.
+     */
+    private static final class IdleStubOwner extends StubOwner {
+        static final long          FAR_DEADLINE_MILLIS = 10_000L;
+        final        AtomicInteger attentionAsked      = new AtomicInteger();
+
+        IdleStubOwner(short queueId, int shard, ShardOwnerMetrics metrics) {
+            super(queueId, shard, metrics, () -> new IllegalStateException("never thrown"), 0);
+        }
+
+        @Override
+        public boolean needsAttention() {
+            attentionAsked.incrementAndGet();
+            return false;
+        }
+
+        @Override
+        public long parkDeadlineMillis() {
+            return FAR_DEADLINE_MILLIS;
         }
     }
 

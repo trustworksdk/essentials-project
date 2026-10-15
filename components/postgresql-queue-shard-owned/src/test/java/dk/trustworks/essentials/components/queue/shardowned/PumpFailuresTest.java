@@ -24,12 +24,13 @@ import org.slf4j.LoggerFactory;
 
 import java.sql.*;
 import java.util.*;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * A delivery pass that keeps failing is retried on every pass of the pump with the shard's lease kept. Every failure must
+ * A delivery pass that keeps failing is retried {@link ShardPump#PUMP_RETRY_NANOS} later with the shard's lease kept. Every failure must
  * be counted where {@code ShardOwnedQueue.metrics()} sees it, and logged at ERROR once a minute at most per queue: not
  * once per pass, and not once per shard.
  */
@@ -67,11 +68,12 @@ class PumpFailuresTest {
         assertThat(logged.list.getFirst().getFormattedMessage())
                 .contains("pump-0: queue 3, unordered shard 5 issued a statement that failed on a healthy connection")
                 .contains("1 failed pass(es) in a row")
+                .contains("its pass is tried again " + TimeUnit.NANOSECONDS.toMillis(ShardPump.PUMP_RETRY_NANOS) + " ms later")
                 .contains("QueueHealth.unownedShards does not count it")
                 .contains("ShardOwnedQueue.metrics() counts every failure under pumpFailures");
         assertThat(logged.list.getFirst().getThrowableProxy()).as("the first carries the stack trace").isNotNull();
 
-        // Retried on every pass: counted, at DEBUG, no stack trace
+        // Retried PUMP_RETRY_NANOS apart: counted, at DEBUG, no stack trace
         for (var pass = 0; pass < 5; pass++) {
             clock.addAndGet(200_000_000L);
             failures.failed(owner, "issued a statement that failed on a healthy connection", new SQLException("refused"));

@@ -52,10 +52,17 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 final class ShardPump implements Runnable {
     private static final Logger log                  = LoggerFactory.getLogger(ShardPump.class);
     /**
-     * How long a shard whose takeover failed waits before the pump retries it. Paced like a failing statement, and for
-     * the same reason (a permanent failure would otherwise spin), but per shard: the pump's other shards are not paced.
+     * How long a shard whose takeover failed waits before the pump retries it. Paced like a failing delivery pass
+     * ({@link #PUMP_RETRY_NANOS}), and for the same reason (a permanent failure would otherwise spin), per shard: the
+     * pump's other shards are not paced.
      */
     static final         long   TAKEOVER_RETRY_NANOS = TimeUnit.MILLISECONDS.toNanos(200L);
+    /**
+     * How long a shard whose delivery pass ({@link LeasedOwner#pumpOnce}) failed on a healthy connection, or threw, waits
+     * before the pump pumps it again. Per shard, never by pacing the pass: a 200 ms sleep after a failed pass held every
+     * other shard on the pump, across every queue it serves, to five passes a second for as long as the one shard failed.
+     */
+    static final         long   PUMP_RETRY_NANOS     = TimeUnit.MILLISECONDS.toNanos(200L);
 
     private final ShardOwnedStorage                 storage;
     private final ShardOwnerSettings                settings;
@@ -289,10 +296,12 @@ final class ShardPump implements Runnable {
                 // When each owner whose takeover failed may try again (System.nanoTime()). Reset with takenOver: after
                 // a reconnect every takeover is retried at once.
                 var takeoverRetryAtNanos = new IdentityHashMap<LeasedOwner, Long>();
+                // When each owner whose delivery pass failed may be pumped again (System.nanoTime()). Reset with
+                // takenOver: after a reconnect every owner is pumped again at once.
+                var pumpRetryAtNanos = new IdentityHashMap<LeasedOwner, Long>();
 
                 while (running.get()) {
-                    var delivered       = 0;
-                    var statementFailed = false;
+                    var delivered = 0;
                     // needsAttention has a side effect — it consumes the shard's wake-up flag — so
                     // it must be asked exactly once per owner per pass.
                     var attentive = new ArrayList<LeasedOwner>();
@@ -319,6 +328,17 @@ final class ShardPump implements Runnable {
                                 continue;
                             }
                             takeoverRetryAtNanos.remove(owner);
+                        }
+                        // A failed pass is retried PUMP_RETRY_NANOS later, BEFORE needsAttention like the delivery
+                        // gate below and for the same reason: a wake-up arriving meanwhile must still be there when the
+                        // retry falls due. Dropped once due, whatever the checks after it decide, so a due entry never
+                        // reaches park(), which would otherwise wake every millisecond for it.
+                        var pumpRetryAt = pumpRetryAtNanos.get(owner);
+                        if (pumpRetryAt != null) {
+                            if (System.nanoTime() - pumpRetryAt < 0) {
+                                continue;
+                            }
+                            pumpRetryAtNanos.remove(owner);
                         }
                         if (!owner.leaseHeld()) {
                             continue;
@@ -353,10 +373,12 @@ final class ShardPump implements Runnable {
                             // reconnect, which reran every owner's takeover, five times a second while it persisted.
                             // A critical one still ends the pump (run()).
                             //
-                            // Counted and rate-limited (PumpFailures): it is retried on every pass with the
-                            // lease kept, and a stack trace per pass was a log flood with no counter behind it.
+                            // Counted and rate-limited (PumpFailures): it is retried with the lease kept, and a
+                            // stack trace per pass was a log flood with no counter behind it. Paced per owner, like a
+                            // failing statement: retried on every pass, it ran as fast as its siblings kept the pump busy.
                             Exceptions.rethrowIfCriticalError(e);
                             pumpFailures.failed(owner, "threw during delivery", e);
+                            pumpRetryAtNanos.put(owner, System.nanoTime() + PUMP_RETRY_NANOS);
                         } catch (SQLException e) {
                             // A failing STATEMENT is not a failing CONNECTION, and conflating them
                             // is worse than either. Letting this reach the reconnect loop below made
@@ -371,8 +393,13 @@ final class ShardPump implements Runnable {
                             if (!connection.isValid(1)) {
                                 throw e;
                             }
-                            statementFailed = true;
                             pumpFailures.failed(owner, "issued a statement that failed on a healthy connection", e);
+                            // Paced, like the reconnect path, and for the same reason: a statement that fails
+                            // permanently - a blocked delete, a full disk, a broken constraint - otherwise spins as
+                            // fast as the database can refuse it (measured at 8 405 stack traces in one test run). Per
+                            // owner, never by pacing the pass: a 200 ms sleep after the pass held every other shard on
+                            // this pump to five passes a second while this one failed. park() wakes in time for it.
+                            pumpRetryAtNanos.put(owner, System.nanoTime() + PUMP_RETRY_NANOS);
                         }
                     }
                     owners.removeIf(owner -> {
@@ -381,6 +408,7 @@ final class ShardPump implements Runnable {
                         }
                         takenOver.remove(owner);
                         takeoverRetryAtNanos.remove(owner);
+                        pumpRetryAtNanos.remove(owner);
                         stalls.forget(owner);
                         pumpFailures.forget(owner);
                         return true;
@@ -390,15 +418,8 @@ final class ShardPump implements Runnable {
                         loopFailures = 0;
                     }
 
-                    if (statementFailed) {
-                        // Paced like the reconnect path, and for the same reason. A statement that
-                        // fails permanently — a blocked delete, a full disk, a broken constraint —
-                        // otherwise spins this loop as fast as the database can refuse it: measured
-                        // at 8 405 stack traces in one test run. Not reconnecting was right; not
-                        // pacing was not. A failing takeover is paced per owner instead (takeoverRetryAtNanos).
-                        TimeUnit.MILLISECONDS.sleep(200L);
-                    } else if (delivered == 0) {
-                        park(takenOver, takeoverRetryAtNanos);
+                    if (delivered == 0) {
+                        park(takenOver, takeoverRetryAtNanos, pumpRetryAtNanos);
                     }
                 }
                 if (flushOnExit.get()) {
@@ -493,8 +514,8 @@ final class ShardPump implements Runnable {
      * wherever the failing owner sat among them. Now the owner is taken out of
      * {@code takenOver} and its takeover is retried {@link #TAKEOVER_RETRY_NANOS} (200 ms) later, while the other shards
      * keep running at their full rate: the wait is the failing owner's alone, and the pump parks on it like on any other
-     * owner deadline. Pacing the pass instead, as a failing {@code pumpOnce} statement does, held every other shard on
-     * this pump to one pass per 200 ms for as long as the takeover failed. The
+     * owner deadline. Pacing the pass instead held every other shard on this pump to one pass per 200 ms for as long as
+     * the takeover failed; a failing {@code pumpOnce} is paced per owner the same way ({@link #PUMP_RETRY_NANOS}). The
      * owners keep the retry cheap: the attempt charge is recorded the moment it commits and the
      * exhaustion pass is cleared only once it has run, so retrying neither charges twice nor skips it.
      * <p>
@@ -617,13 +638,17 @@ final class ShardPump implements Runnable {
     /**
      * Park until a hint arrives or the backstop fires, shortened by the soonest deadline any of this
      * pump's owners has — a retry falling due on one shard must not be delayed by the others being
-     * quiet. A failed takeover's retry is one of those deadlines, and the only one an owner awaiting its takeover has.
+     * quiet. A failed takeover's retry is one of those deadlines, and the only one an owner awaiting its takeover has; a
+     * failed delivery pass's retry is the only one an owner waiting to be pumped again has.
      *
      * @param takenOver            the owners whose takeover has completed on this connection; only their own
      *                             {@link LeasedOwner#parkDeadlineMillis()} counts
      * @param takeoverRetryAtNanos when each owner whose takeover failed may retry it ({@link System#nanoTime()})
+     * @param pumpRetryAtNanos     when each owner whose delivery pass failed may be pumped again ({@link System#nanoTime()});
+     *                             their own {@link LeasedOwner#parkDeadlineMillis()} does not count until then
      */
-    private void park(Set<LeasedOwner> takenOver, Map<LeasedOwner, Long> takeoverRetryAtNanos) throws InterruptedException {
+    private void park(Set<LeasedOwner> takenOver, Map<LeasedOwner, Long> takeoverRetryAtNanos,
+                      Map<LeasedOwner, Long> pumpRetryAtNanos) throws InterruptedException {
         // The ceiling, not the backstop. `pollBackstop` used to floor every park at 500ms, which put
         // a fixed query rate under a process however quiet it was; the owners' own deadlines already
         // account for their sweeps, retries and flushes, and a notification wakes this pump
@@ -636,24 +661,38 @@ final class ShardPump implements Runnable {
             if (!takenOver.contains(owner)) {
                 continue;
             }
+            // Likewise an owner waiting out a failed pass: it is not pumped before its retry, and its own deadline is
+            // typically 0 by then (the acknowledgement that failed is still pending), which would park 1 ms at a time.
+            if (pumpRetryAtNanos.containsKey(owner)) {
+                continue;
+            }
             var deadline = owner.parkDeadlineMillis();
             if (deadline < wait) {
                 wait = Math.max(1L, deadline);
             }
         }
         var now = System.nanoTime();
-        for (var retryAt : takeoverRetryAtNanos.values()) {
-            // Rounded up, so the pump does not wake just short of the retry and park again
-            var deadline = Math.max(0L, (retryAt - now + 999_999L) / 1_000_000L);
-            if (deadline < wait) {
-                wait = Math.max(1L, deadline);
-            }
-        }
+        wait = untilSoonestRetry(takeoverRetryAtNanos, now, wait);
+        wait = untilSoonestRetry(pumpRetryAtNanos, now, wait);
         // The honoured/backstop counters are kept by the owners now, in needsAttention, where it is
         // known which shard a wake-up was actually for. Counting them here would count one wake-up
         // per pump regardless of how many shards it served.
         if (!wakeup.await(wait)) {
             metrics.backstopPolls.increment();
         }
+    }
+
+    /**
+     * {@code wait} shortened to the soonest of {@code retryAtNanos}, in milliseconds and never below 1.
+     */
+    private static long untilSoonestRetry(Map<LeasedOwner, Long> retryAtNanos, long nowNanos, long wait) {
+        for (var retryAt : retryAtNanos.values()) {
+            // Rounded up, so the pump does not wake just short of the retry and park again
+            var deadline = Math.max(0L, (retryAt - nowNanos + 999_999L) / 1_000_000L);
+            if (deadline < wait) {
+                wait = Math.max(1L, deadline);
+            }
+        }
+        return wait;
     }
 }
