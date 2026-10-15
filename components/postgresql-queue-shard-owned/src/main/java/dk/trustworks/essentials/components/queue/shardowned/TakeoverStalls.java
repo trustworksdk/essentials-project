@@ -62,7 +62,9 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * why): what it throws, a non-critical {@code Error} included, is logged at ERROR and the pump goes on. The counters are updated before it, so a
  * throwing observer cannot leave them out of step.
  * <p>
- * Confined to the pump's thread, so nothing here is synchronised. The counters it writes and the ERROR window are
+ * Confined to the pump's thread, so nothing here is synchronised: another thread touches it only once the pump's thread
+ * has left its loop for good, under a lock that thread released after its last access ({@link ShardPump#forgetAfterExit},
+ * {@link ShardPump#handedBack}). The counters it writes and the ERROR window are
  * shared with the other pumps serving the same queue, which is why they are atomics and the window is taken by CAS.
  * <p>
  * Logged under {@link ShardPump}'s logger, where the takeover failure has always been logged, so existing log
@@ -227,7 +229,8 @@ final class TakeoverStalls {
     /**
      * The pump is stopping in order ({@code running} cleared), or it had died and its runtime has since stopped
      * ({@link ShardPump#forgetAfterExit()}): none of its shards is served by it any more. Not called when the pump
-     * dies while the runtime runs, because its shards then stay leased and unserved (why: {@link ShardPump#run}).
+     * dies while the runtime runs, because its shards stay leased and unserved until their queue hands each back, which
+     * forgets that one ({@link ShardPump#handedBack}; why: {@link ShardPump#run}).
      */
     void forgetAll() {
         for (var owner : List.copyOf(stalls.keySet())) {
@@ -237,7 +240,8 @@ final class TakeoverStalls {
 
     /**
      * Caught, unlike every other observer call: this one runs on the pump's thread outside its per-owner guard (from
-     * {@code ShardPump.takeOver}, its lease-ended cleanup and its exit), so a throw would end the thread and stop every
+     * {@code ShardPump.takeOver}, its lease-ended cleanup and its exit; a dead pump's hand-back runs it on the queue's
+     * heartbeat), so a throw would end the thread and stop every
      * shard it serves. Called once per transition, never per retry, so an observer that always throws logs twice per
      * stall, not five times a second.
      */

@@ -248,9 +248,9 @@ public final class ShardRuntime implements Lifecycle, AutoCloseable {
      * two disagree: a pump that died between the lookups left the owner on a live pump while its wake-up still cascaded to
      * the dead one, so notifications for the shard woke nobody and it was served only when its new pump's park deadline
      * or backstop fired, until the shard was acquired again. Placed once, the owner and its wake-up always share a pump.
-     * Should that pump die between {@link ShardRuntime#place} and {@link #register(LeasedOwner)}, the shard sits on the
-     * dead pump like the pump's other shards, counted in {@link ShardOwnerMetrics#shardsOnDeadPumps}
-     * ({@link ShardPump#add(LeasedOwner)}).
+     * Should that pump die between {@link ShardRuntime#place} and {@link #register(LeasedOwner)}, the owner is ended on
+     * the dead pump like the owners it held when it died, counted in {@link ShardOwnerMetrics#shardsOnDeadPumps}, and its
+     * queue hands the lease back ({@link ShardPump#add(LeasedOwner)}).
      */
     record Placement(ShardPump pump, ShardWakeup wakeup) {
         void register(LeasedOwner owner) {
@@ -283,7 +283,8 @@ public final class ShardRuntime implements Lifecycle, AutoCloseable {
      * <b>Never a dead pump while a live one is left.</b> A pump that died on a critical error ({@link ShardPump#run()})
      * serves nothing, and routing over every pump kept handing it newly acquired shards after every rebalance. A shard
      * whose pump is alive keeps it; one whose pump is dead is spread over the live ones. With none alive it goes to its
-     * dead pump, which counts it in {@link ShardOwnerMetrics#shardsOnDeadPumps}.
+     * dead pump, which ends it and counts it in {@link ShardOwnerMetrics#shardsOnDeadPumps} until its queue hands the lease
+     * back; a queue acquires nothing while {@link #hasLivePump()} is false.
      */
     ShardPump pumpFor(short queueId, String lane, int shard) {
         var spread = Objects.hash(queueId, lane, shard);
@@ -293,6 +294,39 @@ public final class ShardRuntime implements Lifecycle, AutoCloseable {
         }
         var live = pumps.stream().filter(candidate -> !candidate.isDead()).toList();
         return live.isEmpty() ? pump : live.get(Math.floorMod(spread, live.size()));
+    }
+
+    /**
+     * Whether any pump is alive. With none, a queue acquires nothing: whatever it took would land on a dead pump, be ended
+     * there and be handed back on the next heartbeat, every heartbeat ({@link ShardPump#run()}).
+     */
+    boolean hasLivePump() {
+        return pumps.stream().anyMatch(pump -> !pump.isDead());
+    }
+
+    /**
+     * Whether {@code owner} sits on a pump that has died, and its queue has not handed its lease back yet
+     * ({@link #handedBack}). The pump ended it when it died ({@link ShardPump#run()}); what is left is the queue's: release
+     * the lease, an ordered one once no key is in a handler.
+     */
+    boolean onDeadPump(LeasedOwner owner) {
+        for (var pump : pumps) {
+            if (pump.isDead() && pump.awaitsHandBack(owner)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * {@code owner}'s queue has given up the lease of a unit whose pump had died ({@link #onDeadPump}): it is no longer
+     * counted in {@link ShardOwnerMetrics#shardsOnDeadPumps}, nor, if its takeover was failing, in
+     * {@link ShardOwnerMetrics#shardsAwaitingTakeover}.
+     */
+    void handedBack(LeasedOwner owner) {
+        for (var pump : pumps) {
+            pump.handedBack(owner);
+        }
     }
 
     void forget(short queueId, String lane, int shard) {
@@ -384,8 +418,9 @@ public final class ShardRuntime implements Lifecycle, AutoCloseable {
             Thread.currentThread().interrupt();
             pumpExecutor.shutdownNow();
         }
-        // A pump that died while the runtime ran kept its shards counted, in shardsOnDeadPumps and, where the takeover was
-        // failing, in shardsAwaitingTakeover (ShardPump.run); this stop ends the leases it was keeping, so forget them.
+        // A pump that died while the runtime ran kept the shards its queues had not handed back yet counted, in
+        // shardsOnDeadPumps and, where the takeover was failing, in shardsAwaitingTakeover (ShardPump.run); none of them is
+        // served here once this stop ends, so forget them.
         // Asked of every pump whether or not the wait above timed out or was interrupted: each acts only once its own
         // thread has ended, which is what makes its state safe to read from here, and a dead pump's thread has. Doing this
         // only when every pump ended in time left a dead pump's counts standing for the rest of the process whenever another

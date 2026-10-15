@@ -786,8 +786,10 @@ failed per-queue batched reads; the shards then read for themselves, and when th
 `pumpFailures`. `pumpLoopFailures` counts pump passes ended by something thrown outside the per-shard guards;
 the pump reconnects 200 ms later, but while it persists it can deliver nothing for every shard it serves.
 `shardsOnDeadPumps` counts shards on a pump thread a critical error (`VirtualMachineError`, `LinkageError`)
-ended: nothing restarts it and their leases keep being renewed, so they deliver nothing until the
-`ShardRuntime` restarts; alert on it above zero. The log carries at most one ERROR a minute per queue for
+ended, until their leases are handed back: nothing restarts the pump, so the queue's next heartbeat releases
+them (an ordered unit once no key is in a handler) and another instance, or a live pump here, takes them over,
+redelivering what was not acknowledged. Alert on it staying above zero. With no live pump left the instance
+acquires nothing, and its shards stay unowned until the `ShardRuntime` restarts. The log carries at most one ERROR a minute per queue for
 `pumpFailures` (naming one shard), at most one WARN a minute per subscription for `batchedReadFailures`
 (naming the queue and the shards it read for; one subscription per queue unless you `consume()` a queue twice
 in one process), at most one ERROR a minute per pump for `pumpLoopFailures`, and one ERROR when a pump dies; every other failure at DEBUG, and an

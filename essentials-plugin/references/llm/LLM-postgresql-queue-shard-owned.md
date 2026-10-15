@@ -493,10 +493,13 @@ Four more `ShardOwnerMetrics` cover a shard that is leased but delivers nothing 
   while a `parkDeadlineMillis` keeps throwing, every pass that delivered nothing ends this way, so the pump
   reconnects and reruns every takeover about five times a second and new messages wait up to 200 ms.
   Logged at ERROR at most once a minute per pump.
-- **`shardsOnDeadPumps`** counts shards placed on a pump thread that a critical error (`VirtualMachineError`,
-  `LinkageError`) ended. Nothing restarts the pump and the heartbeat keeps renewing those leases, so they
-  deliver nothing until the `ShardRuntime` (or the application) restarts. Alert on it above zero, next to
-  `shardsAwaitingTakeover`. The pump logs one ERROR naming itself and how many shards it leaves unserved.
+- **`shardsOnDeadPumps`** counts shards on a pump thread that a critical error (`VirtualMachineError`,
+  `LinkageError`) ended, until their leases are handed back. Nothing restarts the pump, so the queue's next
+  heartbeat releases those leases (an ordered unit only once no key is in one of its handlers) and another
+  instance, or a live pump in this one, takes them over; what was handled but not acknowledged is redelivered.
+  Alert on it staying above zero, next to `shardsAwaitingTakeover`. With no live pump left the instance
+  acquires nothing, so its shards stay unowned (`QueueHealth.unownedShards`) until the `ShardRuntime` (or the
+  application) restarts. The pump logs one ERROR naming itself and how many shards it hands back.
 
 **Where to read them:** only through `ShardOwnedQueue.metrics()`. `PostgresqlMessageQueue` keeps its metrics
 private and no `QueueObserver` callback reports any of the four, so through `MessageQueue` (the Spring starter,

@@ -135,10 +135,10 @@ public final class ShardOwnerMetrics {
      * the pump is reconnecting stays counted here until then. Meanwhile {@code unownedShards} shows the
      * shard only if the lease was released and nobody has taken it yet; if another instance took it over,
      * the shard counts as owned there, and this count is one too high until the pump reconnects. It falls
-     * when the pump stops with its runtime, but not when the pump thread dies (on a critical error) while the
-     * runtime runs: its shards then stay leased and unserved, the death is logged at ERROR, and every shard
-     * on it is counted in {@link #shardsOnDeadPumps}. A dead pump's shards stop counting in both when that
-     * runtime stops.
+     * when the pump stops with its runtime, but not as soon as the pump thread dies (on a critical error) while
+     * the runtime runs: the death is logged at ERROR, every shard on the pump is counted in
+     * {@link #shardsOnDeadPumps}, and its queue's heartbeat hands the lease back. A dead pump's shard stops
+     * counting in both when its lease is handed back, or when that runtime stops.
      * <p>
      * Readable through {@link ShardOwnedQueue#metrics()}. A {@code PostgresqlMessageQueue} keeps its
      * metrics private; for a queue used through {@code MessageQueue} the same transitions reach
@@ -204,23 +204,25 @@ public final class ShardOwnerMetrics {
      */
     public final LongAdder     pumpLoopFailures                 = new LongAdder();
     /**
-     * Shards of this queue that sit on a pump thread that has died, counted from the death (or from being handed to the
-     * dead pump, when no live one was left) until the runtime stops. A pump dies only on a critical error
-     * ({@code VirtualMachineError}, {@code LinkageError}): everything else it reconnects from ({@link #pumpLoopFailures}).
-     * Nothing restarts it, and the heartbeat keeps renewing these shards' leases, so no other instance takes them and they
-     * deliver nothing until the {@code ShardRuntime} (or the application) is restarted. {@code QueueHealth.unownedShards()}
-     * cannot see them, because they are leased. Alert on it above zero, next to {@link #shardsAwaitingTakeover}. Shards
-     * acquired after the death go to the runtime's live pumps and are not counted, unless every pump is dead.
-     * <p>
-     * It counts shards placed on the dead pump, not leases held: a dead pump never drops an owner, so a shard stays
-     * counted after its lease ends - released by rebalancing (fair share, an ordered shed) or by its queue stopping - until
-     * the runtime stops. If this instance acquires such a shard again, it is served on a live pump and still counted
-     * here. Falls to zero when the runtime stops, which ends the leases the dead pump was keeping.
+     * Shards of this queue that sit on a pump thread that has died and whose lease this instance has not handed back yet:
+     * counted from the death (or from being handed to the dead pump after it, when no live one was left or the pump died
+     * between placing and registering the shard) until the queue's heartbeat releases the lease, or the queue or the
+     * runtime stops. A pump dies only on a critical error ({@code VirtualMachineError}, {@code LinkageError}): everything
+     * else it reconnects from ({@link #pumpLoopFailures}). Nothing restarts it, so it ends the owners on it, and the
+     * heartbeat hands their leases back to the cluster - an unordered shard on the next tick, an ordered unit once no key
+     * is in one of its handlers, which a handler that never returns can hold off indefinitely. Another instance, or a live
+     * pump here, then takes the shard over under a new fence; what was handled and not acknowledged is redelivered. So
+     * this is normally above zero for one heartbeat after a death; alert on it staying there, next to
+     * {@link #shardsAwaitingTakeover}. {@code QueueHealth.unownedShards()} cannot see these shards while they are counted,
+     * because they are still leased. Shards acquired after the death go to the runtime's live pumps and are not counted;
+     * with no live pump left this instance acquires nothing, so its shards stay unowned once handed back, where
+     * {@code unownedShards} does see them.
      * <p>
      * Readable only through {@link ShardOwnedQueue#metrics()}. A {@code PostgresqlMessageQueue} keeps its metrics private
      * and no {@code QueueObserver} callback reports a dead pump (unlike {@link #shardsAwaitingTakeover}, which reaches
      * {@code QueueObserver.takeoverStalled}), so for a queue used through {@code MessageQueue} (the Spring starter, the
-     * {@code DurableQueues} adapter) the pump's ERROR log is the only signal. Whether to add one is open:
+     * {@code DurableQueues} adapter) the pump's ERROR log is the only signal of the death; the hand-back that follows
+     * reaches the observer as ownership changes ({@code QueueObserver.shardOwnershipChanged}). Whether to add one is open:
      * {@code docs/durable-queue-shard-owned.md} §18.3.
      */
     public final AtomicInteger shardsOnDeadPumps                = new AtomicInteger();

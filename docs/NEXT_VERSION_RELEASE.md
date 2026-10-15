@@ -700,12 +700,17 @@ unaffected: the interface's `Instant` overloads still call its no-arg methods. (
   naming one shard, and a failing batched read by a WARN at most one a minute per subscription, naming the queue and
   its shards. (`8ed621a2`) Also `pumpLoopFailures`, pump passes that
   ended on something thrown outside the per-shard guards and were reconnected from, and `shardsOnDeadPumps`, the
-  shards this instance holds that sit on a pump thread a critical error ended: leased, renewed and delivering nothing
-  until the `ShardRuntime` is restarted, and invisible to `QueueHealth.unownedShards`; alert on it above zero (§3).
-  It counts shards placed on the dead pump, so a shard whose lease a rebalance ends stays counted until the runtime
-  stops. Both are readable only through `ShardOwnedQueue.metrics()`: `PostgresqlMessageQueue` keeps its metrics
-  private and no `QueueObserver` callback reports them, so through `MessageQueue` (the Spring starter, the
-  `DurableQueues` adapter) a dead pump is reported by its ERROR log line alone.
+  shards that sit on a pump thread a critical error (`VirtualMachineError`, `LinkageError`) ended and whose leases
+  this instance has not handed back yet. A dead pump's shards are handed back to the cluster rather than kept: the
+  queue's next heartbeat releases their leases (an ordered unit once no key is in one of its handlers, so no successor
+  starts a key beside it), and another instance, or a live pump in this one, takes them over under a new fence. What
+  they had handled but not acknowledged is redelivered. In 0.60.0 a pump thread that died left its shards leased to
+  the instance and delivering nothing until a restart. With no live pump left the instance acquires nothing, and its
+  shards stay unowned (`QueueHealth.unownedShards`) until the `ShardRuntime` is restarted; alert on
+  `shardsOnDeadPumps` staying above zero (§3). Both are readable only through `ShardOwnedQueue.metrics()`:
+  `PostgresqlMessageQueue` keeps its metrics private and no `QueueObserver` callback reports them, so through
+  `MessageQueue` (the Spring starter, the `DurableQueues` adapter) a dead pump is reported by its ERROR log line
+  alone, and the hand-back that follows by `QueueObserver.shardOwnershipChanged`.
 - **Shard-owned engine: `QueueObserver.takeoverStalled(MessageId.Lane, int shard, boolean stalled)`** and the
   Micrometer gauge **`essentials.queue.shards.awaiting.takeover`** (`MicrometerQueueObserver.SHARDS_AWAITING_TAKEOVER_GAUGE`).
   The callback is told once when a shard's takeover starts failing and once when the stall ends (the takeover
