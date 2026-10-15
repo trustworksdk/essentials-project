@@ -707,7 +707,9 @@ unaffected: the interface's `Instant` overloads still call its no-arg methods. (
   release that fails is retried on every heartbeat, and until it succeeds the unit still counts towards the instance's
   fair share, so the instance takes no free shard in its place. What
   they had handled but not acknowledged is redelivered. In 0.60.0 a pump thread that died left its shards leased to
-  the instance and delivering nothing until a restart. With no live pump left the instance acquires nothing, and its
+  the instance and delivering nothing until a restart. With no live pump left the instance acquires nothing, a queue
+  started or restarted on that runtime included (it used to take every free unit, report it owned and hand it back a
+  heartbeat later), and its
   shards stay unowned (`QueueHealth.unownedShards`) until the `ShardRuntime` is restarted; alert on
   `shardsOnDeadPumps` staying above zero (§3). Both are readable only through `ShardOwnedQueue.metrics()`:
   `PostgresqlMessageQueue` keeps its metrics private and no `QueueObserver` callback reports them, so through

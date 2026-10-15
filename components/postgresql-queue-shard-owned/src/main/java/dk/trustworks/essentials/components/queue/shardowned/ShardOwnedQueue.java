@@ -320,6 +320,9 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             }
         } catch (SQLException e) {
             running.set(false);
+            // The runtime is borrowed before the acquire loop, which is what can throw here: hand it back, or a shared
+            // runtime keeps a borrower that never stops. No owner exists yet - every statement precedes the placement.
+            releaseRuntime();
             throw new IllegalStateException("Failed to start consuming shards for instance " + instanceId, e);
         }
     }
@@ -366,15 +369,8 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         // for the first ten seconds of its life.
         storage.heartbeatInstance(instanceId);
 
-        var leased = new ArrayList<LeasedUnit>();
-        for (var shard = 0; shard < orderedUnits() && leased.size() < maxShards; shard++) {
-            var grant = storage.acquireLeaseGrant("ordered", shard, instanceId, leaseTtlMillis);
-            if (grant.isPresent()) {
-                leased.add(new LeasedUnit(shard, grant.get()));
-            }
-        }
-
         ensureRuntime(settings);
+        var leased = leaseAtStart("ordered", orderedUnits(), maxShards);
         for (var entry : leased) {
             var placement = runtime.place(queueId, "ordered", entry.shard());
             var owner = new OrderedShardOwner(storage, entry.shard(), entry.grant().fence(), settings, handler, metrics,
@@ -424,7 +420,6 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         var redeliveryPolicy = activePolicy;
         var maxShards        = maxShardsHeld;
 
-        var leased = new ArrayList<LeasedUnit>();
         leaseTtlMillis = Math.max(1_000L, settings.leaseTtlMillis());
         // BEFORE acquiring anything. A unit owned by an instance carries no expiry — its liveness is
         // this row — so an owner that has not registered yet looks DEAD to everyone else, and its
@@ -432,17 +427,12 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         // heartbeat, ten seconds in, which left every instance stealing every other instance's units
         // for the first ten seconds of its life.
         storage.heartbeatInstance(instanceId);
-        for (var shard = 0; shard < shardCount && leased.size() < maxShards; shard++) {
-            var grant = storage.acquireLeaseGrant("unordered", shard, instanceId, leaseTtlMillis);
-            if (grant.isPresent()) {
-                leased.add(new LeasedUnit(shard, grant.get()));
-            }
-        }
-        if (leased.isEmpty()) {
-            log.warn("Instance {} leased no shards — another instance holds them all", instanceId);
-        }
 
         ensureRuntime(settings);
+        var leased = leaseAtStart("unordered", shardCount, maxShards);
+        if (leased.isEmpty() && runtime.hasLivePump()) {
+            log.warn("Instance {} leased no shards — another instance holds them all", instanceId);
+        }
 
         for (var entry : leased) {
             var placement = runtime.place(queueId, "unordered", entry.shard());
@@ -458,6 +448,33 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         startHeartbeat();
         leased.forEach(entry -> metrics.observer().shardOwnershipChanged(entry.shard(), true));
         log.info("Instance {} owns shards {}", instanceId, leased.stream().map(LeasedUnit::shard).toList());
+    }
+
+    /**
+     * Lease up to {@code maxShards} of {@code lane}'s free units for a starting queue: nothing while every pump of its
+     * runtime has died, as in the heartbeat's acquire loops ({@link ShardRuntime#hasLivePump()}).
+     * <p>
+     * Called after {@link #ensureRuntime}, which is where a borrowed runtime becomes known. A unit taken with no live pump
+     * would be placed on a dead pump, ended there on arrival ({@code ShardPump.add}), reported as owned and handed back a
+     * heartbeat later — and for that third of a lease no other instance could take it. Left free instead, it shows in
+     * {@code QueueHealth.unownedShards}, and the dead pump's ERROR says to restart the runtime.
+     */
+    private List<LeasedUnit> leaseAtStart(String lane, int units, int maxShards) throws SQLException {
+        var leased = new ArrayList<LeasedUnit>();
+        if (!runtime.hasLivePump()) {
+            log.warn("Instance {} acquires no {} unit on queue {}: every pump of its ShardRuntime has died, so nothing would "
+                             + "serve them. They stay free for other instances; restart the ShardRuntime to serve them here",
+                     instanceId, lane, queueId);
+            return leased;
+        }
+        // Checked per unit too, as in rebalance: what is placed after the last live pump died is ended on arrival.
+        for (var shard = 0; shard < units && leased.size() < maxShards && runtime.hasLivePump(); shard++) {
+            var grant = storage.acquireLeaseGrant(lane, shard, instanceId, leaseTtlMillis);
+            if (grant.isPresent()) {
+                leased.add(new LeasedUnit(shard, grant.get()));
+            }
+        }
+        return leased;
     }
 
     /**

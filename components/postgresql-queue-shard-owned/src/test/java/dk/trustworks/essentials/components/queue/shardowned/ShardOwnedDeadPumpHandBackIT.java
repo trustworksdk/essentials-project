@@ -224,6 +224,54 @@ class ShardOwnedDeadPumpHandBackIT {
     }
 
     /**
+     * A queue started on a runtime whose every pump has died takes nothing, not even for a heartbeat: the start's acquire
+     * loop is guarded like the rebalance's.
+     * <p>
+     * It used to lease every free unit (all 64 on the ordered lane), place each on the dead pump, which ended it on
+     * arrival, report each as owned, and hand them all back a heartbeat later: the churn the rebalance's guard prevents,
+     * plus a third of a lease in which no other instance could take them. The fences show it: acquiring bumps a unit's
+     * fence and releasing does not, so an unchanged fence means the unit was never taken.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"unordered", "ordered"})
+    void a_queue_started_on_a_runtime_whose_every_pump_has_died_takes_nothing(String lane) throws Exception {
+        var settings = settings(1);
+        var units    = "ordered".equals(lane) ? ShardOwnedSchema.ORDERED_UNITS : SHARD_COUNT;
+        var all      = new ArrayList<Integer>();
+        for (var unit = 0; unit < units; unit++) {
+            all.add(unit);
+        }
+        try (var runtime = new ShardRuntime(dataSource, settings)) {
+            kill(runtime.pumpFor(QUEUE_ID, lane, 0));
+            assertThat(runtime.hasLivePump()).as("premise: every pump of the runtime has died").isFalse();
+            var fencesBefore = fences(lane, all);
+            var queue        = queue(runtime, "dead-runtime-start");
+            try {
+                if ("ordered".equals(lane)) {
+                    queue.startConsumingOrdered((messageId, key, payload, payloadType) -> { }, settings, SHARD_COUNT);
+                } else {
+                    queue.startConsuming((messageId, payload, payloadType) -> { }, settings, SHARD_COUNT);
+                }
+                assertThat(queue.isStarted()).as("the queue still starts, and keeps its membership row").isTrue();
+                assertThat(queue.shardsHeld()).isZero();
+                assertThat(queue.metrics().shardsAcquired.sum()).as("nothing acquired at start").isZero();
+                assertThat(unitsOwnedBy(lane, "dead-runtime-start")).isZero();
+                // Several heartbeats (a third of the 1 s lease each), each of which would have handed back what the start took.
+                Thread.sleep(1_500);
+                for (var unit : all) {
+                    assertThat(fenceOf(lane, unit)).as("unit %d was never taken, not even briefly", unit).isEqualTo(fencesBefore.get(unit));
+                }
+                assertThat(unitsOwnedBy(lane, "dead-runtime-start")).as("every unit is free for the cluster").isZero();
+                assertThat(queue.metrics().shardsAcquired.sum()).isZero();
+                assertThat(queue.metrics().shardsReleased.sum()).as("so nothing was handed back either").isZero();
+                assertThat(queue.metrics().shardsOnDeadPumps.get()).isZero();
+            } finally {
+                queue.stop();
+            }
+        }
+    }
+
+    /**
      * A hand-back whose release fails leaves the dead pump's units held, and the next heartbeat retries it: none is taken
      * again meanwhile, by the acquire loop on a live pump, not even once its key has left the handler.
      * <p>
