@@ -23,7 +23,7 @@ import com.zaxxer.hikari.*;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.ValueSource;
+import org.junit.jupiter.params.provider.*;
 import org.slf4j.LoggerFactory;
 import org.testcontainers.junit.jupiter.*;
 import org.testcontainers.postgresql.PostgreSQLContainer;
@@ -56,6 +56,14 @@ class ShardOwnedDeadPumpHandBackIT {
     private static final short QUEUE_ID    = 1;
     private static final int   SHARD_COUNT = 4;
     /**
+     * A second queue, for the tests whose pump serves more than one ({@link Consumers#TWO_QUEUES}).
+     */
+    private static final short OTHER_QUEUE_ID = 2;
+    /**
+     * Every queue registered here, so {@link #failLeaseReleases} can count refusals per queue and unit.
+     */
+    private static final short[] QUEUE_IDS = {QUEUE_ID, OTHER_QUEUE_ID};
+    /**
      * Not {@link #QUEUE_ID}: the owner that kills the pump is no shard of the queue under test.
      */
     private static final short KILLER_QUEUE_ID = 99;
@@ -83,7 +91,9 @@ class ShardOwnedDeadPumpHandBackIT {
         config.setMaximumPoolSize(20);
         dataSource = new HikariDataSource(config);
         ShardOwnedSchema.recreate(dataSource);
-        ShardOwnedSchema.registerQueue(dataSource, QUEUE_ID, SHARD_COUNT);
+        for (var queueId : QUEUE_IDS) {
+            ShardOwnedSchema.registerQueue(dataSource, queueId, SHARD_COUNT);
+        }
     }
 
     @AfterEach
@@ -357,15 +367,15 @@ class ShardOwnedDeadPumpHandBackIT {
                 try {
                     kill(doomed);
 
-                    awaitReleasesRefused(idleUnits, "while the key is in its handler");
-                    assertThat(releasesRefused(unit)).as("premise: the unit with a key in its handler is not handed back yet").isZero();
+                    awaitReleasesRefused(QUEUE_ID, idleUnits, "while the key is in its handler");
+                    assertThat(releasesRefused(QUEUE_ID, unit)).as("premise: the unit with a key in its handler is not handed back yet").isZero();
                     assertNoneTakenAgain(queue, doomedUnits, fencesBefore, "while the key is in its handler");
                     assertThat(queue.metrics().shardsReleased.sum()).as("premise: no hand-back has succeeded").isZero();
 
                     release.countDown();
                     Awaitility.await().atMost(Duration.ofSeconds(10)).until(() -> delivered.contains("HOLD-0"));
                     // The held unit is now ready to be handed back too, and its release is refused like the others'.
-                    awaitReleasesRefused(List.of(unit), "once the key has left its handler");
+                    awaitReleasesRefused(QUEUE_ID, List.of(unit), "once the key has left its handler");
                     assertNoneTakenAgain(queue, doomedUnits, fencesBefore, "once the key has left its handler");
                 } finally {
                     failLeaseReleases("ordered", false);
@@ -518,9 +528,9 @@ class ShardOwnedDeadPumpHandBackIT {
                     // Sampled throughout, until every dead shard's hand-back has been refused often enough to have been followed by
                     // a rebalance (awaitReleasesRefused says why), and once more after.
                     var deadline = System.nanoTime() + Duration.ofSeconds(20).toNanos();
-                    while (!releasesRefusedOftenEnough(deadShards)) {
+                    while (!releasesRefusedOftenEnough(QUEUE_ID, deadShards)) {
                         assertThat(System.nanoTime() < deadline).as("every dead shard's release refused %d times within 20 s; refused so far: %s",
-                                                                    REFUSALS_SPANNING_A_TICK, refusals(deadShards))
+                                                                    REFUSALS_SPANNING_A_TICK, refusals(QUEUE_ID, deadShards))
                                                                 .isTrue();
                         assertThat(unitsLeasedTo("unordered", "fair-first")).as("never more lease rows than the fair share").hasSizeLessThanOrEqualTo(fairShare);
                         Thread.sleep(50);
@@ -631,9 +641,228 @@ class ShardOwnedDeadPumpHandBackIT {
         }
     }
 
+    /**
+     * A pump serving several queues holds owners of each - the default deployment's shape, where every queue borrows the
+     * runtime shared per {@code DataSource}, and a {@code PostgresqlMessageQueue}'s, whose unordered and ordered consumers
+     * of one queue share it - and each queue hands its own owners back through its own heartbeat and counts only its own in
+     * {@code shardsOnDeadPumps}. The unordered queue's dead shards are handed back and taken again on a live pump while the
+     * ordered queue keeps its unit with a key in a handler; stopping the unordered queue leaves that unit, and its count,
+     * to the ordered queue until the key leaves the handler.
+     * <p>
+     * Each consumer has its own metrics here, so the two counts can be told apart; a {@code PostgresqlMessageQueue}
+     * subscription gives its two consumers one, which sums them.
+     */
+    @ParameterizedTest
+    @EnumSource(Consumers.class)
+    void a_pump_serving_two_queues_hands_each_queues_shards_back_through_that_queue(Consumers consumers) throws Exception {
+        var settings  = settings(2);
+        var entered   = new CountDownLatch(1);
+        var release   = new CountDownLatch(1);
+        var heldUnit  = new CompletableFuture<Integer>();
+        var delivered = ConcurrentHashMap.<String>newKeySet();
+        try (var runtime = new ShardRuntime(dataSource, settings)) {
+            var unordered = queue(runtime, consumers.unorderedQueueId, "shared-pump");
+            var ordered   = queue(runtime, consumers.orderedQueueId, "shared-pump");
+            try {
+                unordered.startConsuming((messageId, payload, payloadType) -> { }, settings, SHARD_COUNT);
+                ordered.startConsumingOrdered(holding("HOLD-0", heldUnit, entered, release, delivered), settings, SHARD_COUNT);
+                ordered.enqueueOrdered(List.of(new ShardOwnedStorage.OrderedPayload("HOLD", 0, "HOLD-0".getBytes(StandardCharsets.UTF_8), 1)));
+                assertThat(entered.await(20, TimeUnit.SECONDS)).as("premise: the key is in its handler").isTrue();
+                assertThat(unordered.shardsHeld()).as("premise: the instance holds every unordered shard").isEqualTo(SHARD_COUNT);
+                int  unit       = heldUnit.get();
+                var  doomed     = runtime.pumpFor(consumers.orderedQueueId, "ordered", unit);
+                var  deadShards = unitsOn(runtime, doomed, consumers.unorderedQueueId, "unordered", SHARD_COUNT);
+                var  idleUnits  = unitsOn(runtime, doomed, consumers.orderedQueueId, "ordered", ShardOwnedSchema.ORDERED_UNITS)
+                        .stream().filter(candidate -> candidate != unit).toList();
+                assertThat(deadShards).as("premise: the pump serves the unordered queue too").isNotEmpty();
+                assertThat(idleUnits).as("premise: and other units of the ordered queue").isNotEmpty();
+                var  shardFences = fences(consumers.unorderedQueueId, "unordered", deadShards);
+                var  unitFences  = fences(consumers.orderedQueueId, "ordered", idleUnits);
+                long heldFence   = fenceOf(consumers.orderedQueueId, "ordered", unit);
+
+                kill(doomed);
+
+                Awaitility.await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
+                    for (var shard : deadShards) {
+                        assertThat(fenceOf(consumers.unorderedQueueId, "unordered", shard)).as("unordered shard %d handed back and taken again", shard)
+                                                                                         .isGreaterThan(shardFences.get(shard));
+                    }
+                    for (var idle : idleUnits) {
+                        assertThat(fenceOf(consumers.orderedQueueId, "ordered", idle)).as("idle ordered unit %d handed back and taken again", idle)
+                                                                                     .isGreaterThan(unitFences.get(idle));
+                    }
+                    assertThat(unordered.metrics().shardsOnDeadPumps.get()).isZero();
+                });
+                // Several heartbeats of both queues (a third of the 1 s lease each) with the key still in its handler.
+                Thread.sleep(1_000);
+                for (var shard : deadShards) {
+                    assertThat(ownerOf(consumers.unorderedQueueId, "unordered", shard)).isEqualTo("shared-pump");
+                    assertThat(runtime.pumpFor(consumers.unorderedQueueId, "unordered", shard).isDead()).as("re-acquired on a live pump").isFalse();
+                }
+                assertThat(unordered.metrics().shardsOnDeadPumps.get()).as("the unordered queue counts nothing on the dead pump").isZero();
+                assertThat(ordered.metrics().shardsOnDeadPumps.get()).as("the ordered queue counts its busy unit, and nothing of the unordered queue's")
+                                                                     .isEqualTo(1);
+                assertThat(fenceOf(consumers.orderedQueueId, "ordered", unit)).as("the unit with a key in its handler is not handed over")
+                                                                              .isEqualTo(heldFence);
+                assertThat(ownerOf(consumers.orderedQueueId, "ordered", unit)).isEqualTo("shared-pump");
+
+                unordered.stop();
+
+                assertThat(runtime.isStarted()).as("premise: the runtime outlives the unordered queue").isTrue();
+                // Several heartbeats of the ordered queue alone.
+                Thread.sleep(1_000);
+                assertThat(ordered.metrics().shardsOnDeadPumps.get()).as("the unordered queue's stop leaves the ordered queue's count alone")
+                                                                     .isEqualTo(1);
+                assertThat(fenceOf(consumers.orderedQueueId, "ordered", unit)).as("and its busy unit").isEqualTo(heldFence);
+                assertThat(ownerOf(consumers.orderedQueueId, "ordered", unit)).isEqualTo("shared-pump");
+
+                release.countDown();
+
+                Awaitility.await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
+                    assertThat(fenceOf(consumers.orderedQueueId, "ordered", unit)).as("handed back once the handler returned").isGreaterThan(heldFence);
+                    assertThat(ordered.metrics().shardsOnDeadPumps.get()).isZero();
+                });
+                assertThat(runtime.pumpFor(consumers.orderedQueueId, "ordered", unit).isDead()).isFalse();
+                ordered.enqueueOrdered(List.of(new ShardOwnedStorage.OrderedPayload("HOLD", 1, "HOLD-1".getBytes(StandardCharsets.UTF_8), 1)));
+                Awaitility.await().atMost(Duration.ofSeconds(20)).untilAsserted(
+                        () -> assertThat(delivered).as("the key is served again on a live pump").contains("HOLD-1"));
+            } finally {
+                release.countDown();
+                ordered.stop();
+                unordered.stop();
+            }
+        }
+    }
+
+    /**
+     * One queue's failing hand-back, and its stop, leave the units another queue has on the same dead pump alone, and
+     * that queue's count: each queue releases, retries and un-counts only the owners in its own list. Here every unordered
+     * release is refused while the ordered queue hands its idle units back and keeps its busy one; the unordered queue then
+     * stops with its dead shards still unreleased, which un-counts them, and the ordered queue goes on counting its unit
+     * until the key leaves the handler and the unit is handed back.
+     */
+    @ParameterizedTest
+    @EnumSource(Consumers.class)
+    void a_queue_whose_hand_back_fails_and_which_then_stops_leaves_another_queues_dead_pump_units_alone(Consumers consumers) throws Exception {
+        var settings  = settings(2);
+        var entered   = new CountDownLatch(1);
+        var release   = new CountDownLatch(1);
+        var heldUnit  = new CompletableFuture<Integer>();
+        var delivered = ConcurrentHashMap.<String>newKeySet();
+        try (var runtime = new ShardRuntime(dataSource, settings)) {
+            var unordered = queue(runtime, consumers.unorderedQueueId, "shared-pump-fail");
+            var ordered   = queue(runtime, consumers.orderedQueueId, "shared-pump-fail");
+            try {
+                unordered.startConsuming((messageId, payload, payloadType) -> { }, settings, SHARD_COUNT);
+                ordered.startConsumingOrdered(holding("HOLD-0", heldUnit, entered, release, delivered), settings, SHARD_COUNT);
+                ordered.enqueueOrdered(List.of(new ShardOwnedStorage.OrderedPayload("HOLD", 0, "HOLD-0".getBytes(StandardCharsets.UTF_8), 1)));
+                assertThat(entered.await(20, TimeUnit.SECONDS)).as("premise: the key is in its handler").isTrue();
+                assertThat(unordered.shardsHeld()).as("premise: the instance holds every unordered shard").isEqualTo(SHARD_COUNT);
+                int  unit       = heldUnit.get();
+                var  doomed     = runtime.pumpFor(consumers.orderedQueueId, "ordered", unit);
+                var  deadShards = unitsOn(runtime, doomed, consumers.unorderedQueueId, "unordered", SHARD_COUNT);
+                var  idleUnits  = unitsOn(runtime, doomed, consumers.orderedQueueId, "ordered", ShardOwnedSchema.ORDERED_UNITS)
+                        .stream().filter(candidate -> candidate != unit).toList();
+                assertThat(deadShards).as("premise: the pump serves the unordered queue too").isNotEmpty();
+                assertThat(idleUnits).as("premise: and other units of the ordered queue").isNotEmpty();
+                var  shardFences = fences(consumers.unorderedQueueId, "unordered", deadShards);
+                var  unitFences  = fences(consumers.orderedQueueId, "ordered", idleUnits);
+                long heldFence   = fenceOf(consumers.orderedQueueId, "ordered", unit);
+
+                failLeaseReleases("unordered", true);
+                try {
+                    kill(doomed);
+
+                    awaitReleasesRefused(consumers.unorderedQueueId, deadShards, "while the ordered queue hands its idle units back");
+                    Awaitility.await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
+                        for (var idle : idleUnits) {
+                            assertThat(fenceOf(consumers.orderedQueueId, "ordered", idle)).as("idle ordered unit %d handed back and taken again", idle)
+                                                                                         .isGreaterThan(unitFences.get(idle));
+                        }
+                    });
+                    for (var shard : deadShards) {
+                        assertThat(ownerOf(consumers.unorderedQueueId, "unordered", shard)).as("unordered shard %d still leased: its release failed", shard)
+                                                                                         .isEqualTo("shared-pump-fail");
+                        assertThat(fenceOf(consumers.unorderedQueueId, "unordered", shard)).as("unordered shard %d not taken again", shard)
+                                                                                         .isEqualTo(shardFences.get(shard));
+                    }
+                    assertThat(unordered.metrics().shardsOnDeadPumps.get()).as("the unordered queue counts its unreleased dead shards, and nothing else")
+                                                                           .isEqualTo(deadShards.size());
+                    assertThat(ordered.metrics().shardsOnDeadPumps.get()).as("the ordered queue counts its busy unit, and nothing of the unordered queue's")
+                                                                         .isEqualTo(1);
+                    assertThat(fenceOf(consumers.orderedQueueId, "ordered", unit)).as("the unit with a key in its handler is not handed over")
+                                                                                  .isEqualTo(heldFence);
+
+                    unordered.stop();
+
+                    assertThat(runtime.isStarted()).as("premise: the runtime outlives the unordered queue").isTrue();
+                    assertThat(unordered.metrics().shardsOnDeadPumps.get()).as("the stopped queue counts nothing on the dead pump").isZero();
+                    assertThat(ordered.metrics().shardsOnDeadPumps.get()).as("and un-counted nothing of the ordered queue's").isEqualTo(1);
+                } finally {
+                    failLeaseReleases("unordered", false);
+                }
+                // Several heartbeats of the ordered queue alone.
+                Thread.sleep(1_000);
+                assertThat(ordered.metrics().shardsOnDeadPumps.get()).as("the ordered queue still counts its busy unit").isEqualTo(1);
+                assertThat(fenceOf(consumers.orderedQueueId, "ordered", unit)).as("and keeps it").isEqualTo(heldFence);
+                assertThat(ownerOf(consumers.orderedQueueId, "ordered", unit)).isEqualTo("shared-pump-fail");
+
+                release.countDown();
+
+                Awaitility.await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
+                    assertThat(fenceOf(consumers.orderedQueueId, "ordered", unit)).as("handed back once the handler returned").isGreaterThan(heldFence);
+                    assertThat(ordered.metrics().shardsOnDeadPumps.get()).isZero();
+                });
+            } finally {
+                release.countDown();
+                failLeaseReleases("unordered", false);
+                ordered.stop();
+                unordered.stop();
+            }
+        }
+    }
+
+    /**
+     * An ordered handler that keeps the message {@code held} in itself until {@code release} opens, and reports the unit it
+     * arrived on; every message it handles is recorded in {@code delivered}.
+     */
+    private static OrderedPayloadHandler holding(String held, CompletableFuture<Integer> heldUnit, CountDownLatch entered, CountDownLatch release,
+                                                 Set<String> delivered) {
+        return (messageId, key, payload, payloadType) -> {
+            var text = new String(payload, StandardCharsets.UTF_8);
+            if (held.equals(text)) {
+                heldUnit.complete(messageId.shard());
+                entered.countDown();
+                awaitQuietly(release);
+            }
+            delivered.add(text);
+        };
+    }
+
     private ShardOwnedQueue queue(ShardRuntime runtime, String instanceId) {
-        return ShardOwnedQueue.builder().setDataSource(dataSource).setQueueId(QUEUE_ID).setShardCount(SHARD_COUNT)
+        return queue(runtime, QUEUE_ID, instanceId);
+    }
+
+    private ShardOwnedQueue queue(ShardRuntime runtime, short queueId, String instanceId) {
+        return ShardOwnedQueue.builder().setDataSource(dataSource).setQueueId(queueId).setShardCount(SHARD_COUNT)
                               .setInstanceId(instanceId).setRuntime(runtime).build();
+    }
+
+    /**
+     * Two consumers on one runtime, one per lane: the two lanes of one queue, as {@code PostgresqlMessageQueue.consume}
+     * builds them, or two queues. Either way they share one instance id, as one process's consumers do.
+     */
+    enum Consumers {
+        TWO_LANES_OF_ONE_QUEUE(QUEUE_ID, QUEUE_ID),
+        TWO_QUEUES(OTHER_QUEUE_ID, QUEUE_ID);
+
+        final short unorderedQueueId;
+        final short orderedQueueId;
+
+        Consumers(short unorderedQueueId, short orderedQueueId) {
+            this.unorderedQueueId = unorderedQueueId;
+            this.orderedQueueId = orderedQueueId;
+        }
     }
 
     /**
@@ -654,21 +883,23 @@ class ShardOwnedDeadPumpHandBackIT {
      * Make every release of a lease row on {@code lane} fail, as a database error would, or stop doing so. A trigger rather
      * than a revoked grant: the test's role owns the table, and an owner keeps every privilege.
      * <p>
-     * Each refusal is counted per unit ({@link #releasesRefused}), so a test can show the injection worked: that a release
-     * was attempted and refused, not merely that nothing was released. The counters are sequences because the refusal rolls
-     * back its transaction, and a {@code nextval} is the one write a rollback does not undo. The trigger runs once per
-     * statement, after its rows, so it counts every unit of a release of several, not just the first it reached.
+     * Each refusal is counted per queue and unit ({@link #releasesRefused}), so a test can show the injection worked: that a
+     * release was attempted and refused, not merely that nothing was released. Per queue as well as per unit, because unit
+     * numbers repeat across queues, and a test with two queues on one lane would otherwise count one queue's refusals as the
+     * other's. The counters are sequences because the refusal rolls back its transaction, and a {@code nextval} is the one
+     * write a rollback does not undo. The trigger runs once per statement, after its rows, so it counts every unit of a
+     * release of several, not just the first it reached.
      */
     private void failLeaseReleases(String lane, boolean fail) throws Exception {
         try (var connection = dataSource.getConnection(); var statement = connection.createStatement()) {
             if (fail) {
-                statement.execute(refusalCounters("DROP SEQUENCE IF EXISTS lease_release_refusals_%s"));
-                statement.execute(refusalCounters("CREATE SEQUENCE lease_release_refusals_%s"));
+                statement.execute(refusalCounters("DROP SEQUENCE IF EXISTS lease_release_refusals_q%s_%s"));
+                statement.execute(refusalCounters("CREATE SEQUENCE lease_release_refusals_q%s_%s"));
                 statement.execute("CREATE OR REPLACE FUNCTION fail_lease_release() RETURNS trigger AS $$ "
                                           + "DECLARE released record; refused int := 0; BEGIN "
-                                          + "FOR released IN SELECT n.shard FROM refused_new n JOIN refused_old o USING (queue_id, lane, shard) "
+                                          + "FOR released IN SELECT n.queue_id, n.shard FROM refused_new n JOIN refused_old o USING (queue_id, lane, shard) "
                                           + "WHERE n.lane = TG_ARGV[0] AND n.owner IS NULL AND o.owner IS NOT NULL LOOP "
-                                          + "PERFORM nextval(format('lease_release_refusals_%s', released.shard)::regclass); "
+                                          + "PERFORM nextval(format('lease_release_refusals_q%s_%s', released.queue_id, released.shard)::regclass); "
                                           + "refused := refused + 1; END LOOP; "
                                           + "IF refused > 0 THEN RAISE EXCEPTION 'simulated failure releasing % % unit(s)', refused, TG_ARGV[0]; END IF; "
                                           + "RETURN NULL; END $$ LANGUAGE plpgsql");
@@ -678,53 +909,60 @@ class ShardOwnedDeadPumpHandBackIT {
             } else {
                 // The trigger first: dropping it waits for a release still running it, so no refusal counts on a dropped sequence.
                 statement.execute("DROP TRIGGER IF EXISTS fail_lease_release ON " + ShardOwnedSchema.LEASE_TABLE);
-                statement.execute(refusalCounters("DROP SEQUENCE IF EXISTS lease_release_refusals_%s"));
+                statement.execute(refusalCounters("DROP SEQUENCE IF EXISTS lease_release_refusals_q%s_%s"));
             }
         }
     }
 
     /**
-     * {@code statementPerUnit} run for every unit either lane can have here, the ordered lane's being the larger space.
+     * {@code statementPerUnit}, formatted with a queue id and a unit, run for every unit either lane can have here (the
+     * ordered lane's being the larger space) of every queue registered here ({@link #QUEUE_IDS}).
      */
     private static String refusalCounters(String statementPerUnit) {
-        return "DO $$ BEGIN FOR unit IN 0.." + (ShardOwnedSchema.ORDERED_UNITS - 1) + " LOOP "
-                + "EXECUTE format('" + statementPerUnit + "', unit); END LOOP; END $$";
+        var perQueue = new StringBuilder();
+        for (var queueId : QUEUE_IDS) {
+            perQueue.append("EXECUTE format('").append(statementPerUnit).append("', ").append(queueId).append(", unit); ");
+        }
+        return "DO $$ BEGIN FOR unit IN 0.." + (ShardOwnedSchema.ORDERED_UNITS - 1) + " LOOP " + perQueue + "END LOOP; END $$";
     }
 
     /**
-     * How many releases of {@code unit} {@link #failLeaseReleases} has refused since it was last turned on.
+     * How many releases of {@code unit} of queue {@code queueId} {@link #failLeaseReleases} has refused since it was last
+     * turned on.
      */
-    private long releasesRefused(int unit) throws Exception {
+    private long releasesRefused(short queueId, int unit) throws Exception {
         try (var connection = dataSource.getConnection(); var statement = connection.createStatement();
-             var resultSet = statement.executeQuery("SELECT CASE WHEN is_called THEN last_value ELSE 0 END FROM lease_release_refusals_" + unit)) {
+             var resultSet = statement.executeQuery("SELECT CASE WHEN is_called THEN last_value ELSE 0 END FROM lease_release_refusals_q"
+                                                            + queueId + "_" + unit)) {
             resultSet.next();
             return resultSet.getLong(1);
         }
     }
 
     /**
-     * {@link #releasesRefused} for each of {@code units}, by unit.
+     * {@link #releasesRefused} for each of {@code units} of queue {@code queueId}, by unit.
      */
-    private Map<Integer, Long> refusals(List<Integer> units) throws Exception {
+    private Map<Integer, Long> refusals(short queueId, List<Integer> units) throws Exception {
         var refusals = new TreeMap<Integer, Long>();
         for (var unit : units) {
-            refusals.put(unit, releasesRefused(unit));
+            refusals.put(unit, releasesRefused(queueId, unit));
         }
         return refusals;
     }
 
-    private boolean releasesRefusedOftenEnough(List<Integer> units) throws Exception {
-        return refusals(units).values().stream().allMatch(refused -> refused >= REFUSALS_SPANNING_A_TICK);
+    private boolean releasesRefusedOftenEnough(short queueId, List<Integer> units) throws Exception {
+        return refusals(queueId, units).values().stream().allMatch(refused -> refused >= REFUSALS_SPANNING_A_TICK);
     }
 
     /**
-     * Wait until the release of every unit in {@code units} has been attempted and refused often enough that a whole
-     * heartbeat tick has run with it failing ({@link #REFUSALS_SPANNING_A_TICK}): the evidence that the injection worked.
+     * Wait until the release of every unit in {@code units} of queue {@code queueId} has been attempted and refused often
+     * enough that a whole heartbeat tick has run with it failing ({@link #REFUSALS_SPANNING_A_TICK}): the evidence that the
+     * injection worked.
      */
-    private void awaitReleasesRefused(List<Integer> units, String when) {
-        Awaitility.await("the release of units " + units + " refused " + REFUSALS_SPANNING_A_TICK + " times " + when)
+    private void awaitReleasesRefused(short queueId, List<Integer> units, String when) {
+        Awaitility.await("the release of units " + units + " of queue " + queueId + " refused " + REFUSALS_SPANNING_A_TICK + " times " + when)
                   .atMost(Duration.ofSeconds(20))
-                  .until(() -> releasesRefusedOftenEnough(units));
+                  .until(() -> releasesRefusedOftenEnough(queueId, units));
     }
 
     /**
@@ -770,9 +1008,13 @@ class ShardOwnedDeadPumpHandBackIT {
     }
 
     private static List<Integer> unitsOn(ShardRuntime runtime, ShardPump pump, String lane, int units) {
+        return unitsOn(runtime, pump, QUEUE_ID, lane, units);
+    }
+
+    private static List<Integer> unitsOn(ShardRuntime runtime, ShardPump pump, short queueId, String lane, int units) {
         var on = new ArrayList<Integer>();
         for (var unit = 0; unit < units; unit++) {
-            if (runtime.pumpFor(QUEUE_ID, lane, unit) == pump) {
+            if (runtime.pumpFor(queueId, lane, unit) == pump) {
                 on.add(unit);
             }
         }
@@ -780,18 +1022,26 @@ class ShardOwnedDeadPumpHandBackIT {
     }
 
     private Map<Integer, Long> fences(String lane, List<Integer> units) throws Exception {
+        return fences(QUEUE_ID, lane, units);
+    }
+
+    private Map<Integer, Long> fences(short queueId, String lane, List<Integer> units) throws Exception {
         var fences = new HashMap<Integer, Long>();
         for (var unit : units) {
-            fences.put(unit, fenceOf(lane, unit));
+            fences.put(unit, fenceOf(queueId, lane, unit));
         }
         return fences;
     }
 
     private long fenceOf(String lane, int shard) throws Exception {
+        return fenceOf(QUEUE_ID, lane, shard);
+    }
+
+    private long fenceOf(short queueId, String lane, int shard) throws Exception {
         try (var connection = dataSource.getConnection();
              var statement = connection.prepareStatement("SELECT fence FROM " + ShardOwnedSchema.LEASE_TABLE
                                                                  + " WHERE queue_id = ? AND lane = ? AND shard = ?")) {
-            statement.setShort(1, QUEUE_ID);
+            statement.setShort(1, queueId);
             statement.setString(2, lane);
             statement.setInt(3, shard);
             try (var resultSet = statement.executeQuery()) {
@@ -802,10 +1052,14 @@ class ShardOwnedDeadPumpHandBackIT {
     }
 
     private String ownerOf(String lane, int shard) throws Exception {
+        return ownerOf(QUEUE_ID, lane, shard);
+    }
+
+    private String ownerOf(short queueId, String lane, int shard) throws Exception {
         try (var connection = dataSource.getConnection();
              var statement = connection.prepareStatement("SELECT owner FROM " + ShardOwnedSchema.LEASE_TABLE
                                                                  + " WHERE queue_id = ? AND lane = ? AND shard = ?")) {
-            statement.setShort(1, QUEUE_ID);
+            statement.setShort(1, queueId);
             statement.setString(2, lane);
             statement.setInt(3, shard);
             try (var resultSet = statement.executeQuery()) {
