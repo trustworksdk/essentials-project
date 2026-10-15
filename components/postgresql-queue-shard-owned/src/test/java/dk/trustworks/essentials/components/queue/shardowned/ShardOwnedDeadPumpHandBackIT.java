@@ -16,11 +16,15 @@
 
 package dk.trustworks.essentials.components.queue.shardowned;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.zaxxer.hikari.*;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.slf4j.LoggerFactory;
 import org.testcontainers.junit.jupiter.*;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 
@@ -126,14 +130,19 @@ class ShardOwnedDeadPumpHandBackIT {
      * The ordered lane never hands a unit over with a key in a handler, a dead pump's included: the handlers run on the
      * runtime's shared executor, not on the pump, so one may outlive it. The unit is kept until that handler returns, and
      * handed back then; the dead pump's other units are handed back at once.
+     * <p>
+     * Nothing bounds that wait, so once it outlasts {@code shedGrace} the queue names the key holding it up in one WARN, as an
+     * abandoned shed does - not on every heartbeat it goes on waiting. It used to log the wait at DEBUG alone, so the pump's
+     * ERROR and a {@code shardsOnDeadPumps} that never fell were all an operator had, with nothing naming the key.
      */
     @Test
     void an_ordered_unit_on_a_dead_pump_is_handed_back_only_once_no_key_is_in_its_handler() throws Exception {
-        var settings  = settings(2);
+        var settings  = settings(2, Duration.ofMillis(300), Duration.ofSeconds(1));
         var entered   = new CountDownLatch(1);
         var release   = new CountDownLatch(1);
         var heldUnit  = new CompletableFuture<Integer>();
         var delivered = ConcurrentHashMap.<String>newKeySet();
+        var logged    = captureQueueLog();
         try (var runtime = new ShardRuntime(dataSource, settings)) {
             var queue = queue(runtime, "dead-pump-o");
             try {
@@ -168,6 +177,15 @@ class ShardOwnedDeadPumpHandBackIT {
                 assertThat(fenceOf("ordered", unit)).as("the unit with a key in its handler is not handed over").isEqualTo(fencesBefore.get(unit));
                 assertThat(ownerOf("ordered", unit)).isEqualTo("dead-pump-o");
                 assertThat(queue.metrics().shardsOnDeadPumps.get()).as("it is still on the dead pump").isEqualTo(1);
+                // 1.5 s against a 300 ms grace: past it, with several heartbeats after the first report.
+                var stuckWarnings = warnings(logged, "to hand back ordered unit");
+                assertThat(stuckWarnings).as("the wait past shedGrace is named once, not on every heartbeat").hasSize(1);
+                assertThat(stuckWarnings.getFirst().getArgumentArray()[2]).as("the unit").isEqualTo(unit);
+                assertThat(stuckWarnings.getFirst().getFormattedMessage()).contains("1 key(s) still in a handler [HOLD]")
+                                                                          .contains("stays leased and unserved until the handler returns or the runtime is restarted");
+                assertThat(warnings(logged, "whose pump had died")).as("the idle units were handed back with a live pump left")
+                                                           .isNotEmpty()
+                                                           .allMatch(event -> event.getFormattedMessage().contains("or a live pump here, takes them over"));
 
                 release.countDown();
 
@@ -183,18 +201,24 @@ class ShardOwnedDeadPumpHandBackIT {
                 release.countDown();
                 queue.stop();
             }
+        } finally {
+            releaseQueueLog(logged);
         }
     }
 
     /**
      * With no live pump left the shards are handed back and left free, not taken again: a shard taken now would land on
      * the dead pump, be ended and be handed back on every heartbeat. Each lane has its own acquire loop and its own guard.
+     * <p>
+     * The WARN reporting the hand-back says so. It used to promise that "another instance, or a live pump here" takes the
+     * shards over, which with no live pump is half false, and in a single-instance deployment wholly so.
      */
     @ParameterizedTest
     @ValueSource(strings = {"unordered", "ordered"})
     void with_no_live_pump_left_the_shards_are_handed_back_and_not_taken_again(String lane) throws Exception {
         var settings = settings(1);
         var units    = "ordered".equals(lane) ? ShardOwnedSchema.ORDERED_UNITS : SHARD_COUNT;
+        var logged   = captureQueueLog();
         try (var runtime = new ShardRuntime(dataSource, settings)) {
             var queue = queue(runtime, "dead-pump-all");
             try {
@@ -217,9 +241,18 @@ class ShardOwnedDeadPumpHandBackIT {
                 assertThat(unitsOwnedBy(lane, "dead-pump-all")).as("nothing is taken back onto a dead pump").isZero();
                 assertThat(queue.metrics().shardsAcquired.sum()).isEqualTo(acquiredBefore);
                 assertThat(queue.shardsHeld()).isZero();
+                assertThat(warnings(logged, "whose pump had died"))
+                        .as("the hand-back WARN says no pump here takes them, and what it takes to get one back")
+                        .isNotEmpty()
+                        .allSatisfy(event -> assertThat(event.getFormattedMessage())
+                                .contains("for other instances only")
+                                .contains("acquires nothing until the runtime (or the application) is restarted")
+                                .doesNotContain("a live pump here"));
             } finally {
                 queue.stop();
             }
+        } finally {
+            releaseQueueLog(logged);
         }
     }
 
@@ -740,6 +773,35 @@ class ShardOwnedDeadPumpHandBackIT {
                 return resultSet.getInt(1);
             }
         }
+    }
+
+    /**
+     * Record what {@link ShardOwnedQueue} logs, from now until {@link #releaseQueueLog}.
+     */
+    private static ListAppender<ILoggingEvent> captureQueueLog() {
+        var logged = new ListAppender<ILoggingEvent>();
+        logged.start();
+        ((ch.qos.logback.classic.Logger) LoggerFactory.getLogger(ShardOwnedQueue.class)).addAppender(logged);
+        return logged;
+    }
+
+    private static void releaseQueueLog(ListAppender<ILoggingEvent> logged) {
+        ((ch.qos.logback.classic.Logger) LoggerFactory.getLogger(ShardOwnedQueue.class)).detachAppender(logged);
+        logged.stop();
+    }
+
+    /**
+     * The WARNs logged so far whose message pattern contains {@code containing}.
+     */
+    private static List<ILoggingEvent> warnings(ListAppender<ILoggingEvent> logged, String containing) {
+        List<ILoggingEvent> events;
+        synchronized (logged) { // the monitor AppenderBase appends under; the heartbeat is still logging
+            events = new ArrayList<>(logged.list);
+        }
+        return events.stream()
+                     .filter(event -> event.getLevel() == Level.WARN)
+                     .filter(event -> event.getMessage().contains(containing))
+                     .toList();
     }
 
     private static void awaitQuietly(CountDownLatch latch) {

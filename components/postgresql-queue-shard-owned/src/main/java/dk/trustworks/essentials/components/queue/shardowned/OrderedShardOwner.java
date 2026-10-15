@@ -176,6 +176,16 @@ final class OrderedShardOwner implements BatchReadableOwner {
      */
     private final Set<String> reportedStuckKeys = new HashSet<>();
     /**
+     * When the queue's heartbeat first found this owner on a dead pump with a key in a handler ({@link #stuckOnDeadPump()}),
+     * by {@link System#nanoTime()}; null until then. Guarded by {@link #stateLock}.
+     */
+    private       Long        deadPumpWaitSinceNanos;
+    /**
+     * Set once the keys holding up this owner's hand-back from a dead pump have been WARNed about
+     * ({@link #stuckOnDeadPump()}). Guarded by {@link #stateLock}.
+     */
+    private       boolean     deadPumpWaitReported;
+    /**
      * Set when a row arrives at exactly a key's blocked {@code key_order} — which can only be the
      * dead letter itself, resurrected, since {@code (key, key_order)} is unique and the original row
      * was deleted when it was parked.
@@ -1184,6 +1194,57 @@ final class OrderedShardOwner implements BatchReadableOwner {
     public int inFlight() {
         synchronized (stateLock) {
             return keysInFlight.size();
+        }
+    }
+
+    /**
+     * The keys holding up this owner's hand-back from a dead pump, once they have held it up for longer than
+     * {@code shedGrace} and have not been reported yet.
+     * <p>
+     * Asked by {@code ShardOwnedQueue.handBackUnitsOnDeadPumps} on every heartbeat that finds this owner on a dead pump
+     * with a key still in a handler. The unit is not handed back while one is - a successor would start that key beside it
+     * - so a handler that never returns keeps it leased and unserved until the runtime is restarted. This is the same
+     * failure an abandoned shed reports ({@link #advanceShed}), and it gets the same treatment: past the grace, one WARN
+     * naming the keys. The wait is timed from the first heartbeat that asks, which is at most one heartbeat after the
+     * death.
+     * <p>
+     * Reported once per owner. The owner drains from the moment its pump dies ({@link #beginDraining()}), and its pump,
+     * the only thread that dispatches, is gone, so no key enters {@link #keysInFlight} after the first report: the keys it
+     * names are every key that will hold this hand-back up, and a repeat could only name fewer of them.
+     *
+     * @return the keys to name, and how long they have held the hand-back up; empty while within the grace, once reported,
+     * or when no key is in a handler
+     */
+    Optional<StuckOnDeadPump> stuckOnDeadPump() {
+        var now = System.nanoTime();
+        synchronized (stateLock) {
+            if (keysInFlight.isEmpty()) {
+                return Optional.empty();
+            }
+            if (deadPumpWaitSinceNanos == null) {
+                deadPumpWaitSinceNanos = now;
+            }
+            var waited = now - deadPumpWaitSinceNanos;
+            if (deadPumpWaitReported || waited < settings.shedGraceNanos()) {
+                return Optional.empty();
+            }
+            deadPumpWaitReported = true;
+            return Optional.of(new StuckOnDeadPump(List.copyOf(keysInFlight), Duration.ofNanos(waited)));
+        }
+    }
+
+    /**
+     * The keys an ordered unit on a dead pump is waiting for, and how long it has waited. See {@link #stuckOnDeadPump()}.
+     *
+     * @param keys   the keys still in a handler
+     * @param waited how long they have held up the hand-back, counted from the first heartbeat that found them
+     */
+    record StuckOnDeadPump(List<String> keys, Duration waited) {
+        /**
+         * The keys as a log line names them: capped, as an abandoned shed's are.
+         */
+        String describeKeys() {
+            return OrderedShardOwner.describeKeys(keys);
         }
     }
 

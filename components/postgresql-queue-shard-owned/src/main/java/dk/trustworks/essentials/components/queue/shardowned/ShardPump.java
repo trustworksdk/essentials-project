@@ -293,7 +293,8 @@ final class ShardPump implements Runnable {
             if (running.get()) {
                 log.error("{} died while its runtime is still running, and nothing restarts it. The {} shard(s) it served are "
                                   + "handed back to the cluster by their queues' next heartbeat (an ordered unit once no key is in "
-                                  + "a handler), for another instance or a live pump here to take over; acknowledgements pending on "
+                                  + "a handler; keys still there after shedGrace are named at WARN), for another instance or a live "
+                                  + "pump here to take over; acknowledgements pending on "
                                   + "them are not flushed, so those messages are redelivered. Shards acquired from now on go to the "
                                   + "runtime's live pumps; with none left this instance acquires nothing. Restart the ShardRuntime "
                                   + "(or the application) to get the pump back. Until handed back, these shards are counted in "

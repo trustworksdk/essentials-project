@@ -703,14 +703,18 @@ unaffected: the interface's `Instant` overloads still call its no-arg methods. (
   shards that sit on a pump thread a critical error (`VirtualMachineError`, `LinkageError`) ended and whose leases
   this instance has not handed back yet. A dead pump's shards are handed back to the cluster rather than kept: the
   queue's next heartbeat releases their leases (an ordered unit once no key is in one of its handlers, so no successor
-  starts a key beside it), and another instance, or a live pump in this one, takes them over under a new fence. A
+  starts a key beside it), and another instance, or a live pump in this one, takes them over under a new fence. An
+  ordered unit waits for its handler without a limit; once the wait outlasts `shedGrace` one WARN per unit names the
+  keys still in a handler, as an abandoned shed does, since the unit stays leased and unserved until the handler
+  returns or the runtime is restarted. A
   release that fails is retried on every heartbeat, and until it succeeds the unit still counts towards the instance's
   fair share, so the instance takes no free shard in its place. What
   they had handled but not acknowledged is redelivered. In 0.60.0 a pump thread that died left its shards leased to
   the instance and delivering nothing until a restart. With no live pump left the instance acquires nothing, a queue
   started or restarted on that runtime included (it used to take every free unit, report it owned and hand it back a
   heartbeat later), and its
-  shards stay unowned (`QueueHealth.unownedShards`) until the `ShardRuntime` is restarted; alert on
+  shards stay unowned (`QueueHealth.unownedShards`) until the `ShardRuntime` is restarted, which the WARN reporting
+  the hand-back then says ("for other instances only") instead of promising a live pump here; alert on
   `shardsOnDeadPumps` staying above zero (§3). Both are readable only through `ShardOwnedQueue.metrics()`:
   `PostgresqlMessageQueue` keeps its metrics private and no `QueueObserver` callback reports them, so through
   `MessageQueue` (the Spring starter, the `DurableQueues` adapter) a dead pump is reported by its ERROR log line

@@ -210,7 +210,8 @@ public final class ShardOwnerMetrics {
      * runtime stops. A pump dies only on a critical error ({@code VirtualMachineError}, {@code LinkageError}): everything
      * else it reconnects from ({@link #pumpLoopFailures}). Nothing restarts it, so it ends the owners on it, and the
      * heartbeat hands their leases back to the cluster - an unordered shard on the next tick, an ordered unit once no key
-     * is in one of its handlers, which a handler that never returns can hold off indefinitely. Another instance, or a live
+     * is in one of its handlers, which a handler that never returns can hold off indefinitely (once that wait outlasts
+     * {@code shedGrace}, a WARN names the unit and its keys still in a handler, once per unit). Another instance, or a live
      * pump here, then takes the shard over under a new fence; what was handled and not acknowledged is redelivered. So
      * this is normally above zero for one heartbeat after a death; alert on it staying there, next to
      * {@link #shardsAwaitingTakeover}. {@code QueueHealth.unownedShards()} cannot see these shards while they are counted,

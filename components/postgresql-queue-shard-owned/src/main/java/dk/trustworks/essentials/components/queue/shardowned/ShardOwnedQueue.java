@@ -730,6 +730,12 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * released at once - whatever is still in one of its handlers is redelivered by the next owner, as on any fair-share
      * release. An ordered unit waits until no key is in a handler (its handlers run on the shared executor, not on the
      * pump), because a successor would otherwise start that key beside it; it is retried on every heartbeat until then.
+     * Nothing bounds that wait, so a handler that never returns keeps the unit leased and unserved until the runtime is
+     * restarted. Each tick's wait is logged at DEBUG, and once it outlasts {@code shedGrace} a WARN names the unit's keys
+     * still in a handler, once per unit ({@link OrderedShardOwner#stuckOnDeadPump()}), as an abandoned ordered shed does.
+     * <p>
+     * With no live pump left in the runtime this instance acquires nothing, so the units are released for other instances
+     * only, and stay unowned if none runs; the WARN reporting the hand-back says which of the two it is.
      * <p>
      * No acknowledgement is flushed first, unlike {@link #stop()}: the owner's state was kept by the thread a critical
      * error just ended, and is not trusted to say what was handled. What was handled and not acknowledged is redelivered
@@ -748,6 +754,17 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             }
             if ("ordered".equals(owner.lane()) && owner.inFlight() > 0) {
                 waiting.add(owner.shard());
+                if (owner instanceof OrderedShardOwner ordered) {
+                    // Past shedGrace, one WARN per unit naming its keys, as an abandoned shed does: nothing bounds this
+                    // wait, and the pump's ERROR cannot say which key to look at. Every tick's DEBUG below covers the rest.
+                    ordered.stuckOnDeadPump().ifPresent(
+                            stuck -> log.warn("Instance {} has waited {} ms to hand back ordered unit {} on queue {} from its dead pump: "
+                                                      + "{} key(s) still in a handler {}. A unit is not handed back while one of its "
+                                                      + "keys is in a handler, so it stays leased and unserved until the handler "
+                                                      + "returns or the runtime is restarted. Logged once per unit",
+                                              instanceId, stuck.waited().toMillis(), owner.shard(), queueId, stuck.keys().size(),
+                                              stuck.describeKeys()));
+                }
             } else {
                 ready.add(owner);
             }
@@ -786,9 +803,19 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             metrics.shardsReleased.increment();
             released.add(owner.shard());
         }
-        log.warn("Instance {} handed back {} {} unit(s) [{}] on queue {} whose pump had died; another instance, or a live pump "
-                         + "here, takes them over under a new fence, and redelivers what they had handled but not acknowledged",
-                 instanceId, ready.size(), activeLane, summarise(ready.stream().map(LeasedOwner::shard).toList()), queueId);
+        // Who takes them over depends on whether this instance has a live pump left: with none it acquires nothing (rebalance
+        // and acquireFreeOrderedShards are guarded on hasLivePump), so promising a live pump here would be false.
+        if (shardRuntime.hasLivePump()) {
+            log.warn("Instance {} handed back {} {} unit(s) [{}] on queue {} whose pump had died; another instance, or a live pump "
+                             + "here, takes them over under a new fence, and redelivers what they had handled but not acknowledged",
+                     instanceId, ready.size(), activeLane, summarise(ready.stream().map(LeasedOwner::shard).toList()), queueId);
+        } else {
+            log.warn("Instance {} handed back {} {} unit(s) [{}] on queue {} whose pump had died, for other instances only: no pump "
+                             + "of this instance's ShardRuntime is alive, so it acquires nothing until the runtime (or the application) "
+                             + "is restarted. Another instance takes them over under a new fence and redelivers what they had handled "
+                             + "but not acknowledged; with none running they stay unowned (QueueHealth.unownedShards)",
+                     instanceId, ready.size(), activeLane, summarise(ready.stream().map(LeasedOwner::shard).toList()), queueId);
+        }
         for (var shard : released) {
             metrics.observer().shardOwnershipChanged(shard, false);
         }
