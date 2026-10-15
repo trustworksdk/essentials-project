@@ -372,13 +372,13 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
 
         ensureRuntime(settings);
         for (var entry : leased) {
+            var placement = runtime.place(queueId, "ordered", entry.shard());
             var owner = new OrderedShardOwner(storage, entry.shard(), entry.grant().fence(), settings, handler, metrics,
-                                              redeliveryPolicy, instanceId,
-                                              runtime.wakeupFor(queueId, "ordered", entry.shard()),
+                                              redeliveryPolicy, instanceId, placement.wakeup(),
                                               dispatch, entry.grant().previousOwnerReleased());
             owner.setDeliveryGate(this::deliveryPermitted);
             owners.add(owner);
-            runtime.register(queueId, "ordered", entry.shard(), owner);
+            placement.register(owner);
             metrics.shardsAcquired.increment();
         }
         // The ordered lane had no heartbeat at all: its leases were taken once and left to expire,
@@ -441,13 +441,14 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         ensureRuntime(settings);
 
         for (var entry : leased) {
+            var placement = runtime.place(queueId, "unordered", entry.shard());
             var owner = new ShardOwner(storage, entry.shard(), entry.grant().fence(), settings, handler, metrics,
-                                       redeliveryPolicy, runtime.wakeupFor(queueId, "unordered", entry.shard()),
+                                       redeliveryPolicy, placement.wakeup(),
                                        instanceId, dispatch, entry.grant().previousOwnerReleased());
             owner.setDeliveryGate(this::deliveryPermitted);
             owners.add(owner);
             ownedShards.put(entry.shard(), owner);
-            runtime.register(queueId, "unordered", entry.shard(), owner);
+            placement.register(owner);
             metrics.shardsAcquired.increment();
         }
         startHeartbeat();
@@ -833,14 +834,15 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             if (grant.isEmpty()) {
                 continue;
             }
-            var fence = grant.get().fence();
+            var fence     = grant.get().fence();
+            var placement = runtime.place(queueId, "unordered", shard);
             var owner = new ShardOwner(storage, shard, fence, activeSettings, activeHandler, metrics,
-                                       activePolicy, runtime.wakeupFor(queueId, "unordered", shard),
+                                       activePolicy, placement.wakeup(),
                                        instanceId, dispatch, grant.get().previousOwnerReleased());
             owner.setDeliveryGate(this::deliveryPermitted);
             owners.add(owner);
             ownedShards.put(shard, owner);
-            runtime.register(queueId, "unordered", shard, owner);
+            placement.register(owner);
             metrics.shardsAcquired.increment();
             metrics.observer().shardOwnershipChanged(shard, true);
             acquired.add(shard);
@@ -924,15 +926,15 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             if (grant.isEmpty()) {
                 continue;
             }
-            var fence = grant.get().fence();
+            var fence     = grant.get().fence();
+            var placement = runtime.place(queueId, "ordered", shard);
             var owner = new OrderedShardOwner(storage, shard, fence, activeSettings, activeOrderedHandler,
-                                              metrics, activePolicy, instanceId,
-                                              runtime.wakeupFor(queueId, "ordered", shard),
+                                              metrics, activePolicy, instanceId, placement.wakeup(),
                                               dispatch, grant.get().previousOwnerReleased());
             owner.setDeliveryGate(this::deliveryPermitted);
             owners.add(owner);
             heldShards.add(shard);
-            runtime.register(queueId, "ordered", shard, owner);
+            placement.register(owner);
             metrics.shardsAcquired.increment();
             metrics.observer().shardOwnershipChanged(shard, true);
             acquired.add(shard);

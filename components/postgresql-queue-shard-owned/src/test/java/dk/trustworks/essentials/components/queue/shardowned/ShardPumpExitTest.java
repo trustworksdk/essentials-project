@@ -557,9 +557,9 @@ class ShardPumpExitTest {
         var metrics = new ShardOwnerMetrics(observer(told));
         var runtime = new ShardRuntime(listenableDataSource(), pumps(1), new ShardOwnerMetrics());
         try {
-            runtime.register((short) 7, "unordered", 1, new StubOwner((short) 7, 1, metrics, Behaviour.TAKEOVER_FAILS));
+            runtime.place((short) 7, "unordered", 1).register(new StubOwner((short) 7, 1, metrics, Behaviour.TAKEOVER_FAILS));
             await().atMost(Duration.ofSeconds(10)).until(() -> metrics.shardsAwaitingTakeover.get() == 1);
-            runtime.register((short) 7, "unordered", 2, new StubOwner((short) 7, 2, metrics, Behaviour.DIES));
+            runtime.place((short) 7, "unordered", 2).register(new StubOwner((short) 7, 2, metrics, Behaviour.DIES));
             awaitDeath("pump-0");
             assertThat(metrics.shardsAwaitingTakeover.get()).as("premise: the dead pump kept its stalled shard counted").isEqualTo(1);
             assertThat(metrics.shardsOnDeadPumps.get()).as("premise: both shards are on the dead pump").isEqualTo(2);
@@ -582,18 +582,51 @@ class ShardPumpExitTest {
         var runtime = new ShardRuntime(listenableDataSource(), pumps(2), new ShardOwnerMetrics());
         try {
             var shards = shardsRoutedTo(0, 2, 2);
-            runtime.register((short) 7, "unordered", shards.get(0), new StubOwner((short) 7, shards.get(0), metrics, Behaviour.DIES));
+            runtime.place((short) 7, "unordered", shards.get(0)).register(new StubOwner((short) 7, shards.get(0), metrics, Behaviour.DIES));
             awaitDeath("pump-0");
             assertThat(metrics.shardsOnDeadPumps.get()).as("premise: the dying shard is on the dead pump").isEqualTo(1);
 
-            var later  = new StubOwner((short) 7, shards.get(1), metrics, Behaviour.SERVED);
-            var wakeup = runtime.wakeupFor((short) 7, "unordered", shards.get(1));
-            runtime.register((short) 7, "unordered", shards.get(1), later);
+            var later     = new StubOwner((short) 7, shards.get(1), metrics, Behaviour.SERVED);
+            var placement = runtime.place((short) 7, "unordered", shards.get(1));
+            placement.register(later);
 
             await().atMost(Duration.ofSeconds(10)).until(() -> later.pumped.get() > 0);
             assertThat(metrics.shardsOnDeadPumps.get()).as("the later shard is on a live pump").isEqualTo(1);
-            assertThat(wakeup.cascadesTo(runtime.pumpFor((short) 7, "unordered", shards.get(1)).wakeup()))
-                    .as("its wake-up reaches the pump that serves it").isTrue();
+            assertThat(placement.pump().isDead()).isFalse();
+            assertThat(placement.wakeup().cascadesTo(placement.pump().wakeup())).as("its wake-up reaches the pump that serves it").isTrue();
+        } finally {
+            runtime.stop();
+        }
+        assertThat(metrics.shardsOnDeadPumps.get()).isZero();
+    }
+
+    /**
+     * A shard's owner is registered on the pump its wake-up cascades to, also when that pump dies between the owner being
+     * built and being registered. The two used to be resolved apart - the wake-up when the owner was built, the pump
+     * again when it was registered - so a death in between put the owner on a live pump with a wake-up that still
+     * cascaded to the dead one: a notification for the shard woke nobody, and it was served only on its new pump's
+     * backstop until it was acquired again. Placed once, the owner sits on the pump it was placed on, dead now, where it
+     * is counted.
+     */
+    @Test
+    void an_owner_whose_pump_dies_before_it_is_registered_stays_on_the_pump_its_wake_up_reaches() {
+        var metrics = new ShardOwnerMetrics();
+        var runtime = new ShardRuntime(listenableDataSource(), pumps(2), new ShardOwnerMetrics());
+        try {
+            var shards    = shardsRoutedTo(0, 2, 2);
+            var placement = runtime.place((short) 7, "unordered", shards.get(1));
+            assertThat(placement.pump().isDead()).as("premise: placed while its pump lived").isFalse();
+            runtime.place((short) 7, "unordered", shards.get(0)).register(new StubOwner((short) 7, shards.get(0), metrics, Behaviour.DIES));
+            awaitDeath("pump-0");
+            var livePump = runtime.pumpFor((short) 7, "unordered", shards.get(1));
+            assertThat(livePump).as("premise: the shard would now be routed to the live pump").isNotSameAs(placement.pump());
+
+            placement.register(new StubOwner((short) 7, shards.get(1), metrics, Behaviour.SERVED));
+
+            assertThat(placement.wakeup().cascadesTo(placement.pump().wakeup())).as("its wake-up reaches the pump holding it").isTrue();
+            assertThat(placement.pump().shardsServed()).as("the owner is on the pump it was placed on").isEqualTo(2);
+            assertThat(livePump.shardsServed()).as("not on a pump its wake-up does not reach").isZero();
+            assertThat(metrics.shardsOnDeadPumps.get()).as("and is counted as on a dead pump").isEqualTo(2);
         } finally {
             runtime.stop();
         }
@@ -610,11 +643,11 @@ class ShardPumpExitTest {
         var runtime = new ShardRuntime(listenableDataSource(), pumps(2), new ShardOwnerMetrics());
         try {
             var shards = shardsRoutedTo(0, 2, 2);
-            var before = runtime.wakeupFor((short) 7, "unordered", shards.get(1));
-            runtime.register((short) 7, "unordered", shards.get(0), new StubOwner((short) 7, shards.get(0), metrics, Behaviour.DIES));
+            var before = runtime.place((short) 7, "unordered", shards.get(1)).wakeup();
+            runtime.place((short) 7, "unordered", shards.get(0)).register(new StubOwner((short) 7, shards.get(0), metrics, Behaviour.DIES));
             awaitDeath("pump-0");
 
-            var after = runtime.wakeupFor((short) 7, "unordered", shards.get(1));
+            var after = runtime.place((short) 7, "unordered", shards.get(1)).wakeup();
 
             assertThat(after).isNotSameAs(before);
             assertThat(after.cascadesTo(runtime.pumpFor((short) 7, "unordered", shards.get(1)).wakeup())).isTrue();
@@ -632,10 +665,10 @@ class ShardPumpExitTest {
         var metrics = new ShardOwnerMetrics();
         var runtime = new ShardRuntime(listenableDataSource(), pumps(1), new ShardOwnerMetrics());
         try {
-            runtime.register((short) 7, "unordered", 1, new StubOwner((short) 7, 1, metrics, Behaviour.DIES));
+            runtime.place((short) 7, "unordered", 1).register(new StubOwner((short) 7, 1, metrics, Behaviour.DIES));
             awaitDeath("pump-0");
 
-            runtime.register((short) 7, "unordered", 2, new StubOwner((short) 7, 2, metrics, Behaviour.SERVED));
+            runtime.place((short) 7, "unordered", 2).register(new StubOwner((short) 7, 2, metrics, Behaviour.SERVED));
 
             assertThat(metrics.shardsOnDeadPumps.get()).isEqualTo(2);
         } finally {
@@ -657,13 +690,13 @@ class ShardPumpExitTest {
         var deadPumpShards = shardsRoutedTo(0, 2, 2);
         var slow           = new StubOwner((short) 7, shardsRoutedTo(1, 2, 1).getFirst(), new ShardOwnerMetrics(), Behaviour.BLOCKS);
         try {
-            runtime.register((short) 7, "unordered", slow.shard(), slow);
+            runtime.place((short) 7, "unordered", slow.shard()).register(slow);
             await().atMost(Duration.ofSeconds(10)).until(() -> slow.pumped.get() > 0);
-            runtime.register((short) 7, "unordered", deadPumpShards.get(0),
-                             new StubOwner((short) 7, deadPumpShards.get(0), metrics, Behaviour.TAKEOVER_FAILS));
+            runtime.place((short) 7, "unordered", deadPumpShards.get(0))
+                   .register(new StubOwner((short) 7, deadPumpShards.get(0), metrics, Behaviour.TAKEOVER_FAILS));
             await().atMost(Duration.ofSeconds(10)).until(() -> metrics.shardsAwaitingTakeover.get() == 1);
-            runtime.register((short) 7, "unordered", deadPumpShards.get(1),
-                             new StubOwner((short) 7, deadPumpShards.get(1), metrics, Behaviour.DIES));
+            runtime.place((short) 7, "unordered", deadPumpShards.get(1))
+                   .register(new StubOwner((short) 7, deadPumpShards.get(1), metrics, Behaviour.DIES));
             awaitDeath("pump-0");
 
             runtime.shutdownStarting(() -> Duration.ofMillis(100));
@@ -718,9 +751,9 @@ class ShardPumpExitTest {
         var runtime = new ShardRuntime(listenableDataSource(), pumps(1), new ShardOwnerMetrics());
         try {
             var pump = runtime.pumpFor((short) 7, "unordered", 1);
-            runtime.register((short) 7, "unordered", 1, new StubOwner((short) 7, 1, metrics, Behaviour.TAKEOVER_FAILS));
+            runtime.place((short) 7, "unordered", 1).register(new StubOwner((short) 7, 1, metrics, Behaviour.TAKEOVER_FAILS));
             await().atMost(Duration.ofSeconds(10)).until(() -> metrics.shardsAwaitingTakeover.get() == 1);
-            runtime.register((short) 7, "unordered", 2, new StubOwner((short) 7, 2, metrics, Behaviour.DIES));
+            runtime.place((short) 7, "unordered", 2).register(new StubOwner((short) 7, 2, metrics, Behaviour.DIES));
             assertThat(held.await(10, TimeUnit.SECONDS)).as("premise: the pump is held in its death's ERROR").isTrue();
 
             runtime.shutdownStarting(() -> Duration.ofMillis(100));
@@ -754,7 +787,7 @@ class ShardPumpExitTest {
         var runtime     = new ShardRuntime(listenableDataSource(), pumps(1), new ShardOwnerMetrics());
         var slow        = new StubOwner((short) 7, 1, slowMetrics, Behaviour.BLOCKS);
         try {
-            runtime.register((short) 7, "unordered", slow.shard(), slow);
+            runtime.place((short) 7, "unordered", slow.shard()).register(slow);
             await().atMost(Duration.ofSeconds(10)).until(() -> slow.pumped.get() > 0);
             var slowPump = runtime.pumpFor((short) 7, "unordered", slow.shard());
 

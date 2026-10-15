@@ -240,20 +240,40 @@ public final class ShardRuntime implements Lifecycle, AutoCloseable {
     }
 
     /**
-     * The wake-up for one shard of one lane of one queue, cascading to the pump that will serve it.
-     * Keyed the same way the notification payload is, so the listener can route without knowing
-     * anything about queues.
+     * Where one shard of one lane of one queue is served: the pump chosen for it, and the shard's wake-up, which cascades
+     * to that same pump. An owner is built with {@link #wakeup()} and handed to {@link #register(LeasedOwner)}, both from
+     * one placement.
      * <p>
-     * Kept per shard across ownerships, and replaced when it no longer cascades to the pump that would serve the shard
-     * now: once a pump has died ({@link ShardPump#run()}) its shards are routed elsewhere, and a wake-up still pointing at
-     * it would leave a re-acquired shard served only when its new pump's backstop fires.
+     * <b>One placement, not two lookups.</b> Choosing the pump once for the wake-up and again for the registration let the
+     * two disagree: a pump that died between the lookups left the owner on a live pump while its wake-up still cascaded to
+     * the dead one, so notifications for the shard woke nobody and it was served only when its new pump's park deadline
+     * or backstop fired, until the shard was acquired again. Placed once, the owner and its wake-up always share a pump.
+     * Should that pump die between {@link ShardRuntime#place} and {@link #register(LeasedOwner)}, the shard sits on the
+     * dead pump like the pump's other shards, counted in {@link ShardOwnerMetrics#shardsOnDeadPumps}
+     * ({@link ShardPump#add(LeasedOwner)}).
      */
-    ShardWakeup wakeupFor(short queueId, String lane, int shard) {
+    record Placement(ShardPump pump, ShardWakeup wakeup) {
+        void register(LeasedOwner owner) {
+            pump.add(owner);
+        }
+    }
+
+    /**
+     * Choose the pump that will serve one shard of one lane of one queue ({@link #pumpFor}) and the shard's wake-up,
+     * cascading to that pump. The wake-up is keyed the same way the notification payload is, so the listener can route
+     * without knowing anything about queues.
+     * <p>
+     * The wake-up is kept per shard across ownerships, and replaced when it no longer cascades to the chosen pump: once a
+     * pump has died ({@link ShardPump#run()}) its shards are routed elsewhere, and a wake-up still pointing at it would
+     * leave a re-acquired shard served only when its new pump's backstop fires.
+     */
+    Placement place(short queueId, String lane, int shard) {
         var pump = pumpFor(queueId, lane, shard);
-        return wakeups.compute(ShardWakeupListener.key(queueId, lane, shard),
-                               (ignored, existing) -> existing != null && existing.cascadesTo(pump.wakeup())
-                                                      ? existing
-                                                      : new ShardWakeup(pump.wakeup()));
+        var wakeup = wakeups.compute(ShardWakeupListener.key(queueId, lane, shard),
+                                     (ignored, existing) -> existing != null && existing.cascadesTo(pump.wakeup())
+                                                            ? existing
+                                                            : new ShardWakeup(pump.wakeup()));
+        return new Placement(pump, wakeup);
     }
 
     /**
@@ -273,10 +293,6 @@ public final class ShardRuntime implements Lifecycle, AutoCloseable {
         }
         var live = pumps.stream().filter(candidate -> !candidate.isDead()).toList();
         return live.isEmpty() ? pump : live.get(Math.floorMod(spread, live.size()));
-    }
-
-    void register(short queueId, String lane, int shard, LeasedOwner owner) {
-        pumpFor(queueId, lane, shard).add(owner);
     }
 
     void forget(short queueId, String lane, int shard) {
