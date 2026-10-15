@@ -459,15 +459,15 @@ healthy (typically a trigger or constraint refusing the takeover's dead-letter m
 retried every 200 ms with no limit and the lease is kept, so no other instance takes the shard and it
 delivers nothing until the cause is fixed — a data-caused failure does not clear on its own. Alert on it
 being above zero next to `unownedShards`; `takeoverFailures` counts the failed attempts. The engine logs
-at most one ERROR a minute per queue, with the cause, while any of its shards is stalled (a cause that fails one
-takeover usually fails them all), every failed attempt at DEBUG, and an INFO for each shard when it recovers.
+at most one ERROR a minute per subscription (one per queue unless the queue is consumed twice in one process), with
+the cause, while any of its shards is stalled (a cause that fails one takeover usually fails them all), every failed attempt at DEBUG, and an INFO for each shard when it recovers.
 **Where to read it:** `ShardOwnerMetrics` is exposed only by the engine-level `ShardOwnedQueue.metrics()`;
 `PostgresqlMessageQueue` keeps it private. Through `MessageQueue` — including the Spring starter and the
 `DurableQueues` adapter — the same stall reaches `QueueObserver.takeoverStalled(lane, shard, stalled)`
 (`true` once when it starts, `false` once when it ends; never per retry), which `MicrometerQueueObserver`
 publishes as `essentials.queue.shards.awaiting.takeover`. Alert on that. The ERROR log (logger
 `dk.trustworks.essentials.components.queue.shardowned.ShardPump`) names one shard and the cause, and counts the
-queue's other stalled shards.
+subscription's other stalled shards.
 `takeoverStalled` is the one callback whose exceptions the engine catches and logs, because it runs on the
 pump thread.
 
@@ -479,8 +479,9 @@ Four more `ShardOwnerMetrics` cover a shard that is leased but delivers nothing 
   `handlerFailures`), and the checks deciding whether to serve the shard when they throw. The shard keeps
   its lease and its pass is retried 200 ms later with no limit, so a shard whose reads or acknowledgements
   are permanently refused delivers nothing while this rises by about five a second. Alert on its rate.
-  Logged at ERROR with the stack trace at most once a minute per queue, naming one shard; every failure at
-  DEBUG; an INFO when the shard's pass succeeds again.
+  Logged at ERROR with the stack trace at most once a minute per subscription (one per queue unless the queue
+  is consumed twice in one process), naming one shard; every failure at DEBUG; an INFO when the shard's pass
+  succeeds again, or, for a throwing check, when the checks next complete.
 - **`batchedReadFailures`** counts the ordered lane's per-queue batched reads that failed. The shards then
   read for themselves, so this alone stops nothing; when they cannot either, their failures count under
   `pumpFailures`. Logged at WARN at most once a minute per subscription (one per queue unless the queue is

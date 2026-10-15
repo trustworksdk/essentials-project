@@ -769,8 +769,8 @@ or constraint refusing the takeover's dead-letter move). The takeover is retried
 limit and the lease is kept, so no other instance takes the shard and it delivers nothing until the cause
 is fixed. `unownedShards` cannot see this, because the shard is leased: alert on this one being above zero
 next to it. `takeoverFailures` counts the failed attempts. The log carries at most one ERROR a minute per
-queue, with the cause, naming one stalled shard and counting the others (a cause that fails one takeover
-usually fails them all); every failed attempt is logged at DEBUG, and an INFO for each shard when it
+subscription (one per queue unless you `consume()` a queue twice in one process), with the cause, naming one
+stalled shard and counting the subscription's others (a cause that fails one takeover usually fails them all); every failed attempt is logged at DEBUG, and an INFO for each shard when it
 recovers. Only the engine-level `ShardOwnedQueue.metrics()` exposes
 these counters, since a `PostgresqlMessageQueue` keeps its `ShardOwnerMetrics` private. Through `MessageQueue`
 (and the Spring starter and the `DurableQueues` adapter built on it) the same stall reaches
@@ -789,8 +789,8 @@ the pump reconnects 200 ms later, but while it persists it can deliver nothing f
 ended, until their leases are handed back: nothing restarts the pump, so the queue's next heartbeat releases
 them (an ordered unit once no key is in a handler) and another instance, or a live pump here, takes them over,
 redelivering what was not acknowledged. Alert on it staying above zero. With no live pump left the instance
-acquires nothing, and its shards stay unowned until the `ShardRuntime` restarts. The log carries at most one ERROR a minute per queue for
-`pumpFailures` (naming one shard), at most one WARN a minute per subscription for `batchedReadFailures`
+acquires nothing, and its shards stay unowned until the `ShardRuntime` restarts. The log carries at most one ERROR a minute per
+subscription for `pumpFailures` (naming one shard), at most one WARN a minute per subscription for `batchedReadFailures`
 (naming the queue and the shards it read for; one subscription per queue unless you `consume()` a queue twice
 in one process), at most one ERROR a minute per pump for `pumpLoopFailures`, and one ERROR when a pump dies; every other failure at DEBUG, and an
 INFO on recovery. All four are readable only through `ShardOwnedQueue.metrics()`: a `PostgresqlMessageQueue`

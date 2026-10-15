@@ -129,7 +129,8 @@ public final class ShardOwnerMetrics {
      * leased. The heartbeat keeps renewing the lease, so no other instance takes the shard either, and
      * it delivers nothing until the cause clears. A failure caused by data (a trigger or constraint
      * refusing the takeover's dead-letter move) does not clear on its own. The ERROR log, at most one a
-     * minute per queue, names one shard and the cause and counts the others; every shard is logged at
+     * minute per subscription (these metrics: one per queue unless a queue has several), names one shard and
+     * the cause and counts the subscription's others; every shard is logged at
      * DEBUG, and this count is exact. Rises on a shard's first failed takeover and falls when the takeover
      * completes, or when the lease ends once the pump next reaches the database. A lease that ends while
      * the pump is reconnecting stays counted here until then. Meanwhile {@code unownedShards} shows the
@@ -156,14 +157,15 @@ public final class ShardOwnerMetrics {
      * whose reads or acknowledgements are permanently refused delivers nothing while this rises by up to about five a
      * second per failing shard, whatever the pump's pass rate - and,
      * like a stalled takeover, {@code QueueHealth.unownedShards()} cannot see it because the shard is leased. Alert on
-     * its rate. The ERROR log, at most one a minute per queue, names one shard and the cause; every failure is logged at
-     * DEBUG, and a shard whose pass succeeds again after failing gets an INFO. See {@code PumpFailures}.
+     * its rate. The ERROR log, at most one a minute per subscription (these metrics: one per queue unless a queue has
+     * several), names one shard and the cause; every failure is logged at DEBUG, and a shard whose pass succeeds again after
+     * failing gets an INFO. See {@code PumpFailures}.
      * <p>
      * Readable only through {@link ShardOwnedQueue#metrics()}. A {@code PostgresqlMessageQueue} keeps its metrics private
      * and no {@code QueueObserver} callback reports a failing pass (unlike {@link #shardsAwaitingTakeover}, which reaches
      * {@code QueueObserver.takeoverStalled}), so for a queue used through {@code MessageQueue} (the Spring starter, the
-     * {@code DurableQueues} adapter) the {@code ShardPump} ERROR log is the only signal: at most one a minute per queue,
-     * naming one shard.
+     * {@code DurableQueues} adapter) the {@code ShardPump} ERROR log is the only signal: at most one a minute per
+     * subscription, naming one shard.
      */
     public final LongAdder     pumpFailures                     = new LongAdder();
     /**
@@ -358,17 +360,19 @@ public final class ShardOwnerMetrics {
     final LongAdder blockedKeysSinceLastWarning = new LongAdder();
 
     /**
-     * Rate limit for the ERROR that reports a stalled takeover, per queue rather than per shard: what makes one shard's
-     * takeover fail usually makes them all fail. {@link ErrorWindow#NEVER_TAKEN} until the first, and again
-     * once no shard of the queue is awaiting its takeover. See {@code TakeoverStalls}.
+     * Rate limit for the ERROR that reports a stalled takeover, per subscription rather than per shard: what makes one
+     * shard's takeover fail usually makes them all fail. These metrics are one subscription's (one per queue unless a queue
+     * has several), and every pump serving the subscription shares this window. {@link ErrorWindow#NEVER_TAKEN} until the
+     * first, and again once no shard of the subscription is awaiting its takeover. See {@code TakeoverStalls}.
      */
     final java.util.concurrent.atomic.AtomicLong nextTakeoverStallErrorNanos =
             new java.util.concurrent.atomic.AtomicLong(ErrorWindow.NEVER_TAKEN);
 
     /**
-     * Rate limit for the ERROR that reports a failing delivery pass, per queue for the same reason as
-     * {@link #nextTakeoverStallErrorNanos}. {@link ErrorWindow#NEVER_TAKEN} until the first. See
-     * {@code PumpFailures}.
+     * Rate limit for the ERROR that reports a failing delivery pass, per subscription rather than per shard, for the same
+     * reason as {@link #nextTakeoverStallErrorNanos}: these metrics are one subscription's (one per queue unless a queue
+     * has several), and every pump serving the subscription shares this window. {@link ErrorWindow#NEVER_TAKEN} until
+     * the first. See {@code PumpFailures}.
      */
     final java.util.concurrent.atomic.AtomicLong nextPumpFailureErrorNanos =
             new java.util.concurrent.atomic.AtomicLong(ErrorWindow.NEVER_TAKEN);

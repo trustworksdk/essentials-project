@@ -39,7 +39,7 @@ import static org.awaitility.Awaitility.await;
  * {@link ShardPump#PUMP_RETRY_NANOS} later with the lease kept, so the shard is held and delivers nothing, and
  * {@code QueueHealth.unownedShards} cannot see it. It used to log a full stack trace at ERROR on every pass and count
  * nothing. Now every failure is counted in {@link ShardOwnerMetrics#pumpFailures} on the owner's metrics, and logged at
- * ERROR once a minute per queue at most, with DEBUG for the rest. Only the failing shard is paced; its siblings on the
+ * ERROR once a minute per subscription at most, with DEBUG for the rest. Only the failing shard is paced; its siblings on the
  * same pump are not.
  */
 class ShardPumpDeliveryFailureTest {
@@ -219,6 +219,45 @@ class ShardPumpDeliveryFailureTest {
         assertThat(idle.attentionAsked.get())
                 .as("the pump parks on its owners' deadlines once the retry is due, not every millisecond (ran %d ms)", ranForMillis)
                 .isLessThanOrEqualTo((int) (ranForMillis / retryMillis) + 3);
+    }
+
+    /**
+     * A selection check that threw once and then completes without throwing ends the shard's run of failures, although
+     * the shard, needing no attention, is not pumped. The run used to stay open until the shard was next pumped (or its
+     * lease ended), so a shard sitting idle after one throw had its next, unrelated throw - hours later, say - reported as
+     * the second failure in a row over the whole idle period, and its eventual recovery INFO claimed it had been failing
+     * all along.
+     */
+    @Test
+    void a_selection_check_that_threw_once_and_then_completes_ends_the_run_while_the_shard_is_idle() throws InterruptedException {
+        var metrics = new ShardOwnerMetrics();
+        var owner = new StubOwner((short) 7, 1, metrics, () -> new IllegalStateException("never thrown"), 0) {
+            final AtomicInteger asked = new AtomicInteger();
+
+            @Override
+            public boolean needsAttention() {
+                // Throws on the first and the sixth check, and needs no attention otherwise: never pumped
+                var check = asked.incrementAndGet();
+                if (check == 1 || check == 6) {
+                    throw new IllegalStateException("attention check broke");
+                }
+                return false;
+            }
+        };
+
+        runUntil(() -> owner.asked.get() >= 8, owner);
+
+        assertThat(owner.passes.get()).as("premise: never attentive, so never pumped").isZero();
+        assertThat(metrics.pumpFailures.sum()).isEqualTo(2);
+        var aboutShard = aboutShard(1);
+        assertThat(aboutShard.stream().map(ILoggingEvent::getLevel).toList())
+                .as("each throw is a run of its own, closed by the next check that completes")
+                .containsExactly(Level.ERROR, Level.INFO, Level.DEBUG, Level.INFO);
+        assertThat(aboutShard.get(0).getFormattedMessage()).contains("queue 7, unordered shard 1 threw while being selected")
+                                                           .contains("1 failed pass(es) in a row");
+        assertThat(aboutShard.get(1).getFormattedMessage()).contains("queue 7, unordered shard 1 passes its selection checks again after 1 failed pass(es)");
+        assertThat(aboutShard.get(2).getFormattedMessage()).as("not the second in a row: the checks completed in between")
+                                                           .contains("threw while being selected (failed pass 1 in a row)");
     }
 
     private void runUntil(Callable<Boolean> done, LeasedOwner... owners) throws InterruptedException {

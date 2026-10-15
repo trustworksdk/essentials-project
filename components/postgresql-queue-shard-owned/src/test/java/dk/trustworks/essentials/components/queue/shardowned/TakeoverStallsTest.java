@@ -33,7 +33,8 @@ import static org.assertj.core.api.Assertions.*;
 /**
  * A takeover that keeps failing is retried {@link ShardPump#TAKEOVER_RETRY_NANOS} after each failure, about five times
  * a second, while its shard stays leased and unserved. That state must be counted where {@code ShardOwnedQueue.metrics()}
- * sees it, and logged at ERROR once a minute at most per queue: not once per retry, and not once per shard.
+ * sees it, and logged at ERROR once a minute at most per subscription (one metrics object; one per queue unless a queue
+ * is consumed twice in one process): not once per retry, and not once per shard.
  */
 class TakeoverStallsTest {
 
@@ -124,11 +125,11 @@ class TakeoverStallsTest {
      * What makes a takeover fail is rarely one shard's: a trigger or constraint refusing the dead-letter move is
      * database-wide, and an {@code onTakeover} bug throws for every owner. After a crash or rebalance one instance takes
      * over dozens of shards at once, often on more than one pump. Throttled per shard, that logged a stack-trace ERROR for
-     * each of them, then one a minute for each. Throttled per queue (on the shared metrics), it is one ERROR a minute
-     * that names one shard and counts the others; {@code shardsAwaitingTakeover} stays exact.
+     * each of them, then one a minute for each. Throttled per subscription (on the shared metrics; here one per queue), it
+     * is one ERROR a minute that names one shard and counts the others; {@code shardsAwaitingTakeover} stays exact.
      */
     @Test
-    void shards_stalling_together_are_logged_at_error_once_a_minute_per_queue_not_once_per_shard() {
+    void shards_stalling_together_are_logged_at_error_once_a_minute_per_subscription_not_once_per_shard() {
         var metrics   = new ShardOwnerMetrics();
         var pumpZero  = new TakeoverStalls("pump-0", clock::get);
         var pumpOne   = new TakeoverStalls("pump-1", clock::get);
@@ -141,10 +142,12 @@ class TakeoverStallsTest {
         pumpZero.failed(second, "threw during its takeover", new IllegalStateException("broken"));
         pumpOne.failed(third, "threw during its takeover", new IllegalStateException("broken"));
         assertThat(metrics.shardsAwaitingTakeover.get()).as("still exact, per shard").isEqualTo(3);
-        assertThat(levels()).as("one ERROR for the queue, the others at DEBUG").containsExactly(Level.ERROR, Level.DEBUG, Level.DEBUG);
+        assertThat(levels()).as("one ERROR for the subscription, the others at DEBUG").containsExactly(Level.ERROR, Level.DEBUG, Level.DEBUG);
         assertThat(logged.list.getFirst().getFormattedMessage())
                 .contains("pump-0: queue 4, ordered shard 0 threw during its takeover")
-                .contains("0 other shard(s) on this queue are also awaiting their takeover");
+                .contains("0 other shard(s) of this subscription are also awaiting their takeover")
+                .as("the window the ERROR describes is the subscription's, not the queue's")
+                .contains("at ERROR at most once a minute per subscription (the consumer reading this shard)");
         assertThat(logged.list.get(1).getFormattedMessage())
                 .contains("pump-0: queue 4, ordered shard 1 threw during its takeover")
                 .contains("java.lang.IllegalStateException: broken");
@@ -159,7 +162,7 @@ class TakeoverStallsTest {
         }
         assertThat(levels().stream().filter(Level.ERROR::equals).count()).isEqualTo(1);
 
-        // A minute on, the first shard to retry gets the queue's one ERROR, counting the other two
+        // A minute on, the first shard to retry gets the subscription's one ERROR, counting the other two
         clock.set(start + ErrorWindow.EVERY_NANOS);
         var before = logged.list.size();
         pumpOne.failed(third, "threw during its takeover", new IllegalStateException("broken"));
@@ -169,10 +172,11 @@ class TakeoverStallsTest {
         assertThat(minuteLater.stream().map(ILoggingEvent::getLevel).toList()).containsExactly(Level.ERROR, Level.DEBUG, Level.DEBUG);
         assertThat(minuteLater.getFirst().getFormattedMessage())
                 .contains("pump-1: queue 4, unordered shard 2 has still not completed its takeover: 7 failed attempt(s) in 60 s")
-                .contains("2 other shard(s) on this queue are also awaiting their takeover");
+                .contains("2 other shard(s) of this subscription are also awaiting their takeover")
+                .contains("Logged at most once a minute per subscription (the consumer reading this shard)");
         assertThat(minuteLater.getFirst().getThrowableProxy()).as("the periodic ERROR carries the stack trace").isNotNull();
 
-        // Once no shard on the queue is stalled, the next stall is reported in full again
+        // Once no shard of the subscription is stalled, the next stall is reported in full again
         pumpZero.completed(first);
         pumpZero.completed(second);
         pumpOne.completed(third);
@@ -184,7 +188,35 @@ class TakeoverStallsTest {
     }
 
     /**
-     * The queue's last stall ending reopens the window, but between its count reaching zero and the reopen, a pump on
+     * A queue consumed twice in one process has two subscriptions, each with its own metrics object, so each has its own
+     * ERROR window and its own count of stalled shards: a stall in one neither takes the other's window nor counts in
+     * the other's ERROR. Pins what the docs say, "per subscription", rather than the "per queue" they used to say.
+     */
+    @Test
+    void two_subscriptions_on_one_queue_have_their_own_error_window_and_count() {
+        var firstSubscription  = new ShardOwnerMetrics();
+        var secondSubscription = new ShardOwnerMetrics();
+        var pump               = new TakeoverStalls("pump-0", clock::get);
+        var a                  = new StubOwner((short) 4, 0, firstSubscription);
+        var b                  = new StubOwner((short) 4, 1, firstSubscription);
+        var c                  = new StubOwner((short) 4, 2, secondSubscription);
+
+        pump.failed(a, "threw during its takeover", new IllegalStateException("broken"));
+        pump.failed(b, "threw during its takeover", new IllegalStateException("broken"));
+        pump.failed(c, "threw during its takeover", new IllegalStateException("broken"));
+
+        assertThat(levels()).as("an ERROR window per subscription, though both are queue 4")
+                            .containsExactly(Level.ERROR, Level.DEBUG, Level.ERROR);
+        assertThat(logged.list.get(2).getFormattedMessage())
+                .contains("queue 4, unordered shard 2 threw during its takeover")
+                .as("the second subscription's count leaves out the first's stalled shards")
+                .contains("0 other shard(s) of this subscription are also awaiting their takeover");
+        assertThat(firstSubscription.shardsAwaitingTakeover.get()).isEqualTo(2);
+        assertThat(secondSubscription.shardsAwaitingTakeover.get()).isEqualTo(1);
+    }
+
+    /**
+     * The subscription's last stall ending reopens the window, but between its count reaching zero and the reopen, a pump on
      * another thread can count a new stall and take the window for that stall's ERROR. Reopening unconditionally then
      * undid that take, and the new stall's next retry, {@link ShardPump#TAKEOVER_RETRY_NANOS} later, logged a second
      * stack-trace ERROR within the minute. The interleaving is forced by running the other pump's failure from inside the
@@ -196,7 +228,7 @@ class TakeoverStallsTest {
         var window  = metrics.nextTakeoverStallErrorNanos;
         var other   = new StubOwner((short) 4, 1, metrics);
         var pumpOne = new TakeoverStalls("pump-1", clock::get);
-        // The ending stall had the queue's ERROR more than a minute ago, so the window is open again by the clock
+        // The ending stall had the subscription's ERROR more than a minute ago, so the window is open again by the clock
         assertThat(ErrorWindow.take(window, clock.get())).isTrue();
         clock.addAndGet(ErrorWindow.EVERY_NANOS + TimeUnit.SECONDS.toNanos(1));
 
@@ -263,7 +295,7 @@ class TakeoverStallsTest {
         stalls.failed(first, "threw during its takeover", new IllegalStateException("broken"));
         stalls.failed(second, "threw during its takeover", new IllegalStateException("broken"));
         stalls.failed(third, "threw during its takeover", new IllegalStateException("broken"));
-        assertThat(metrics.shardsAwaitingTakeover.get()).as("per queue, across its shards").isEqualTo(3);
+        assertThat(metrics.shardsAwaitingTakeover.get()).as("per subscription, across its shards").isEqualTo(3);
 
         stalls.forget(first);
         assertThat(metrics.shardsAwaitingTakeover.get()).isEqualTo(2);

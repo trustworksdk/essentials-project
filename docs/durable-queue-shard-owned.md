@@ -861,7 +861,8 @@ number to alert on: zero in steady state, briefly non-zero while shards move, pe
 when messages are sitting in shards nobody reads. It cannot see a shard that is leased but not served:
 one whose takeover keeps failing on a healthy connection, which the pump retries without limit while it
 keeps the lease (`ShardPump.takeOver`). Each instance logs such shards at ERROR at most once a minute per
-queue, naming one and counting the others (every failed attempt at DEBUG), counts each in its
+subscription (one per queue unless the queue is consumed twice in one process), naming one and counting the
+subscription's others (every failed attempt at DEBUG), counts each in its
 `ShardOwnerMetrics.shardsAwaitingTakeover` (read through
 `ShardOwnedQueue.metrics()`; `PostgresqlMessageQueue` keeps its `ShardOwnerMetrics` private), and reports
 the stall starting and ending to `QueueObserver.takeoverStalled`, which reaches every observer on a

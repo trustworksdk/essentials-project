@@ -68,14 +68,14 @@ interface LeasedOwner {
      * dead-letter move, is database-wide: releasing the shard would only hand the same failure to the next
      * instance and move the shard back and forth between instances. A failing {@link #pumpOnce} is also retried
      * with the lease kept; it is counted in {@link ShardOwnerMetrics#pumpFailures} and logged at ERROR at most once a
-     * minute per queue (see {@link PumpFailures}), but it has no current-state count like the one below.
+     * minute per subscription (see {@link PumpFailures}), but it has no current-state count like the one below.
      * Because the shard is leased, {@code QueueHealth.unownedShards()} does not count it. The signal for a takeover is
      * {@link ShardOwnerMetrics#shardsAwaitingTakeover} on this owner's {@link #ownerMetrics()} (readable through
      * {@link ShardOwnedQueue#metrics()}; a {@code PostgresqlMessageQueue} keeps its metrics private, so through
      * {@code MessageQueue} it is the observer callback {@code QueueObserver.takeoverStalled}, published by
      * Micrometer as {@code essentials.queue.shards.awaiting.takeover}), together with
-     * {@link ShardOwnerMetrics#takeoverFailures} and an ERROR at most once a minute per queue, naming one stalled
-     * shard and counting the others (see {@link TakeoverStalls}). It clears when the takeover completes or the lease ends.
+     * {@link ShardOwnerMetrics#takeoverFailures} and an ERROR at most once a minute per subscription, naming one
+     * stalled shard and counting the others (see {@link TakeoverStalls}). It clears when the takeover completes or the lease ends.
      */
     void onTakeover(Connection connection) throws SQLException;
 

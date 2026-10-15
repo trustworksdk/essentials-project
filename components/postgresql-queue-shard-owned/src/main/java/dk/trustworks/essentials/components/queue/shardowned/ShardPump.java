@@ -430,28 +430,29 @@ final class ShardPump implements Runnable {
                             }
                             pumpRetryAtNanos.remove(owner);
                         }
+                        boolean selected;
                         try {
-                            if (!owner.leaseHeld()) {
-                                continue;
-                            }
-                            // BEFORE needsAttention, which consumes the shard's wake-up flag. Skipping
-                            // after it would swallow the signal and leave the shard waiting for the
-                            // backstop once delivery is permitted again.
-                            if (!owner.deliveryPermitted()) {
-                                continue;
-                            }
-                            // The wake-up was for one of this pump's shards, not all of them.
-                            if (!owner.needsAttention()) {
-                                continue;
-                            }
+                            // In this order, short-circuiting. deliveryPermitted BEFORE needsAttention, which consumes
+                            // the shard's wake-up flag: skipping after it would swallow the signal and leave the shard
+                            // waiting for the backstop once delivery is permitted again. And needsAttention because the
+                            // wake-up was for one of this pump's shards, not all of them.
+                            selected = owner.leaseHeld() && owner.deliveryPermitted() && owner.needsAttention();
                         } catch (RuntimeException | Error e) {
                             // The owner's own code, so the owner's own failure, guarded like pumpOnce below. Left to the
                             // outer catch it ended the pass before any owner was pumped and reconnected, rerunning every
                             // owner's takeover: one owner's bug stopped every shard on the pump for as long as it threw.
                             // Retried PUMP_RETRY_NANOS later; a critical error still ends the pump (run()).
                             Exceptions.rethrowIfCriticalError(e);
-                            pumpFailures.failed(owner, "threw while being selected", e);
+                            pumpFailures.selectionFailed(owner, e);
                             pumpRetryAtNanos.put(owner, System.nanoTime() + PUMP_RETRY_NANOS);
+                            continue;
+                        }
+                        // The checks completed without throwing, so a run of selection failures ends here, whether or
+                        // not they select the shard: an idle shard is not pumped, and its run used to stay open until it
+                        // was, so a throw hours later was reported as the next in a row. A run of failed passes is left
+                        // alone; only the pass succeeding ends that one, or a retry whose checks pass would end it.
+                        pumpFailures.selectionSucceeded(owner);
+                        if (!selected) {
                             continue;
                         }
                         attentive.add(owner);
@@ -627,6 +628,11 @@ final class ShardPump implements Runnable {
      * and is its own failure, as in the selection checks: escaping here, it ended every pass after the selection guard had
      * already caught the same throw. Charged only when the owner is not already waiting out a retry, so a lease check
      * that keeps throwing is counted once per retry, by whichever of the two asks first.
+     * <p>
+     * A lease check that completes here ends no run of selection failures: it is one check of three, and an owner waiting
+     * out a retry for a throwing {@code deliveryPermitted} or {@code needsAttention} would otherwise have its run cut on
+     * every pass, never counting past one. The run a throw here opens ends when the owner's selection checks next all
+     * complete, on the next pass.
      */
     private boolean stillLeased(LeasedOwner owner, Map<LeasedOwner, Long> pumpRetryAtNanos) {
         try {
@@ -634,7 +640,7 @@ final class ShardPump implements Runnable {
         } catch (RuntimeException | Error e) {
             Exceptions.rethrowIfCriticalError(e);
             if (!pumpRetryAtNanos.containsKey(owner)) {
-                pumpFailures.failed(owner, "threw while being selected", e);
+                pumpFailures.selectionFailed(owner, e);
                 pumpRetryAtNanos.put(owner, System.nanoTime() + PUMP_RETRY_NANOS);
             }
             return true;
@@ -704,7 +710,7 @@ final class ShardPump implements Runnable {
      * {@code essentials.queue.shards.awaiting.takeover}):
      * {@link TakeoverStalls} counts the shard there from its first failure until the takeover completes, tells the
      * observer at both ends, counts every failure in {@link ShardOwnerMetrics#takeoverFailures}, and logs at ERROR at
-     * most once a minute per queue, naming one shard and counting the others, and every failure at DEBUG.
+     * most once a minute per subscription, naming one shard and counting the others, and every failure at DEBUG.
      *
      * @return whether the takeover completed
      * @throws SQLException only when the connection itself is broken - the reconnect loop's case

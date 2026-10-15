@@ -34,8 +34,9 @@ package dk.trustworks.essentials.components.queue.shardowned.spi;
  * It does not see a shard that is leased but not served. An instance whose takeover of a shard keeps
  * failing on a healthy connection (say, a trigger or constraint refusing the takeover's dead-letter
  * move) keeps the lease and retries without limit, and the shard delivers nothing meanwhile. The
- * instance logs that at ERROR at most once a minute per queue, naming one stalled shard and counting the
- * others, and every failed attempt at DEBUG. It also counts the shard in {@code ShardOwnerMetrics.shardsAwaitingTakeover} (read through the
+ * instance logs that at ERROR at most once a minute per subscription (one per queue unless the queue is
+ * consumed twice in one process), naming one stalled shard and counting the others, and every failed attempt
+ * at DEBUG. It also counts the shard in {@code ShardOwnerMetrics.shardsAwaitingTakeover} (read through the
  * engine-level {@code ShardOwnedQueue.metrics()}) and reports it to {@link QueueObserver#takeoverStalled},
  * which reaches a {@link MessageQueue}'s observers; {@code MicrometerQueueObserver} publishes it as
  * {@code essentials.queue.shards.awaiting.takeover}, bound by the Spring starter to every queue, the

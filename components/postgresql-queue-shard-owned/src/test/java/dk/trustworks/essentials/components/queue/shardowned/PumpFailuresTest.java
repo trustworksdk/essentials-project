@@ -31,8 +31,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * A delivery pass that keeps failing is retried {@link ShardPump#PUMP_RETRY_NANOS} later with the shard's lease kept. Every failure must
- * be counted where {@code ShardOwnedQueue.metrics()} sees it, and logged at ERROR once a minute at most per queue: not
- * once per pass, and not once per shard.
+ * be counted where {@code ShardOwnedQueue.metrics()} sees it, and logged at ERROR once a minute at most per subscription
+ * (the owners' shared metrics; one per queue unless a queue is consumed twice in one process): not once per pass, and not
+ * once per shard.
  */
 class PumpFailuresTest {
 
@@ -111,10 +112,11 @@ class PumpFailuresTest {
 
     /**
      * What makes a pass fail is rarely one shard's: a revoked grant or a broken trigger fails every shard of the queue, on
-     * every pump serving it. One ERROR a minute for the queue, not one per shard.
+     * every pump serving it. One ERROR a minute for the subscription (here one per queue, each queue having one), not one
+     * per shard.
      */
     @Test
-    void shards_failing_together_are_logged_at_error_once_a_minute_per_queue() {
+    void shards_failing_together_are_logged_at_error_once_a_minute_per_subscription() {
         var metrics = new ShardOwnerMetrics();
         var other   = new ShardOwnerMetrics();
         var pumpZero = new PumpFailures("pump-0", clock::get);
@@ -128,7 +130,7 @@ class PumpFailuresTest {
         pumpZero.failed(second, "threw during delivery", new IllegalStateException("broken"));
         pumpOne.failed(third, "threw during delivery", new IllegalStateException("broken"));
         pumpOne.failed(elsewhere, "threw during delivery", new IllegalStateException("broken"));
-        assertThat(levels()).as("one ERROR per queue").containsExactly(Level.ERROR, Level.DEBUG, Level.DEBUG, Level.ERROR);
+        assertThat(levels()).as("one ERROR per subscription").containsExactly(Level.ERROR, Level.DEBUG, Level.DEBUG, Level.ERROR);
         assertThat(metrics.pumpFailures.sum()).isEqualTo(3);
         assertThat(other.pumpFailures.sum()).isEqualTo(1);
     }
@@ -147,6 +149,69 @@ class PumpFailuresTest {
 
         failures.failed(owner, "threw during delivery", new IllegalStateException("broken"));
         assertThat(logged.list.getLast().getFormattedMessage()).contains("(failed pass 1 in a row)");
+    }
+
+    /**
+     * A selection check that threw and then completes ends its run, whether or not the shard is then pumped. Left open
+     * until the shard was next pumped, an idle shard's run lasted until its next throw, hours later, which was then
+     * reported as the second in a row over those hours.
+     */
+    @Test
+    void a_selection_failure_run_ends_when_the_checks_next_complete() {
+        var metrics  = new ShardOwnerMetrics();
+        var owner    = new StubOwner((short) 3, 5, metrics);
+        var failures = new PumpFailures("pump-0", clock::get);
+
+        failures.selectionFailed(owner, new IllegalStateException("attention check broke"));
+        assertThat(levels()).containsExactly(Level.ERROR);
+        assertThat(logged.list.getLast().getFormattedMessage())
+                .contains("pump-0: queue 3, unordered shard 5 threw while being selected")
+                .contains("1 failed pass(es) in a row over 0 s")
+                .contains("at ERROR at most once a minute per subscription");
+
+        clock.addAndGet(200_000_000L);
+        failures.selectionSucceeded(owner);
+        assertThat(levels().getLast()).isEqualTo(Level.INFO);
+        assertThat(logged.list.getLast().getFormattedMessage())
+                .contains("pump-0: queue 3, unordered shard 5 passes its selection checks again after 1 failed pass(es) in 0 s");
+        var before = logged.list.size();
+        failures.selectionSucceeded(owner);
+        failures.succeeded(owner);
+        assertThat(logged.list).as("the run has ended: nothing more to report").hasSize(before);
+
+        // Idle for three hours, then an unrelated throw: a run of its own, not the second in a row over three hours
+        clock.addAndGet(TimeUnit.HOURS.toNanos(3));
+        failures.selectionFailed(owner, new IllegalStateException("another bug"));
+        assertThat(levels().getLast()).isEqualTo(Level.ERROR);
+        assertThat(logged.list.getLast().getFormattedMessage()).contains("1 failed pass(es) in a row over 0 s");
+        assertThat(metrics.pumpFailures.sum()).as("every throw still counted").isEqualTo(2);
+
+        failures.forget(owner);
+        failures.selectionSucceeded(owner);
+        assertThat(levels().getLast()).as("forgotten with the lease, so no recovery is reported").isEqualTo(Level.ERROR);
+    }
+
+    /**
+     * A failing pass's run is not ended by the selection checks completing: a retry's checks pass before its
+     * {@code pumpOnce} fails again, so ending the run there would count every failure as the first in a row.
+     */
+    @Test
+    void a_failing_pass_run_keeps_counting_across_passes_whose_selection_checks_complete() {
+        var metrics  = new ShardOwnerMetrics();
+        var owner    = new StubOwner((short) 3, 5, metrics);
+        var failures = new PumpFailures("pump-0", clock::get);
+
+        failures.failed(owner, "threw during delivery", new IllegalStateException("broken"));
+        for (var pass = 0; pass < 2; pass++) {
+            clock.addAndGet(200_000_000L);
+            failures.selectionSucceeded(owner);
+            failures.failed(owner, "threw during delivery", new IllegalStateException("broken"));
+        }
+        assertThat(levels()).containsExactly(Level.ERROR, Level.DEBUG, Level.DEBUG);
+        assertThat(logged.list.getLast().getFormattedMessage()).contains("(failed pass 3 in a row)");
+
+        failures.succeeded(owner);
+        assertThat(logged.list.getLast().getFormattedMessage()).contains("is delivering again after 3 failed pass(es) in 0 s");
     }
 
     /**
