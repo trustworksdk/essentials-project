@@ -59,6 +59,15 @@ class ShardOwnedDeadPumpHandBackIT {
      * Not {@link #QUEUE_ID}: the owner that kills the pump is no shard of the queue under test.
      */
     private static final short KILLER_QUEUE_ID = 99;
+    /**
+     * Refusals of one unit's release that show the heartbeat has run a whole tick with that release failing.
+     * <p>
+     * The heartbeat runs one tick at a time and hands back before it rebalances. So a unit's second refused release comes
+     * from a later tick than its first, after the first tick's rebalance, which is where a failed release used to let a unit
+     * be taken again. A fixed sleep proved neither that the hand-back had been attempted nor, on a loaded build, that a
+     * tick had run at all.
+     */
+    private static final int REFUSALS_SPANNING_A_TICK = 2;
 
     @Container
     static PostgreSQLContainer postgres = LabPostgres.create();
@@ -342,19 +351,21 @@ class ShardOwnedDeadPumpHandBackIT {
                 var fencesBefore = fences("ordered", doomedUnits);
                 assertThat(doomedUnits.size()).as("premise: the dead pump serves other units too").isGreaterThan(1);
 
+                var idleUnits = doomedUnits.stream().filter(candidate -> candidate != unit).toList();
+
                 failLeaseReleases("ordered", true);
                 try {
                     kill(doomed);
 
-                    // Several heartbeats (a third of the 1 s lease each), every hand-back failing.
-                    Thread.sleep(1_500);
+                    awaitReleasesRefused(idleUnits, "while the key is in its handler");
+                    assertThat(releasesRefused(unit)).as("premise: the unit with a key in its handler is not handed back yet").isZero();
                     assertNoneTakenAgain(queue, doomedUnits, fencesBefore, "while the key is in its handler");
                     assertThat(queue.metrics().shardsReleased.sum()).as("premise: no hand-back has succeeded").isZero();
 
                     release.countDown();
                     Awaitility.await().atMost(Duration.ofSeconds(10)).until(() -> delivered.contains("HOLD-0"));
-                    // The held unit is now ready to be handed back too, and its release fails like the others'.
-                    Thread.sleep(1_500);
+                    // The held unit is now ready to be handed back too, and its release is refused like the others'.
+                    awaitReleasesRefused(List.of(unit), "once the key has left its handler");
                     assertNoneTakenAgain(queue, doomedUnits, fencesBefore, "once the key has left its handler");
                 } finally {
                     failLeaseReleases("ordered", false);
@@ -504,12 +515,17 @@ class ShardOwnedDeadPumpHandBackIT {
                 try {
                     kill(doomed);
 
-                    // Several heartbeats (a third of the 1 s lease each), every hand-back failing, sampled throughout.
-                    var until = System.nanoTime() + Duration.ofMillis(1_500).toNanos();
-                    while (System.nanoTime() < until) {
+                    // Sampled throughout, until every dead shard's hand-back has been refused often enough to have been followed by
+                    // a rebalance (awaitReleasesRefused says why), and once more after.
+                    var deadline = System.nanoTime() + Duration.ofSeconds(20).toNanos();
+                    while (!releasesRefusedOftenEnough(deadShards)) {
+                        assertThat(System.nanoTime() < deadline).as("every dead shard's release refused %d times within 20 s; refused so far: %s",
+                                                                    REFUSALS_SPANNING_A_TICK, refusals(deadShards))
+                                                                .isTrue();
                         assertThat(unitsLeasedTo("unordered", "fair-first")).as("never more lease rows than the fair share").hasSizeLessThanOrEqualTo(fairShare);
                         Thread.sleep(50);
                     }
+                    assertThat(unitsLeasedTo("unordered", "fair-first")).as("never more lease rows than the fair share").hasSizeLessThanOrEqualTo(fairShare);
                     for (var shard : deadShards) {
                         assertThat(ownerOf("unordered", shard)).as("shard %d still leased: its release failed", shard).isEqualTo("fair-first");
                         assertThat(fenceOf("unordered", shard)).as("shard %d not taken again", shard).isEqualTo(fencesBefore.get(shard));
@@ -637,20 +653,78 @@ class ShardOwnedDeadPumpHandBackIT {
     /**
      * Make every release of a lease row on {@code lane} fail, as a database error would, or stop doing so. A trigger rather
      * than a revoked grant: the test's role owns the table, and an owner keeps every privilege.
+     * <p>
+     * Each refusal is counted per unit ({@link #releasesRefused}), so a test can show the injection worked: that a release
+     * was attempted and refused, not merely that nothing was released. The counters are sequences because the refusal rolls
+     * back its transaction, and a {@code nextval} is the one write a rollback does not undo. The trigger runs once per
+     * statement, after its rows, so it counts every unit of a release of several, not just the first it reached.
      */
     private void failLeaseReleases(String lane, boolean fail) throws Exception {
         try (var connection = dataSource.getConnection(); var statement = connection.createStatement()) {
             if (fail) {
-                statement.execute("CREATE OR REPLACE FUNCTION fail_lease_release() RETURNS trigger AS $$ BEGIN "
-                                          + "IF NEW.lane = TG_ARGV[0] AND NEW.owner IS NULL AND OLD.owner IS NOT NULL THEN "
-                                          + "RAISE EXCEPTION 'simulated failure releasing % unit %', NEW.lane, OLD.shard; END IF; "
-                                          + "RETURN NEW; END $$ LANGUAGE plpgsql");
-                statement.execute("CREATE TRIGGER fail_lease_release BEFORE UPDATE ON " + ShardOwnedSchema.LEASE_TABLE
-                                          + " FOR EACH ROW EXECUTE FUNCTION fail_lease_release('" + lane + "')");
+                statement.execute(refusalCounters("DROP SEQUENCE IF EXISTS lease_release_refusals_%s"));
+                statement.execute(refusalCounters("CREATE SEQUENCE lease_release_refusals_%s"));
+                statement.execute("CREATE OR REPLACE FUNCTION fail_lease_release() RETURNS trigger AS $$ "
+                                          + "DECLARE released record; refused int := 0; BEGIN "
+                                          + "FOR released IN SELECT n.shard FROM refused_new n JOIN refused_old o USING (queue_id, lane, shard) "
+                                          + "WHERE n.lane = TG_ARGV[0] AND n.owner IS NULL AND o.owner IS NOT NULL LOOP "
+                                          + "PERFORM nextval(format('lease_release_refusals_%s', released.shard)::regclass); "
+                                          + "refused := refused + 1; END LOOP; "
+                                          + "IF refused > 0 THEN RAISE EXCEPTION 'simulated failure releasing % % unit(s)', refused, TG_ARGV[0]; END IF; "
+                                          + "RETURN NULL; END $$ LANGUAGE plpgsql");
+                statement.execute("CREATE TRIGGER fail_lease_release AFTER UPDATE ON " + ShardOwnedSchema.LEASE_TABLE
+                                          + " REFERENCING OLD TABLE AS refused_old NEW TABLE AS refused_new"
+                                          + " FOR EACH STATEMENT EXECUTE FUNCTION fail_lease_release('" + lane + "')");
             } else {
+                // The trigger first: dropping it waits for a release still running it, so no refusal counts on a dropped sequence.
                 statement.execute("DROP TRIGGER IF EXISTS fail_lease_release ON " + ShardOwnedSchema.LEASE_TABLE);
+                statement.execute(refusalCounters("DROP SEQUENCE IF EXISTS lease_release_refusals_%s"));
             }
         }
+    }
+
+    /**
+     * {@code statementPerUnit} run for every unit either lane can have here, the ordered lane's being the larger space.
+     */
+    private static String refusalCounters(String statementPerUnit) {
+        return "DO $$ BEGIN FOR unit IN 0.." + (ShardOwnedSchema.ORDERED_UNITS - 1) + " LOOP "
+                + "EXECUTE format('" + statementPerUnit + "', unit); END LOOP; END $$";
+    }
+
+    /**
+     * How many releases of {@code unit} {@link #failLeaseReleases} has refused since it was last turned on.
+     */
+    private long releasesRefused(int unit) throws Exception {
+        try (var connection = dataSource.getConnection(); var statement = connection.createStatement();
+             var resultSet = statement.executeQuery("SELECT CASE WHEN is_called THEN last_value ELSE 0 END FROM lease_release_refusals_" + unit)) {
+            resultSet.next();
+            return resultSet.getLong(1);
+        }
+    }
+
+    /**
+     * {@link #releasesRefused} for each of {@code units}, by unit.
+     */
+    private Map<Integer, Long> refusals(List<Integer> units) throws Exception {
+        var refusals = new TreeMap<Integer, Long>();
+        for (var unit : units) {
+            refusals.put(unit, releasesRefused(unit));
+        }
+        return refusals;
+    }
+
+    private boolean releasesRefusedOftenEnough(List<Integer> units) throws Exception {
+        return refusals(units).values().stream().allMatch(refused -> refused >= REFUSALS_SPANNING_A_TICK);
+    }
+
+    /**
+     * Wait until the release of every unit in {@code units} has been attempted and refused often enough that a whole
+     * heartbeat tick has run with it failing ({@link #REFUSALS_SPANNING_A_TICK}): the evidence that the injection worked.
+     */
+    private void awaitReleasesRefused(List<Integer> units, String when) {
+        Awaitility.await("the release of units " + units + " refused " + REFUSALS_SPANNING_A_TICK + " times " + when)
+                  .atMost(Duration.ofSeconds(20))
+                  .until(() -> releasesRefusedOftenEnough(units));
     }
 
     /**
@@ -676,7 +750,8 @@ class ShardOwnedDeadPumpHandBackIT {
 
     /**
      * Every unit of the dead pump still leased to the instance under the fence it had at the death, and still counted on
-     * the dead pump: its hand-back has failed (the injection worked), and nothing took it again.
+     * the dead pump: nothing took it again. On its own this does not show a hand-back was attempted - a unit nobody tried
+     * to release looks the same - so call it after {@link #awaitReleasesRefused}, which does.
      */
     private void assertNoneTakenAgain(ShardOwnedQueue queue, List<Integer> units, Map<Integer, Long> fencesBefore, String when) throws Exception {
         for (var unit : units) {
