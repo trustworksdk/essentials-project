@@ -270,6 +270,68 @@ class ShardPumpDeliveryFailureTest {
         assertThat(aboutBatch.getLast().getFormattedMessage()).contains("java.sql.SQLException: permission denied");
     }
 
+    /**
+     * A second {@code consume()} on the same queue in one process (warned about, not refused) gives its owners their own
+     * {@link ShardOwnerMetrics} on the same runtime, so one pump can serve owners of one queue id with two metrics objects.
+     * Grouped by queue id alone, their batched read was one statement whose failures were all charged - counter and WARN
+     * window - to whichever subscription's owner came first, and the other subscription's {@code batchedReadFailures}
+     * stayed at zero while its shards' batched read failed on every pass.
+     */
+    @Test
+    void a_failing_batched_read_is_charged_to_each_subscription_on_the_queue_not_to_the_first() throws InterruptedException {
+        var first       = new ShardOwnerMetrics();
+        var second      = new ShardOwnerMetrics();
+        var firstOwner  = new BatchStubOwner((short) 9, 0, first);
+        var firstOther  = new BatchStubOwner((short) 9, 1, first);
+        var secondOwner = new BatchStubOwner((short) 9, 2, second);
+        var secondOther = new BatchStubOwner((short) 9, 3, second);
+
+        runUntil(() -> firstOwner.passes.get() >= 5, firstOwner, secondOwner, firstOther, secondOther);
+
+        assertThat(first.batchedReadFailures.sum()).as("one failed batched read per pass for the first subscription")
+                                                   .isEqualTo(firstOwner.passes.get());
+        assertThat(second.batchedReadFailures.sum()).as("one failed batched read per pass for the second subscription")
+                                                    .isEqualTo(secondOwner.passes.get());
+        var warnings = logged.list.stream()
+                                  .filter(event -> event.getFormattedMessage().contains("batched read for queue 9"))
+                                  .filter(event -> event.getLevel() == Level.WARN)
+                                  .toList();
+        assertThat(warnings).as("each subscription takes its own WARN window").hasSize(2);
+        assertThat(first.pumpLoopFailures.sum() + second.pumpLoopFailures.sum()).isZero();
+    }
+
+    /**
+     * The batched read calls owner code - {@link BatchReadableOwner#batchReadCursor()}, {@code batchSweepDue()},
+     * {@code applyBatchRead(...)} - and its guard caught only {@code SQLException | RuntimeException}. A non-critical
+     * {@link Error} from one of them (an {@link AssertionError}) went to the pump's outer catch instead: the pass ended
+     * before any owner was pumped, the pump reconnected and reran every takeover, and failed again, so its shards
+     * delivered nothing. Now it is a failed batched read like any other, and the shards read for themselves.
+     */
+    @Test
+    void an_owner_whose_batch_read_hook_throws_a_non_critical_error_does_not_stop_the_pump() throws InterruptedException {
+        var metrics = new ShardOwnerMetrics();
+        var failing = new BatchStubOwner((short) 9, 0, metrics) {
+            @Override
+            public long batchReadCursor() {
+                throw new AssertionError("broken cursor");
+            }
+        };
+        var sibling = new BatchStubOwner((short) 9, 1, metrics);
+
+        runUntil(() -> failing.passes.get() >= 5 && sibling.passes.get() >= 5, failing, sibling);
+
+        assertThat(metrics.pumpLoopFailures.sum()).as("not a failed pass").isZero();
+        assertThat(metrics.batchedReadFailures.sum()).as("a failed batched read, every pass").isEqualTo(failing.passes.get());
+        assertThat(metrics.pumpFailures.sum()).as("the shards' own passes succeed").isZero();
+        assertThat(logged.list.stream()
+                              .filter(event -> event.getFormattedMessage().contains("batched read for queue 9"))
+                              .map(ILoggingEvent::getFormattedMessage)
+                              .toList())
+                .last()
+                .asString()
+                .contains("java.lang.AssertionError: broken cursor");
+    }
+
     private List<ILoggingEvent> aboutShard(int shard) {
         return logged.list.stream()
                           .filter(event -> event.getFormattedMessage().contains("shard " + shard + " "))
@@ -440,7 +502,7 @@ class ShardPumpDeliveryFailureTest {
      * An ordered-lane owner whose own passes succeed, so it is read for in batch whenever a sibling of its queue is
      * attentive in the same pass.
      */
-    private static final class BatchStubOwner extends StubOwner implements BatchReadableOwner {
+    private static class BatchStubOwner extends StubOwner implements BatchReadableOwner {
         final AtomicInteger batchesApplied = new AtomicInteger();
 
         BatchStubOwner(short queueId, int shard, ShardOwnerMetrics metrics) {

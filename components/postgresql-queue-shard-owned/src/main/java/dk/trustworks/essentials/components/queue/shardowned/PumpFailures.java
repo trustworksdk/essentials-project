@@ -47,7 +47,8 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * The ordered lane's <b>batched read</b> ({@link ShardPump}'s one statement per queue for two or more attentive shards,
  * issued before their passes) meets the same causes and is retried on the same passes, so it is reported here too: every
  * failure counted in {@link ShardOwnerMetrics#batchedReadFailures}, a WARN with the stack trace at most once a minute per
- * queue ({@link ShardOwnerMetrics#nextBatchedReadWarningNanos}), DEBUG otherwise, an INFO when the queue's batched read
+ * queue ({@link ShardOwnerMetrics#nextBatchedReadWarningNanos}; per subscription when a queue has several, see
+ * {@link BatchedRead}), DEBUG otherwise, an INFO when the queue's batched read
  * succeeds again. A WARN, not an ERROR: the shards then read for themselves, so the batched read failing stops nothing on
  * its own; when they cannot either, their own failures are the ERROR above. Before this a revoked grant on the ordered
  * lane still logged a stack trace on every pass, from the batched read, next to the throttled ERROR.
@@ -68,10 +69,10 @@ final class PumpFailures {
      */
     private final IdentityHashMap<LeasedOwner, Failing> failing             = new IdentityHashMap<>();
     /**
-     * By queue id: the ordered lane's batched read is one statement per queue, not per shard. At most one entry per queue
-     * this pump has batched for, dropped when the queue's batched read next succeeds.
+     * By {@link BatchedRead}: the ordered lane's batched read is one statement per queue and metrics object, not per shard.
+     * At most one entry per batch this pump has issued, dropped when that batch's read next succeeds.
      */
-    private final Map<Short, Failing>                   failingBatchedReads = new HashMap<>();
+    private final Map<BatchedRead, Failing>             failingBatchedReads = new HashMap<>();
 
     PumpFailures(String pumpName) {
         this(pumpName, System::nanoTime);
@@ -80,6 +81,32 @@ final class PumpFailures {
     PumpFailures(String pumpName, LongSupplier nanoTime) {
         this.pumpName = requireNonNull(pumpName, "No pumpName provided");
         this.nanoTime = requireNonNull(nanoTime, "No nanoTime provided");
+    }
+
+    /**
+     * One batched read: the owners of one queue that share one {@link ShardOwnerMetrics}. That is one subscription, so
+     * normally one per queue; a second {@code consume()} on the same queue in one process (warned about, not refused)
+     * gives its owners their own metrics, and grouping by queue id alone charged both subscriptions' failures to
+     * whichever came first. The metrics compare by IDENTITY, like {@link ShardPump}'s other per-metrics bookkeeping:
+     * they are one subscription's counters, not a value.
+     *
+     * @param queueId the queue the batched statement reads
+     * @param metrics the owners' shared {@link ShardOwnerMetrics}, never the pump's own
+     */
+    record BatchedRead(short queueId, ShardOwnerMetrics metrics) {
+        BatchedRead {
+            requireNonNull(metrics, "No metrics provided");
+        }
+
+        @Override
+        public boolean equals(Object other) {
+            return other instanceof BatchedRead that && queueId == that.queueId && metrics == that.metrics;
+        }
+
+        @Override
+        public int hashCode() {
+            return 31 * Short.hashCode(queueId) + System.identityHashCode(metrics);
+        }
     }
 
     private static final class Failing {
@@ -152,19 +179,20 @@ final class PumpFailures {
 
     /**
      * The ordered lane's batched read for a queue failed; its shards read for themselves this pass, and the pump tries the
-     * batched read again on the next pass whose attentive shards of the queue number two or more.
+     * batched read again on the next pass whose attentive shards of the batch number two or more.
      *
-     * @param queueId the queue the batched statement read
-     * @param metrics that queue's metrics: the owners' shared {@link ShardOwnerMetrics}, never the pump's own
-     * @param cause   the failure
+     * @param batch the batch whose statement failed; counted, and its WARN window taken, on {@link BatchedRead#metrics()}
+     * @param cause the failure
      */
-    void batchedReadFailed(short queueId, ShardOwnerMetrics metrics, Throwable cause) {
+    void batchedReadFailed(BatchedRead batch, Throwable cause) {
+        var queueId = batch.queueId();
+        var metrics = batch.metrics();
         metrics.batchedReadFailures.increment();
         var now     = nanoTime.getAsLong();
-        var current = failingBatchedReads.get(queueId);
+        var current = failingBatchedReads.get(batch);
         if (current == null) {
             current = new Failing(now);
-            failingBatchedReads.put(queueId, current);
+            failingBatchedReads.put(batch, current);
         } else {
             current.failures++;
         }
@@ -182,14 +210,14 @@ final class PumpFailures {
     }
 
     /**
-     * The ordered lane's batched read for a queue completed. A no-op unless it had been failing on this pump.
+     * The ordered lane's batched read for a batch completed. A no-op unless it had been failing on this pump.
      */
-    void batchedReadSucceeded(short queueId) {
-        var current = failingBatchedReads.remove(queueId);
+    void batchedReadSucceeded(BatchedRead batch) {
+        var current = failingBatchedReads.remove(batch);
         if (current == null) {
             return;
         }
         log.info("{}: batched read for queue {} succeeds again after {} failure(s) in {} s",
-                 pumpName, queueId, current.failures, TimeUnit.NANOSECONDS.toSeconds(nanoTime.getAsLong() - current.sinceNanos));
+                 pumpName, batch.queueId(), current.failures, TimeUnit.NANOSECONDS.toSeconds(nanoTime.getAsLong() - current.sinceNanos));
     }
 }

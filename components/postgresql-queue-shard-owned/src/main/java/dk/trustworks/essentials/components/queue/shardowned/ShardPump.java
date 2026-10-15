@@ -563,37 +563,51 @@ final class ShardPump implements Runnable {
      * in the process and its handle is bound to queue 0 for opening connections; binding that in a
      * batched statement queries a queue that does not exist and returns nothing, silently.
      * <p>
+     * <b>Grouped by metrics too.</b> A second {@code consume()} on the same queue in one process (warned about, not
+     * refused) gives its owners their own {@link ShardOwnerMetrics} on the same runtime. Grouped by queue id alone, the
+     * subscriptions shared one statement, and its count and its failures went to whichever subscription's owner came
+     * first. Each subscription now gets its own statement, counted on its own metrics.
+     * <p>
      * <b>Failure is not failure of the pass.</b> Owners are left without a batch and read for
      * themselves, exactly as before this existed. The batched read is tried again on the next pass, so a failure is
      * counted in {@link ShardOwnerMetrics#batchedReadFailures} and logged through {@link PumpFailures}: a WARN with the
-     * stack trace at most once a minute per queue, DEBUG otherwise.
+     * stack trace at most once a minute per queue (per subscription when a queue has several), DEBUG otherwise.
      */
     private void batchRead(Connection connection, List<LeasedOwner> attentive) {
-        var byQueue = new HashMap<Short, List<BatchReadableOwner>>();
+        var batches = new LinkedHashMap<PumpFailures.BatchedRead, List<BatchReadableOwner>>();
         for (var owner : attentive) {
             if (owner instanceof BatchReadableOwner readable) {
-                byQueue.computeIfAbsent(readable.queueId(), ignored -> new ArrayList<>()).add(readable);
+                batches.computeIfAbsent(new PumpFailures.BatchedRead(readable.queueId(), readable.ownerMetrics()),
+                                        ignored -> new ArrayList<>())
+                       .add(readable);
             }
         }
-        for (var entry : byQueue.entrySet()) {
+        for (var entry : batches.entrySet()) {
             if (entry.getValue().size() < 2) {
                 // One shard is not worth a wider statement, and zero is not worth one at all.
                 continue;
             }
+            var batch = entry.getKey();
             try {
-                batchReadQueue(connection, entry.getKey(), entry.getValue());
-                pumpFailures.batchedReadSucceeded(entry.getKey());
-            } catch (SQLException | RuntimeException e) {
+                batchReadQueue(connection, batch, entry.getValue());
+                pumpFailures.batchedReadSucceeded(batch);
+            } catch (SQLException | RuntimeException | Error e) {
+                // A non-critical Error too: the batched read calls owner code (batchReadCursor, batchSweepDue,
+                // applyBatchRead), and an AssertionError from it reached serve()'s outer catch, which ended the pass
+                // before any owner was pumped and reconnected, five times a second, for as long as it persisted. A
+                // critical one still ends the pump (run()), as from the pumpOnce and takeover guards.
+                //
                 // Counted and rate-limited (PumpFailures): it is tried again on every pass, and a stack trace per pass
-                // was a log flood beside the throttled pumpOnce ERROR. On the queue's metrics: every owner in the batch
-                // shares them.
-                pumpFailures.batchedReadFailed(entry.getKey(), entry.getValue().getFirst().ownerMetrics(), e);
+                // was a log flood beside the throttled pumpOnce ERROR. On the batch's own metrics: grouped by them.
+                Exceptions.rethrowIfCriticalError(e);
+                pumpFailures.batchedReadFailed(batch, e);
             }
         }
     }
 
-    private void batchReadQueue(Connection connection, short queueId, List<BatchReadableOwner> batchable)
+    private void batchReadQueue(Connection connection, PumpFailures.BatchedRead batch, List<BatchReadableOwner> batchable)
             throws SQLException {
+        var queueId  = batch.queueId();
         var shards   = new int[batchable.size()];
         var cursors  = new long[batchable.size()];
         var sweeping = new ArrayList<BatchReadableOwner>();
@@ -618,9 +632,9 @@ final class ShardPump implements Runnable {
         var nextVisible = storage.millisUntilNextVisibleByShard(connection, queueId,
                                                                 ShardOwnedSchema.ORDERED_TABLE, sweptShards);
         // On the OWNERS' metrics, not this pump's: the runtime builds its own counters, so counting
-        // here would be invisible to whoever calls queue.metrics(). Every owner in this batch shares
-        // one queue and therefore one metrics object.
-        batchable.get(0).ownerMetrics().orderedReadStatements.add(sweptShards.length > 0 ? 3 : 1);
+        // here would be invisible to whoever calls queue.metrics(). The batch is grouped by those
+        // metrics (batchRead), so every owner in it shares them.
+        batch.metrics().orderedReadStatements.add(sweptShards.length > 0 ? 3 : 1);
 
         var isSweeping = Collections.newSetFromMap(new IdentityHashMap<BatchReadableOwner, Boolean>());
         isSweeping.addAll(sweeping);
