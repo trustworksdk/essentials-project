@@ -132,10 +132,26 @@ public class SingleOperationTransactionDurableQueuesInterceptor implements Durab
      * its own and finished its work. The acknowledgement is then written with the flag cleared, as the consumer's own
      * would be (a connection pool may refuse an interrupted thread), and the flag is restored afterwards.
      * <p>
-     * Left to the consumer when the handler returned with the flag set while its consumer is stopping: it may not
-     * have finished its work, and the consumer hands the message back instead of acknowledging it. Acknowledging here
-     * would delete the message before the consumer could decide. Also left to the consumer when the operation does
-     * not know the consumer's state, as there a stop's interrupt cannot be told from any other.
+     * A handler that returned with the flag set while its consumer is stopping
+     * ({@link HandleQueuedMessage#isConsumerKnownToBeStopping()}) may have given up part-way through its work, so the
+     * whole delivery is undone: the unit of work is marked rollback-only, with an {@link InterruptedException} as its
+     * cause, discarding the writes the handler did make, and the message is left to the consumer, which hands it back
+     * for redelivery instead of acknowledging it. The next delivery then runs the handler from the start against none
+     * of its earlier writes - whole or nothing, as above. The unit of work is marked rather than failed, so the
+     * consumer does not classify the delivery as a handler failure: it is a plain hand-back, which can never
+     * dead-letter the message (it counts one redelivery attempt, as every hand-back does).
+     * <p>
+     * That rollback reaches only a handler run in this unit of work. A
+     * {@link UnitOfWorkBoundaryOwningQueuedMessageHandler} - every {@code EventProcessor} handler, whatever its
+     * {@code UnitOfWorkMode}, and an {@code Inbox} whose consumer is a {@code UnitOfWorkBoundaryOwningMessageConsumer},
+     * which between them cover every {@code UnitOfWorkMode.NONE} handler - is not wrapped here at all (see
+     * {@link #intercept(HandleQueuedMessage, InterceptorChain)}): whatever it committed before returning stays
+     * committed, its consumer still hands the message back, and the redelivery runs it again on top of its own partial
+     * writes. Such a handler must be idempotent across a partial run, not only across a whole one.
+     * <p>
+     * Left to the consumer as it is - no acknowledgement and no rollback, so the handler's writes commit - when the
+     * handler returned with the flag set and the operation does not know the consumer's state, as there a stop's
+     * interrupt cannot be told from any other.
      */
     private void acknowledgeWithHandler(HandleQueuedMessage operation, HandleAwareUnitOfWork unitOfWork) {
         var message = operation.getMessage();
@@ -146,16 +162,23 @@ public class SingleOperationTransactionDurableQueuesInterceptor implements Durab
             operation.acknowledgedWithHandler(durableQueues.acknowledgeMessageAsHandled(message.getId()));
             return;
         }
-        if (!operation.isConsumerKnownToBeStarted()) {
-            return;
-        }
-        var wasInterrupted = Thread.interrupted();
-        try {
-            operation.acknowledgedWithHandler(durableQueues.acknowledgeMessageAsHandled(message.getId()));
-        } finally {
-            if (wasInterrupted) {
-                Thread.currentThread().interrupt();
+        // Started is asked first: once a consumer stops being started it stays stopping, so a stop beginning between
+        // the two questions still lands in one of the two branches below
+        if (operation.isConsumerKnownToBeStarted()) {
+            var wasInterrupted = Thread.interrupted();
+            try {
+                operation.acknowledgedWithHandler(durableQueues.acknowledgeMessageAsHandled(message.getId()));
+            } finally {
+                if (wasInterrupted) {
+                    Thread.currentThread().interrupt();
+                }
             }
+        } else if (operation.isConsumerKnownToBeStopping()) {
+            // Marked, not thrown: the unit of work then rolls back when withUnitOfWork commits it, with no exception
+            // for the consumer to classify as a handler failure, and the consumer hands the message back on the
+            // interrupt flag, which is left set
+            unitOfWork.markAsRollbackOnly(new InterruptedException("The message handler returned while interrupted by its consumer stopping; it may not have " +
+                                                                           "finished its work, so its writes are rolled back and the message is redelivered"));
         }
     }
 

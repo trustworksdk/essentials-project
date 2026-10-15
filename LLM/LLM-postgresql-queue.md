@@ -125,8 +125,17 @@ handler exception: it uses a redelivery attempt and goes through the permanent-e
 `IllegalArgumentException` thrown by a `DurableQueuesInterceptor` on `AcknowledgeMessageAsHandled` - which now runs
 inside the handler's transaction - dead-letters the message on its first delivery. The acknowledgement stays
 separate, as before, for a handler that requests redelivery, one that marks its unit of work rollback-only (its
-message is still consumed), and `UnitOfWorkMode.NONE` handlers. A crash before the commit still redelivers, so
-handlers should stay idempotent.
+message is still consumed), and a handler that owns its unit-of-work boundary - every `EventProcessor` handler,
+whatever its `UnitOfWorkMode`, and an `Inbox` with a `UnitOfWorkBoundaryOwningMessageConsumer`, which between them
+cover every `UnitOfWorkMode.NONE` handler. A handler that returns with the interrupt flag set is acknowledged in its
+transaction only while its consumer is known to be started (it re-set the flag for a reason of its own). While its
+consumer is stopping it may have given up part-way, so its unit of work is marked rollback-only - its writes are
+discarded - and the consumer hands the message back for redelivery instead of acknowledging it; the rollback is not a
+handler failure, so it is never classified or dead-lettered (the hand-back counts one redelivery attempt). When the operation does not know the consumer's state, its writes commit and the message is left to the
+consumer unacknowledged. The rollback reaches only a handler run in the queue's own unit of work: a boundary-owning
+handler keeps whatever it committed before returning and is still handed back, so the redelivery runs it again on top
+of its own partial writes - it must be idempotent across a partial run. A crash before the commit still redelivers,
+so handlers should stay idempotent.
 
 An enqueue **outside** any `UnitOfWork` or Spring transaction commits on its own and is not undone by a later
 rollback of the caller's work - e.g. `Outbox.sendMessage` called before the business transaction starts. The first

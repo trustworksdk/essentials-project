@@ -207,11 +207,12 @@ abstract class PostgresqlDurableQueuesAcknowledgeWithHandlerIT {
      * Stopping a consumer interrupts its handler. A handler that catches the interrupt and returns normally with the
      * flag re-set has not necessarily finished its work, so its message is not acknowledged - neither inside its unit
      * of work nor by the consumer - but handed back for the next consumer, the hand-back counting one attempt. The
-     * handler did return normally, so its unit of work commits its writes; the redelivery may repeat them, as
-     * at-least-once delivery always allows.
+     * writes it did make are rolled back with its unit of work, so the redelivery starts from none of them rather than
+     * from half of them - and the rollback is not a handler failure: the redelivery policy allows no redeliveries, yet
+     * the message is not dead-lettered.
      */
     @Test
-    void a_handler_that_returns_while_interrupted_by_the_consumer_stopping_has_its_message_handed_back_not_acknowledged() {
+    void a_handler_that_returns_while_interrupted_by_the_consumer_stopping_has_its_writes_rolled_back_and_its_message_handed_back_not_acknowledged() {
         var acknowledgements = new AtomicInteger();
         durableQueues.addInterceptor(onAcknowledge(chain -> {
             acknowledgements.incrementAndGet();
@@ -247,13 +248,17 @@ abstract class PostgresqlDurableQueuesAcknowledgeWithHandlerIT {
                               assertThat(queued.getRedeliveryAttempts()).isEqualTo(1);
                           }));
         assertThat(acknowledgements.get()).as("not acknowledged").isZero();
-        assertThat(handlerWrites()).as("the handler returned normally, so its unit of work committed").isEqualTo(1);
+        assertThat(handlerWrites()).as("its partial writes rolled back with its unit of work").isZero();
         assertThat(durableQueues.getTotalDeadLetterMessagesQueuedFor(QUEUE)).isZero();
 
-        consumer = consume(message -> deliveries.incrementAndGet());
+        consumer = consume(message -> {
+            deliveries.incrementAndGet();
+            writeFromHandler(message);
+        });
         awaitQueueEmpty();
         assertThat(deliveries.get()).as("delivered again to the next consumer").isEqualTo(2);
         assertThat(acknowledgements.get()).as("acknowledged once, by the next consumer").isEqualTo(1);
+        assertThat(handlerWrites()).as("only the completed delivery's write").isEqualTo(1);
     }
 
     /**

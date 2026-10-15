@@ -74,7 +74,7 @@ class SingleOperationTransactionDurableQueuesInterceptorTest {
     }
 
     @Test
-    void a_handler_that_returns_while_interrupted_by_its_consumer_stopping_leaves_the_acknowledgement_to_the_consumer() {
+    void a_handler_that_returns_while_interrupted_by_its_consumer_stopping_has_its_writes_rolled_back_and_leaves_the_message_to_the_consumer() {
         var consumerStarted = new AtomicBoolean(true);
         var operation       = handleQueuedMessage(consumerStarted::get);
 
@@ -87,6 +87,36 @@ class SingleOperationTransactionDurableQueuesInterceptorTest {
 
         assertThat(operation.getAcknowledgedWithHandler()).as("the consumer hands the message back").isNull();
         verify(durableQueues, never()).acknowledgeMessageAsHandled(any(QueueEntryId.class));
+        verify(unitOfWork).markAsRollbackOnly(any(InterruptedException.class));
+        assertThat(Thread.currentThread().isInterrupted()).as("the consumer still sees the stop's interrupt").isTrue();
+    }
+
+    @Test
+    void a_stop_beginning_after_the_started_check_still_lands_in_the_started_branch() {
+        // The consumer is started when the interceptor first asks, and stopping from then on. Started is asked first, so
+        // the answer is "started": acknowledged. Asked the other way round, the operation would read "not stopping", then
+        // "not started", and fall through to the unknown-state branch for a consumer whose state is known
+        var asked     = new AtomicInteger();
+        var operation = handleQueuedMessage(() -> asked.getAndIncrement() == 0);
+
+        interceptor.intercept(operation, handlerChain(() -> Thread.currentThread().interrupt()));
+
+        assertThat(operation.getAcknowledgedWithHandler()).as("acknowledged on the first answer, started").isTrue();
+        verify(durableQueues).acknowledgeMessageAsHandled(MESSAGE_ID);
+        verify(unitOfWork, never()).markAsRollbackOnly(any(Throwable.class));
+        assertThat(asked.get()).as("the consumer state is asked once").isEqualTo(1);
+    }
+
+    @Test
+    void a_handler_that_marked_its_unit_of_work_rollback_only_and_returns_while_interrupted_by_its_consumer_stopping_is_left_as_it_is() {
+        when(unitOfWork.status()).thenReturn(UnitOfWorkStatus.MarkedForRollbackOnly);
+        var operation = handleQueuedMessage(() -> false);
+
+        interceptor.intercept(operation, handlerChain(() -> Thread.currentThread().interrupt()));
+
+        assertThat(operation.getAcknowledgedWithHandler()).isNull();
+        verify(durableQueues, never()).acknowledgeMessageAsHandled(any(QueueEntryId.class));
+        verify(unitOfWork, never()).markAsRollbackOnly(any(Throwable.class));
     }
 
     @Test
@@ -104,18 +134,20 @@ class SingleOperationTransactionDurableQueuesInterceptorTest {
         assertThat(operation.getAcknowledgedWithHandler()).as("acknowledged in the handler's transaction, committing with its writes").isTrue();
         verify(durableQueues).acknowledgeMessageAsHandled(MESSAGE_ID);
         assertThat(flagDuringAckRef.get()).as("the acknowledgement is written with the interrupt flag cleared").isFalse();
+        verify(unitOfWork, never()).markAsRollbackOnly(any(Throwable.class));
         assertThat(Thread.currentThread().isInterrupted()).as("the handler's interrupt flag is restored afterwards").isTrue();
     }
 
     @Test
     void a_handler_that_returns_while_interrupted_when_the_consumer_state_is_unknown_leaves_the_acknowledgement_to_the_consumer() {
-        // Built without a consumer state, as the shard-owned adapter does
+        // Built without a consumer state, e.g. by hand
         var operation = handleQueuedMessage(null);
 
         interceptor.intercept(operation, handlerChain(() -> Thread.currentThread().interrupt()));
 
         assertThat(operation.getAcknowledgedWithHandler()).as("cannot tell a stop's interrupt from any other: the consumer decides").isNull();
         verify(durableQueues, never()).acknowledgeMessageAsHandled(any(QueueEntryId.class));
+        verify(unitOfWork, never()).markAsRollbackOnly(any(Throwable.class));
     }
 
     @Test

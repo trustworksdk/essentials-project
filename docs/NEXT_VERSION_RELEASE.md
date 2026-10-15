@@ -88,12 +88,25 @@ is handed back the same way, with an `InterruptedException` saying so as its las
 `Handler returned while interrupted by ... consumer stopping; returning the message for redelivery instead of
 acknowledging it`. Before, PostgreSQL usually acknowledged it, deleting a message whose work may never have been done;
 MongoDB failed that acknowledgement on the interrupted thread, so the message came back only after
-`messageHandlingTimeout`. A handler that returns with the flag set while its consumer is still running is acknowledged
-as before, on PostgreSQL inside the handler's own transaction (§1.1.16), with the flag cleared for that write and
-restored afterwards; so is one that returns with the flag clear while its consumer is stopping. This is narrower than the
-shard-owned engine's rule (`abandonedOnInterrupt`): that engine refuses to acknowledge on the interrupt flag alone,
-stopping or not, and charges no attempt, leaving the message to the next owner. Here the flag must be set *and* the
-consumer stopping, and the hand-back counts one redelivery attempt, as below.
+`messageHandlingTimeout`. On PostgreSQL, a handler run in the queue's own unit of work has the writes it made there
+rolled back with it, so the redelivery starts from none of them, not from the half a handler that gave up between two
+writes left behind: the delivery is undone whole, as the in-transaction acknowledgement (§1.1.16) promises. The
+rollback is not a handler failure, so it is never classified and cannot dead-letter the message.
+
+The rollback does not reach a handler that owns its unit-of-work boundary, as the queue then opens no unit of work
+around it: every `EventProcessor` handler, whatever its `UnitOfWorkMode`, and an `Inbox` whose consumer is a
+`UnitOfWorkBoundaryOwningMessageConsumer`, which between them cover every `UnitOfWorkMode.NONE` handler. What such a
+handler committed before returning stays committed, and its message is still handed back, so the redelivery runs it
+again on top of its own partial writes: it must be idempotent across a partial run, not only across a whole one.
+
+When the consumer's state is not known (an operation built without it, e.g. by hand) the interrupt cannot be told
+from any other: the handler's writes commit and the message is left to the consumer, as before. A handler that
+returns with the flag set while its consumer is still running is acknowledged as before, on PostgreSQL inside the
+handler's own transaction (§1.1.16), with the flag cleared for that write and restored afterwards; so is one that
+returns with the flag clear while its consumer is stopping. This is narrower than the shard-owned engine's rule
+(`abandonedOnInterrupt`): that engine refuses to acknowledge on the interrupt flag alone, stopping or not, and charges
+no attempt, leaving the message to the next owner. Here the flag must be set *and* the consumer stopping, and the
+hand-back counts one redelivery attempt, as below.
 
 What you may notice:
 
@@ -107,8 +120,10 @@ What you may notice:
 
 Commit `6ba568b5`. Pinned by `DurableQueuesIT.a_message_whose_handler_is_interrupted_by_the_consumer_stopping_is_redelivered_not_dead_lettered`
 (PostgreSQL traditional and centralized, both transactional variants, and MongoDB). The handler that returns
-while interrupted: commit `4f573f0d`, pinned by `PostgresqlDurableQueuesAcknowledgeWithHandlerIT.a_handler_that_returns_while_interrupted_by_the_consumer_stopping_has_its_message_handed_back_not_acknowledged`
-and the consumers' unit tests. The handler that re-sets the flag while its consumer runs is pinned by
+while interrupted: commit `4f573f0d`, its writes rolled back since F-200's fix, pinned by
+`PostgresqlDurableQueuesAcknowledgeWithHandlerIT.a_handler_that_returns_while_interrupted_by_the_consumer_stopping_has_its_writes_rolled_back_and_its_message_handed_back_not_acknowledged`,
+`SingleOperationTransactionDurableQueuesInterceptorTest` and the consumers' unit tests. The handler that re-sets the
+flag while its consumer runs is pinned by
 `PostgresqlDurableQueuesAcknowledgeWithHandlerIT.a_handler_that_returns_while_interrupted_while_its_consumer_is_running_is_acknowledged_in_its_unit_of_work`.
 
 #### 1.1.2 A public `is`-getter no longer adds a property to persisted JSON
@@ -390,9 +405,18 @@ benchmark). What changes:
   `require`) dead-letters the message on its first delivery, as it would from the handler.
 - **`beforeCommit` callbacks run after the acknowledgement**: event-store appends and in-transaction handlers. The
   queue row stays locked until the commit, and the stuck-message reset waits for it.
+- **A handler that returns with the interrupt flag set while its consumer is stopping has its writes rolled back**
+  and its message handed back unacknowledged (§1.1.1): it may have given up part-way, and committing what it did write
+  would make the redelivery start from half of its work. Not a handler failure, so never dead-lettered. When the
+  consumer's state is not known, its writes commit and the message is left to the consumer. Only a handler run in the
+  queue's own unit of work is rolled back: one that owns its unit-of-work boundary (every `EventProcessor` handler,
+  whatever its `UnitOfWorkMode`, and an `Inbox` with a `UnitOfWorkBoundaryOwningMessageConsumer`, which covers every
+  `UnitOfWorkMode.NONE` handler) keeps what it committed before returning and is still handed back, so it must be
+  idempotent across a partial run.
 
 What does not change: a handler that requests redelivery, one that marks its unit of work rollback-only (its message
-is still consumed) and `UnitOfWorkMode.NONE` handlers are acknowledged separately, as before. `MongoDurableQueues`
+is still consumed) and one that owns its unit-of-work boundary (`EventProcessor` handlers, a boundary-owning `Inbox`
+consumer, so every `UnitOfWorkMode.NONE` handler) are acknowledged separately, as before. `MongoDurableQueues`
 and the shard-owned engine are unchanged. A crash before the commit still redelivers, so handlers should stay
 idempotent. (`6949dcac`)
 
@@ -650,8 +674,8 @@ unaffected: the interface's `Instant` overloads still call its no-arg methods. (
   `HandleQueuedMessage.builder().setConsumerStarted(BooleanSupplier)`. Both consumers set it, so a
   `DurableQueuesInterceptor` on `HandleQueuedMessage` can tell a handler interrupted by its consumer stopping from one
   that re-set the interrupt flag for a reason of its own; `SingleOperationTransactionDurableQueuesInterceptor` uses it
-  to acknowledge the latter inside the handler's transaction (§1.1.1). An operation built with the existing
-  constructor, as the shard-owned adapter does, answers `false` to both.
+  to acknowledge the latter inside the handler's transaction, and to roll back the former's writes (§1.1.1). An
+  operation built with the existing constructor, as the shard-owned adapter does, answers `false` to both.
 - **`DefaultDurableQueueConsumer.getQueuePollingOptimizer()`**, and `SimpleQueuePollingOptimizer` implements
   `messageScheduledFor` and `queuePollingReturnedNoMessages(Instant)` (§3). (`6777b8b9`)
 - **Shard-owned engine: `spi.RedeliveryRequested(delay)`.** A handler throws it to ask for redelivery after `delay`
@@ -726,7 +750,7 @@ The plugin's features are in [§4](#4-the-essentials-claude-code-plugin).
 | Spring Boot starters | A missing `provided` library surfaced as a bare `NoClassDefFoundError` or `ClassNotFoundException` deep in bean creation. The startup failure report now names the Maven coordinates to add: jdbi3-core/postgres, the PostgreSQL driver, kotlin-stdlib/kotlin-reflect, Spring Data MongoDB, spring-boot-starter-jdbc, Jackson 3, objenesis and reactor-core | SB-2, `e26d0459` |
 | `immutable-jackson3` | With `immutable-jackson3` on the classpath but no `org.objenesis:objenesis`, an application started and wrote, then every read failed with `NoClassDefFoundError`. Creating the persistence mapper now throws an `IllegalStateException` naming the dependency. Objenesis stays `provided` | SB-2, N-5, `e26d0459` |
 | Durable queues (MongoDB) | Handing such a message back on an interrupted thread used to fail silently: the MongoDB driver refuses a connection on an interrupted thread (`Interrupted waiting for lock`), the failure was logged at DEBUG, and the message stayed marked as being delivered until the stuck-message reset. The hand-back now clears the interrupt flag for its write and restores it afterwards. A manual redelivery request, a retry or a dead-letter mark failed the same way, as did the acknowledgement of a handler that re-set the flag while its consumer was still running. The consumer now makes all of these writes with the flag cleared and restored. A handler that caught the stop's interrupt, re-set the flag (as Kafka does) and returned normally is not acknowledged at all: it may not have finished its work, so its message is handed back for immediate redelivery (§1.1.1) instead of coming back after `messageHandlingTimeout` | `6ba568b5`, `0a40069f`, `4f573f0d` |
-| Durable queues (PostgreSQL) | The writes that end a delivery (acknowledgement, manual redelivery request, retry, dead-letter mark, and handing back a message whose handler the consumer's stop interrupted) ran with whatever interrupt flag the handler left set. Where taking a connection has to wait, that write could be refused: HikariCP, with every pooled connection in use, rejects an interrupted thread with `Interrupted during connection acquisition`, and the message then stayed marked as being delivered until `messageHandlingTimeout`. Both consumers, the centralized fetcher (the default) and the per-consumer path (`setUseCentralizedMessageFetcher(false)`), now make these writes with the flag cleared and restore it afterwards. A handler that caught the stop's interrupt, re-set the flag (as Kafka does) and returned normally is no longer acknowledged, neither by the consumer nor inside its own transaction: it may not have finished its work, and acknowledging deleted a message that was never processed. Its message is handed back for immediate redelivery instead (§1.1.1) | `6ba568b5`, `0a40069f`, `4f573f0d` |
+| Durable queues (PostgreSQL) | The writes that end a delivery (acknowledgement, manual redelivery request, retry, dead-letter mark, and handing back a message whose handler the consumer's stop interrupted) ran with whatever interrupt flag the handler left set. Where taking a connection has to wait, that write could be refused: HikariCP, with every pooled connection in use, rejects an interrupted thread with `Interrupted during connection acquisition`, and the message then stayed marked as being delivered until `messageHandlingTimeout`. Both consumers, the centralized fetcher (the default) and the per-consumer path (`setUseCentralizedMessageFetcher(false)`), now make these writes with the flag cleared and restore it afterwards. A handler that caught the stop's interrupt, re-set the flag (as Kafka does) and returned normally is no longer acknowledged, neither by the consumer nor inside its own transaction: it may not have finished its work, and acknowledging deleted a message that was never processed. Its message is handed back for immediate redelivery instead, and the writes it made in the queue's own unit of work are rolled back; a handler that owns its unit-of-work boundary (`EventProcessor`, a boundary-owning `Inbox` consumer) keeps what it committed (§1.1.1) | `6ba568b5`, `0a40069f`, `4f573f0d` |
 | Command bus | A `sendAndDontWait` handler that wrote in its UnitOfWork and then threw had those writes committed whenever the `SendAndDontWaitErrorHandler` did not rethrow: the default on a plain `LocalCommandBus` (`FallbackSendAndDontWaitErrorHandler`), or a custom handler on `DurableLocalCommandBus`. The writes are now rolled back before the error handler runs; see [§1.1.12](#1112-a-failed-sendanddontwait-handlers-writes-roll-back-the-error-handler-runs-afterwards) | `f722edb8` |
 | `ViewEventProcessor` | When the fenced lock was released while the lock-acquired callback was still starting up (for example, the lock manager stopping at that moment), the release callback threw a `NullPointerException`. It never cancelled the exclusive durable-queue consumer or stopped the subscriptions created right after, so a processor that had lost its lock kept consuming. The two callbacks are now mutually exclusive, a release always cancels the consumer and stops the subscriptions that exist, and an acquire that fails part-way stops the subscriptions it created. Present since 0.60.0 | `72abb871` |
 | `MultiTableChangeListener` | A `start()` that ran while `stop()` was tearing down could leave the listener reporting `isStarted()` as `true` with nothing polling, until the next `stop()`/`start()`: `stop()` cleared its started flag before cancelling the poll task, so the racing `start()` found the old task, skipped scheduling, and the task was then cancelled. The teardown of the poll task now happens under the same lock as the flag | `1bfbe58d` |
