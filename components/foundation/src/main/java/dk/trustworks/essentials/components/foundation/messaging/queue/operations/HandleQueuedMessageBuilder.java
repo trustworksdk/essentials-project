@@ -34,7 +34,7 @@ public final class HandleQueuedMessageBuilder {
     private QueuedMessageHandler messageHandler;
     /**
      * Live view of whether the consumer delivering the message is still started - see
-     * {@link HandleQueuedMessage#isConsumerKnownToBeStarted()}
+     * {@link HandleQueuedMessage#consumerState()}
      */
     private BooleanSupplier      consumerStarted;
 
@@ -60,9 +60,8 @@ public final class HandleQueuedMessageBuilder {
      * @param consumerStarted Live view of whether the consumer delivering the message is still started, typically
      *                        {@code consumer::isStarted}. It is read each time it is asked, not once, because the
      *                        consumer's {@code stop()} can begin while the handler runs. {@code null} (the default)
-     *                        when it is not known: the consumer is then neither known to be started nor known to be
-     *                        stopping - see {@link HandleQueuedMessage#isConsumerKnownToBeStarted()} and
-     *                        {@link HandleQueuedMessage#isConsumerKnownToBeStopping()}
+     *                        when it is not known: {@link HandleQueuedMessage#consumerState()} then answers
+     *                        {@link HandleQueuedMessage.ConsumerState#UNKNOWN}
      * @return this builder instance
      */
     public HandleQueuedMessageBuilder setConsumerStarted(BooleanSupplier consumerStarted) {

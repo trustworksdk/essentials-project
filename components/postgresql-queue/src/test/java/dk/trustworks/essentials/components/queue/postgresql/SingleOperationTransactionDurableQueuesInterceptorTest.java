@@ -92,19 +92,19 @@ class SingleOperationTransactionDurableQueuesInterceptorTest {
     }
 
     @Test
-    void a_stop_beginning_after_the_started_check_still_lands_in_the_started_branch() {
-        // The consumer is started when the interceptor first asks, and stopping from then on. Started is asked first, so
-        // the answer is "started": acknowledged. Asked the other way round, the operation would read "not stopping", then
-        // "not started", and fall through to the unknown-state branch for a consumer whose state is known
+    void a_consumer_restarting_while_its_state_is_read_is_judged_on_a_single_read() {
+        // The consumer is stopping when the interceptor first reads its state, and started again from then on - a stop
+        // followed by start(), so stopping is not monotonic. Two separate reads ("not started", then "not stopping")
+        // would fall through to the unknown-state branch for a consumer whose state is known; one read says "stopping"
         var asked     = new AtomicInteger();
-        var operation = handleQueuedMessage(() -> asked.getAndIncrement() == 0);
+        var operation = handleQueuedMessage(() -> asked.getAndIncrement() != 0);
 
         interceptor.intercept(operation, handlerChain(() -> Thread.currentThread().interrupt()));
 
-        assertThat(operation.getAcknowledgedWithHandler()).as("acknowledged on the first answer, started").isTrue();
-        verify(durableQueues).acknowledgeMessageAsHandled(MESSAGE_ID);
-        verify(unitOfWork, never()).markAsRollbackOnly(any(Throwable.class));
-        assertThat(asked.get()).as("the consumer state is asked once").isEqualTo(1);
+        assertThat(operation.getAcknowledgedWithHandler()).as("the consumer hands the message back").isNull();
+        verify(durableQueues, never()).acknowledgeMessageAsHandled(any(QueueEntryId.class));
+        verify(unitOfWork).markAsRollbackOnly(any(InterruptedException.class));
+        assertThat(asked.get()).as("the consumer state is read once").isEqualTo(1);
     }
 
     @Test

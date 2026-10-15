@@ -127,13 +127,13 @@ public class SingleOperationTransactionDurableQueuesInterceptor implements Durab
      * after every {@code messageHandlingTimeout}.
      * <p>
      * A handler that returned with the thread's interrupt flag set is acknowledged here only while its consumer is
-     * known to be started ({@link HandleQueuedMessage#isConsumerKnownToBeStarted()}): a consumer's {@code stop()}
+     * known to be started ({@link HandleQueuedMessage#consumerState()} is {@code STARTED}): a consumer's {@code stop()}
      * marks it as stopping before it interrupts its delivery threads, so that handler re-set the flag for a reason of
      * its own and finished its work. The acknowledgement is then written with the flag cleared, as the consumer's own
      * would be (a connection pool may refuse an interrupted thread), and the flag is restored afterwards.
      * <p>
      * A handler that returned with the flag set while its consumer is stopping
-     * ({@link HandleQueuedMessage#isConsumerKnownToBeStopping()}) may have given up part-way through its work, so the
+     * ({@code STOPPING}) may have given up part-way through its work, so the
      * whole delivery is undone: the unit of work is marked rollback-only, with an {@link InterruptedException} as its
      * cause, discarding the writes the handler did make, and the message is left to the consumer, which hands it back
      * for redelivery instead of acknowledging it. The next delivery then runs the handler from the start against none
@@ -150,8 +150,11 @@ public class SingleOperationTransactionDurableQueuesInterceptor implements Durab
      * writes. Such a handler must be idempotent across a partial run, not only across a whole one.
      * <p>
      * Left to the consumer as it is - no acknowledgement and no rollback, so the handler's writes commit - when the
-     * handler returned with the flag set and the operation does not know the consumer's state, as there a stop's
-     * interrupt cannot be told from any other.
+     * handler returned with the flag set and the operation does not know the consumer's state ({@code UNKNOWN}), as
+     * there a stop's interrupt cannot be told from any other.
+     * <p>
+     * The consumer's state is read once and the branch taken on that one answer: a consumer can stop, or be started
+     * again after a stop, while it is being asked, and two reads could then name neither state.
      */
     private void acknowledgeWithHandler(HandleQueuedMessage operation, HandleAwareUnitOfWork unitOfWork) {
         var message = operation.getMessage();
@@ -162,23 +165,25 @@ public class SingleOperationTransactionDurableQueuesInterceptor implements Durab
             operation.acknowledgedWithHandler(durableQueues.acknowledgeMessageAsHandled(message.getId()));
             return;
         }
-        // Started is asked first: once a consumer stops being started it stays stopping, so a stop beginning between
-        // the two questions still lands in one of the two branches below
-        if (operation.isConsumerKnownToBeStarted()) {
-            var wasInterrupted = Thread.interrupted();
-            try {
-                operation.acknowledgedWithHandler(durableQueues.acknowledgeMessageAsHandled(message.getId()));
-            } finally {
-                if (wasInterrupted) {
-                    Thread.currentThread().interrupt();
+        switch (operation.consumerState()) {
+            case STARTED -> {
+                var wasInterrupted = Thread.interrupted();
+                try {
+                    operation.acknowledgedWithHandler(durableQueues.acknowledgeMessageAsHandled(message.getId()));
+                } finally {
+                    if (wasInterrupted) {
+                        Thread.currentThread().interrupt();
+                    }
                 }
             }
-        } else if (operation.isConsumerKnownToBeStopping()) {
             // Marked, not thrown: the unit of work then rolls back when withUnitOfWork commits it, with no exception
             // for the consumer to classify as a handler failure, and the consumer hands the message back on the
             // interrupt flag, which is left set
-            unitOfWork.markAsRollbackOnly(new InterruptedException("The message handler returned while interrupted by its consumer stopping; it may not have " +
-                                                                           "finished its work, so its writes are rolled back and the message is redelivered"));
+            case STOPPING -> unitOfWork.markAsRollbackOnly(new InterruptedException("The message handler returned while interrupted by its consumer stopping; it may not " +
+                                                                                            "have finished its work, so its writes are rolled back and the message is redelivered"));
+            case UNKNOWN -> {
+                // A stop's interrupt cannot be told from any other: left to the consumer as it is
+            }
         }
     }
 
