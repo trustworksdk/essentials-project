@@ -304,7 +304,8 @@ class ShardOwnedDeadPumpHandBackIT {
                 } else {
                     queue.startConsuming((messageId, payload, payloadType) -> { }, settings, SHARD_COUNT);
                 }
-                assertThat(queue.isStarted()).as("the queue still starts, and keeps its membership row").isTrue();
+                assertThat(queue.isStarted()).as("the queue still starts").isTrue();
+                assertThat(membershipRows("dead-runtime-start")).as("the start registers the instance as a member").isOne();
                 assertThat(queue.shardsHeld()).isZero();
                 assertThat(queue.metrics().shardsAcquired.sum()).as("nothing acquired at start").isZero();
                 assertThat(unitsOwnedBy(lane, "dead-runtime-start")).isZero();
@@ -317,6 +318,7 @@ class ShardOwnedDeadPumpHandBackIT {
                 assertThat(queue.metrics().shardsAcquired.sum()).isZero();
                 assertThat(queue.metrics().shardsReleased.sum()).as("so nothing was handed back either").isZero();
                 assertThat(queue.metrics().shardsOnDeadPumps.get()).isZero();
+                assertThat(membershipRows("dead-runtime-start")).as("and the instance keeps its membership row through the heartbeats").isOne();
             } finally {
                 queue.stop();
             }
@@ -1088,6 +1090,22 @@ class ShardOwnedDeadPumpHandBackIT {
                     units.add(resultSet.getInt(1));
                 }
                 return units;
+            }
+        }
+    }
+
+    /**
+     * The rows {@code instanceId} has in {@link ShardOwnedSchema#INSTANCE_TABLE} for {@link #QUEUE_ID}: its cluster membership.
+     */
+    private int membershipRows(String instanceId) throws Exception {
+        try (var connection = dataSource.getConnection();
+             var statement = connection.prepareStatement("SELECT count(*) FROM " + ShardOwnedSchema.INSTANCE_TABLE
+                                                                 + " WHERE queue_id = ? AND instance_id = ?")) {
+            statement.setShort(1, QUEUE_ID);
+            statement.setString(2, instanceId);
+            try (var resultSet = statement.executeQuery()) {
+                resultSet.next();
+                return resultSet.getInt(1);
             }
         }
     }
