@@ -610,8 +610,10 @@ class ShardOwnedDeadPumpHandBackIT {
                     kill(doomed);
                     assertThat(queue.metrics().shardsOnDeadPumps.get()).as("premise: on the dead pump").isEqualTo(doomedUnits.size());
 
-                    failLeaseReleases("ordered", false);
+                    // The narrow refusal first: a heartbeat tick between the two would otherwise find no refusal in place
+                    // and hand the kept units back in one statement.
                     failMultiUnitOrderedReleases(true);
+                    failLeaseReleases("ordered", false);
                     Awaitility.await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
                         assertThat(unitsLeasedTo("ordered", null)).as("the shed released every unit it had finished with").containsAll(shed);
                         assertThat(queue.metrics().shardsOnDeadPumps.get()).as("those on the dead pump are no longer counted there")
