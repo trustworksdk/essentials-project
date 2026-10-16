@@ -459,8 +459,9 @@ healthy (typically a trigger or constraint refusing the takeover's dead-letter m
 retried every 200 ms with no limit and the lease is kept, so no other instance takes the shard and it
 delivers nothing until the cause is fixed — a data-caused failure does not clear on its own. Alert on it
 being above zero next to `unownedShards`; `takeoverFailures` counts the failed attempts. The engine logs
-at most one ERROR a minute per subscription (one per queue unless the queue is consumed twice in one process), with
-the cause, while any of its shards is stalled (a cause that fails one takeover usually fails them all), every failed attempt at DEBUG, and an INFO for each shard when it recovers.
+at most one ERROR a minute per subscription (one per queue unless the queue is consumed twice in one
+process), with the cause, while any of its shards is stalled (a cause that fails one takeover usually fails
+them all), every failed attempt at DEBUG, and an INFO for each shard when it recovers.
 **Where to read it:** `ShardOwnerMetrics` is exposed only by the engine-level `ShardOwnedQueue.metrics()`;
 `PostgresqlMessageQueue` keeps it private. Through `MessageQueue` — including the Spring starter and the
 `DurableQueues` adapter — the same stall reaches `QueueObserver.takeoverStalled(lane, shard, stalled)`

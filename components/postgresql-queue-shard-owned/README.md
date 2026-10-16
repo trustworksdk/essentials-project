@@ -770,12 +770,12 @@ limit and the lease is kept, so no other instance takes the shard and it deliver
 is fixed. `unownedShards` cannot see this, because the shard is leased: alert on this one being above zero
 next to it. `takeoverFailures` counts the failed attempts. The log carries at most one ERROR a minute per
 subscription (one per queue unless you `consume()` a queue twice in one process), with the cause, naming one
-stalled shard and counting the subscription's others (a cause that fails one takeover usually fails them all); every failed attempt is logged at DEBUG, and an INFO for each shard when it
-recovers. Only the engine-level `ShardOwnedQueue.metrics()` exposes
-these counters, since a `PostgresqlMessageQueue` keeps its `ShardOwnerMetrics` private. Through `MessageQueue`
-(and the Spring starter and the `DurableQueues` adapter built on it) the same stall reaches
-`QueueObserver.takeoverStalled`, once when it starts and once when it ends, which `MicrometerQueueObserver`
-publishes as `essentials.queue.shards.awaiting.takeover`.
+stalled shard and counting the subscription's others (a cause that fails one takeover usually fails them all);
+every failed attempt is logged at DEBUG, and an INFO for each shard when it recovers. Only the engine-level
+`ShardOwnedQueue.metrics()` exposes these counters, since a `PostgresqlMessageQueue` keeps its
+`ShardOwnerMetrics` private. Through `MessageQueue` (and the Spring starter and the `DurableQueues` adapter
+built on it) the same stall reaches `QueueObserver.takeoverStalled`, once when it starts and once when it
+ends, which `MicrometerQueueObserver` publishes as `essentials.queue.shards.awaiting.takeover`.
 
 **`ShardOwnerMetrics.pumpFailures`, `batchedReadFailures`, `pumpLoopFailures` and `shardsOnDeadPumps`.**
 Each covers a shard that is leased but delivers nothing for a reason other than a stalled takeover, which
