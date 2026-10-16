@@ -191,7 +191,9 @@ final class ShardPump implements Runnable {
     /**
      * Whether this pump's thread ended on a critical error while its runtime was running ({@link #run()}). A dead pump
      * serves nothing, and {@link ShardRuntime} routes new shards to the live ones. True only once every owner it held has
-     * been counted and ended - or ending it threw, which still leaves it counted ({@link #markDead()}).
+     * been counted and ended - or ending it threw, which still leaves it counted ({@link #markDead()}). The exception
+     * is rare: a throw while counting any owner (an {@code OutOfMemoryError}, say) leaves that owner uncounted and not
+     * ended ({@link #endOnDeadPump}).
      */
     boolean isDead() {
         return dead;
@@ -342,7 +344,8 @@ final class ShardPump implements Runnable {
      * lease back ({@link #run()} says why), and route new shards elsewhere ({@link #dead}).
      * <p>
      * {@link #dead} is set LAST, after every owner is counted and ended: {@link #isDead()} reads it without the lock, so
-     * whoever sees the pump dead also sees every owner it held counted in {@link ShardOwnerMetrics#shardsOnDeadPumps}.
+     * whoever sees the pump dead also sees every owner it held counted in {@link ShardOwnerMetrics#shardsOnDeadPumps}
+     * (bar any owner whose counting threw, below).
      * Set first, a reader could see the death with only part of the count. Nothing is lost by the owners being ended
      * before the flag: {@link #add} decides under the lock, and {@link ShardRuntime#onDeadPump} asks
      * {@link #awaitsHandBack} (under the lock) rather than {@link #isDead()}.
@@ -351,7 +354,7 @@ final class ShardPump implements Runnable {
      * likely. A throw from one owner is that owner's alone ({@link #endOnDeadPump}) - logged, not rethrown, even a critical
      * one, because the pump is already dying and {@link #run()} rethrows its death - so the owners after it are still
      * ended and counted. The same holds for anything {@link #endOnDeadPump} still throws - an {@code OutOfMemoryError}
-     * in its ERROR line, after the owner is counted, or, rarely, in counting it, which leaves that one owner uncounted:
+     * in its ERROR line, after the owner is counted, or, rarely, in counting it, which leaves that owner uncounted:
      * the throw is dropped here and the loop goes on, or the owners after it would stay leased and unserved,
      * uncounted, until a restart. And {@link #dead} is set in a {@code finally}:
      * left unset, the pump read as live, and {@link ShardRuntime#pumpFor} kept placing new shards on a pump that serves
@@ -363,9 +366,9 @@ final class ShardPump implements Runnable {
                 for (var owner : owners) {
                     try {
                         endOnDeadPump(owner);
-                    } catch (Throwable loggingFailed) {
+                    } catch (Throwable ignored) {
                         // Mostly endOnDeadPump's own ERROR line, after the owner was counted. Rarely counting it
-                        // (countedDead.add or the metric increment, an OutOfMemoryError say): that one owner is then
+                        // (countedDead.add or the metric increment, an OutOfMemoryError say): that owner is then
                         // not ended, and may be left uncounted and never handed back. Either way the loop goes on.
                         // Dropped, not logged: logging may be what just failed, and run() rethrows the pump's death.
                     }
@@ -391,6 +394,12 @@ final class ShardPump implements Runnable {
      * returned, not thrown: whether it propagates is the caller's choice ({@link #markDead()}, {@link #add}). What can
      * still throw out of here is that ERROR line, with the owner counted, or, rarely (an {@code OutOfMemoryError}),
      * counting it, before it is; {@link #markDead()} drops either.
+     * <p>
+     * Counting is two steps, and a throw between them leaves the two out of step. When {@code countedDead.add} throws,
+     * the owner is in neither: uncounted, not ended, and never handed back by this pump. When the add succeeds and the
+     * {@code shardsOnDeadPumps} increment throws, the owner awaits hand-back without having raised the metric, so
+     * {@link #handedBack} or {@link #forgetAfterExit()} later lowers it one below the true count. Swapping the two steps
+     * only moves the gap - a raised metric with no {@code countedDead} entry is never lowered - so the order is kept.
      *
      * @return what ending the owner threw, or {@code null}
      */
