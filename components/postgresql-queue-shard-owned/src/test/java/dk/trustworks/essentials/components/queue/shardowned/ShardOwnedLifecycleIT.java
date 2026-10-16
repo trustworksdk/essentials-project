@@ -22,16 +22,19 @@ import com.zaxxer.hikari.*;
 import dk.trustworks.essentials.components.queue.shardowned.spi.*;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.*;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.slf4j.LoggerFactory;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import java.nio.charset.StandardCharsets;
+import java.sql.SQLException;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
 
-import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.*;
 
 /**
  * {@link dk.trustworks.essentials.shared.Lifecycle} semantics, which the rest of this project's
@@ -425,6 +428,73 @@ class ShardOwnedLifecycleIT {
             assertThat(orderedUnitsOwnedBy("stop-mid-acquire-ordered")).as("no lease row names the stopped instance").isZero();
         } finally {
             ShardRuntime.releaseShared(dataSource);
+        }
+    }
+
+    /**
+     * A {@code start()} that fails after borrowing the runtime shared per {@code DataSource} gives the borrow back. The
+     * borrow comes before the start's acquire loop, which is where a database error lands, so a failed start that kept it
+     * left the shared runtime a borrower that never stops: its pumps, listener and connections were never closed. The test
+     * holds one borrow of its own, makes every lease acquire by the queue fail with a trigger, and then gives its borrow
+     * back: the last borrower closes the shared runtime, so it stops only if the failed start's borrow is gone.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"unordered", "ordered"})
+    void a_start_that_fails_after_borrowing_the_shared_runtime_gives_the_borrow_back(String lane) throws Exception {
+        var settings   = ShardOwnerSettings.defaults();
+        var instanceId = "failed-start-" + lane;
+        var held       = ShardRuntime.acquireShared(dataSource, settings);
+        var heldGiven  = false;
+        try {
+            failLeaseAcquiresBy(instanceId, true);
+            try {
+                var queue = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, instanceId);
+                assertThatThrownBy(() -> {
+                    if ("ordered".equals(lane)) {
+                        queue.startConsumingOrdered((messageId, key, payload, payloadType) -> { }, settings, SHARD_COUNT);
+                    } else {
+                        queue.startConsuming((messageId, payload, payloadType) -> { }, settings, SHARD_COUNT);
+                    }
+                }).isInstanceOf(IllegalStateException.class)
+                  .hasMessageStartingWith("Failed to start consuming shards for instance " + instanceId)
+                  .hasCauseInstanceOf(SQLException.class)
+                  .as("premise: the start failed in its acquire loop, where the trigger fires")
+                  .hasStackTraceContaining("simulated failure acquiring a lease");
+                assertThat(queue.isStarted()).isFalse();
+            } finally {
+                failLeaseAcquiresBy(instanceId, false);
+            }
+            assertThat(held.isStarted()).as("premise: the test's own borrow keeps the shared runtime running").isTrue();
+
+            ShardRuntime.releaseShared(dataSource);
+            heldGiven = true;
+
+            assertThat(held.isStarted()).as("the test's borrow was the last one: the failed start gave its borrow back").isFalse();
+        } finally {
+            if (!heldGiven) {
+                ShardRuntime.releaseShared(dataSource);
+            }
+            // Should the failed start have kept its borrow, the shared runtime must still not outlive the test.
+            held.stop();
+        }
+    }
+
+    /**
+     * Make every lease acquire by {@code instanceId} fail, as a database error would, or stop doing so. A trigger rather
+     * than a revoked grant: the test's role owns the table, and an owner keeps every privilege.
+     */
+    private void failLeaseAcquiresBy(String instanceId, boolean fail) throws Exception {
+        try (var connection = dataSource.getConnection(); var statement = connection.createStatement()) {
+            if (fail) {
+                statement.execute("CREATE OR REPLACE FUNCTION fail_lease_acquire() RETURNS trigger AS $$ BEGIN "
+                                          + "RAISE EXCEPTION 'simulated failure acquiring a lease on % unit %', NEW.lane, NEW.shard; "
+                                          + "END $$ LANGUAGE plpgsql");
+                statement.execute("CREATE TRIGGER fail_lease_acquire BEFORE UPDATE ON " + ShardOwnedSchema.LEASE_TABLE
+                                          + " FOR EACH ROW WHEN (OLD.owner IS NULL AND NEW.owner = '" + instanceId + "')"
+                                          + " EXECUTE FUNCTION fail_lease_acquire()");
+            } else {
+                statement.execute("DROP TRIGGER IF EXISTS fail_lease_acquire ON " + ShardOwnedSchema.LEASE_TABLE);
+            }
         }
     }
 
