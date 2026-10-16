@@ -408,7 +408,7 @@ So nothing a retry could cure ends a pump. An unchecked exception or a non-criti
 
 Keeping the shards was the earlier design, and it was the state this section warns about: leased to an instance that went on heartbeating, served by nobody until a restart — worse than a crash, whose shards are taken over a lease lifetime later. The reasons given for it were weighed. That the cause could kill the pump the shards went to: for a JVM-wide cause a re-acquired shard already goes to a live pump, and another instance is another JVM; a cause carried by the data — an `OutOfMemoryError` from reading one shard's oversized payloads — does follow the shard to its next pump or instance, and that is accepted, as it is after a crash, which hands the shard on the same way. That a release cannot be trusted after a `VirtualMachineError`: the release is the queue's, on its heartbeat thread, one statement bounded by this instance's ownership that changes no message.
 
-Both metrics are readable only through `ShardOwnedQueue.metrics()`. `PostgresqlMessageQueue` keeps its metrics private and no `QueueObserver` callback reports a dead pump, so through `MessageQueue` (the Spring starter, the `DurableQueues` adapter) the pump's ERROR line is the only signal of the death itself — unlike a stalled takeover, which reaches `QueueObserver.takeoverStalled`; the hand-back that follows reaches the observer as `shardOwnershipChanged`. Whether to add one is open: §18.3.
+Both metrics are readable only through `ShardOwnedQueue.metrics()`. `PostgresqlMessageQueue` keeps its metrics private and no `QueueObserver` callback reports a dead pump, so through `MessageQueue` (the Spring starter, the `DurableQueues` adapter) the pump's ERROR line is the only signal of the death itself — unlike a stalled takeover, which reaches `QueueObserver.takeoverStalled`; the hand-back that follows reaches the observer as `shardOwnershipChanged`. Not built, deliberately; the reopen trigger is in §18.3.
 
 ---
 
@@ -1428,8 +1428,8 @@ keeps its `ShardOwnerMetrics` private, and no observer callback reports either. 
 is reported by its ERROR line alone, while a stalled takeover reaches `QueueObserver.takeoverStalled`
 (published as `essentials.queue.shards.awaiting.takeover`). It matters less than it did: a dead pump's
 shards are now handed back to the cluster on the next heartbeat (§3), which the observer sees as
-`shardOwnershipChanged`, so the death costs a pump's worth of capacity rather than its shards. Open, not
-settled: a callback beside `takeoverStalled` plus its Micrometer gauge would close it, and it widens
+`shardOwnershipChanged`, so the death costs a pump's worth of capacity rather than its shards. Not
+built: a callback beside `takeoverStalled` plus its Micrometer gauge would close it, but it widens
 `QueueObserver` — every implementor's surface — for a state reached only on a `VirtualMachineError` or
 `LinkageError`, which usually takes more than one pump down with it.
 *Reopen when* a deployment on the starter or the adapter needs to alert on a dead pump without log
