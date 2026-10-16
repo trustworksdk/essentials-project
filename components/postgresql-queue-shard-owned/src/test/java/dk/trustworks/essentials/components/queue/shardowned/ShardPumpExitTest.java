@@ -527,12 +527,13 @@ class ShardPumpExitTest {
 
     /**
      * A dead pump ends its owners, so their queue hands the leases back rather than keeping them leased to this instance
-     * and served by nobody until a restart. An unordered owner's lease ends at once. An ordered owner drains instead: its
-     * handlers run on the shared executor, so a key may still be in one, and the ordered lane never ends a unit with a key
-     * in flight - its queue releases it once nothing is.
+     * and served by nobody until a restart. Each owner ends in memory and keeps its lease row ({@code ENDED_ROW_HELD}):
+     * the row is its queue's to release, so the pump releases none. An ordered owner also drains: its handlers run on the
+     * shared executor, so a key may still be in one, and the ordered lane never releases a unit with a key in flight - its
+     * queue releases it once nothing is.
      */
     @Test
-    void a_pump_that_dies_ends_its_unordered_owners_and_drains_its_ordered_ones() {
+    void a_pump_that_dies_ends_its_owners_keeping_their_lease_rows_and_drains_its_ordered_ones() {
         var metrics   = new ShardOwnerMetrics();
         var pump      = pump(new AtomicBoolean(true));
         var unordered = new StubOwner((short) 7, 1, metrics, Behaviour.SERVED);
@@ -543,8 +544,13 @@ class ShardPumpExitTest {
 
         assertThatThrownBy(pump::run).isSameAs(StubOwner.DEATH);
 
-        assertThat(unordered.ended).as("the unordered lease ends").containsExactly(LeasedOwner.LeaseEnd.RELEASED);
-        assertThat(ordered.ended).as("never with a key that may still be in a handler").isEmpty();
+        for (var owner : List.of(unordered, ordered)) {
+            assertThat(owner.endedKeepingRow.get()).as("%s owner ended", owner.lane()).isEqualTo(1);
+            assertThat(owner.leaseRow()).as("%s owner keeps its row for its queue to release", owner.lane())
+                                        .isEqualTo(LeasedOwner.LeaseRow.ENDED_ROW_HELD);
+            assertThat(owner.ended).as("the pump releases no row").isEmpty();
+        }
+        assertThat(unordered.drains.get()).isZero();
         assertThat(ordered.drains.get()).as("the ordered owner drains").isEqualTo(1);
         assertThat(pump.awaitsHandBack(unordered)).isTrue();
         assertThat(pump.awaitsHandBack(ordered)).isTrue();
@@ -591,8 +597,8 @@ class ShardPumpExitTest {
     }
 
     /**
-     * Ending one owner on a dying pump runs that owner's code ({@code onLeaseEnded} for an unordered one,
-     * {@code beginDraining} for an ordered one) right after a critical error, when another throw is most likely. A throw
+     * Ending one owner on a dying pump runs that owner's code ({@code endKeepingLeaseRow}, and {@code beginDraining} for an
+     * ordered one) right after a critical error, when another throw is most likely. A throw
      * there is that owner's alone: the owners after it are still ended and counted, the pump still reads as dead - so new
      * shards go to a live pump, and with none left the runtime has none - and its thread still reads as exited. It used to
      * escape {@code markDead()} before the flag was set: the dead pump read as live and kept being handed new shards, the
@@ -618,10 +624,12 @@ class ShardPumpExitTest {
             awaitDeath("pump-0");
             await().atMost(Duration.ofSeconds(10)).until(pump::hasExited);
 
-            assertThat(throwing.ended.size() + throwing.drains.get()).as("premise: ending the first owner was tried").isEqualTo(1);
+            assertThat(throwing.endedKeepingRow.get()).as("premise: ending the first owner was tried").isEqualTo(1);
+            assertThat(throwing.drains.get()).as("premise: it threw before an ordered one drained").isZero();
             assertThat(pump.isDead()).as("the pump reads as dead although ending one of its owners threw").isTrue();
             assertThat(runtime.hasLivePump()).as("so new shards are not placed on it").isFalse();
-            assertThat(beside.ended).as("the owner after the one that threw is still ended").containsExactly(LeasedOwner.LeaseEnd.RELEASED);
+            assertThat(beside.endedKeepingRow.get()).as("the owner after the one that threw is still ended").isEqualTo(1);
+            assertThat(beside.leaseRow()).isEqualTo(LeasedOwner.LeaseRow.ENDED_ROW_HELD);
             assertThat(metrics.shardsOnDeadPumps.get()).as("and every owner is counted").isEqualTo(3);
             assertThat(runtime.onDeadPump(throwing)).as("the owner that threw is still handed back by its queue").isTrue();
             assertThat(runtime.onDeadPump(beside)).isTrue();
@@ -673,13 +681,13 @@ class ShardPumpExitTest {
             awaitDeath("pump-0");
             await().atMost(Duration.ofSeconds(10)).until(pump::hasExited);
 
-            assertThat(throwing.ended).as("premise: ending the first owner was tried").containsExactly(LeasedOwner.LeaseEnd.RELEASED);
+            assertThat(throwing.endedKeepingRow.get()).as("premise: ending the first owner was tried").isEqualTo(1);
             assertThat(loggedEvents().stream().map(ILoggingEvent::getFormattedMessage))
                     .as("premise: the ERROR for it was attempted, and refused")
                     .anyMatch(message -> message.contains("queue 7, unordered shard 1 on the dead pump threw"));
             assertThat(pump.isDead()).isTrue();
             assertThat(runtime.hasLivePump()).isFalse();
-            assertThat(beside.ended).as("the owner after the one whose ERROR threw is still ended").containsExactly(LeasedOwner.LeaseEnd.RELEASED);
+            assertThat(beside.endedKeepingRow.get()).as("the owner after the one whose ERROR threw is still ended").isEqualTo(1);
             assertThat(metrics.shardsOnDeadPumps.get()).as("and every owner is counted").isEqualTo(3);
             assertThat(runtime.onDeadPump(throwing)).isTrue();
             assertThat(runtime.onDeadPump(beside)).as("and handed back by its queue").isTrue();
@@ -716,7 +724,7 @@ class ShardPumpExitTest {
             } else {
                 registering.doesNotThrowAnyException();
             }
-            assertThat(late.ended).as("premise: ending it was tried").containsExactly(LeasedOwner.LeaseEnd.RELEASED);
+            assertThat(late.endedKeepingRow.get()).as("premise: ending it was tried").isEqualTo(1);
             assertThat(metrics.shardsOnDeadPumps.get()).as("counted although ending it threw").isEqualTo(2);
             assertThat(runtime.onDeadPump(late)).as("and still handed back by its queue").isTrue();
             assertThat(loggedEvents().stream()
@@ -795,8 +803,10 @@ class ShardPumpExitTest {
             endedPlaced.register(lateUnordered);
             drainingPlaced.register(lateOrdered);
 
-            assertThat(lateUnordered.ended).containsExactly(LeasedOwner.LeaseEnd.RELEASED);
-            assertThat(lateOrdered.ended).isEmpty();
+            assertThat(lateUnordered.endedKeepingRow.get()).isEqualTo(1);
+            assertThat(lateUnordered.leaseRow()).isEqualTo(LeasedOwner.LeaseRow.ENDED_ROW_HELD);
+            assertThat(lateOrdered.endedKeepingRow.get()).isEqualTo(1);
+            assertThat(lateOrdered.leaseRow()).isEqualTo(LeasedOwner.LeaseRow.ENDED_ROW_HELD);
             assertThat(lateOrdered.drains.get()).isEqualTo(1);
             assertThat(runtime.onDeadPump(lateUnordered)).as("its queue is to hand it back").isTrue();
             assertThat(runtime.onDeadPump(lateOrdered)).isTrue();
@@ -1389,6 +1399,11 @@ class ShardPumpExitTest {
          * Every {@code onLeaseEnded} call, in order.
          */
         final         List<LeaseEnd>    ended     = new CopyOnWriteArrayList<>();
+        /**
+         * {@code endKeepingLeaseRow} calls.
+         */
+        final         AtomicInteger     endedKeepingRow = new AtomicInteger();
+        private volatile LeaseRow       leaseRow  = LeaseRow.HELD;
         final         AtomicInteger     drains    = new AtomicInteger();
         private final String            lane;
         /**
@@ -1396,7 +1411,7 @@ class ShardPumpExitTest {
          */
         volatile      Runnable          beforeFailing = () -> {};
         /**
-         * Run after each {@code onLeaseEnded} is recorded.
+         * Run after each {@code onLeaseEnded} or {@code endKeepingLeaseRow} is recorded.
          */
         volatile      Runnable          onEnded       = () -> {};
         /**
@@ -1522,11 +1537,25 @@ class ShardPumpExitTest {
         }
 
         @Override
+        public LeaseRow leaseRow() {
+            return leaseRow;
+        }
+
+        @Override
         public boolean leaseHeld() {
             if (behaviour == Behaviour.LEASE_CHECK_ERRORS) {
                 throw OWNER_ERROR;
             }
-            return true;
+            return leaseRow == LeaseRow.HELD;
+        }
+
+        @Override
+        public void endKeepingLeaseRow() {
+            endedKeepingRow.incrementAndGet();
+            if (leaseRow == LeaseRow.HELD) {
+                leaseRow = LeaseRow.ENDED_ROW_HELD;
+            }
+            onEnded.run();
         }
 
         @Override
@@ -1551,6 +1580,7 @@ class ShardPumpExitTest {
         @Override
         public void onLeaseEnded(LeaseEnd reason) {
             ended.add(reason);
+            leaseRow = LeaseRow.RELEASED;
             onEnded.run();
         }
     }

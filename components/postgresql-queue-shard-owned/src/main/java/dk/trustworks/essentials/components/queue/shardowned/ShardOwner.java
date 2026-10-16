@@ -84,9 +84,12 @@ final class ShardOwner implements LeasedOwner {
      */
     private final    Object                                       stateLock     = new Object();
     /**
-     * Cleared when the lease is lost, so the owner stops dispatching rather than racing its successor.
+     * Where this owner's lease row stands ({@link LeasedOwner#leaseRow()}). Anything but {@code HELD} stops the owner
+     * dispatching, rather than racing its successor. Written under {@link #stateLock}, so each transition reads and
+     * writes it as one step; volatile, so the pump's selection check on every pass reads it without taking the lock
+     * the handler threads contend for.
      */
-    private final    AtomicBoolean                                leaseHeld     = new AtomicBoolean(true);
+    private volatile LeaseRow                                     leaseRow      = LeaseRow.HELD;
     /**
      * Set by {@link #beginDraining()}: nothing new is read or dispatched, acknowledgements still flush.
      */
@@ -218,19 +221,40 @@ final class ShardOwner implements LeasedOwner {
     }
 
     @Override
+    public void endKeepingLeaseRow() {
+        synchronized (stateLock) {
+            if (leaseRow != LeaseRow.HELD) {
+                return;
+            }
+            leaseRow = LeaseRow.ENDED_ROW_HELD;
+        }
+        log.debug("Shard {}: owner stopping under fence {}; its lease row is still to be released", shard, fence);
+        // So the pump drops it on its next pass rather than at its backstop.
+        wakeup.signal();
+    }
+
+    @Override
     public void onLeaseEnded(LeaseEnd reason) {
-        if (leaseHeld.compareAndSet(true, false)) {
-            // Per unit, and DEBUG for both: the caller knows how many units it just moved and says so
-            // once. At a two-instance handover this fires 32 times in one heartbeat tick.
-            log.debug("Shard {}: lease {} under fence {}, owner stopping",
-                      shard, reason == LeaseEnd.TAKEN ? "taken" : "released", fence);
+        LeaseRow was;
+        synchronized (stateLock) {
+            was = leaseRow;
+            leaseRow = LeaseRow.RELEASED;
+        }
+        if (was == LeaseRow.RELEASED) {
+            return;
+        }
+        // Per unit, and DEBUG for both: the caller knows how many units it just moved and says so
+        // once. At a two-instance handover this fires 32 times in one heartbeat tick.
+        log.debug("Shard {}: lease {} under fence {}{}",
+                  shard, reason == LeaseEnd.TAKEN ? "taken" : "released", fence, was == LeaseRow.HELD ? ", owner stopping" : "");
+        if (was == LeaseRow.HELD) {
             wakeup.signal();
         }
     }
 
     @Override
-    public boolean leaseHeld() {
-        return leaseHeld.get();
+    public LeaseRow leaseRow() {
+        return leaseRow;
     }
 
     @Override
@@ -915,7 +939,9 @@ final class ShardOwner implements LeasedOwner {
             // it had cost a lease that was still held: the owner stopped, the shard was re-acquired,
             // and everything in flight was redelivered.
             metrics.fencedOutAcks.increment();
-            leaseHeld.set(false);
+            synchronized (stateLock) {
+                leaseRow = LeaseRow.RELEASED;
+            }
             log.warn("Shard {}: acknowledgement rejected under fence {} — lease lost, stopping", shard, fence);
             return;
         }

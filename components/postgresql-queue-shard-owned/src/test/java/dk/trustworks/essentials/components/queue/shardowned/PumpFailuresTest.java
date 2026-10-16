@@ -515,8 +515,12 @@ class PumpFailuresTest {
         }
 
         @Override
-        public boolean leaseHeld() {
-            return true;
+        public LeaseRow leaseRow() {
+            return LeaseRow.HELD;
+        }
+
+        @Override
+        public void endKeepingLeaseRow() {
         }
 
         @Override

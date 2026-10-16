@@ -662,9 +662,13 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             // one row per queue rather than one per unit held. All that remains is to notice a unit
             // that was taken away and stop its owner at once, rather than let it discover that at
             // acknowledgement time with work already dispatched.
+            //
+            // Every owner whose lease row is still this instance's (holdsLeaseRow), one its pump's death ended included: the
+            // question is whether the ROW is still held under its fence, and a dead pump's unit found taken here is no
+            // longer this instance's to release (handBackUnitsOnDeadPumps then leaves it out).
             for (var lane : new String[]{"unordered", "ordered"}) {
                 var held = owners.stream()
-                                 .filter(LeasedOwner::leaseHeld)
+                                 .filter(LeasedOwner::holdsLeaseRow)
                                  .filter(owner -> lane.equals(owner.lane()))
                                  .toList();
                 if (held.isEmpty()) {
@@ -694,7 +698,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                         // this instance was gone, and that is worth knowing. One line for the tick
                         // rather than one per unit, because a handover takes them in a batch.
                         log.warn("Instance {} lost {} {} unit(s) [{}] on queue {} to another instance; "
-                                         + "their owners are stopping and will not acknowledge under the old fence",
+                                         + "their owners stop, if they had not already, and will not acknowledge under the old fence",
                                  instanceId, taken.size(), lane, summarise(taken), queueId);
                     }
                 } catch (Exception e) {
@@ -723,10 +727,11 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
     /**
      * Release the units whose pump died, so another instance - or this one, on a live pump - serves them.
      * <p>
-     * The pump ended these owners as it died ({@link ShardPump#run()} says why they are handed back rather than kept): an
-     * unordered owner's lease ended, an ordered owner began draining. What is left is the database's half, which the dying
-     * thread does not do: the lease row still names this instance, and an instance-owned lease has no expiry, so until it
-     * is released no other instance can take the unit, and this one's fair share counts it as taken. An unordered unit is
+     * The pump ended these owners as it died ({@link ShardPump#run()} says why they are handed back rather than kept),
+     * moving each to {@link LeasedOwner.LeaseRow#ENDED_ROW_HELD}; an ordered owner also began draining. What is left is the
+     * database's half, which the dying thread does not do: the lease row still names this instance, and an instance-owned
+     * lease has no expiry, so until it is released no other instance can take the unit, and this one's fair share counts it
+     * as taken. Released through {@link #releaseLeaseRows}, which moves each owner to {@code RELEASED}. An unordered unit is
      * released at once - whatever is still in one of its handlers is redelivered by the next owner, as on any fair-share
      * release. An ordered unit waits until no key is in a handler (its handlers run on the shared executor, not on the
      * pump), because a successor would otherwise start that key beside it; it is retried on every heartbeat until then.
@@ -749,7 +754,10 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         var ready   = new ArrayList<LeasedOwner>();
         var waiting = new ArrayList<Integer>();
         for (var owner : owners) {
-            if (!shardRuntime.onDeadPump(owner)) {
+            // The runtime says which pump, the owner where its row stands. Normally ENDED_ROW_HELD, which the death moved it
+            // to; HELD if ending it threw (ShardPump.endOnDeadPump), its row held all the same. Not RELEASED: a unit found
+            // taken has no row here to release, and the rebalance's removeIf drops it and tells the runtime.
+            if (!owner.holdsLeaseRow() || !shardRuntime.onDeadPump(owner)) {
                 continue;
             }
             if ("ordered".equals(owner.lane()) && owner.inFlight() > 0) {
@@ -776,21 +784,13 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         if (ready.isEmpty()) {
             return;
         }
-        // Read before the release: an ordered owner whose lease the lease check above already ended as TAKEN gives up
-        // nothing here, so it is not reported as released. An unordered owner's lease ended at the death; it counts.
-        var givingUp = ready.stream().filter(owner -> owner.leaseHeld() || !"ordered".equals(owner.lane())).toList();
-        // Bounded by owner, so a unit something else has taken meanwhile is left alone. Every owner is on activeLane
-        // (releaseHeldLeases says why). If it throws, nothing below has run: every owner is still in `owners` and still
-        // on its dead pump, so it still holds its lease row (holdsLeaseRow) and the next heartbeat retries. Neither acquire
-        // loop takes the unit again meanwhile: both count it towards the fair share through holdsLeaseRow, and skip it
-        // (acquireFreeOrderedShards through its held set, the unordered loop through ownedShards).
-        storage.releaseLeases(activeLane, ready.stream().map(LeasedOwner::shard).toList(), instanceId);
-        // Only now that the row is released: an ordered owner ended first and then left holding its row by a failed
-        // release would read as free to everything that asks leaseHeld().
+        // If it throws, nothing below has run: every owner is still in `owners` with its row held (holdsLeaseRow), and the
+        // next heartbeat retries. Neither acquire loop takes the unit again meanwhile: both count it towards the fair share
+        // through holdsLeaseRow, and skip it (acquireFreeOrderedShards through its held set, the unordered loop through
+        // ownedShards).
+        releaseLeaseRows(ready);
         var released = new ArrayList<Integer>();
         for (var owner : ready) {
-            // A no-op for an unordered owner, which its pump ended as it died.
-            owner.onLeaseEnded(LeasedOwner.LeaseEnd.RELEASED);
             shardRuntime.handedBack(owner);
             owners.remove(owner);
             if (owner instanceof ShardOwner unordered) {
@@ -799,7 +799,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         }
         // The observer last, after the bookkeeping for every owner: one that throws part-way leaves no owner released in
         // the database and still listed here.
-        for (var owner : givingUp) {
+        for (var owner : ready) {
             metrics.shardsReleased.increment();
             released.add(owner.shard());
         }
@@ -933,14 +933,17 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         // pause and it is permanently degraded until someone restarts it. It survived every
         // same-JVM test and only appeared once a process was actually frozen with SIGSTOP.
         owners.removeIf(owner -> {
-            // Not one whose pump died and whose lease is still to be released (handBackUnitsOnDeadPumps): its lease has
-            // ended in memory only, and dropping it here would leave the lease row naming this instance for good.
-            if (holdsLeaseRow(owner, shardRuntime)) {
+            // Only RELEASED. Not one whose row is still to be released (ENDED_ROW_HELD: its pump died, and
+            // handBackUnitsOnDeadPumps releases it): dropping it here would leave the lease row naming this instance for good.
+            if (owner.holdsLeaseRow()) {
                 return false;
             }
             if (owner instanceof ShardOwner unordered) {
                 ownedShards.remove(owner.shard(), unordered);
             }
+            // A unit on a dead pump found taken is dropped here, not handed back, so stop counting it in
+            // shardsOnDeadPumps. A no-op for any other owner.
+            shardRuntime.handedBack(owner);
             return true;
         });
 
@@ -949,20 +952,16 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             return;
         }
 
-        // leaseHeld, not holdsLeaseRow: on this lane an owner on a dead pump has already ended (leaseHeld is false), so it is
-        // never shed; handBackUnitsOnDeadPumps releases it.
+        // leaseHeld (HELD): only an owner that serves its unit is shed. One whose pump died (ENDED_ROW_HELD) is released by
+        // handBackUnitsOnDeadPumps.
         var held = owners.stream().filter(LeasedOwner::leaseHeld).toList();
         if (held.size() > fairShare) {
             var released = new ArrayList<Integer>();
             for (var owner : held.subList(fairShare, held.size())) {
-                // The row first, then the owner, as in handBackUnitsOnDeadPumps and the ordered shed. Ended first and then
-                // left holding its row by a failed release, the owner read as free to the next tick's removeIf, which
-                // dropped it: the row still named this instance, so no other instance took the shard, and nothing here
-                // served it. Released first, a failed release leaves the owner serving and the next tick sheds it again.
+                // One unit at a time: a failed release leaves this owner serving (HELD) and the next tick sheds it again.
                 // The owner may dispatch for the moment between the release and its end; a successor's acquire bumps the
                 // fence, so that is at worst a redelivery, which this lane allows.
-                storage.releaseLease("unordered", owner.shard(), instanceId);
-                owner.onLeaseEnded(LeasedOwner.LeaseEnd.RELEASED);
+                releaseLeaseRows(List.of(owner));
                 ownedShards.remove(owner.shard(), owner);
                 metrics.shardsReleased.increment();
                 metrics.observer().shardOwnershipChanged(owner.shard(), false);
@@ -985,11 +984,11 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             return;
         }
         var acquired = new ArrayList<Integer>();
-        // Bounded by the lease rows this instance holds, a dead pump's not yet handed back included, not by countHeld():
-        // those owners' leases ended in memory at the death, so while their hand-back kept failing this loop took one free
-        // shard more per dead row, on top of the fair share. Counted once and kept up to date below: a pump dying during
-        // the loop changes nothing, as an owner its death ends still holds its row.
-        var rowsHeld = owners.stream().filter(owner -> holdsLeaseRow(owner, shardRuntime)).count();
+        // Bounded by the lease rows this instance holds (holdsLeaseRow), a dead pump's not yet handed back included, not by
+        // countHeld(): those owners ended in memory at the death (ENDED_ROW_HELD), so while their hand-back kept failing a
+        // count of served units took one free shard more per dead row, on top of the fair share. Counted once and kept up
+        // to date below: a pump dying during the loop changes nothing, as an owner its death ends still holds its row.
+        var rowsHeld = owners.stream().filter(LeasedOwner::holdsLeaseRow).count();
         for (var shard = 0; shard < shardCount && rowsHeld < fairShare; shard++) {
             if (!shardRuntime.hasLivePump()) {
                 // The last live pump died during this loop. What it placed from here on would be ended on arrival
@@ -1045,11 +1044,9 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         var drained = new ArrayList<Integer>();
         for (var owner : List.copyOf(owners)) {
             if (owner instanceof OrderedShardOwner ordered && ordered.shedComplete()) {
-                // The row first, as in handBackUnitsOnDeadPumps: ended first and then left holding its row by a failed
-                // release, the owner read as free to the next tick's removeIf, which dropped it with the row still naming
-                // this instance. A shed-complete owner dispatches nothing, so ending it after the release costs nothing.
-                storage.releaseLease("ordered", ordered.shard(), instanceId);
-                ordered.onLeaseEnded(LeasedOwner.LeaseEnd.RELEASED);
+                // One unit at a time, as the unordered shed. A shed-complete owner dispatches nothing, so ending it after
+                // the release costs nothing.
+                releaseLeaseRows(List.of(ordered));
                 // A unit that finished its shed before its pump died, and whose hand-back failed this tick, is released
                 // here instead. Dropped from `owners` below, it would never be handed back, and stay counted in
                 // shardsOnDeadPumps (and shardsAwaitingTakeover) until the runtime stops. A no-op on a live pump.
@@ -1066,10 +1063,8 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                      instanceId, drained.size(), summarise(drained), queueId, countHeld());
         }
 
-        // leaseHeld, not holdsLeaseRow. Unlike the unordered lane, an ordered owner on a dead pump still reads as held: it
-        // drains with its lease held until no key is in its handlers. So it may be asked to shed here, harmlessly: a dead pump
-        // advances no shed, so one begun after the death never completes and the release above never reaches it (one that
-        // completed before the death is released there, with handedBack); handBackUnitsOnDeadPumps releases it. All the ask costs is a shedsStarted count and a mention in the "is draining" line below.
+        // leaseHeld (HELD), as on the unordered lane: only an owner that serves its unit is asked to shed. One whose pump died
+        // (ENDED_ROW_HELD) drains until no key is in its handlers and is released by handBackUnitsOnDeadPumps.
         var held = owners.stream().filter(LeasedOwner::leaseHeld).toList();
         if (held.size() > fairShare) {
             var asked = new ArrayList<Integer>();
@@ -1110,7 +1105,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         // live pump while its dead owner may still have a key in a handler - and the dead owner's hand-back would then
         // release the new owner's row.
         var heldShards = owners.stream()
-                               .filter(owner -> holdsLeaseRow(owner, shardRuntime))
+                               .filter(LeasedOwner::holdsLeaseRow)
                                .map(LeasedOwner::shard)
                                .collect(java.util.stream.Collectors.toSet());
         var acquired   = new ArrayList<Integer>();
@@ -1190,15 +1185,16 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         // The wake-up place() kept for the shard; stop() forgets only those of the owners it found.
         shardRuntime.forget(queueId, owner.lane(), owner.shard());
         try {
-            storage.releaseLease(owner.lane(), owner.shard(), instanceId);
+            releaseLeaseRows(List.of(owner));
             log.debug("Instance {} released {} unit {} on queue {} again: the queue stopped while it was being acquired",
                       instanceId, owner.lane(), owner.shard(), queueId);
         } catch (SQLException e) {
+            // Ended all the same, keeping the row it could not release: it is on no pump, and in no list of this queue's.
+            owner.endKeepingLeaseRow();
             log.warn("Instance {} leased {} unit {} on queue {} as the queue stopped, and could not release it again; it is "
                              + "free to another instance once this instance's membership row is gone or older than the "
                              + "lease TTL ({} ms)", instanceId, owner.lane(), owner.shard(), queueId, leaseTtlMillis, e);
         }
-        owner.onLeaseEnded(LeasedOwner.LeaseEnd.RELEASED);
         return true;
     }
 
@@ -1238,37 +1234,45 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
     }
 
     /**
-     * Whether this instance still holds {@code owner}'s lease ROW: its lease is held in memory, or its pump died and the
-     * row is still to be released ({@link #handBackUnitsOnDeadPumps}). The second is a state of its own. The owner has
-     * ended in memory (an unordered one's lease ended at the death, so {@link LeasedOwner#leaseHeld()} is false) while
-     * the row still names this instance, and nothing else can take the unit until it is released.
+     * Give up the lease rows of {@code releasing}: release the rows, then move each owner to
+     * {@link LeasedOwner.LeaseRow#RELEASED}, which ends it if it had not ended. The one way this instance gives a row up -
+     * both lanes' fair-share sheds, the dead-pump hand-back ({@link #handBackUnitsOnDeadPumps}), an acquisition undone by a
+     * stop ({@link #abandonIfStopped}) and {@link #stop()} - so the order lives here and nowhere else.
      * <p>
-     * Every place that asks what this instance holds towards its fair share, or may drop or re-take, asks this: the
-     * rebalance's {@code removeIf}, both lanes' acquire loops, and {@link #stop()} (which spells it out against one
-     * snapshot of the dead pumps' owners, as it needs that list again). A site that asked
-     * {@code leaseHeld()} alone dropped such an owner with its row unreleased, re-took its unit, or took one free unit
-     * more per dead row. The shed checks deliberately ask {@code leaseHeld()}: an unordered owner on a dead pump is never
-     * shed, and an ordered one, which drains with its lease held, may be asked to but never completes the shed, so
-     * {@link #handBackUnitsOnDeadPumps} releases both.
-     *
-     * @param shardRuntime the runtime read once by the caller; {@code null} once {@link #releaseRuntime()} has let it go,
-     *                     when no owner is on a pump of this queue's any more
+     * The row first. Ended first and then left holding its row by a failed release, an owner read as free to the next
+     * tick's {@code removeIf}, which dropped it: the row still named this instance, so no other instance took the unit,
+     * and nothing here served it. Released first, a failed release throws before any owner has moved, so each is still
+     * {@code HELD} (and serving, so the next tick sheds it again) or {@code ENDED_ROW_HELD} (still counted towards the fair
+     * share, and released again on the next heartbeat), and nothing drops it.
+     * <p>
+     * One statement for all of them, on {@code activeLane}: every owner is on it ({@link #releaseHeldLeases} says why).
+     * Bounded by this instance id, so a unit something else has taken meanwhile is left alone.
      */
-    private static boolean holdsLeaseRow(LeasedOwner owner, ShardRuntime shardRuntime) {
-        return owner.leaseHeld() || (shardRuntime != null && shardRuntime.onDeadPump(owner));
+    private void releaseLeaseRows(List<? extends LeasedOwner> releasing) throws SQLException {
+        if (releasing.isEmpty()) {
+            return;
+        }
+        storage.releaseLeases(activeLane, releasing.stream().map(LeasedOwner::shard).toList(), instanceId);
+        for (var owner : releasing) {
+            owner.onLeaseEnded(LeasedOwner.LeaseEnd.RELEASED);
+        }
     }
 
+    /**
+     * Owners that serve their unit ({@link LeasedOwner#leaseHeld()}, {@code HELD}). Not the lease rows this instance holds:
+     * see {@link #shardsHeld()}.
+     */
     private long countHeld() {
         return owners.stream().filter(LeasedOwner::leaseHeld).count();
     }
 
     /**
-     * The units this instance holds on its configured lane in memory: owners whose lease is held.
+     * The units this instance serves on its configured lane: owners whose lease is held in memory
+     * ({@link LeasedOwner.LeaseRow#HELD}).
      * <p>
      * Not every lease row that names this instance. A unit whose pump died keeps its row until the queue's heartbeat hands
-     * it back, and until then it is counted in {@link ShardOwnerMetrics#shardsOnDeadPumps}. Here an unordered one is not
-     * counted from the death on (its lease ended in memory as the pump died), while an ordered one still is (it drains
-     * with its lease held, until no key is in its handlers); neither is served by the dead pump.
+     * it back, and until then it is counted in {@link ShardOwnerMetrics#shardsOnDeadPumps}, not here: on either lane its
+     * owner ended at the death ({@code ENDED_ROW_HELD}), and the dead pump serves it no more.
      */
     public int shardsHeld() {
         return (int) countHeld();
@@ -1315,16 +1319,15 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             heartbeat = null;
         }
         // Snapshot before releaseRuntime clears anything: the leases still have to be handed back
-        // afterwards, and the owner list is what says which ones this instance holds. Filtered on
-        // holdsLeaseRow NOW, because ending the owners below turns leaseHeld false for all of them -
-        // and it counts the dead pumps': an owner its pump ended as it died still holds its lease row
-        // until it is handed back (handBackUnitsOnDeadPumps), which a stop before the next heartbeat
-        // does here. Evaluated against the one onDeadPumps snapshot rather than asking the runtime
-        // again: a tick still running may hand an owner back in between, and an owner taken as on a
-        // dead pump must be the one kept out of the flush below.
+        // afterwards, and the owner list is what says which ones this instance holds - every owner
+        // whose row is still this instance's (holdsLeaseRow), the dead pumps' included: an owner its
+        // pump ended as it died (ENDED_ROW_HELD) still holds its row until it is handed back
+        // (handBackUnitsOnDeadPumps), which a stop before the next heartbeat does here. `serving` is
+        // read now too, before ending the owners below moves every one of them to ENDED_ROW_HELD: only
+        // those still serve, and only their acknowledgements are flushed below.
         var shardRuntime = runtime;
-        var onDeadPumps  = shardRuntime == null ? List.<LeasedOwner>of() : owners.stream().filter(shardRuntime::onDeadPump).toList();
-        var held         = owners.stream().filter(owner -> owner.leaseHeld() || onDeadPumps.contains(owner)).toList();
+        var held         = owners.stream().filter(LeasedOwner::holdsLeaseRow).toList();
+        var serving      = held.stream().filter(LeasedOwner::leaseHeld).toList();
         // Drain BEFORE releaseRuntime: the pumps are what flush a finishing handler's acknowledgement,
         // and a runtime this queue created stops them. Without a drain, whatever was in a handler at
         // stop lost its acknowledgement and was redelivered by the successor - and on the ordered lane
@@ -1339,8 +1342,10 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         // phase - and cancelling the heartbeat above did nothing to stop them: they kept reading and
         // dispatching for a queue that had been stopped, until the liveness gate noticed the missing
         // heartbeat a lease TTL later and every owner of every stopped queue logged that it was
-        // pausing. An ended owner is skipped and dropped by its pump on the next pass.
-        held.forEach(owner -> owner.onLeaseEnded(LeasedOwner.LeaseEnd.RELEASED));
+        // pausing. An ended owner is skipped and dropped by its pump on the next pass. Ended keeping
+        // its row (ENDED_ROW_HELD) until releaseHeldLeases below has released it: a heartbeat tick
+        // still running counts it as this instance's, so its acquire loop cannot take the unit again.
+        held.forEach(LeasedOwner::endKeepingLeaseRow);
         // An ordered unit with a key still in a handler is NOT handed back: a successor taking it now
         // could start that key while it runs here, which is reordering. It is kept until this
         // instance's liveness lapses - a lease TTL - which is also why the instance must stay
@@ -1352,7 +1357,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             // releasing a lease does not bump its fence, and the leases go only after this. Nothing to
             // do for a runtime this queue closed itself - its pumps flushed on the way out. Not for an
             // owner whose pump died: its state is not trusted (handBackUnitsOnDeadPumps).
-            flushAcknowledgements(held.stream().filter(owner -> !onDeadPumps.contains(owner)).toList());
+            flushAcknowledgements(serving);
             releaseHeldLeases(toRelease);
             if (!kept.isEmpty()) {
                 log.warn("Instance {} is keeping {} ordered unit(s) [{}] on queue {}: a key was still in a handler "
@@ -1376,9 +1381,10 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             }
         });
         // This queue has given them up, released or left to lapse: a shared runtime keeps running, and
-        // would otherwise count them in shardsOnDeadPumps until it stops.
+        // would otherwise count those on a dead pump in shardsOnDeadPumps until it stops. A no-op for
+        // the others.
         if (shardRuntime != null) {
-            onDeadPumps.forEach(shardRuntime::handedBack);
+            held.forEach(shardRuntime::handedBack);
         }
         owners.clear();
         ownedShards.clear();
@@ -1501,10 +1507,9 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         // Every owner is on activeLane: one instance serves one lane (configureOrdered and configureUnordered refuse
         // each other), and both the start and rebalance only acquire on it. Letting an instance hold both lanes would
         // need this split per lane, or the other lane's leases would be left to expire on stop.
-        var lane   = activeLane;
-        var shards = stillHeld.stream().map(LeasedOwner::shard).toList();
+        var lane = activeLane;
         try {
-            storage.releaseLeases(lane, shards, instanceId);
+            releaseLeaseRows(stillHeld);
             for (var owner : stillHeld) {
                 metrics.shardsReleased.increment();
                 metrics.observer().shardOwnershipChanged(owner.shard(), false);

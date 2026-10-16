@@ -114,7 +114,40 @@ interface LeasedOwner {
      */
     String lane();
 
-    boolean leaseHeld();
+    /**
+     * Where this owner's lease row stands: the one place that says so. Each owner keeps it in a field written under its
+     * {@code stateLock}, and every site that counts, drops, re-takes, sheds or releases a unit reads it here (through
+     * {@link #leaseHeld()} or {@link #holdsLeaseRow()}).
+     * <p>
+     * It used to be derived at each site from three objects: the owner's lease flag, whether its pump had died
+     * ({@code ShardRuntime.onDeadPump}), and the queue's owner list. An owner whose pump died has ended in memory while its
+     * row still names this instance, and a site that asked the lease flag alone dropped such an owner with its row
+     * unreleased, re-took its unit, took one free unit more per dead row, or ended it before releasing its row.
+     */
+    LeaseRow leaseRow();
+
+    /**
+     * Whether this owner still serves its unit: {@link LeaseRow#HELD}. Asked by the pump before it pumps the owner, by the
+     * fair-share sheds, and by {@code ShardOwnedQueue.shardsHeld()}.
+     */
+    default boolean leaseHeld() {
+        return leaseRow() == LeaseRow.HELD;
+    }
+
+    /**
+     * Whether this owner's lease row still names this instance: anything but {@link LeaseRow#RELEASED}. Asked by every site
+     * that counts the unit towards the fair share, drops the owner, could take the unit again, or checks the row's fence.
+     */
+    default boolean holdsLeaseRow() {
+        return leaseRow() != LeaseRow.RELEASED;
+    }
+
+    /**
+     * End this owner in memory and keep its lease row: {@link LeaseRow#HELD} to {@link LeaseRow#ENDED_ROW_HELD}. It
+     * dispatches nothing more, and its queue still has to release the row. Called by the pump as it dies, and by
+     * {@code ShardOwnedQueue.stop()} before it releases the rows. A no-op in any other state.
+     */
+    void endKeepingLeaseRow();
 
     /**
      * Stop dispatching anything new, and let what is already in a handler finish. Acknowledgements keep
@@ -139,8 +172,9 @@ interface LeasedOwner {
      */
     enum LeaseEnd {
         /**
-         * This instance gave the unit up: a fair-share release, or an ordered unit that finished
-         * draining. Expected, initiated here, and nothing is in doubt.
+         * This instance released the row: a fair-share release (an ordered unit once it finished
+         * draining), the hand-back of a unit whose pump died, or a stop. Expected, initiated here, and
+         * nothing is in doubt.
          */
         RELEASED,
         /**
@@ -152,7 +186,36 @@ interface LeasedOwner {
     }
 
     /**
-     * Called when this owner's lease ends, for either reason.
+     * The state of an owner's lease row, the database's half of its lease. Moves one way only, {@code HELD} to
+     * {@code ENDED_ROW_HELD} to {@code RELEASED}, and may skip the middle.
+     */
+    enum LeaseRow {
+        /**
+         * The row names this instance under this owner's fence, and the owner serves the unit.
+         */
+        HELD,
+        /**
+         * The owner has ended in memory and dispatches nothing more, while the row still names this instance: its pump
+         * died ({@link #endKeepingLeaseRow()}), or its queue is stopping. Nothing else can take the unit until the queue
+         * releases the row, so the unit still counts towards this instance's fair share. Left for {@code RELEASED} once
+         * the queue has released the row, or once the unit is found taken: by the queue's lease check, which calls
+         * {@link #onLeaseEnded}, or by the owner's own acknowledgement flush being fenced out, which sets {@code RELEASED}
+         * itself under the owner's lock and does not go through {@link #onLeaseEnded}.
+         */
+        ENDED_ROW_HELD,
+        /**
+         * The row no longer names this owner: this instance released it, or another instance took the unit (found by the
+         * queue's lease check, or by the owner's own acknowledgement being fenced out). The owner has ended, and its queue
+         * drops it.
+         */
+        RELEASED
+    }
+
+    /**
+     * The lease row no longer names this owner: {@link LeaseRow#RELEASED} from either other state, ending the owner if it
+     * had not ended. {@link LeaseEnd#RELEASED} is called only once the row has been released, by
+     * {@code ShardOwnedQueue.releaseLeaseRows}, the one method that gives a row up; {@link LeaseEnd#TAKEN} when the queue's
+     * lease check finds the unit taken. Safe to repeat.
      */
     void onLeaseEnded(LeaseEnd reason);
 

@@ -707,7 +707,8 @@ unaffected: the interface's `Instant` overloads still call its no-arg methods. (
   keys still in a handler, as an abandoned shed does, since the unit stays leased and unserved until the handler
   returns or the runtime is restarted. A
   release that fails is retried on every heartbeat, and until it succeeds the unit still counts towards the instance's
-  fair share, so the instance takes no free shard in its place. What
+  fair share, so the instance takes no free shard in its place. From the death on, `ShardOwnedQueue.shardsHeld()` no
+  longer counts such a unit, on either lane; `shardsOnDeadPumps` does. What
   they had handled but not acknowledged is redelivered. Ending one of a dead pump's shards runs that shard's own code
   right after the critical error; a throw there is logged at ERROR naming the queue, lane and shard, and the shard is
   still counted and handed back. The pump's other shards are still ended and counted, even when logging that throw

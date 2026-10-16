@@ -309,9 +309,10 @@ public final class ShardRuntime implements Lifecycle, AutoCloseable {
      * ({@link #handedBack}). The pump ended it when it died ({@link ShardPump#run()}); what is left is the queue's: release
      * the lease, an ordered one once no key is in a handler.
      * <p>
-     * Asks each pump's {@link ShardPump#awaitsHandBack} alone, not gated on {@link ShardPump#isDead()}: a dying pump ends
-     * its owners before it reads as dead, so a gate let an unordered owner read as neither holding its lease nor on a dead
-     * pump while the death was being recorded, and {@code ShardOwnedQueue.rebalance} drop it with its lease row unreleased.
+     * Which pump, not what state: whether the owner's lease row still names this instance is the owner's own
+     * {@link LeasedOwner#leaseRow()}, which the death moved to {@code ENDED_ROW_HELD}. The queue asks this only to pick
+     * the owners its hand-back is for. Asks each pump's {@link ShardPump#awaitsHandBack} alone, not gated on
+     * {@link ShardPump#isDead()}, which a dying pump sets only after it has ended every owner on it.
      */
     boolean onDeadPump(LeasedOwner owner) {
         for (var pump : pumps) {
@@ -323,9 +324,10 @@ public final class ShardRuntime implements Lifecycle, AutoCloseable {
     }
 
     /**
-     * {@code owner}'s queue has given up the lease of a unit whose pump had died ({@link #onDeadPump}): it is no longer
-     * counted in {@link ShardOwnerMetrics#shardsOnDeadPumps}, nor, if its takeover was failing, in
-     * {@link ShardOwnerMetrics#shardsAwaitingTakeover}.
+     * {@code owner}'s queue is done with a unit whose pump had died ({@link #onDeadPump}) - it released the lease row, found
+     * the unit taken, or stopped: it is no longer counted in {@link ShardOwnerMetrics#shardsOnDeadPumps}, nor, if its
+     * takeover was failing, in {@link ShardOwnerMetrics#shardsAwaitingTakeover}. A no-op for an owner no dead pump counts,
+     * so the queue may call it for every owner it drops.
      */
     void handedBack(LeasedOwner owner) {
         for (var pump : pumps) {

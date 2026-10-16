@@ -605,8 +605,13 @@ class ShardOwnedTakeoverExhaustionRetryIT {
         }
 
         @Override
-        public boolean leaseHeld() {
-            return delegate.leaseHeld();
+        public LeaseRow leaseRow() {
+            return delegate.leaseRow();
+        }
+
+        @Override
+        public void endKeepingLeaseRow() {
+            delegate.endKeepingLeaseRow();
         }
 
         @Override

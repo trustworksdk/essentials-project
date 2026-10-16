@@ -199,8 +199,10 @@ final class ShardPump implements Runnable {
 
     /**
      * Whether {@code owner} sits on this pump, which has died, and its queue has not handed its lease back yet
-     * ({@link #handedBack}): an owner its queue's heartbeat has to release. Answers from {@link #countedDead} under
+     * ({@link #handedBack}): an owner its queue's heartbeat has to hand back. Answers from {@link #countedDead} under
      * {@link #deathLock}, so it is true as soon as the owner has been ended by the death, before {@link #isDead()} is.
+     * It says which pump, not where the owner's lease row stands: that is the owner's own
+     * {@link LeasedOwner#leaseRow()}.
      */
     boolean awaitsHandBack(LeasedOwner owner) {
         synchronized (deathLock) {
@@ -260,10 +262,11 @@ final class ShardPump implements Runnable {
      * <p>
      * <b>A dead pump's shards are handed back, not kept.</b> The pump marks itself dead ({@link #markDead()}):
      * {@link ShardRuntime} routes newly acquired shards to its live pumps, and every owner on this one is ended, an owner
-     * handed to it later included ({@link #add}). An unordered owner's lease ends ({@code onLeaseEnded(RELEASED)}). An
-     * ordered owner drains instead ({@code beginDraining()}): its handlers run on the runtime's shared executor and may
-     * still be running, and handing a unit over with a key in a handler lets the successor start that key beside it, which
-     * is reordering. Its queue's heartbeat then hands the leases back to the cluster
+     * handed to it later included ({@link #add}). Each owner ends in memory and keeps its lease row
+     * ({@code endKeepingLeaseRow()}, to {@link LeasedOwner.LeaseRow#ENDED_ROW_HELD}). An ordered owner also drains
+     * ({@code beginDraining()}): its handlers run on the runtime's shared executor and may still be running, and handing a
+     * unit over with a key in a handler lets the successor start that key beside it, which is reordering. Its queue's
+     * heartbeat then hands the leases back to the cluster
      * ({@code ShardOwnedQueue.handBackUnitsOnDeadPumps}), an ordered one only once no key is in a handler. Other instances
      * take them under a bumped fence, or this one does, on a live pump ({@link ShardRuntime#pumpFor}). The acknowledgements
      * still pending on them are not flushed - the owners' state is not trusted after a critical error on the thread that
@@ -375,14 +378,16 @@ final class ShardPump implements Runnable {
 
     /**
      * Count {@code owner} in {@link ShardOwnerMetrics#shardsOnDeadPumps} until its queue hands its lease back
-     * ({@link #handedBack}), and end it, because this pump will never serve it again. An unordered owner's lease ends. An
-     * ordered owner drains: a key may still be in one of its handlers on the shared executor, and the lane never releases
-     * a unit with a key in flight. Its queue's heartbeat releases the lease, an ordered one once nothing is in a handler.
-     * Called under {@link #deathLock}.
+     * ({@link #handedBack}), and end it, because this pump will never serve it again: its lease row moves to
+     * {@link LeasedOwner.LeaseRow#ENDED_ROW_HELD} ({@code endKeepingLeaseRow}), which keeps the unit counted as this
+     * instance's until its queue's heartbeat has released the row. An ordered owner also drains: a key may still be in one
+     * of its handlers on the shared executor, and the lane never releases a unit with a key in flight, so its queue
+     * releases the row only once nothing is in a handler. Called under {@link #deathLock}.
      * <p>
-     * Counted before the owner's code runs, so a throw from {@code onLeaseEnded} or {@code beginDraining} leaves the owner
-     * counted and awaiting hand-back ({@link #awaitsHandBack}): its queue still releases the lease row and then calls
-     * {@code onLeaseEnded(RELEASED)} itself, which the owners make safe to repeat. The throw is logged at ERROR here and
+     * Counted before the owner's code runs, so a throw from {@code endKeepingLeaseRow} or {@code beginDraining} leaves the
+     * owner counted and awaiting hand-back ({@link #awaitsHandBack}), its row still held whichever state it was left in:
+     * its queue still releases the lease row and then calls {@code onLeaseEnded(RELEASED)} itself, which the owners make
+     * safe to repeat. The throw is logged at ERROR here and
      * returned, not thrown: whether it propagates is the caller's choice ({@link #markDead()}, {@link #add}). What can
      * still throw out of here is that ERROR line, with the owner counted, or, rarely (an {@code OutOfMemoryError}),
      * counting it, before it is; {@link #markDead()} drops either.
@@ -395,10 +400,9 @@ final class ShardPump implements Runnable {
         }
         owner.ownerMetrics().shardsOnDeadPumps.incrementAndGet();
         try {
+            owner.endKeepingLeaseRow();
             if ("ordered".equals(owner.lane())) {
                 owner.beginDraining();
-            } else {
-                owner.onLeaseEnded(LeasedOwner.LeaseEnd.RELEASED);
             }
             return null;
         } catch (RuntimeException | Error e) {

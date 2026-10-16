@@ -460,8 +460,8 @@ class ShardOwnedDeadPumpHandBackIT {
 
     /**
      * A queue stopped right after a pump died, before a heartbeat could hand its unordered shards back, releases them
-     * itself: their owners' leases ended in memory at the death, so only the dead-pump check puts them among the leases
-     * the stop gives back. A long lease keeps the heartbeat (a third of it) from running first.
+     * itself: the death moved their owners to {@code ENDED_ROW_HELD}, so stop()'s {@code holdsLeaseRow()} selection still
+     * puts them among the leases it gives back. A long lease keeps the heartbeat (a third of it) from running first.
      */
     @Test
     void a_queue_stopped_before_its_heartbeat_hands_back_a_dead_pumps_shards_releases_them_itself() throws Exception {
@@ -560,6 +560,65 @@ class ShardOwnedDeadPumpHandBackIT {
                 failLeaseReleases("unordered", false);
                 second.stop();
                 first.stop();
+            }
+        }
+    }
+
+    /**
+     * A dead pump's shard that another instance takes before the hand-back succeeds is dropped by the rebalance and no
+     * longer counted on the dead pump, while the dead pump's other shards still wait for their release.
+     * <p>
+     * The heartbeat's lease check finds the row naming another instance and moves the owner from {@code ENDED_ROW_HELD} to
+     * {@code RELEASED}. The hand-back then has no row of its own to release and leaves it out, so only the rebalance drops it.
+     * That drop must tell the runtime, or the shard stays counted in {@code shardsOnDeadPumps} until the runtime stops.
+     * The take is written straight into the lease row, as an instance that found this one's liveness lapsed would write it.
+     * The taker is not registered, so it reads as gone at once and this instance takes the shard back on a live pump. That
+     * re-take is also the proof the dead owner was dropped: the unordered acquire loop skips a shard it still maps to an
+     * owner. Every release is refused throughout, so a hand-back cannot uncount the shard instead.
+     */
+    @Test
+    void a_dead_pumps_shard_taken_by_another_instance_before_its_hand_back_is_dropped_and_no_longer_counted() throws Exception {
+        var settings = settings(2);
+        try (var runtime = new ShardRuntime(dataSource, settings)) {
+            var queue = queue(runtime, "dead-pump-taken");
+            try {
+                queue.startConsuming((messageId, payload, payloadType) -> { }, settings, SHARD_COUNT);
+                assertThat(queue.shardsHeld()).as("premise: one instance holds every shard").isEqualTo(SHARD_COUNT);
+                var doomed       = runtime.pumpFor(QUEUE_ID, "unordered", 0);
+                var deadShards   = unitsOn(runtime, doomed, "unordered", SHARD_COUNT);
+                var fencesBefore = fences("unordered", deadShards);
+                var taken        = (int) deadShards.getFirst();
+                var stillDead    = deadShards.stream().filter(shard -> shard != taken).toList();
+
+                failLeaseReleases("unordered", true);
+                try {
+                    kill(doomed);
+                    awaitReleasesRefused(QUEUE_ID, deadShards, "before the take");
+                    assertThat(queue.metrics().shardsOnDeadPumps.get()).as("premise: no hand-back has succeeded").isEqualTo(deadShards.size());
+
+                    takeAs("unordered", taken, "dead-pump-taker");
+
+                    Awaitility.await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
+                        assertThat(queue.metrics().shardsOnDeadPumps.get()).as("the taken shard is no longer counted on the dead pump")
+                                                                          .isEqualTo(stillDead.size());
+                        assertThat(ownerOf("unordered", taken)).as("taken back from the gone taker: the dead owner was dropped")
+                                                               .isEqualTo("dead-pump-taken");
+                        assertThat(fenceOf("unordered", taken)).as("taken, then taken back").isEqualTo(fencesBefore.get(taken) + 2);
+                    });
+                    assertThat(runtime.pumpFor(QUEUE_ID, "unordered", taken).isDead()).as("taken back on a live pump").isFalse();
+                    for (var shard : stillDead) {
+                        assertThat(ownerOf("unordered", shard)).as("shard %d still leased: its release failed", shard).isEqualTo("dead-pump-taken");
+                        assertThat(fenceOf("unordered", shard)).as("shard %d not taken again", shard).isEqualTo(fencesBefore.get(shard));
+                    }
+                } finally {
+                    failLeaseReleases("unordered", false);
+                }
+
+                Awaitility.await().atMost(Duration.ofSeconds(20)).untilAsserted(
+                        () -> assertThat(queue.metrics().shardsOnDeadPumps.get()).as("the rest handed back once releases succeed").isZero());
+            } finally {
+                failLeaseReleases("unordered", false);
+                queue.stop();
             }
         }
     }
@@ -1110,6 +1169,23 @@ class ShardOwnedDeadPumpHandBackIT {
         }
     }
 
+    /**
+     * Write a take of {@code shard} by {@code instanceId} into its lease row, as {@code ShardOwnedStorage.acquireLeaseGrant}
+     * writes one: the row names the taker under a new fence.
+     */
+    private void takeAs(String lane, int shard, String instanceId) throws Exception {
+        try (var connection = dataSource.getConnection();
+             var statement = connection.prepareStatement("UPDATE " + ShardOwnedSchema.LEASE_TABLE
+                                                                 + " SET owner = ?, lease_until = NULL, fence = fence + 1"
+                                                                 + " WHERE queue_id = ? AND lane = ? AND shard = ?")) {
+            statement.setString(1, instanceId);
+            statement.setShort(2, QUEUE_ID);
+            statement.setString(3, lane);
+            statement.setInt(4, shard);
+            assertThat(statement.executeUpdate()).as("premise: shard %d has a lease row", shard).isEqualTo(1);
+        }
+    }
+
     private int unitsOwnedBy(String lane, String instanceId) throws Exception {
         try (var connection = dataSource.getConnection();
              var statement = connection.prepareStatement("SELECT count(*) FROM " + ShardOwnedSchema.LEASE_TABLE
@@ -1216,8 +1292,12 @@ class ShardOwnedDeadPumpHandBackIT {
         }
 
         @Override
-        public boolean leaseHeld() {
-            return true;
+        public LeaseRow leaseRow() {
+            return LeaseRow.HELD;
+        }
+
+        @Override
+        public void endKeepingLeaseRow() {
         }
 
         @Override

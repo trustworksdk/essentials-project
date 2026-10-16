@@ -232,9 +232,12 @@ final class OrderedShardOwner implements BatchReadableOwner {
      */
     private final    ShardWakeup                        wakeup;
     /**
-     * Cleared when the lease is lost, so this owner stops rather than racing its successor.
+     * Where this owner's lease row stands ({@link LeasedOwner#leaseRow()}). Anything but {@code HELD} stops this owner,
+     * rather than racing its successor. Written under {@link #stateLock}, so each transition reads and writes it as one
+     * step; volatile, so the pump's selection check on every pass reads it without taking the lock the handler threads
+     * contend for.
      */
-    private final    AtomicBoolean                      leaseHeld    = new AtomicBoolean(true);
+    private volatile LeaseRow                           leaseRow     = LeaseRow.HELD;
     /**
      * Set when this owner has been asked to give the shard up. See {@link #beginShedding()}.
      */
@@ -1094,7 +1097,9 @@ final class OrderedShardOwner implements BatchReadableOwner {
             // real fencing rejection would delete messages the new owner is about to deliver, and for
             // an ordered key that is loss AND reordering at once.
             metrics.fencedOutAcks.increment();
-            leaseHeld.set(false);
+            synchronized (stateLock) {
+                leaseRow = LeaseRow.RELEASED;
+            }
             log.warn("Ordered shard {}: acknowledgement rejected under fence {} — lease lost, stopping", shard, fence);
             return;
         }
@@ -1290,8 +1295,8 @@ final class OrderedShardOwner implements BatchReadableOwner {
     }
 
     @Override
-    public boolean leaseHeld() {
-        return leaseHeld.get();
+    public LeaseRow leaseRow() {
+        return leaseRow;
     }
 
     /**
@@ -1308,11 +1313,27 @@ final class OrderedShardOwner implements BatchReadableOwner {
     }
 
     @Override
+    public void endKeepingLeaseRow() {
+        synchronized (stateLock) {
+            if (leaseRow != LeaseRow.HELD) {
+                return;
+            }
+            leaseRow = LeaseRow.ENDED_ROW_HELD;
+        }
+        log.debug("Ordered unit {}: owner stopping under fence {}; its lease row is still to be released", shard, fence);
+    }
+
+    @Override
     public void onLeaseEnded(LeaseEnd reason) {
-        if (leaseHeld.compareAndSet(true, false)) {
+        LeaseRow was;
+        synchronized (stateLock) {
+            was = leaseRow;
+            leaseRow = LeaseRow.RELEASED;
+        }
+        if (was != LeaseRow.RELEASED) {
             // See ShardOwner: per unit and therefore DEBUG, because the caller reports the pass.
-            log.debug("Ordered unit {}: lease {} under fence {}, owner stopping",
-                      shard, reason == LeaseEnd.TAKEN ? "taken" : "released", fence);
+            log.debug("Ordered unit {}: lease {} under fence {}{}",
+                      shard, reason == LeaseEnd.TAKEN ? "taken" : "released", fence, was == LeaseRow.HELD ? ", owner stopping" : "");
         }
     }
 }
