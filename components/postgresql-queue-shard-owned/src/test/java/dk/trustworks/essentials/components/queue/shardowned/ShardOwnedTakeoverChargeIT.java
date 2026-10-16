@@ -46,6 +46,10 @@ class ShardOwnedTakeoverChargeIT {
     private static final int   SHARD_COUNT  = 4;
     private static final int   SHARD        = 0;
     private static final int   MAX_ATTEMPTS = 3;
+    /**
+     * The instance taking the unit over. The charge is fenced, so it holds the unit's lease (see {@link #take}).
+     */
+    private static final String OWNER = "owner-1";
 
     @Container
     static PostgreSQLContainer postgres = LabPostgres.create();
@@ -85,7 +89,7 @@ class ShardOwnedTakeoverChargeIT {
 
         try (var connection = dataSource.getConnection()) {
             for (var takeover = 0; takeover < MAX_ATTEMPTS + 2; takeover++) {
-                storage.bumpOrderedAttemptsOnTakeover(connection, SHARD, 200);
+                storage.bumpOrderedAttemptsOnTakeover(connection, SHARD, 200, OWNER, take("ordered"));
             }
             assertThat(attempts(ORDERED_TABLE, 2)).as("queued behind a key held by its retry").isZero();
             assertThat(attempts(ORDERED_TABLE, 3)).as("queued behind a key held by its retry").isZero();
@@ -104,7 +108,7 @@ class ShardOwnedTakeoverChargeIT {
         insertOrdered("key-1", 1, 2, 0, MAX_ATTEMPTS - 1, null);
 
         try (var connection = dataSource.getConnection()) {
-            storage.bumpOrderedAttemptsOnTakeover(connection, SHARD, 200);
+            storage.bumpOrderedAttemptsOnTakeover(connection, SHARD, 200, OWNER, take("ordered"));
             assertThat(attempts(ORDERED_TABLE, 2)).isEqualTo(MAX_ATTEMPTS - 1);
             assertThat(storage.exhaustedAfterTakeover(connection, ORDERED_TABLE, SHARD, MAX_ATTEMPTS - 1))
                     .as("parked behind the dead letter when its turn comes, never as exhausted by takeovers")
@@ -120,7 +124,7 @@ class ShardOwnedTakeoverChargeIT {
 
         try (var connection = dataSource.getConnection()) {
             // ackBatchSize 0: a window of one row per key
-            storage.bumpOrderedAttemptsOnTakeover(connection, SHARD, 0);
+            storage.bumpOrderedAttemptsOnTakeover(connection, SHARD, 0, OWNER, take("ordered"));
         }
         assertThat(attempts(ORDERED_TABLE, 3)).as("the first VISIBLE row of its key").isEqualTo(1);
         assertThat(attempts(ORDERED_TABLE, 1)).as("a delayed row is never charged").isZero();
@@ -131,13 +135,15 @@ class ShardOwnedTakeoverChargeIT {
     void a_requested_redelivery_is_not_counted_and_still_holds_its_ordered_key_across_a_takeover() throws Exception {
         insertOrdered("key-1", 0, 1, 0, 0, null);
         insertOrdered("key-1", 1, 2, 0, 0, null);
+        // A key nothing holds: the charge must land on it, so a charge refused outright cannot pass for one that skipped key-1
+        insertOrdered("key-2", 0, 3, 0, 0, null);
         insertUnordered(10, 2, null, null);
-        var orderedFence   = storage.acquireLease("ordered", SHARD, "owner-1", 60_000).orElseThrow();
-        var unorderedFence = storage.acquireLease("unordered", SHARD, "owner-1", 60_000).orElseThrow();
+        var orderedFence   = take("ordered");
+        var unorderedFence = take("unordered");
 
         try (var connection = dataSource.getConnection()) {
-            assertThat(storage.scheduleRequestedRedeliveryIfOwned(connection, ORDERED_TABLE, SHARD, 1, 3_600_000, "owner-1", orderedFence)).isTrue();
-            assertThat(storage.scheduleRequestedRedeliveryIfOwned(connection, UNORDERED_TABLE, SHARD, 10, 3_600_000, "owner-1", unorderedFence)).isTrue();
+            assertThat(storage.scheduleRequestedRedeliveryIfOwned(connection, ORDERED_TABLE, SHARD, 1, 3_600_000, OWNER, orderedFence)).isTrue();
+            assertThat(storage.scheduleRequestedRedeliveryIfOwned(connection, UNORDERED_TABLE, SHARD, 10, 3_600_000, OWNER, unorderedFence)).isTrue();
             assertThat(attempts(ORDERED_TABLE, 1)).as("a requested redelivery is not an attempt").isZero();
             assertThat(attempts(UNORDERED_TABLE, 10)).as("a requested redelivery is not an attempt").isEqualTo(2);
 
@@ -145,14 +151,17 @@ class ShardOwnedTakeoverChargeIT {
                     .as("a successor holds the key until the requested redelivery is due")
                     .extracting(retry -> retry.row().seq())
                     .containsExactly(1L);
-            storage.bumpOrderedAttemptsOnTakeover(connection, SHARD, 200);
+            assertThat(storage.bumpOrderedAttemptsOnTakeover(connection, SHARD, 200, OWNER, orderedFence))
+                    .as("only the key nothing holds is charged")
+                    .isEqualTo(1);
+            assertThat(attempts(ORDERED_TABLE, 3)).as("the head of a key nothing holds").isEqualTo(1);
             assertThat(attempts(ORDERED_TABLE, 2)).as("queued behind the held key").isZero();
 
             // A failure afterwards is a retry like any other, and clears the mark
-            assertThat(storage.scheduleRetryIfOwned(connection, ORDERED_TABLE, SHARD, 1, 1, 3_600_000, "owner-1", orderedFence)).isTrue();
+            assertThat(storage.scheduleRetryIfOwned(connection, ORDERED_TABLE, SHARD, 1, 1, 3_600_000, OWNER, orderedFence)).isTrue();
             assertThat(lease(1)).isNull();
             // ... and the admin retry, which resets the count, leaves a plain delayed row
-            assertThat(storage.scheduleRequestedRedeliveryIfOwned(connection, ORDERED_TABLE, SHARD, 1, 3_600_000, "owner-1", orderedFence)).isTrue();
+            assertThat(storage.scheduleRequestedRedeliveryIfOwned(connection, ORDERED_TABLE, SHARD, 1, 3_600_000, OWNER, orderedFence)).isTrue();
             assertThat(storage.retryMessage(SHARD, 1, true, 3_600_000)).isTrue();
             assertThat(storage.orderedRetriesInBackoff(connection, SHARD)).isEmpty();
         }
@@ -164,7 +173,7 @@ class ShardOwnedTakeoverChargeIT {
         insertUnordered(2, MAX_ATTEMPTS, -8L, -1);
 
         try (var connection = dataSource.getConnection()) {
-            storage.bumpAttemptsOnTakeover(connection, SHARD, 5, 8, 200);
+            storage.bumpAttemptsOnTakeover(connection, SHARD, 8, 200, OWNER, take("unordered"));
             assertThat(attempts(UNORDERED_TABLE, 1)).as("held by a live session").isEqualTo(MAX_ATTEMPTS);
             assertThat(attempts(UNORDERED_TABLE, 2)).as("the session's lease has lapsed").isEqualTo(MAX_ATTEMPTS + 1);
             assertThat(storage.exhaustedAfterTakeover(connection, UNORDERED_TABLE, SHARD, MAX_ATTEMPTS)).containsExactly(2L);
@@ -248,6 +257,13 @@ class ShardOwnedTakeoverChargeIT {
             statement.setLong(5, seq);
             statement.executeUpdate();
         }
+    }
+
+    /**
+     * Take {@link #SHARD} of {@code lane} for {@link #OWNER} under a new fence, as a takeover does.
+     */
+    private long take(String lane) throws SQLException {
+        return storage.acquireLease(lane, SHARD, OWNER, 60_000).orElseThrow();
     }
 
     private int attempts(String table, long seq) throws SQLException {

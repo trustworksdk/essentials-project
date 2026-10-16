@@ -1026,13 +1026,23 @@ public final class ShardOwnedStorage {
      *     <li>a retry that had come due, which it re-dispatches from memory regardless of sequence, or</li>
      *     <li>a row it pre-claimed for local hand-off, stamped with its fence ({@code fence - 1}).</li>
      * </ul>
+     * <p>
+     * <b>Fenced, like the acknowledgement, retry and dead-letter writes.</b> The charge lands only while
+     * {@code owner} still holds the shard's lease under {@code fence}. An owner can reach its takeover after its lease
+     * has moved on - taken by another instance, or released by a {@code stop()} that ended it before its pump took it
+     * over - and its charge would then fall on rows the successor may be delivering, each reaching its redelivery
+     * limit one failure early.
      *
-     * @param fence         the fence the new owner holds; the previous owner's is the one before it
      * @param inFlightBound how many handlers the previous owner could have had running at once
      * @param ackBatchSize  how many handled rows the previous owner could have held before flushing their deletes
-     * @return how many rows were charged
+     * @param owner         the instance taking the shard over
+     * @param fence         the fence it holds the shard under; the previous owner's is the one before it
+     * @return how many rows were charged: 0 also when {@code owner} no longer holds the lease under {@code fence} -
+     *         {@link #stillOwns(String, int, String, long)} tells that apart from nothing to charge
      */
-    public int bumpAttemptsOnTakeover(Connection connection, int shard, long fence, int inFlightBound, int ackBatchSize) throws SQLException {
+    public int bumpAttemptsOnTakeover(Connection connection, int shard, int inFlightBound, int ackBatchSize, String owner, long fence)
+            throws SQLException {
+        requireNonNull(owner, "No owner provided");
         var window = (int) Math.min(Integer.MAX_VALUE, (long) inFlightBound + ackBatchSize);
         try (var statement = connection.prepareStatement(
                 "UPDATE " + UNORDERED_TABLE + " u SET attempts = u.attempts + 1"
@@ -1046,7 +1056,8 @@ public final class ShardOwnedStorage {
                         + "   (SELECT seq FROM " + UNORDERED_TABLE
                         + "    WHERE queue_id = ? AND shard = ? AND visible_at <= now() AND attempts = 0"
                         + notRowLeasedClause()
-                        + "    ORDER BY seq LIMIT ?))")) {
+                        + "    ORDER BY seq LIMIT ?))"
+                        + ownedByClause("u"))) {
             statement.setShort(1, queueId);
             statement.setInt(2, shard);
             statement.setShort(3, queueId);
@@ -1055,6 +1066,9 @@ public final class ShardOwnedStorage {
             statement.setShort(6, queueId);
             statement.setInt(7, shard);
             statement.setInt(8, window);
+            statement.setString(9, "unordered");
+            statement.setString(10, owner);
+            statement.setLong(11, fence);
             return statement.executeUpdate();
         }
     }
@@ -1555,10 +1569,17 @@ public final class ShardOwnedStorage {
      * not being delivered at all - the previous owner held it, and the successor holds it too (see
      * {@link #orderedRetriesInBackoff}, {@link #orderedDeadLetterBlocks}). Charging the visible rows queued behind
      * it cost each of them an attempt per takeover, and enough takeovers dead-lettered them, never delivered.
+     * <p>
+     * <b>Fenced</b>, for the reason {@link #bumpAttemptsOnTakeover} is: the charge lands only while {@code owner} still
+     * holds the unit's lease under {@code fence}.
      *
-     * @return how many rows were charged
+     * @param owner the instance taking the unit over
+     * @param fence the fence it holds the unit under
+     * @return how many rows were charged: 0 also when {@code owner} no longer holds the lease under {@code fence} -
+     *         {@link #stillOwns(String, int, String, long)} tells that apart from nothing to charge
      */
-    public int bumpOrderedAttemptsOnTakeover(Connection connection, int shard, int ackBatchSize) throws SQLException {
+    public int bumpOrderedAttemptsOnTakeover(Connection connection, int shard, int ackBatchSize, String owner, long fence) throws SQLException {
+        requireNonNull(owner, "No owner provided");
         var window = (int) Math.min(Integer.MAX_VALUE, (long) ackBatchSize + 1);
         try (var statement = connection.prepareStatement(
                 "UPDATE " + ORDERED_TABLE + " o SET attempts = o.attempts + 1"
@@ -1568,12 +1589,16 @@ public final class ShardOwnedStorage {
                         + "            row_number() OVER (PARTITION BY v.msg_key ORDER BY v.key_order) AS position_in_key"
                         + "     FROM " + ORDERED_TABLE + " v WHERE v.queue_id = ? AND v.shard = ? AND v.visible_at <= now()"
                         + orderedKeyNotHeldClause("v") + ") r"
-                        + "   WHERE r.position_in_key <= ? OR r.attempts > 0)")) {
+                        + "   WHERE r.position_in_key <= ? OR r.attempts > 0)"
+                        + ownedByClause("o"))) {
             statement.setShort(1, queueId);
             statement.setInt(2, shard);
             statement.setShort(3, queueId);
             statement.setInt(4, shard);
             statement.setInt(5, window);
+            statement.setString(6, "ordered");
+            statement.setString(7, owner);
+            statement.setLong(8, fence);
             return statement.executeUpdate();
         }
     }

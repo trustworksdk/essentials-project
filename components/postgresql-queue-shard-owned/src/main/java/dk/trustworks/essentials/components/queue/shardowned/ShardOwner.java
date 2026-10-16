@@ -320,8 +320,14 @@ final class ShardOwner implements LeasedOwner {
             cursorPositioned = true;
         }
         if (!takeoverCharged) {
-            metrics.takeoverAttemptBumps.add(storage.bumpAttemptsOnTakeover(connection, shard, fence, dispatch.capacity(),
-                                                                            settings.ackBatchSize()));
+            var charged = storage.bumpAttemptsOnTakeover(connection, shard, dispatch.capacity(), settings.ackBatchSize(), instanceId, fence);
+            if (charged == 0 && !storage.stillOwns("unordered", shard, instanceId, fence)) {
+                // The charge is fenced: this owner's lease moved on before its pump took it over, and its charge would
+                // have fallen on rows the successor may be delivering. Nothing else here is this owner's to do.
+                leaseLostBeforeTakeover();
+                return;
+            }
+            metrics.takeoverAttemptBumps.add(charged);
             // The bump has committed: record it before anything else can fail, or the next call charges again
             takeoverCharged = true;
             exhaustionPending = true;
@@ -341,6 +347,23 @@ final class ShardOwner implements LeasedOwner {
             }
         }
         exhaustionPending = false;
+    }
+
+    /**
+     * The takeover charge was refused by its fence: the shard's lease row no longer names this instance under this
+     * owner's fence. As on the acknowledgement path, that is the lease lost; the pump drops the owner at the end of its pass.
+     */
+    private void leaseLostBeforeTakeover() {
+        LeaseRow was;
+        synchronized (stateLock) {
+            was = leaseRow;
+            leaseRow = LeaseRow.RELEASED;
+        }
+        if (was == LeaseRow.HELD) {
+            log.warn("Shard {}: takeover charge rejected under fence {} — lease lost, stopping", shard, fence);
+        } else {
+            log.debug("Shard {}: takeover charge rejected under fence {}; the owner had already stopped", shard, fence);
+        }
     }
 
     @Override

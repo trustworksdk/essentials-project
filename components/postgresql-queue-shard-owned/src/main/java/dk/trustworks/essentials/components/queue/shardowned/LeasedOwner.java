@@ -199,14 +199,15 @@ interface LeasedOwner {
          * died ({@link #endKeepingLeaseRow()}), or its queue is stopping. Nothing else can take the unit until the queue
          * releases the row, so the unit still counts towards this instance's fair share. Left for {@code RELEASED} once
          * the queue has released the row, or once the unit is found taken: by the queue's lease check, which calls
-         * {@link #onLeaseEnded}, or by the owner's own acknowledgement flush being fenced out, which sets {@code RELEASED}
-         * itself under the owner's lock and does not go through {@link #onLeaseEnded}.
+         * {@link #onLeaseEnded}, or by one of the owner's own fenced writes being refused - its acknowledgement flush,
+         * or the attempt charge in {@link #onTakeover} - which sets {@code RELEASED} itself under the owner's lock and
+         * does not go through {@link #onLeaseEnded}.
          */
         ENDED_ROW_HELD,
         /**
          * The row no longer names this owner: this instance released it, or another instance took the unit (found by the
-         * queue's lease check, or by the owner's own acknowledgement being fenced out). The owner has ended, and its queue
-         * drops it.
+         * queue's lease check, or by the owner's own acknowledgement or takeover attempt charge being fenced out). The
+         * owner has ended, and its queue drops it.
          */
         RELEASED
     }

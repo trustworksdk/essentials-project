@@ -1161,13 +1161,10 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * {@code running} was still set, so a stop starting later finds this owner in {@code owners} and drains, ends and
      * releases it like the others. That stop can end it before the caller registers it, so it can reach its pump
      * already ended. The pump never dispatches for it (its lease check fails) and drops it at the end of that pass, but
-     * it first runs the owner's {@link LeasedOwner#onTakeover takeover}, which does not ask whether the lease is still
-     * held. On either lane, when the unit had not been released by its previous holder (an unclean takeover), that
-     * charges an attempt to the rows the previous holder could have had in flight, and the charge is not fenced. It is
-     * the one charge that takeover owes: the stop released the row, so the next instance to lease the unit takes it
-     * cleanly and charges nothing. But if that instance is already delivering when the late charge lands, the attempt
-     * falls on rows it may be handling, and a message among them reaches its redelivery policy's limit one failure
-     * sooner. The exhaustion pass after the charge is fenced, so it parks nothing once the stop has released the row.
+     * it first runs the owner's {@link LeasedOwner#onTakeover takeover}. Every write the takeover makes is fenced: while the
+     * stop has not yet released the row, an unclean takeover's attempt charge lands, and it is the one charge that
+     * takeover owes, since the next instance takes the released unit cleanly and charges nothing; once the row is
+     * released or taken, the charge and the exhaustion pass change nothing.
      * <p>
      * When both sides see it, both end it and both release the row: ending is idempotent, and the release is bounded
      * by this instance id, so it never touches a row a successor has taken meanwhile.

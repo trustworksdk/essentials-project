@@ -360,7 +360,13 @@ final class OrderedShardOwner implements BatchReadableOwner {
     @Override
     public void onTakeover(Connection connection) throws SQLException {
         if (!takeoverCharged) {
-            metrics.takeoverAttemptBumps.add(storage.bumpOrderedAttemptsOnTakeover(connection, shard, settings.ackBatchSize()));
+            var charged = storage.bumpOrderedAttemptsOnTakeover(connection, shard, settings.ackBatchSize(), instanceId, fence);
+            if (charged == 0 && !storage.stillOwns("ordered", shard, instanceId, fence)) {
+                // Fenced out - see ShardOwner#onTakeover. Loading blocks for a unit this owner no longer holds is pointless.
+                leaseLostBeforeTakeover();
+                return;
+            }
+            metrics.takeoverAttemptBumps.add(charged);
             // The bump has committed: record it before anything else can fail, or the next call charges again
             takeoverCharged = true;
             exhaustionPending = true;
@@ -387,6 +393,24 @@ final class OrderedShardOwner implements BatchReadableOwner {
         // The same reasoning for a key whose message is waiting out a retry backoff: the previous owner
         // held it in memory, and the cursor and the sweep below read only visible rows.
         restoreRetriesInBackoff(connection);
+    }
+
+    /**
+     * The takeover charge was refused by its fence: the unit's lease row no longer names this instance under this
+     * owner's fence. As on the acknowledgement path, that is the lease lost; the pump drops the owner at the end of its
+     * pass, before it has dispatched anything.
+     */
+    private void leaseLostBeforeTakeover() {
+        LeaseRow was;
+        synchronized (stateLock) {
+            was = leaseRow;
+            leaseRow = LeaseRow.RELEASED;
+        }
+        if (was == LeaseRow.HELD) {
+            log.warn("Ordered shard {}: takeover charge rejected under fence {} — lease lost, stopping", shard, fence);
+        } else {
+            log.debug("Ordered shard {}: takeover charge rejected under fence {}; the owner had already stopped", shard, fence);
+        }
     }
 
     /**
