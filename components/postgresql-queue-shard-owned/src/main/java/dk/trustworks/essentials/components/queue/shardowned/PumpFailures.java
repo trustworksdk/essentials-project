@@ -42,7 +42,9 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * ({@link ShardOwnerMetrics#nextPumpFailureErrorNanos}) shared by every pump serving the subscription, because what makes
  * one shard's pass fail (a revoked grant, a full disk, a broken trigger) usually makes them all fail. A subscription is
  * one metrics object: one per queue unless a queue is consumed twice in one process, which gives each its own window.
- * Everything else at DEBUG, one line without a stack trace. An INFO for a shard when its pass succeeds again. Unlike the
+ * Everything else at DEBUG, one line without a stack trace. When a shard's pass succeeds again, an INFO if its run of
+ * failures logged that ERROR, a DEBUG otherwise: a pass that fails intermittently ends a run every other retry, so an
+ * INFO per run wrote a line every other retry per shard while the ERROR was held to one a minute. Unlike the
  * takeover window, this one does not reopen when the subscription's last failing shard recovers, because nothing counts
  * the failing shards across pumps: a new failure within a minute of the subscription's last ERROR is logged at DEBUG,
  * its cause in the line, and at ERROR once the minute has passed if it persists.
@@ -58,7 +60,8 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * failure counted in {@link ShardOwnerMetrics#batchedReadFailures}, a WARN with the stack trace at most once a minute per
  * <b>subscription</b> ({@link ShardOwnerMetrics#nextBatchedReadWarningNanos}, shared by every pump serving it; one per
  * queue unless a queue has several, see {@link BatchedRead}), naming the queue and the shards read for, DEBUG otherwise,
- * an INFO when the subscription's batched read succeeds again. A WARN, not an ERROR: the shards then read for themselves, so the batched read failing stops nothing on
+ * and when the batch's read succeeds again on this pump an INFO if its run logged that WARN, a DEBUG otherwise. A WARN,
+ * not an ERROR: the shards then read for themselves, so the batched read failing stops nothing on
  * its own; when they cannot either, their own failures are the ERROR above. Before this a revoked grant on the ordered
  * lane still logged a stack trace on every pass, from the batched read, next to the throttled ERROR.
  * <p>
@@ -130,10 +133,37 @@ final class PumpFailures {
     private static final class Failing {
         final long sinceNanos;
         long       failures;
+        /**
+         * Whether one of this run's failures took its subscription's window and so was logged at ERROR (a pass, a
+         * selection) or WARN (a batched read). Only such a run has its end logged at INFO; any other ends at DEBUG, as its
+         * failures were logged. An intermittent failure ends a run every other attempt, so an INFO per run was a line every
+         * other {@link ShardPump#PUMP_RETRY_NANOS} per shard while the failures themselves were held to one a minute.
+         */
+        boolean    windowTaken;
 
         Failing(long sinceNanos) {
             this.sinceNanos = sinceNanos;
             this.failures = 1;
+        }
+    }
+
+    /**
+     * Whether a run's end is written at all: always when the run logged an ERROR or WARN, otherwise only with DEBUG on.
+     * Asked before building the line's arguments.
+     */
+    private static boolean recoveryLogged(Failing run) {
+        return run.windowTaken || log.isDebugEnabled();
+    }
+
+    /**
+     * A run's end: at INFO when the run took its subscription's window, so every ERROR or WARN has its recovery line; at
+     * DEBUG otherwise, like the run's own failures.
+     */
+    private static void logRecovery(Failing run, String format, Object... arguments) {
+        if (run.windowTaken) {
+            log.info(format, arguments);
+        } else {
+            log.debug(format, arguments);
         }
     }
 
@@ -160,17 +190,17 @@ final class PumpFailures {
 
     /**
      * The owner's selection checks completed without throwing, whether or not they then had it pumped. Ends a run
-     * {@link #selectionFailed} opened, with an INFO; a no-op otherwise, and never ends a run of failed passes, which
-     * only {@link #succeeded} does.
+     * {@link #selectionFailed} opened, with an INFO when the run logged an ERROR and a DEBUG otherwise; a no-op when no
+     * run is open, and never ends a run of failed passes, which only {@link #succeeded} does.
      */
     void selectionSucceeded(LeasedOwner owner) {
         var current = failingSelections.remove(owner);
-        if (current == null) {
+        if (current == null || !recoveryLogged(current)) {
             return;
         }
-        log.info("{}: queue {}, {} shard {} passes its selection checks again after {} failed pass(es) in {} s",
-                 pumpName, owner.queueId(), owner.lane(), owner.shard(), current.failures,
-                 TimeUnit.NANOSECONDS.toSeconds(nanoTime.getAsLong() - current.sinceNanos));
+        logRecovery(current, "{}: queue {}, {} shard {} passes its selection checks again after {} failed pass(es) in {} s",
+                    pumpName, owner.queueId(), owner.lane(), owner.shard(), current.failures,
+                    TimeUnit.NANOSECONDS.toSeconds(nanoTime.getAsLong() - current.sinceNanos));
     }
 
     private void report(Map<LeasedOwner, Failing> runs, LeasedOwner owner, String what, Throwable cause) {
@@ -185,6 +215,7 @@ final class PumpFailures {
             current.failures++;
         }
         if (ErrorWindow.take(metrics.nextPumpFailureErrorNanos, now)) {
+            current.windowTaken = true;
             log.error("{}: queue {}, {} shard {} {}; continuing with the other shards. {} failed pass(es) in a row over {} s. "
                               + "The shard stays leased to this instance and its pass is tried again {} ms later at the "
                               + "earliest, with no limit, while the pump's other shards keep their own rate; while it keeps "
@@ -206,16 +237,17 @@ final class PumpFailures {
     }
 
     /**
-     * The owner's delivery pass completed. A no-op unless it had been failing.
+     * The owner's delivery pass completed. A no-op unless it had been failing; then an INFO when the run logged an ERROR,
+     * a DEBUG otherwise.
      */
     void succeeded(LeasedOwner owner) {
         var current = failing.remove(owner);
-        if (current == null) {
+        if (current == null || !recoveryLogged(current)) {
             return;
         }
-        log.info("{}: queue {}, {} shard {} is delivering again after {} failed pass(es) in {} s",
-                 pumpName, owner.queueId(), owner.lane(), owner.shard(), current.failures,
-                 TimeUnit.NANOSECONDS.toSeconds(nanoTime.getAsLong() - current.sinceNanos));
+        logRecovery(current, "{}: queue {}, {} shard {} is delivering again after {} failed pass(es) in {} s",
+                    pumpName, owner.queueId(), owner.lane(), owner.shard(), current.failures,
+                    TimeUnit.NANOSECONDS.toSeconds(nanoTime.getAsLong() - current.sinceNanos));
     }
 
     /**
@@ -252,6 +284,7 @@ final class PumpFailures {
             current.failures++;
         }
         if (ErrorWindow.take(metrics.nextBatchedReadWarningNanos, now)) {
+            current.windowTaken = true;
             log.warn("{}: batched read for queue {} (shards {}) failed; those shards read for themselves this pass. {} failed batched "
                              + "read(s) in a row over {} s; it is tried again on every pass. ShardOwnedQueue.metrics() counts "
                              + "every failure under batchedReadFailures. Every failure is logged at DEBUG, and at WARN at most "
@@ -266,20 +299,21 @@ final class PumpFailures {
     }
 
     /**
-     * The ordered lane's batched read for a batch completed. A no-op unless it had been failing on this pump.
+     * The ordered lane's batched read for a batch completed. A no-op unless it had been failing on this pump; then an INFO
+     * when the run logged a WARN, a DEBUG otherwise.
      *
      * @param batch  the batch whose statement completed
      * @param owners the owners the statement read for, named in the recovery line by their shards (only read when it is
-     *               logged, so the pass that finds nothing to report builds nothing)
+     *               written, so a pass that finds nothing to report, or a DEBUG recovery with DEBUG off, builds nothing)
      */
     void batchedReadSucceeded(BatchedRead batch, List<? extends LeasedOwner> owners) {
         var current = failingBatchedReads.remove(batch);
-        if (current == null) {
+        if (current == null || !recoveryLogged(current)) {
             return;
         }
-        log.info("{}: batched read for queue {} (shards {}) succeeds again after {} failure(s) in {} s",
-                 pumpName, batch.queueId(), shardsOf(owners), current.failures,
-                 TimeUnit.NANOSECONDS.toSeconds(nanoTime.getAsLong() - current.sinceNanos));
+        logRecovery(current, "{}: batched read for queue {} (shards {}) succeeds again after {} failure(s) in {} s",
+                    pumpName, batch.queueId(), shardsOf(owners), current.failures,
+                    TimeUnit.NANOSECONDS.toSeconds(nanoTime.getAsLong() - current.sinceNanos));
     }
 
     /**

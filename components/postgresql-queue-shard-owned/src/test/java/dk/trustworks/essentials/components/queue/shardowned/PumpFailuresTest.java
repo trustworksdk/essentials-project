@@ -193,6 +193,97 @@ class PumpFailuresTest {
     }
 
     /**
+     * A selection check that throws intermittently alternates between throwing and completing on every retry, so each
+     * run is one failure long and ends a pass later. The ERROR is held to once a minute per subscription, and the
+     * recovery must be too: INFO only for a run whose ERROR was written, DEBUG for the rest, or one flapping check writes
+     * an INFO every other pass on every shard it guards.
+     */
+    @Test
+    void a_flapping_selection_check_logs_its_recovery_at_info_once_a_minute_per_subscription() {
+        var metrics  = new ShardOwnerMetrics();
+        var owner    = new StubOwner((short) 3, 5, metrics);
+        var sibling  = new StubOwner((short) 3, 6, metrics);
+        var pumpZero = new PumpFailures("pump-0", clock::get);
+        var pumpOne  = new PumpFailures("pump-1", clock::get);
+
+        for (var flap = 0; flap < 10; flap++) {
+            pumpZero.selectionFailed(owner, new IllegalStateException("deliveryPermitted broke"));
+            pumpOne.selectionFailed(sibling, new IllegalStateException("deliveryPermitted broke"));
+            clock.addAndGet(200_000_000L);
+            pumpZero.selectionSucceeded(owner);
+            pumpOne.selectionSucceeded(sibling);
+            clock.addAndGet(200_000_000L);
+        }
+        assertThat(levels().stream().filter(Level.ERROR::equals)).as("one ERROR for the subscription").hasSize(1);
+        assertThat(levels().stream().filter(Level.INFO::equals)).as("and one recovery INFO, the ERROR's").hasSize(1);
+        var info = logged.list.stream().filter(event -> event.getLevel() == Level.INFO).findFirst().orElseThrow();
+        assertThat(info.getFormattedMessage()).contains("pump-0: queue 3, unordered shard 5 passes its selection checks again after 1 failed pass(es)");
+        assertThat(logged.list.getLast().getLevel()).as("every other recovery is still logged, at DEBUG").isEqualTo(Level.DEBUG);
+        assertThat(logged.list.getLast().getFormattedMessage()).contains("pump-1: queue 3, unordered shard 6 passes its selection checks again after 1 failed pass(es)");
+        assertThat(metrics.pumpFailures.sum()).as("every throw counted").isEqualTo(20);
+
+        // A minute after the subscription's ERROR: the next run takes the window again, and so has its recovery at INFO
+        clock.set(1_000_000_000L + ErrorWindow.EVERY_NANOS);
+        pumpOne.selectionFailed(sibling, new IllegalStateException("deliveryPermitted broke"));
+        assertThat(levels().getLast()).isEqualTo(Level.ERROR);
+        pumpOne.selectionSucceeded(sibling);
+        assertThat(levels().getLast()).isEqualTo(Level.INFO);
+    }
+
+    /**
+     * A run that started at DEBUG, inside another run's minute, and lasted until the window reopened wrote an ERROR of its
+     * own, so its recovery is at INFO: every ERROR has its recovery line at INFO.
+     */
+    @Test
+    void a_run_whose_error_was_written_later_in_the_run_recovers_at_info() {
+        var metrics  = new ShardOwnerMetrics();
+        var first    = new StubOwner((short) 3, 5, metrics);
+        var second   = new StubOwner((short) 3, 6, metrics);
+        var failures = new PumpFailures("pump-0", clock::get);
+
+        failures.failed(first, "threw during delivery", new IllegalStateException("broken"));
+        failures.succeeded(first);
+        failures.failed(second, "threw during delivery", new IllegalStateException("broken"));
+        assertThat(levels()).containsExactly(Level.ERROR, Level.INFO, Level.DEBUG);
+
+        clock.set(1_000_000_000L + ErrorWindow.EVERY_NANOS);
+        failures.failed(second, "threw during delivery", new IllegalStateException("broken"));
+        failures.succeeded(second);
+        assertThat(levels()).containsExactly(Level.ERROR, Level.INFO, Level.DEBUG, Level.ERROR, Level.INFO);
+        assertThat(logged.list.getLast().getFormattedMessage()).contains("queue 3, unordered shard 6 is delivering again after 2 failed pass(es) in 60 s");
+    }
+
+    /**
+     * The delivery pass and the batched read have the same shape: a pass or a statement that fails intermittently ends a
+     * run every other attempt. Their recoveries are at INFO only for the run whose ERROR or WARN was written.
+     */
+    @Test
+    void a_flapping_pass_and_a_flapping_batched_read_log_their_recovery_at_info_once_a_minute_per_subscription() {
+        var metrics  = new ShardOwnerMetrics();
+        var owner    = new StubOwner((short) 6, 0, metrics);
+        var batch    = new PumpFailures.BatchedRead((short) 6, metrics);
+        var failures = new PumpFailures("pump-0", clock::get);
+
+        for (var flap = 0; flap < 10; flap++) {
+            failures.failed(owner, "threw during delivery", new IllegalStateException("broken"));
+            failures.batchedReadFailed(batch, owners((short) 6, 0, 1), new SQLException("permission denied"));
+            clock.addAndGet(200_000_000L);
+            failures.succeeded(owner);
+            failures.batchedReadSucceeded(batch, owners((short) 6, 0, 1));
+            clock.addAndGet(200_000_000L);
+        }
+        assertThat(levels().stream().filter(Level.ERROR::equals)).hasSize(1);
+        assertThat(levels().stream().filter(Level.WARN::equals)).hasSize(1);
+        assertThat(logged.list.stream().filter(event -> event.getLevel() == Level.INFO).map(ILoggingEvent::getFormattedMessage))
+                .as("one recovery INFO each, the ERROR's and the WARN's")
+                .hasSize(2)
+                .anySatisfy(message -> assertThat(message).contains("queue 6, unordered shard 0 is delivering again after 1 failed pass(es)"))
+                .anySatisfy(message -> assertThat(message).contains("batched read for queue 6 (shards [0, 1]) succeeds again after 1 failure(s)"));
+        assertThat(logged.list.getLast().getLevel()).isEqualTo(Level.DEBUG);
+        assertThat(logged.list.getLast().getFormattedMessage()).contains("batched read for queue 6 (shards [0, 1]) succeeds again after 1 failure(s)");
+    }
+
+    /**
      * A failing pass's run is not ended by the selection checks completing: a retry's checks pass before its
      * {@code pumpOnce} fails again, so ending the run there would count every failure as the first in a row.
      */
@@ -334,6 +425,18 @@ class PumpFailuresTest {
         assertThat(metrics.pumpFailures.sum()).isEqualTo(2);
         assertThat(levels()).containsExactly(Level.WARN, Level.ERROR);
         assertThat(passCause.rendered.get()).as("a repeat failed pass builds nothing either").isZero();
+
+        // A second run of a batched read, inside the minute of its first run's WARN: the recovery of a run whose WARN was not
+        // written is at DEBUG, so with DEBUG off it builds no shard list either
+        var otherBatch = new PumpFailures.BatchedRead((short) 7, new ShardOwnerMetrics());
+        pump.batchedReadFailed(otherBatch, owners((short) 7, 2), new SQLException("permission denied"));
+        pump.batchedReadSucceeded(otherBatch, owners((short) 7, 2));
+        assertThat(levels()).containsExactly(Level.WARN, Level.ERROR, Level.WARN, Level.INFO);
+        pump.batchedReadFailed(otherBatch, owners((short) 7, 2), new SQLException("permission denied"));
+        shardReads.set(0);
+        pump.batchedReadSucceeded(otherBatch, countingShardReads(shardReads, owners((short) 7, 2)));
+        assertThat(levels()).as("the recovery is not written").containsExactly(Level.WARN, Level.ERROR, Level.WARN, Level.INFO);
+        assertThat(shardReads.get()).as("so its shard list is not built").isZero();
     }
 
     /**

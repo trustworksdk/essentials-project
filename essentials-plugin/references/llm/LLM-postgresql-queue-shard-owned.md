@@ -480,12 +480,14 @@ Four more `ShardOwnerMetrics` cover a shard that is leased but delivers nothing 
   its lease and its pass is retried 200 ms later with no limit, so a shard whose reads or acknowledgements
   are permanently refused delivers nothing while this rises by about five a second. Alert on its rate.
   Logged at ERROR with the stack trace at most once a minute per subscription (one per queue unless the queue
-  is consumed twice in one process), naming one shard; every failure at DEBUG; an INFO when the shard's pass
-  succeeds again, or, for a throwing check, when the checks next complete.
+  is consumed twice in one process), naming one shard; every failure at DEBUG; when the shard's pass
+  succeeds again, or, for a throwing check, when the checks next complete, an INFO if that run of failures
+  logged the ERROR and a DEBUG otherwise, so a check that throws on and off does not flood INFO either.
 - **`batchedReadFailures`** counts the ordered lane's per-queue batched reads that failed. The shards then
   read for themselves, so this alone stops nothing; when they cannot either, their failures count under
   `pumpFailures`. Logged at WARN at most once a minute per subscription (one per queue unless the queue is
-  consumed twice in one process), naming the queue and the shards read for; DEBUG otherwise, INFO on recovery.
+  consumed twice in one process), naming the queue and the shards read for; DEBUG otherwise. On recovery an
+  INFO if that run of failures logged the WARN, a DEBUG otherwise.
 - **`pumpLoopFailures`** counts pump passes ended by something thrown outside the per-shard guards: the
   connection pool, the pump's own bookkeeping, or an owner's `parkDeadlineMillis`. An owner's failing
   delivery pass, takeover or selection checks (`leaseHeld`, `deliveryPermitted`, `needsAttention`) count

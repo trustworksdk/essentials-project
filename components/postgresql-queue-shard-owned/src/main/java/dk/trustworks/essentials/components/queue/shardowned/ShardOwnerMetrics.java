@@ -159,7 +159,7 @@ public final class ShardOwnerMetrics {
      * like a stalled takeover, {@code QueueHealth.unownedShards()} cannot see it because the shard is leased. Alert on
      * its rate. The ERROR log, at most one a minute per subscription (these metrics: one per queue unless a queue has
      * several), names one shard and the cause; every failure is logged at DEBUG, and a shard whose pass succeeds again after
-     * failing gets an INFO. See {@code PumpFailures}.
+     * failing gets an INFO if its run of failures logged that ERROR, a DEBUG otherwise. See {@code PumpFailures}.
      * <p>
      * Readable only through {@link ShardOwnedQueue#metrics()}. A {@code PostgresqlMessageQueue} keeps its metrics private
      * and no {@code QueueObserver} callback reports a failing pass (unlike {@link #shardsAwaitingTakeover}, which reaches
@@ -174,7 +174,8 @@ public final class ShardOwnerMetrics {
      * again on the next pass: a read the database keeps refusing (a revoked grant) rises with every pass, and the shards'
      * own reads usually fail too, under {@link #pumpFailures}. Logged at WARN with the stack trace at most once a minute per
      * subscription (these metrics: one per queue unless a queue has several), naming the queue and the shards read for,
-     * every failure at DEBUG, and an INFO when the subscription's batched read succeeds again. See {@code PumpFailures}.
+     * every failure at DEBUG, and when the batched read succeeds again on a pump an INFO if its run of failures there
+     * logged that WARN, a DEBUG otherwise. See {@code PumpFailures}.
      * <p>
      * Readable only through {@link ShardOwnedQueue#metrics()}. A {@code PostgresqlMessageQueue} keeps its metrics private
      * and no {@code QueueObserver} callback reports this, so for a queue used through {@code MessageQueue} (the Spring

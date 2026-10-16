@@ -251,13 +251,15 @@ class ShardPumpDeliveryFailureTest {
         assertThat(metrics.pumpFailures.sum()).isEqualTo(2);
         var aboutShard = aboutShard(1);
         assertThat(aboutShard.stream().map(ILoggingEvent::getLevel).toList())
-                .as("each throw is a run of its own, closed by the next check that completes")
-                .containsExactly(Level.ERROR, Level.INFO, Level.DEBUG, Level.INFO);
+                .as("each throw is a run of its own, closed by the next check that completes; the second, inside the "
+                    + "subscription's minute, logged no ERROR, so its recovery is at DEBUG too")
+                .containsExactly(Level.ERROR, Level.INFO, Level.DEBUG, Level.DEBUG);
         assertThat(aboutShard.get(0).getFormattedMessage()).contains("queue 7, unordered shard 1 threw while being selected")
                                                            .contains("1 failed pass(es) in a row");
         assertThat(aboutShard.get(1).getFormattedMessage()).contains("queue 7, unordered shard 1 passes its selection checks again after 1 failed pass(es)");
         assertThat(aboutShard.get(2).getFormattedMessage()).as("not the second in a row: the checks completed in between")
                                                            .contains("threw while being selected (failed pass 1 in a row)");
+        assertThat(aboutShard.get(3).getFormattedMessage()).contains("queue 7, unordered shard 1 passes its selection checks again after 1 failed pass(es)");
     }
 
     private void runUntil(Callable<Boolean> done, LeasedOwner... owners) throws InterruptedException {

@@ -793,7 +793,8 @@ acquires nothing, and its shards stay unowned until the `ShardRuntime` restarts.
 ERROR a minute per subscription for `pumpFailures` (naming one shard), at most one WARN a minute per
 subscription for `batchedReadFailures` (naming the queue and the shards it read for; one subscription per
 queue unless you `consume()` a queue twice in one process), at most one ERROR a minute per pump for
-`pumpLoopFailures`, and one ERROR when a pump dies; every other failure at DEBUG, and an INFO on recovery. All
+`pumpLoopFailures`, and one ERROR when a pump dies; every other failure at DEBUG, and an INFO on recovery (for
+`pumpFailures` and `batchedReadFailures` only after a run whose ERROR or WARN was logged, DEBUG otherwise). All
 four are readable only through `ShardOwnedQueue.metrics()`: a `PostgresqlMessageQueue` keeps its metrics
 private and no `QueueObserver` callback reports them, so through `MessageQueue` (the Spring starter, the
 `DurableQueues` adapter) those `ShardPump` log lines are the only signal.
