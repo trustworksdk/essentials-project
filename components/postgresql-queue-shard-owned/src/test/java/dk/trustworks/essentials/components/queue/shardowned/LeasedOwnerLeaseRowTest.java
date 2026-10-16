@@ -36,6 +36,12 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <p>
  * The rule lives once, in {@link LeaseRowState}; the owner tests check that both owners delegate to it and that both
  * signal their wake-up when they leave {@code HELD} from outside their pump, so the pump drops them on its next pass.
+ * <p>
+ * Two transitions need the database and are not here. In both, the owner's own fenced write is refused by its fence and the
+ * owner moves itself to {@code RELEASED} without going through {@link LeasedOwner#onLeaseEnded}: its acknowledgement flush
+ * (from {@code HELD} or {@code ENDED_ROW_HELD}; {@code ShardOwnedFencingIT} pins it on both lanes), and its takeover
+ * attempt charge ({@code leaseLostBeforeTakeover}; {@code ShardOwnedTakeoverAttemptsIT}'s
+ * {@code ..._whose_lease_was_taken_before_its_takeover_charges_nothing} pin it on both lanes).
  */
 class LeasedOwnerLeaseRowTest {
 

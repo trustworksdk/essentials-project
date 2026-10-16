@@ -20,12 +20,15 @@ import com.zaxxer.hikari.*;
 import dk.trustworks.essentials.components.queue.shardowned.*;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.*;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.*;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.*;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -111,6 +114,97 @@ class ShardOwnedFencingIT {
                     .isEqualTo((int) before);
         }
         assertThat(storage.countRemaining(0)).isZero();
+    }
+
+    /**
+     * One of the two ways out of {@link LeasedOwner.LeaseRow#ENDED_ROW_HELD} that do not go through
+     * {@link LeasedOwner#onLeaseEnded} (the other, a takeover attempt charge refused by its fence, is
+     * {@code ShardOwnedTakeoverAttemptsIT}'s): the owner's own acknowledgement flush is refused by its fence, and the
+     * owner moves itself to {@code RELEASED}.
+     * {@code stop()} ends every held owner keeping its row and then flushes the acknowledgements of those that were
+     * serving, so a successor that took the unit in between fences that flush out. From either state the flush ran in,
+     * the owner must then stop counting the unit as this instance's, and nothing may move it back.
+     */
+    @ParameterizedTest(name = "{0} lane, flushed while {1}")
+    @CsvSource({"unordered, HELD", "unordered, ENDED_ROW_HELD", "ordered, HELD", "ordered, ENDED_ROW_HELD"})
+    void an_owner_whose_acknowledgement_flush_is_fenced_out_no_longer_holds_its_lease_row(String lane, LeasedOwner.LeaseRow flushedIn) throws Exception {
+        var storage = new ShardOwnedStorage(dataSource, QUEUE_ID);
+        var payload = "a".getBytes(StandardCharsets.UTF_8);
+        try (var connection = dataSource.getConnection()) {
+            if ("ordered".equals(lane)) {
+                storage.enqueueOrderedBatch(connection, 0, List.of(new ShardOwnedStorage.OrderedPayload("key-1", 1L, payload, 1)));
+            } else {
+                storage.enqueueBatch(connection, 0, List.of(payload), 1);
+            }
+        }
+        var grant = storage.acquireLeaseGrant(lane, 0, "instance-1", 60_000L).orElseThrow();
+
+        var metrics = new ShardOwnerMetrics();
+        var handled = new AtomicInteger();
+        var owner   = owner(lane, storage, grant, metrics, handled);
+        try (var connection = dataSource.getConnection()) {
+            owner.onTakeover(connection);
+            // Handled inline, on this thread; the flush interval is out of the pass's reach, so the acknowledgement stays pending.
+            Awaitility.await().atMost(Duration.ofSeconds(10)).pollInterval(Duration.ofMillis(10))
+                      .until(() -> {
+                          owner.pumpOnce(connection);
+                          return handled.get() == 1;
+                      });
+        }
+        assertThat(remaining(storage, lane)).as("handled, not yet acknowledged").isEqualTo(1L);
+        assertThat(metrics.fencedOutAcks.sum()).isZero();
+
+        if (flushedIn == LeasedOwner.LeaseRow.ENDED_ROW_HELD) {
+            owner.endKeepingLeaseRow();
+        }
+        assertThat(owner.leaseRow()).isEqualTo(flushedIn);
+
+        // A successor takes the unit: the lease expires and another instance acquires it, bumping the fence.
+        try (var connection = dataSource.getConnection();
+             var statement = connection.prepareStatement(
+                     "UPDATE " + ShardOwnedSchema.LEASE_TABLE + " SET lease_until = now() - interval '1 second'"
+                     + " WHERE queue_id = ? AND lane = ? AND shard = 0")) {
+            statement.setShort(1, QUEUE_ID);
+            statement.setString(2, lane);
+            assertThat(statement.executeUpdate()).isOne();
+        }
+        assertThat(storage.acquireLease(lane, 0, "instance-2", 60_000L).orElseThrow()).isGreaterThan(grant.fence());
+
+        try (var connection = dataSource.getConnection()) {
+            owner.flushOnStop(connection);
+        }
+
+        assertThat(metrics.fencedOutAcks.sum()).as("the flush was refused by the fence").isEqualTo(1L);
+        assertThat(remaining(storage, lane)).as("left for the successor").isEqualTo(1L);
+        assertThat(owner.leaseRow()).as("the row names the successor now").isEqualTo(LeasedOwner.LeaseRow.RELEASED);
+        assertThat(owner.leaseHeld()).isFalse();
+        assertThat(owner.holdsLeaseRow()).as("no longer counted as this instance's").isFalse();
+
+        owner.endKeepingLeaseRow();
+        assertThat(owner.leaseRow()).as("a released row is never held again").isEqualTo(LeasedOwner.LeaseRow.RELEASED);
+        assertThat(owner.holdsLeaseRow()).isFalse();
+    }
+
+    private static LeasedOwner owner(String lane, ShardOwnedStorage storage, ShardOwnedStorage.LeaseGrant grant, ShardOwnerMetrics metrics,
+                                     AtomicInteger handled) {
+        var d = ShardOwnerSettings.defaults();
+        // An acknowledgement batch size and flush interval no pump pass reaches, so the acknowledgement is still pending
+        // when flushOnStop runs.
+        var settings = new ShardOwnerSettings(d.readBatchSize(), 1_000, Duration.ofDays(36_500), d.chaseDelay(), d.holeExpiry(),
+                                              d.sweepInterval(), d.maxHolesPerChase(), d.keyConcurrency(), d.pollBackstop(),
+                                              d.maxSweepInterval(), d.pumpThreads(), d.shedGrace(), d.leaseTtl(), d.watermarkCap());
+        var policy = RedeliveryPolicy.fixed(Duration.ofSeconds(1), 3);
+        if ("ordered".equals(lane)) {
+            return new OrderedShardOwner(storage, 0, grant.fence(), settings, (id, key, payload, type) -> handled.incrementAndGet(),
+                                         metrics, policy, "instance-1", new ShardWakeup(), HandlerDispatch.inline(),
+                                         grant.previousOwnerReleased());
+        }
+        return new ShardOwner(storage, 0, grant.fence(), settings, (id, payload, type) -> handled.incrementAndGet(), metrics, policy,
+                              new ShardWakeup(), "instance-1", HandlerDispatch.inline(), grant.previousOwnerReleased());
+    }
+
+    private static long remaining(ShardOwnedStorage storage, String lane) throws Exception {
+        return "ordered".equals(lane) ? storage.countOrderedRemaining(0) : storage.countRemaining(0);
     }
 
     /**
