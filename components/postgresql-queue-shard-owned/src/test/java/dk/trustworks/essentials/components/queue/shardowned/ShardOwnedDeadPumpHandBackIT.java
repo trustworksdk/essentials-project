@@ -693,8 +693,16 @@ class ShardOwnedDeadPumpHandBackIT {
                         assertThat(ownerOf("unordered", taken)).as("taken back from the gone taker: the dead owner was dropped")
                                                                .isEqualTo("dead-pump-taken");
                         assertThat(fenceOf("unordered", taken)).as("taken, then taken back").isEqualTo(fencesBefore.get(taken) + 2);
+                        var retaken = ownersOf(queue).stream()
+                                                     .filter(owner -> owner.queueId() == QUEUE_ID && owner.lane().equals("unordered") && owner.shard() == taken)
+                                                     .toList();
+                        assertThat(retaken).as("one owner of shard %d: the dead one was dropped", taken).hasSize(1);
+                        assertThat(retaken.getFirst().leaseHeld()).as("the re-taken shard is served").isTrue();
+                        assertThat(runtime.onDeadPump(retaken.getFirst())).as("the re-taken shard is not counted on the dead pump").isFalse();
+                        assertThat(pumpsHolding(runtime, retaken.getFirst())).as("taken back on a live pump")
+                                                                             .singleElement()
+                                                                             .satisfies(pump -> assertThat(pump.isDead()).isFalse());
                     });
-                    assertThat(runtime.pumpFor(QUEUE_ID, "unordered", taken).isDead()).as("taken back on a live pump").isFalse();
                     for (var shard : stillDead) {
                         assertThat(ownerOf("unordered", shard)).as("shard %d still leased: its release failed", shard).isEqualTo("dead-pump-taken");
                         assertThat(fenceOf("unordered", shard)).as("shard %d not taken again", shard).isEqualTo(fencesBefore.get(shard));
@@ -1306,6 +1314,25 @@ class ShardOwnedDeadPumpHandBackIT {
         var field = ShardOwnedQueue.class.getDeclaredField("owners");
         field.setAccessible(true);
         return (List<LeasedOwner>) field.get(queue);
+    }
+
+    /**
+     * The runtime's pumps whose own owner list holds {@code owner}: the pumps that serve it, not the one
+     * {@link ShardRuntime#pumpFor} would route its shard to now.
+     */
+    @SuppressWarnings("unchecked")
+    private static List<ShardPump> pumpsHolding(ShardRuntime runtime, LeasedOwner owner) throws ReflectiveOperationException {
+        var pumpsField = ShardRuntime.class.getDeclaredField("pumps");
+        pumpsField.setAccessible(true);
+        var ownersField = ShardPump.class.getDeclaredField("owners");
+        ownersField.setAccessible(true);
+        var holding = new ArrayList<ShardPump>();
+        for (var pump : List.copyOf((List<ShardPump>) pumpsField.get(runtime))) {
+            if (((List<LeasedOwner>) ownersField.get(pump)).stream().anyMatch(held -> held == owner)) {
+                holding.add(pump);
+            }
+        }
+        return holding;
     }
 
     /**
