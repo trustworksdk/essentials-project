@@ -333,7 +333,7 @@ class ShardOwnedLifecycleIT {
         var queueLogger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(ShardOwnedQueue.class);
         logged.start();
         queueLogger.addAppender(logged);
-        ShardRuntime.acquireShared(dataSource, settings);
+        var runtime = ShardRuntime.acquireShared(dataSource, settings);
         try {
             var queue = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "stop-mid-tick");
             queue.startConsuming((messageId, payload, payloadType) -> { }, settings, SHARD_COUNT);
@@ -348,9 +348,9 @@ class ShardOwnedLifecycleIT {
 
                 queue.stop();
 
-                Awaitility.await().atMost(Duration.ofSeconds(10)).until(() -> !aHeartbeatIsSleeping());
-                // The rest of the tick - the lease check, the hand-back and the rebalance - is a few statements.
-                Thread.sleep(500);
+                // The whole tick, its rebalance included, not just the sleeping statement: until then the assertions
+                // below would run before the regression could be logged.
+                awaitHeartbeatTickFinished(runtime);
             } finally {
                 try (var connection = dataSource.getConnection(); var statement = connection.createStatement()) {
                     statement.execute("DROP TRIGGER IF EXISTS slow_heartbeat ON " + ShardOwnedSchema.INSTANCE_TABLE);
@@ -367,6 +367,121 @@ class ShardOwnedLifecycleIT {
         } finally {
             ShardRuntime.releaseShared(dataSource);
             queueLogger.detachAppender(logged);
+        }
+    }
+
+    /**
+     * A heartbeat tick that is acquiring a unit when the queue stops leaves no owner behind. {@code stop()} ends and
+     * releases the owners it finds; one the tick acquires after that was neither, and on a runtime shared with other
+     * queues, whose pumps outlive the stopped queue, it went on reading and dispatching for it, its lease row naming an
+     * instance that had just deregistered. The tick is held inside the lease UPDATE of the acquire by a trigger that
+     * sleeps: the test frees one of the queue's shards, the next tick's lease check ends that owner and its rebalance
+     * takes the shard again, and the queue stops while that UPDATE sleeps.
+     */
+    @Test
+    void a_unit_a_heartbeat_tick_acquires_while_the_queue_stops_is_not_left_served_on_a_shared_runtime() throws Exception {
+        var settings = settingsWithShedGrace(Duration.ofSeconds(1));
+        var runtime  = ShardRuntime.acquireShared(dataSource, settings);
+        try {
+            var queue = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "stop-mid-acquire");
+            queue.startConsuming((messageId, payload, payloadType) -> { }, settings, SHARD_COUNT);
+            assertThat(queue.shardsHeld()).isEqualTo(SHARD_COUNT);
+
+            stopWhileAHeartbeatTickAcquiresUnitZero(queue, runtime, "unordered", "stop-mid-acquire");
+
+            // The owners stop() ended are dropped on their pump's next pass; one the tick left registered is never dropped.
+            // Every owner on the runtime counts: this test's queue is the only one on it.
+            Awaitility.await().atMost(Duration.ofSeconds(5))
+                      .untilAsserted(() -> assertThat(runtime.unitsServed())
+                              .as("no owner of the stopped queue is still on the shared runtime's pumps").isZero());
+            assertThat(unorderedShardsOwnedBy("stop-mid-acquire")).as("no lease row names the stopped instance").isZero();
+        } finally {
+            ShardRuntime.releaseShared(dataSource);
+        }
+    }
+
+    /**
+     * The ordered lane's acquire loop meets the same stop. A unit leased there after {@code stop()} read its owners was
+     * left on the shared runtime's pumps like an unordered shard, and on this lane its keys could then be in a handler
+     * here and on the instance that took the unit next, because the stop had deregistered this one.
+     */
+    @Test
+    void an_ordered_unit_a_heartbeat_tick_acquires_while_the_queue_stops_is_not_left_served_on_a_shared_runtime() throws Exception {
+        var settings = settingsWithShedGrace(Duration.ofSeconds(1));
+        var runtime  = ShardRuntime.acquireShared(dataSource, settings);
+        try {
+            var queue = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "stop-mid-acquire-ordered");
+            queue.startConsumingOrdered((messageId, key, payload, payloadType) -> { }, settings, SHARD_COUNT);
+            var unitsHeld = orderedUnitsOwnedBy("stop-mid-acquire-ordered");
+            assertThat(unitsHeld).as("the sole instance holds every ordered unit").isPositive();
+            assertThat(queue.shardsHeld()).isEqualTo(unitsHeld);
+
+            stopWhileAHeartbeatTickAcquiresUnitZero(queue, runtime, "ordered", "stop-mid-acquire-ordered");
+
+            // Every owner on the runtime counts: this test's queue is the only one on it.
+            Awaitility.await().atMost(Duration.ofSeconds(5))
+                      .untilAsserted(() -> assertThat(runtime.unitsServed())
+                              .as("no owner of the stopped queue is still on the shared runtime's pumps").isZero());
+            assertThat(orderedUnitsOwnedBy("stop-mid-acquire-ordered")).as("no lease row names the stopped instance").isZero();
+        } finally {
+            ShardRuntime.releaseShared(dataSource);
+        }
+    }
+
+    /**
+     * Free unit 0 of {@code lane}, hold the heartbeat tick that leases it again inside the lease UPDATE (a trigger that
+     * sleeps, firing only on an acquire by {@code instanceId}), stop the queue while it sleeps and wait for that tick to
+     * finish. The tick's lease check finds the unit gone and ends its owner, and its rebalance drops that owner and
+     * acquires the unit again - into the trigger.
+     */
+    private void stopWhileAHeartbeatTickAcquiresUnitZero(ShardOwnedQueue queue, ShardRuntime runtime, String lane, String instanceId) throws Exception {
+        try (var connection = dataSource.getConnection(); var statement = connection.createStatement()) {
+            statement.execute("CREATE OR REPLACE FUNCTION slow_acquire() RETURNS trigger AS $$ BEGIN "
+                                      + "PERFORM pg_sleep(1.5); RETURN NEW; END $$ LANGUAGE plpgsql");
+            statement.execute("CREATE TRIGGER slow_acquire BEFORE UPDATE ON " + ShardOwnedSchema.LEASE_TABLE
+                                      + " FOR EACH ROW WHEN (OLD.owner IS NULL AND NEW.owner = '" + instanceId + "')"
+                                      + " EXECUTE FUNCTION slow_acquire()");
+            statement.execute("UPDATE " + ShardOwnedSchema.LEASE_TABLE + " SET owner = NULL WHERE queue_id = " + QUEUE_ID
+                                      + " AND lane = '" + lane + "' AND shard = 0");
+        }
+        try {
+            Awaitility.await().atMost(Duration.ofSeconds(10)).until(this::aHeartbeatIsSleeping);
+
+            queue.stop();
+
+            awaitHeartbeatTickFinished(runtime);
+        } finally {
+            try (var connection = dataSource.getConnection(); var statement = connection.createStatement()) {
+                statement.execute("DROP TRIGGER IF EXISTS slow_acquire ON " + ShardOwnedSchema.LEASE_TABLE);
+            }
+            queue.stop();
+        }
+    }
+
+    /**
+     * Wait until the heartbeat tick running now, if any, has finished: every queue's heartbeat runs on the runtime's one
+     * heartbeat thread, so a task queued behind it runs only once the tick is done.
+     */
+    private static void awaitHeartbeatTickFinished(ShardRuntime runtime) throws InterruptedException {
+        var behindTheTick = new CountDownLatch(1);
+        var task          = runtime.scheduleHeartbeat(behindTheTick::countDown, 1);
+        try {
+            assertThat(behindTheTick.await(20, TimeUnit.SECONDS)).as("the overlapping heartbeat tick finished").isTrue();
+        } finally {
+            task.cancel(false);
+        }
+    }
+
+    private int unorderedShardsOwnedBy(String instanceId) throws Exception {
+        try (var connection = dataSource.getConnection();
+             var statement = connection.prepareStatement("SELECT count(*) FROM " + ShardOwnedSchema.LEASE_TABLE
+                                                                 + " WHERE queue_id = ? AND lane = 'unordered' AND owner = ?")) {
+            statement.setShort(1, QUEUE_ID);
+            statement.setString(2, instanceId);
+            try (var resultSet = statement.executeQuery()) {
+                resultSet.next();
+                return resultSet.getInt(1);
+            }
         }
     }
 

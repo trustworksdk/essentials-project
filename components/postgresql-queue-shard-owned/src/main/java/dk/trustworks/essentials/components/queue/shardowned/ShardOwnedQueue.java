@@ -908,16 +908,11 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         // and logged a NullPointerException as "Rebalance failed" during an ordinary shutdown. Every use below goes through
         // the local, so the rest of this tick cannot meet it null, whenever stop() lets it go.
         //
-        // The running check is check-then-act: it narrows the race with stop(), it does not close it. It guarantees that a
-        // tick starting after stop() has cleared `running` acquires nothing, which matters for a runtime the caller owns:
-        // the field stays set, and the tick would otherwise lease units for a stopped queue. It does NOT guarantee that a
-        // tick already past it acquires nothing: stop() may begin between this check and the acquire loops, and a unit
-        // taken then is missing from the owners stop() snapshots, so that stop neither ends nor releases it. Its row names
-        // an instance that stop() deregisters, so the cluster can take it over at once under a new fence (or a lease TTL
-        // later, when stop() keeps an ordered unit and the instance stays registered), and the fence refuses the stale
-        // owner's writes from then on; but on a shared runtime, whose pumps outlive the queue, that owner is not ended
-        // and may go on reading and dispatching. That residue is narrow (a tick reaching the acquire loops in the moment
-        // stop() begins) and left open.
+        // The running check spares a tick that starts after stop() the whole rebalance; on a runtime the caller owns the
+        // field stays set, and the tick would otherwise lease units for a stopped queue. It is check-then-act, so it is not
+        // what keeps a tick already past it from leaving a unit behind when stop() begins during the acquire loops: both
+        // loops check `running` again for every unit they lease, after publishing its owner (abandonIfStopped says why
+        // that order closes the race).
         var shardRuntime = runtime;
         if (shardRuntime == null || !running.get()) {
             return;
@@ -1016,6 +1011,9 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             owner.setDeliveryGate(this::deliveryPermitted);
             owners.add(owner);
             ownedShards.put(shard, owner);
+            if (abandonIfStopped(owner, shardRuntime)) {
+                break;
+            }
             rowsHeld++;
             placement.register(owner);
             metrics.shardsAcquired.increment();
@@ -1131,6 +1129,9 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                                               dispatch, grant.get().previousOwnerReleased());
             owner.setDeliveryGate(this::deliveryPermitted);
             owners.add(owner);
+            if (abandonIfStopped(owner, shardRuntime)) {
+                break;
+            }
             heldShards.add(shard);
             placement.register(owner);
             metrics.shardsAcquired.increment();
@@ -1142,6 +1143,63 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             log.info("Instance {} acquired {} ordered unit(s) [{}] on queue {}; now holding {} of {}",
                      instanceId, acquired.size(), summarise(acquired), queueId, heldShards.size(), orderedUnits());
         }
+    }
+
+    /**
+     * Undo an acquisition the heartbeat made while {@link #stop()} was stopping this queue: drop the owner, release its
+     * lease row and end it. Called by both acquire loops for each unit they lease, after the owner is in {@code owners}
+     * and before it is registered on a pump.
+     * <p>
+     * <b>Why after {@code owners.add}.</b> {@code stop()} clears {@code running} and only then reads {@code owners} for the
+     * owners it ends and releases. This reads them the other way round: the owner is published first, {@code running} is
+     * read after. Both are sequentially consistent ({@code AtomicBoolean}, {@code CopyOnWriteArrayList}), so at least
+     * one side sees the other: either {@code stop()}'s list contains this owner, or this check sees {@code running}
+     * false, or both. A check before the add, like the one at the top of {@link #rebalance()}, leaves the case where
+     * neither does: a unit leased by a tick already past that check when the stop began was in no list the stop read.
+     * Nothing ended it, and on a runtime that keeps running after this queue stops (one the caller passed with
+     * {@code setRuntime}, even to this queue alone, or the one shared per {@code DataSource} while another queue still
+     * borrows it), it went on reading and dispatching for the stopped queue, its lease row naming an instance the stop
+     * had just deregistered.
+     * <p>
+     * <b>Why before the pump.</b> An owner undone here has never been on a pump, so it has dispatched nothing, and
+     * releasing its row cannot hand a successor an ordered key that is still in a handler here. When the check passes,
+     * {@code running} was still set, so a stop starting later finds this owner in {@code owners} and drains, ends and
+     * releases it like the others. That stop can end it before the caller registers it, so it can reach its pump
+     * already ended. The pump never dispatches for it (its lease check fails) and drops it at the end of that pass, but
+     * it first runs the owner's {@link LeasedOwner#onTakeover takeover}, which does not ask whether the lease is still
+     * held. On either lane, when the unit had not been released by its previous holder (an unclean takeover), that
+     * charges an attempt to the rows the previous holder could have had in flight, and the charge is not fenced. It is
+     * the one charge that takeover owes: the stop released the row, so the next instance to lease the unit takes it
+     * cleanly and charges nothing. But if that instance is already delivering when the late charge lands, the attempt
+     * falls on rows it may be handling, and a message among them reaches its redelivery policy's limit one failure
+     * sooner. The exhaustion pass after the charge is fenced, so it parks nothing once the stop has released the row.
+     * <p>
+     * When both sides see it, both end it and both release the row: ending is idempotent, and the release is bounded
+     * by this instance id, so it never touches a row a successor has taken meanwhile.
+     *
+     * @return true when the queue is stopping and the acquisition was undone; the caller stops acquiring
+     */
+    private boolean abandonIfStopped(LeasedOwner owner, ShardRuntime shardRuntime) {
+        if (running.get()) {
+            return false;
+        }
+        owners.remove(owner);
+        if (owner instanceof ShardOwner unordered) {
+            ownedShards.remove(owner.shard(), unordered);
+        }
+        // The wake-up place() kept for the shard; stop() forgets only those of the owners it found.
+        shardRuntime.forget(queueId, owner.lane(), owner.shard());
+        try {
+            storage.releaseLease(owner.lane(), owner.shard(), instanceId);
+            log.debug("Instance {} released {} unit {} on queue {} again: the queue stopped while it was being acquired",
+                      instanceId, owner.lane(), owner.shard(), queueId);
+        } catch (SQLException e) {
+            log.warn("Instance {} leased {} unit {} on queue {} as the queue stopped, and could not release it again; it is "
+                             + "free to another instance once this instance's membership row is gone or older than the "
+                             + "lease TTL ({} ms)", instanceId, owner.lane(), owner.shard(), queueId, leaseTtlMillis, e);
+        }
+        owner.onLeaseEnded(LeasedOwner.LeaseEnd.RELEASED);
+        return true;
     }
 
     /**
@@ -1246,6 +1304,9 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      */
     @Override
     public void stop() {
+        // Cleared BEFORE `owners` is read below, and that order is load-bearing: the heartbeat's acquire loops add an owner
+        // and then read `running` (abandonIfStopped), so a unit a tick leases while this stop runs is either in the list
+        // read below or undone by the tick itself.
         if (!running.compareAndSet(true, false)) {
             return;
         }
