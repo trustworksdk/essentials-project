@@ -1403,7 +1403,7 @@ class ShardPumpExitTest {
          * {@code endKeepingLeaseRow} calls.
          */
         final         AtomicInteger     endedKeepingRow = new AtomicInteger();
-        private volatile LeaseRow       leaseRow  = LeaseRow.HELD;
+        private final LeaseRowState     leaseRow  = new LeaseRowState();
         final         AtomicInteger     drains    = new AtomicInteger();
         private final String            lane;
         /**
@@ -1538,7 +1538,7 @@ class ShardPumpExitTest {
 
         @Override
         public LeaseRow leaseRow() {
-            return leaseRow;
+            return leaseRow.get();
         }
 
         @Override
@@ -1546,15 +1546,13 @@ class ShardPumpExitTest {
             if (behaviour == Behaviour.LEASE_CHECK_ERRORS) {
                 throw OWNER_ERROR;
             }
-            return leaseRow == LeaseRow.HELD;
+            return leaseRow.get() == LeaseRow.HELD;
         }
 
         @Override
         public void endKeepingLeaseRow() {
             endedKeepingRow.incrementAndGet();
-            if (leaseRow == LeaseRow.HELD) {
-                leaseRow = LeaseRow.ENDED_ROW_HELD;
-            }
+            leaseRow.advanceTo(LeaseRow.ENDED_ROW_HELD);
             onEnded.run();
         }
 
@@ -1580,7 +1578,7 @@ class ShardPumpExitTest {
         @Override
         public void onLeaseEnded(LeaseEnd reason) {
             ended.add(reason);
-            leaseRow = LeaseRow.RELEASED;
+            leaseRow.advanceTo(LeaseRow.RELEASED);
             onEnded.run();
         }
     }

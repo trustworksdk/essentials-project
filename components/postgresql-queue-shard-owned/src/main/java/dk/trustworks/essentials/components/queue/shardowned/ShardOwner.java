@@ -85,11 +85,11 @@ final class ShardOwner implements LeasedOwner {
     private final    Object                                       stateLock     = new Object();
     /**
      * Where this owner's lease row stands ({@link LeasedOwner#leaseRow()}). Anything but {@code HELD} stops the owner
-     * dispatching, rather than racing its successor. Written under {@link #stateLock}, so each transition reads and
-     * writes it as one step; volatile, so the pump's selection check on every pass reads it without taking the lock
-     * the handler threads contend for.
+     * dispatching, rather than racing its successor. Every transition goes through {@link LeaseRowState#advanceTo}, one
+     * compare-and-set, not {@link #stateLock}: no field the lock guards changes with it, and the pump's selection check
+     * on every pass reads it without taking the lock the handler threads contend for.
      */
-    private volatile LeaseRow                                     leaseRow      = LeaseRow.HELD;
+    private final    LeaseRowState                                leaseRow      = new LeaseRowState();
     /**
      * Set by {@link #beginDraining()}: nothing new is read or dispatched, acknowledgements still flush.
      */
@@ -222,11 +222,8 @@ final class ShardOwner implements LeasedOwner {
 
     @Override
     public void endKeepingLeaseRow() {
-        synchronized (stateLock) {
-            if (leaseRow != LeaseRow.HELD) {
-                return;
-            }
-            leaseRow = LeaseRow.ENDED_ROW_HELD;
+        if (leaseRow.advanceTo(LeaseRow.ENDED_ROW_HELD) != LeaseRow.HELD) {
+            return;
         }
         log.debug("Shard {}: owner stopping under fence {}; its lease row is still to be released", shard, fence);
         // So the pump drops it on its next pass rather than at its backstop.
@@ -235,11 +232,7 @@ final class ShardOwner implements LeasedOwner {
 
     @Override
     public void onLeaseEnded(LeaseEnd reason) {
-        LeaseRow was;
-        synchronized (stateLock) {
-            was = leaseRow;
-            leaseRow = LeaseRow.RELEASED;
-        }
+        var was = leaseRow.advanceTo(LeaseRow.RELEASED);
         if (was == LeaseRow.RELEASED) {
             return;
         }
@@ -254,7 +247,7 @@ final class ShardOwner implements LeasedOwner {
 
     @Override
     public LeaseRow leaseRow() {
-        return leaseRow;
+        return leaseRow.get();
     }
 
     @Override
@@ -354,11 +347,7 @@ final class ShardOwner implements LeasedOwner {
      * owner's fence. As on the acknowledgement path, that is the lease lost; the pump drops the owner at the end of its pass.
      */
     private void leaseLostBeforeTakeover() {
-        LeaseRow was;
-        synchronized (stateLock) {
-            was = leaseRow;
-            leaseRow = LeaseRow.RELEASED;
-        }
+        var was = leaseRow.advanceTo(LeaseRow.RELEASED);
         if (was == LeaseRow.HELD) {
             log.warn("Shard {}: takeover charge rejected under fence {} — lease lost, stopping", shard, fence);
         } else {
@@ -962,9 +951,7 @@ final class ShardOwner implements LeasedOwner {
             // it had cost a lease that was still held: the owner stopped, the shard was re-acquired,
             // and everything in flight was redelivered.
             metrics.fencedOutAcks.increment();
-            synchronized (stateLock) {
-                leaseRow = LeaseRow.RELEASED;
-            }
+            leaseRow.advanceTo(LeaseRow.RELEASED);
             log.warn("Shard {}: acknowledgement rejected under fence {} — lease lost, stopping", shard, fence);
             return;
         }

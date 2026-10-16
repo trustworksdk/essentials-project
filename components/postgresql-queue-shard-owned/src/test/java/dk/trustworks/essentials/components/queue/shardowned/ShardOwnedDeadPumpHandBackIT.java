@@ -1317,7 +1317,7 @@ class ShardOwnedDeadPumpHandBackIT {
         private final    int               shard;
         private final    AtomicBoolean     endThrown     = new AtomicBoolean();
         private final    AtomicInteger     flushesOnStop = new AtomicInteger();
-        private volatile LeaseRow          leaseRow      = LeaseRow.HELD;
+        private final    LeaseRowState     leaseRow      = new LeaseRowState();
 
         EndingThrowsOnceOwner(int shard) {
             this.shard = shard;
@@ -1374,7 +1374,7 @@ class ShardOwnedDeadPumpHandBackIT {
 
         @Override
         public LeaseRow leaseRow() {
-            return leaseRow;
+            return leaseRow.get();
         }
 
         @Override
@@ -1382,9 +1382,7 @@ class ShardOwnedDeadPumpHandBackIT {
             if (endThrown.compareAndSet(false, true)) {
                 throw new IllegalStateException("simulated failure ending the owner on its dying pump");
             }
-            if (leaseRow == LeaseRow.HELD) {
-                leaseRow = LeaseRow.ENDED_ROW_HELD;
-            }
+            leaseRow.advanceTo(LeaseRow.ENDED_ROW_HELD);
         }
 
         @Override
@@ -1398,7 +1396,7 @@ class ShardOwnedDeadPumpHandBackIT {
 
         @Override
         public void onLeaseEnded(LeaseEnd reason) {
-            leaseRow = LeaseRow.RELEASED;
+            leaseRow.advanceTo(LeaseRow.RELEASED);
         }
     }
 

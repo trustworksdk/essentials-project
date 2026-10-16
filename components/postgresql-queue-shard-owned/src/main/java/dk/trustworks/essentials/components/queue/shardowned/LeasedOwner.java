@@ -115,8 +115,8 @@ interface LeasedOwner {
     String lane();
 
     /**
-     * Where this owner's lease row stands: the one place that says so. Each owner keeps it in a field written under its
-     * {@code stateLock}, and every site that counts, drops, re-takes, sheds or releases a unit reads it here (through
+     * Where this owner's lease row stands: the one place that says so. Each owner keeps it in a {@link LeaseRowState}, which
+     * owns the transition rule, and every site that counts, drops, re-takes, sheds or releases a unit reads it here (through
      * {@link #leaseHeld()} or {@link #holdsLeaseRow()}).
      * <p>
      * It used to be derived at each site from three objects: the owner's lease flag, whether its pump had died
@@ -187,7 +187,24 @@ interface LeasedOwner {
 
     /**
      * The state of an owner's lease row, the database's half of its lease. Moves one way only, {@code HELD} to
-     * {@code ENDED_ROW_HELD} to {@code RELEASED}, and may skip the middle.
+     * {@code ENDED_ROW_HELD} to {@code RELEASED}, and may skip the middle. The rule is {@link LeaseRowState}'s, the one
+     * holder both owners keep the state in; it compares the constants' declaration order, so they are declared in the order
+     * they are reached.
+     * <p>
+     * What each owner does on a transition is its own, keyed on the state {@link LeaseRowState#advanceTo} returns, and the
+     * same on both lanes:
+     * <ul>
+     *     <li>{@link #endKeepingLeaseRow()}, out of {@code HELD}: a DEBUG line, and the owner's wake-up is signalled, so its
+     *     pump drops it on its next pass rather than at its backstop. Nothing in any other state.</li>
+     *     <li>{@link #onLeaseEnded}, to {@code RELEASED}: a DEBUG line unless it was {@code RELEASED} already, and the wake-up
+     *     when it was {@code HELD} (the pump still had the owner in its selection). Called off the pump thread, by the
+     *     queue's heartbeat or {@code stop()}.</li>
+     *     <li>The owner's own fenced write refused - its acknowledgement flush, or the attempt charge in
+     *     {@link #onTakeover}: {@code RELEASED} and a WARN (the charge logs at DEBUG when the owner had already ended). No
+     *     wake-up: those writes run on the owner's own pump, inside a pass, or on {@code stop()}'s flush of owners it had
+     *     already ended; the pump drops the owner at the end of that pass, and a wake-up would only cost it one empty
+     *     pass more.</li>
+     * </ul>
      */
     enum LeaseRow {
         /**
@@ -200,8 +217,8 @@ interface LeasedOwner {
          * releases the row, so the unit still counts towards this instance's fair share. Left for {@code RELEASED} once
          * the queue has released the row, or once the unit is found taken: by the queue's lease check, which calls
          * {@link #onLeaseEnded}, or by one of the owner's own fenced writes being refused - its acknowledgement flush,
-         * or the attempt charge in {@link #onTakeover} - which sets {@code RELEASED} itself under the owner's lock and
-         * does not go through {@link #onLeaseEnded}.
+         * or the attempt charge in {@link #onTakeover} - which moves to {@code RELEASED} itself and does not go through
+         * {@link #onLeaseEnded}.
          */
         ENDED_ROW_HELD,
         /**

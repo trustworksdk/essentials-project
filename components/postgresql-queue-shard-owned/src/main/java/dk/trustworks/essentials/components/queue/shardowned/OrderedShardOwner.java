@@ -233,11 +233,11 @@ final class OrderedShardOwner implements BatchReadableOwner {
     private final    ShardWakeup                        wakeup;
     /**
      * Where this owner's lease row stands ({@link LeasedOwner#leaseRow()}). Anything but {@code HELD} stops this owner,
-     * rather than racing its successor. Written under {@link #stateLock}, so each transition reads and writes it as one
-     * step; volatile, so the pump's selection check on every pass reads it without taking the lock the handler threads
-     * contend for.
+     * rather than racing its successor. Every transition goes through {@link LeaseRowState#advanceTo}, one
+     * compare-and-set, not {@link #stateLock}: no field the lock guards changes with it, and the pump's selection check
+     * on every pass reads it without taking the lock the handler threads contend for.
      */
-    private volatile LeaseRow                           leaseRow     = LeaseRow.HELD;
+    private final    LeaseRowState                      leaseRow     = new LeaseRowState();
     /**
      * Set when this owner has been asked to give the shard up. See {@link #beginShedding()}.
      */
@@ -401,11 +401,7 @@ final class OrderedShardOwner implements BatchReadableOwner {
      * pass, before it has dispatched anything.
      */
     private void leaseLostBeforeTakeover() {
-        LeaseRow was;
-        synchronized (stateLock) {
-            was = leaseRow;
-            leaseRow = LeaseRow.RELEASED;
-        }
+        var was = leaseRow.advanceTo(LeaseRow.RELEASED);
         if (was == LeaseRow.HELD) {
             log.warn("Ordered shard {}: takeover charge rejected under fence {} — lease lost, stopping", shard, fence);
         } else {
@@ -1121,9 +1117,7 @@ final class OrderedShardOwner implements BatchReadableOwner {
             // real fencing rejection would delete messages the new owner is about to deliver, and for
             // an ordered key that is loss AND reordering at once.
             metrics.fencedOutAcks.increment();
-            synchronized (stateLock) {
-                leaseRow = LeaseRow.RELEASED;
-            }
+            leaseRow.advanceTo(LeaseRow.RELEASED);
             log.warn("Ordered shard {}: acknowledgement rejected under fence {} — lease lost, stopping", shard, fence);
             return;
         }
@@ -1320,7 +1314,7 @@ final class OrderedShardOwner implements BatchReadableOwner {
 
     @Override
     public LeaseRow leaseRow() {
-        return leaseRow;
+        return leaseRow.get();
     }
 
     /**
@@ -1338,26 +1332,25 @@ final class OrderedShardOwner implements BatchReadableOwner {
 
     @Override
     public void endKeepingLeaseRow() {
-        synchronized (stateLock) {
-            if (leaseRow != LeaseRow.HELD) {
-                return;
-            }
-            leaseRow = LeaseRow.ENDED_ROW_HELD;
+        if (leaseRow.advanceTo(LeaseRow.ENDED_ROW_HELD) != LeaseRow.HELD) {
+            return;
         }
         log.debug("Ordered unit {}: owner stopping under fence {}; its lease row is still to be released", shard, fence);
+        // As on the unordered lane: so the pump drops it on its next pass rather than at its backstop.
+        wakeup.signal();
     }
 
     @Override
     public void onLeaseEnded(LeaseEnd reason) {
-        LeaseRow was;
-        synchronized (stateLock) {
-            was = leaseRow;
-            leaseRow = LeaseRow.RELEASED;
+        var was = leaseRow.advanceTo(LeaseRow.RELEASED);
+        if (was == LeaseRow.RELEASED) {
+            return;
         }
-        if (was != LeaseRow.RELEASED) {
-            // See ShardOwner: per unit and therefore DEBUG, because the caller reports the pass.
-            log.debug("Ordered unit {}: lease {} under fence {}{}",
-                      shard, reason == LeaseEnd.TAKEN ? "taken" : "released", fence, was == LeaseRow.HELD ? ", owner stopping" : "");
+        // See ShardOwner: per unit and therefore DEBUG, because the caller reports the pass.
+        log.debug("Ordered unit {}: lease {} under fence {}{}",
+                  shard, reason == LeaseEnd.TAKEN ? "taken" : "released", fence, was == LeaseRow.HELD ? ", owner stopping" : "");
+        if (was == LeaseRow.HELD) {
+            wakeup.signal();
         }
     }
 }

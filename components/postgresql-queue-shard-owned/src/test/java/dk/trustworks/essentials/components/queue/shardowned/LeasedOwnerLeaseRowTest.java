@@ -17,8 +17,9 @@
 package dk.trustworks.essentials.components.queue.shardowned;
 
 import dk.trustworks.essentials.components.queue.shardowned.LeasedOwner.*;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.ValueSource;
+import org.junit.jupiter.params.provider.*;
 
 import javax.sql.DataSource;
 import java.lang.reflect.Proxy;
@@ -32,8 +33,65 @@ import static org.assertj.core.api.Assertions.assertThat;
  * stopping queue, end the owner in memory and keep the row ({@code ENDED_ROW_HELD}): it serves nothing, and still counts as
  * this instance's until its queue has released the row. Only the queue moves it on, to {@code RELEASED}, once the row is
  * released; a unit found taken goes there directly. The state never moves back.
+ * <p>
+ * The rule lives once, in {@link LeaseRowState}; the owner tests check that both owners delegate to it and that both
+ * signal their wake-up when they leave {@code HELD} from outside their pump, so the pump drops them on its next pass.
  */
 class LeasedOwnerLeaseRowTest {
+
+    @ParameterizedTest
+    @EnumSource(LeaseRow.class)
+    void the_state_only_ever_moves_forward_and_reports_where_it_was(LeaseRow start) {
+        for (var target : LeaseRow.values()) {
+            var state = stateAt(start);
+
+            var was = state.advanceTo(target);
+
+            assertThat(was).isEqualTo(start);
+            assertThat(state.get()).as("%s asked for %s", start, target)
+                                   .isEqualTo(target.ordinal() > start.ordinal() ? target : start);
+        }
+    }
+
+    @Test
+    void the_state_starts_held_and_may_skip_the_middle() {
+        var state = new LeaseRowState();
+        assertThat(state.get()).isEqualTo(LeaseRow.HELD);
+
+        assertThat(state.advanceTo(LeaseRow.RELEASED)).isEqualTo(LeaseRow.HELD);
+        assertThat(state.get()).isEqualTo(LeaseRow.RELEASED);
+    }
+
+    @Test
+    void the_states_are_declared_in_the_order_they_are_reached() {
+        // LeaseRowState compares ordinals: reordering the enum would silently reverse a transition.
+        assertThat(LeaseRow.values()).containsExactly(LeaseRow.HELD, LeaseRow.ENDED_ROW_HELD, LeaseRow.RELEASED);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"unordered", "ordered"})
+    void ending_an_owner_keeping_its_row_wakes_its_pump_once(String lane) {
+        var wakeup = new ShardWakeup();
+        var owner  = owner(lane, wakeup);
+
+        owner.endKeepingLeaseRow();
+        assertThat(wakeup.consume()).as("the pump drops the owner on its next pass, not at its backstop").isTrue();
+
+        owner.endKeepingLeaseRow();
+        owner.onLeaseEnded(LeaseEnd.RELEASED);
+        assertThat(wakeup.consume()).as("only leaving HELD wakes the pump: the owner was already out of its selection").isFalse();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"unordered", "ordered"})
+    void a_unit_found_taken_while_held_wakes_its_pump(String lane) {
+        var wakeup = new ShardWakeup();
+        var owner  = owner(lane, wakeup);
+
+        owner.onLeaseEnded(LeaseEnd.TAKEN);
+
+        assertThat(wakeup.consume()).isTrue();
+    }
 
     @ParameterizedTest
     @ValueSource(strings = {"unordered", "ordered"})
@@ -81,7 +139,17 @@ class LeasedOwnerLeaseRowTest {
         assertThat(owner.leaseRow()).as("a released row is never held again").isEqualTo(LeaseRow.RELEASED);
     }
 
+    private static LeaseRowState stateAt(LeaseRow start) {
+        var state = new LeaseRowState();
+        state.advanceTo(start);
+        return state;
+    }
+
     private static LeasedOwner owner(String lane) {
+        return owner(lane, new ShardWakeup());
+    }
+
+    private static LeasedOwner owner(String lane, ShardWakeup wakeup) {
         // Nothing here touches the database: the lease row's state is in memory.
         var noDatabase = (DataSource) Proxy.newProxyInstance(DataSource.class.getClassLoader(), new Class<?>[]{DataSource.class},
                                                              (proxy, method, args) -> {
@@ -92,9 +160,9 @@ class LeasedOwnerLeaseRowTest {
         var policy   = RedeliveryPolicy.fixed(Duration.ofSeconds(1), 3);
         if ("ordered".equals(lane)) {
             return new OrderedShardOwner(storage, 3, 1L, settings, (id, key, payload, type) -> { }, new ShardOwnerMetrics(), policy,
-                                         "instance-under-test", new ShardWakeup(), HandlerDispatch.inline(), false);
+                                         "instance-under-test", wakeup, HandlerDispatch.inline(), false);
         }
-        return new ShardOwner(storage, 3, 1L, settings, (id, payload, type) -> { }, new ShardOwnerMetrics(), policy, new ShardWakeup(),
+        return new ShardOwner(storage, 3, 1L, settings, (id, payload, type) -> { }, new ShardOwnerMetrics(), policy, wakeup,
                               "instance-under-test", HandlerDispatch.inline(), false);
     }
 }
