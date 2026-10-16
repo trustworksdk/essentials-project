@@ -836,6 +836,44 @@ public final class ShardOwnedStorage {
     }
 
     /**
+     * {@link #releaseLeases(String, Collection, String)}, also bounded by the fence each unit was taken under: a row
+     * {@code owner} has taken again since, under a newer fence, is left alone too.
+     * <p>
+     * The instance id alone cannot tell two incarnations of one instance apart. A queue stopped and started again in the
+     * same process keeps its instance id, and {@link #acquireLeaseGrant} hands it a row that already names it, under a new
+     * fence; a release by the earlier incarnation would then free the row the new one serves under.
+     *
+     * @param fenceByShard each shard to release, with the fence its owner holds it under
+     * @return how many leases were actually given up
+     */
+    public int releaseFencedLeases(String lane, Map<Integer, Long> fenceByShard, String owner) throws SQLException {
+        if (fenceByShard.isEmpty()) {
+            return 0;
+        }
+        var shards = new Integer[fenceByShard.size()];
+        var fences = new Long[fenceByShard.size()];
+        var index  = 0;
+        for (var entry : fenceByShard.entrySet()) {
+            shards[index] = entry.getKey();
+            fences[index] = entry.getValue();
+            index++;
+        }
+        try (var connection = dataSource.getConnection();
+             var statement = connection.prepareStatement(
+                     "UPDATE " + LEASE_TABLE + " l SET owner = NULL"
+                             + " FROM unnest(?::int[], ?::bigint[]) AS released(shard, fence)"
+                             + " WHERE l.queue_id = ? AND l.lane = ? AND l.owner = ?"
+                             + "   AND l.shard = released.shard AND l.fence = released.fence")) {
+            statement.setArray(1, connection.createArrayOf("int", shards));
+            statement.setArray(2, connection.createArrayOf("bigint", fences));
+            statement.setShort(3, queueId);
+            statement.setString(4, lane);
+            statement.setString(5, owner);
+            return statement.executeUpdate();
+        }
+    }
+
+    /**
      * Take or renew the shard's lease, bumping the fence on a change of owner.
      *
      * @return the fence held, or empty if another instance holds an unexpired lease
