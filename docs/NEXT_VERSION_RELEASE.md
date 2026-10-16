@@ -708,12 +708,15 @@ unaffected: the interface's `Instant` overloads still call its no-arg methods. (
   returns or the runtime is restarted. A
   release that fails is retried on every heartbeat, and until it succeeds the unit still counts towards the instance's
   fair share, so the instance takes no free shard in its place. What
-  they had handled but not acknowledged is redelivered. In 0.60.0 a pump thread that died left its shards leased to
-  the instance and delivering nothing until a restart. With no live pump left the instance acquires nothing, a queue
-  started or restarted on that runtime included (it used to take every free unit, report it owned and hand it back a
-  heartbeat later), and its
-  shards stay unowned (`QueueHealth.unownedShards`) until the `ShardRuntime` is restarted, which the WARN reporting
-  the hand-back then says ("for other instances only") instead of promising a live pump here; alert on
+  they had handled but not acknowledged is redelivered. Ending one of a dead pump's shards runs that shard's own code
+  right after the critical error; a throw there is logged at ERROR naming the queue, lane and shard, and the shard is
+  still counted and handed back. The pump's other shards are still ended and counted, even when logging that throw
+  fails too. Separately, the pump reads as dead on every path, a failed end included, so it gets no new shards. In
+  0.60.0 a pump thread that died left its shards leased to the instance and delivering nothing until a restart. With
+  no live pump left the instance acquires nothing, a queue started or restarted on that runtime included (it used to
+  take every free unit, report it owned and hand it back a heartbeat later), and its shards stay unowned
+  (`QueueHealth.unownedShards`) until the `ShardRuntime` is restarted, which the WARN reporting the hand-back then
+  says ("for other instances only") instead of promising a live pump here; alert on
   `shardsOnDeadPumps` staying above zero (§3). Both are readable only through `ShardOwnedQueue.metrics()`:
   `PostgresqlMessageQueue` keeps its metrics private and no `QueueObserver` callback reports them, so through
   `MessageQueue` (the Spring starter, the `DurableQueues` adapter) a dead pump is reported by its ERROR log line

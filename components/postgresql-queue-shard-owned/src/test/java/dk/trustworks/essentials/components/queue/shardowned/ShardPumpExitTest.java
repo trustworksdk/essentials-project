@@ -23,7 +23,7 @@ import ch.qos.logback.core.read.ListAppender;
 import dk.trustworks.essentials.components.queue.shardowned.spi.*;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.*;
 import org.postgresql.PGConnection;
 import org.slf4j.LoggerFactory;
 
@@ -588,6 +588,145 @@ class ShardPumpExitTest {
         } finally {
             runtime.stop();
         }
+    }
+
+    /**
+     * Ending one owner on a dying pump runs that owner's code ({@code onLeaseEnded} for an unordered one,
+     * {@code beginDraining} for an ordered one) right after a critical error, when another throw is most likely. A throw
+     * there is that owner's alone: the owners after it are still ended and counted, the pump still reads as dead - so new
+     * shards go to a live pump, and with none left the runtime has none - and its thread still reads as exited. It used to
+     * escape {@code markDead()} before the flag was set: the dead pump read as live and kept being handed new shards, the
+     * owners after the failing one stayed leased and unserved until a restart, and the pump never read as exited.
+     */
+    @ParameterizedTest
+    @CsvSource({"unordered, false", "unordered, true", "ordered, false", "ordered, true"})
+    void a_dying_pump_whose_owner_throws_as_it_is_ended_still_ends_the_others_and_reads_as_dead(String lane, boolean critical) {
+        var metrics = new ShardOwnerMetrics();
+        var runtime = new ShardRuntime(listenableDataSource(), pumps(1), new ShardOwnerMetrics());
+        var refused = critical ? new OutOfMemoryError("ending refused") : new AssertionError("ending refused");
+        try {
+            var throwing = new StubOwner((short) 7, 1, metrics, Behaviour.SERVED, lane);
+            throwing.onEnded = () -> { throw refused; };
+            throwing.onDrained = () -> { throw refused; };
+            var beside = new StubOwner((short) 7, 2, metrics, Behaviour.SERVED);
+            var pump   = runtime.pumpFor((short) 7, lane, 1);
+            runtime.place((short) 7, lane, 1).register(throwing);
+            runtime.place((short) 7, "unordered", 2).register(beside);
+            runtime.place((short) 7, "unordered", 3).register(new StubOwner((short) 7, 3, metrics, Behaviour.DIES));
+            assertThat(runtime.pumpFor((short) 7, "unordered", 2)).as("premise: every owner is on the one pump").isSameAs(pump);
+
+            awaitDeath("pump-0");
+            await().atMost(Duration.ofSeconds(10)).until(pump::hasExited);
+
+            assertThat(throwing.ended.size() + throwing.drains.get()).as("premise: ending the first owner was tried").isEqualTo(1);
+            assertThat(pump.isDead()).as("the pump reads as dead although ending one of its owners threw").isTrue();
+            assertThat(runtime.hasLivePump()).as("so new shards are not placed on it").isFalse();
+            assertThat(beside.ended).as("the owner after the one that threw is still ended").containsExactly(LeasedOwner.LeaseEnd.RELEASED);
+            assertThat(metrics.shardsOnDeadPumps.get()).as("and every owner is counted").isEqualTo(3);
+            assertThat(runtime.onDeadPump(throwing)).as("the owner that threw is still handed back by its queue").isTrue();
+            assertThat(runtime.onDeadPump(beside)).isTrue();
+            var failed = loggedEvents().stream()
+                                       .filter(event -> event.getLevel() == Level.ERROR)
+                                       .filter(event -> event.getFormattedMessage().contains("on the dead pump threw"))
+                                       .toList();
+            assertThat(failed).hasSize(1);
+            assertThat(failed.getFirst().getFormattedMessage()).contains("pump-0").contains("queue 7, " + lane + " shard 1").contains("shardsOnDeadPumps");
+            assertThat(failed.getFirst().getThrowableProxy().getMessage()).isEqualTo("ending refused");
+        } finally {
+            runtime.stop();
+        }
+        assertThat(metrics.shardsOnDeadPumps.get()).isZero();
+    }
+
+    /**
+     * The ERROR that reports a failed end can itself throw: it is logged right after the pump's critical error, when an
+     * {@code OutOfMemoryError} in the logging is as likely as in the owner. The owner is already counted by then, so that
+     * throw is dropped, and the owners after it are still ended and counted. It used to escape the loop in
+     * {@code markDead()}, leaving them leased, unserved and uncounted until a restart - although the pump read as dead.
+     */
+    @Test
+    void a_dying_pump_still_ends_and_counts_the_owners_after_one_whose_failed_end_cannot_be_logged() {
+        var metrics = new ShardOwnerMetrics();
+        var loggingRefused = new OutOfMemoryError("logging refused");
+        var refuseLogging = new AppenderBase<ILoggingEvent>() {
+            @Override
+            protected void append(ILoggingEvent event) {
+                // AppenderBase.doAppend catches an Exception from append, not an Error, so this reaches the log.error caller.
+                if (event.getLevel() == Level.ERROR && event.getFormattedMessage().contains("on the dead pump threw")) {
+                    throw loggingRefused;
+                }
+            }
+        };
+        refuseLogging.start();
+        pumpLogger.addAppender(refuseLogging);
+        var runtime = new ShardRuntime(listenableDataSource(), pumps(1), new ShardOwnerMetrics());
+        try {
+            var throwing = new StubOwner((short) 7, 1, metrics, Behaviour.SERVED);
+            throwing.onEnded = () -> { throw new AssertionError("ending refused"); };
+            var beside = new StubOwner((short) 7, 2, metrics, Behaviour.SERVED);
+            var pump   = runtime.pumpFor((short) 7, "unordered", 1);
+            runtime.place((short) 7, "unordered", 1).register(throwing);
+            runtime.place((short) 7, "unordered", 2).register(beside);
+            runtime.place((short) 7, "unordered", 3).register(new StubOwner((short) 7, 3, metrics, Behaviour.DIES));
+            assertThat(runtime.pumpFor((short) 7, "unordered", 2)).as("premise: every owner is on the one pump").isSameAs(pump);
+
+            awaitDeath("pump-0");
+            await().atMost(Duration.ofSeconds(10)).until(pump::hasExited);
+
+            assertThat(throwing.ended).as("premise: ending the first owner was tried").containsExactly(LeasedOwner.LeaseEnd.RELEASED);
+            assertThat(loggedEvents().stream().map(ILoggingEvent::getFormattedMessage))
+                    .as("premise: the ERROR for it was attempted, and refused")
+                    .anyMatch(message -> message.contains("queue 7, unordered shard 1 on the dead pump threw"));
+            assertThat(pump.isDead()).isTrue();
+            assertThat(runtime.hasLivePump()).isFalse();
+            assertThat(beside.ended).as("the owner after the one whose ERROR threw is still ended").containsExactly(LeasedOwner.LeaseEnd.RELEASED);
+            assertThat(metrics.shardsOnDeadPumps.get()).as("and every owner is counted").isEqualTo(3);
+            assertThat(runtime.onDeadPump(throwing)).isTrue();
+            assertThat(runtime.onDeadPump(beside)).as("and handed back by its queue").isTrue();
+        } finally {
+            runtime.stop();
+            pumpLogger.detachAppender(refuseLogging);
+        }
+        assertThat(metrics.shardsOnDeadPumps.get()).isZero();
+    }
+
+    /**
+     * An owner registered on a pump after it died is ended there too ({@code ShardPump.add}), and a throw from ending it is
+     * that owner's alone in the same way: it is still counted, and its queue still hands it back. A non-critical one does
+     * not reach the queue that registered it; a critical one does, as from every other per-owner guard, once the owner is
+     * counted.
+     */
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void an_owner_registered_on_a_dead_pump_whose_end_throws_is_still_counted_and_handed_back(boolean critical) {
+        var metrics = new ShardOwnerMetrics();
+        var runtime = new ShardRuntime(listenableDataSource(), pumps(1), new ShardOwnerMetrics());
+        var refused = critical ? new OutOfMemoryError("ending refused") : new AssertionError("ending refused");
+        try {
+            var dying = runtime.place((short) 7, "unordered", 1);
+            dying.register(new StubOwner((short) 7, 1, metrics, Behaviour.DIES));
+            awaitDeath("pump-0", dying.pump());
+            var late = new StubOwner((short) 7, 2, metrics, Behaviour.SERVED);
+            late.onEnded = () -> { throw refused; };
+
+            var registering = assertThatCode(() -> runtime.place((short) 7, "unordered", 2).register(late));
+
+            if (critical) {
+                registering.as("a critical error still reaches the caller").isSameAs(refused);
+            } else {
+                registering.doesNotThrowAnyException();
+            }
+            assertThat(late.ended).as("premise: ending it was tried").containsExactly(LeasedOwner.LeaseEnd.RELEASED);
+            assertThat(metrics.shardsOnDeadPumps.get()).as("counted although ending it threw").isEqualTo(2);
+            assertThat(runtime.onDeadPump(late)).as("and still handed back by its queue").isTrue();
+            assertThat(loggedEvents().stream()
+                                     .filter(event -> event.getLevel() == Level.ERROR)
+                                     .map(ILoggingEvent::getFormattedMessage))
+                    .anyMatch(message -> message.contains("queue 7, unordered shard 2 on the dead pump threw"));
+        } finally {
+            runtime.stop();
+        }
+        assertThat(metrics.shardsOnDeadPumps.get()).isZero();
     }
 
     /**
@@ -1260,6 +1399,10 @@ class ShardPumpExitTest {
          * Run after each {@code onLeaseEnded} is recorded.
          */
         volatile      Runnable          onEnded       = () -> {};
+        /**
+         * Run after each {@code beginDraining} is counted.
+         */
+        volatile      Runnable          onDrained     = () -> {};
 
         StubOwner(short queueId, int shard, ShardOwnerMetrics ownerMetrics, Behaviour behaviour) {
             this(queueId, shard, ownerMetrics, behaviour, "unordered");
@@ -1397,6 +1540,7 @@ class ShardPumpExitTest {
         @Override
         public void beginDraining() {
             drains.incrementAndGet();
+            onDrained.run();
         }
 
         @Override

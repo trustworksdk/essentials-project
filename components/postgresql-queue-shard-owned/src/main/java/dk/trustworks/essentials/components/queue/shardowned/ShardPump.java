@@ -163,14 +163,21 @@ final class ShardPump implements Runnable {
      */
     public void add(LeasedOwner owner) {
         requireNonNull(owner, "No owner provided");
+        Throwable endFailed = null;
         synchronized (deathLock) {
             owners.add(owner);
             // ShardRuntime routes new shards to live pumps, so this is reached only when none is left, or when the pump
             // died between the shard being placed on it and being handed to it (ShardRuntime.Placement). Either way
             // nothing will serve the shard here, so it is ended like the owners the pump held when it died (markDead).
             if (dead && !forgotten) {
-                endOnDeadPump(owner);
+                endFailed = endOnDeadPump(owner);
             }
+        }
+        // A throw from ending the owner is its own, logged by endOnDeadPump, and the owner is counted and handed back
+        // whatever it was. Only a critical error reaches the caller - the queue registering the shard - as from every
+        // per-owner guard.
+        if (endFailed != null) {
+            Exceptions.rethrowIfCriticalError(endFailed);
         }
         // So a pump parked on its backstop starts serving the new shard now rather than up to half a
         // second later.
@@ -184,7 +191,7 @@ final class ShardPump implements Runnable {
     /**
      * Whether this pump's thread ended on a critical error while its runtime was running ({@link #run()}). A dead pump
      * serves nothing, and {@link ShardRuntime} routes new shards to the live ones. True only once every owner it held has
-     * been ended and counted ({@link #markDead()}).
+     * been counted and ended - or ending it threw, which still leaves it counted ({@link #markDead()}).
      */
     boolean isDead() {
         return dead;
@@ -297,24 +304,32 @@ final class ShardPump implements Runnable {
             died = e;
             throw e;
         } finally {
-            if (running.get()) {
-                log.error("{} died while its runtime is still running, and nothing restarts it. The {} shard(s) it served are "
-                                  + "handed back to the cluster by their queues' next heartbeat (an ordered unit once no key is in "
-                                  + "a handler; keys still there after shedGrace are named at WARN), for another instance or a live "
-                                  + "pump here to take over; acknowledgements pending on "
-                                  + "them are not flushed, so those messages are redelivered. Shards acquired from now on go to the "
-                                  + "runtime's live pumps; with none left this instance acquires nothing. Restart the ShardRuntime "
-                                  + "(or the application) to get the pump back. Until handed back, these shards are counted in "
-                                  + "shardsOnDeadPumps, and those whose takeover was failing in shardsAwaitingTakeover",
-                          name, owners.size(), died);
-                markDead();
-            } else {
-                stalls.forgetAll();
-            }
-            exited = true;
-            if (dead && !running.get()) {
-                // The runtime stopped while this pump was dying, possibly after its stop had looked for exited pumps.
-                forgetAfterExit();
+            // Nested, so a throw from the bookkeeping - the ERROR below, after a critical error - still marks the pump
+            // dead and exited: unmarked it read as live and was handed new shards, and unexited it was never forgotten.
+            try {
+                if (running.get()) {
+                    try {
+                        log.error("{} died while its runtime is still running, and nothing restarts it. The {} shard(s) it served are "
+                                          + "handed back to the cluster by their queues' next heartbeat (an ordered unit once no key is in "
+                                          + "a handler; keys still there after shedGrace are named at WARN), for another instance or a live "
+                                          + "pump here to take over; acknowledgements pending on "
+                                          + "them are not flushed, so those messages are redelivered. Shards acquired from now on go to the "
+                                          + "runtime's live pumps; with none left this instance acquires nothing. Restart the ShardRuntime "
+                                          + "(or the application) to get the pump back. Until handed back, these shards are counted in "
+                                          + "shardsOnDeadPumps, and those whose takeover was failing in shardsAwaitingTakeover",
+                                  name, owners.size(), died);
+                    } finally {
+                        markDead();
+                    }
+                } else {
+                    stalls.forgetAll();
+                }
+            } finally {
+                exited = true;
+                if (dead && !running.get()) {
+                    // The runtime stopped while this pump was dying, possibly after its stop had looked for exited pumps.
+                    forgetAfterExit();
+                }
             }
         }
     }
@@ -328,13 +343,33 @@ final class ShardPump implements Runnable {
      * Set first, a reader could see the death with only part of the count. Nothing is lost by the owners being ended
      * before the flag: {@link #add} decides under the lock, and {@link ShardRuntime#onDeadPump} asks
      * {@link #awaitsHandBack} (under the lock) rather than {@link #isDead()}.
+     * <p>
+     * Last, but on every path: ending an owner runs its code right after a critical error, when another throw is most
+     * likely. A throw from one owner is that owner's alone ({@link #endOnDeadPump}) - logged, not rethrown, even a critical
+     * one, because the pump is already dying and {@link #run()} rethrows its death - so the owners after it are still
+     * ended and counted. The same holds for anything {@link #endOnDeadPump} still throws - an {@code OutOfMemoryError}
+     * in its ERROR line, after the owner is counted, or, rarely, in counting it, which leaves that one owner uncounted:
+     * the throw is dropped here and the loop goes on, or the owners after it would stay leased and unserved,
+     * uncounted, until a restart. And {@link #dead} is set in a {@code finally}:
+     * left unset, the pump read as live, and {@link ShardRuntime#pumpFor} kept placing new shards on a pump that serves
+     * nothing.
      */
     private void markDead() {
         synchronized (deathLock) {
-            for (var owner : owners) {
-                endOnDeadPump(owner);
+            try {
+                for (var owner : owners) {
+                    try {
+                        endOnDeadPump(owner);
+                    } catch (Throwable loggingFailed) {
+                        // Mostly endOnDeadPump's own ERROR line, after the owner was counted. Rarely counting it
+                        // (countedDead.add or the metric increment, an OutOfMemoryError say): that one owner is then
+                        // not ended, and may be left uncounted and never handed back. Either way the loop goes on.
+                        // Dropped, not logged: logging may be what just failed, and run() rethrows the pump's death.
+                    }
+                }
+            } finally {
+                dead = true;
             }
-            dead = true;
         }
     }
 
@@ -344,16 +379,33 @@ final class ShardPump implements Runnable {
      * ordered owner drains: a key may still be in one of its handlers on the shared executor, and the lane never releases
      * a unit with a key in flight. Its queue's heartbeat releases the lease, an ordered one once nothing is in a handler.
      * Called under {@link #deathLock}.
+     * <p>
+     * Counted before the owner's code runs, so a throw from {@code onLeaseEnded} or {@code beginDraining} leaves the owner
+     * counted and awaiting hand-back ({@link #awaitsHandBack}): its queue still releases the lease row and then calls
+     * {@code onLeaseEnded(RELEASED)} itself, which the owners make safe to repeat. The throw is logged at ERROR here and
+     * returned, not thrown: whether it propagates is the caller's choice ({@link #markDead()}, {@link #add}). What can
+     * still throw out of here is that ERROR line, with the owner counted, or, rarely (an {@code OutOfMemoryError}),
+     * counting it, before it is; {@link #markDead()} drops either.
+     *
+     * @return what ending the owner threw, or {@code null}
      */
-    private void endOnDeadPump(LeasedOwner owner) {
+    private Throwable endOnDeadPump(LeasedOwner owner) {
         if (!countedDead.add(owner)) {
-            return;
+            return null;
         }
         owner.ownerMetrics().shardsOnDeadPumps.incrementAndGet();
-        if ("ordered".equals(owner.lane())) {
-            owner.beginDraining();
-        } else {
-            owner.onLeaseEnded(LeasedOwner.LeaseEnd.RELEASED);
+        try {
+            if ("ordered".equals(owner.lane())) {
+                owner.beginDraining();
+            } else {
+                owner.onLeaseEnded(LeasedOwner.LeaseEnd.RELEASED);
+            }
+            return null;
+        } catch (RuntimeException | Error e) {
+            log.error("{}: ending queue {}, {} shard {} on the dead pump threw; the shard is still counted in shardsOnDeadPumps, "
+                              + "and its queue's heartbeat still hands its lease back",
+                      name, owner.queueId(), owner.lane(), owner.shard(), e);
+            return e;
         }
     }
 
