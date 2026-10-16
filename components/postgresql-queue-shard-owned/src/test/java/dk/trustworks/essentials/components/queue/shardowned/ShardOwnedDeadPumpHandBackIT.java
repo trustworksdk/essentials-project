@@ -33,6 +33,7 @@ import java.sql.Connection;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.*;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -488,6 +489,94 @@ class ShardOwnedDeadPumpHandBackIT {
                 assertThat(unitsOwnedBy("unordered", "dead-pump-stop-u")).as("every lease, the dead pump's included, released").isZero();
                 assertThat(queue.metrics().shardsOnDeadPumps.get()).isZero();
             } finally {
+                queue.stop();
+            }
+        }
+    }
+
+    /**
+     * A queue stopped while one of its owners on a dead pump is left {@code HELD}, because ending it as the pump died threw,
+     * flushes no acknowledgement for that owner: its state was kept by the thread a critical error ended, and is not
+     * trusted to say what was handled.
+     * <p>
+     * A throw from ending an owner on a dying pump leaves the owner counted on the dead pump, awaiting hand-back, in the
+     * state it was in ({@code ShardPump.endOnDeadPump}): {@code HELD}, which reads as serving. stop() picked the owners
+     * whose acknowledgements it flushes by that state alone, so it flushed this one. A real owner's ending cannot be made
+     * to throw, so a stand-in is handed to the dead pump and listed in the queue as the queue lists the units it leases.
+     * Its unit is outside the queue's shard range, so it has no lease row to collide with a real one. A long lease keeps
+     * the heartbeat from handing it back first.
+     */
+    @Test
+    void a_queue_stopped_flushes_nothing_for_a_dead_pumps_owner_whose_ending_threw() throws Exception {
+        var settings = settings(2, ShardOwnerSettings.defaults().shedGrace(), Duration.ofSeconds(60));
+        try (var runtime = new ShardRuntime(dataSource, settings)) {
+            var queue = queue(runtime, "dead-pump-stop-untrusted");
+            try {
+                queue.startConsuming((messageId, payload, payloadType) -> { }, settings, SHARD_COUNT);
+                var doomed = runtime.pumpFor(QUEUE_ID, "unordered", 0);
+                kill(doomed);
+                var untrusted = new EndingThrowsOnceOwner(SHARD_COUNT);
+                doomed.add(untrusted);
+                assertThat(runtime.onDeadPump(untrusted)).as("premise: counted on the dead pump, awaiting hand-back").isTrue();
+                assertThat(untrusted.leaseHeld()).as("premise: ending it threw, so it is still HELD").isTrue();
+                ownersOf(queue).add(untrusted);
+
+                queue.stop();
+
+                assertThat(runtime.isStarted()).as("premise: the runtime outlives the queue").isTrue();
+                assertThat(untrusted.flushesOnStop.get()).as("no acknowledgement flushed for an owner on a dead pump").isZero();
+                assertThat(queue.metrics().shardsOnDeadPumps.get()).as("the stopped queue counts nothing on the dead pump").isZero();
+            } finally {
+                queue.stop();
+            }
+        }
+    }
+
+    /**
+     * A queue stopped after another instance took one of its dead pump's shards, before a rebalance dropped that shard,
+     * stops counting it in {@code shardsOnDeadPumps} on a runtime that outlives the queue.
+     * <p>
+     * The heartbeat's lease check finds the shard taken and moves its owner to {@code RELEASED}, so it is not among the
+     * owners whose rows the stop gives back, and only the rebalance's {@code removeIf} uncounted it. A stop that ran first,
+     * or a rebalance that failed, left it counted until the runtime stopped: the stop told the runtime only about the owners
+     * whose rows it gave back. Here every rebalance fails - the membership table is renamed away, and a rebalance first
+     * counts the live instances in it - and every release is refused, so no hand-back uncounts the dead pump's shards
+     * either.
+     */
+    @Test
+    void a_queue_stopped_before_a_rebalance_drops_a_dead_pumps_taken_shard_stops_counting_it() throws Exception {
+        var settings = settings(2);
+        try (var runtime = new ShardRuntime(dataSource, settings)) {
+            var queue = queue(runtime, "dead-pump-taken-stop");
+            try {
+                queue.startConsuming((messageId, payload, payloadType) -> { }, settings, SHARD_COUNT);
+                assertThat(queue.shardsHeld()).as("premise: one instance holds every shard").isEqualTo(SHARD_COUNT);
+                var doomed     = runtime.pumpFor(QUEUE_ID, "unordered", 0);
+                var deadShards = unitsOn(runtime, doomed, "unordered", SHARD_COUNT);
+                var taken      = (int) deadShards.getFirst();
+
+                failLeaseReleases("unordered", true);
+                kill(doomed);
+                awaitReleasesRefused(QUEUE_ID, deadShards, "before the take");
+                failRebalances(true);
+                var lostBefore = queue.metrics().leasesLost.sum();
+
+                takeAs("unordered", taken, "dead-pump-taker");
+
+                Awaitility.await("the lease check finds shard " + taken + " taken").atMost(Duration.ofSeconds(20))
+                          .until(() -> queue.metrics().leasesLost.sum() > lostBefore);
+                assertThat(queue.metrics().shardsOnDeadPumps.get()).as("premise: no rebalance has dropped the taken shard")
+                                                                  .isEqualTo(deadShards.size());
+                assertThat(ownerOf("unordered", taken)).as("premise: not taken back").isEqualTo("dead-pump-taker");
+
+                queue.stop();
+
+                assertThat(runtime.isStarted()).as("premise: the runtime outlives the queue").isTrue();
+                assertThat(queue.metrics().shardsOnDeadPumps.get()).as("the stopped queue counts nothing on the dead pump, the taken shard included")
+                                                                  .isZero();
+            } finally {
+                failRebalances(false);
+                failLeaseReleases("unordered", false);
                 queue.stop();
             }
         }
@@ -1191,6 +1280,125 @@ class ShardOwnedDeadPumpHandBackIT {
             latch.await(30, TimeUnit.SECONDS);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+        }
+    }
+
+    /**
+     * Make every rebalance of every queue fail, or stop doing so: the membership table is renamed away, and a rebalance
+     * counts the live instances in it before anything else. The instance heartbeat and the stop's deregistration fail too,
+     * and are logged and carried on from. Idempotent either way.
+     */
+    private void failRebalances(boolean fail) throws Exception {
+        try (var connection = dataSource.getConnection(); var statement = connection.createStatement()) {
+            if (fail) {
+                statement.execute("ALTER TABLE " + ShardOwnedSchema.INSTANCE_TABLE + " RENAME TO " + ShardOwnedSchema.INSTANCE_TABLE + "_away");
+            } else {
+                statement.execute("ALTER TABLE IF EXISTS " + ShardOwnedSchema.INSTANCE_TABLE + "_away RENAME TO " + ShardOwnedSchema.INSTANCE_TABLE);
+            }
+        }
+    }
+
+    /**
+     * The queue's own list of the owners it leases units for, which {@link ShardOwnedQueue#stop()} reads.
+     */
+    @SuppressWarnings("unchecked")
+    private static List<LeasedOwner> ownersOf(ShardOwnedQueue queue) throws ReflectiveOperationException {
+        var field = ShardOwnedQueue.class.getDeclaredField("owners");
+        field.setAccessible(true);
+        return (List<LeasedOwner>) field.get(queue);
+    }
+
+    /**
+     * An unordered owner of {@link #QUEUE_ID} whose first {@code endKeepingLeaseRow} throws, leaving it {@code HELD}, as a
+     * throw ending an owner on a dying pump leaves it; later calls end it. Counts its {@code flushOnStop} calls.
+     */
+    private static final class EndingThrowsOnceOwner implements LeasedOwner {
+        private final    ShardOwnerMetrics metrics       = new ShardOwnerMetrics();
+        private final    int               shard;
+        private final    AtomicBoolean     endThrown     = new AtomicBoolean();
+        private final    AtomicInteger     flushesOnStop = new AtomicInteger();
+        private volatile LeaseRow          leaseRow      = LeaseRow.HELD;
+
+        EndingThrowsOnceOwner(int shard) {
+            this.shard = shard;
+        }
+
+        @Override
+        public int pumpOnce(Connection connection) {
+            return 0;
+        }
+
+        @Override
+        public boolean needsAttention() {
+            return false;
+        }
+
+        @Override
+        public void onTakeover(Connection connection) {
+        }
+
+        @Override
+        public void flushOnStop(Connection connection) {
+            flushesOnStop.incrementAndGet();
+        }
+
+        @Override
+        public long parkDeadlineMillis() {
+            return Long.MAX_VALUE;
+        }
+
+        @Override
+        public int shard() {
+            return shard;
+        }
+
+        @Override
+        public short queueId() {
+            return QUEUE_ID;
+        }
+
+        @Override
+        public ShardOwnerMetrics ownerMetrics() {
+            return metrics;
+        }
+
+        @Override
+        public long fence() {
+            return 1;
+        }
+
+        @Override
+        public String lane() {
+            return "unordered";
+        }
+
+        @Override
+        public LeaseRow leaseRow() {
+            return leaseRow;
+        }
+
+        @Override
+        public void endKeepingLeaseRow() {
+            if (endThrown.compareAndSet(false, true)) {
+                throw new IllegalStateException("simulated failure ending the owner on its dying pump");
+            }
+            if (leaseRow == LeaseRow.HELD) {
+                leaseRow = LeaseRow.ENDED_ROW_HELD;
+            }
+        }
+
+        @Override
+        public void beginDraining() {
+        }
+
+        @Override
+        public int inFlight() {
+            return 0;
+        }
+
+        @Override
+        public void onLeaseEnded(LeaseEnd reason) {
+            leaseRow = LeaseRow.RELEASED;
         }
     }
 

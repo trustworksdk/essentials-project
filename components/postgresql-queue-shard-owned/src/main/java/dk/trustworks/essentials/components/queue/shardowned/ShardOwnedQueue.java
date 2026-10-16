@@ -1440,9 +1440,15 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             heartbeat = null;
         }
         // `serving` is read now, before ending the owners below moves every one of them to ENDED_ROW_HELD: only
-        // those still serve, and only their acknowledgements are flushed below.
+        // those still serve, and only their acknowledgements are flushed below. Not an owner on a dead pump, whatever its
+        // state: its pump ended it as it died (ENDED_ROW_HELD), or left it HELD when ending it threw (ShardPump.endOnDeadPump),
+        // and either way its state was kept by the thread a critical error ended. Asked before releaseRuntime: a
+        // last borrower stops the shared runtime there, and a stopped runtime's pumps forget what they counted.
         var shardRuntime = runtime;
-        var serving      = held.stream().filter(LeasedOwner::leaseHeld).toList();
+        var serving      = held.stream()
+                               .filter(LeasedOwner::leaseHeld)
+                               .filter(owner -> shardRuntime == null || !shardRuntime.onDeadPump(owner))
+                               .toList();
         // Drain BEFORE releaseRuntime: the pumps are what flush a finishing handler's acknowledgement,
         // and a runtime this queue created stops them. Without a drain, whatever was in a handler at
         // stop lost its acknowledgement and was redelivered by the successor - and on the ordered lane
@@ -1495,11 +1501,12 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                          instanceId, e);
             }
         });
-        // This queue has given them up, released or left to lapse: a shared runtime keeps running, and
-        // would otherwise count those on a dead pump in shardsOnDeadPumps until it stops. A no-op for
-        // the others.
+        // This queue drops every owner it has, released, left to lapse, or found taken (RELEASED, so not in `held`): a
+        // shared runtime keeps running, and would otherwise count those on a dead pump in shardsOnDeadPumps until it stops.
+        // Every owner, not only `held`: a dead pump's owner the lease check found taken is uncounted only by the
+        // rebalance's removeIf, which a stop or a failed rebalance can come before. A no-op for an owner no dead pump counts.
         if (shardRuntime != null) {
-            held.forEach(shardRuntime::handedBack);
+            owners.forEach(shardRuntime::handedBack);
         }
         owners.clear();
         ownedShards.clear();
