@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  PMD rules for the tw-code-review plugin's JVM adapter (reviews.tools.jvm.pmd),
+  which finds this file at the repository root and reports only on added lines.
+  Not wired into the Maven build.
+
+  PMD's own errorprone, security, multithreading and bestpractices categories,
+  minus the rules that contradict this codebase's deliberate idioms. Measured on
+  the main sources with PMD 7.28.0: 4616 violations with whole categories, 357
+  with the exclusions below.
+-->
+<ruleset name="essentials-review"
+         xmlns="http://pmd.sourceforge.net/ruleset/2.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://pmd.sourceforge.net/ruleset/2.0.0 https://pmd.sourceforge.io/ruleset_2_0_0.xsd">
+
+  <description>Bug, security, concurrency and best-practice rules for code review.</description>
+
+  <rule ref="category/java/errorprone.xml">
+    <!-- Framework code catches Exception on purpose: retry, redelivery and dead-letter handling. -->
+    <exclude name="AvoidCatchingGenericException"/>
+    <!-- Fluent accessors (orderId() over field orderId) are the house API style. -->
+    <exclude name="AvoidFieldNameMatchingMethodName"/>
+    <exclude name="AvoidDuplicateLiterals"/>
+    <exclude name="AvoidLiteralsInIfCondition"/>
+    <exclude name="NullAssignment"/>
+    <exclude name="MissingSerialVersionUID"/>
+    <!-- Re-added below, with *Test / *IT classes suppressed. -->
+    <exclude name="AvoidAccessibilityAlteration"/>
+  </rule>
+
+  <!-- Test classes (*Test / *IT, and classes nested in them) may set private state through
+       reflection to stage a state that only a database read would otherwise reach (a handler's
+       keys in flight); every other class, main or test helper, is still checked. -->
+  <rule ref="category/java/errorprone.xml/AvoidAccessibilityAlteration">
+    <properties>
+      <property name="violationSuppressXPath"
+                value="./ancestor-or-self::ClassDeclaration[ends-with(@SimpleName, 'Test') or ends-with(@SimpleName, 'IT')]"/>
+    </properties>
+  </rule>
+
+  <rule ref="category/java/security.xml"/>
+
+  <rule ref="category/java/multithreading.xml">
+    <!-- A Jakarta EE container rule; this library manages its own threads and executors. -->
+    <exclude name="DoNotUseThreads"/>
+    <!-- Virtual-thread pinning on synchronized ended in JDK 24; the build targets 25. -->
+    <exclude name="AvoidSynchronizedStatement"/>
+    <exclude name="AvoidSynchronizedAtMethodLevel"/>
+    <exclude name="AvoidUsingVolatile"/>
+    <!-- Flags every HashMap field, guarded or not. -->
+    <exclude name="UseConcurrentHashMap"/>
+  </rule>
+
+  <rule ref="category/java/bestpractices.xml">
+    <!-- Wildcard imports are the house style. -->
+    <exclude name="OnDemandImport"/>
+    <!-- SLF4J parameterised messages need no isDebugEnabled() guard. -->
+    <exclude name="GuardLogStatement"/>
+    <exclude name="ImplicitFunctionalInterface"/>
+    <!-- A test asserts every observable consequence of the one behaviour it names
+         (row held, unit served, owner counted); splitting it repeats the setup per assert. -->
+    <exclude name="UnitTestContainsTooManyAsserts"/>
+  </rule>
+
+</ruleset>
