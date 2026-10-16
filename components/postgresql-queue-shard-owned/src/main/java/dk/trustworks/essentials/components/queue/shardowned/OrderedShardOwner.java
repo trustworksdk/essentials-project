@@ -176,8 +176,9 @@ final class OrderedShardOwner implements BatchReadableOwner {
      */
     private final Set<String> reportedStuckKeys = new HashSet<>();
     /**
-     * When the queue's heartbeat first found this owner on a dead pump with a key in a handler ({@link #stuckOnDeadPump()}),
-     * by {@link System#nanoTime()}; null until then. Guarded by {@link #stateLock}.
+     * When the wait {@link #stuckOnDeadPump()} reports began, by {@link System#nanoTime()}: when this owner began draining
+     * ({@link #drainingSinceNanos}), which on a dead pump is the pump's death, or, if it had not, when the queue's heartbeat
+     * first asked. Null until the heartbeat first asks. Guarded by {@link #stateLock}.
      */
     private       Long        deadPumpWaitSinceNanos;
     /**
@@ -247,6 +248,13 @@ final class OrderedShardOwner implements BatchReadableOwner {
      * whether or not its keys finish in time.
      */
     private final    AtomicBoolean                      draining     = new AtomicBoolean();
+    /**
+     * When {@link #beginDraining()} set {@link #draining}, by {@link System#nanoTime()}; null until then. A dying pump drains
+     * its ordered owners as it dies, so on a dead pump this is the death (for an owner added to the pump after it died, the
+     * add), which {@link #stuckOnDeadPump()} times its wait from. Volatile: written by the thread that ends the owner (its
+     * pump, the thread adding it to a dead pump, or {@code stop()}), read by the queue's heartbeat.
+     */
+    private volatile Long                               drainingSinceNanos;
     private volatile long                               shedDeadlineNanos;
     /**
      * Whether this owner's instance has confirmed its own liveness recently enough to dispatch —
@@ -1186,6 +1194,7 @@ final class OrderedShardOwner implements BatchReadableOwner {
     @Override
     public void beginDraining() {
         if (draining.compareAndSet(false, true)) {
+            drainingSinceNanos = System.nanoTime();
             wakeup.signal();
         }
     }
@@ -1205,8 +1214,11 @@ final class OrderedShardOwner implements BatchReadableOwner {
      * with a key still in a handler. The unit is not handed back while one is - a successor would start that key beside it
      * - so a handler that never returns keeps it leased and unserved until the runtime is restarted. This is the same
      * failure an abandoned shed reports ({@link #advanceShed}), and it gets the same treatment: past the grace, one WARN
-     * naming the keys. The wait is timed from the first heartbeat that asks, which is at most one heartbeat after the
-     * death.
+     * naming the keys. The wait is timed from when this owner began draining ({@link #drainingSinceNanos}): the dying
+     * pump ends it with {@link #beginDraining()}, so on a dead pump that is the death (for an owner added to the pump
+     * after it died, the add, which ends it). The WARN therefore comes {@code shedGrace} after the pump's death ERROR,
+     * and its wait matches the time since that ERROR. An owner that never began draining is timed from the first
+     * heartbeat that asks.
      * <p>
      * Reported once per owner. The owner drains from the moment its pump dies ({@link #beginDraining()}), and its pump,
      * the only thread that dispatches, is gone, so no key enters {@link #keysInFlight} after the first report: the keys it
@@ -1222,7 +1234,8 @@ final class OrderedShardOwner implements BatchReadableOwner {
                 return Optional.empty();
             }
             if (deadPumpWaitSinceNanos == null) {
-                deadPumpWaitSinceNanos = now;
+                var drainingSince = drainingSinceNanos;
+                deadPumpWaitSinceNanos = drainingSince != null ? drainingSince : now;
             }
             var waited = now - deadPumpWaitSinceNanos;
             if (deadPumpWaitReported || waited < settings.shedGraceNanos()) {
@@ -1237,7 +1250,9 @@ final class OrderedShardOwner implements BatchReadableOwner {
      * The keys an ordered unit on a dead pump is waiting for, and how long it has waited. See {@link #stuckOnDeadPump()}.
      *
      * @param keys   the keys still in a handler
-     * @param waited how long they have held up the hand-back, counted from the first heartbeat that found them
+     * @param waited how long they have held up the hand-back, counted from the pump's death, or, for an owner that
+     *               never began draining, from the first heartbeat that asked (see
+     *               {@link OrderedShardOwner#stuckOnDeadPump()})
      */
     record StuckOnDeadPump(List<String> keys, Duration waited) {
         /**
