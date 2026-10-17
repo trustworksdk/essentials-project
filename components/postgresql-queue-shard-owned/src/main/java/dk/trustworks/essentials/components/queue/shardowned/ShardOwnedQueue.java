@@ -2201,8 +2201,11 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * A constant rather than a setting: it is not a tuning knob but the answer to "how long is a
      * graceful shutdown allowed to spend on things that do not have to happen", and exposing it
      * would widen a published contract for a number nobody should need to choose.
+     * <p>
+     * Package-private for {@link PostgresqlMessageQueue#stop()}, which waits no longer than this for a
+     * {@code consume()} or {@code start()} still starting its consumers.
      */
-    private static final Duration SHUTDOWN_BUDGET = Duration.ofSeconds(2);
+    static final Duration SHUTDOWN_BUDGET = Duration.ofSeconds(2);
 
     /**
      * Run the stop path's database work with a deadline, on a thread that can be abandoned.

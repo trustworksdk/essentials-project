@@ -28,8 +28,12 @@ import dk.trustworks.essentials.components.queue.shardowned.spi.MessageId;
 import dk.trustworks.essentials.components.queue.shardowned.spi.MessageQueue;
 import dk.trustworks.essentials.components.queue.shardowned.spi.RedeliveryRequested;
 import dk.trustworks.essentials.components.queue.shardowned.spi.Subscription;
+import dk.trustworks.essentials.shared.Exceptions;
 import org.slf4j.*;
 
+import java.time.Duration;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
@@ -57,6 +61,32 @@ class ShardOwnedDurableQueueConsumer implements DurableQueueConsumer {
     private final JSONSerializer                 jsonSerializer;
     private final Consumer<DurableQueueConsumer> onCancel;
     private final DeliveryDispatch               delivery;
+
+    /**
+     * How long a {@link #stop()} waits for a {@link #start()} still subscribing: the 2 s each lane's own stop waits for
+     * that lane's start ({@code ShardOwnedQueue.stop()}), and {@code PostgresqlMessageQueue.stop()} for a
+     * {@code consume()}.
+     */
+    static final Duration STOP_WAITS_FOR_START = Duration.ofSeconds(2);
+
+    /**
+     * Held across the whole of {@link #start()} and {@link #stop()}, so they run one at a time. A lock rather than this
+     * object's monitor, which it used to be, because a stop must be able to stop waiting for it: a start holds it across
+     * the queue's {@code consume()}, which registers the instance and leases units on the database, and nothing bounds
+     * that - a statement caught by a network partition blocks until the driver's {@code socketTimeout}, and without one
+     * indefinitely.
+     */
+    private final ReentrantLock lifecycleLock = new ReentrantLock();
+    /**
+     * Guards {@link #holder} and {@link #stopOwed}. Held for a few reads and writes of them only.
+     */
+    private final Object        handOver      = new Object();
+    private       Holder        holder        = Holder.NONE;
+    /**
+     * Whether a {@link #stop()} that did not get {@link #lifecycleLock} has stopped the consumer while a {@link #start()}
+     * was subscribing, so the start must stop the subscription the queue returns.
+     */
+    private       boolean       stopOwed;
 
     private volatile Subscription subscription;
 
@@ -100,42 +130,154 @@ class ShardOwnedDurableQueueConsumer implements DurableQueueConsumer {
         return operation.getRedeliveryPolicy();
     }
 
+    /**
+     * {@inheritDoc}
+     * <p>
+     * A {@link #stop()} that gave up waiting for this start, still subscribing, has stopped the consumer without it. This
+     * start then stops the subscription the queue returns, logging at WARN rather than throwing what that stop throws,
+     * since the stop's caller has already returned, and returns with the consumer not started.
+     */
     @Override
-    public synchronized void start() {
-        if (subscription != null) {
-            return;
-        }
+    public void start() {
+        lifecycleLock.lock();
         try {
-            subscription = queue.consume(new MessageHandler() {
-                @Override
-                public void handle(MessageId messageId, String key, byte[] payload, int payloadType) {
-                    throw new IllegalStateException("The engine delivers with the key order");
-                }
+            if (subscription != null) {
+                return;
+            }
+            synchronized (handOver) {
+                holder = Holder.STARTING;
+            }
+            Subscription subscribed;
+            boolean      owed;
+            try {
+                subscribed = queue.consume(new MessageHandler() {
+                    @Override
+                    public void handle(MessageId messageId, String key, byte[] payload, int payloadType) {
+                        throw new IllegalStateException("The engine delivers with the key order");
+                    }
 
-                @Override
-                public void handle(MessageId messageId, String key, long keyOrder, byte[] payload, int payloadType) {
-                    deliver(messageId, key, keyOrder, payload, payloadType);
+                    @Override
+                    public void handle(MessageId messageId, String key, long keyOrder, byte[] payload, int payloadType) {
+                        deliver(messageId, key, keyOrder, payload, payloadType);
+                    }
+                }, toConsumerOptions(operation));
+            } catch (Exception e) {
+                throw new DurableQueueException("Failed to start consumer '" + consumerName() + "'", e, queueName());
+            } finally {
+                synchronized (handOver) {
+                    owed = stopOwed;
+                    stopOwed = false;
+                    holder = Holder.NONE;
                 }
-            }, toConsumerOptions(operation));
+            }
+            if (owed) {
+                stopForAStopThatDidNotWait(subscribed);
+                return;
+            }
+            subscription = subscribed;
             log.info("Consumer '{}' started on queue '{}'", consumerName(), queueName());
-        } catch (Exception e) {
-            throw new DurableQueueException("Failed to start consumer '" + consumerName() + "'", e, queueName());
+        } finally {
+            lifecycleLock.unlock();
         }
     }
 
+    /**
+     * {@inheritDoc}
+     * <p>
+     * Called while a {@link #start()} on another thread is still subscribing - the queue's {@code consume()} registers the
+     * instance and leases units on the database, and nothing bounds that - this waits for it up to
+     * {@link #STOP_WAITS_FOR_START}, and no longer; on an interrupted thread not at all, returning with the interrupt flag
+     * still set. Past that, the consumer is not started from then on, and the start stops the subscription itself once
+     * {@code consume()} returns. Until then, a lane that {@code consume()} has already started may still deliver to the
+     * handler. A stop called while another stop is stopping the subscription past that wait returns at once.
+     */
     @Override
-    public synchronized void stop() {
-        if (subscription == null) {
-            return;
+    public void stop() {
+        var     interrupted = false;
+        boolean locked;
+        try {
+            locked = lifecycleLock.tryLock(STOP_WAITS_FOR_START.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            // Restored, so the caller still sees it.
+            Thread.currentThread().interrupt();
+            interrupted = true;
+            locked = false;
+        }
+        while (!locked) {
+            Holder heldBy;
+            synchronized (handOver) {
+                heldBy = holder;
+                if (heldBy == Holder.STARTING) {
+                    stopOwed = true;
+                }
+            }
+            if (heldBy == Holder.STARTING) {
+                if (interrupted) {
+                    log.warn("Consumer '{}' was interrupted while its stop waited for its start on queue '{}' to subscribe, and "
+                                     + "stopped without it. The start stops the subscription once the queue's consume() returns",
+                             consumerName(), queueName());
+                } else {
+                    log.warn("Consumer '{}' gave up waiting {} for its start on queue '{}' to subscribe, and stopped without it. "
+                                     + "The start stops the subscription once the queue's consume() returns",
+                             consumerName(), STOP_WAITS_FOR_START, queueName());
+                }
+                return;
+            }
+            if (heldBy == Holder.STOPPING) {
+                return;
+            }
+            // Holder.NONE: whoever holds the lock has just taken it, or is just letting go of it.
+            Thread.onSpinWait();
+            locked = lifecycleLock.tryLock();
         }
         try {
-            subscription.stop();
+            if (subscription == null) {
+                return;
+            }
+            synchronized (handOver) {
+                holder = Holder.STOPPING;
+            }
+            try {
+                subscription.stop();
+            } finally {
+                // Dropped even when the stop throws: a subscription's stop throws only once both of its lanes have stopped (a
+                // QueueObserver failing for a release), and one left here made every later start() return without consuming.
+                subscription = null;
+                synchronized (handOver) {
+                    holder = Holder.NONE;
+                }
+            }
+            log.info("Consumer '{}' stopped on queue '{}'", consumerName(), queueName());
         } finally {
-            // Dropped even when the stop throws: a subscription's stop throws only once both of its lanes have stopped (a
-            // QueueObserver failing for a release), and one left here made every later start() return without consuming.
-            subscription = null;
+            lifecycleLock.unlock();
         }
-        log.info("Consumer '{}' stopped on queue '{}'", consumerName(), queueName());
+    }
+
+    /**
+     * What the holder of {@link #lifecycleLock} is doing, for a {@link #stop()} that did not get it.
+     */
+    private enum Holder {
+        /**
+         * A start or stop that found nothing to do, or one that has just taken the lock or is about to let go of it: all
+         * brief, so the stop tries the lock again.
+         */
+        NONE,
+        /** A {@link #start()} subscribing: the stop leaves stopping the subscription to it. */
+        STARTING,
+        /** A {@link #stop()} stopping the subscription: the stop has nothing left to do. */
+        STOPPING
+    }
+
+    private void stopForAStopThatDidNotWait(Subscription subscribed) {
+        try {
+            subscribed.stop();
+            log.info("Consumer '{}' stopped on queue '{}' as it finished starting, for a stop that did not wait for it", consumerName(), queueName());
+        } catch (RuntimeException | Error e) {
+            Exceptions.rethrowIfCriticalError(e);
+            log.warn("Consumer '{}' failed stopping its subscription to queue '{}' for a stop that did not wait for its start. That stop "
+                             + "has returned, so this is logged rather than thrown; both lanes have still been stopped",
+                     consumerName(), queueName(), e);
+        }
     }
 
     @Override

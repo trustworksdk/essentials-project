@@ -17,6 +17,7 @@
 package dk.trustworks.essentials.components.queue.shardowned;
 
 import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.UnsynchronizedAppenderBase;
 import ch.qos.logback.core.read.ListAppender;
 import com.zaxxer.hikari.*;
 import dk.trustworks.essentials.components.queue.shardowned.spi.*;
@@ -1641,6 +1642,146 @@ class ShardOwnedLifecycleIT {
             dropSlowAcquire();
             queue.stop();
             queueLogger.detachAppender(logged);
+        }
+    }
+
+    /**
+     * A {@code MessageQueue.stop()} called while a {@code consume()} or {@code start()} of the {@link PostgresqlMessageQueue}
+     * is still leasing returns within its budget, and leaves nothing of that start running. The queue's stop used to take
+     * the monitor {@code consume()} and {@code start()} hold across their consumers' starts, database work included, so
+     * it waited for the whole of a start caught by a network partition and never reached the timed wait each
+     * {@code ShardOwnedQueue.stop()} keeps to. It now waits up to the 2 s budget for the lock (on an interrupted thread
+     * not at all), then stops without it: the unordered lane's consumer, still leasing, waits up to its own 2 s budget and
+     * hands the stop's work to its start; the {@code consume()} or {@code start()} then starts no further lane and stops
+     * both lanes again. A trigger holds the unordered lane's start inside the acquire of shard 1 for 10 s.
+     */
+    @ParameterizedTest
+    @CsvSource({"consume, false", "start, false", "consume, true"})
+    void a_message_queue_stop_called_while_a_start_is_still_leasing_returns_within_its_budget_and_leaves_nothing_running(String startedBy,
+                                                                                                                          boolean interrupted) throws Exception {
+        var instanceId   = "spi-stop-mid-" + startedBy + "-" + interrupted;
+        var subscription = new AtomicReference<Subscription>();
+        try (var queue = new PostgresqlMessageQueue(dataSource, QUEUE_ID, SHARD_COUNT, instanceId)) {
+            CompletableFuture<Void> starting;
+            if ("consume".equals(startedBy)) {
+                slowTheAcquireOf("unordered", instanceId, 1, 10);
+                starting = CompletableFuture.runAsync(() -> subscription.set(consumeUnchecked(queue)));
+            } else {
+                subscription.set(consumeUnchecked(queue));
+                Awaitility.await().atMost(Duration.ofSeconds(20))
+                          .alias("premise: both lanes hold units before the queue is stopped and started again")
+                          .until(() -> subscription.get().unorderedShardsHeld() > 0 && subscription.get().orderedUnitsHeld() > 0);
+                queue.stop();
+                slowTheAcquireOf("unordered", instanceId, 1, 10);
+                starting = CompletableFuture.runAsync(queue::start);
+            }
+            Awaitility.await().atMost(Duration.ofSeconds(10)).until(this::aHeartbeatIsSleeping);
+
+            var stopTook = new AtomicLong();
+            var stopping = new Thread(() -> {
+                if (interrupted) {
+                    Thread.currentThread().interrupt();
+                }
+                var stopCalled = System.nanoTime();
+                queue.stop();
+                stopTook.set(System.nanoTime() - stopCalled);
+            });
+            stopping.start();
+            stopping.join(20_000);
+
+            assertThat(stopping.isAlive()).as("the stop returned").isFalse();
+            assertThat(Duration.ofNanos(stopTook.get()))
+                    .as(interrupted ? "an interrupted stop waits for neither the queue's lock nor the lane's start"
+                                    : "the stop waits 2 s for the queue's lock and 2 s for the lane's start, and a margin")
+                    .isLessThan(Duration.ofMillis(interrupted ? 1_500 : 5_500));
+            assertThat(starting).as("premise: the " + startedBy + "() was still leasing when the stop returned").isNotDone();
+            assertThat(queue.isStarted()).as("the stop left the queue not started").isFalse();
+
+            starting.get(30, TimeUnit.SECONDS);
+
+            assertThat(queue.isStarted()).as("the " + startedBy + "(), finding the stop, left the queue not started").isFalse();
+            assertThat(subscription.get()).as("a consume() still returns its subscription").isNotNull();
+            assertThat(subscription.get().isStarted()).as("neither lane is started").isFalse();
+            // The start registered the instance and leased shard 0 before it reached shard 1: the stop's work, done by the
+            // start, deregisters and releases them, and nothing leases or registers again afterwards.
+            Awaitility.await().during(Duration.ofSeconds(1)).atMost(Duration.ofSeconds(10)).until(
+                    () -> !instanceRegistered(instanceId) && unitsOwnedBy("unordered", instanceId) == 0 && unitsOwnedBy("ordered", instanceId) == 0);
+        } finally {
+            dropSlowAcquire();
+        }
+    }
+
+    /**
+     * A {@code consume()} that a {@code MessageQueue.stop()} gave up waiting for leaves the queue not started without
+     * marking it started on the way. It used to mark it started as it registered its pair, and to mark it not started
+     * again only after waiting for every stop still stopping without the lock, so {@code isStarted()} read true after
+     * a stop had returned with the queue stopped. A trigger holds the unordered lane's start inside the acquire of shard
+     * 1 for 10 s; the first stop returns while it is held, and a second stop that also gave up waiting is held inside its
+     * WARN, so the {@code consume()} waits for it with its pair registered.
+     */
+    @Test
+    void a_consume_a_message_queue_stop_gave_up_waiting_for_never_reads_as_started_after_that_stop_returned() throws Exception {
+        var instanceId        = "spi-stop-owed-not-started";
+        var subscription      = new AtomicReference<Subscription>();
+        var holdTheNextStop   = new AtomicBoolean();
+        var secondStopHeld    = new CountDownLatch(1);
+        var releaseSecondStop = new CountDownLatch(1);
+        var holdingAppender = new UnsynchronizedAppenderBase<ILoggingEvent>() {
+            @Override
+            protected void append(ILoggingEvent event) {
+                if (event.getFormattedMessage().contains("gave up waiting") && holdTheNextStop.compareAndSet(true, false)) {
+                    secondStopHeld.countDown();
+                    awaitQuietly(releaseSecondStop);
+                }
+            }
+        };
+        var queueLogger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(PostgresqlMessageQueue.class);
+        holdingAppender.start();
+        queueLogger.addAppender(holdingAppender);
+        try (var queue = new PostgresqlMessageQueue(dataSource, QUEUE_ID, SHARD_COUNT, instanceId)) {
+            slowTheAcquireOf("unordered", instanceId, 1, 10);
+            var consuming = new Thread(() -> subscription.set(consumeUnchecked(queue)));
+            consuming.start();
+            Awaitility.await().atMost(Duration.ofSeconds(10)).until(this::aHeartbeatIsSleeping);
+
+            queue.stop();
+
+            assertThat(consuming.isAlive()).as("premise: the consume() was still leasing when the first stop returned").isTrue();
+            assertThat(queue.isStarted()).as("the first stop left the queue not started").isFalse();
+
+            holdTheNextStop.set(true);
+            var secondStop = new Thread(queue::stop);
+            secondStop.start();
+            assertThat(secondStopHeld.await(10, TimeUnit.SECONDS)).as("premise: a second stop gave up waiting and is held in its WARN").isTrue();
+            Awaitility.await().atMost(Duration.ofSeconds(20))
+                      .alias("premise: the consume() has registered its pair and waits for the second stop to finish stopping")
+                      .until(() -> Arrays.stream(consuming.getStackTrace()).anyMatch(frame -> "awaitStopsWithoutLock".equals(frame.getMethodName())));
+
+            assertThat(queue.isStarted()).as("the consume() did not mark the queue started after the first stop returned").isFalse();
+
+            releaseSecondStop.countDown();
+            secondStop.join(20_000);
+            consuming.join(20_000);
+
+            assertThat(secondStop.isAlive()).as("the second stop returned").isFalse();
+            assertThat(consuming.isAlive()).as("the consume() returned").isFalse();
+            assertThat(queue.isStarted()).as("the consume() left the queue not started").isFalse();
+            assertThat(subscription.get()).as("a consume() still returns its subscription").isNotNull();
+            assertThat(subscription.get().isStarted()).as("neither lane is started").isFalse();
+            Awaitility.await().during(Duration.ofSeconds(1)).atMost(Duration.ofSeconds(10)).until(
+                    () -> !instanceRegistered(instanceId) && unitsOwnedBy("unordered", instanceId) == 0 && unitsOwnedBy("ordered", instanceId) == 0);
+        } finally {
+            releaseSecondStop.countDown();
+            queueLogger.detachAppender(holdingAppender);
+            dropSlowAcquire();
+        }
+    }
+
+    private static Subscription consumeUnchecked(PostgresqlMessageQueue queue) {
+        try {
+            return queue.consume((messageId, key, payload, payloadType) -> { }, ConsumerOptions.defaults());
+        } catch (SQLException e) {
+            throw new IllegalStateException(e);
         }
     }
 
