@@ -862,6 +862,10 @@ entries are in [`essentials-plugin/CHANGELOG.md`](../essentials-plugin/CHANGELOG
   manifest stamped at or below that copy's version (typos stay loud), but on one stamped with a newer `1.x`
   it is printed as a note and the lint exits 0. Unknown-key findings now read `endpoints/0: unknown key
   'rateLimit'`, and `slice-lint --json` gains a `notes` list.
+- **`slice.yaml` gains an optional `requirements` field** (schema 1.4): the requirement ids a slice implements,
+  written as the project's requirement source names them (`requirements: [REQ-ORDERS-12]`). `slice-lint`
+  checks only that it is a non-empty list of distinct, non-empty strings; a requirement-trace tool such as
+  sdd's checks the ids themselves. The plugin never writes the field and every rewrite keeps it as written.
 - **`/essentials:slice-enrich`** drafts the absent human-owned manifest fields (`flow`, `scenarios`, `summary`,
   `invariants`, `tier`, `consistency`, `featureFlag`, `maps`) from evidence in the code and tests, and writes
   only what you accept.

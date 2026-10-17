@@ -92,6 +92,13 @@
       "items": { "$ref": "#/$defs/scenario" },
       "description": "The slice's specification by example, in Event Modeling's given / when / then form, naming the slice's own messages. Data that is rendered and checked, not a test — the test that runs a scenario is named in its `test`. Which message kinds each slice kind may name, and from which of its own lists, is checked by scripts/slice-lint.py (gate 1(d)); see manifest-guide.md §3."
     },
+    "requirements": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 },
+      "description": "Requirement ids this slice implements, as the project's requirement source names them (e.g. REQ-ORDERS-12). Written by a person or a spec-driven generator; never derived by a scaffolding skill, and never rewritten. The id grammar belongs to the requirement source, so this schema checks only that each id is a non-empty string and none repeats; a toolchain that owns a requirement trace checks the ids against it. Optional; see manifest-guide.md §3."
+    },
     "code": { "type": "object", "description": "Optional, estate-level code-symbol-graph ids." },
     "dependsOn": { "type": "array", "items": { "type": "string" } }
   },
@@ -131,7 +138,7 @@
         "handles", "serves", "publishes", "consumes", "dispatches", "provides", "endpoints", "schedule",
         "externalSystem", "direction", "maps", "writes", "reads", "owns", "projections", "invariants",
         "forbidden", "statutory", "featureFlag", "sla", "observability", "characterization", "tests", "arch",
-        "flow", "scenarios", "code", "dependsOn" ] } ] },
+        "flow", "scenarios", "requirements", "code", "dependsOn" ] } ] },
       "properties": {
         "endpoints": { "items": { "propertyNames": { "anyOf": [ { "$ref": "#/$defs/extensionKey" }, { "enum": ["method", "path", "auth", "capability", "maps"] } ] } } },
         "provides": { "items": { "propertyNames": { "anyOf": [ { "$ref": "#/$defs/extensionKey" }, { "enum": ["name", "note", "consumedBy"] } ] } } },

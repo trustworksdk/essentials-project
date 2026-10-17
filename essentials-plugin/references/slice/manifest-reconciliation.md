@@ -18,7 +18,7 @@ The single most important distinction. Getting it wrong destroys work.
 | Class | Fields | Rule |
 |---|---|---|
 | **Machine-derived** | `handles`, `publishes`, `consumes`, `dispatches`, `serves`, `endpoints`, `writes`, `owns`, `reads`, `projections` (including `from` **and `aggregateTypes`**), `schedule`, `language`, `lane`, `tests.*.present` | Read from the code. On a conflict the **code wins** — it is what actually runs |
-| **Human-owned** | `summary`, `owner`, `status`, `stability`, `invariants[].text`, `notes`, `forbidden`, `supersedes`, `flow`, `scenarios`, `tier`, `profile`, `sla`, `statutory`, `observability`, `x-*` | Never overwritten. Preserved byte-for-byte, including comments and ordering where the writer can manage it |
+| **Human-owned** | `summary`, `owner`, `status`, `stability`, `invariants[].text`, `notes`, `forbidden`, `supersedes`, `flow`, `scenarios`, `requirements`, `tier`, `profile`, `sla`, `statutory`, `observability`, `x-*` | Never overwritten. Preserved byte-for-byte, including comments and ordering where the writer can manage it |
 | **Derived, but a judgement** | `invariants[].enforcedBy`, `reads[].via`, `projections[].consistency`, `provides`, `endpoints[].capability` | Proposable from code, but confirm rather than assume: `consistency` follows the processor type, `enforcedBy` follows the class that throws |
 
 A field that is machine-derived is safe to regenerate on every run. A human-owned field that disagrees

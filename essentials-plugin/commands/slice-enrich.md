@@ -68,9 +68,8 @@ that does not parse: `propose` skips it and lists it under `skipped`; name each 
 count them in the report and name `/essentials:slice-check`. Exit 2 is "could not run": stop and say why.
 
 **Check the schema copy knows 1.4** before proposing anything, per `references/slice/manifest-guide.md`
-§3 ("A generator writes `flow` and `scenarios` only where the project's schema copy knows them"): look
-for a `scenarios` property in the project's `scripts/slice-yaml.schema.json`. When the project has a copy
-and it lacks the property, the pre-commit hook would reject every manifest this command writes. Offer
+§3 ("Stamp what you wrote for"): look for a root `x-manifestVersion` of `"1.4"` or later in the
+project's `scripts/slice-yaml.schema.json`. When the project has a copy and it lacks one, the pre-commit hook would reject every manifest this command writes. Offer
 `/essentials:upgrade` (Group A2 refreshes the gate) first, and stop unless the user chooses to go on with
 `--dry-run` only. A project with no lint gate is checked against the plugin's own schema, which `apply`
 validates against anyway.

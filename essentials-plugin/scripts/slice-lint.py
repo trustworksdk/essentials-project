@@ -272,7 +272,8 @@ def validate_schema(parsed, schema, findings, notes):
     if gate is not None:
         known = validator_cls({"$schema": schema.get("$schema"), "$defs": schema["$defs"], "$ref": GATE_REF})
         newer = validator_cls({"$schema": schema.get("$schema"), **schema["allOf"][gate]["if"]})
-    copy_version = schema.get("x-manifestVersion", "this copy's")
+    copy_version = schema.get("x-manifestVersion")
+    defined_by = f"schema {copy_version}" if copy_version else "the project's schema copy"
 
     for path, doc in parsed.items():
         for error in sorted(validator.iter_errors(doc), key=lambda e: list(e.absolute_path)):
@@ -298,7 +299,7 @@ def validate_schema(parsed, schema, findings, notes):
                 what = f"unknown key '{key}'" if key is not None else error.message
                 if tolerated:
                     notes.append(
-                        f"{path}: {where}: {what} — not defined by schema {copy_version}; the manifest "
+                        f"{path}: {where}: {what} — not defined by {defined_by}; the manifest "
                         f"is stamped {doc.get('schemaVersion')}, so it is accepted unchecked. "
                         "/essentials:upgrade refreshes the schema copy"
                     )

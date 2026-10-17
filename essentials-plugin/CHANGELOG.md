@@ -47,6 +47,14 @@ targets, with a `-N` suffix for plugin-only releases.
   any JSON Schema 2020-12 validator agrees. Unknown-key findings name the key (`endpoints/0: unknown key
   'rateLimit'`), and the unknown-root-key hint, which never fired, now does. The Slice Atlas no longer
   annotates `x-` keys in scenarios as unknown.
+- **Schema 1.4: optional `requirements`** — the requirement ids a slice implements, as the project's
+  requirement source names them (`requirements: [REQ-ORDERS-12]`). The schema checks the shape only (a
+  non-empty list of distinct, non-empty strings); a toolchain that keeps a requirement trace checks the ids.
+  Human- or generator-owned like `flow`: no slice skill writes it, `/essentials:slice-enrich` never proposes
+  it, and a manifest carrying it is stamped `"1.4"`. A generator now checks the project's schema copy for an
+  `x-manifestVersion` of `"1.4"` or later, rather than for a `scenarios` property, before writing `flow`,
+  `scenarios` or `requirements`. A slice-lint note on a copy without `x-manifestVersion` names "the
+  project's schema copy" rather than reading "schema this copy's".
 - `/essentials:slice-map`'s closed list of checks gains the completeness rule (a read-model column no
   inbound event carries) and the scenario and adoption checks (a `given` event nothing publishes, an
   unknown field, a `test:` that resolves to no test, a malformed scenario, no `flow:`, no scenarios). All

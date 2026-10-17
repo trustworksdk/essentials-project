@@ -13,7 +13,7 @@ Every slice directory carries a `slice.yaml` and a `CLAUDE.md`. They are generat
 
 | Field | Notes |
 |---|---|
-| `schemaVersion` | `"1.4"` — readers accept any `1.x`, so an older stamp stays valid and needs no restamp. A manifest carrying `flow` or `scenarios` is stamped `"1.4"` (§3). A newer `1.x` than the project's schema copy is accepted, its unknown keys reported as notes (§3) |
+| `schemaVersion` | `"1.4"` — readers accept any `1.x`, so an older stamp stays valid and needs no restamp. A manifest carrying `flow`, `scenarios` or `requirements` is stamped `"1.4"` (§3). A newer `1.x` than the project's schema copy is accepted, its unknown keys reported as notes (§3) |
 | `slice` | `<bc>.<slice-id>` — **snake_case on the JVM** (`orders.place_order`); hyphens are illegal in package dirs |
 | `kind` | `command` \| `view` \| `automation` \| `translation` |
 | `bc` | owning bounded context |
@@ -38,7 +38,7 @@ Schema-required is the floor; Essentials writes the stricter set so the manifest
 | view | `serves` | `projections` (**with `from`** — see §3), `reads`, `endpoints` |
 | automation | `consumes` **or** `schedule` | `dispatches`, `invariants` |
 | translation | `externalSystem`; plus `consumes` + `maps` unless `direction: outbound` | `direction`, `tests.contract` |
-| any kind | — | optional, never required: `flow` (the journey, §3); `scenarios` (given / when / then, §3 — written by a generator or a person; the plugin's slice skills do not write it, and `/essentials:slice-enrich` drafts it from existing tests for a person to accept) |
+| any kind | — | optional, never required: `flow` (the journey, §3); `scenarios` (given / when / then, §3 — written by a generator or a person; the plugin's slice skills do not write it, and `/essentials:slice-enrich` drafts it from existing tests for a person to accept); `requirements` (the requirement ids the slice implements, §3 — written by a person or a spec-driven generator, never by the plugin) |
 
 **Every kind declares what triggers it, but not all in the same field.** A view uses
 `projections[].from`; automations use `consumes` or `schedule`; translations use `consumes`. §3 has
@@ -377,6 +377,19 @@ a command slice always writes `publishes` and a view slice always writes `projec
   existing tests — each scenario names the test it came from in `test` — and writes only those a person
   accepts; a slice with no mapped test gets a suggestion, not a draft. A slice without scenarios is not
   a defect — the map shows its invariants and test kinds in their place.
+- **`requirements` names the requirements a slice implements** (schema 1.4, optional, any kind):
+
+  ```yaml
+  requirements: [REQ-ORDERS-12, NFR-ORDERS-3]
+  ```
+
+  Each id is written as the project's requirement source names it — a sphinx-needs id, an issue key,
+  whatever the project traces against. The schema checks only the shape: a non-empty list of
+  non-empty strings with no duplicates. The id grammar belongs to the requirement source, so a
+  toolchain that keeps a requirement trace (sdd's, for one) checks the ids against it; Essentials does
+  not. **Who writes it.** A person or a spec-driven generator. The plugin's slice skills never derive
+  it, `/essentials:slice-enrich` never proposes it — no source the plugin reads names a requirement —
+  and every rewriter carries it through verbatim (`manifest-reconciliation.md` §1).
 - **A key starting with `x-` is an extension key.** It is valid on the root and on every mapping a
   manifest holds — an endpoint, a projection, a scenario, a step — at any `schemaVersion`
   (`x-team-oncall: payments`, `x-ticket: PAY-112`). No toolchain reads one, so it is documentation, not
@@ -389,20 +402,22 @@ a command slice always writes `publishes` and a view slice always writes `projec
   still checked. A stamp that is not `1.x` gets no tolerance. Values are not keys: a known key with a
   value its enum does not list fails at any stamp.
 - **Stamp what you wrote for.** A generator stamps the schema version whose fields it wrote, and writes
-  `flow` and `scenarios` only with a stamp of `"1.4"` or later. A project copy older than 1.4 has no
+  `flow`, `scenarios` and `requirements` only with a stamp of `"1.4"` or later. A project copy older than 1.4 has no
   version gate and rejects any unknown key whatever the stamp, and every project with the lint gate
   carries its **own copy** (`scripts/slice-yaml.schema.json`, installed by `/essentials:init` Step 9 or
-  `/essentials:upgrade` Group A2). So, before writing either field:
+  `/essentials:upgrade` Group A2). So, before writing any of them:
 
   1. Check the project's `scripts/slice-yaml.schema.json` — or, in a project without a lint gate,
-     the plugin's `references/slice/slice-yaml.schema.json` — for a `scenarios` property.
-  2. If it is absent, write neither field and tell the user to run `/essentials:upgrade`, which
-     refreshes the gate (Group A2). Do not add the fields and leave the gate red.
-  3. Stamp `schemaVersion: "1.4"` on a manifest that carries either field. Readers accept any `1.x`,
+     the plugin's `references/slice/slice-yaml.schema.json` — for a root `x-manifestVersion` of
+     `"1.4"` or later. A copy without one predates the version gate and knows none of the three.
+  2. If it is absent, write none of the fields and tell the user why: the project's schema copy
+     predates 1.4, and `/essentials:upgrade` refreshes it (Group A2). Do not add the fields and leave
+     the gate red.
+  3. Stamp `schemaVersion: "1.4"` on a manifest that carries any of them. Readers accept any `1.x`,
      so a manifest without them needs no restamp.
 
   `/essentials:slice-enrich` follows these steps: it checks the schema copy before proposing and its
-  script stamps 1.4 when it writes either field.
+  script stamps 1.4 when it writes `flow` or `scenarios`.
 
 ### Validating a manifest
 

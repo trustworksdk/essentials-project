@@ -466,8 +466,8 @@ Machine-derived fields (`handles`, `publishes`, **`consumes`**, **`dispatches`**
 `writes`, `owns`, `reads`, `projections` **including `from` and `aggregateTypes`**) are overwritten from the code;
 hand-written prose is preserved byte-for-byte; contradictions are reported rather than silently
 resolved. Refresh the pointer file only after the user accepts gate 12's offer — never silently.
-`flow` and `scenarios` are never written or rewritten: they are generator- or human-owned
-(`manifest-reconciliation.md` §1). Where they are absent, `/essentials:slice-enrich` drafts them from
+`flow`, `scenarios` and `requirements` are never written or rewritten: they are generator- or human-owned
+(`manifest-reconciliation.md` §1). Where `flow` or `scenarios` is absent, `/essentials:slice-enrich` drafts it from
 the code's cause and effect and the slice's tests, and writes only what a person accepts — name it in
 the report rather than drafting here. A derived field the refresh changes can leave a scenario naming a
 message the slice no longer has; slice-lint's `1(d)` then reports it — report it on, do not edit the

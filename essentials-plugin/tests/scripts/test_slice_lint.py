@@ -360,6 +360,8 @@ VALID = [
         sc("out", when=step(E, "OrderPlaced"), then=[step(X, "CreateInvoice")])]}),
     ("flow-one", "command", {"flow": "checkout"}),
     ("flow-several", "view", {"flow": ["checkout", "returns_2"]}),
+    # any id grammar: the requirement source owns it, not this schema
+    ("requirements", "command", {"requirements": ["REQ-ORDERS-12", "PROJ-481", "nfr.latency.p99"]}),
     # a view on the service-entity lane reads entity state: it has no events to be given
     ("view-given-state-entity-lane", "view", {"lane": "service-entity",
                                               "scenarios": [sc(given=[step(S, "ShippingOrder")],
@@ -485,6 +487,10 @@ INVALID = [
     ("flow-empty-list", "command", {"flow": []}, [("1(b)", "flow")]),
     ("flow-duplicate", "command", {"flow": ["checkout", "checkout"]}, [("1(b)", "flow")]),
     ("flow-number", "command", {"flow": 3}, [("1(b)", "flow")]),
+    ("requirements-empty-list", "command", {"requirements": []}, [("1(b)", "requirements")]),
+    ("requirements-duplicate", "command", {"requirements": ["REQ-A-1", "REQ-A-1"]}, [("1(b)", "requirements")]),
+    ("requirements-empty-id", "command", {"requirements": [""]}, [("1(b)", "requirements/0")]),
+    ("requirements-scalar", "command", {"requirements": "REQ-A-1"}, [("1(b)", "requirements")]),
 ]
 
 
@@ -669,8 +675,22 @@ class UnknownKeys(unittest.TestCase):
                                           scenarios=[sc(when=step(C, "CancelOrder"), then={"nothing": True, "why": "x"})]))
                 self.assertEqual((code, doc["findings"]), (0, []))
                 self.assertEqual(len(doc["notes"]), 2)
-                self.assertIn(f"stamped {stamp}", doc["notes"][0])
-                self.assertIn("unknown key 'futureField' — not defined by schema 1.4", doc["notes"][0])
+                self.assertTrue(all(f"stamped {stamp}" in n for n in doc["notes"]))
+                self.assertTrue(any("(root): unknown key 'futureField' — not defined by schema 1.4" in n
+                                    for n in doc["notes"]))
+                self.assertTrue(any("scenarios/0/then: unknown key 'why'" in n for n in doc["notes"]))
+
+    def test_note_names_the_copy_when_it_carries_no_version(self):
+        # a hand-edited copy that kept the gate but lost x-manifestVersion
+        with tempfile.TemporaryDirectory() as tmp:
+            copy = json.loads(SCHEMA.read_text())
+            copy.pop("x-manifestVersion")
+            copy_path = Path(tmp) / "copy.json"
+            copy_path.write_text(json.dumps(copy))
+            code, doc = lint(manifest(tmp, "1.5", futureField=1), "--schema", str(copy_path))
+        self.assertEqual(code, 0)
+        self.assertEqual(len(doc["notes"]), 1)
+        self.assertIn("not defined by the project's schema copy; the manifest is stamped 1.5", doc["notes"][0])
 
     def test_newer_stamp_still_checks_every_known_key(self):
         # tolerance covers keys the copy does not know, never a known key with a wrong value

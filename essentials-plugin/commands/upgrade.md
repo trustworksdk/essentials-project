@@ -194,9 +194,10 @@ grep -n "${PREFIX}.githooks/pre-commit" "${TOP}/${HOOKS}/pre-commit" 2>/dev/null
   running a stale schema validates against yesterday's contract and reports a clean pass it has not
   earned, and a stale hook can call the script in a way it no longer runs. The refresh replaces the
   script, the schema and the hook together, as one fix — they are one contract and must not drift
-  apart. A schema copy older than 1.4 also rejects `flow` and `scenarios`, the optional fields a
-  spec-driven generator writes: the generator checks the project's copy for a `scenarios` property
-  and, when it is absent, writes neither and sends the user here (`manifest-guide.md` §3). The refresh
+  apart. A schema copy older than 1.4 also rejects `flow`, `scenarios` and `requirements`, the
+  optional fields a spec-driven generator writes: the generator checks the project's copy for an
+  `x-manifestVersion` of `"1.4"` or later and, when it is absent, writes none of them and sends the
+  user here (`manifest-guide.md` §3). The refresh
   is what lets those fields in. A project that chose "script only" has no `.githooks/pre-commit`;
   that is not a finding, and the refresh covers the other two. If the project's hook carries lines of
   its own beyond the template's, show the diff and offer to merge rather than replace.
