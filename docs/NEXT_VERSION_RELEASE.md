@@ -9,9 +9,12 @@ _Add an entry in the same commit as the change. Cite the commit or PR. Write it 
 changes for them, and what they must do, if anything. Purely internal refactors, test-only changes and CI
 plumbing that no user sees go in §7 at most, as one line._
 
-**So far:** no breaking change, twenty-two framework changes with a behaviour change (§1.1, §1.1.13–§1.1.22 in the
-durable queues and units of work), additive features (§2), bug fixes (§3), plugin releases `0.60.0-6` and `0.60.0-7`, and example and tooling updates. Nothing here requires a migration
-step, except one for `essentials.schema.mode=validate` deployments: re-run `emit` and apply the script before the
+**So far:** no public API removed, but three changes can break code written against 0.60.0 (§1): two additions that
+can stop a processor subclass or `CommandHandler` implementation of your own compiling, and one runtime break for
+direct callers of `ShardOwnedStorage`'s 0.60.0 takeover-charge methods, which now throw. Twenty-two framework changes
+with a behaviour change (§1.1, §1.1.13–§1.1.22 in the durable queues and units of work), additive features (§2), bug
+fixes (§3), plugin releases `0.60.0-6` and `0.60.0-7`, and example and tooling updates. Beyond those three, the only
+migration step is for `essentials.schema.mode=validate` deployments: re-run `emit` and apply the script before the
 first start (§1). Supported PostgreSQL is now 15+ (§1). The persisted
 format changes for one shape only, back to what 0.50 wrote: a type with a public `is`-getter (§1.1.2).
 
