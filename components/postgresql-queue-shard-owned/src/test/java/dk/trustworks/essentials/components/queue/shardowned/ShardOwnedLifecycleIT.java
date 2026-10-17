@@ -553,29 +553,67 @@ class ShardOwnedLifecycleIT {
      * the tick, which checked only that, kept its owner: listed, on a pump and reported acquired beside the new run's own
      * owner of the same unit, until a lease check found its fence superseded. Undoing it must not cost the new run the
      * unit either: the tick's release is bounded by its own fence, so the row the new run took under a newer one stays.
+     * <p>
+     * Nor the unit's notifications: the tick's refused acquisition must leave the wake-up the new run placed for the unit
+     * alone, or a NOTIFY for it reaches no owner and the unit is served only when its sweep or poll backstop comes due.
+     * Both are 30 s here, so a message enqueued on the unit from outside the queue - by NOTIFY, not by local hand-off - is
+     * handled within the test's bound only if the new run's owner was woken for it. That proves something only when the
+     * new run has placed the unit before the tick refuses its acquisition: refused first, anything the refusal did to the
+     * unit's wake-up would be over before the placement, which then builds a fresh one. Left to themselves the two race,
+     * as the start places its units outside the queue's runLock once it has leased them all, so the test holds that lock
+     * - the one the tick refuses under - from just after the start has set {@code running} until the start has returned.
      */
     @ParameterizedTest
     @ValueSource(strings = {"unordered", "ordered"})
     void a_heartbeat_tick_acquiring_while_the_queue_is_stopped_and_started_again_does_not_join_the_new_run(String lane) throws Exception {
-        var settings   = settingsWithShedGrace(Duration.ofSeconds(1));
-        var instanceId = "restart-mid-acquire-" + lane;
-        var runtime    = ShardRuntime.acquireShared(dataSource, settings);
-        var reported   = new RecordedOwnership();
-        var metrics    = new ShardOwnerMetrics(reported);
-        var queue      = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, instanceId, metrics);
+        var settings    = settingsReadingOnlyWhenNotified();
+        var instanceId  = "restart-mid-acquire-" + lane;
+        var runtime     = ShardRuntime.acquireShared(dataSource, settings);
+        var reported    = new RecordedOwnership();
+        var metrics     = new ShardOwnerMetrics(reported);
+        var delivered   = ConcurrentHashMap.<String>newKeySet();
+        var logged      = new ListAppender<ILoggingEvent>();
+        var queueLogger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(ShardOwnedQueue.class);
+        var queueLevel  = queueLogger.getLevel();
+        logged.start();
+        queueLogger.addAppender(logged);
+        // The refused acquisition's release is logged at DEBUG only.
+        queueLogger.setLevel(ch.qos.logback.classic.Level.DEBUG);
+        var queue = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, instanceId, metrics);
         try {
-            startConsuming(queue, lane, settings);
+            startConsuming(queue, lane, settings, delivered);
             var units = unitsOwnedBy(lane, instanceId);
             assertThat(units).as("premise: the sole instance holds every unit of the lane").isPositive();
             holdTheNextAcquireOfUnitZero(lane, instanceId, 1.5);
 
             queue.stop();
+            assertThat(aHeartbeatIsSleeping()).as("premise: the tick was still acquiring when the queue stopped").isTrue();
             var lostBefore        = metrics.leasesLost.sum();
             var acquiredBefore    = metrics.shardsAcquired.sum();
             var reportsBeforeRestart = reported.events().size();
-            // The new run's start acquires unit 0 once the held tick has committed its acquire, under a newer fence.
-            startConsuming(queue, lane, settings);
+            // The new run's start acquires unit 0 once the held tick has committed its acquire, under a newer fence. The tick
+            // decides whether to adopt its owner under the queue's runLock (adoptIntoRun), which the start takes only to set
+            // `running`. Holding that lock from then until the start has returned keeps the tick from refusing until the new
+            // run has placed unit 0, whichever of the two would otherwise have got there first.
+            var starting = CompletableFuture.runAsync(() -> {
+                try {
+                    startConsuming(queue, lane, settings, delivered);
+                } catch (SQLException e) {
+                    throw new IllegalStateException(e);
+                }
+            });
+            Awaitility.await().atMost(Duration.ofSeconds(10)).until(queue::isStarted);
+            synchronized (runLockOf(queue)) {
+                assertThat(aHeartbeatIsSleeping()).as("premise: the tick was still acquiring when the test took the lock it refuses under").isTrue();
+                starting.get(20, TimeUnit.SECONDS);
+            }
             awaitHeartbeatTickFinished(runtime);
+            assertThat(logged.list).filteredOn(event -> event.getLevel() == ch.qos.logback.classic.Level.DEBUG)
+                                   .extracting(ILoggingEvent::getFormattedMessage)
+                                   .filteredOn(message -> message.contains(" unit 0 on queue " + QUEUE_ID
+                                                                                   + " again: the queue stopped while it was being acquired"))
+                                   .as("premise: the tick's acquisition of unit 0 was refused and released again")
+                                   .hasSize(1);
 
             // Three of the new run's lease checks, each counting a renewal per unit it still holds. A tick's owner in the
             // new run is found superseded by one; a new-run owner whose row the tick released ends at its takeover or its
@@ -591,10 +629,51 @@ class ShardOwnedLifecycleIT {
             assertThat(queue.shardsHeld()).as("the new run serves every unit once").isEqualTo(units);
             assertThat(unitsOwnedBy(lane, instanceId)).as("the new run still holds every unit's row").isEqualTo(units);
             assertThat(runtime.unitsServed()).as("one owner per unit on the shared runtime's pumps").isEqualTo(units);
+
+            var honouredBefore = metrics.wakeupsHonoured.sum();
+            enqueueFromAnotherProducer(lane, 0, "after-restart");
+            Awaitility.await().atMost(Duration.ofSeconds(5))
+                      .untilAsserted(() -> assertThat(delivered).as("unit 0's notification reached the new run's owner, well before its 30 s sweep")
+                                                                .contains("after-restart"));
+            assertThat(metrics.wakeupsHonoured.sum()).as("the owner was woken by its unit's wake-up").isGreaterThan(honouredBefore);
         } finally {
             dropSlowAcquire();
             queue.stop();
             ShardRuntime.releaseShared(dataSource);
+            queueLogger.detachAppender(logged);
+            queueLogger.setLevel(queueLevel);
+        }
+    }
+
+    /**
+     * {@link #settingsWithShedGrace} with a 1 s grace, whose head sweep, its backed-off ceiling and the poll backstop are all
+     * 30 s: within a test's few seconds an owner reads its unit when a notification wakes it, and not otherwise.
+     */
+    private static ShardOwnerSettings settingsReadingOnlyWhenNotified() {
+        var base = settingsWithShedGrace(Duration.ofSeconds(1));
+        return new ShardOwnerSettings(base.readBatchSize(), base.ackBatchSize(), base.ackFlushInterval(), base.chaseDelay(), base.holeExpiry(),
+                                      Duration.ofSeconds(30), base.maxHolesPerChase(), base.keyConcurrency(), Duration.ofSeconds(30),
+                                      Duration.ofSeconds(30), base.pumpThreads(), base.shedGrace(), base.leaseTtl(), base.watermarkCap());
+    }
+
+    /**
+     * Enqueue one message on {@code unit} of {@code lane} through a storage of its own rather than through a queue, so it
+     * reaches the unit's owner by NOTIFY and never by local hand-off. On the ordered lane, under a key that routes to
+     * {@code unit} in the queue's routing space ({@link ShardOwnedSchema#ORDERED_UNITS}: the queue is registered by id).
+     */
+    private void enqueueFromAnotherProducer(String lane, int unit, String payload) throws Exception {
+        var producer = new ShardOwnedStorage(dataSource, QUEUE_ID);
+        var bytes    = payload.getBytes(StandardCharsets.UTF_8);
+        try (var connection = dataSource.getConnection()) {
+            if ("ordered".equals(lane)) {
+                var key = 0;
+                while (ShardOwnedSchema.unitForKey("key-" + key, ShardOwnedSchema.ORDERED_UNITS) != unit) {
+                    key++;
+                }
+                producer.enqueueOrderedBatch(connection, unit, List.of(new ShardOwnedStorage.OrderedPayload("key-" + key, 0, bytes, 1)));
+            } else {
+                producer.enqueueBatch(connection, unit, List.of(bytes), 1);
+            }
         }
     }
 
@@ -843,6 +922,20 @@ class ShardOwnedLifecycleIT {
         }
     }
 
+    /**
+     * {@link #startConsuming(ShardOwnedQueue, String, ShardOwnerSettings)}, with a handler that records each payload it
+     * is given, as text.
+     */
+    private static void startConsuming(ShardOwnedQueue queue, String lane, ShardOwnerSettings settings, Set<String> delivered) throws SQLException {
+        if ("ordered".equals(lane)) {
+            queue.startConsumingOrdered((messageId, key, payload, payloadType) -> delivered.add(new String(payload, StandardCharsets.UTF_8)),
+                                        settings, SHARD_COUNT);
+        } else {
+            queue.startConsuming((messageId, payload, payloadType) -> delivered.add(new String(payload, StandardCharsets.UTF_8)),
+                                 settings, SHARD_COUNT);
+        }
+    }
+
     private int unitsOwnedBy(String lane, String instanceId) throws Exception {
         return "ordered".equals(lane) ? orderedUnitsOwnedBy(instanceId) : unorderedShardsOwnedBy(instanceId);
     }
@@ -995,6 +1088,17 @@ class ShardOwnedLifecycleIT {
                                       + " AND lane = '" + lane + "' AND shard = " + unit);
         }
         Awaitility.await().atMost(Duration.ofSeconds(10)).until(this::aHeartbeatIsSleeping);
+    }
+
+    /**
+     * The monitor {@code queue} decides under whether a heartbeat tick's acquisition joins its run (its private
+     * {@code runLock}, taken by {@code adoptIntoRun}). A test holding it keeps every tick of the queue from adopting or
+     * refusing a unit until it lets go.
+     */
+    private static Object runLockOf(ShardOwnedQueue queue) throws ReflectiveOperationException {
+        var field = ShardOwnedQueue.class.getDeclaredField("runLock");
+        field.setAccessible(true);
+        return field.get(queue);
     }
 
     private void dropSlowAcquire() throws Exception {
