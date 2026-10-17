@@ -308,6 +308,12 @@ public final class ShardOwnerMetrics {
      * instance never had to rebalance".
      */
     public final LongAdder     shardsAcquired                   = new LongAdder();
+    /**
+     * Units this instance no longer holds, one per acquisition counted in {@link #shardsAcquired}: released (to rebalance,
+     * handed back from a dead pump, or by {@code stop()}), found taken by another instance, or given up by {@code stop()}
+     * without a release (an ordered unit kept because a key was still in its handler, or a release that failed). So
+     * {@code shardsAcquired - shardsReleased} is the units held, and zero once every consumer counting here has stopped.
+     */
     public final LongAdder     shardsReleased                   = new LongAdder();
     /**
      * Dispatch attempts skipped because that key already had a message in flight.

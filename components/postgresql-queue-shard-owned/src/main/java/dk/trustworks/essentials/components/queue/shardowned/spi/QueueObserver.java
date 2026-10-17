@@ -71,7 +71,15 @@ public interface QueueObserver {
     }
 
     /**
-     * A shard was taken or lost, which is the signal that consumers are moving.
+     * This instance acquired a shard ({@code acquired} true) or no longer holds it (false), which is the signal that
+     * consumers are moving. The shard is an unordered shard or an ordered unit, whichever lane the consumer serves.
+     * <p>
+     * Every acquisition is followed by exactly one release, however the shard is lost: released by this instance (to
+     * rebalance, or handed back from a dead pump), found taken by another instance (on the heartbeat that finds it), or
+     * given up when the consumer stops - released, or kept because an ordered key was still in its handler, or left to
+     * lapse because its release failed. So, over the consumers this observer is attached to, acquisitions minus releases
+     * is the number of shards they hold, and zero once they have stopped. One caveat on order: a shard the heartbeat
+     * acquires just as its consumer stops can have its release told before its acquisition.
      */
     default void shardOwnershipChanged(int shard, boolean acquired) {
     }

@@ -138,6 +138,14 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * and only for an owner whose acquisition was counted: a heartbeat tick's fair-share shed or dead-pump hand-back and
      * {@link #stop()} can release the same owner at once, and both used to report it.
      * <p>
+     * And every owner leaves it with its release counted, however this instance loses the unit: released by this queue,
+     * found taken by another instance (counted by the {@link #rebalance()} that drops the owner), or given up by
+     * {@link #stop()} without a release - an ordered unit kept because a key was still in its handler, or a release that
+     * failed or ran out of the shutdown budget. So {@code shardsAcquired - shardsReleased} is the number of units this
+     * queue holds, and is zero once {@code stop()} has run ({@link #stopAbruptly()}, which stands in for a crash, counts
+     * nothing). A unit found taken, or kept at stop, used to leave without a release counted, and the difference grew by
+     * one each time, for good.
+     * <p>
      * Membership does not mean the observer has been told of the acquisition. The count is taken under {@link #runLock};
      * the observer is told by the caller afterwards, outside it - at start-up once the heartbeat is scheduled, on a
      * heartbeat tick in a {@code finally} around its acquire loop. So a {@link #stop()} can tell the observer of a release
@@ -467,7 +475,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         startHeartbeat();
         // The shards taken at start-up are ownership changes like any other. Reporting only the ones
         // rebalancing moves would leave an observer unable to tell which shards this instance serves.
-        leased.forEach(entry -> metrics.observer().shardOwnershipChanged(entry.shard(), true));
+        reportAcquired(leased.stream().map(LeasedUnit::shard).toList());
         log.info("Instance {} owns ordered shards {}", instanceId, leased.stream().map(LeasedUnit::shard).toList());
     }
 
@@ -527,7 +535,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             countAcquisition(owner);
         }
         startHeartbeat();
-        leased.forEach(entry -> metrics.observer().shardOwnershipChanged(entry.shard(), true));
+        reportAcquired(leased.stream().map(LeasedUnit::shard).toList());
         log.info("Instance {} owns shards {}", instanceId, leased.stream().map(LeasedUnit::shard).toList());
     }
 
@@ -940,9 +948,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                              + "but not acknowledged; with none running they stay unowned (QueueHealth.unownedShards)",
                      instanceId, ready.size(), activeLane, summarise(ready.stream().map(LeasedOwner::shard).toList()), queueId);
         }
-        for (var shard : released) {
-            metrics.observer().shardOwnershipChanged(shard, false);
-        }
+        reportReleases(released);
     }
 
     /**
@@ -1058,6 +1064,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         // them all as already-held, and the node never takes anything again: one long stop-the-world
         // pause and it is permanently degraded until someone restarts it. It survived every
         // same-JVM test and only appeared once a process was actually frozen with SIGSTOP.
+        var lost = new ArrayList<Integer>();
         owners.removeIf(owner -> {
             // Only RELEASED. Not one whose row is still to be released (ENDED_ROW_HELD: its pump died, and
             // handBackUnitsOnDeadPumps releases it): dropping it here would leave the lease row naming this instance for good.
@@ -1070,10 +1077,16 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             // A unit on a dead pump found taken is dropped here, not handed back, so stop counting it in
             // shardsOnDeadPumps. A no-op for any other owner.
             shardRuntime.handedBack(owner);
-            // A unit found taken is not reported as released, as before; one this queue released was reported already.
-            acquisitionReported.remove(owner);
+            // A unit found taken - by the lease check, or by one of its owner's fenced writes being refused - is counted
+            // released here, as it leaves this instance. One this queue released was counted when it released it, and
+            // countRelease counts nothing for it again.
+            if (countRelease(owner)) {
+                lost.add(owner.shard());
+            }
             return true;
         });
+        // Told before the acquire loops below, which may take the same units again: the observer hears the loss first.
+        reportReleases(lost);
 
         if ("ordered".equals(activeLane)) {
             shedOrAcquireOrderedShards(fairShare, shardRuntime, generation);
@@ -1454,17 +1467,31 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
     }
 
     /**
-     * Tell the observer of every unit a heartbeat tick's acquire loop adopted ({@link #adoptIntoRun}), outside
-     * {@link #runLock}. Each one is told even when the observer throws for an earlier one: its acquisition is counted and its
-     * release will be told, so a unit skipped here would leave the observer's released count ahead of its acquired count.
+     * Tell the observer of every unit a start-up leased ({@code startOrdered}, {@code startUnordered}) or a heartbeat tick's
+     * acquire loop adopted ({@link #adoptIntoRun}), outside {@link #runLock}. Each one is told even when the observer throws
+     * for an earlier one: its acquisition is counted and its release will be told, so a unit skipped here would leave the
+     * observer's released count ahead of its acquired count.
      * The first throw is rethrown once every unit has been told, the others added to it as suppressed, so the heartbeat
      * still logs the observer's failure.
      */
     private void reportAcquired(List<Integer> units) {
+        tellOwnershipChanged(units, true);
+    }
+
+    /**
+     * Tell the observer of the release of every unit whose release the caller has just counted ({@link #countRelease}),
+     * each one even when the observer throws for an earlier one, as {@link #reportAcquired} does: every one of them was
+     * told acquired, so a unit skipped here would leave the observer's acquired count ahead of its released count for good.
+     */
+    private void reportReleases(List<Integer> units) {
+        tellOwnershipChanged(units, false);
+    }
+
+    private void tellOwnershipChanged(List<Integer> units, boolean acquired) {
         RuntimeException failure = null;
         for (var unit : units) {
             try {
-                metrics.observer().shardOwnershipChanged(unit, true);
+                metrics.observer().shardOwnershipChanged(unit, acquired);
             } catch (RuntimeException e) {
                 if (failure == null) {
                     failure = e;
@@ -1730,9 +1757,21 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         // listed anything yet (lifecycleLock), so this empties them all the same.
         owners.removeAll(ending);
         ownedShards.values().removeAll(ending);
-        // A release not reported by now is not reported: the unit was kept, its release failed, or the budget ran out.
-        // Every entry no listed owner has, which includes an owner found taken and dropped by a rebalance.
-        acquisitionReported.retainAll(owners);
+        // Every owner this run listed leaves the queue here, so each one whose release nobody has counted yet is counted
+        // now: an ordered unit kept because a key was still in its handler, a unit whose release failed or ran out of the
+        // budget, and one found taken that no rebalance has dropped yet. This instance holds none of them any more, as far as
+        // the queue knows - a kept unit's row lapses with the instance's liveness - and nothing would report them later. A
+        // release still running on the abandoned budget thread, or on a heartbeat tick, counts nothing for an owner counted
+        // here (countRelease), and nothing here for one it counted first.
+        var givenUp = new ArrayList<Integer>();
+        for (var owner : ending) {
+            if (countRelease(owner)) {
+                givenUp.add(owner.shard());
+            }
+        }
+        // Last, once the stop's own work is done: an observer that throws (QueueObserver says why that is not caught)
+        // escapes the stop with nothing of it left undone.
+        reportReleases(givenUp);
     }
 
     /**

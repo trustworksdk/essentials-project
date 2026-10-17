@@ -46,7 +46,10 @@ package dk.trustworks.essentials.components.queue.shardowned.spi;
  *                                         defect by itself — a queue filling faster than it drains legitimately
  *                                         produces them — but a rising share means the fast path is not keeping up
  * @param shardsAcquired                   units taken since start
- * @param shardsReleased                   units handed back since start
+ * @param shardsReleased                   units no longer held since start, one per acquisition, however lost: handed
+ *                                         back, taken away by another instance (see {@code leasesLost}), or given up by
+ *                                         a stop without a release; {@code shardsAcquired - shardsReleased} is the
+ *                                         units held
  * @param leasesLost                       units taken away by another instance, which is rebalancing when it happens
  *                                         during one and fencing when it does not
  * @param watermarkCapped                  times the ordered lane advanced its cursor on the wall-clock cap rather

@@ -257,7 +257,7 @@ class ShardOwnedLifecycleIT {
                 queue.stop();
 
                 assertThat(unorderedShardsOwnedBy(instanceId)).as("the next stop releases the new run's shards").isZero();
-                reported.assertEveryReleaseFollowsItsAcquisition();
+                reported.assertEveryAcquisitionIsReleasedOnceAfterIt();
                 assertThat(metrics.shardsReleased.sum()).as("every acquisition of both runs is reported released")
                                                         .isEqualTo(metrics.shardsAcquired.sum())
                                                         .isEqualTo(2L * SHARD_COUNT);
@@ -312,6 +312,43 @@ class ShardOwnedLifecycleIT {
             }
         } finally {
             release.countDown();
+        }
+    }
+
+    /**
+     * Every unit {@code stop()} gives up is reported released, the one it keeps included. An ordered unit with a key still
+     * in a handler after the grace keeps its lease row until this instance's liveness lapses, but the stopped queue lists
+     * it no more, so nothing would report it later: it used to be left reported acquired for good, and the observer's -
+     * and the Micrometer counter's - acquired count ran one ahead of its released count after every such stop.
+     */
+    @Test
+    void an_ordered_unit_kept_by_stop_is_reported_released() throws Exception {
+        var entered    = new CountDownLatch(1);
+        var release    = new CountDownLatch(1);
+        var settings   = settingsWithShedGrace(Duration.ofMillis(300));
+        var instanceId = "kept-reported";
+        var reported   = new RecordedOwnership();
+        var metrics    = new ShardOwnerMetrics(reported);
+        try (var runtime = new ShardRuntime(dataSource, settings)) {
+            var queue = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, instanceId, metrics).useRuntime(runtime);
+            try {
+                queue.startConsumingOrdered((messageId, key, payload, payloadType) -> {
+                    entered.countDown();
+                    awaitQuietly(release);
+                }, settings, SHARD_COUNT);
+                queue.enqueueOrdered(List.of(new ShardOwnedStorage.OrderedPayload("ACC-1", 0, "0".getBytes(StandardCharsets.UTF_8), 1)));
+                assertThat(entered.await(20, TimeUnit.SECONDS)).isTrue();
+
+                queue.stop();
+
+                assertThat(orderedUnitsOwnedBy(instanceId)).as("premise: the busy unit is kept").isEqualTo(1);
+                reported.assertEveryAcquisitionIsReleasedOnceAfterIt();
+                assertThat(metrics.shardsReleased.sum()).as("every acquisition counted released, the kept unit's included")
+                                                        .isEqualTo(metrics.shardsAcquired.sum());
+            } finally {
+                release.countDown();
+                queue.stop();
+            }
         }
     }
 
@@ -447,7 +484,7 @@ class ShardOwnedLifecycleIT {
             assertThat(queue.shardsHeld()).isEqualTo(SHARD_COUNT);
 
             stopWhileAHeartbeatTickAcquiresUnitZero(queue, runtime, "unordered", "stop-mid-acquire");
-            reported.assertEveryReleaseFollowsItsAcquisition();
+            reported.assertEveryAcquisitionIsReleasedOnceAfterIt();
 
             // The owners stop() ended are dropped on their pump's next pass; one the tick left registered is never dropped.
             // Every owner on the runtime counts: this test's queue is the only one on it.
@@ -478,7 +515,7 @@ class ShardOwnedLifecycleIT {
             assertThat(queue.shardsHeld()).isEqualTo(unitsHeld);
 
             stopWhileAHeartbeatTickAcquiresUnitZero(queue, runtime, "ordered", "stop-mid-acquire-ordered");
-            reported.assertEveryReleaseFollowsItsAcquisition();
+            reported.assertEveryAcquisitionIsReleasedOnceAfterIt();
 
             // Every owner on the runtime counts: this test's queue is the only one on it.
             Awaitility.await().atMost(Duration.ofSeconds(5))
@@ -844,7 +881,7 @@ class ShardOwnedLifecycleIT {
             }
 
             assertThat(unitsOwnedBy(lane, instanceId)).as("premise: every unit was released").isZero();
-            reported.assertEveryReleaseFollowsItsAcquisition();
+            reported.assertEveryAcquisitionIsReleasedOnceAfterIt();
             assertThat(metrics.shardsReleased.sum()).as("each unit's release counted once").isEqualTo(units);
             assertThat(metrics.shardsAcquired.sum()).as("each unit's acquisition counted once").isEqualTo(units);
         } finally {
@@ -907,10 +944,100 @@ class ShardOwnedLifecycleIT {
             assertThat(acquiredReports).as("every acquisition counted is reported").isEqualTo(metrics.shardsAcquired.sum());
             assertThat(releasedReports).as("every release counted is reported").isEqualTo(metrics.shardsReleased.sum());
             assertThat(releasedReports).as("the observer is never told of more releases than acquisitions").isLessThanOrEqualTo(acquiredReports);
-            reported.assertEveryReleaseFollowsItsAcquisition();
+            reported.assertEveryAcquisitionIsReleasedOnceAfterIt();
         } finally {
             queue.stop();
             ShardRuntime.releaseShared(dataSource);
+        }
+    }
+
+    /**
+     * A shard (unordered) or unit (ordered) another instance takes from a running queue is reported released, by the
+     * heartbeat tick whose rebalance drops the owner its lease check found taken, before the queue acquires it again. It
+     * used to be dropped unreported: every unit lost to a takeover left the observer's acquired count - and so the
+     * Micrometer counter's - one further ahead of its released count, for good. Units 0 and 1 are handed to a departed
+     * instance, which leaves them free, so the tick that finds them taken acquires them again.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"unordered", "ordered"})
+    void a_unit_found_taken_is_reported_released_before_it_is_acquired_again(String lane) throws Exception {
+        var settings   = settingsWithShedGrace(Duration.ofSeconds(1));
+        var instanceId = "taken-reported-" + lane;
+        var runtime    = ShardRuntime.acquireShared(dataSource, settings);
+        var reported   = new RecordedOwnership();
+        var metrics    = new ShardOwnerMetrics(reported);
+        var queue      = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, instanceId, metrics);
+        try {
+            startConsuming(queue, lane, settings);
+            var units = unitsOwnedBy(lane, instanceId);
+            assertThat(units).as("premise: the sole instance holds units 0 and 1").isGreaterThan(1);
+            try (var connection = dataSource.getConnection(); var statement = connection.createStatement()) {
+                statement.execute("UPDATE " + ShardOwnedSchema.LEASE_TABLE + " SET owner = 'departed' WHERE queue_id = " + QUEUE_ID
+                                          + " AND lane = '" + lane + "' AND shard IN (0, 1)");
+            }
+            Awaitility.await().atMost(Duration.ofSeconds(10))
+                      .untilAsserted(() -> assertThat(metrics.shardsAcquired.sum()).as("premise: a heartbeat tick took units 0 and 1 back")
+                                                                                .isEqualTo(units + 2L));
+            // The tick tells the observer of what it acquired once its acquire loop has ended.
+            awaitHeartbeatTickFinished(runtime);
+
+            for (var unit : List.of(0, 1)) {
+                assertThat(reported.events()).filteredOn(event -> event.shard() == unit)
+                                             .as("unit %d reported acquired at start-up, released when found taken, acquired again", unit)
+                                             .containsExactly(new Reported(unit, true), new Reported(unit, false), new Reported(unit, true));
+            }
+            assertThat(metrics.shardsReleased.sum()).as("the two units found taken are counted released").isEqualTo(2L);
+
+            queue.stop();
+
+            reported.assertEveryAcquisitionIsReleasedOnceAfterIt();
+            assertThat(metrics.shardsReleased.sum()).as("every acquisition counted released once")
+                                                    .isEqualTo(metrics.shardsAcquired.sum());
+        } finally {
+            queue.stop();
+            ShardRuntime.releaseShared(dataSource);
+        }
+    }
+
+    /**
+     * An observer that throws for the first unit a start-up reports acquired is still told of every other one, so the
+     * releases {@code stop()} reports later each follow an acquisition. The start used to tell it unit by unit and stop at
+     * the throw: every unit after the first was left untold acquired, yet counted acquired and so reported released at
+     * stop, and the observer saw more releases than acquisitions. The observer's failure still escapes the start, first.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"unordered", "ordered"})
+    void an_observer_throwing_for_a_start_up_acquisition_is_still_told_of_every_unit_acquired(String lane) throws Exception {
+        var settings   = settingsWithShedGrace(Duration.ofSeconds(1));
+        var instanceId = "start-observer-throws-" + lane;
+        var reported   = new RecordedOwnership();
+        var failure    = new IllegalStateException("simulated observer failure on the first acquisition");
+        var thrown     = new AtomicBoolean();
+        var metrics = new ShardOwnerMetrics(new QueueObserver() {
+            @Override
+            public void shardOwnershipChanged(int shard, boolean acquired) {
+                reported.shardOwnershipChanged(shard, acquired);
+                if (acquired && thrown.compareAndSet(false, true)) {
+                    throw failure;
+                }
+            }
+        });
+        var queue = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, instanceId, metrics);
+        try {
+            assertThatThrownBy(() -> startConsuming(queue, lane, settings)).as("the observer's failure escapes the start").isSameAs(failure);
+            var units = unitsOwnedBy(lane, instanceId);
+            assertThat(units).as("premise: the start acquired more than the unit the observer threw for").isGreaterThan(1);
+            assertThat(reported.events()).filteredOn(Reported::acquired)
+                                          .as("every unit the start acquired is reported acquired, the ones after the throw included")
+                                          .hasSize(units);
+
+            queue.stop();
+
+            reported.assertEveryAcquisitionIsReleasedOnceAfterIt();
+            assertThat(metrics.shardsReleased.sum()).as("every acquisition counted released once")
+                                                    .isEqualTo(metrics.shardsAcquired.sum());
+        } finally {
+            queue.stop();
         }
     }
 
@@ -959,13 +1086,18 @@ class ShardOwnedLifecycleIT {
         }
 
         /**
-         * Per unit, acquisitions and releases alternate, an acquisition first: no release is reported twice, or before
-         * the acquisition it ends. A unit found taken is not reported released, so an acquisition may go unmatched.
+         * For a queue that has stopped: per unit, acquisitions and releases alternate, an acquisition first, and the last
+         * one is a release. No release is reported twice, or before the acquisition it ends, and no acquisition goes
+         * unmatched - whether the unit was released by the queue, found taken by another instance, or kept or left
+         * unreleased by the stop.
          */
-        void assertEveryReleaseFollowsItsAcquisition() {
+        void assertEveryAcquisitionIsReleasedOnceAfterIt() {
             var held = new HashMap<Integer, Boolean>();
             for (var event : events) {
                 if (event.acquired()) {
+                    assertThat(held.getOrDefault(event.shard(), false))
+                            .as("unit %d is reported acquired only while reported released; reported: %s", event.shard(), events)
+                            .isFalse();
                     held.put(event.shard(), true);
                 } else {
                     assertThat(held.getOrDefault(event.shard(), false))
@@ -974,6 +1106,10 @@ class ShardOwnedLifecycleIT {
                     held.put(event.shard(), false);
                 }
             }
+            assertThat(held.entrySet()).filteredOn(Map.Entry::getValue)
+                                       .extracting(Map.Entry::getKey)
+                                       .as("units reported acquired and never reported released, once the queue has stopped; reported: %s", events)
+                                       .isEmpty();
         }
     }
 
