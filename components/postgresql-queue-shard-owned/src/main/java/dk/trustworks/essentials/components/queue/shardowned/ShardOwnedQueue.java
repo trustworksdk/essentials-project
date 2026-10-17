@@ -2066,7 +2066,8 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             }
         }
         // Last, once the stop's own work is done: an observer that throws (QueueObserver says why that is not caught)
-        // escapes the stop with nothing of it left undone.
+        // escapes the stop with nothing of it left undone. On the stop's own thread, never inside handBackWithinBudget:
+        // told there, between the release and the deregistration, an observer that threw skipped the deregistration.
         reportReleases(givenUp);
     }
 
