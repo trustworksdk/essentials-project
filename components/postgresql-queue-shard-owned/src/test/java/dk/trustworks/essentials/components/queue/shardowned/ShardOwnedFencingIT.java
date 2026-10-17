@@ -242,4 +242,88 @@ class ShardOwnedFencingIT {
                     .isZero();
         }
     }
+
+    /**
+     * The heartbeat's lease check finding a serving owner's unit taken counts one lost lease. The owner counts it, as the
+     * call that moves its lease row to {@code RELEASED}; the lease check counts nothing itself, or the loss is counted
+     * twice. Nothing else finds this loss first: the owner took the unit over cleanly (its lease row was never held
+     * before), so its takeover charges nothing, and no message is enqueued, so it has nothing to acknowledge.
+     */
+    @ParameterizedTest(name = "{0} lane")
+    @ValueSource(strings = {"unordered", "ordered"})
+    void a_serving_owners_unit_the_lease_check_finds_taken_is_counted_lost_once(String lane) throws Exception {
+        // leaseTtl 1s: the heartbeat, and so the lease check, runs every 333 ms.
+        var shortLease = new ShardOwnerSettings(500, 200, Duration.ofMillis(1), Duration.ofMillis(2),
+                                                Duration.ofMillis(300), Duration.ofMillis(100),
+                                                1_000, 8, Duration.ofMillis(50), Duration.ofSeconds(30), 2, Duration.ofSeconds(5), Duration.ofMillis(1000), Duration.ofSeconds(60));
+
+        try (var queue = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "instance-1")) {
+            if ("ordered".equals(lane)) {
+                queue.startConsumingOrdered((messageId, key, payload, payloadType) -> { }, shortLease, SHARD_COUNT);
+            } else {
+                queue.startConsuming((messageId, payload, payloadType) -> { }, shortLease, SHARD_COUNT);
+            }
+            Awaitility.await("instance-1 holds unit 0").atMost(Duration.ofSeconds(20))
+                      .until(() -> "instance-1".equals(ownerOf(lane, 0)));
+            var metrics = queue.metrics();
+            assertThat(metrics.leasesLost.sum()).as("premise: nothing lost yet").isZero();
+            var fence = fenceOf(lane, 0);
+
+            // Another instance takes unit 0 under a new fence, as a takeover after a missed heartbeat would.
+            takeAs(lane, 0, "instance-2");
+
+            Awaitility.await("the lease check finds unit 0 taken").atMost(Duration.ofSeconds(20))
+                      .until(() -> metrics.leasesLost.sum() > 0);
+            // instance-2 has no membership row, so it reads as gone and a later rebalance takes the unit back: by then the
+            // lease check that found the loss has finished with it.
+            Awaitility.await("instance-1 takes unit 0 back").atMost(Duration.ofSeconds(20))
+                      .until(() -> "instance-1".equals(ownerOf(lane, 0)) && fenceOf(lane, 0) > fence + 1);
+
+            assertThat(metrics.leasesLost.sum()).as("one loss, counted once").isEqualTo(1L);
+            assertThat(metrics.fencedOutAcks.sum()).as("premise: no acknowledgement found the loss").isZero();
+        }
+    }
+
+    private void takeAs(String lane, int shard, String instanceId) throws Exception {
+        try (var connection = dataSource.getConnection();
+             var statement = connection.prepareStatement("UPDATE " + ShardOwnedSchema.LEASE_TABLE
+                                                                 + " SET owner = ?, lease_until = NULL, fence = fence + 1"
+                                                                 + " WHERE queue_id = ? AND lane = ? AND shard = ?")) {
+            statement.setString(1, instanceId);
+            statement.setShort(2, QUEUE_ID);
+            statement.setString(3, lane);
+            statement.setInt(4, shard);
+            assertThat(statement.executeUpdate()).as("premise: unit %d has a lease row", shard).isEqualTo(1);
+        }
+    }
+
+    /**
+     * The instance unit {@code shard}'s lease row names, {@code null} when it names none or there is no row.
+     */
+    private String ownerOf(String lane, int shard) throws Exception {
+        try (var connection = dataSource.getConnection();
+             var statement = connection.prepareStatement("SELECT owner FROM " + ShardOwnedSchema.LEASE_TABLE
+                                                                 + " WHERE queue_id = ? AND lane = ? AND shard = ?")) {
+            statement.setShort(1, QUEUE_ID);
+            statement.setString(2, lane);
+            statement.setInt(3, shard);
+            try (var resultSet = statement.executeQuery()) {
+                return resultSet.next() ? resultSet.getString(1) : null;
+            }
+        }
+    }
+
+    private long fenceOf(String lane, int shard) throws Exception {
+        try (var connection = dataSource.getConnection();
+             var statement = connection.prepareStatement("SELECT fence FROM " + ShardOwnedSchema.LEASE_TABLE
+                                                                 + " WHERE queue_id = ? AND lane = ? AND shard = ?")) {
+            statement.setShort(1, QUEUE_ID);
+            statement.setString(2, lane);
+            statement.setInt(3, shard);
+            try (var resultSet = statement.executeQuery()) {
+                assertThat(resultSet.next()).as("premise: unit %d has a lease row", shard).isTrue();
+                return resultSet.getLong(1);
+            }
+        }
+    }
 }

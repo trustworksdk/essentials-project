@@ -296,6 +296,21 @@ public final class ShardOwnerMetrics {
      */
     public final LongAdder     fencedOutAcks                    = new LongAdder();
     public final LongAdder     leaseRenewals                    = new LongAdder();
+    /**
+     * Units taken away by another instance while this instance still held their lease row. Counted once per loss, by the
+     * call that moved the owner's lease row to {@code RELEASED}:
+     * <ul>
+     *     <li>An owner still serving its unit is counted by whichever finds the loss first: the heartbeat's lease check, or
+     *     the owner's own takeover attempt charge being refused by its fence. A loss its refused acknowledgement finds
+     *     first is counted in {@link #fencedOutAcks} instead.</li>
+     *     <li>An owner whose pump died, its lease row not yet handed back, is counted by the lease check alone: a dead pump
+     *     runs no takeover.</li>
+     *     <li>An owner {@code stop()} has ended is counted by neither, whether or not another instance has taken its unit:
+     *     a unit the stop gave up is not a lost lease. The lease check leaves a run's owners alone once a stop has taken
+     *     the run out, which it does before it drains and ends them (so a loss the lease check would find during that
+     *     drain is not counted either), and a refused takeover charge counts only an owner still serving its unit.</li>
+     * </ul>
+     */
     public final LongAdder     leasesLost                       = new LongAdder();
     /**
      * Connections lost underneath an owner and reconnected. Routine in production; not fatal.

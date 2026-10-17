@@ -1014,17 +1014,31 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                         shards[index] = held.get(index).shard();
                     }
                     var fences = storage.heldFences(lane, shards, instanceId);
-                    var taken  = new ArrayList<Integer>();
-                    for (var owner : held) {
-                        var fence = fences.get(owner.shard());
-                        if (fence != null && fence == owner.fence()) {
-                            metrics.leaseRenewals.increment();
-                        } else {
-                            // Absent, or back under a NEW fence — the unit was taken and handed on.
-                            // Both mean this owner's fence is stale.
-                            metrics.leasesLost.increment();
-                            owner.onLeaseEnded(LeasedOwner.LeaseEnd.TAKEN);
-                            taken.add(owner.shard());
+                    // Decided under the run's monitor, the one stop() takes the run out under, and asked after the read,
+                    // not before it. stop() takes the run out before it ends the run's owners and releases their rows, so
+                    // either every owner below is moved before the stop has ended any of them, or the stop has taken the
+                    // run out and none is: the run's owners are the stop's from then on (stop() ends each and releases or
+                    // keeps its row; stopAbruptly() leaves them as a crash would), and a unit the stop gives up is not a
+                    // lost lease. A row this read found absent because the stop had released it is therefore never read
+                    // as taken: that release came after the take-out, so the check sees it.
+                    var taken = new ArrayList<Integer>();
+                    synchronized (run) {
+                        if (currentRun.get() != run) {
+                            break;
+                        }
+                        for (var owner : held) {
+                            var fence = fences.get(owner.shard());
+                            if (fence != null && fence == owner.fence()) {
+                                metrics.leaseRenewals.increment();
+                            } else {
+                                // Absent, or back under a NEW fence — the unit was taken and handed on.
+                                // Both mean this owner's fence is stale. The owner counts it in leasesLost if this call
+                                // moves its row to RELEASED. It is RELEASED already, and not counted here, when one of its
+                                // own fenced writes was refused since `held` was read: a refused takeover charge counted
+                                // the loss in leasesLost, a refused acknowledgement in fencedOutAcks.
+                                owner.onLeaseEnded(LeasedOwner.LeaseEnd.TAKEN);
+                                taken.add(owner.shard());
+                            }
                         }
                     }
                     if (!taken.isEmpty()) {

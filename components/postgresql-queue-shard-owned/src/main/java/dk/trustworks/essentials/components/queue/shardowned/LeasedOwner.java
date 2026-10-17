@@ -196,9 +196,11 @@ interface LeasedOwner {
      * <ul>
      *     <li>{@link #endKeepingLeaseRow()}, out of {@code HELD}: a DEBUG line, and the owner's wake-up is signalled, so its
      *     pump drops it on its next pass rather than at its backstop. Nothing in any other state.</li>
-     *     <li>{@link #onLeaseEnded}, to {@code RELEASED}: a DEBUG line unless it was {@code RELEASED} already, and the wake-up
-     *     when it was {@code HELD} (the pump still had the owner in its selection). Called off the pump thread, by the
-     *     queue's heartbeat or {@code stop()}.</li>
+     *     <li>{@link #onLeaseEnded}, to {@code RELEASED}: a DEBUG line unless it was {@code RELEASED} already, the wake-up
+     *     when it was {@code HELD} (the pump still had the owner in its selection), and, for {@link LeaseEnd#TAKEN}, one
+     *     {@code leasesLost} unless it was {@code RELEASED} already. Called off the pump thread, by the queue's heartbeat or
+     *     {@code stop()}; {@link LeaseEnd#TAKEN} only by the heartbeat's lease check, never for an owner {@code stop()} has
+     *     ended, so a unit the stop gave up is not counted lost.</li>
      *     <li>The owner's own fenced write refused - its acknowledgement flush, or the attempt charge in
      *     {@link #onTakeover}: {@code RELEASED} and a WARN (the charge logs at DEBUG when the owner had already ended, and
      *     counts {@code leasesLost} only when it had not; a refused acknowledgement counts {@code fencedOutAcks}). No
@@ -217,7 +219,8 @@ interface LeasedOwner {
          * died ({@link #endKeepingLeaseRow()}), or its queue is stopping. Nothing else can take the unit until the queue
          * releases the row, so the unit still counts towards this instance's fair share. Left for {@code RELEASED} once
          * the queue has released the row, or once the unit is found taken: by the queue's lease check, which calls
-         * {@link #onLeaseEnded}, or by one of the owner's own fenced writes being refused - its acknowledgement flush,
+         * {@link #onLeaseEnded} (for an owner whose pump died; it leaves an owner {@code stop()} ended to that stop), or by
+         * one of the owner's own fenced writes being refused - its acknowledgement flush,
          * or the attempt charge in {@link #onTakeover} - which moves to {@code RELEASED} itself and does not go through
          * {@link #onLeaseEnded}.
          */
@@ -234,7 +237,11 @@ interface LeasedOwner {
      * The lease row no longer names this owner: {@link LeaseRow#RELEASED} from either other state, ending the owner if it
      * had not ended. {@link LeaseEnd#RELEASED} is called only once the row has been released, by
      * {@code ShardOwnedQueue.releaseLeaseRows}, the one method that gives a row up; {@link LeaseEnd#TAKEN} when the queue's
-     * lease check finds the unit taken. Safe to repeat.
+     * lease check finds the unit taken, which the owner counts in {@code leasesLost} if this call moved its row (the lease
+     * check counts nothing itself, so a loss the owner's refused takeover charge found first is not counted twice). The
+     * lease check makes that call only while the owner's run is still the queue's current one, decided under the run's
+     * monitor, which {@code stop()} takes the run out under before it ends the run's owners: an owner {@code stop()} has
+     * ended is never counted lost, whether or not another instance has taken its unit. Safe to repeat.
      */
     void onLeaseEnded(LeaseEnd reason);
 

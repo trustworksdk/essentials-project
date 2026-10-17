@@ -28,7 +28,8 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * <p>
  * Each owner ({@link ShardOwner}, {@link OrderedShardOwner}) used to keep the state in a field and write each transition by
  * hand, under its {@code stateLock}: eight copies of the rule, four in each owner, plus those in two test doubles. They stay the owners'
- * {@link LeasedOwner#leaseRow()}, and keep their own side effects (the log line, the wake-up), keyed on the state
+ * {@link LeasedOwner#leaseRow()}, and keep their own side effects (the log line, the wake-up, the {@code leasesLost}
+ * count), keyed on the state
  * {@link #advanceTo} returns. A compare-and-set is enough, without the owner's lock: no other field of an owner changes
  * together with its lease row.
  */

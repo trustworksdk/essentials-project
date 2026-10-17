@@ -145,6 +145,53 @@ class LeasedOwnerLeaseRowTest {
         assertThat(owner.leaseRow()).as("a released row is never held again").isEqualTo(LeaseRow.RELEASED);
     }
 
+    /**
+     * {@code leasesLost} is counted by the transition into {@code RELEASED}, not by whoever finds the unit taken: the
+     * queue's lease check and a refused takeover charge can both find the same loss, and only the one whose
+     * {@link LeaseRowState#advanceTo} moved the row counts it.
+     */
+    @ParameterizedTest(name = "{0} lane, found taken while {1}")
+    @CsvSource({"unordered, HELD", "unordered, ENDED_ROW_HELD", "ordered, HELD", "ordered, ENDED_ROW_HELD"})
+    void a_unit_found_taken_is_counted_lost_once(String lane, LeaseRow foundIn) {
+        var owner = owner(lane);
+        if (foundIn == LeaseRow.ENDED_ROW_HELD) {
+            owner.endKeepingLeaseRow();
+        }
+
+        owner.onLeaseEnded(LeaseEnd.TAKEN);
+        owner.onLeaseEnded(LeaseEnd.TAKEN);
+
+        assertThat(owner.ownerMetrics().leasesLost.sum()).as("counted by the call that moved the row, once").isEqualTo(1L);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"unordered", "ordered"})
+    void a_unit_this_instance_released_is_not_counted_lost_when_found_taken_afterwards(String lane) {
+        var owner = owner(lane);
+
+        owner.onLeaseEnded(LeaseEnd.RELEASED);
+        owner.onLeaseEnded(LeaseEnd.TAKEN);
+
+        assertThat(owner.ownerMetrics().leasesLost.sum()).isZero();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"unordered", "ordered"})
+    void a_unit_found_taken_after_its_takeover_charge_was_refused_is_counted_lost_once(String lane) {
+        var owner = owner(lane);
+
+        // The pump's refused charge, then a lease check that had selected the owner while it was still HELD
+        if (owner instanceof OrderedShardOwner ordered) {
+            ordered.leaseLostBeforeTakeover();
+        } else {
+            ((ShardOwner) owner).leaseLostBeforeTakeover();
+        }
+        owner.onLeaseEnded(LeaseEnd.TAKEN);
+
+        assertThat(owner.ownerMetrics().leasesLost.sum()).isEqualTo(1L);
+        assertThat(owner.leaseRow()).isEqualTo(LeaseRow.RELEASED);
+    }
+
     private static LeaseRowState stateAt(LeaseRow start) {
         var state = new LeaseRowState();
         state.advanceTo(start);
