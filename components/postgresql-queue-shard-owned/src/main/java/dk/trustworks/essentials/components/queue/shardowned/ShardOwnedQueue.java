@@ -109,11 +109,12 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * a pooled connection blocks until the driver's {@code socketTimeout}, and without one indefinitely. A
      * {@code stop()} or {@link #close()} waits up to {@link #SHUTDOWN_BUDGET} for this lock, {@code stopAbruptly()} not at
      * all. One that gets no further takes the starting run out of {@link #currentRun} without the lock, under the run's
-     * monitor, and records on the run the stop it owes ({@link Run#owedStop}); {@link #isStarted()} is false from then on.
+     * monitor, and records on the run the stop it owes ({@link Run#phase}); {@link #isStarted()} is false from then on.
      * The start, still holding this lock, adopts nothing into the ended run, schedules it no heartbeat, and does the
      * stop's work itself before it lets go ({@link #endRunOfStart}). A stop that finds the start already past its database
-     * work ({@link Run#startFinished}) waits for the lock after all: all that start has left is telling the
-     * {@code QueueObserver} of its acquisitions.
+     * work ({@link Phase#STARTED}) waits for the lock after all: all that start has left is telling the
+     * {@code QueueObserver} of its acquisitions. So does one that finds a run no start is running for any more
+     * ({@link Phase#START_ABORTED}): handed over, the stop's work would be done by nobody.
      * <p>
      * A run's own lists need no such guard - a stop works on the {@link Run} it took out, and a start fills the one it
      * installed - but the queue-wide state a stop ends with does: {@link #releaseRuntime} hands back the runtime a start
@@ -356,14 +357,17 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * and hands back the runtime it borrowed. A {@link SQLException} escapes wrapped in an {@link IllegalStateException},
      * anything else as it was thrown - the ordered lane's refusal to start on a database that hides
      * {@code pg_stat_activity.backend_xid}, for one. A critical error escapes untouched, with nothing undone, and the
-     * queue stays started - a later {@code start()} doing nothing - until a {@link #stop()}. The
+     * queue stays started - a later {@code start()} doing nothing - until a {@link #stop()}, which ends its run as it ends a
+     * started queue's, on an interrupted thread too ({@link Phase#START_ABORTED}). The
      * instance's membership row, written before the lease loop, is left to age out rather than deleted: the two lanes of
      * a {@code PostgresqlMessageQueue} subscription share one instance id, and deleting the row would drop the other
      * lane's membership too, until its next heartbeat.
      * <p>
      * A stop that gave up waiting for this start ({@link #lifecycleLock}) has taken its run out already. This start then
      * leases nothing more, adopts nothing, schedules no heartbeat, and does that stop's work itself before it returns
-     * ({@link #endRunOfStart}). It returns normally, with the queue not started.
+     * ({@link #endRunOfStart}). It returns normally, with the queue not started: a failure of that work - a
+     * {@code QueueObserver} throwing for the ownership changes it tells - is the stop's, whose caller has returned, and is
+     * logged at WARN rather than thrown from here. A critical error is the exception, and escapes.
      */
     @Override
     public void start() {
@@ -377,57 +381,96 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             if (!currentRun.compareAndSet(null, run)) {
                 return;
             }
-            List<Integer> adopted;
-            StopKind      owed;
             try {
-                adopted = "ordered".equals(activeLane) ? startOrdered(run) : startUnordered(run);
-                owed = startHeartbeatUnlessStopped(run);
-            } catch (SQLException e) {
-                // A critical error (Exceptions.isCriticalError, which looks at the causes too) escapes untouched, with no
-                // undo attempted: the JVM is then in no state to run one, and a failure of the undo must not stand in for it.
-                Exceptions.rethrowIfCriticalError(e);
-                throw undoFailedStart(run, new IllegalStateException("Failed to start consuming shards for instance " + instanceId, e));
-            } catch (RuntimeException e) {
-                Exceptions.rethrowIfCriticalError(e);
-                throw undoFailedStart(run, e);
-            } catch (Error e) {
-                Exceptions.rethrowIfCriticalError(e);
-                throw undoFailedStart(run, e);
+                startRun(run);
+            } finally {
+                // Still STARTING only when the start escaped with a critical error before it scheduled the heartbeat, which
+                // leaves the run installed: from here no start is running for it, and a stop must not hand it its work
+                // (stopWithoutWaiting). Every other way out has moved the run on already.
+                synchronized (run) {
+                    if (run.phase() == Phase.STARTING) {
+                        run.advanceTo(Phase.START_ABORTED);
+                    }
+                }
             }
-            if (owed != null) {
-                endRunOfStart(run, owed);
-                return;
-            }
-            // The shards taken at start-up are ownership changes like any other. Reporting only the ones rebalancing moves
-            // would leave an observer unable to tell which shards this instance serves. After the heartbeat is scheduled,
-            // so an observer that throws escapes the start with the run started: every unit it is told of is served.
-            reportAcquired(adopted);
-            log.info("Instance {} owns {}shards {}", instanceId, "ordered".equals(activeLane) ? "ordered " : "", adopted);
         } finally {
             lifecycleLock.unlock();
         }
     }
 
     /**
+     * {@link #start()}'s work on the run it has just installed, under {@link #lifecycleLock}.
+     */
+    private void startRun(Run run) {
+        List<Integer> adopted;
+        StopKind      owed;
+        try {
+            adopted = "ordered".equals(activeLane) ? startOrdered(run) : startUnordered(run);
+            owed = startHeartbeatUnlessStopped(run);
+        } catch (SQLException e) {
+            // A critical error (Exceptions.isCriticalError, which looks at the causes too) escapes untouched, with no
+            // undo attempted: the JVM is then in no state to run one, and a failure of the undo must not stand in for it.
+            Exceptions.rethrowIfCriticalError(e);
+            throw undoFailedStart(run, new IllegalStateException("Failed to start consuming shards for instance " + instanceId, e));
+        } catch (RuntimeException e) {
+            Exceptions.rethrowIfCriticalError(e);
+            throw undoFailedStart(run, e);
+        } catch (Error e) {
+            Exceptions.rethrowIfCriticalError(e);
+            throw undoFailedStart(run, e);
+        }
+        if (owed != null) {
+            doOwedStop(run, owed);
+            return;
+        }
+        // The shards taken at start-up are ownership changes like any other. Reporting only the ones rebalancing moves
+        // would leave an observer unable to tell which shards this instance serves. After the heartbeat is scheduled,
+        // so an observer that throws escapes the start with the run started: every unit it is told of is served.
+        reportAcquired(adopted);
+        log.info("Instance {} owns {}shards {}", instanceId, "ordered".equals(activeLane) ? "ordered " : "", adopted);
+    }
+
+    /**
+     * Do the work of the stop that took this start's run out without waiting for it ({@link #endRunOfStart}). That stop
+     * has returned already, and the start itself did nothing wrong, so what the work throws - a {@code QueueObserver}
+     * throwing for an ownership change it is told, or anything else ending the run throws - is logged rather than thrown
+     * from {@link #start()}. An observer that throws leaves nothing undone: it is told of every unit even so, the run is
+     * ended whatever it throws for the acquisitions ({@link #endRunOfStart}), and the releases are told last
+     * ({@link #endRun}). A critical error ({@link Exceptions#isCriticalError}) escapes, as everywhere in this module.
+     */
+    private void doOwedStop(Run run, StopKind owed) {
+        try {
+            endRunOfStart(run, owed);
+        } catch (RuntimeException | Error e) {
+            Exceptions.rethrowIfCriticalError(e);
+            log.warn("Instance {} failed while its start of queue {} did the work of a {} that had stopped the queue without "
+                             + "waiting for that start. That stop has returned, so this is logged rather than thrown from start(), "
+                             + "which leaves the queue not started",
+                     instanceId, queueId, owed == StopKind.ABRUPT ? "stopAbruptly()" : "stop()", e);
+        }
+    }
+
+    /**
      * Schedule the heartbeat of the run a start has just filled, unless a stop that gave up waiting for the start has
      * taken the run out meanwhile. Decided under the run's monitor, the one that stop takes the run out under
-     * ({@link #stopWithoutWaiting}): either the heartbeat is scheduled and the stop finds the start finished
-     * ({@link Run#startFinished}), or the stop took the run out first and no heartbeat is ever scheduled for it. One
-     * scheduled for an ended run would have no stop left to cancel it, and each of its ticks would keep the stopped
-     * instance live in the membership table.
+     * ({@link #stopWithoutWaiting}): either the heartbeat is scheduled and the stop finds the run {@link Phase#STARTED},
+     * or the stop took the run out first ({@code STOP_OWED_*}) and no heartbeat is ever scheduled for it. One scheduled
+     * for an ended run would have no stop left to cancel it, and each of its ticks would keep the stopped instance live in
+     * the membership table.
      *
      * @return the stop the start owes, which took its run out ({@link Run#owedStop}); {@code null} when the run is current
      * and its heartbeat scheduled
      */
     private StopKind startHeartbeatUnlessStopped(Run run) {
         synchronized (run) {
-            if (currentRun.get() != run) {
-                return run.owedStop;
+            // While this start holds lifecycleLock, only a stop without it moves the run on from STARTING, to the stop owed.
+            if (run.phase() != Phase.STARTING) {
+                return run.owedStop();
             }
             // The ordered lane had no heartbeat at all: its leases were taken once and left to expire, after which a
             // second node could take the same shard while this one kept delivering.
             startHeartbeat(run);
-            run.startFinished = true;
+            run.advanceTo(Phase.STARTED);
             return null;
         }
     }
@@ -446,7 +489,8 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         // Under the run's monitor, as every take-out is (Run).
         synchronized (run) {
             currentRun.compareAndSet(run, null);
-            owed = run.owedStop;
+            owed = run.owedStop();
+            run.advanceTo(Phase.ENDED);
         }
         try {
             endRunOfStart(run, owed);
@@ -477,6 +521,9 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * @param owed the stop the start owes, {@code null} for a failed start no stop is waiting on
      */
     private void endRunOfStart(Run run, StopKind owed) {
+        synchronized (run) {
+            run.advanceTo(Phase.ENDED);
+        }
         var adopted = run.owners.stream().map(LeasedOwner::shard).toList();
         try {
             reportAcquired(adopted);
@@ -760,6 +807,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         if (run != null) {
             synchronized (run) {
                 currentRun.compareAndSet(run, null);
+                run.advanceTo(Phase.ENDED);
             }
             run.cancelHeartbeat();
         }
@@ -767,13 +815,15 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
     }
 
     /**
-     * A stop that did not get {@link #lifecycleLock} - {@link #stop()} within {@link #SHUTDOWN_BUDGET},
-     * {@link #stopAbruptly()} at once. A run whose start is still running is taken out here, under the run's monitor,
-     * with the stop it owes recorded on it ({@link Run#owedStop}): the start, which holds the lock, does the stop's work
-     * ({@link #endRunOfStart}). A run whose start has finished its database work ({@link Run#startFinished}) is stopped
-     * under the lock after all, once that start lets go of it: all it has left is telling the observer of its
-     * acquisitions. No run current means there is nothing to stop: the holder is a stop already ending it, or a start
-     * that failed and is undoing its own.
+     * A stop that did not get {@link #lifecycleLock} - {@link #stop()} within {@link #SHUTDOWN_BUDGET} or on an
+     * interrupted thread, {@link #stopAbruptly()} at once. A run whose start is still running ({@link Phase#STARTING}) is taken out here,
+     * under the run's monitor, with the stop it owes recorded on it ({@link Run#phase}): the start, which holds the lock,
+     * does the stop's work ({@link #endRunOfStart}). Any other run is stopped under the lock after all: one whose start has
+     * finished its database work ({@link Phase#STARTED}) once that start lets go of the lock, all it has left being to
+     * tell the observer of its acquisitions; one whose start escaped with a critical error ({@link Phase#START_ABORTED})
+     * as soon as the lock is free, which for an interrupted stop it usually is already - no start is running for that
+     * run, and nobody would do the work handed to it. No run current means there is nothing to stop: the holder is a stop
+     * already ending it, or a start that failed and is undoing its own.
      *
      * @param interrupted whether {@link #stop()} got no further because its thread was interrupted, rather than because
      *                    it waited out {@link #SHUTDOWN_BUDGET}; an interrupted stop may not have waited at all
@@ -787,8 +837,9 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             if (currentRun.get() != run) {
                 return;
             }
-            if (!run.startFinished) {
-                run.owedStop = stop;
+            // STARTING is the one phase in which a start is running for the run, holding lifecycleLock (Phase).
+            if (run.phase() == Phase.STARTING) {
+                run.advanceTo(stop == StopKind.ABRUPT ? Phase.STOP_OWED_ABRUPT : Phase.STOP_OWED_GRACEFUL);
                 currentRun.compareAndSet(run, null);
                 if (stop == StopKind.GRACEFUL && interrupted) {
                     log.warn("Instance {} was interrupted while its stop of queue {} waited for the queue's start to finish its database "
@@ -1955,14 +2006,16 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      */
     private void stopRun() {
         // Only stop() and stopAbruptly() take a run out - they and a start() that fails, its own - and they do it one at a
-        // time (lifecycleLock). A stop that did not get the lock takes out only a run whose start is still running, which
-        // holds the lock (stopWithoutWaiting), so the run read here is still the current one inside the monitor.
+        // time (lifecycleLock). A stop that did not get the lock takes out only a run whose start is still running
+        // (Phase.STARTING), which holds the lock (stopWithoutWaiting), so the run read here is still the current one inside
+        // the monitor: one started, or one a start that escaped with a critical error left installed (START_ABORTED).
         var run = currentRun.get();
         if (run == null) {
             return;
         }
         synchronized (run) {
             currentRun.compareAndSet(run, null);
+            run.advanceTo(Phase.ENDED);
         }
         endRun(run, true);
     }
@@ -2334,10 +2387,19 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      *   <li>{@code start()}, {@code stop()} and {@code stopAbruptly()} run one at a time under {@link #lifecycleLock}.
      *       Only {@code start()} installs a run, only the two stops take one out - they and a {@code start()} that
      *       fails, its own. One exception: a stop that does not get the lock - {@code stop()} within the
-     *       {@link #SHUTDOWN_BUDGET}, {@code stopAbruptly()} at once - takes out a run whose start, holding the lock, is still
-     *       running, and records the stop on it ({@link #owedStop}). The start then ends the run itself, under the lock
+     *       {@link #SHUTDOWN_BUDGET} or on an interrupted thread, {@code stopAbruptly()} at once - takes out a run whose
+     *       start, holding the lock, is still running, and records on it the stop the start owes ({@link #phase}:
+     *       {@link Phase#STARTING} to {@code STOP_OWED_*}). The start then ends the run itself, under the lock
      *       ({@link #endRunOfStart}). So a stop under the lock always finds the current run its own to take out, and a start
      *       finds its run current or taken out by the one stop it owes.</li>
+     *   <li>Whether a start is still running for a run is its {@link #phase}, one field moved only forward under the
+     *       run's monitor, and never inferred from anything else. {@link Phase#STARTING} is the only phase a stop without
+     *       the lock hands its work over from. It is not enough that the start has not scheduled the heartbeat: a start
+     *       that escapes with a critical error leaves its run installed with no heartbeat and lets go of the lock
+     *       ({@link Phase#START_ABORTED}), and a stop that handed its work to it would hand it to nobody. Four separate
+     *       signals - membership in {@link #currentRun}, a start-finished flag, the stop owed, and whether the lock was
+     *       held - used to stand for the phase, and read the run a critical-error start left behind as one whose start
+     *       was still running.</li>
      *   <li>A run is taken out under its own monitor, and its {@link #owners} are read under it once it is out. A unit
      *       joins a run only through {@link #adoptIntoRun}, under the same monitor and only while the run is still
      *       current - a start-up's units as much as a heartbeat tick's. So every owner a run ever lists is in the list
@@ -2398,18 +2460,45 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
          */
         volatile ScheduledFuture<?>    heartbeat;
         /**
-         * Whether this run's start has finished its database work and scheduled the heartbeat
-         * ({@link #startHeartbeatUnlessStopped}). Read and written under the run's monitor. A stop that did not get
-         * {@link #lifecycleLock} takes out only a run whose start has not finished; one whose start has finished it
-         * stops under the lock, after that start has told the observer of its acquisitions ({@link #stopWithoutWaiting}).
+         * Where this run stands in its lifecycle ({@link Phase}). Read and moved only under the run's monitor, and only
+         * forward ({@link #advanceTo}).
          */
-        boolean                        startFinished;
+        private Phase                  phase               = Phase.STARTING;
+
         /**
-         * The stop that took this run out while its start was still running, without {@link #lifecycleLock}
-         * ({@link #stopWithoutWaiting}); {@code null} otherwise. Read and written under the run's monitor. The start does
-         * that stop's work for it ({@link #endRunOfStart}).
+         * Where this run stands. Under the run's monitor.
          */
-        StopKind                       owedStop;
+        Phase phase() {
+            return phase;
+        }
+
+        /**
+         * Move this run to {@code target} if that is forward of where it stands, else leave it where it is. Under the
+         * run's monitor. The caller decides whether the move is one the protocol allows from where the run stands - a
+         * stop takes over a start's run only from {@link Phase#STARTING} - and this keeps the phase from ever moving back.
+         *
+         * @return the phase the run was in before this call
+         */
+        Phase advanceTo(Phase target) {
+            var previous = phase;
+            if (previous.ordinal() < target.ordinal()) {
+                phase = target;
+            }
+            return previous;
+        }
+
+        /**
+         * The stop this run's start owes, when a stop took the run out while the start was still running
+         * ({@link Phase#STOP_OWED_GRACEFUL}, {@link Phase#STOP_OWED_ABRUPT}); {@code null} in every other phase. Under the
+         * run's monitor.
+         */
+        StopKind owedStop() {
+            return switch (phase) {
+                case STOP_OWED_GRACEFUL -> StopKind.GRACEFUL;
+                case STOP_OWED_ABRUPT -> StopKind.ABRUPT;
+                default -> null;
+            };
+        }
 
         /**
          * Cancel this run's heartbeat, without interrupting a tick already running: that tick finishes on this run's
@@ -2421,6 +2510,55 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                 scheduled.cancel(false);
             }
         }
+    }
+
+    /**
+     * Where a {@link Run} stands, from the {@link #start()} that installs it to whoever ends it. A run moves only forward
+     * through these, under its monitor ({@link Run#advanceTo}), and each stop that finds it current reads from the phase
+     * whether a start is still running for it - nothing else does that inferring.
+     * <pre>
+     *   STARTING -+-&gt; STARTED ------------+
+     *             +-&gt; START_ABORTED ------+
+     *             +-&gt; STOP_OWED_GRACEFUL -+-&gt; ENDED
+     *             +-&gt; STOP_OWED_ABRUPT ---+
+     *             +-----------------------+   (a start that failed, undoing its own run)
+     * </pre>
+     */
+    private enum Phase {
+        /**
+         * Installed by a {@link #start()} that is still doing its database work, holding {@link #lifecycleLock} - the one
+         * phase in which a start is known to be running for the run. A stop that did not get the lock takes the run out
+         * from here, and leaves the stop's work to the start ({@link #stopWithoutWaiting}).
+         */
+        STARTING,
+        /**
+         * The start has scheduled the run's heartbeat ({@link #startHeartbeatUnlessStopped}); all it may still do is tell
+         * the observer of its acquisitions, still holding {@link #lifecycleLock}. A stop that did not get the lock waits for
+         * it after all.
+         */
+        STARTED,
+        /**
+         * The start escaped while still {@link #STARTING} - a critical error ({@link Exceptions#isCriticalError}), which
+         * undoes nothing - and left the run installed, with no heartbeat, and let go of {@link #lifecycleLock}. No start
+         * is running for it, so a stop, with the lock or without, takes it out under the lock and ends it as it ends a
+         * started run.
+         */
+        START_ABORTED,
+        /**
+         * A {@link #stop()} that did not get {@link #lifecycleLock} took the run out while it was {@link #STARTING}; the
+         * start does that stop's work ({@link #endRunOfStart}). A critical error escaping the start leaves the run here,
+         * with that work undone, as it leaves the start's own.
+         */
+        STOP_OWED_GRACEFUL,
+        /**
+         * {@link #STOP_OWED_GRACEFUL}, for a {@link #stopAbruptly()}.
+         */
+        STOP_OWED_ABRUPT,
+        /**
+         * Taken out of {@link #currentRun} by whoever ends it: a stop under {@link #lifecycleLock}, a start doing the work
+         * of the stop it owes, or a start that failed undoing its own run.
+         */
+        ENDED
     }
 
     /**

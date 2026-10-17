@@ -1686,6 +1686,147 @@ class ShardOwnedLifecycleIT {
         }
     }
 
+    /**
+     * A {@code stop()} on an interrupted thread ends the run a start left installed when it escaped with a critical error,
+     * as it ends a started queue's: it deregisters the instance and leaves the queue stopped, with the thread's interrupt
+     * flag still set. No start is running for that run any more, so the stop does its work itself. It used to take the
+     * missing heartbeat for a start still running, hand that start the stop's work and return - and nobody did the work:
+     * the instance stayed registered, holding every other instance at a stale fair share, the runtime was never handed
+     * back, and any unit the run had adopted stayed leased and placed on the runtime, while {@code isStarted()} read
+     * false. The interrupted stop does not wait for the lifecycle lock at all, so it reached that hand-over with no start
+     * holding the lock.
+     */
+    @Test
+    void a_stop_on_an_interrupted_thread_ends_the_run_a_start_left_behind_with_a_critical_error() throws Exception {
+        var settings    = settingsWithShedGrace(Duration.ofSeconds(1));
+        var instanceId  = "interrupted-stop-after-critical-start";
+        var failing     = new ConnectionRefusingDataSource(dataSource);
+        var logged      = new ListAppender<ILoggingEvent>();
+        var queueLogger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(ShardOwnedQueue.class);
+        logged.start();
+        queueLogger.addAppender(logged);
+        try (var runtime = new ShardRuntime(dataSource, settings)) {
+            var queue = ShardOwnedQueue.builder().setDataSource(failing).setQueueId(QUEUE_ID).setShardCount(SHARD_COUNT)
+                                       .setInstanceId(instanceId).setRuntime(runtime).build();
+            try {
+                failing.failAfterTheFirstAcquire(() -> new NoClassDefFoundError("simulated critical error"));
+                var thrown = catchThrowable(() -> startConsuming(queue, "unordered", settings));
+                failing.refuse(false);
+                assertThat(thrown).as("premise: the start escaped with the critical error").isInstanceOf(NoClassDefFoundError.class);
+                assertThat(queue.isStarted()).as("premise: the critical error left the queue started").isTrue();
+                assertThat(instanceRegistered(instanceId)).as("premise: the start registered the instance").isTrue();
+
+                var stillInterrupted = new AtomicBoolean();
+                var stopping = new Thread(() -> {
+                    Thread.currentThread().interrupt();
+                    queue.stop();
+                    stillInterrupted.set(Thread.currentThread().isInterrupted());
+                });
+                stopping.start();
+                stopping.join(10_000);
+
+                assertThat(stopping.isAlive()).as("the interrupted stop returned").isFalse();
+                assertThat(stillInterrupted).as("the stop left the thread's interrupt flag set").isTrue();
+                assertThat(queue.isStarted()).as("the stop ended the run").isFalse();
+                // The deregistration runs on the stop's shutdown-budget thread, which an interrupted stop does not wait for.
+                Awaitility.await().atMost(Duration.ofSeconds(5)).until(() -> !instanceRegistered(instanceId));
+                assertThat(logged.list).extracting(ILoggingEvent::getFormattedMessage)
+                                       .as("the stop did not hand its work to a start, there being none running")
+                                       .noneMatch(message -> message.contains("does the stop's work itself"));
+            } finally {
+                failing.refuse(false);
+                queue.stop();
+                queueLogger.detachAppender(logged);
+            }
+        }
+    }
+
+    /**
+     * A start that does the work of a stop that took its run out without waiting for it returns normally, the queue not
+     * started, when the observer throws for the releases that work tells: that stop's caller has returned, so the failure
+     * is logged at WARN rather than thrown from {@code start()}. It used to escape {@code start()} - and through
+     * {@code PostgresqlMessageQueue.consume()} turn a consume into a failure - while the caller of {@code stop()}, whose
+     * stop it was, never saw it.
+     * <p>
+     * The observer is told only of units the run adopted, so the stop has to take the run out after the start has adopted
+     * one and before it schedules the heartbeat, and nothing in that window can be made to hold the start. The ordered lane
+     * adopts its units one at a time, each under the run's monitor, and a stop on an interrupted thread - which does not
+     * wait for the lifecycle lock - called as soon as the first is adopted waits for that monitor between two adoptions.
+     * When it gets the monitor only once the heartbeat is scheduled it stops the queue under the lock instead, after the
+     * start, and the observer's failure escapes the stop; the attempt is then made again under a new instance id.
+     */
+    @Test
+    void a_start_doing_the_work_of_a_stop_that_did_not_wait_for_it_logs_the_observers_failure_instead_of_throwing_it() throws Exception {
+        var settings    = settingsWithShedGrace(Duration.ofSeconds(1));
+        var throwing    = new AtomicBoolean(true);
+        var logged      = new ListAppender<ILoggingEvent>();
+        var queueLogger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(ShardOwnedQueue.class);
+        logged.start();
+        queueLogger.addAppender(logged);
+        ShardRuntime.acquireShared(dataSource, settings);
+        try {
+            var landed = false;
+            for (var attempt = 0; attempt < 20 && !landed; attempt++) {
+                var instanceId   = "owed-stop-observer-" + attempt;
+                var queue        = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, instanceId, new ShardOwnerMetrics(throwingForEveryRelease(throwing)));
+                var startFailure = new AtomicReference<Throwable>();
+                var starting = new Thread(() -> {
+                    try {
+                        startConsuming(queue, "ordered", settings);
+                    } catch (Throwable failure) {
+                        startFailure.set(failure);
+                    }
+                });
+                Throwable stopFailure = null;
+                try {
+                    starting.start();
+                    while (queue.owners().isEmpty() && starting.isAlive()) {
+                        Thread.onSpinWait();
+                    }
+                    Thread.currentThread().interrupt();
+                    try {
+                        queue.stop();
+                    } catch (RuntimeException | Error failure) {
+                        stopFailure = failure;
+                    } finally {
+                        Thread.interrupted();
+                    }
+                    starting.join(30_000);
+                    assertThat(starting.isAlive()).as("the start returned").isFalse();
+                    // The stop returned without the observer's failure only when it left its work to the start.
+                    landed = stopFailure == null;
+                    if (landed) {
+                        assertThat(startFailure.get()).as("the start, doing the stop's work, returned normally").isNull();
+                        assertThat(queue.isStarted()).as("the start left the queue stopped").isFalse();
+                        Awaitility.await().atMost(Duration.ofSeconds(5)).until(() -> !instanceRegistered(instanceId)
+                                                                                     && unitsOwnedBy("ordered", instanceId) == 0);
+                        assertThat(logged.list).filteredOn(event -> event.getFormattedMessage().contains("did the work of a stop()"))
+                                               .as("the observer's failure is logged at WARN, with what it threw")
+                                               .singleElement()
+                                               .satisfies(event -> assertThat(event.getThrowableProxy().getMessage())
+                                                       .startsWith("simulated observer failure releasing unit"));
+                    } else {
+                        assertThat(stopFailure).as("premise: a stop under the lock throws the observer's failure")
+                                               .hasMessageStartingWith("simulated observer failure releasing unit");
+                        // The release ran on the interrupted stop's budget thread, which it did not wait for.
+                        Awaitility.await().atMost(Duration.ofSeconds(10)).until(() -> !instanceRegistered(instanceId)
+                                                                                      && unitsOwnedBy("ordered", instanceId) == 0);
+                    }
+                } finally {
+                    Thread.interrupted();
+                    starting.join(30_000);
+                    throwing.set(false);
+                    queue.stop();
+                    throwing.set(true);
+                }
+            }
+            assertThat(landed).as("premise: in one of 20 attempts a stop took the run out between an adoption and the heartbeat").isTrue();
+        } finally {
+            queueLogger.detachAppender(logged);
+            ShardRuntime.releaseShared(dataSource);
+        }
+    }
+
     private static void startUnchecked(ShardOwnedQueue queue, String lane, ShardOwnerSettings settings) {
         try {
             startConsuming(queue, lane, settings);

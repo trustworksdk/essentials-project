@@ -84,7 +84,11 @@ public interface QueueObserver {
      * <p>
      * A stop tells its releases last. An implementation that throws for one leaves nothing of the stop undone - every
      * shard is given up as above and told, and every consumer of the queue or subscription is stopped - and the first
-     * throw then escapes {@code stop()}.
+     * throw then escapes {@code stop()}. A {@code stop()} that did not wait for a start still registering and leasing
+     * (past its shutdown budget, or on an interrupted thread) leaves its work to that start, and so does a
+     * {@code stopAbruptly()}, which never waits for one. The start then tells its acquisitions, and for a {@code stop()}
+     * the releases; what the observer throws there, for either stop, is logged at WARN, and escapes neither the stop,
+     * which has returned, nor the start.
      */
     default void shardOwnershipChanged(int shard, boolean acquired) {
     }
