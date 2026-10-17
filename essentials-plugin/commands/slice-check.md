@@ -22,7 +22,7 @@ is audited.
 
 | Mode | What it may change |
 |---|---|
-| _(default)_ | Nothing. Report only. |
+| *(default)* | Nothing. Report only. |
 | `--fix-manifests` | `slice.yaml`, per-slice `CLAUDE.md`, per-BC `CLAUDE.md`, and the `.claude/rules` pointer. **Never source code.** |
 | `--adopt-tier` | One field, one time: writes `tier` into manifests that have none. Never overwrites one. `/essentials:slice-enrich` covers `tier` too, with the other absent human-owned fields |
 | `--fix-source` | Additionally *proposes* structural source fixes. Each is shown as a diff and applied only on explicit per-fix confirmation. |
