@@ -246,6 +246,11 @@ class ShardOwnedLifecycleIT {
                 var stopping = CompletableFuture.runAsync(queue::stop);
                 Awaitility.await().atMost(Duration.ofSeconds(5)).until(() -> !queue.isStarted());
                 var starting = CompletableFuture.runAsync(queue::start);
+                // The wait itself, asserted while the stop is still in its drain: the final state alone cannot show it, since
+                // the stop works only on the run it took out and its fenced release leaves rows re-taken under newer fences.
+                Awaitility.await().during(Duration.ofMillis(500)).atMost(Duration.ofSeconds(1)).until(() -> !starting.isDone());
+                assertThat(stopping).as("the stop is still draining the held handler").isNotDone();
+                assertThat(starting).as("start waits for the draining stop").isNotDone();
                 stopping.get(10, TimeUnit.SECONDS);
                 release.countDown();
                 starting.get(10, TimeUnit.SECONDS);
