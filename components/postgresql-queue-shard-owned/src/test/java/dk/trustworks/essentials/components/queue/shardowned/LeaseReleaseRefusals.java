@@ -87,7 +87,9 @@ final class LeaseReleaseRefusals {
         try (var connection = dataSource.getConnection(); var statement = connection.createStatement();
              var resultSet = statement.executeQuery("SELECT CASE WHEN is_called THEN last_value ELSE 0 END FROM lease_release_refusals_q"
                                                             + queueId + "_" + unit)) {
-            resultSet.next();
+            if (!resultSet.next()) {
+                throw new IllegalStateException("Reading the refusal counter of queue " + queueId + " unit " + unit + " returned no row");
+            }
             return resultSet.getLong(1);
         }
     }
