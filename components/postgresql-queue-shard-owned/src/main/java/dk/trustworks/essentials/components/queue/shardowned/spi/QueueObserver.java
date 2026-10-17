@@ -78,8 +78,9 @@ public interface QueueObserver {
      * rebalance, or handed back from a dead pump), found taken by another instance (on the heartbeat that finds it), or
      * given up when the consumer stops - released, or kept because an ordered key was still in its handler, or left to
      * lapse because its release failed. So, over the consumers this observer is attached to, acquisitions minus releases
-     * is the number of shards they hold, and zero once they have stopped. One caveat on order: a shard the heartbeat
-     * acquires just as its consumer stops can have its release told before its acquisition.
+     * is the number of shards they hold, and zero once they have stopped with {@code stop()}; {@code stopAbruptly()},
+     * which stands in for a crash, tells no releases. One caveat on order: a shard the heartbeat acquires just as its
+     * consumer stops can have its release told before its acquisition.
      * <p>
      * A stop tells its releases last. An implementation that throws for one leaves nothing of the stop undone - every
      * shard is given up as above and told, and every consumer of the queue or subscription is stopped - and the first
