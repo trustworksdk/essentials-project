@@ -404,7 +404,9 @@ class ShardOwnedLifecycleIT {
             statement.setString(2, lane);
             statement.setInt(3, shard);
             try (var resultSet = statement.executeQuery()) {
-                resultSet.next();
+                if (!resultSet.next()) {
+                    throw new IllegalStateException("No lease row for queue " + QUEUE_ID + " " + lane + " unit " + shard);
+                }
                 return resultSet.getLong(1);
             }
         }
@@ -841,7 +843,9 @@ class ShardOwnedLifecycleIT {
             statement.setString(2, lane);
             statement.setInt(3, shard);
             try (var resultSet = statement.executeQuery()) {
-                resultSet.next();
+                if (!resultSet.next()) {
+                    throw new IllegalStateException("No lease row for queue " + QUEUE_ID + " " + lane + " unit " + shard);
+                }
                 return resultSet.getString(1);
             }
         }
