@@ -18,6 +18,7 @@ package dk.trustworks.essentials.shared;
 
 import java.io.*;
 import java.util.*;
+import java.util.function.Consumer;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
@@ -156,6 +157,72 @@ public final class Exceptions {
         if (isCriticalError(throwable)) {
             Exceptions.sneakyThrow(throwable);
         }
+    }
+
+    /**
+     * Runs <code>action</code> for every one of <code>items</code>, each one even when it throws for an earlier one, and then
+     * throws the first failure - as it was thrown, using {@link #sneakyThrow(Throwable)} - with every later, distinct
+     * failure added to it as suppressed.
+     * <p>
+     * Meant for fanning one operation out over independent parts, such as stopping every consumer of a queue, where
+     * giving up at the first throw would leave the parts after it untouched (still running, say).
+     * <p>
+     * A {@link RuntimeException} and a non-critical {@link Error} (an {@link AssertionError}, for example) are collected
+     * alike. A critical error ({@link #isCriticalError(Throwable)}) is rethrown at once, without running
+     * <code>action</code> for the items after it, with the failure collected so far added to it as suppressed.
+     *
+     * @param items  the items to run <code>action</code> for, in their iteration order
+     * @param action the action to run for each item
+     * @param <T>    the type of the items
+     * @see #forEachCollectingFailures(Iterable, Consumer, Throwable)
+     */
+    public static <T> void forEachThenThrowFirst(Iterable<? extends T> items, Consumer<? super T> action) {
+        var failure = forEachCollectingFailures(items, action, null);
+        if (failure != null) {
+            sneakyThrow(failure);
+        }
+    }
+
+    /**
+     * {@link #forEachThenThrowFirst(Iterable, Consumer)}, adding every failure to <code>failure</code> when there already is
+     * one - the failure of a start that the action undoes, say - and returning the failure instead of throwing it, so the
+     * caller throws it with its own type. A critical error is thrown at once all the same, with <code>failure</code> added
+     * to it as suppressed.
+     *
+     * @param items   the items to run <code>action</code> for, in their iteration order
+     * @param action  the action to run for each item
+     * @param failure the failure every failure of <code>action</code> is added to as suppressed; may be null
+     * @param <T>     the type of the items
+     * @return <code>failure</code> when it is not null; otherwise the first failure of <code>action</code>, with every
+     * later, distinct one added to it as suppressed; null when <code>failure</code> is null and <code>action</code> threw
+     * for no item
+     */
+    @SuppressWarnings("PMD.CompareObjectsWithEquals") // identity on purpose: see the comment in the loop
+    public static <T> Throwable forEachCollectingFailures(Iterable<? extends T> items, Consumer<? super T> action, Throwable failure) {
+        requireNonNull(items, "You must supply the items");
+        requireNonNull(action, "You must supply an action");
+        var collected = failure;
+        for (var item : items) {
+            try {
+                action.accept(item);
+            } catch (RuntimeException | Error e) {
+                if (isCriticalError(e)) {
+                    if (collected != null && collected != e) {
+                        e.addSuppressed(collected);
+                    }
+                    sneakyThrow(e);
+                }
+                if (collected == null) {
+                    collected = e;
+                } else if (collected != e) {
+                    // Identity, not equals(): Throwable.addSuppressed throws IllegalArgumentException for the throwable
+                    // itself, which it tells by identity - an action throwing one shared instance for every item would
+                    // otherwise end the loop here, with the items after it not run
+                    collected.addSuppressed(e);
+                }
+            }
+        }
+        return collected;
     }
 
     /**

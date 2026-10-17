@@ -31,6 +31,7 @@ import dk.trustworks.essentials.components.queue.shardowned.spi.MessageId;
 import dk.trustworks.essentials.components.queue.shardowned.spi.MessageQueue;
 import dk.trustworks.essentials.components.queue.shardowned.spi.MessageQueues;
 import dk.trustworks.essentials.components.queue.shardowned.spi.QueueDepth;
+import dk.trustworks.essentials.shared.Exceptions;
 import org.slf4j.*;
 
 import javax.sql.DataSource;
@@ -207,26 +208,18 @@ public class ShardOwnedDurableQueues implements DurableQueues {
      * {@inheritDoc}
      * <p>
      * Every consumer is stopped even when an earlier one's stop throws - a {@code QueueObserver} failing for a release,
-     * say - and the first such failure is thrown once all of them have stopped, the others added to it as suppressed.
-     * Stopping at the first throw left the consumers after it running, and this reporting itself started.
+     * say, with a {@code RuntimeException} or a non-critical {@code Error} such as a test double's {@code AssertionError} -
+     * and the first such failure is thrown, as it was thrown, once all of them have stopped, the others added to it as
+     * suppressed ({@link Exceptions#forEachThenThrowFirst}). Stopping at the first throw left the consumers after it
+     * running, and this reporting itself started. Only a critical error ({@link Exceptions#isCriticalError}) ends the
+     * stopping at once; this reports itself stopped then too.
      */
     @Override
     public void stop() {
-        RuntimeException failure = null;
-        for (var consumer : consumers.values()) {
-            try {
-                consumer.stop();
-            } catch (RuntimeException e) {
-                if (failure == null) {
-                    failure = e;
-                } else if (failure != e) {
-                    failure.addSuppressed(e);
-                }
-            }
-        }
-        started = false;
-        if (failure != null) {
-            throw failure;
+        try {
+            Exceptions.forEachThenThrowFirst(consumers.values(), ShardOwnedDurableQueueConsumer::stop);
+        } finally {
+            started = false;
         }
     }
 

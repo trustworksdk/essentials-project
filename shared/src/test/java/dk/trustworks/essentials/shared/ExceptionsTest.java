@@ -19,6 +19,7 @@ package dk.trustworks.essentials.shared;
 import org.junit.jupiter.api.Test;
 
 import java.sql.SQLException;
+import java.util.*;
 
 import static org.assertj.core.api.Assertions.*;
 
@@ -223,6 +224,113 @@ public class ExceptionsTest {
         assertThatThrownBy(() -> Exceptions.prependRootCauseSummary(null, "the description"))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> Exceptions.prependRootCauseSummary(new RuntimeException(), null))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void forEachThenThrowFirst_runsTheActionForEveryItem_whenNoneThrows() {
+        var ran = new ArrayList<String>();
+
+        Exceptions.forEachThenThrowFirst(List.of("a", "b", "c"), ran::add);
+
+        assertThat(ran).containsExactly("a", "b", "c");
+    }
+
+    @Test
+    void forEachThenThrowFirst_runsEveryItem_andThrowsTheFirstFailure_withTheOthersSuppressed() {
+        var ran    = new ArrayList<String>();
+        var first  = new IllegalStateException("a");
+        var second = new AssertionError("c");
+
+        var thrown = catchThrowable(() -> Exceptions.forEachThenThrowFirst(List.of("a", "b", "c"), item -> {
+            ran.add(item);
+            switch (item) {
+                case "a" -> throw first;
+                case "c" -> throw second;
+                default -> { }
+            }
+        }));
+
+        assertThat(ran).as("every item ran, also after a throw").containsExactly("a", "b", "c");
+        assertThat(thrown).isSameAs(first);
+        assertThat(thrown.getSuppressed()).containsExactly(second);
+    }
+
+    @Test
+    void forEachThenThrowFirst_throwsANonCriticalErrorAsItWasThrown() {
+        var error = new AssertionError("the only failure");
+
+        assertThatThrownBy(() -> Exceptions.forEachThenThrowFirst(List.of("a", "b"), item -> {
+            if ("a".equals(item)) {
+                throw error;
+            }
+        })).isSameAs(error);
+    }
+
+    @Test
+    void forEachThenThrowFirst_doesNotSuppressAFailureInItself_whenEveryItemThrowsTheSameInstance() {
+        var ran     = new ArrayList<String>();
+        var failure = new IllegalStateException("shared instance");
+
+        var thrown = catchThrowable(() -> Exceptions.forEachThenThrowFirst(List.of("a", "b", "c"), item -> {
+            ran.add(item);
+            throw failure;
+        }));
+
+        assertThat(ran).containsExactly("a", "b", "c");
+        assertThat(thrown).isSameAs(failure);
+        assertThat(thrown.getSuppressed()).isEmpty();
+    }
+
+    @Test
+    void forEachThenThrowFirst_rethrowsACriticalErrorAtOnce_withTheFailureSoFarSuppressed() {
+        var ran      = new ArrayList<String>();
+        var first    = new IllegalStateException("a");
+        var critical = new StackOverflowError("b");
+
+        var thrown = catchThrowable(() -> Exceptions.forEachThenThrowFirst(List.of("a", "b", "c"), item -> {
+            ran.add(item);
+            switch (item) {
+                case "a" -> throw first;
+                case "b" -> throw critical;
+                default -> { }
+            }
+        }));
+
+        assertThat(thrown).isSameAs(critical);
+        assertThat(thrown.getSuppressed()).containsExactly(first);
+        assertThat(ran).as("no item ran after the critical error").containsExactly("a", "b");
+    }
+
+    @Test
+    void forEachCollectingFailures_addsEveryFailureToTheGivenOne_andReturnsIt() {
+        var ran     = new ArrayList<String>();
+        var failure = new IllegalStateException("the start's failure");
+        var stop    = new AssertionError("a");
+
+        var returned = Exceptions.forEachCollectingFailures(List.of("a", "b"), item -> {
+            ran.add(item);
+            if ("a".equals(item)) {
+                throw stop;
+            }
+            throw failure;
+        }, failure);
+
+        assertThat(ran).containsExactly("a", "b");
+        assertThat(returned).isSameAs(failure);
+        assertThat(returned.getSuppressed()).as("not suppressed in itself when an item throws the given failure").containsExactly(stop);
+    }
+
+    @Test
+    void forEachCollectingFailures_returnsNull_whenNoItemThrowsAndNoFailureIsGiven() {
+        assertThat(Exceptions.forEachCollectingFailures(List.of("a"), item -> { }, null)).isNull();
+    }
+
+    @Test
+    void forEachCollectingFailures_rejectsMissingArguments() {
+        assertThatThrownBy(() -> Exceptions.forEachCollectingFailures(null, item -> { }, null))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> Exceptions.forEachCollectingFailures(List.of("a"), null, null))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 }

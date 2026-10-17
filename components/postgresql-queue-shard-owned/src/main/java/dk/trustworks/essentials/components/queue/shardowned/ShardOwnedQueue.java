@@ -1770,24 +1770,14 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         tellOwnershipChanged(units, false);
     }
 
+    /**
+     * Tell the observer of every one of {@code units}, each one even when it throws for an earlier one - a
+     * {@code RuntimeException} or a non-critical {@code Error}, such as a test double's {@code AssertionError} - and then
+     * throw the first failure as it was thrown, the others added to it as suppressed ({@link Exceptions#forEachThenThrowFirst}).
+     * Only a critical error ({@link Exceptions#isCriticalError}) leaves the units after it untold.
+     */
     private void tellOwnershipChanged(List<Integer> units, boolean acquired) {
-        RuntimeException failure = null;
-        for (var unit : units) {
-            try {
-                metrics.observer().shardOwnershipChanged(unit, acquired);
-            } catch (RuntimeException e) {
-                if (failure == null) {
-                    failure = e;
-                } else if (failure != e) {
-                    // An observer throwing one instance every time: suppressing it in itself would throw here, and the
-                    // units after this one would go untold
-                    failure.addSuppressed(e);
-                }
-            }
-        }
-        if (failure != null) {
-            throw failure;
-        }
+        Exceptions.forEachThenThrowFirst(units, unit -> metrics.observer().shardOwnershipChanged(unit, acquired));
     }
 
     /**

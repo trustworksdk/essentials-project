@@ -225,32 +225,14 @@ public final class PostgresqlMessageQueue implements MessageQueue {
         /**
          * Every observer is told even when an earlier one throws: the engine catches this callback (see
          * {@link QueueObserver#takeoverStalled}), so stopping at the first throw would leave the observers after it
-         * with a stall they never hear about, or one that never ends. The first exception is rethrown once all have
-         * been told, for the engine to log. A non-critical {@code Error} (an {@code AssertionError}, say) is treated
-         * the same way; a critical one (VirtualMachineError, LinkageError) propagates at once.
+         * with a stall they never hear about, or one that never ends. The first exception is rethrown as it was thrown
+         * once all have been told, for the engine to log, the later ones added to it as suppressed
+         * ({@link Exceptions#forEachThenThrowFirst}). A non-critical {@code Error} (an {@code AssertionError}, say) is
+         * treated the same way; a critical one (VirtualMachineError, LinkageError) propagates at once.
          */
         @Override
         public void takeoverStalled(MessageId.Lane lane, int shard, boolean stalled) {
-            Throwable first = null;
-            for (var observer : observers) {
-                try {
-                    observer.takeoverStalled(lane, shard, stalled);
-                } catch (RuntimeException | Error e) {
-                    Exceptions.rethrowIfCriticalError(e);
-                    if (first == null) {
-                        first = e;
-                    } else {
-                        first.addSuppressed(e);
-                    }
-                }
-            }
-            // Only a RuntimeException or an Error can have been caught above
-            if (first instanceof RuntimeException e) {
-                throw e;
-            }
-            if (first != null) {
-                throw (Error) first;
-            }
+            Exceptions.forEachThenThrowFirst(observers, observer -> observer.takeoverStalled(lane, shard, stalled));
         }
     };
 
@@ -603,10 +585,15 @@ public final class PostgresqlMessageQueue implements MessageQueue {
             try {
                 unorderedConsumer.start();
                 orderedConsumer.start();
-            } catch (RuntimeException e) {
-                // Both stopped even when the first one's stop throws (an observer failing for a release), and the start's
-                // failure is what escapes: a stop's failure is added to it, never thrown in its place.
-                throw stopEach(List.of(unorderedConsumer, orderedConsumer), e);
+            } catch (RuntimeException | Error e) {
+                // A critical error (Exceptions.isCriticalError) escapes untouched, with no undo attempted, as a consumer's
+                // own start does. Otherwise both are stopped even when the first one's stop throws (an observer failing for
+                // a release), and the start's failure is what escapes: a stop's failure is added to it, never thrown in
+                // its place. A non-critical Error counts as a failed start too - an observer's AssertionError for an
+                // acquisition escapes a consumer's start with that consumer running.
+                Exceptions.rethrowIfCriticalError(e);
+                Exceptions.forEachCollectingFailures(List.of(unorderedConsumer, orderedConsumer), ShardOwnedQueue::stop, e);
+                throw e;
             }
             // A competing consumer is legal and occasionally wanted, but the common reason for a
             // second consume() is the belief that one call serves the ordered lane and another the
@@ -951,7 +938,9 @@ public final class PostgresqlMessageQueue implements MessageQueue {
      * them up immediately rather than waiting out the lease.
      * <p>
      * Every consumer is stopped even when an earlier one's stop throws - a {@link QueueObserver} failing for a release,
-     * say - and the first such failure is thrown once all of them have stopped, the others added to it as suppressed.
+     * say, with a {@code RuntimeException} or a non-critical {@code Error} - and the first such failure is thrown as it
+     * was thrown once all of them have stopped, the others added to it as suppressed. A critical error
+     * ({@link Exceptions#isCriticalError}) propagates at once, leaving the consumers after it unstopped.
      */
     @Override
     public void stop() {
@@ -965,38 +954,16 @@ public final class PostgresqlMessageQueue implements MessageQueue {
 
     /**
      * Stop every one of {@code consumers}, each one even when an earlier one's stop throws, and then throw the first
-     * failure, the others added to it as suppressed. A consumer's stop throws only after it has done all of its stopping,
-     * when the {@link QueueObserver} it tells of a release, last, throws. The fan-out
+     * failure as it was thrown, the others added to it as suppressed ({@link Exceptions#forEachThenThrowFirst}). A
+     * consumer's stop throws only after it has done all of its stopping, when the {@link QueueObserver} it tells of a
+     * release, last, throws - a {@code RuntimeException} or a non-critical {@code Error} such as a test double's
+     * {@code AssertionError}; only a critical error ({@link Exceptions#isCriticalError}) ends the loop at once. The fan-out
      * observer is shared by every consumer of this queue, so stopping at the first throw left the consumers after it
      * started: still leasing, heartbeating and dispatching after the queue reported itself stopped, and a second
      * {@code stop()} found the queue already stopped.
      */
     private static void stopEach(List<ShardOwnedQueue> consumers) {
-        var failure = stopEach(consumers, null);
-        if (failure != null) {
-            throw failure;
-        }
-    }
-
-    /**
-     * {@link #stopEach(List)}, adding each failure to {@code failure} when there already is one (the failure of the start
-     * a stop undoes), and returning the failure to throw instead of throwing it.
-     *
-     * @return {@code failure}, or the first stop's failure when {@code failure} is null and a stop threw, or null
-     */
-    private static RuntimeException stopEach(List<ShardOwnedQueue> consumers, RuntimeException failure) {
-        for (var consumer : consumers) {
-            try {
-                consumer.stop();
-            } catch (RuntimeException e) {
-                if (failure == null) {
-                    failure = e;
-                } else if (failure != e) {
-                    failure.addSuppressed(e);
-                }
-            }
-        }
-        return failure;
+        Exceptions.forEachThenThrowFirst(consumers, ShardOwnedQueue::stop);
     }
 
     @Override

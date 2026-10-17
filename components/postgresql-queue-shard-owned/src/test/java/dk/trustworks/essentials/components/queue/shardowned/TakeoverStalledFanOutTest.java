@@ -70,6 +70,22 @@ class TakeoverStalledFanOutTest {
     }
 
     @Test
+    void observers_throwing_one_shared_instance_do_not_keep_the_observers_after_them_from_hearing_the_transition() {
+        var queue  = new PostgresqlMessageQueue(untouchable(), (short) 1, 4, "fan-out");
+        var told   = new CopyOnWriteArrayList<String>();
+        var shared = new IllegalStateException("one instance thrown by every failing observer");
+        queue.addObserver(throwing(shared));
+        queue.addObserver(throwing(shared));
+        queue.addObserver(recording(told));
+
+        assertThatThrownBy(() -> queue.fanOut.takeoverStalled(MessageId.Lane.ORDERED, 3, true))
+                .as("the shared instance is rethrown, not suppressed in itself (addSuppressed refuses that)")
+                .isSameAs(shared)
+                .satisfies(thrown -> assertThat(thrown.getSuppressed()).isEmpty());
+        assertThat(told).as("the observer after them still heard it").containsExactly("ORDERED/3=true");
+    }
+
+    @Test
     void a_critical_error_still_propagates_at_once() {
         var queue    = new PostgresqlMessageQueue(untouchable(), (short) 1, 4, "fan-out");
         var critical = new LinkageError("critical");

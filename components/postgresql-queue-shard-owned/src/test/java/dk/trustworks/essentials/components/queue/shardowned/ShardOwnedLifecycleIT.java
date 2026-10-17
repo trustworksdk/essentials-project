@@ -23,7 +23,7 @@ import dk.trustworks.essentials.components.queue.shardowned.spi.*;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.ValueSource;
+import org.junit.jupiter.params.provider.*;
 import org.slf4j.LoggerFactory;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
@@ -1019,21 +1019,23 @@ class ShardOwnedLifecycleIT {
      * releases {@code stop()} reports later each follow an acquisition. The start used to tell it unit by unit and stop at
      * the throw: every unit after the first was left untold acquired, yet counted acquired and so reported released at
      * stop, and the observer saw more releases than acquisitions. The observer's failure still escapes the start, first.
+     * A non-critical {@code Error}, a test double's {@code AssertionError}, is no different: the units after it are told
+     * too, and it escapes as it was thrown.
      */
     @ParameterizedTest
-    @ValueSource(strings = {"unordered", "ordered"})
-    void an_observer_throwing_for_a_start_up_acquisition_is_still_told_of_every_unit_acquired(String lane) throws Exception {
+    @CsvSource({"unordered, IllegalStateException", "ordered, IllegalStateException", "unordered, AssertionError", "ordered, AssertionError"})
+    void an_observer_throwing_for_a_start_up_acquisition_is_still_told_of_every_unit_acquired(String lane, String thrownType) throws Exception {
         var settings   = settingsWithShedGrace(Duration.ofSeconds(1));
-        var instanceId = "start-observer-throws-" + lane;
+        var instanceId = "start-observer-throws-" + lane + "-" + thrownType;
         var reported   = new RecordedOwnership();
-        var failure    = new IllegalStateException("simulated observer failure on the first acquisition");
+        var failure    = simulatedObserverFailure(thrownType, "simulated observer failure on the first acquisition");
         var thrown     = new AtomicBoolean();
         var metrics = new ShardOwnerMetrics(new QueueObserver() {
             @Override
             public void shardOwnershipChanged(int shard, boolean acquired) {
                 reported.shardOwnershipChanged(shard, acquired);
                 if (acquired && thrown.compareAndSet(false, true)) {
-                    throw failure;
+                    throwAsThrown(failure);
                 }
             }
         });
@@ -1061,22 +1063,24 @@ class ShardOwnedLifecycleIT {
      * row is released, the instance deregistered and every unit reported released, and the observer's failure escapes the
      * stop. The stop used to tell the observer of each release on its shutdown-budget thread, before the deregistration:
      * the throw ended that thread there, so the membership row stayed and held the surviving instances at a stale fair
-     * share until it aged out, and the failure went to the thread's default handler instead of the caller.
+     * share until it aged out, and the failure went to the thread's default handler instead of the caller. A non-critical
+     * {@code Error}, a test double's {@code AssertionError}, is no different: every unit after it is still reported
+     * released, and it escapes the stop as it was thrown.
      */
     @ParameterizedTest
-    @ValueSource(strings = {"unordered", "ordered"})
-    void an_observer_throwing_for_a_release_at_stop_still_lets_the_stop_release_every_unit_and_deregister(String lane) throws Exception {
+    @CsvSource({"unordered, IllegalStateException", "ordered, IllegalStateException", "unordered, AssertionError", "ordered, AssertionError"})
+    void an_observer_throwing_for_a_release_at_stop_still_lets_the_stop_release_every_unit_and_deregister(String lane, String thrownType) throws Exception {
         var settings   = settingsWithShedGrace(Duration.ofSeconds(1));
-        var instanceId = "stop-observer-throws-" + lane;
+        var instanceId = "stop-observer-throws-" + lane + "-" + thrownType;
         var reported   = new RecordedOwnership();
-        var failure    = new IllegalStateException("simulated observer failure on the first release");
+        var failure    = simulatedObserverFailure(thrownType, "simulated observer failure on the first release");
         var thrown     = new AtomicBoolean();
         var metrics = new ShardOwnerMetrics(new QueueObserver() {
             @Override
             public void shardOwnershipChanged(int shard, boolean acquired) {
                 reported.shardOwnershipChanged(shard, acquired);
                 if (!acquired && thrown.compareAndSet(false, true)) {
-                    throw failure;
+                    throwAsThrown(failure);
                 }
             }
         });
@@ -1104,15 +1108,18 @@ class ShardOwnedLifecycleIT {
      * {@code Subscription.stop()}, stop both lane consumers, and its failure escapes once they have. Each lane's consumer
      * tells the observer of its releases last, and throws its failure after that; the queue stopped its consumers one after
      * another and the subscription its two lanes, so the first consumer's throw skipped the stop of the ordered lane, which
-     * went on leasing, heartbeating and dispatching after the queue reported itself stopped.
+     * went on leasing, heartbeating and dispatching after the queue reported itself stopped. A non-critical {@code Error},
+     * a test double's {@code AssertionError}, is no different: only {@code RuntimeException} was caught, so it skipped the
+     * ordered lane's stop all the same.
      */
     @ParameterizedTest
-    @ValueSource(strings = {"queue", "subscription"})
-    void an_observer_throwing_for_every_release_still_lets_the_spi_queue_stop_both_lanes(String stoppedBy) throws Exception {
-        var instanceId = "spi-stop-observer-throws-" + stoppedBy;
-        var throwing   = new AtomicBoolean(true);
+    @CsvSource({"queue, IllegalStateException", "subscription, IllegalStateException", "queue, AssertionError", "subscription, AssertionError"})
+    void an_observer_throwing_for_every_release_still_lets_the_spi_queue_stop_both_lanes(String stoppedBy, String thrownType) throws Exception {
+        var asAssertionError = "AssertionError".equals(thrownType);
+        var instanceId       = "spi-stop-observer-throws-" + stoppedBy + "-" + thrownType;
+        var throwing         = new AtomicBoolean(true);
         try (var queue = new PostgresqlMessageQueue(dataSource, QUEUE_ID, SHARD_COUNT, instanceId)) {
-            queue.addObserver(throwingForEveryRelease(throwing));
+            queue.addObserver(throwingForEveryRelease(throwing, asAssertionError));
             var subscription = queue.consume((messageId, key, payload, payloadType) -> { }, ConsumerOptions.defaults());
             try {
                 Awaitility.await().atMost(Duration.ofSeconds(20))
@@ -1121,7 +1128,7 @@ class ShardOwnedLifecycleIT {
 
                 assertThatThrownBy("queue".equals(stoppedBy) ? queue::stop : subscription::stop)
                         .as("the observer's failure escapes the stop")
-                        .isInstanceOf(IllegalStateException.class)
+                        .isInstanceOf(asAssertionError ? AssertionError.class : IllegalStateException.class)
                         .hasMessageStartingWith("simulated observer failure releasing");
 
                 assertThat(subscription.isStarted()).as("neither lane's consumer is still started").isFalse();
@@ -1169,14 +1176,86 @@ class ShardOwnedLifecycleIT {
     }
 
     /**
-     * An observer that throws a new exception for every release it is told of, while {@code throwing} is set.
+     * A {@code consume()} whose start throws a non-critical {@code Error} - an observer's {@code AssertionError} for an
+     * acquisition, which escapes a lane's start with that lane running - stops both lanes and throws it. Only a
+     * {@code RuntimeException} undid a failed start, so the lane went on leasing and dispatching with no subscription
+     * returned to stop it.
+     */
+    @Test
+    void a_consume_whose_start_throws_an_observer_error_stops_both_lanes_and_throws_it() throws Exception {
+        var instanceId = "spi-start-observer-asserts";
+        var throwing   = new AtomicBoolean(true);
+        try (var queue = new PostgresqlMessageQueue(dataSource, QUEUE_ID, SHARD_COUNT, instanceId)) {
+            queue.addObserver(new QueueObserver() {
+                @Override
+                public void shardOwnershipChanged(int shard, boolean acquired) {
+                    if (acquired && throwing.get()) {
+                        throw new AssertionError("simulated observer assertion acquiring unit " + shard);
+                    }
+                }
+            });
+
+            var thrown = catchThrowable(() -> queue.consume((messageId, key, payload, payloadType) -> { }, ConsumerOptions.defaults()));
+
+            assertThat(thrown).as("the observer's error escapes the consume()")
+                              .isInstanceOf(AssertionError.class)
+                              .hasMessageStartingWith("simulated observer assertion acquiring");
+            assertThat(queue.isStarted()).isFalse();
+            assertThat(unitsOwnedBy("unordered", instanceId)).as("no unordered lease row names the instance").isZero();
+            assertThat(unitsOwnedBy("ordered", instanceId)).as("no ordered lease row names the instance").isZero();
+            assertThat(instanceRegistered(instanceId)).as("the instance is deregistered").isFalse();
+        } finally {
+            throwing.set(false);
+        }
+    }
+
+    /**
+     * A new {@code AssertionError} when {@code thrownType} is {@code "AssertionError"}, a new
+     * {@code IllegalStateException} when it is {@code "IllegalStateException"}: the two kinds of observer failure the
+     * engine collects alike, a {@code RuntimeException} and a non-critical {@code Error}.
+     */
+    private static Throwable simulatedObserverFailure(String thrownType, String message) {
+        return switch (thrownType) {
+            case "AssertionError" -> new AssertionError(message);
+            case "IllegalStateException" -> new IllegalStateException(message);
+            default -> throw new IllegalArgumentException("Unknown failure type " + thrownType);
+        };
+    }
+
+    /**
+     * Throw {@code failure}, which {@link #simulatedObserverFailure} built as a {@code RuntimeException} or an
+     * {@code Error}, as the instance it is.
+     */
+    private static void throwAsThrown(Throwable failure) {
+        switch (failure) {
+            case RuntimeException e -> throw e;
+            case Error e -> throw e;
+            default -> throw new IllegalArgumentException("Neither a RuntimeException nor an Error", failure);
+        }
+    }
+
+    /**
+     * An observer that throws a new {@code IllegalStateException} for every release it is told of, while {@code throwing}
+     * is set.
      */
     private static QueueObserver throwingForEveryRelease(AtomicBoolean throwing) {
+        return throwingForEveryRelease(throwing, false);
+    }
+
+    /**
+     * An observer that throws a new {@code AssertionError} when {@code asAssertionError}, a new
+     * {@code IllegalStateException} otherwise, for every release it is told of, while {@code throwing} is set.
+     */
+    private static QueueObserver throwingForEveryRelease(AtomicBoolean throwing, boolean asAssertionError) {
         return new QueueObserver() {
             @Override
             public void shardOwnershipChanged(int shard, boolean acquired) {
                 if (!acquired && throwing.get()) {
-                    throw new IllegalStateException("simulated observer failure releasing unit " + shard);
+                    var message = "simulated observer failure releasing unit " + shard;
+                    if (asAssertionError) {
+                        throw new AssertionError(message);
+                    }
+                    throw new IllegalStateException(message);
                 }
             }
         };

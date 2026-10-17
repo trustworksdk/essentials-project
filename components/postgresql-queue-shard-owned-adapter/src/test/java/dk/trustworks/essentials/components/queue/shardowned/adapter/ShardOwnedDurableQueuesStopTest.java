@@ -68,6 +68,47 @@ class ShardOwnedDurableQueuesStopTest {
         assertThat(durableQueues.isStarted()).isFalse();
     }
 
+    /**
+     * A non-critical {@link Error} - an observer's {@code AssertionError}, say - from a consumer's stop is collected like a
+     * {@code RuntimeException}: only {@code RuntimeException} was caught, so the first such throw left every consumer after
+     * it consuming.
+     */
+    @Test
+    void stop_stops_every_consumer_when_an_earlier_ones_stop_throws_an_error_and_throws_the_first_error() {
+        var durableQueues = new ShardOwnedDurableQueues(queues, EssentialsObjectMappers.createJSONSerializer(), null, null, 0);
+        durableQueues.start();
+        var first  = durableQueues.consumeFromQueue(consumeFrom("asserting-first"));
+        var second = durableQueues.consumeFromQueue(consumeFrom("asserting-second"));
+
+        var thrown = catchThrowable(durableQueues::stop);
+
+        assertThat(thrown).as("the first stop's error escapes").isInstanceOf(AssertionError.class)
+                          .hasMessageStartingWith("simulated observer assertion stopping");
+        assertThat(thrown.getSuppressed()).as("the second stop's error is added to it").hasSize(1);
+        assertThat(stopped).as("every consumer's subscription was stopped").containsExactlyInAnyOrder("asserting-first", "asserting-second");
+        assertThat(first.isStarted()).isFalse();
+        assertThat(second.isStarted()).isFalse();
+        assertThat(durableQueues.isStarted()).isFalse();
+    }
+
+    /**
+     * A critical error ({@code Exceptions.isCriticalError}) from a consumer's stop ends the stopping at once and escapes as
+     * it was thrown, and the {@code DurableQueues} reports itself stopped all the same.
+     */
+    @Test
+    void stop_reports_itself_stopped_when_a_consumers_stop_throws_a_critical_error() {
+        var durableQueues = new ShardOwnedDurableQueues(queues, EssentialsObjectMappers.createJSONSerializer(), null, null, 0);
+        durableQueues.start();
+        durableQueues.consumeFromQueue(consumeFrom("critical"));
+
+        var thrown = catchThrowable(durableQueues::stop);
+
+        assertThat(thrown).as("the critical error escapes as it was thrown").isExactlyInstanceOf(StackOverflowError.class)
+                          .hasMessage("simulated critical error stopping critical");
+        assertThat(thrown.getSuppressed()).isEmpty();
+        assertThat(durableQueues.isStarted()).as("the DurableQueues reports itself stopped").isFalse();
+    }
+
     @Test
     void a_consumer_whose_stop_throws_consumes_again_when_started_again() {
         var durableQueues = new ShardOwnedDurableQueues(queues, EssentialsObjectMappers.createJSONSerializer(), null, null, 0);
@@ -97,7 +138,9 @@ class ShardOwnedDurableQueuesStopTest {
 
     /**
      * A queue whose {@code consume} records the queue's name and returns a subscription that is started until it is
-     * stopped, and whose {@code stop()} then throws, as one throws when the observer it tells of a release throws.
+     * stopped, and whose {@code stop()} then throws, as one throws when the observer it tells of a release throws - an
+     * {@link AssertionError} for a queue whose name starts with {@code asserting}, a {@link StackOverflowError} (a critical
+     * error) for one whose name starts with {@code critical}, an {@link IllegalStateException} otherwise.
      */
     private MessageQueue queue(String name) {
         return proxy(MessageQueue.class, (method, args) -> {
@@ -111,6 +154,12 @@ class ShardOwnedDurableQueuesStopTest {
                 case "stop" -> {
                     started[0] = false;
                     stopped.add(name);
+                    if (name.startsWith("critical")) {
+                        throw new StackOverflowError("simulated critical error stopping " + name);
+                    }
+                    if (name.startsWith("asserting")) {
+                        throw new AssertionError("simulated observer assertion stopping " + name);
+                    }
                     throw new IllegalStateException("simulated observer failure stopping " + name);
                 }
                 default -> throw new UnsupportedOperationException(subscriptionMethod);
