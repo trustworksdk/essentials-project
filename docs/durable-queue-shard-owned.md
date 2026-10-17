@@ -695,7 +695,9 @@ So before it dispatches, an owner asks whether its instance has confirmed livene
 If not, the pump skips it — before consuming the shard's wake-up, so the signal is still there when
 delivery resumes. The instance keeps its units, because releasing them needs the database it cannot
 reach; a successor takes them on the lease instead, which is the existing mechanism and not a new one.
-Resuming is unattended: the next successful heartbeat is the whole condition.
+Resuming is unattended: the next successful heartbeat is the whole condition. A start counts as one: the
+membership row it writes before leasing anything is that same liveness, so a queue started, or restarted after a
+`stop()`, long after its last heartbeat does not pause the delivery of an instance that has just registered.
 
 **This is not a fence and does not replace one.** The fence is what makes the window safe. This stops
 an instance from spending the window acting on a belief it has no way to check.

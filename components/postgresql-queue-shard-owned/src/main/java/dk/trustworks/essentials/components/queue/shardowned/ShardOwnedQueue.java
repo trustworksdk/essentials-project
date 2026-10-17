@@ -535,6 +535,10 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         // heartbeat, ten seconds in, which left every instance stealing every other instance's units
         // for the first ten seconds of its life.
         storage.heartbeatInstance(instanceId);
+        // That write is the liveness the delivery gate measures, so it counts as a confirmation. Otherwise the gate reads
+        // the previous run's last heartbeat, or the queue's construction time, and a start more than four fifths of a
+        // lease after either pauses delivery until the first heartbeat tick, a third of a lease later.
+        confirmLiveness();
 
         ensureRuntime(settings);
         var leased = leaseAtStart(run, "ordered", orderedUnits(), maxShards);
@@ -589,6 +593,10 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         // heartbeat, ten seconds in, which left every instance stealing every other instance's units
         // for the first ten seconds of its life.
         storage.heartbeatInstance(instanceId);
+        // That write is the liveness the delivery gate measures, so it counts as a confirmation. Otherwise the gate reads
+        // the previous run's last heartbeat, or the queue's construction time, and a start more than four fifths of a
+        // lease after either pauses delivery until the first heartbeat tick, a third of a lease later.
+        confirmLiveness();
 
         ensureRuntime(settings);
         var leased = leaseAtStart(run, "unordered", shardCount, maxShards);
@@ -850,7 +858,8 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * The last moment this instance successfully told the database it was alive.
      * <p>
      * Nanoseconds from {@link System#nanoTime()}, so it measures elapsed time and not wall-clock, and
-     * is unaffected by the clock moving.
+     * is unaffected by the clock moving. Every start confirms it when it registers the instance, so a run never reads the
+     * value an earlier run, or the construction, left behind.
      */
     private volatile long lastLivenessConfirmedNanos = System.nanoTime();
 

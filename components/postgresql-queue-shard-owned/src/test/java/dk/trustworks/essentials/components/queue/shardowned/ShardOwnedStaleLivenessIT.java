@@ -132,6 +132,50 @@ class ShardOwnedStaleLivenessIT {
         }
     }
 
+    /**
+     * A start registers the instance ({@code heartbeatInstance}) before it leases anything, and that write is the very
+     * liveness the gate measures. A start that did not count it left the gate reading the previous run's last heartbeat,
+     * or the queue's construction time: a queue started more than four fifths of a lease after either paused the
+     * delivery of an instance that had just registered, logged the "has not confirmed its liveness" WARN and counted a
+     * {@code deliveryPauses}, until its first heartbeat tick a third of a lease later.
+     * <p>
+     * The message waits in the queue before each start, so the first owner to dispatch asks the gate at once, ahead of
+     * that first tick.
+     */
+    @Test
+    void a_start_after_more_than_four_fifths_of_a_lease_does_not_pause_delivery() throws Exception {
+        var received = new CopyOnWriteArrayList<String>();
+        var metrics  = new ShardOwnerMetrics();
+        var settings = shortLease();
+        // Past the pause threshold, four fifths of the lease.
+        var idle = settings.leaseTtl().plusMillis(500);
+
+        try (var queue = new ShardOwnedQueue(direct, QUEUE_ID, SHARD_COUNT, "instance-1", metrics)) {
+            queue.configureUnordered((messageId, payload, type) -> received.add(new String(payload, StandardCharsets.UTF_8)),
+                                     settings, SHARD_COUNT, RedeliveryPolicy.fixed(Duration.ofMillis(50), 3));
+            enqueue(direct, "first-start");
+            Thread.sleep(idle.toMillis());
+
+            queue.start();
+            Awaitility.await().atMost(Duration.ofSeconds(30))
+                      .untilAsserted(() -> assertThat(received).contains("first-start"));
+            assertThat(metrics.deliveryPauses.sum())
+                    .as("a queue started long after it was constructed has just registered, and must not pause")
+                    .isZero();
+
+            queue.stop();
+            enqueue(direct, "restart");
+            Thread.sleep(idle.toMillis());
+
+            queue.start();
+            Awaitility.await().atMost(Duration.ofSeconds(30))
+                      .untilAsserted(() -> assertThat(received).contains("restart"));
+            assertThat(metrics.deliveryPauses.sum())
+                    .as("a restarted queue has just registered, and must not pause on its previous run's last heartbeat")
+                    .isZero();
+        }
+    }
+
     private static void enqueue(HikariDataSource dataSource, String payload) throws Exception {
         try (var queue = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "producer", new ShardOwnerMetrics())) {
             queue.enqueue(List.of(payload.getBytes(StandardCharsets.UTF_8)), 1);
