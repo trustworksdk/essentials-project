@@ -25,6 +25,7 @@ import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
+import java.util.function.*;
 
 import static dk.trustworks.essentials.shared.FailFast.*;
 
@@ -102,9 +103,8 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * two never interleave: an owner is either adopted before the stop reads {@code owners}, and the stop ends and
      * releases it, or not adopted at all, and the tick releases it. Never both, and never neither.
      * <p>
-     * Also held by {@link #start()} for its {@code running} CAS, by {@link #stopAbruptly()} as it ends the run, and by
-     * {@link #abandonAcquisition} to decide whether to forget the shard's wake-up - which is correct only because
-     * {@code start()} sets {@code running} under it.
+     * Every write of {@code running} is under it: {@link #start()}'s CAS and the clear on its failure path, and
+     * {@link #stopAbruptly()} as it ends the run, as well as {@code stop()}.
      * <p>
      * It orders a run's end against a heartbeat tick, not against another {@code start()} or {@code stop()}: those are
      * serialised by {@link #lifecycleLock}. Held only for short sections, never across a stop's drain or its database
@@ -132,13 +132,32 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      */
     private final    Object                   lifecycleLock       = new Object();
     /**
-     * The owners whose acquisition this queue has reported - {@link ShardOwnerMetrics#shardsAcquired} and
-     * {@code QueueObserver.shardOwnershipChanged(shard, true)} - and whose release it has not. A release is reported only
-     * by whoever removes the owner from here ({@link #reportReleased}), so it is reported once, and only after its
-     * acquisition: a heartbeat tick's fair-share shed or dead-pump hand-back and {@link #stop()} can release the same owner
-     * at once, and both used to report it.
+     * The owners whose acquisition this queue has counted ({@link ShardOwnerMetrics#shardsAcquired}, by
+     * {@link #countAcquisition}) and whose release it has not. A release is counted, and told to the {@code QueueObserver},
+     * only by whoever removes the owner from here ({@link #countRelease}, {@link #reportReleased}), so it is reported once,
+     * and only for an owner whose acquisition was counted: a heartbeat tick's fair-share shed or dead-pump hand-back and
+     * {@link #stop()} can release the same owner at once, and both used to report it.
+     * <p>
+     * Membership does not mean the observer has been told of the acquisition. The count is taken under {@link #runLock};
+     * the observer is told by the caller afterwards, outside it - at start-up once the heartbeat is scheduled, on a
+     * heartbeat tick in a {@code finally} around its acquire loop. So a {@link #stop()} can tell the observer of a release
+     * just before the tick tells it of the acquisition: every acquisition is still told, but not always first
+     * ({@link #adoptIntoRun} says why the observer is kept out of the lock).
      */
     private final    Set<LeasedOwner>         acquisitionReported = ConcurrentHashMap.newKeySet();
+    /**
+     * Lease rows a heartbeat tick leased as its run ended and then could not release again ({@link #abandonAcquisition}):
+     * unit to the fence it leased the unit under. No owner of this queue's counts such a row - the tick built none - so
+     * while it names this instance nothing serves the unit: not this queue's lease check or fair share, which go by
+     * {@code owners}, and not another instance, for as long as this instance's membership row is live, which it is again
+     * once the queue is started under the same instance id. Each heartbeat retries the release
+     * ({@link #retryUnreleasedAcquisitions}) until it has run, whether or not it found the row still under that fence.
+     * <p>
+     * The queue's, not a run's: {@link #stop()} leaves it as it is, so a later run's heartbeat retries what a tick of an
+     * earlier run could not release. Safe against that run, because the release is fenced: a unit it has taken again holds
+     * a newer fence, and is left alone.
+     */
+    private final    Map<Integer, Long>       unreleasedAcquisitions = new ConcurrentHashMap<>();
     private final    AtomicBoolean            flushOnExit         = new AtomicBoolean(true);
     private final    AtomicInteger            enqueueShardCursor  = new AtomicInteger();
     private final    List<LeasedOwner>        owners              = new CopyOnWriteArrayList<>();
@@ -364,8 +383,8 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
     public void start() {
         requireTrue(activeSettings != null, "Nothing configured — call configureUnordered or configureOrdered first");
         synchronized (lifecycleLock) {
-            // Under runLock, so a tick of an earlier run undoing its acquisition sees either this run or none
-            // (abandonAcquisition).
+            // Under runLock, as every write of `running` is, so a tick adopting a unit (adoptIntoRun) sees either this run or
+            // none.
             synchronized (runLock) {
                 if (!running.compareAndSet(false, true)) {
                     return;
@@ -378,7 +397,9 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                     startUnordered();
                 }
             } catch (SQLException e) {
-                running.set(false);
+                synchronized (runLock) {
+                    running.set(false);
+                }
                 // The runtime is borrowed before the acquire loop, which is what can throw here: hand it back, or a shared
                 // runtime keeps a borrower that never stops. No owner exists yet - every statement precedes the placement.
                 releaseRuntime();
@@ -772,6 +793,14 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                     log.warn("Lease check failed for {} shards on the {} lane", held.size(), lane, e);
                 }
             }
+            // BEFORE the rebalance, as the hand-back below: a unit released here is free for its acquire loop to take again.
+            try {
+                retryUnreleasedAcquisitions();
+            } catch (Exception e) {
+                log.warn("Instance {} could not release {} {} unit(s) [{}] on queue {} that a heartbeat tick leased as the queue "
+                                 + "stopped; retried on the next heartbeat", instanceId, unreleasedAcquisitions.size(), activeLane,
+                         summarise(unreleasedAcquisitions.keySet()), queueId, e);
+            }
             // BEFORE the rebalance, so a unit handed back here is free for its acquire loop to take again on a live pump, and
             // so its removeIf, which drops owners whose lease has ended, never drops one whose lease is still to be released.
             try {
@@ -789,6 +818,32 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             // since one of them succeeded.
             evaluateLiveness();
         }, interval);
+    }
+
+    /**
+     * Release again the lease rows an earlier heartbeat tick could not release when it undid an acquisition
+     * ({@link #unreleasedAcquisitions}, {@link #abandonAcquisition}). One fenced statement for all of them; each entry is
+     * dropped once it has run, whether it released the row or found it taken meanwhile - by another instance, or by this
+     * one again under a newer fence - and kept for the next heartbeat when it throws. An entry added while this runs, or
+     * one for the same unit under a newer fence, stays.
+     */
+    private void retryUnreleasedAcquisitions() throws SQLException {
+        if (unreleasedAcquisitions.isEmpty()) {
+            return;
+        }
+        var retrying = Map.copyOf(unreleasedAcquisitions);
+        var released = storage.releaseFencedLeases(activeLane, retrying, instanceId);
+        retrying.forEach(unreleasedAcquisitions::remove);
+        if (released > 0) {
+            log.info("Instance {} released {} of {} {} unit(s) [{}] on queue {} that a heartbeat tick leased as the queue stopped and "
+                             + "could not release then; any not released had been taken meanwhile, by another instance or by this "
+                             + "one under a newer fence",
+                     instanceId, released, retrying.size(), activeLane, summarise(retrying.keySet()), queueId);
+        } else {
+            log.debug("Instance {} found the {} unit(s) [{}] on queue {} that a heartbeat tick could not release as the queue stopped "
+                              + "taken meanwhile, by another instance or by this one under a newer fence; nothing left to release",
+                      instanceId, activeLane, summarise(retrying.keySet()), queueId);
+        }
     }
 
     /**
@@ -1061,36 +1116,47 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         // count of served units took one free shard more per dead row, on top of the fair share. Counted once and kept up
         // to date below: a pump dying during the loop changes nothing, as an owner its death ends still holds its row.
         var rowsHeld = owners.stream().filter(LeasedOwner::holdsLeaseRow).count();
-        for (var shard = 0; shard < shardCount && rowsHeld < fairShare; shard++) {
-            if (!shardRuntime.hasLivePump()) {
-                // The last live pump died during this loop. What it placed from here on would be ended on arrival
-                // (ShardPump.add) and handed back next tick, every tick.
-                break;
+        try {
+            for (var shard = 0; shard < shardCount && rowsHeld < fairShare; shard++) {
+                if (!shardRuntime.hasLivePump()) {
+                    // The last live pump died during this loop. What it placed from here on would be ended on arrival
+                    // (ShardPump.add) and handed back next tick, every tick.
+                    break;
+                }
+                if (ownedShards.containsKey(shard)) {
+                    continue;
+                }
+                var grant = storage.acquireLeaseGrant("unordered", shard, instanceId, leaseTtlMillis);
+                if (grant.isEmpty()) {
+                    continue;
+                }
+                var unit                  = shard;
+                var fence                 = grant.get().fence();
+                var previousOwnerReleased = grant.get().previousOwnerReleased();
+                var adopted = adoptIntoRun(shardRuntime, "unordered", unit, generation,
+                                           wakeup -> {
+                                               var owner = new ShardOwner(storage, unit, fence, activeSettings, activeHandler, metrics,
+                                                                          activePolicy, wakeup,
+                                                                          instanceId, dispatch, previousOwnerReleased);
+                                               owner.setDeliveryGate(this::deliveryPermitted);
+                                               return owner;
+                                           });
+                if (!adopted) {
+                    abandonAcquisition(unit, fence);
+                    break;
+                }
+                rowsHeld++;
+                acquired.add(shard);
+                log.debug("Instance {} acquired unordered shard {} under fence {}", instanceId, shard, fence);
             }
-            if (ownedShards.containsKey(shard)) {
-                continue;
+        } finally {
+            // However the loop ended - a later shard's acquire throwing included - what it adopted is listed and counted,
+            // so it is logged and reported too. The observer last, outside runLock (adoptIntoRun says why).
+            if (!acquired.isEmpty()) {
+                log.info("Instance {} acquired {} unordered shard(s) [{}] on queue {}; now holding {} of {}",
+                         instanceId, acquired.size(), summarise(acquired), queueId, countHeld(), shardCount);
             }
-            var grant = storage.acquireLeaseGrant("unordered", shard, instanceId, leaseTtlMillis);
-            if (grant.isEmpty()) {
-                continue;
-            }
-            var fence     = grant.get().fence();
-            var placement = shardRuntime.place(queueId, "unordered", shard);
-            var owner = new ShardOwner(storage, shard, fence, activeSettings, activeHandler, metrics,
-                                       activePolicy, placement.wakeup(),
-                                       instanceId, dispatch, grant.get().previousOwnerReleased());
-            owner.setDeliveryGate(this::deliveryPermitted);
-            if (!adoptIntoRun(owner, placement, generation)) {
-                abandonAcquisition(owner, shardRuntime);
-                break;
-            }
-            rowsHeld++;
-            acquired.add(shard);
-            log.debug("Instance {} acquired unordered shard {} under fence {}", instanceId, shard, fence);
-        }
-        if (!acquired.isEmpty()) {
-            log.info("Instance {} acquired {} unordered shard(s) [{}] on queue {}; now holding {} of {}",
-                     instanceId, acquired.size(), summarise(acquired), queueId, countHeld(), shardCount);
+            reportAcquired(acquired);
         }
     }
 
@@ -1176,40 +1242,52 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                                .map(LeasedOwner::shard)
                                .collect(java.util.stream.Collectors.toSet());
         var acquired   = new ArrayList<Integer>();
-        for (var shard = 0; shard < orderedUnits() && heldShards.size() < limit; shard++) {
-            if (heldShards.contains(shard)) {
-                continue;
+        try {
+            for (var shard = 0; shard < orderedUnits() && heldShards.size() < limit; shard++) {
+                if (heldShards.contains(shard)) {
+                    continue;
+                }
+                var grant = storage.acquireLeaseGrant("ordered", shard, instanceId, leaseTtlMillis);
+                if (grant.isEmpty()) {
+                    continue;
+                }
+                var unit                  = shard;
+                var fence                 = grant.get().fence();
+                var previousOwnerReleased = grant.get().previousOwnerReleased();
+                var adopted = adoptIntoRun(shardRuntime, "ordered", unit, generation,
+                                           wakeup -> {
+                                               var owner = new OrderedShardOwner(storage, unit, fence, activeSettings, activeOrderedHandler,
+                                                                                 metrics, activePolicy, instanceId, wakeup,
+                                                                                 dispatch, previousOwnerReleased);
+                                               owner.setDeliveryGate(this::deliveryPermitted);
+                                               return owner;
+                                           });
+                if (!adopted) {
+                    abandonAcquisition(unit, fence);
+                    break;
+                }
+                heldShards.add(shard);
+                acquired.add(shard);
+                log.debug("Instance {} acquired ordered unit {} under fence {}", instanceId, shard, fence);
             }
-            var grant = storage.acquireLeaseGrant("ordered", shard, instanceId, leaseTtlMillis);
-            if (grant.isEmpty()) {
-                continue;
+        } finally {
+            // As in rebalance()'s unordered loop: what this loop adopted is logged and reported however it ended. Not
+            // orderedUnits() here: the loop's first condition resolved it, so the field holds it whenever something was adopted.
+            if (!acquired.isEmpty()) {
+                log.info("Instance {} acquired {} ordered unit(s) [{}] on queue {}; now holding {} of {}",
+                         instanceId, acquired.size(), summarise(acquired), queueId, heldShards.size(), orderedUnits);
             }
-            var fence     = grant.get().fence();
-            var placement = shardRuntime.place(queueId, "ordered", shard);
-            var owner = new OrderedShardOwner(storage, shard, fence, activeSettings, activeOrderedHandler,
-                                              metrics, activePolicy, instanceId, placement.wakeup(),
-                                              dispatch, grant.get().previousOwnerReleased());
-            owner.setDeliveryGate(this::deliveryPermitted);
-            if (!adoptIntoRun(owner, placement, generation)) {
-                abandonAcquisition(owner, shardRuntime);
-                break;
-            }
-            heldShards.add(shard);
-            acquired.add(shard);
-            log.debug("Instance {} acquired ordered unit {} under fence {}", instanceId, shard, fence);
-        }
-        if (!acquired.isEmpty()) {
-            log.info("Instance {} acquired {} ordered unit(s) [{}] on queue {}; now holding {} of {}",
-                     instanceId, acquired.size(), summarise(acquired), queueId, heldShards.size(), orderedUnits());
+            reportAcquired(acquired);
         }
     }
 
     /**
-     * Make an owner a heartbeat tick acquired one of this queue's - list it, register it on its pump and report the
-     * acquisition - if the run the tick belongs to is still the current one: {@code running} set, and
-     * {@link #runGeneration} still the {@code generation} the tick read at the top of {@link #rebalance()}. Called by both
-     * acquire loops for each unit they lease; when it refuses, the loop undoes the acquisition
-     * ({@link #abandonAcquisition}) and stops acquiring.
+     * Adopt a unit a heartbeat tick has leased into the run the tick belongs to, if that run is still the current one:
+     * {@code running} set, and {@link #runGeneration} still the {@code generation} the tick read at the top of
+     * {@link #rebalance()}. Adopting places the unit on its pump ({@link ShardRuntime#place}), builds its owner with the
+     * wake-up that placement chose ({@code build}), lists it, registers it on the pump and counts the acquisition
+     * ({@link #countAcquisition}). Called by both acquire loops for each unit they lease; when it refuses, the loop undoes
+     * the acquisition ({@link #abandonAcquisition}) and stops acquiring.
      * <p>
      * <b>Why under {@link #runLock}.</b> {@link #stop()} ends the run and reads {@code owners} under the same lock, so the
      * two cannot interleave. Adopted first, the owner is in the list the stop reads, and the stop drains, ends and releases
@@ -1221,6 +1299,23 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * running after this queue stops (one the caller passed with {@code setRuntime}, even to this queue alone, or the one
      * shared per {@code DataSource} while another queue still borrows it), it went on reading and dispatching for the
      * stopped queue, its lease row naming an instance the stop had just deregistered.
+     * <p>
+     * <b>Placed only once adopted.</b> The placement is under the lock too, after the check, so a refused unit was never
+     * placed and leaves no wake-up behind in the runtime. Placed before the check, as it was, a refused unit's wake-up had
+     * to be forgotten again, and whether that was safe depended on whether the run current by then had placed the same
+     * unit and so reused that wake-up: forgetting it left the unit's notifications reaching no owner, keeping it left an
+     * entry nothing forgot until the runtime stopped. Placing the unit and building its owner are both in-memory work.
+     * <p>
+     * <b>The observer is told by the caller, outside the lock, in a {@code finally} around its loop</b>
+     * ({@link #reportAcquired}). It is the caller's code (a Micrometer binding, tracing, {@code PostgresqlMessageQueue}'s
+     * fan-out): told under the lock, a slow one held up {@code stop()}, {@code start()} and {@link #stopAbruptly()}, which
+     * all take it, and one that threw escaped with the owner already listed and on its pump, and ended the acquire loop.
+     * In a {@code finally}, because a loop can end by throwing - a later unit's acquire statement failing - after it has
+     * adopted units: each of those is listed and counted, its release will be told to the observer, and so its acquisition
+     * must be too. The count stays under the lock, so a stop that reads the owner counts its release. The cost: a stop that
+     * takes the lock right after this adoption can tell the observer of the release before the tick has told it of the
+     * acquisition, should the stop's drain and release statement finish while the tick is still running the rest of its
+     * loop.
      * <p>
      * A stop right after the adoption can end the owner before its pump has run its {@link LeasedOwner#onTakeover takeover}.
      * The pump never dispatches for an ended owner and drops it at the end of that pass, but it runs the takeover first.
@@ -1234,84 +1329,105 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * fence the new run may already have superseded - joined the new run until the next lease check dropped it. The stop
      * bumped the generation, so the tick's no longer matches and it undoes its acquisition instead.
      *
-     * @return whether the owner was adopted; when not, it is in no list of this queue's and on no pump
+     * @param build the unit's owner, built with the wake-up its placement chose
+     * @return whether the unit was adopted; when not, nothing was placed or built, and the caller releases the row
      */
-    private boolean adoptIntoRun(LeasedOwner owner, ShardRuntime.Placement placement, long generation) {
+    private boolean adoptIntoRun(ShardRuntime shardRuntime, String lane, int unit, long generation,
+                                 Function<ShardWakeup, LeasedOwner> build) {
         synchronized (runLock) {
             if (!running.get() || runGeneration.get() != generation) {
                 return false;
             }
+            var placement = shardRuntime.place(queueId, lane, unit);
+            var owner     = build.apply(placement.wakeup());
             owners.add(owner);
             if (owner instanceof ShardOwner unordered) {
                 ownedShards.put(owner.shard(), unordered);
             }
             placement.register(owner);
-            reportAcquired(owner);
+            countAcquisition(owner);
             return true;
         }
     }
 
     /**
      * Undo an acquisition {@link #adoptIntoRun} refused, because the run the heartbeat tick belongs to has ended: release
-     * the unit's lease row, which moves the owner to {@code RELEASED}, or, when the release fails, end the owner keeping
-     * the row. The owner was never listed, never on a pump and never reported, so it has dispatched nothing, and
-     * releasing its row cannot hand a successor an ordered key that is still in a handler here.
+     * the unit's lease row on {@code activeLane}. No owner was built for it and nothing placed, so nothing has dispatched
+     * for it here, and releasing its row cannot hand a successor an ordered key that is still in a handler here.
      * <p>
-     * The release is fenced ({@link #releaseLeaseRows}): when the queue has been started again under the same instance id,
-     * the new run may hold this very unit, under a newer fence, and it keeps it.
+     * The release is fenced, as {@link #releaseLeaseRows}' is: when the queue has been started again under the same
+     * instance id, the new run may hold this very unit, under a newer fence, and it keeps it.
+     * <p>
+     * When the release fails, the unit goes to {@link #unreleasedAcquisitions}, and every heartbeat of this queue retries
+     * it, the heartbeats of a run started later included. Nothing else would: no owner counts the row, so a restarted run
+     * at its fair share, or at its {@code maxShards}, never took the unit back, and no other instance could, as the row
+     * names a live instance.
      */
-    private void abandonAcquisition(LeasedOwner owner, ShardRuntime shardRuntime) {
-        // The wake-up place() kept for the shard; stop() forgets only those of the owners it read. Not once the queue is
-        // running again: the new run reuses that wake-up for the shard (ShardRuntime.place), and forgetting it would leave
-        // the shard's notifications reaching no owner. Under runLock, which start() sets `running` under, so a start after
-        // this check places the shard afresh.
-        synchronized (runLock) {
-            if (!running.get()) {
-                shardRuntime.forget(queueId, owner.lane(), owner.shard());
-            }
-        }
+    private void abandonAcquisition(int unit, long fence) {
         try {
-            releaseLeaseRows(List.of(owner));
+            storage.releaseFencedLeases(activeLane, Map.of(unit, fence), instanceId);
             log.debug("Instance {} released {} unit {} on queue {} again: the queue stopped while it was being acquired",
-                      instanceId, owner.lane(), owner.shard(), queueId);
+                      instanceId, activeLane, unit, queueId);
         } catch (SQLException e) {
-            // Ended all the same, keeping the row it could not release: it is on no pump, and in no list of this queue's.
-            owner.endKeepingLeaseRow();
+            // The newest fence wins: a later lease of the unit can only have bumped it, and the older one matches no row.
+            unreleasedAcquisitions.merge(unit, fence, Math::max);
             if (running.get()) {
                 // Started again under the same instance id, which keeps the membership row live, so no other instance
                 // takes the unit. Usually the restarted run holds it already: its start blocked on the row lock this
                 // tick's acquire UPDATE held, then took the row under a newer fence (acquireLeaseGrant accepts a row
-                // naming this instance), and the fenced release would not have touched that row anyway. Otherwise the
-                // row stays this instance's, unserved until the restarted run's rebalance takes it back while under its
-                // fair share. This run's lists cannot tell the two apart here: the start lists its owners only once it
-                // has leased every unit, and the database just refused a statement - so the WARN names both outcomes.
+                // naming this instance), and the fenced release would not have touched that row anyway. Otherwise - its
+                // start stopped short of the unit at its maxShards - nothing of the new run counts the row, and only the
+                // retry frees it.
                 log.warn("Instance {} leased {} unit {} on queue {} as the queue stopped, and could not release it again. The "
                                  + "queue has been started again under the same instance id: unless it has already taken the "
-                                 + "unit again under a newer fence, the unit stays leased to this instance, and unserved until "
-                                 + "the queue's rebalance takes it back or the queue stops",
-                         instanceId, owner.lane(), owner.shard(), queueId, e);
+                                 + "unit again under a newer fence, the release is retried on every heartbeat until it goes "
+                                 + "through, and until then the unit stays leased to this instance and unserved",
+                         instanceId, activeLane, unit, queueId, e);
             } else {
                 // The stop deregisters this instance, or, when it kept an ordered unit or could not deregister, the
                 // cancelled heartbeat stops refreshing the membership row: gone, or older than the lease TTL, either way.
                 log.warn("Instance {} leased {} unit {} on queue {} as the queue stopped, and could not release it again; it is "
                                  + "free to another instance once this instance's membership row is gone or older than the "
-                                 + "lease TTL ({} ms)", instanceId, owner.lane(), owner.shard(), queueId, leaseTtlMillis, e);
+                                 + "lease TTL ({} ms). Should the queue be started again under the same instance id first, the "
+                                 + "release is retried on every heartbeat until it goes through",
+                         instanceId, activeLane, unit, queueId, leaseTtlMillis, e);
             }
         }
     }
 
     /**
-     * Count an owner's acquisition, and record it as reported ({@link #acquisitionReported}). The caller tells the observer:
-     * at start-up once the heartbeat is scheduled, otherwise through {@link #reportAcquired}.
+     * Count an owner's acquisition, and record it as counted ({@link #acquisitionReported}). The caller tells the observer,
+     * outside {@link #runLock}: at start-up once the heartbeat is scheduled, on a heartbeat tick in a {@code finally} around
+     * its acquire loop ({@link #reportAcquired}).
      */
     private void countAcquisition(LeasedOwner owner) {
         acquisitionReported.add(owner);
         metrics.shardsAcquired.increment();
     }
 
-    private void reportAcquired(LeasedOwner owner) {
-        countAcquisition(owner);
-        metrics.observer().shardOwnershipChanged(owner.shard(), true);
+    /**
+     * Tell the observer of every unit a heartbeat tick's acquire loop adopted ({@link #adoptIntoRun}), outside
+     * {@link #runLock}. Each one is told even when the observer throws for an earlier one: its acquisition is counted and its
+     * release will be told, so a unit skipped here would leave the observer's released count ahead of its acquired count.
+     * The first throw is rethrown once every unit has been told, the others added to it as suppressed, so the heartbeat
+     * still logs the observer's failure.
+     */
+    private void reportAcquired(List<Integer> units) {
+        RuntimeException failure = null;
+        for (var unit : units) {
+            try {
+                metrics.observer().shardOwnershipChanged(unit, true);
+            } catch (RuntimeException e) {
+                if (failure == null) {
+                    failure = e;
+                } else {
+                    failure.addSuppressed(e);
+                }
+            }
+        }
+        if (failure != null) {
+            throw failure;
+        }
     }
 
     /**
@@ -1373,8 +1489,9 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
     /**
      * Give up the lease rows of {@code releasing}: release the rows, then move each owner to
      * {@link LeasedOwner.LeaseRow#RELEASED}, which ends it if it had not ended. The one way this instance gives a row up -
-     * both lanes' fair-share sheds, the dead-pump hand-back ({@link #handBackUnitsOnDeadPumps}), an acquisition undone by a
-     * stop ({@link #abandonAcquisition}) and {@link #stop()} - so the order lives here and nowhere else.
+     * both lanes' fair-share sheds, the dead-pump hand-back ({@link #handBackUnitsOnDeadPumps}) and {@link #stop()} - so the
+     * order lives here and nowhere else. An acquisition undone by a stop ({@link #abandonAcquisition}, and its retry,
+     * {@link #retryUnreleasedAcquisitions}) releases a row no owner was built for, with the same fenced statement.
      * <p>
      * The row first. Ended first and then left holding its row by a failed release, an owner read as free to the next
      * tick's {@code removeIf}, which dropped it: the row still named this instance, so no other instance took the unit,

@@ -33,6 +33,7 @@ import java.sql.SQLException;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.*;
 
 import static org.assertj.core.api.Assertions.*;
 
@@ -491,7 +492,7 @@ class ShardOwnedLifecycleIT {
 
     /**
      * A heartbeat tick that acquired a unit after {@code stop()} began, and cannot release it again, still leaves nothing
-     * served: the acquisition is undone, the owner ended keeping the row, and the WARN saying so is true - the unit is free
+     * served: the acquisition is undone with no owner built for it, and the WARN saying so is true - the unit is free
      * to another instance once the stopped one's membership row is gone. A trigger refuses every release of that unit, and
      * only of that one, so the stop releases the others and deregisters as it does on a healthy database. It is in place
      * before the tick acquires: created while the tick's UPDATE holds the row, it would wait for that transaction.
@@ -598,6 +599,128 @@ class ShardOwnedLifecycleIT {
     }
 
     /**
+     * A heartbeat tick that acquired a shard as the queue stopped, and could not release it again, does not leave that
+     * shard leased and unserved for good once the queue is started again under the same instance id. The restarted run
+     * lists no owner for the shard, so neither its lease check nor its fair share counted the row, and while it held as
+     * many shards as it may (here its {@code maxShards}; in a cluster its fair share) its rebalance never took the shard
+     * back. No other instance could take it either: the row names a live instance. The release is now retried on every
+     * heartbeat. A trigger refuses every release of the last shard until the test lifts it; the restarted run's
+     * {@code maxShards} leaves that shard out of its own start, so only the retry can free it.
+     */
+    @Test
+    void a_shard_a_heartbeat_tick_could_not_release_as_the_queue_stopped_is_released_once_the_restarted_queue_can() throws Exception {
+        var settings    = settingsWithShedGrace(Duration.ofSeconds(1));
+        var instanceId  = "restart-failed-undo";
+        var stranded    = SHARD_COUNT - 1;
+        var runtime     = ShardRuntime.acquireShared(dataSource, settings);
+        var logged      = new ListAppender<ILoggingEvent>();
+        var queueLogger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(ShardOwnedQueue.class);
+        logged.start();
+        queueLogger.addAppender(logged);
+        var queue = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, instanceId);
+        try {
+            queue.startConsuming((messageId, payload, payloadType) -> { }, settings, SHARD_COUNT);
+            LeaseReleaseRefusals.failLeaseReleasesOf(dataSource, new short[]{QUEUE_ID}, "unordered", stranded, true);
+            try {
+                holdTheNextAcquireOf("unordered", instanceId, stranded, 1.5);
+
+                queue.stop();
+                // Every shard but the stranded one: the restarted run is at its limit without it.
+                queue.startConsuming((messageId, payload, payloadType) -> { }, settings, SHARD_COUNT - 1);
+                awaitHeartbeatTickFinished(runtime);
+
+                assertThat(LeaseReleaseRefusals.releasesRefused(dataSource, QUEUE_ID, stranded))
+                        .as("premise: the earlier run's tick tried to release the shard again, and was refused").isPositive();
+                assertThat(ownerOf("unordered", stranded)).as("premise: the refused shard is still leased to the instance").isEqualTo(instanceId);
+                assertThat(queue.shardsHeld()).as("premise: the restarted run serves every shard but the stranded one").isEqualTo(SHARD_COUNT - 1);
+            } finally {
+                dropSlowAcquire();
+                LeaseReleaseRefusals.failLeaseReleasesOf(dataSource, new short[]{QUEUE_ID}, "unordered", stranded, false);
+            }
+
+            Awaitility.await().atMost(Duration.ofSeconds(5))
+                      .untilAsserted(() -> assertThat(ownerOf("unordered", stranded))
+                              .as("the restarted queue's heartbeat released the shard the earlier run's tick could not").isNull());
+            assertThat(logged.list).filteredOn(event -> event.getLevel() == ch.qos.logback.classic.Level.WARN)
+                                   .extracting(ILoggingEvent::getFormattedMessage)
+                                   .filteredOn(message -> message.contains("could not release it again"))
+                                   .as("one WARN for the shard the tick could not release, saying the release is retried")
+                                   .hasSize(1)
+                                   .allMatch(message -> message.contains("retried on every heartbeat"));
+            assertThat(queue.shardsHeld()).as("the restarted run kept every shard it serves").isEqualTo(SHARD_COUNT - 1);
+            assertThat(unorderedShardsOwnedBy(instanceId)).as("and their rows").isEqualTo(SHARD_COUNT - 1);
+        } finally {
+            dropSlowAcquire();
+            queue.stop();
+            ShardRuntime.releaseShared(dataSource);
+            queueLogger.detachAppender(logged);
+        }
+    }
+
+    /**
+     * A {@code QueueObserver} told of a shard a heartbeat tick acquired does not hold up {@code stop()}. The tick used to
+     * tell it while holding the lock a stop takes to end the run, so an observer that blocked - a slow metrics backend, a
+     * tracing exporter - kept the stop waiting for as long as it did. The observer here blocks on the tick's acquisition
+     * of shard 0 until the test lets it go, and the stop runs on another thread meanwhile.
+     */
+    @Test
+    void a_stop_does_not_wait_for_an_observer_told_of_a_shard_a_heartbeat_tick_acquired() throws Exception {
+        var settings   = settingsWithShedGrace(Duration.ofSeconds(1));
+        var instanceId = "slow-observer";
+        var runtime    = ShardRuntime.acquireShared(dataSource, settings);
+        var armed      = new AtomicBoolean();
+        var told       = new CountDownLatch(1);
+        var letGo      = new CountDownLatch(1);
+        var observer = new QueueObserver() {
+            @Override
+            public void shardOwnershipChanged(int shard, boolean acquired) {
+                if (acquired && shard == 0 && armed.compareAndSet(true, false)) {
+                    told.countDown();
+                    awaitQuietly(letGo);
+                }
+            }
+        };
+        var queue = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, instanceId, new ShardOwnerMetrics(observer));
+        var stopper = Executors.newSingleThreadExecutor();
+        try {
+            queue.startConsuming((messageId, payload, payloadType) -> { }, settings, SHARD_COUNT);
+            armed.set(true);
+            // The next tick's lease check finds shard 0 gone and ends its owner, and its rebalance takes the shard again.
+            try (var connection = dataSource.getConnection(); var statement = connection.createStatement()) {
+                statement.execute("UPDATE " + ShardOwnedSchema.LEASE_TABLE + " SET owner = 'departed' WHERE queue_id = " + QUEUE_ID
+                                          + " AND lane = 'unordered' AND shard = 0");
+            }
+            assertThat(told.await(10, TimeUnit.SECONDS)).as("premise: a heartbeat tick acquired shard 0 again and told the observer").isTrue();
+
+            var stopped = stopper.submit(queue::stop);
+
+            assertThatCode(() -> stopped.get(10, TimeUnit.SECONDS)).as("the stop finished while the observer was still blocked")
+                                                                   .doesNotThrowAnyException();
+            assertThat(letGo.getCount()).as("premise: the observer was blocked throughout").isOne();
+        } finally {
+            letGo.countDown();
+            awaitHeartbeatTickFinished(runtime);
+            stopper.shutdownNow();
+            queue.stop();
+            ShardRuntime.releaseShared(dataSource);
+        }
+    }
+
+    private String ownerOf(String lane, int shard) throws Exception {
+        try (var connection = dataSource.getConnection();
+             var statement = connection.prepareStatement("SELECT owner FROM " + ShardOwnedSchema.LEASE_TABLE
+                                                                 + " WHERE queue_id = ? AND lane = ? AND shard = ?")) {
+            statement.setShort(1, QUEUE_ID);
+            statement.setString(2, lane);
+            statement.setInt(3, shard);
+            try (var resultSet = statement.executeQuery()) {
+                resultSet.next();
+                return resultSet.getString(1);
+            }
+        }
+    }
+
+    /**
      * A shard (unordered) or unit (ordered) a heartbeat tick is releasing to rebalance while the queue stops is reported
      * released once. The stop releases every owner it finds, the one the tick is releasing included, and both used to
      * report it: a release counted, and told to the observer, twice for one acquisition. The tick's release is held
@@ -645,6 +768,67 @@ class ShardOwnedLifecycleIT {
             reported.assertEveryReleaseFollowsItsAcquisition();
             assertThat(metrics.shardsReleased.sum()).as("each unit's release counted once").isEqualTo(units);
             assertThat(metrics.shardsAcquired.sum()).as("each unit's acquisition counted once").isEqualTo(units);
+        } finally {
+            queue.stop();
+            ShardRuntime.releaseShared(dataSource);
+        }
+    }
+
+    /**
+     * A unit a heartbeat tick adopted is reported acquired to the {@code QueueObserver} even when a later unit's acquire
+     * statement fails and ends the tick's acquire loop. The observer used to be told only after the loop, so those units
+     * were listed, on their pumps and counted in {@code shardsAcquired}, but never reported acquired, while their releases
+     * were reported: the observer's released count ran ahead of its acquired count. Units 0 and 1 are taken from the queue
+     * by a departed instance; the next tick's lease check drops their owners, and its acquire loop takes unit 0 again and
+     * then fails on unit 1, which a trigger refuses to lease to the queue.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"unordered", "ordered"})
+    void a_unit_a_heartbeat_tick_acquires_before_a_later_acquire_fails_is_reported_acquired(String lane) throws Exception {
+        var settings   = settingsWithShedGrace(Duration.ofSeconds(1));
+        var instanceId = "acquire-then-fail-" + lane;
+        var runtime    = ShardRuntime.acquireShared(dataSource, settings);
+        var reported   = new RecordedOwnership();
+        var metrics    = new ShardOwnerMetrics(reported);
+        var queue      = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, instanceId, metrics);
+        try {
+            startConsuming(queue, lane, settings);
+            var units = unitsOwnedBy(lane, instanceId);
+            assertThat(units).as("premise: the sole instance holds units 0 and 1 and more").isGreaterThan(2);
+            try (var connection = dataSource.getConnection(); var statement = connection.createStatement()) {
+                statement.execute("CREATE OR REPLACE FUNCTION refuse_acquire() RETURNS trigger AS $$ BEGIN "
+                                          + "RAISE EXCEPTION 'simulated failure acquiring % unit %', NEW.lane, NEW.shard; END $$ LANGUAGE plpgsql");
+                statement.execute("CREATE TRIGGER refuse_acquire BEFORE UPDATE ON " + ShardOwnedSchema.LEASE_TABLE
+                                          + " FOR EACH ROW WHEN (OLD.owner IS DISTINCT FROM NEW.owner AND NEW.owner = '" + instanceId + "'"
+                                          + " AND NEW.lane = '" + lane + "' AND NEW.shard = 1)"
+                                          + " EXECUTE FUNCTION refuse_acquire()");
+                statement.execute("UPDATE " + ShardOwnedSchema.LEASE_TABLE + " SET owner = 'departed' WHERE queue_id = " + QUEUE_ID
+                                          + " AND lane = '" + lane + "' AND shard IN (0, 1)");
+            }
+            try {
+                Awaitility.await().atMost(Duration.ofSeconds(10))
+                          .untilAsserted(() -> assertThat(ownerOf(lane, 0)).as("premise: a heartbeat tick took unit 0 back").isEqualTo(instanceId));
+                awaitHeartbeatTickFinished(runtime);
+                assertThat(ownerOf(lane, 1)).as("premise: the tick's acquire of unit 1 failed").isEqualTo("departed");
+                assertThat(metrics.shardsAcquired.sum()).as("premise: the tick adopted unit 0 and counted it").isEqualTo(units + 1);
+
+                assertThat(reported.events()).filteredOn(event -> event.shard() == 0 && event.acquired())
+                                             .as("unit 0 reported acquired at start-up and again by the tick whose loop then failed")
+                                             .hasSize(2);
+            } finally {
+                try (var connection = dataSource.getConnection(); var statement = connection.createStatement()) {
+                    statement.execute("DROP TRIGGER IF EXISTS refuse_acquire ON " + ShardOwnedSchema.LEASE_TABLE);
+                }
+            }
+
+            queue.stop();
+
+            var acquiredReports = reported.events().stream().filter(Reported::acquired).count();
+            var releasedReports = reported.events().stream().filter(event -> !event.acquired()).count();
+            assertThat(acquiredReports).as("every acquisition counted is reported").isEqualTo(metrics.shardsAcquired.sum());
+            assertThat(releasedReports).as("every release counted is reported").isEqualTo(metrics.shardsReleased.sum());
+            assertThat(releasedReports).as("the observer is never told of more releases than acquisitions").isLessThanOrEqualTo(acquiredReports);
+            reported.assertEveryReleaseFollowsItsAcquisition();
         } finally {
             queue.stop();
             ShardRuntime.releaseShared(dataSource);
@@ -793,15 +977,22 @@ class ShardOwnedLifecycleIT {
      * released, so a test refusing releases can be set up before it. Drop the trigger with {@link #dropSlowAcquire}.
      */
     private void holdTheNextAcquireOfUnitZero(String lane, String instanceId, double sleepSeconds) throws Exception {
+        holdTheNextAcquireOf(lane, instanceId, 0, sleepSeconds);
+    }
+
+    /**
+     * {@link #holdTheNextAcquireOfUnitZero}, for {@code unit} instead of unit 0.
+     */
+    private void holdTheNextAcquireOf(String lane, String instanceId, int unit, double sleepSeconds) throws Exception {
         try (var connection = dataSource.getConnection(); var statement = connection.createStatement()) {
             statement.execute("CREATE OR REPLACE FUNCTION slow_acquire() RETURNS trigger AS $$ BEGIN "
                                       + "PERFORM pg_sleep(" + sleepSeconds + "); RETURN NEW; END $$ LANGUAGE plpgsql");
             statement.execute("CREATE TRIGGER slow_acquire BEFORE UPDATE ON " + ShardOwnedSchema.LEASE_TABLE
                                       + " FOR EACH ROW WHEN (OLD.owner IS DISTINCT FROM NEW.owner AND NEW.owner = '" + instanceId + "'"
-                                      + " AND NEW.lane = '" + lane + "' AND NEW.shard = 0)"
+                                      + " AND NEW.lane = '" + lane + "' AND NEW.shard = " + unit + ")"
                                       + " EXECUTE FUNCTION slow_acquire()");
             statement.execute("UPDATE " + ShardOwnedSchema.LEASE_TABLE + " SET owner = 'departed' WHERE queue_id = " + QUEUE_ID
-                                      + " AND lane = '" + lane + "' AND shard = 0");
+                                      + " AND lane = '" + lane + "' AND shard = " + unit);
         }
         Awaitility.await().atMost(Duration.ofSeconds(10)).until(this::aHeartbeatIsSleeping);
     }
