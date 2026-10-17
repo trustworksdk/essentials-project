@@ -38,6 +38,16 @@ the additions can still stop your code compiling: `AbstractEventProcessor` gains
 A processor subclass or `CommandHandler` implementation of your own that already declares a method with one of those
 names and an incompatible signature or return type no longer compiles; rename yours.
 
+`ShardOwnedStorage`, the shard-owned engine's SQL layer (public, and reachable through `ShardOwnedQueue.storage()`,
+but not meant to be called by applications), keeps its three 0.60.0 lease and takeover-charge methods, deprecated for
+removal. `releaseLeases(lane, shards, owner)` still works, but the engine no longer calls it: bounded by the instance
+id alone, a release made for a queue that has since been stopped and started again in the same process frees the
+lease the new run holds. Use `releaseFencedLeases(lane, fenceByShard, owner)`. `bumpAttemptsOnTakeover(connection,
+shard)` and `bumpOrderedAttemptsOnTakeover(connection, shard)` now throw `UnsupportedOperationException` and write
+nothing: without an owner and a fence they would charge attempts to rows another instance is delivering (§1.1.18).
+Use the overloads taking `(connection, shard, inFlightBound, ackBatchSize, owner, fence)` and
+`(connection, shard, ackBatchSize, owner, fence)`.
+
 **Supported PostgreSQL is now 15+.** Essentials supports the PostgreSQL majors the PostgreSQL community still
 patches, which today means 15 and later (14 reaches end of life on 2026-11-12). Before this release the module docs
 said 9.5+, or 13+ for the shard-owned ordered lane. Nothing in 0.60.1 stops an older server from working, but older

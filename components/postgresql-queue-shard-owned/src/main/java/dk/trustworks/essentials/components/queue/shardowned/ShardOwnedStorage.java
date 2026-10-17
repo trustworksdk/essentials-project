@@ -814,10 +814,20 @@ public final class ShardOwnedStorage {
      * one lane of one queue took half an hour, and an application with several queues never finished
      * at all. One acquisition discovers an absent database once.
      *
+     * <p>
+     * <b>Unsafe across a restart with the same instance id</b>, which is why nothing in the engine calls it any more. The
+     * release is bounded by the instance id alone, and the id cannot tell two runs of one instance apart: a queue stopped
+     * and started again in the same process keeps its id, and {@link #acquireLeaseGrant} hands the new run a row that
+     * already names it, under a newer fence. A release made on behalf of the earlier run then frees the row the new run
+     * serves under, and another instance can take the unit while the new run is still delivering from it.
+     *
      * @param shards the shards to release; releasing is bounded by {@code owner} as well, so a unit
      *               already taken away from this instance is left alone
      * @return how many leases were actually given up
+     * @deprecated Use {@link #releaseFencedLeases(String, Map, String)}, which also requires the fence each unit was
+     *             taken under, so a row the same instance id has taken again since is left alone.
      */
+    @Deprecated(forRemoval = true, since = "0.60.1")
     public int releaseLeases(String lane, Collection<Integer> shards, String owner) throws SQLException {
         if (shards.isEmpty()) {
             return 0;
@@ -836,17 +846,27 @@ public final class ShardOwnedStorage {
     }
 
     /**
-     * {@link #releaseLeases(String, Collection, String)}, also bounded by the fence each unit was taken under: a row
-     * {@code owner} has taken again since, under a newer fence, is left alone too.
+     * Hand back the given units of one lane that {@code owner} still holds under the given fences, in ONE statement over
+     * ONE connection.
      * <p>
-     * The instance id alone cannot tell two incarnations of one instance apart. A queue stopped and started again in the
-     * same process keeps its instance id, and {@link #acquireLeaseGrant} hands it a row that already names it, under a new
-     * fence; a release by the earlier incarnation would then free the row the new one serves under.
+     * A row is released only while it names {@code owner} AND still carries the fence the unit was taken under. A unit
+     * taken away from this instance is left alone, and so is one {@code owner} has taken again since, under a newer fence.
+     * The instance id alone cannot tell two runs of one instance apart: a queue stopped and started again in the same
+     * process keeps its instance id, and {@link #acquireLeaseGrant} hands it a row that already names it, under a new
+     * fence; a release made on behalf of the earlier run would then free the row the new one serves under.
+     * <p>
+     * One statement for the whole set because the shutdown path calls it: one connection acquisition per unit meant a
+     * lane of 64 units waited out the pool's {@code connectionTimeout} 64 times when the database was gone.
      *
-     * @param fenceByShard each shard to release, with the fence its owner holds it under
+     * @param lane         the lane the units belong to
+     * @param fenceByShard each unit to release, with the fence its owner holds it under; empty releases nothing
+     * @param owner        the instance id the rows must name
      * @return how many leases were actually given up
      */
     public int releaseFencedLeases(String lane, Map<Integer, Long> fenceByShard, String owner) throws SQLException {
+        requireNonNull(lane, "No lane provided");
+        requireNonNull(fenceByShard, "No fences provided");
+        requireNonNull(owner, "No owner provided");
         if (fenceByShard.isEmpty()) {
             return 0;
         }
@@ -1112,8 +1132,28 @@ public final class ShardOwnedStorage {
     }
 
     /**
+     * The 0.60.0 form of the unordered lane's takeover charge, kept only so code compiled against that release still
+     * links. It refuses every call and writes nothing.
+     * <p>
+     * It charged an attempt to every row of the shard, unfenced. Without the owner and the fence it cannot tell whether
+     * the caller still holds the shard, so an owner whose lease had moved on would charge the rows its successor is
+     * delivering; and without the in-flight bound it would charge the whole backlog on every takeover. Neither can be
+     * supplied on the caller's behalf, so the call is refused rather than answered with that write.
+     *
+     * @throws UnsupportedOperationException always
+     * @deprecated Use {@link #bumpAttemptsOnTakeover(Connection, int, int, int, String, long)}, which charges only the
+     *             rows the previous owner could have had in flight, and only while {@code owner} holds the shard under
+     *             {@code fence}.
+     */
+    @Deprecated(forRemoval = true, since = "0.60.1")
+    public int bumpAttemptsOnTakeover(Connection connection, int shard) throws SQLException {
+        throw new UnsupportedOperationException("bumpAttemptsOnTakeover(Connection, int) no longer charges anything: unfenced, it charged every row of the shard "
+                                                        + "even after the caller's lease had moved on. Use bumpAttemptsOnTakeover(Connection, int, int, int, String, long)");
+    }
+
+    /**
      * The visible rows at or past the redelivery policy's limit, read right after a takeover's charge. Not only the
-     * rows {@link #bumpAttemptsOnTakeover} charged: any row at the limit that nobody holds, which includes one a pull
+     * rows {@link #bumpAttemptsOnTakeover(Connection, int, int, int, String, long)} charged: any row at the limit that nobody holds, which includes one a pull
      * session failed up to it, since a session's failure counts on the row and never dead-letters. Most are messages
      * whose handler never completed - the delivering process stopped every time - so no failure will ever be
      * recorded for them, and without this they would be redelivered forever. They are parked with
@@ -1589,7 +1629,7 @@ public final class ShardOwnedStorage {
     }
 
     /**
-     * {@link #bumpAttemptsOnTakeover} for the ordered lane. A key has at most one message in a handler, behind at
+     * {@link #bumpAttemptsOnTakeover(Connection, int, int, int, String, long)} for the ordered lane. A key has at most one message in a handler, behind at
      * most {@code ackBatchSize} handled rows of the same key whose deletes had not been flushed, so a row the previous
      * owner could have been handling is among the first {@code ackBatchSize + 1} rows of its key, or a retry that
      * had come due.
@@ -1608,7 +1648,7 @@ public final class ShardOwnedStorage {
      * {@link #orderedRetriesInBackoff}, {@link #orderedDeadLetterBlocks}). Charging the visible rows queued behind
      * it cost each of them an attempt per takeover, and enough takeovers dead-lettered them, never delivered.
      * <p>
-     * <b>Fenced</b>, for the reason {@link #bumpAttemptsOnTakeover} is: the charge lands only while {@code owner} still
+     * <b>Fenced</b>, for the reason {@link #bumpAttemptsOnTakeover(Connection, int, int, int, String, long)} is: the charge lands only while {@code owner} still
      * holds the unit's lease under {@code fence}.
      *
      * @param owner the instance taking the unit over
@@ -1639,6 +1679,23 @@ public final class ShardOwnedStorage {
             statement.setLong(8, fence);
             return statement.executeUpdate();
         }
+    }
+
+    /**
+     * The 0.60.0 form of the ordered lane's takeover charge, kept only so code compiled against that release still
+     * links. It refuses every call and writes nothing, for the reasons {@link #bumpAttemptsOnTakeover(Connection, int)}
+     * does: it charged every row of the unit, unfenced, and the owner, fence and window it would need cannot be supplied
+     * on the caller's behalf.
+     *
+     * @throws UnsupportedOperationException always
+     * @deprecated Use {@link #bumpOrderedAttemptsOnTakeover(Connection, int, int, String, long)}, which charges only the
+     *             rows the previous owner could have had in flight, and only while {@code owner} holds the unit under
+     *             {@code fence}.
+     */
+    @Deprecated(forRemoval = true, since = "0.60.1")
+    public int bumpOrderedAttemptsOnTakeover(Connection connection, int shard) throws SQLException {
+        throw new UnsupportedOperationException("bumpOrderedAttemptsOnTakeover(Connection, int) no longer charges anything: unfenced, it charged every row of the "
+                                                        + "unit even after the caller's lease had moved on. Use bumpOrderedAttemptsOnTakeover(Connection, int, int, String, long)");
     }
 
     /**
@@ -1695,7 +1752,7 @@ public final class ShardOwnedStorage {
      * any rebalance, graceful stop or crash.
      * <p>
      * A retry is told apart from a delayed message by {@code attempts > 0}: {@link #scheduleRetry}
-     * always writes a positive count, an enqueue writes 0, and {@link #bumpOrderedAttemptsOnTakeover}
+     * always writes a positive count, an enqueue writes 0, and {@link #bumpOrderedAttemptsOnTakeover(Connection, int, int, String, long)}
      * no longer touches a row that is not yet visible. A requested redelivery, which is not counted, is
      * told apart by {@link #REDELIVERY_REQUESTED} in the row's otherwise unused {@code lease} column. A delayed ordered message therefore still does
      * not block its key, exactly as before. A row an older version bumped while it was delayed reads
