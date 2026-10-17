@@ -216,8 +216,8 @@ class ShardOwnedLifecycleIT {
 
     /**
      * A {@code start()} called on another thread while {@code stop()} is still draining waits for that stop, and the run it
-     * then starts is whole. The stop clears {@code running} at its top and drains for up to {@code shedGrace} before it drops
-     * its owners. A start in that window used to set {@code running} again and list its own owners, and the stop's final
+     * then starts is whole. The stop ends its run at its top and drains for up to {@code shedGrace} before it drops
+     * its owners. A start in that window used to mark the queue running again and list its own owners, and the stop's final
      * clears then dropped them from the queue while they were on the pumps and serving: the queue reported holding
      * nothing, and its next stop released and reported nothing, leaving every lease row naming the stopped instance. A
      * handler held past the grace keeps the stop in its drain while the start is called.
@@ -586,7 +586,7 @@ class ShardOwnedLifecycleIT {
 
     /**
      * A heartbeat tick still inside its acquire when the queue is stopped and started again in the same process, under
-     * the same instance id, does not hand its owner to the new run. The restarted queue sets {@code running} again, and
+     * the same instance id, does not hand its owner to the new run. The restarted queue was marked running again, and
      * the tick, which checked only that, kept its owner: listed, on a pump and reported acquired beside the new run's own
      * owner of the same unit, until a lease check found its fence superseded. Undoing it must not cost the new run the
      * unit either: the tick's release is bounded by its own fence, so the row the new run took under a newer one stays.
@@ -597,8 +597,9 @@ class ShardOwnedLifecycleIT {
      * handled within the test's bound only if the new run's owner was woken for it. That proves something only when the
      * new run has placed the unit before the tick refuses its acquisition: refused first, anything the refusal did to the
      * unit's wake-up would be over before the placement, which then builds a fresh one. Left to themselves the two race,
-     * as the start places its units outside the queue's runLock once it has leased them all, so the test holds that lock
-     * - the one the tick refuses under - from just after the start has set {@code running} until the start has returned.
+     * as the start places its units once it has leased them all, so the test holds the monitor of the stopped run - the
+     * one the tick refuses under, and not the one the new run adopts its units under - from just after the start has
+     * installed its run until the start has returned.
      */
     @ParameterizedTest
     @ValueSource(strings = {"unordered", "ordered"})
@@ -623,15 +624,17 @@ class ShardOwnedLifecycleIT {
             assertThat(units).as("premise: the sole instance holds every unit of the lane").isPositive();
             holdTheNextAcquireOfUnitZero(lane, instanceId, 1.5);
 
+            var stoppedRun = queue.currentRunMonitor();
             queue.stop();
             assertThat(aHeartbeatIsSleeping()).as("premise: the tick was still acquiring when the queue stopped").isTrue();
             var lostBefore        = metrics.leasesLost.sum();
             var acquiredBefore    = metrics.shardsAcquired.sum();
             var reportsBeforeRestart = reported.events().size();
             // The new run's start acquires unit 0 once the held tick has committed its acquire, under a newer fence. The tick
-            // decides whether to adopt its owner under the queue's runLock (adoptIntoRun), which the start takes only to set
-            // `running`. Holding that lock from then until the start has returned keeps the tick from refusing until the new
-            // run has placed unit 0, whichever of the two would otherwise have got there first.
+            // decides whether to adopt its owner under the monitor of the run it was scheduled for (adoptIntoRun), the stopped
+            // one; the start adopts its own units under its new run's. Holding the stopped run's from once the new run is
+            // installed until the start has returned keeps the tick from refusing until the new run has placed unit 0,
+            // whichever of the two would otherwise have got there first.
             var starting = CompletableFuture.runAsync(() -> {
                 try {
                     startConsuming(queue, lane, settings, delivered);
@@ -640,7 +643,7 @@ class ShardOwnedLifecycleIT {
                 }
             });
             Awaitility.await().atMost(Duration.ofSeconds(10)).until(queue::isStarted);
-            synchronized (queue.runLock()) {
+            synchronized (stoppedRun) {
                 assertThat(aHeartbeatIsSleeping()).as("premise: the tick was still acquiring when the test took the lock it refuses under").isTrue();
                 starting.get(20, TimeUnit.SECONDS);
             }

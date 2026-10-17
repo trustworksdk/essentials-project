@@ -9,7 +9,7 @@ _Add an entry in the same commit as the change. Cite the commit or PR. Write it 
 changes for them, and what they must do, if anything. Purely internal refactors, test-only changes and CI
 plumbing that no user sees go in §7 at most, as one line._
 
-**So far:** no breaking change, twenty-one framework changes with a behaviour change (§1.1, §1.1.13–§1.1.21 in the
+**So far:** no breaking change, twenty-two framework changes with a behaviour change (§1.1, §1.1.13–§1.1.22 in the
 durable queues and units of work), additive features (§2), bug fixes (§3), plugin releases `0.60.0-6` and `0.60.0-7`, and example and tooling updates. Nothing here requires a migration
 step, except one for `essentials.schema.mode=validate` deployments: re-run `emit` and apply the script before the
 first start (§1). Supported PostgreSQL is now 15+ (§1). The persisted
@@ -527,6 +527,19 @@ centralized optimizer, `queuePollingReturnedMessages(List)`) compiles as before 
 the `Instant claimedAt` overloads instead; the no-arg forms are `@Deprecated(since = "0.60.1")` on these two classes,
 so an existing override now gets a deprecation warning. A `QueuePollingOptimizer` implemented from scratch is
 unaffected: the interface's `Instant` overloads still call its no-arg methods. (`d42c4bc3`)
+
+#### 1.1.22 Shard-owned engine: a stopping queue holds no shards and takes no hand-off
+
+From the moment `ShardOwnedQueue.stop()` begins, the queue reports what a stopped queue reports. `shardsHeld()` reads
+0, and so do `Subscription.shardsHeld()`, `unorderedShardsHeld()` and `orderedUnitsHeld()`, while the stop is still
+waiting up to `shedGrace` for handlers to finish and then releasing its leases; before, they went on counting the shards
+and units being drained until the stop had released them. After `stopAbruptly()` they read 0 as well. A dashboard or
+test that polled these during a shutdown sees the drop at the start of the stop rather than at its end.
+
+A message enqueued on the instance while a stop is under way is no longer handed in memory to the owner of its shard
+that is draining. It is inserted like any other row and waits in the table for the next owner of the shard: another
+instance once the stop has released the lease, or this one when it is started again. Nothing is lost; the stopping
+instance just no longer delivers it. (F-324)
 
 ---
 
