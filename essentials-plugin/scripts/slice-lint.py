@@ -224,8 +224,42 @@ def parse_manifests(manifests, findings):
     return parsed
 
 
-def validate_schema(parsed, schema, findings):
-    """Gate 1(b). Returns True if validation actually ran."""
+GATE_REF = "#/$defs/knownKeys"
+
+
+def version_gate(schema):
+    """Index of the `allOf` clause that applies `knownKeys` to a manifest stamped at or below the
+    schema copy's own version, or None for a copy older than the gate — there an unknown key is
+    an ordinary schema error and needs no special handling."""
+    for i, clause in enumerate(schema.get("allOf") or ()):
+        if isinstance(clause, dict) and (clause.get("else") or {}).get("$ref") == GATE_REF:
+            return i
+    return None
+
+
+def unknown_keys(error, schema):
+    """(location, key) for each key the `knownKeys` check rejected; key is None for a failure it
+    cannot pin on one key. A key outside a mapping's own list fails `propertyNames` with the key as
+    the instance; a `then` object fails one `anyOf` over its three forms, so the form is read from
+    the object and the keys outside it are reported."""
+    location = list(error.absolute_path)
+    if isinstance(error.instance, str) and "propertyNames" in error.relative_schema_path:
+        return [(location, error.instance)]
+    if isinstance(error.instance, dict) and location[-1:] == ["then"]:
+        for form in schema["$defs"]["scenario"]["properties"]["then"]["oneOf"][1:]:
+            if form["required"][0] in error.instance:
+                return [(location, k) for k in error.instance
+                        if k not in form["properties"] and not str(k).startswith("x-")]
+    return [(location, None)]
+
+
+def validate_schema(parsed, schema, findings, notes):
+    """Gate 1(b). Returns True if validation actually ran.
+
+    A key the schema does not define is rejected on a manifest stamped at or below the copy's
+    `x-manifestVersion`, and only noted on one stamped with a newer 1.x — that manifest was written
+    for a schema this copy has not seen. `x-` keys are extension keys and pass everywhere. The gate
+    lives in the schema, so any validator agrees; this function only words it."""
     try:
         from jsonschema import validators
     except ImportError:
@@ -234,9 +268,16 @@ def validate_schema(parsed, schema, findings):
     validator_cls = validators.validator_for(schema)
     validator_cls.check_schema(schema)
     validator = validator_cls(schema)
+    gate = version_gate(schema)
+    if gate is not None:
+        known = validator_cls({"$schema": schema.get("$schema"), "$defs": schema["$defs"], "$ref": GATE_REF})
+        newer = validator_cls({"$schema": schema.get("$schema"), **schema["allOf"][gate]["if"]})
+    copy_version = schema.get("x-manifestVersion", "this copy's")
 
     for path, doc in parsed.items():
         for error in sorted(validator.iter_errors(doc), key=lambda e: list(e.absolute_path)):
+            if gate is not None and list(error.absolute_schema_path)[:3] == ["allOf", gate, "else"]:
+                continue  # worded below, once per key
             location = list(error.absolute_path)
             where = "/".join(str(p) for p in location) or "(root)"
             findings.append(
@@ -248,7 +289,53 @@ def validate_schema(parsed, schema, findings):
                     hint=schema_hint(location, error),
                 )
             )
+        if gate is None:
+            continue
+        tolerated = newer.is_valid(doc)
+        for error in known.iter_errors(doc):
+            for location, key in unknown_keys(error, schema):
+                where = "/".join(str(p) for p in location) or "(root)"
+                what = f"unknown key '{key}'" if key is not None else error.message
+                if tolerated:
+                    notes.append(
+                        f"{path}: {where}: {what} — not defined by schema {copy_version}; the manifest "
+                        f"is stamped {doc.get('schemaVersion')}, so it is accepted unchecked. "
+                        "/essentials:upgrade refreshes the schema copy"
+                    )
+                else:
+                    findings.append(
+                        Finding(
+                            "Should-fix",
+                            "1(b) schema",
+                            path,
+                            f"{where}: {what}",
+                            hint=unknown_key_hint(location, key),
+                        )
+                    )
     return True
+
+
+def unknown_key_hint(location, key):
+    head = location[0] if location else None
+    if head == "projections":
+        if key == "subscribesTo":
+            return (
+                "`subscribesTo` is spelled `aggregateTypes` — the AggregateType stream(s) the "
+                "projector subscribes to (PascalCase plural, e.g. Orders). If the value is a "
+                "list of EVENT types it belongs in `from` instead; the two are different axes "
+                "and moving one into the other corrupts it (manifest-guide.md §3)"
+            )
+        return (
+            "only name, aggregateTypes, from, consistency and store are read; move the rest "
+            "into `notes`. `handles`, `table` and `kind` are the keys most often reached for "
+            "instead of `from`"
+        )
+    if head is None:
+        return (
+            "no reader consults an unknown root key. Use the field that fits, `notes:` for prose, "
+            "or an `x-` extension key if it really is project-specific"
+        )
+    return "not a key this schema defines here — fix the spelling, or prefix it `x-` to keep it as an extension key"
 
 
 def schema_hint(location, error):
@@ -307,7 +394,10 @@ def schema_hint(location, error):
                 "a step is a mapping with exactly one of event, command, query, state, external or "
                 "schedule (schedule: true), plus an optional `with` (manifest-guide.md §3)"
             )
-    if head is None and "Additional properties" in error.message:
+    # A copy older than the version gate rejects an unknown root key through `patternProperties`, whose
+    # message reads "does not match any of the regexes", not "Additional properties".
+    if head is None and ("Additional properties" in error.message
+                         or "does not match any of the regexes" in error.message):
         return (
             "no reader consults an unknown root key. Use the field that fits, `notes:` for prose, "
             "or an `x-` prefixed key if it really is project-specific"
@@ -758,7 +848,7 @@ SKIPPED_BANNER = (
 )
 
 
-def report(findings, manifests, parsed, schema_ran, quiet, suppressed=None):
+def report(findings, manifests, parsed, schema_ran, quiet, suppressed=None, notes=()):
     out = sys.stdout
     findings.sort(key=Finding.sort_key)
 
@@ -778,6 +868,11 @@ def report(findings, manifests, parsed, schema_ran, quiet, suppressed=None):
             print(f"            {f.message}", file=out)
             if f.hint:
                 print(f"            → {f.hint}", file=out)
+        print("", file=out)
+
+    for note in notes:
+        print(f"Note        {note}", file=out)
+    if notes:
         print("", file=out)
 
     if not quiet:
@@ -850,7 +945,7 @@ def main(argv=None):
     if not manifests:
         if args.json:
             json.dump({"root": str(root), "manifests": 0, "parsed": 0, "schemaValidated": False,
-                       "findings": []}, sys.stdout, indent=2)
+                       "findings": [], "notes": []}, sys.stdout, indent=2)
             sys.stdout.write("\n")
         elif not args.quiet:
             print(f"slice-lint: no slice.yaml found under {root}", file=sys.stderr)
@@ -880,7 +975,8 @@ def main(argv=None):
 
     findings = []
     parsed = parse_manifests(manifests, findings)
-    schema_ran = validate_schema(parsed, schema, findings)
+    notes = []
+    schema_ran = validate_schema(parsed, schema, findings, notes)
     stream_vs_event_checks(parsed, findings)
     scenario_checks(parsed, findings)
     cross_manifest_checks(parsed, findings)
@@ -899,6 +995,7 @@ def main(argv=None):
             "parsed": len(parsed),
             "schemaValidated": schema_ran,
             "findings": [f.as_dict() for f in sorted(findings, key=Finding.sort_key)],
+            "notes": notes,
         }
         if suppressed is not None:
             doc["baseline"] = {"path": str(Path(args.baseline).resolve()), "suppressed": suppressed}
@@ -907,7 +1004,7 @@ def main(argv=None):
         if not schema_ran:
             print(SKIPPED_BANNER, file=sys.stderr)
     else:
-        report(findings, manifests, parsed, schema_ran, args.quiet, suppressed)
+        report(findings, manifests, parsed, schema_ran, args.quiet, suppressed, notes)
 
     # Findings first: a skipped validation never hides one. Otherwise a run that could not validate
     # is not a pass, and says so with 2 — the code a hook or CI already treats as "did not run".

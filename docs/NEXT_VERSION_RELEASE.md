@@ -832,6 +832,13 @@ entries are in [`essentials-plugin/CHANGELOG.md`](../essentials-plugin/CHANGELOG
   "+N new issues" walks the same N entries the list shows.
 - **`slice.yaml` schema 1.4** adds optional `flow:` (the journeys a slice belongs to) and `scenarios:`
   (given / when / then over the slice's own messages, each linked to its test).
+- **`slice.yaml` keys starting with `x-` are extension keys everywhere**, and a manifest written for a newer
+  schema no longer fails an older lint gate. An `x-` key used to be accepted only at the root; one inside an
+  endpoint, a projection, a schedule, a seam or a scenario failed `slice-lint`. It is now valid on every
+  mapping, at any `schemaVersion`. Any other key the project's schema copy does not define still fails on a
+  manifest stamped at or below that copy's version (typos stay loud), but on one stamped with a newer `1.x`
+  it is printed as a note and the lint exits 0. Unknown-key findings now read `endpoints/0: unknown key
+  'rateLimit'`, and `slice-lint --json` gains a `notes` list.
 - **`/essentials:slice-enrich`** drafts the absent human-owned manifest fields (`flow`, `scenarios`, `summary`,
   `invariants`, `tier`, `consistency`, `featureFlag`, `maps`) from evidence in the code and tests, and writes
   only what you accept.

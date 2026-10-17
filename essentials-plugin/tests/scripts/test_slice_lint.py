@@ -480,7 +480,7 @@ INVALID = [
      [("1(b)", "scenarios/0/when")]),
     ("unknown-scenario-key", "command", {"scenarios": [sc(when=step(C, "CancelOrder"), then=NOTHING,
                                                           expect="x")]},
-     [("1(b)", "Additional properties are not allowed ('expect' was unexpected)")]),
+     [("1(b)", "scenarios/0: unknown key 'expect'")]),
     ("flow-capitalised", "command", {"flow": "Checkout"}, [("1(b)", "flow")]),
     ("flow-empty-list", "command", {"flow": []}, [("1(b)", "flow")]),
     ("flow-duplicate", "command", {"flow": ["checkout", "checkout"]}, [("1(b)", "flow")]),
@@ -590,6 +590,10 @@ class FlowAndScenarios(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             old = json.loads(SCHEMA.read_text())
             del old["properties"]["flow"], old["properties"]["scenarios"]
+            # a copy that old predates the version gate too: strict at the root, no x-manifestVersion
+            old.pop("x-manifestVersion")
+            old["allOf"] = [c for c in old["allOf"] if (c.get("else") or {}).get("$ref") != "#/$defs/knownKeys"]
+            old["additionalProperties"] = False
             old_path = Path(tmp) / "old.json"
             old_path.write_text(json.dumps(old))
             manifest = Path(tmp) / "m" / "slice.yaml"
@@ -619,6 +623,99 @@ class FlowAndScenarios(unittest.TestCase):
         kinds = "".join(blocks)
         for form in ("error:", "nothing: true", "readModel:", "external:", "flow:"):
             self.assertIn(form, kinds)
+
+
+def manifest(tmp, stamp, **extra):
+    path = Path(tmp) / "m" / "slice.yaml"
+    path.parent.mkdir(exist_ok=True)
+    path.write_text(yaml.safe_dump({
+        "schemaVersion": stamp, "slice": "orders.cancel_order", "kind": "command", "bc": "orders",
+        "owner": "o", "status": "live", "summary": "s", "tests": {}, **BASES["command"], **extra}))
+    return path.parent
+
+
+class UnknownKeys(unittest.TestCase):
+    """The version gate: strict at or below the copy's x-manifestVersion, tolerant above it, and an
+    x- extension key valid on every object at any stamp (manifest-guide.md §3)."""
+
+    EVERYWHERE = {
+        "x-team": "payments",
+        "endpoints": [{"method": "POST", "path": "/x", "x-rate": 3}],
+        "projections": [{"name": "P", "from": ["A"], "x-why": "y"}],
+        "schedule": {"cron": "0 * * * *", "x-owner": "ops"},
+        "provides": [{"name": "Seam", "x-since": "2026"}],
+        "scenarios": [sc(when={"command": "CancelOrder", "x-n": 1}, then={"nothing": True, "x-why": "idem"},
+                         **{"x-ticket": "T-1"})],
+    }
+
+    def test_extension_keys_pass_everywhere_at_the_current_stamp(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            code, doc = lint(manifest(tmp, "1.4", **self.EVERYWHERE))
+        self.assertEqual((code, doc["findings"], doc["notes"]), (0, [], []))
+
+    def test_unknown_key_at_or_below_the_copy_is_a_finding(self):
+        for stamp in ("1.4", "1.0", "2.0", "1.4.1"):
+            with self.subTest(stamp=stamp), tempfile.TemporaryDirectory() as tmp:
+                code, doc = lint(manifest(tmp, stamp, futureField=1,
+                                          endpoints=[{"method": "POST", "path": "/x", "rateLimit": 3}]))
+                self.assertEqual(code, 1)
+                self.assertEqual(sorted(f["message"] for f in doc["findings"]),
+                                 ["(root): unknown key 'futureField'", "endpoints/0: unknown key 'rateLimit'"])
+
+    def test_unknown_key_on_a_newer_stamp_is_a_note(self):
+        for stamp in ("1.5", "1.12"):
+            with self.subTest(stamp=stamp), tempfile.TemporaryDirectory() as tmp:
+                code, doc = lint(manifest(tmp, stamp, futureField=1,
+                                          scenarios=[sc(when=step(C, "CancelOrder"), then={"nothing": True, "why": "x"})]))
+                self.assertEqual((code, doc["findings"]), (0, []))
+                self.assertEqual(len(doc["notes"]), 2)
+                self.assertIn(f"stamped {stamp}", doc["notes"][0])
+                self.assertIn("unknown key 'futureField' — not defined by schema 1.4", doc["notes"][0])
+
+    def test_newer_stamp_still_checks_every_known_key(self):
+        # tolerance covers keys the copy does not know, never a known key with a wrong value
+        with tempfile.TemporaryDirectory() as tmp:
+            code, doc = lint(manifest(tmp, "1.5", flow="Checkout", futureField=1))
+        self.assertEqual(code, 1)
+        self.assertEqual([f["gate"] for f in doc["findings"]], ["1(b) schema"])
+
+    def test_then_form_reports_the_key_outside_its_form_once(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            code, doc = lint(manifest(tmp, "1.4", scenarios=[
+                sc(when=step(C, "CancelOrder"), then={"error": "X", "rows": []})]))
+        self.assertEqual([f["message"] for f in doc["findings"]], ["scenarios/0/then: unknown key 'rows'"])
+
+    def test_known_keys_mirror_the_properties_they_guard(self):
+        # knownKeys restates each object's key list for the strict branch; a field added to one place only
+        # is either rejected at the current stamp or never checked
+        s = json.loads(SCHEMA.read_text())
+        d, kk = s["$defs"], s["$defs"]["knownKeys"]
+        enum = lambda frag: set(frag["propertyNames"]["anyOf"][1]["enum"])  # noqa: E731
+        sc_kk = kk["properties"]["scenarios"]["items"]
+        pairs = {
+            "root": (enum(kk), s["properties"]),
+            "endpoint": (enum(kk["properties"]["endpoints"]["items"]), d["endpoint"]["properties"]),
+            "providedSeam": (enum(kk["properties"]["provides"]["items"]), d["providedSeam"]["properties"]),
+            "schedule": (enum(kk["properties"]["schedule"]), d["schedule"]["properties"]),
+            "projection": (enum(kk["properties"]["projections"]["items"]), d["projection"]["properties"]),
+            "scenario": (enum(sc_kk), d["scenario"]["properties"]),
+            "scenarioStep": (enum(sc_kk["properties"]["when"]), d["scenarioStep"]["properties"]),
+        }
+        for form, guard in zip(d["scenario"]["properties"]["then"]["oneOf"][1:],
+                               sc_kk["properties"]["then"]["else"]["anyOf"]):
+            pairs["then " + form["required"][0]] = (enum(guard), form["properties"])
+        for name, (listed, props) in pairs.items():
+            with self.subTest(object=name):
+                self.assertEqual(listed, set(props))
+
+    def test_gate_pattern_matches_x_manifest_version(self):
+        s = json.loads(SCHEMA.read_text())
+        import re
+        major, minor = map(int, s["x-manifestVersion"].split("."))
+        newer = re.compile([c for c in s["allOf"] if (c.get("else") or {}).get("$ref") == "#/$defs/knownKeys"][0]
+                           ["if"]["properties"]["schemaVersion"]["pattern"])
+        self.assertEqual([bool(newer.match(f"{major}.{m}")) for m in range(minor + 12)],
+                         [m > minor for m in range(minor + 12)])
 
 
 if __name__ == "__main__":

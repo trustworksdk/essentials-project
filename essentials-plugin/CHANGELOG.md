@@ -38,6 +38,15 @@ targets, with a `-N` suffix for plugin-only releases.
   `/essentials:slice-check --fix-manifests` never writes them. A project's schema copy older than 1.4
   rejects them, so a generator checks the copy first and otherwise sends the user to
   `/essentials:upgrade` (`manifest-guide.md` §3).
+- **Schema 1.4: `x-` extension keys on every object, and a version gate for unknown keys.** A key
+  starting with `x-` is valid on the root and on every mapping a manifest holds — endpoint, projection,
+  schedule, seam, scenario, step, `then` — at any `schemaVersion`; before, nested `x-` keys failed. The
+  schema declares the version it implements (`x-manifestVersion`). Any other unknown key fails gate 1(b)
+  on a manifest stamped at or below it, as before, and is tolerated on one stamped with a newer `1.x`:
+  slice-lint prints it as a note (`notes` in `--json`) and exits 0. The gate is in the schema itself, so
+  any JSON Schema 2020-12 validator agrees. Unknown-key findings name the key (`endpoints/0: unknown key
+  'rateLimit'`), and the unknown-root-key hint, which never fired, now does. The Slice Atlas no longer
+  annotates `x-` keys in scenarios as unknown.
 - `/essentials:slice-map`'s closed list of checks gains the completeness rule (a read-model column no
   inbound event carries) and the scenario and adoption checks (a `given` event nothing publishes, an
   unknown field, a `test:` that resolves to no test, a malformed scenario, no `flow:`, no scenarios). All

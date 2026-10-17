@@ -1,18 +1,18 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://trustworks.dk/slice-yaml.schema.json",
+  "x-manifestVersion": "1.4",
   "title": "Per-slice manifest (slice.yaml)",
   "description": "Canonical schema for the machine-readable per-slice manifest. Toolchain-neutral: a manifest written by an external generator (see `generator`) validates against it unchanged. essentials ships scripts/slice-lint.py, which parses and validates every slice.yaml against this schema and exits non-zero — wire it into CI or a pre-commit hook, because nothing in a JVM build reads a manifest and an unparseable one is invisible rather than loud.",
   "type": "object",
-  "additionalProperties": false,
   "patternProperties": {
     "^x-": {
-      "$comment": "Escape hatch. A project may carry toolchain- or project-specific data under an x- prefixed key without inventing a bare key that this schema rejects. No toolchain reads these; they are inert to every gate. Prefer a real field where one fits — an x- key nothing reads is documentation, not a contract."
+      "$comment": "Extension key. A key starting with x- is accepted on the manifest root and on every object the schema defines, at any schemaVersion. No toolchain reads one; it is inert to every gate. Prefer a real field where one fits — an x- key is documentation, not a contract."
     }
   },
   "required": ["schemaVersion", "slice", "kind", "bc", "owner", "status", "summary", "tests"],
   "properties": {
-    "schemaVersion": { "type": "string", "description": "Manifest schema version, e.g. \"1.4\". Readers accept any 1.x, so a manifest stamped at an earlier 1.x stays valid and needs no restamp. A manifest that carries `flow` or `scenarios` (both added in 1.4) is stamped \"1.4\" or later, so a reader can tell from the stamp alone that a project copy of this schema older than 1.4 would reject it." },
+    "schemaVersion": { "type": "string", "description": "Manifest schema version, e.g. \"1.4\". Readers accept any 1.x, so a manifest stamped at an earlier 1.x stays valid and needs no restamp. A manifest stamped with a newer 1.x than this copy's x-manifestVersion is accepted with keys this copy does not define; see the version gate in allOf. A manifest that carries `flow` or `scenarios` (both added in 1.4) is stamped \"1.4\" or later, so a reader can tell from the stamp alone that a project copy of this schema older than 1.4 would reject it." },
     "slice": { "type": "string", "pattern": "^[a-z0-9_-]+\\.[a-z0-9_-]+$", "description": "Globally unique id <bc>.<slice-id>. kebab-case or snake_case; snake_case is REQUIRED on JVM platforms, where package directories cannot contain hyphens (e.g. orders.place_order)." },
     "generator": { "enum": ["sdd", "essentials", "manual"], "description": "Which toolchain owns this manifest: essentials, manual, or an external generator. Determines whether lastSyncedAt/arch are expected and which tool may rewrite the manifest's derived fields." },
     "language": { "type": "string", "description": "Implementation language of the slice (open string: java | kotlin | typescript | python | go | ...). Lets tooling pick the right template family without sniffing file extensions in a mixed module." },
@@ -108,12 +108,59 @@
       "$comment": "A port-style ACL — the system calls out, nothing calls in — has no inbound message and therefore no mapping table, and is still unambiguously a translation slice. `consumes` and `maps` are required for every direction EXCEPT an explicit `direction: outbound`; with `direction` absent, both stay required.",
       "if": { "properties": { "kind": { "const": "translation" }, "direction": { "not": { "const": "outbound" } } } },
       "then": { "required": ["consumes", "maps"] }
+    },
+    {
+      "$comment": "Version gate. A manifest stamped with a NEWER 1.x than x-manifestVersion was written for a schema this copy has not seen, so a key it does not define is tolerated rather than rejected (slice-lint reports it as a note). At or below x-manifestVersion — and on any stamp that is not 1.x — an unknown key is rejected, so typos and near-synonyms stay loud. Bump the pattern together with x-manifestVersion.",
+      "if": {
+        "required": ["schemaVersion"],
+        "properties": { "schemaVersion": { "type": "string", "pattern": "^1\\.([5-9]|[1-9][0-9]+)$" } }
+      },
+      "else": { "$ref": "#/$defs/knownKeys" }
     }
   ],
   "$defs": {
+    "extensionKey": {
+      "type": "string", "pattern": "^x-",
+      "description": "A key starting with x- is an extension key: valid on the root and on every object this schema defines, at any schemaVersion."
+    },
+    "knownKeys": {
+      "$comment": "Strict mode: every key must be one this schema defines, or an extension key. Applied by the version gate in allOf to a manifest stamped at or below x-manifestVersion. Each enum mirrors the `properties` of the object it guards; tests/scripts/test_slice_lint.py keeps them equal.",
+      "propertyNames": { "anyOf": [ { "$ref": "#/$defs/extensionKey" }, { "enum": [
+        "schemaVersion", "slice", "generator", "language", "kind", "bc", "owner", "status", "summary", "notes",
+        "lastSyncedAt", "sourceFingerprint", "stability", "supersedes", "tier", "lane", "profile",
+        "handles", "serves", "publishes", "consumes", "dispatches", "provides", "endpoints", "schedule",
+        "externalSystem", "direction", "maps", "writes", "reads", "owns", "projections", "invariants",
+        "forbidden", "statutory", "featureFlag", "sla", "observability", "characterization", "tests", "arch",
+        "flow", "scenarios", "code", "dependsOn" ] } ] },
+      "properties": {
+        "endpoints": { "items": { "propertyNames": { "anyOf": [ { "$ref": "#/$defs/extensionKey" }, { "enum": ["method", "path", "auth", "capability", "maps"] } ] } } },
+        "provides": { "items": { "propertyNames": { "anyOf": [ { "$ref": "#/$defs/extensionKey" }, { "enum": ["name", "note", "consumedBy"] } ] } } },
+        "schedule": { "propertyNames": { "anyOf": [ { "$ref": "#/$defs/extensionKey" }, { "enum": ["cron", "fixedDelay", "initialDelay", "timeZone", "note"] } ] } },
+        "projections": { "items": { "propertyNames": { "anyOf": [ { "$ref": "#/$defs/extensionKey" }, { "enum": ["name", "aggregateTypes", "from", "consistency", "store"] } ] } } },
+        "scenarios": { "items": {
+          "propertyNames": { "anyOf": [ { "$ref": "#/$defs/extensionKey" }, { "enum": ["name", "given", "when", "then", "test", "note"] } ] },
+          "properties": {
+            "given": { "items": { "propertyNames": { "anyOf": [ { "$ref": "#/$defs/extensionKey" }, { "enum": ["event", "command", "query", "state", "external", "schedule", "with"] } ] } } },
+            "when": { "propertyNames": { "anyOf": [ { "$ref": "#/$defs/extensionKey" }, { "enum": ["event", "command", "query", "state", "external", "schedule", "with"] } ] } },
+            "then": {
+              "if": { "type": "array" },
+              "then": { "items": { "propertyNames": { "anyOf": [ { "$ref": "#/$defs/extensionKey" }, { "enum": ["event", "command", "query", "state", "external", "schedule", "with"] } ] } } },
+              "else": { "anyOf": [
+                { "propertyNames": { "anyOf": [ { "$ref": "#/$defs/extensionKey" }, { "enum": ["error", "message"] } ] } },
+                { "propertyNames": { "anyOf": [ { "$ref": "#/$defs/extensionKey" }, { "enum": ["nothing"] } ] } },
+                { "propertyNames": { "anyOf": [ { "$ref": "#/$defs/extensionKey" }, { "enum": ["readModel", "rows"] } ] } },
+                {
+                  "$comment": "Not exactly one form key: the base oneOf already reports it, so this check stays quiet rather than report it twice.",
+                  "not": { "oneOf": [ { "required": ["error"] }, { "required": ["nothing"] }, { "required": ["readModel"] } ] }
+                }
+              ] }
+            }
+          }
+        } }
+      }
+    },
     "scenario": {
       "type": "object",
-      "additionalProperties": false,
       "required": ["name", "then"],
       "properties": {
         "name": { "type": "string", "minLength": 1, "description": "Unique within the slice." },
@@ -124,18 +171,18 @@
           "oneOf": [
             { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/scenarioStep" } },
             {
-              "type": "object", "additionalProperties": false, "required": ["error"],
+              "type": "object", "required": ["error"],
               "properties": {
                 "error": { "type": "string", "minLength": 1, "description": "The exception or domain-error type's simple name, as thrown." },
                 "message": { "type": "string", "description": "An example message." }
               }
             },
             {
-              "type": "object", "additionalProperties": false, "required": ["nothing"],
+              "type": "object", "required": ["nothing"],
               "properties": { "nothing": { "const": true } }
             },
             {
-              "type": "object", "additionalProperties": false, "required": ["readModel", "rows"],
+              "type": "object", "required": ["readModel", "rows"],
               "properties": {
                 "readModel": { "type": "string", "minLength": 1 },
                 "rows": { "type": "array", "items": { "$ref": "#/$defs/scalarMap" }, "description": "Rows of the read model; `rows: []` is a valid empty outcome." }
@@ -149,7 +196,6 @@
     },
     "scenarioStep": {
       "type": "object",
-      "additionalProperties": false,
       "description": "Exactly one message key, plus optional example values in `with`.",
       "oneOf": [
         { "required": ["event"] },
@@ -194,7 +240,6 @@
     },
     "providedSeam": {
       "type": "object",
-      "additionalProperties": false,
       "required": ["name"],
       "properties": {
         "name": { "type": "string", "description": "The interface this slice implements, declared in the BC's `types/`." },
@@ -204,7 +249,6 @@
     },
     "endpoint": {
       "type": "object",
-      "additionalProperties": false,
       "required": ["method", "path"],
       "properties": {
         "method": { "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"] },
@@ -216,7 +260,6 @@
     },
     "schedule": {
       "type": "object",
-      "additionalProperties": false,
       "anyOf": [{ "required": ["cron"] }, { "required": ["fixedDelay"] }],
       "properties": {
         "cron": { "type": "string", "description": "Cron expression, as written in the source (e.g. a Spring @Scheduled(cron = \"...\"))." },
@@ -238,9 +281,8 @@
       ]
     },
     "projection": {
-      "$comment": "additionalProperties is false here for a reason: `kind`, `handles` and `table` are the three near-synonyms an author reaches for, and each one would carry the event list under a key no reader consults — a manifest that looks maintained and reports the view as reacting to nothing. `from` is required for the same reason. `subscribesTo` is the fourth key authors reach for, and it is a DIFFERENT mistake with the same cost: it names the stream rather than the events, and its home is `aggregateTypes` — never `from`, which it would corrupt.",
+      "$comment": "Strict keys here (via knownKeys) for a reason: `kind`, `handles` and `table` are the three near-synonyms an author reaches for, and each one would carry the event list under a key no reader consults — a manifest that looks maintained and reports the view as reacting to nothing. `from` is required for the same reason. `subscribesTo` is the fourth key authors reach for, and it is a DIFFERENT mistake with the same cost: it names the stream rather than the events, and its home is `aggregateTypes` — never `from`, which it would corrupt.",
       "type": "object",
-      "additionalProperties": false,
       "required": ["name", "from"],
       "properties": {
         "name": { "type": "string" },

@@ -185,12 +185,17 @@ def _scalar_map(raw, where, problems):
     return out
 
 
+def _ext(key) -> bool:
+    """An `x-` key is an extension key: valid on every object a manifest holds, and read by nothing."""
+    return str(key).startswith("x-")
+
+
 def _step(raw, where, problems):
     if not isinstance(raw, dict):
         problems.append(f"{where} is not a mapping")
         return None
     keys = [k for k in raw if k in STEP_TYPES]
-    extra = sorted(str(k) for k in raw if k not in STEP_TYPES and k != "with")
+    extra = sorted(str(k) for k in raw if k not in STEP_TYPES and k != "with" and not _ext(k))
     if extra:
         problems.append(f"{where} has unknown key(s) {', '.join(extra)}")
     if not keys:
@@ -219,14 +224,14 @@ def _then(raw, problems):
         return {"kind": "steps", "steps": steps}
     if isinstance(raw, dict):
         if "error" in raw:
-            extra = sorted(str(k) for k in raw if k not in ("error", "message"))
+            extra = sorted(str(k) for k in raw if k not in ("error", "message") and not _ext(k))
             if extra:
                 problems.append(f"`then` error has unknown key(s) {', '.join(extra)}")
             message = raw.get("message")
             return {"kind": "error", "error": str(raw["error"]),
                     "message": message if isinstance(message, str) else None}
         if "nothing" in raw:
-            if raw["nothing"] is not True or len(raw) > 1:
+            if raw["nothing"] is not True or any(k != "nothing" and not _ext(k) for k in raw):
                 problems.append("`then` is not exactly { nothing: true }")
             return {"kind": "nothing"}
         if "readModel" in raw:
@@ -259,7 +264,7 @@ def normalise_scenarios(raw):
         if name in names:
             mine.append("repeats the name of an earlier scenario")
         names.add(name)
-        extra = sorted(str(k) for k in sc if k not in ("name", "given", "when", "then", "test", "note"))
+        extra = sorted(str(k) for k in sc if k not in ("name", "given", "when", "then", "test", "note") and not _ext(k))
         if extra:
             mine.append(f"has unknown key(s) {', '.join(extra)}")
         given_raw = sc.get("given")

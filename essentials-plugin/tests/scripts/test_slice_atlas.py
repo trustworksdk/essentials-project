@@ -327,6 +327,18 @@ class Scenarios(unittest.TestCase):
                      "unknown key(s) extra", "#4: is not a mapping"):
             self.assertTrue(any(want in t for t in texts), (want, texts))
 
+    def test_extension_keys_are_not_problems(self):
+        # an x- key is valid on every mapping a manifest holds and read by nothing (manifest-guide.md §3)
+        raw = [
+            {"name": "a", "x-ticket": "T-1", "given": [{"event": "E", "x-n": 1}],
+             "when": {"command": "X", "x-n": 2}, "then": {"nothing": True, "x-why": "idem"}},
+            {"name": "b", "when": {"command": "X"}, "then": {"error": "Boom", "x-code": 409}},
+            {"name": "c", "when": {"command": "X"}, "then": [{"event": "E", "x-n": 3}]},
+        ]
+        out, problems = slice_atlas.normalise_scenarios(raw)
+        self.assertEqual(problems, [])
+        self.assertEqual([sc["then"]["kind"] for sc in out], ["nothing", "error", "steps"])
+
     def test_malformed_scenarios_become_warn_issues(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -13,7 +13,7 @@ Every slice directory carries a `slice.yaml` and a `CLAUDE.md`. They are generat
 
 | Field | Notes |
 |---|---|
-| `schemaVersion` | `"1.4"` — readers accept any `1.x`, so an older stamp stays valid and needs no restamp. A manifest carrying `flow` or `scenarios` is stamped `"1.4"` (§3) |
+| `schemaVersion` | `"1.4"` — readers accept any `1.x`, so an older stamp stays valid and needs no restamp. A manifest carrying `flow` or `scenarios` is stamped `"1.4"` (§3). A newer `1.x` than the project's schema copy is accepted, its unknown keys reported as notes (§3) |
 | `slice` | `<bc>.<slice-id>` — **snake_case on the JVM** (`orders.place_order`); hyphens are illegal in package dirs |
 | `kind` | `command` \| `view` \| `automation` \| `translation` |
 | `bc` | owning bounded context |
@@ -377,11 +377,22 @@ a command slice always writes `publishes` and a view slice always writes `projec
   existing tests — each scenario names the test it came from in `test` — and writes only those a person
   accepts; a slice with no mapped test gets a suggestion, not a draft. A slice without scenarios is not
   a defect — the map shows its invariants and test kinds in their place.
-- **A generator writes `flow` and `scenarios` only where the project's schema copy knows them.** The
-  schema rejects an unknown root key, and every project with the lint gate carries its **own copy**
-  (`scripts/slice-yaml.schema.json`, installed by `/essentials:init` Step 9 or `/essentials:upgrade`
-  Group A2). A copy older than 1.4 rejects a manifest carrying either field at commit time. So,
-  before writing either field:
+- **A key starting with `x-` is an extension key.** It is valid on the root and on every mapping a
+  manifest holds — an endpoint, a projection, a scenario, a step — at any `schemaVersion`
+  (`x-team-oncall: payments`, `x-ticket: PAY-112`). No toolchain reads one, so it is documentation, not
+  a contract: reach for a real field first and `notes:` second.
+- **Any other unknown key is checked against the manifest's stamp.** Each schema copy declares the
+  version it implements (`x-manifestVersion`). A manifest stamped at or below it is held to that schema
+  exactly, so an unknown key is a typo and fails gate 1(b) — that is what catches `subscribesTo` for
+  `aggregateTypes`. A manifest stamped with a newer `1.x` was written for a schema the copy has not
+  seen: an unknown key passes, `slice-lint` prints it as a note, and every key the copy does know is
+  still checked. A stamp that is not `1.x` gets no tolerance. Values are not keys: a known key with a
+  value its enum does not list fails at any stamp.
+- **Stamp what you wrote for.** A generator stamps the schema version whose fields it wrote, and writes
+  `flow` and `scenarios` only with a stamp of `"1.4"` or later. A project copy older than 1.4 has no
+  version gate and rejects any unknown key whatever the stamp, and every project with the lint gate
+  carries its **own copy** (`scripts/slice-yaml.schema.json`, installed by `/essentials:init` Step 9 or
+  `/essentials:upgrade` Group A2). So, before writing either field:
 
   1. Check the project's `scripts/slice-yaml.schema.json` — or, in a project without a lint gate,
      the plugin's `references/slice/slice-yaml.schema.json` — for a `scenarios` property.
@@ -392,11 +403,6 @@ a command slice always writes `publishes` and a view slice always writes `projec
 
   `/essentials:slice-enrich` follows these steps: it checks the schema copy before proposing and its
   script stamps 1.4 when it writes either field.
-- **An unknown root key is rejected, and `x-` is the escape hatch.** The schema is strict at the root
-  so that drift is visible rather than silent. Where a project genuinely needs to carry something no
-  field fits, prefix the key with `x-` (`x-team-oncall: payments`) and it validates. Reach for a real
-  field first and `notes:` second — no toolchain reads an `x-` key, so one is
-  documentation, not a contract.
 
 ### Validating a manifest
 
@@ -413,7 +419,9 @@ that every scenario names the slice's own messages (gate 1(d), the kind table in
 clean, 1 findings, 2 could not run — including a run without `jsonschema` that found nothing, because
 a parse-only pass is not a pass (`--allow-skip-schema` accepts one, with its banner; never in CI).
 Findings win the exit code over a skipped validation, so read `schemaValidated` in the JSON. The
-script emits Blocking and Should-fix only, and both exit 1. `--require-schema` is accepted and does
+script emits Blocking and Should-fix only, and both exit 1. An unknown key on a manifest stamped newer
+than the schema copy is a **note** (§3): printed as `Note`, listed under `notes` in the JSON, and never
+counted in the exit code or a baseline. `--require-schema` is accepted and does
 nothing: failing on a skipped validation is the default. With `--json`, each finding carries its
 gate label and its `ESS-G<gate><clause>` id. `--baseline` takes a previous `--json` output and drops
 every finding it holds (matched on id, file and message, relative to each run's root), which is how
