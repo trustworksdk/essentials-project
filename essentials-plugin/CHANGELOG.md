@@ -43,10 +43,12 @@ targets, with a `-N` suffix for plugin-only releases.
   schedule, seam, scenario, step, `then` — at any `schemaVersion`; before, nested `x-` keys failed. The
   schema declares the version it implements (`x-manifestVersion`). Any other unknown key fails gate 1(b)
   on a manifest stamped at or below it, as before, and is tolerated on one stamped with a newer `1.x`:
-  slice-lint prints it as a note (`notes` in `--json`) and exits 0. The gate is in the schema itself, so
-  any JSON Schema 2020-12 validator agrees. Unknown-key findings name the key (`endpoints/0: unknown key
-  'rateLimit'`), and the unknown-root-key hint, which never fired, now does. The Slice Atlas no longer
-  annotates `x-` keys in scenarios as unknown.
+  slice-lint prints it as a note (`notes` in `--json`) and exits 0. The projection near-synonyms
+  `subscribesTo`, `handles`, `table` and `kind` are the exception and fail at every stamp, so a stamp
+  written ahead of the project's schema copy cannot switch that guard off. The gate is in the schema
+  itself, so any JSON Schema 2020-12 validator agrees. Unknown-key findings name the key (`endpoints/0:
+  unknown key 'rateLimit'`), and the unknown-root-key hint, which never fired, now does. The Slice Atlas
+  no longer annotates `x-` keys in scenarios as unknown.
 - **Schema 1.4: optional `requirements`** — the requirement ids a slice implements, as the project's
   requirement source names them (`requirements: [REQ-ORDERS-12]`). The schema checks the shape only (a
   non-empty list of distinct, non-empty strings); a toolchain that keeps a requirement trace checks the ids.

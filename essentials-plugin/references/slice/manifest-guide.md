@@ -399,8 +399,10 @@ a command slice always writes `publishes` and a view slice always writes `projec
   exactly, so an unknown key is a typo and fails gate 1(b) — that is what catches `subscribesTo` for
   `aggregateTypes`. A manifest stamped with a newer `1.x` was written for a schema the copy has not
   seen: an unknown key passes, `slice-lint` prints it as a note, and every key the copy does know is
-  still checked. A stamp that is not `1.x` gets no tolerance. Values are not keys: a known key with a
-  value its enum does not list fails at any stamp.
+  still checked. The exception is the projection near-synonyms — `subscribesTo`, `handles`, `table`
+  and `kind` on a projection — which fail gate 1(b) at every stamp, so a stamp written ahead of the
+  copy cannot switch that guard off; no `1.x` will ever define them. A stamp that is not `1.x` gets no
+  tolerance. Values are not keys: a known key with a value its enum does not list fails at any stamp.
 - **Stamp what you wrote for.** A generator stamps the schema version whose fields it wrote, and writes
   `flow`, `scenarios` and `requirements` only with a stamp of `"1.4"` or later. A project copy older than 1.4 has no
   version gate and rejects any unknown key whatever the stamp, and every project with the lint gate
@@ -436,15 +438,16 @@ a parse-only pass is not a pass (`--allow-skip-schema` accepts one, with its ban
 Findings win the exit code over a skipped validation, so read `schemaValidated` in the JSON. The
 script emits Blocking and Should-fix only, and both exit 1. An unknown key on a manifest stamped newer
 than the schema copy is a **note** (§3): printed as `Note`, listed under `notes` in the JSON, and never
-counted in the exit code or a baseline. `--require-schema` is accepted and does
-nothing: failing on a skipped validation is the default. With `--json`, each finding carries its
-gate label and its `ESS-G<gate><clause>` id. `--baseline` takes a previous `--json` output and drops
-every finding it holds (matched on id, file and message, relative to each run's root), which is how
-`/essentials:slice-check` measures what refreshing a project's installed copy would add, and how a
-project can ratchet: commit a baseline, pass it in CI, and only new findings fail the build. `/essentials:init` offers to install a project copy (the script plus the
-schema beside it, in `scripts/`) and a pre-commit hook, which every clone activates once with the
-command in the project README. Wire one of them up, because nothing in a Maven
-or Gradle build reads `slice.yaml` and an unparseable manifest is otherwise invisible rather than loud.
+counted in the exit code or a baseline. The projection near-synonyms are the exception: they fail at
+every stamp. `--require-schema` is accepted and does nothing: failing on a skipped validation is the
+default. With `--json`, each finding carries its gate label and its `ESS-G<gate><clause>` id.
+`--baseline` takes a previous `--json` output and drops every finding it holds (matched on id, file and
+message, relative to each run's root), which is how `/essentials:slice-check` measures what refreshing
+a project's installed copy would add, and how a project can ratchet: commit a baseline, pass it in CI,
+and only new findings fail the build. `/essentials:init` offers to install a project copy (the script
+plus the schema beside it, in `scripts/`) and a pre-commit hook, which every clone activates once with
+the command in the project README. Wire one of them up, because nothing in a Maven or Gradle build
+reads `slice.yaml` and an unparseable manifest is otherwise invisible rather than loud.
 
 Whether the manifests still describe the *code* is a separate check, over the Java and Kotlin sources:
 `uv run --script <plugin>/scripts/slice-source.py . --check` (gates 6, 11(b) and 14's signal rows,

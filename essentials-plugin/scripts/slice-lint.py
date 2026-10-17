@@ -258,8 +258,10 @@ def validate_schema(parsed, schema, findings, notes):
 
     A key the schema does not define is rejected on a manifest stamped at or below the copy's
     `x-manifestVersion`, and only noted on one stamped with a newer 1.x — that manifest was written
-    for a schema this copy has not seen. `x-` keys are extension keys and pass everywhere. The gate
-    lives in the schema, so any validator agrees; this function only words it."""
+    for a schema this copy has not seen. The gate's `then` keeps the keys it lists rejected on a newer
+    stamp too (the projection near-synonyms); a copy whose gate has no `then` tolerates them as well.
+    `x-` keys are extension keys and pass everywhere. The gate lives in the schema, so any validator
+    agrees; this function only words it."""
     try:
         from jsonschema import validators
     except ImportError:
@@ -276,9 +278,16 @@ def validate_schema(parsed, schema, findings, notes):
     defined_by = f"schema {copy_version}" if copy_version else "the project's schema copy"
 
     for path, doc in parsed.items():
+        rejected = set()  # (location, key) the gate's `then` rejected — never also a note
         for error in sorted(validator.iter_errors(doc), key=lambda e: list(e.absolute_path)):
-            if gate is not None and list(error.absolute_schema_path)[:3] == ["allOf", gate, "else"]:
+            branch = list(error.absolute_schema_path)[:3]
+            if gate is not None and branch == ["allOf", gate, "else"]:
                 continue  # worded below, once per key
+            if gate is not None and branch == ["allOf", gate, "then"]:
+                for location, key in unknown_keys(error, schema):
+                    rejected.add((tuple(location), key))
+                    findings.append(unknown_key_finding(path, location, key, error))
+                continue
             location = list(error.absolute_path)
             where = "/".join(str(p) for p in location) or "(root)"
             findings.append(
@@ -295,25 +304,25 @@ def validate_schema(parsed, schema, findings, notes):
         tolerated = newer.is_valid(doc)
         for error in known.iter_errors(doc):
             for location, key in unknown_keys(error, schema):
-                where = "/".join(str(p) for p in location) or "(root)"
-                what = f"unknown key '{key}'" if key is not None else error.message
+                if (tuple(location), key) in rejected:
+                    continue
                 if tolerated:
+                    where = "/".join(str(p) for p in location) or "(root)"
+                    what = f"unknown key '{key}'" if key is not None else error.message
                     notes.append(
                         f"{path}: {where}: {what} — not defined by {defined_by}; the manifest "
                         f"is stamped {doc.get('schemaVersion')}, so it is accepted unchecked. "
                         "/essentials:upgrade refreshes the schema copy"
                     )
                 else:
-                    findings.append(
-                        Finding(
-                            "Should-fix",
-                            "1(b) schema",
-                            path,
-                            f"{where}: {what}",
-                            hint=unknown_key_hint(location, key),
-                        )
-                    )
+                    findings.append(unknown_key_finding(path, location, key, error))
     return True
+
+
+def unknown_key_finding(path, location, key, error):
+    where = "/".join(str(p) for p in location) or "(root)"
+    what = f"unknown key '{key}'" if key is not None else error.message
+    return Finding("Should-fix", "1(b) schema", path, f"{where}: {what}", hint=unknown_key_hint(location, key))
 
 
 def unknown_key_hint(location, key):

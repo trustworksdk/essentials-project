@@ -680,6 +680,42 @@ class UnknownKeys(unittest.TestCase):
                                     for n in doc["notes"]))
                 self.assertTrue(any("scenarios/0/then: unknown key 'why'" in n for n in doc["notes"]))
 
+    def test_projection_near_synonyms_are_findings_at_every_stamp(self):
+        # the projection's $comment: these keys make a view look maintained while it reacts to nothing,
+        # so a stamp ahead of the copy must not turn them into notes
+        for stamp in ("1.4", "1.5", "1.12"):
+            for key in ("subscribesTo", "handles", "table", "kind"):
+                with self.subTest(stamp=stamp, key=key), tempfile.TemporaryDirectory() as tmp:
+                    code, doc = lint(manifest(tmp, stamp, projections=[{"name": "P", "from": ["A"],
+                                                                         key: ["Orders"]}]))
+                    self.assertEqual(code, 1)
+                    self.assertEqual([f["message"].split(" — ")[0] for f in doc["findings"]],
+                                     [f"projections/0: unknown key '{key}'"])
+                    self.assertEqual(doc["findings"][0]["gate"], "1(b) schema")
+                    self.assertEqual(doc["notes"], [])
+                    hint = doc["findings"][0]["hint"]
+                    self.assertIn("`aggregateTypes`" if key == "subscribesTo" else "instead of `from`", hint)
+
+    def test_other_unknown_projection_key_on_a_newer_stamp_is_still_a_note(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            code, doc = lint(manifest(tmp, "1.5", projections=[{"name": "P", "from": ["A"], "retention": "P30D"}]))
+        self.assertEqual((code, doc["findings"]), (0, []))
+        self.assertEqual(len(doc["notes"]), 1)
+        self.assertIn("projections/0: unknown key 'retention' — not defined by schema 1.4", doc["notes"][0])
+
+    def test_copy_without_the_near_synonym_clause_keeps_them_as_notes(self):
+        # an older project copy: the gate has no `then`, so a newer stamp tolerates every unknown key
+        with tempfile.TemporaryDirectory() as tmp:
+            copy = json.loads(SCHEMA.read_text())
+            gate = [c for c in copy["allOf"] if (c.get("else") or {}).get("$ref") == "#/$defs/knownKeys"][0]
+            gate.pop("then", None)
+            copy_path = Path(tmp) / "copy.json"
+            copy_path.write_text(json.dumps(copy))
+            code, doc = lint(manifest(tmp, "1.5", projections=[{"name": "P", "from": ["A"], "subscribesTo": ["O"]}]),
+                             "--schema", str(copy_path))
+        self.assertEqual((code, doc["findings"]), (0, []))
+        self.assertIn("projections/0: unknown key 'subscribesTo'", doc["notes"][0])
+
     def test_note_names_the_copy_when_it_carries_no_version(self):
         # a hand-edited copy that kept the gate but lost x-manifestVersion
         with tempfile.TemporaryDirectory() as tmp:

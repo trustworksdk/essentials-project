@@ -868,7 +868,9 @@ entries are in [`essentials-plugin/CHANGELOG.md`](../essentials-plugin/CHANGELOG
   endpoint, a projection, a schedule, a seam or a scenario failed `slice-lint`. It is now valid on every
   mapping, at any `schemaVersion`. Any other key the project's schema copy does not define still fails on a
   manifest stamped at or below that copy's version (typos stay loud), but on one stamped with a newer `1.x`
-  it is printed as a note and the lint exits 0. Unknown-key findings now read `endpoints/0: unknown key
+  it is printed as a note and the lint exits 0. The projection near-synonyms `subscribesTo`, `handles`,
+  `table` and `kind` are the exception and fail at every stamp, so a stamp written ahead of the project's
+  schema copy cannot switch that guard off. Unknown-key findings now read `endpoints/0: unknown key
   'rateLimit'`, and `slice-lint --json` gains a `notes` list.
 - **`slice.yaml` gains an optional `requirements` field** (schema 1.4): the requirement ids a slice implements,
   written as the project's requirement source names them (`requirements: [REQ-ORDERS-12]`). `slice-lint`
