@@ -214,6 +214,60 @@ class ShardOwnedLifecycleIT {
     }
 
     /**
+     * A {@code start()} called on another thread while {@code stop()} is still draining waits for that stop, and the run it
+     * then starts is whole. The stop clears {@code running} at its top and drains for up to {@code shedGrace} before it drops
+     * its owners. A start in that window used to set {@code running} again and list its own owners, and the stop's final
+     * clears then dropped them from the queue while they were on the pumps and serving: the queue reported holding
+     * nothing, and its next stop released and reported nothing, leaving every lease row naming the stopped instance. A
+     * handler held past the grace keeps the stop in its drain while the start is called.
+     */
+    @Test
+    void a_start_called_while_a_stop_is_still_draining_waits_for_it_and_its_run_is_intact() throws Exception {
+        var entered    = new CountDownLatch(1);
+        var release    = new CountDownLatch(1);
+        var settings   = settingsWithShedGrace(Duration.ofSeconds(2));
+        var instanceId = "start-mid-stop";
+        var reported   = new RecordedOwnership();
+        var metrics    = new ShardOwnerMetrics(reported);
+        try (var runtime = new ShardRuntime(dataSource, settings)) {
+            var queue = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, instanceId, metrics).useRuntime(runtime);
+            try {
+                queue.startConsuming((messageId, payload, payloadType) -> {
+                    entered.countDown();
+                    awaitQuietly(release);
+                }, settings, SHARD_COUNT);
+                queue.enqueue(List.of("slow".getBytes(StandardCharsets.UTF_8)), 1);
+                assertThat(entered.await(20, TimeUnit.SECONDS)).isTrue();
+
+                var stopping = CompletableFuture.runAsync(queue::stop);
+                Awaitility.await().atMost(Duration.ofSeconds(5)).until(() -> !queue.isStarted());
+                var starting = CompletableFuture.runAsync(queue::start);
+                stopping.get(10, TimeUnit.SECONDS);
+                release.countDown();
+                starting.get(10, TimeUnit.SECONDS);
+
+                assertThat(queue.isStarted()).isTrue();
+                assertThat(queue.shardsHeld()).as("the new run's owners are this queue's").isEqualTo(SHARD_COUNT);
+                assertThat(unorderedShardsOwnedBy(instanceId)).as("the new run holds every shard's row").isEqualTo(SHARD_COUNT);
+                // The stopped run's owners leave the pumps on their next pass; the new run's stay, one per shard.
+                Awaitility.await().atMost(Duration.ofSeconds(5))
+                          .untilAsserted(() -> assertThat(runtime.unitsServed()).as("one owner per shard on the pumps").isEqualTo(SHARD_COUNT));
+
+                queue.stop();
+
+                assertThat(unorderedShardsOwnedBy(instanceId)).as("the next stop releases the new run's shards").isZero();
+                reported.assertEveryReleaseFollowsItsAcquisition();
+                assertThat(metrics.shardsReleased.sum()).as("every acquisition of both runs is reported released")
+                                                        .isEqualTo(metrics.shardsAcquired.sum())
+                                                        .isEqualTo(2L * SHARD_COUNT);
+            } finally {
+                release.countDown();
+                queue.stop();
+            }
+        }
+    }
+
+    /**
      * An ordered handler that outlasts the grace. Releasing its unit would let a successor start the
      * same key while it still runs here, so the unit is kept - and the instance stays registered - until
      * this instance's liveness lapses.

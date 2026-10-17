@@ -35,7 +35,7 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
 
-import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.*;
 
 /**
  * A pump that dies on a critical error hands its shards back to the cluster, through its queues' heartbeat.
@@ -515,7 +515,7 @@ class ShardOwnedDeadPumpHandBackIT {
                 queue.startConsuming((messageId, payload, payloadType) -> { }, settings, SHARD_COUNT);
                 var doomed = runtime.pumpFor(QUEUE_ID, "unordered", 0);
                 kill(doomed);
-                var untrusted = new EndingThrowsOnceOwner(SHARD_COUNT);
+                var untrusted = new EndingThrowsOwner(SHARD_COUNT, 1);
                 doomed.add(untrusted);
                 assertThat(runtime.onDeadPump(untrusted)).as("premise: counted on the dead pump, awaiting hand-back").isTrue();
                 assertThat(untrusted.leaseHeld()).as("premise: ending it threw, so it is still HELD").isTrue();
@@ -526,6 +526,51 @@ class ShardOwnedDeadPumpHandBackIT {
                 assertThat(runtime.isStarted()).as("premise: the runtime outlives the queue").isTrue();
                 assertThat(untrusted.flushesOnStop.get()).as("no acknowledgement flushed for an owner on a dead pump").isZero();
                 assertThat(queue.metrics().shardsOnDeadPumps.get()).as("the stopped queue counts nothing on the dead pump").isZero();
+            } finally {
+                queue.stop();
+            }
+        }
+    }
+
+    /**
+     * A queue stopped while ending one of its owners throws every time still ends and releases every other owner, and
+     * deregisters the instance. A dead pump's owner can be left {@code HELD} because ending it threw as the pump died
+     * ({@code ShardPump.endOnDeadPump}), and ending it again on stop can throw again. Unguarded, that throw escaped stop()
+     * and skipped everything after it: the owners after it in the list went on being served by the shared runtime, no
+     * lease was released and the instance stayed registered. The stand-in is listed first, so it is the first owner the
+     * stop ends; as in the test above, its unit is outside the queue's shard range.
+     */
+    @Test
+    void a_queue_stopped_while_ending_a_dead_pumps_owner_keeps_throwing_still_ends_and_releases_the_others_and_deregisters() throws Exception {
+        var settings = settings(2, ShardOwnerSettings.defaults().shedGrace(), Duration.ofSeconds(60));
+        try (var runtime = new ShardRuntime(dataSource, settings)) {
+            var queue = queue(runtime, "dead-pump-stop-throwing");
+            try {
+                queue.startConsuming((messageId, payload, payloadType) -> { }, settings, SHARD_COUNT);
+                var others = List.copyOf(ownersOf(queue));
+                assertThat(others).as("premise: one instance holds every shard").hasSize(SHARD_COUNT);
+                var doomed = runtime.pumpFor(QUEUE_ID, "unordered", 0);
+                kill(doomed);
+                var throwing = new EndingThrowsOwner(SHARD_COUNT, Integer.MAX_VALUE);
+                doomed.add(throwing);
+                assertThat(runtime.onDeadPump(throwing)).as("premise: counted on the dead pump, awaiting hand-back").isTrue();
+                assertThat(throwing.leaseHeld()).as("premise: ending it threw, so it is still HELD").isTrue();
+                ownersOf(queue).addFirst(throwing);
+
+                assertThatCode(queue::stop).as("stop() returns although ending one owner throws").doesNotThrowAnyException();
+
+                assertThat(others).as("every other owner ended, and its lease row released")
+                                  .allMatch(owner -> owner.leaseRow() == LeasedOwner.LeaseRow.RELEASED);
+                assertThat(throwing.leaseRow()).as("the throwing owner's row is released with the others, which ends it")
+                                               .isEqualTo(LeasedOwner.LeaseRow.RELEASED);
+                assertThat(unitsOwnedBy("unordered", "dead-pump-stop-throwing")).as("every lease released").isZero();
+                assertThat(membershipRows("dead-pump-stop-throwing")).as("the instance deregistered").isZero();
+                assertThat(queue.metrics().shardsOnDeadPumps.get()).as("the stopped queue counts nothing on the dead pump").isZero();
+                Awaitility.await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
+                    for (var owner : others) {
+                        assertThat(pumpsHolding(runtime, owner)).as("shard %d's owner is on no pump", owner.shard()).isEmpty();
+                    }
+                });
             } finally {
                 queue.stop();
             }
@@ -1336,18 +1381,20 @@ class ShardOwnedDeadPumpHandBackIT {
     }
 
     /**
-     * An unordered owner of {@link #QUEUE_ID} whose first {@code endKeepingLeaseRow} throws, leaving it {@code HELD}, as a
-     * throw ending an owner on a dying pump leaves it; later calls end it. Counts its {@code flushOnStop} calls.
+     * An unordered owner of {@link #QUEUE_ID} whose first {@code throwsLeft} calls of {@code endKeepingLeaseRow} throw,
+     * leaving it {@code HELD}, as a throw ending an owner on a dying pump leaves it; later calls end it. Counts its
+     * {@code flushOnStop} calls.
      */
-    private static final class EndingThrowsOnceOwner implements LeasedOwner {
+    private static final class EndingThrowsOwner implements LeasedOwner {
         private final    ShardOwnerMetrics metrics       = new ShardOwnerMetrics();
         private final    int               shard;
-        private final    AtomicBoolean     endThrown     = new AtomicBoolean();
+        private final    AtomicInteger     throwsLeft;
         private final    AtomicInteger     flushesOnStop = new AtomicInteger();
         private final    LeaseRowState     leaseRow      = new LeaseRowState();
 
-        EndingThrowsOnceOwner(int shard) {
+        EndingThrowsOwner(int shard, int throwsLeft) {
             this.shard = shard;
+            this.throwsLeft = new AtomicInteger(throwsLeft);
         }
 
         @Override
@@ -1406,8 +1453,8 @@ class ShardOwnedDeadPumpHandBackIT {
 
         @Override
         public void endKeepingLeaseRow() {
-            if (endThrown.compareAndSet(false, true)) {
-                throw new IllegalStateException("simulated failure ending the owner on its dying pump");
+            if (throwsLeft.getAndUpdate(left -> Math.max(0, left - 1)) > 0) {
+                throw new IllegalStateException("simulated failure ending the owner");
             }
             leaseRow.advanceTo(LeaseRow.ENDED_ROW_HELD);
         }
