@@ -40,8 +40,9 @@ if [ "$rc" -eq 0 ] && [ -n "$out" ] && command -v jq >/dev/null 2>&1; then
     */.claude/worktrees/*)
       rewritten="$(printf '%s' "$out" | jq -r '.hookSpecificOutput.updatedInput.command // empty' 2>/dev/null)"
       # `rtk git …` anywhere in the command: at the start, after `&&`/`;`/`|`/`(`, or behind
-      # `rtk proxy`. Dropping the whole rewrite keeps the command exactly as the model wrote it.
-      if [[ "$rewritten" =~ (^|[^[:alnum:]_./-])rtk([[:space:]]+proxy)?[[:space:]]+git([[:space:]]|$) ]]; then
+      # `rtk bypass` (1.0's name) or `rtk proxy` (its alias). Dropping the whole rewrite keeps
+      # the command exactly as the model wrote it.
+      if [[ "$rewritten" =~ (^|[^[:alnum:]_./-])rtk([[:space:]]+(bypass|proxy))?[[:space:]]+git([[:space:]]|$) ]]; then
         exit 0
       fi
       ;;

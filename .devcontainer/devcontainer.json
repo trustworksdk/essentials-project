@@ -37,6 +37,15 @@
             // chrome-headless-shell. The version is PLAYWRIGHT_VERSION in the Dockerfile.
             "INSTALL_PLAYWRIGHT": "true",
 
+            // Static analysers for the tw-code-review plugin: gitleaks (secret
+            // scan), spotbugs + FindSecBugs, detekt and PMD (JVM) baked into
+            // the image; markdownlint (from the lockfile in
+            // .devcontainer/tools/markdownlint/), semgrep with an offline copy of
+            // its rules, and PyYAML installed by post-create.sh. Needs
+            // INSTALL_JAVA=true. Pins and why gitleaks is built from source: the
+            // Dockerfile's ARG block.
+            "INSTALL_REVIEW_TOOLS": "true",
+
             // Git identity is in containerEnv (not here) to avoid leaking PII into image layers.
 
             // Version configuration
@@ -194,6 +203,15 @@
         // mcp_server.py:365). Upstream still flags it, so treat as experimental.
         "HEADROOM_MCP_READ": "on",
         "RTK_TELEMETRY_DISABLED": "1",
+        // semgrep (review tools) makes no outbound call with these two set:
+        // usage metrics to metrics.semgrep.dev are never sent, and the per-scan
+        // version check against semgrep.dev/api/check-version is skipped. Tracing
+        // (telemetry.semgrep.dev) is already off unless --trace is passed. Rules
+        // come from a local copy (post-create.sh), so no registry fetch either.
+        // `--config auto` refuses to run with metrics off — by design here.
+        // post-create.sh's semgrep wrapper sets both too, as defence in depth.
+        "SEMGREP_SEND_METRICS": "off",
+        "SEMGREP_ENABLE_VERSION_CHECK": "0",
         // Native LSP layer: enable Claude Code's built-in LSP tool (semantic
         // go-to-definition / find-references / diagnostics). Auto-on for recent
         // Claude Code (≥ 2.1.50); setting it explicitly is harmless and covers

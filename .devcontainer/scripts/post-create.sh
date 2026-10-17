@@ -393,6 +393,96 @@ if [ "${INSTALL_PLAYWRIGHT:-false}" = "true" ]; then
 fi
 
 # =============================================================================
+# markdownlint for the tw-code-review plugin (Conditional)
+# The rest of the review tools are baked into the image (Dockerfile,
+# INSTALL_REVIEW_TOOLS); this one needs Node, which the Node feature installs
+# after the image build. `npm ci` installs exactly the tree in
+# .devcontainer/tools/markdownlint/package-lock.json, integrity-checked, with no
+# install scripts. The lockfile's overrides lift js-yaml, smol-toml and katex past
+# advisories that markdownlint-cli 0.49.1's own ranges still allow
+# (GHSA-r3ph-w7gj-g6xm, GHSA-r4xh-jqrq-34v2, GHSA-238p-pmpm-9mq7); `npm audit`
+# must stay at zero when either file changes. Not added to the repository: the
+# Essentials build stays JVM-only.
+# =============================================================================
+if [ "${INSTALL_REVIEW_TOOLS:-false}" = "true" ]; then
+    echo "Setting up markdownlint..."
+    MDL_SRC="/workspace/.devcontainer/tools/markdownlint"
+    MDL_DIR="$HOME/.local/share/markdownlint-cli"
+    if rm -rf "$MDL_DIR" && mkdir -p "$MDL_DIR" \
+        && cp "$MDL_SRC/package.json" "$MDL_SRC/package-lock.json" "$MDL_DIR/" \
+        && (cd "$MDL_DIR" && npm ci --ignore-scripts --no-audit --no-fund --loglevel=error); then
+        mkdir -p "$HOME/.local/bin"
+        ln -sf "$MDL_DIR/node_modules/.bin/markdownlint" "$HOME/.local/bin/markdownlint"
+        echo "  markdownlint $("$HOME/.local/bin/markdownlint" --version)"
+    else
+        setup_problem "markdownlint install failed (npm ci in $MDL_DIR) — reviews skip the Markdown style lint"
+    fi
+fi
+
+# =============================================================================
+# semgrep, its rules, and PyYAML for the tw-code-review plugin (Conditional)
+# Python packages, so they wait for the Python feature like markdownlint waits
+# for Node. Versions are pinned in the Dockerfile (SEMGREP_VERSION,
+# PYYAML_VERSION) and reach this script through ENV.
+#
+# semgrep never phones home from this container:
+#   - metrics and the version check are off (SEMGREP_SEND_METRICS=off and
+#     SEMGREP_ENABLE_VERSION_CHECK=0 in containerEnv, and again in the wrapper
+#     below, so an edited containerEnv cannot switch them back on);
+#   - the rules are read from a local directory, never from the registry at
+#     scan time. The tw-code-review config points
+#     reviews.tools.polyglot.semgrep_config at it.
+# The rules are fetched once here, from the registry's p/java, p/kotlin and
+# p/security-audit rulesets. They are under the Semgrep Rules License v1.0:
+# internal business use only, no distribution, notices kept. That is why they
+# live under $HOME and never in the repository (which is public); each rule
+# carries its licence line in its metadata, unmodified. They refresh on every
+# container rebuild.
+#
+# PyYAML is the plugin's YAML fallback reader, used only for constructs its
+# built-in awk reader skips. It also covers yq, the plugin's other fallback, so
+# yq is not installed. PyYAML goes into the Python feature's own site-packages,
+# which vscode owns; the essentials plugin's scripts import it too.
+# =============================================================================
+if [ "${INSTALL_REVIEW_TOOLS:-false}" = "true" ]; then
+    echo "Setting up semgrep, its rules and PyYAML..."
+    export PATH="$HOME/.local/bin:$PATH"
+    if command -v uv &> /dev/null \
+        && uv tool install --force "semgrep==${SEMGREP_VERSION:?SEMGREP_VERSION not set — Dockerfile ENV}" 2>&1; then
+        # Replace uv's symlink with a wrapper that forces both switches off.
+        SG_BIN="$(uv tool dir)/semgrep/bin/semgrep"
+        rm -f "$HOME/.local/bin/semgrep"
+        printf '#!/bin/sh\n# Written by post-create.sh: semgrep with metrics and the version check forced off.\nexport SEMGREP_SEND_METRICS=off SEMGREP_ENABLE_VERSION_CHECK=0\nexec "%s" "$@"\n' "$SG_BIN" \
+            > "$HOME/.local/bin/semgrep"
+        chmod 0755 "$HOME/.local/bin/semgrep"
+        echo "  semgrep $(semgrep --version)"
+    else
+        setup_problem "semgrep install failed (uv tool install semgrep==${SEMGREP_VERSION}) — reviews skip the semgrep security rules"
+    fi
+    SG_RULES="$HOME/.local/share/semgrep-rules"
+    SG_TMP="$(mktemp -d)"
+    _sg_ok=true
+    for _rs in java kotlin security-audit; do
+        if ! curl -fsSL "https://semgrep.dev/c/p/${_rs}" -o "$SG_TMP/p_${_rs}.yml" \
+            || ! head -n1 "$SG_TMP/p_${_rs}.yml" | grep -q '^rules:'; then
+            _sg_ok=false
+        fi
+    done
+    if [ "$_sg_ok" = true ]; then
+        rm -rf "$SG_RULES" && mkdir -p "$(dirname "$SG_RULES")" && mv "$SG_TMP" "$SG_RULES"
+        echo "  semgrep rules: $(for _f in "$SG_RULES"/*.yml; do printf '%s=%s ' "$(basename "$_f" .yml)" "$(grep -c '^- id:' "$_f")"; done)"
+    else
+        rm -rf "$SG_TMP"
+        setup_problem "semgrep rules download from semgrep.dev failed — semgrep has no rules until the next rebuild"
+    fi
+    if python3 -m pip install --quiet --disable-pip-version-check "pyyaml==${PYYAML_VERSION:?PYYAML_VERSION not set — Dockerfile ENV}" 2>&1; then
+        echo "  PyYAML $(python3 -c 'import yaml; print(yaml.__version__)')"
+    else
+        setup_problem "PyYAML install failed (pip install pyyaml==${PYYAML_VERSION}) — YAML outside the plugin's built-in subset is read only partly"
+    fi
+fi
+
+# =============================================================================
 # Repository git hooks — always on, not an optional tool
 # .githooks/pre-commit keeps essentials-plugin/references/llm/ in step with LLM/.
 # The installer writes a small wrapper into .git/hooks rather than setting
@@ -532,7 +622,7 @@ fi
 
 # =============================================================================
 # rtk — Rust Token Killer (Conditional, part of the local-first stack)
-# https://github.com/rtk-ai/rtk (Apache-2.0). Transparent CLI-output compression:
+# https://github.com/rtk-ai/rtk (rtk-oss edition, Apache-2.0). Transparent CLI-output compression:
 # it rewrites Claude Code's Bash commands (e.g. `cargo test` → `rtk cargo test`)
 # via a PreToolUse hook, shrinking command output 60-90% before it hits context.
 # The `rtk` binary is installed at build time (see Dockerfile). The hook is the
@@ -599,8 +689,9 @@ if [ "$rc" -eq 0 ] && [ -n "$out" ] && command -v jq >/dev/null 2>&1; then
     */.claude/worktrees/*)
       rewritten="$(printf '%s' "$out" | jq -r '.hookSpecificOutput.updatedInput.command // empty' 2>/dev/null)"
       # `rtk git …` anywhere in the command: at the start, after `&&`/`;`/`|`/`(`, or behind
-      # `rtk proxy`. Dropping the whole rewrite keeps the command exactly as the model wrote it.
-      if [[ "$rewritten" =~ (^|[^[:alnum:]_./-])rtk([[:space:]]+proxy)?[[:space:]]+git([[:space:]]|$) ]]; then
+      # `rtk bypass` (1.0's name) or `rtk proxy` (its alias). Dropping the whole rewrite keeps
+      # the command exactly as the model wrote it.
+      if [[ "$rewritten" =~ (^|[^[:alnum:]_./-])rtk([[:space:]]+(bypass|proxy))?[[:space:]]+git([[:space:]]|$) ]]; then
         exit 0
       fi
       ;;
@@ -946,6 +1037,11 @@ if [ "${INSTALL_CLAUDE:-false}" = "true" ]; then require_tool claude "post-creat
 if [ "${INSTALL_GRAPHIFY:-false}" = "true" ]; then require_tool graphify "post-create.sh: uv tool install graphifyy"; fi
 if [ "${INSTALL_HEADROOM:-false}" = "true" ]; then require_tool headroom "post-create.sh: uv tool install headroom-ai"; fi
 if [ "${INSTALL_RTK:-false}" = "true" ]; then require_tool rtk "Dockerfile"; fi
+if [ "${INSTALL_REVIEW_TOOLS:-false}" = "true" ]; then
+    for _tool in gitleaks spotbugs detekt pmd; do require_tool "$_tool" "Dockerfile"; done
+    require_tool markdownlint "post-create.sh: npm ci in .devcontainer/tools/markdownlint"
+    require_tool semgrep "post-create.sh: uv tool install semgrep"
+fi
 
 if [ "${#SETUP_PROBLEMS[@]}" -gt 0 ]; then
     echo "============================================================================"

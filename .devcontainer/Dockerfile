@@ -35,6 +35,14 @@ ARG INSTALL_JETBRAINS="false"
 # Atlas pages, tests/fixtures/slice-map/render-check.py) and any browser check. The
 # system libraries are baked in here; post-create.sh downloads the browser binary.
 ARG INSTALL_PLAYWRIGHT="false"
+# Static analysers the tw-code-review plugin runs when they are on PATH:
+# gitleaks (secret scan), spotbugs + FindSecBugs, detekt and PMD (JVM). Built
+# or fetched here. markdownlint, semgrep and PyYAML need Node or Python, which
+# arrive with the devcontainer features after this build, so post-create.sh
+# installs those. PyYAML is the plugin's YAML fallback reader and makes yq, its
+# other one, redundant, so yq is not installed. detekt, spotbugs and PMD run on
+# the JVM and need INSTALL_JAVA=true.
+ARG INSTALL_REVIEW_TOOLS="false"
 
 # Git identity is passed via containerEnv in devcontainer.json (not build args)
 # to avoid leaking PII into image layers. post-create.sh reads it at runtime.
@@ -73,17 +81,88 @@ ARG KOTLIN_LS_SHA256_ARM64="ec7cb254a6662a07fff9f10e4365226afab6c40008f8a974c10a
 #   curl -fsSL -H "Accept: application/vnd.github+json" \
 #     https://api.github.com/repos/rtk-ai/rtk/releases/tags/v<ver> \
 #     | python3 -c "import sys,json;[print(a['name'],a.get('digest')) for a in json.load(sys.stdin)['assets']]"
-ARG RTK_VERSION="0.50.0"
-ARG RTK_SHA256_AMD64="bc2b8902b0d9c796c82ef45f16ae2307e17757afeca5ee156235a3dc7bda5f89"
+# The `rtk-oss-*` assets, not `rtk-*`: since 1.0.0 the default `rtk` binary links
+# rtk-engine, which is BUSL-1.1 (engine/LICENSE: production use only inside RTK's
+# own binary, never offered to third parties as a paid or hosted product). The
+# oss edition is Apache-2.0 only, installs the same `rtk` binary name, and keeps
+# the hook core and every command filter, which is all this container uses; it
+# lacks only the pipeline engine and the llm-proxy setup that `rtk init -g`
+# would otherwise offer. Take the digests of the rtk-oss-* assets.
+ARG RTK_VERSION="1.0.1"
+ARG RTK_SHA256_AMD64="a44e8ffc43981100b4ddf1710399a1649a6c874591aa6d0c0727fe6cbd983c41"
 # Playwright release whose chromium-headless-shell post-create.sh downloads. Run with
 # npx, never added to the project: the Essentials build stays JVM-only.
 ARG PLAYWRIGHT_VERSION="1.55.0"
-ARG RTK_SHA256_ARM64="d1cc49dfa2cd443fc32625444b59fe616b6c80478cca210985118347174dd758"
+ARG RTK_SHA256_ARM64="ee24a43dac9162de55fea8460b5efcd56d401ec28b5117c921bffa8a57bc136e"
+# Review tools (INSTALL_REVIEW_TOOLS). Every pin below was checked against
+# OSV and the project's GitHub security advisories before it was added; re-check
+# both when bumping one.
+#
+# gitleaks is built from source, not taken as the release binary: the v8.30.1
+# binary is built with Go 1.24.11 and stale golang.org/x modules, and govulncheck
+# finds 69 reachable vulnerabilities in it. Built with the Go below and the
+# dependency pins in GITLEAKS_DEP_PINS, govulncheck reports none reachable and
+# gitleaks' own test suite passes. GITLEAKS_COMMIT is the commit the v<ver> tag
+# points at; the build fails if the tag has moved. Refresh recipe:
+#   curl -fsSL https://api.github.com/repos/gitleaks/gitleaks/git/ref/tags/v<ver> | jq -r .object.sha
+#   docker buildx imagetools inspect golang:<go-ver>-trixie   # index digest
+#   in a checkout: go get <pins> && go mod tidy && go test ./... && govulncheck ./...
+ARG GITLEAKS_VERSION="8.30.1"
+ARG GITLEAKS_COMMIT="83d9cd684c87d95d656c1458ef04895a7f1cbd8e"
+ARG GITLEAKS_GO_IMAGE="golang:1.27.2-trixie@sha256:47667934874913a449b96faa7ef4777fa285d9ec29126ee80ed61c45b7cccf0e"
+ARG GITLEAKS_DEP_PINS="github.com/mholt/archives@v0.1.5 github.com/nwaples/rardecode/v2@v2.2.0 github.com/ulikunitz/xz@v0.5.15 github.com/klauspost/compress@v1.18.7 golang.org/x/crypto@v0.58.0 golang.org/x/text@v0.43.0 golang.org/x/sys@v0.49.0"
+# spotbugs: release tarball from GitHub; SHA-256 = GitHub's published asset digest.
+#   curl -fsSL https://api.github.com/repos/spotbugs/spotbugs/releases/tags/<ver> | jq -r '.assets[]|.name+" "+.digest'
+ARG SPOTBUGS_VERSION="4.10.4"
+ARG SPOTBUGS_SHA256="72bc0d4edd686e462c0f71f42a049b27bf4da6708797ff7b2b56dd202714b4e5"
+# FindSecBugs plugin and detekt CLI: jars from Maven Central. The SHA-256 was
+# computed from the downloaded jar after it matched Central's published .sha1.
+# detekt's GitHub release jar is a different build from Central's; pin Central's.
+#   https://repo1.maven.org/maven2/com/h3xstream/findsecbugs/findsecbugs-plugin/<ver>/
+#   https://repo1.maven.org/maven2/io/gitlab/arturbosch/detekt/detekt-cli/<ver>/   (the -all.jar)
+ARG FINDSECBUGS_VERSION="1.14.0"
+ARG FINDSECBUGS_SHA256="6fa340344fa433ff46c2985dab1010e8bc739f9395c983594a5240095e92abc8"
+ARG DETEKT_VERSION="1.23.8"
+ARG DETEKT_SHA256="3afe89a11120303c73c9bdda3d8fe558dd9070a6937d27819ddc04b275381245"
+# PMD: the binary distribution zip from GitHub; SHA-256 = GitHub's published
+# asset digest. The tag name carries a slash, URL-encoded in the download path.
+#   curl -fsSL https://api.github.com/repos/pmd/pmd/releases/tags/pmd_releases/<ver> | jq -r '.assets[]|.name+" "+.digest'
+# The rules it applies: pmd-ruleset.xml at the repository root.
+ARG PMD_VERSION="7.28.0"
+ARG PMD_SHA256="f974ba571f7bc01c73fffe11bade25fbc1f438698f9e9c00e416e8d65e9fbac2"
+# semgrep and PyYAML are Python packages; post-create.sh installs them at these
+# versions once the Python feature is present (pins reach it through ENV below).
+ARG SEMGREP_VERSION="1.181.0"
+ARG PYYAML_VERSION="6.0.3"
 
 # -----------------------------------------------------------------------------
 # JetBrains Configuration
 # -----------------------------------------------------------------------------
 ARG JETBRAINS_BACKEND="IntelliJ"
+
+# -----------------------------------------------------------------------------
+# gitleaks build stage (used only when INSTALL_REVIEW_TOOLS=true)
+# Leaves the binary in /out, or /out empty when the toggle is off, so the
+# COPY --from in the main stage works either way. The Go image is pulled even
+# when the toggle is off (a COPY --from cannot be conditional); only the build
+# is skipped. Nothing from this stage but /out reaches the image.
+# -----------------------------------------------------------------------------
+FROM ${GITLEAKS_GO_IMAGE} AS gitleaks-build
+ARG INSTALL_REVIEW_TOOLS
+ARG GITLEAKS_VERSION
+ARG GITLEAKS_COMMIT
+ARG GITLEAKS_DEP_PINS
+RUN mkdir -p /out && if [ "${INSTALL_REVIEW_TOOLS}" = "true" ]; then \
+    set -eux && \
+    export CGO_ENABLED=0 GOTOOLCHAIN=local GOFLAGS=-mod=mod && \
+    git clone --quiet --depth 1 --branch "v${GITLEAKS_VERSION}" https://github.com/gitleaks/gitleaks.git /src && \
+    cd /src && \
+    [ "$(git rev-parse HEAD)" = "${GITLEAKS_COMMIT}" ] && \
+    go get ${GITLEAKS_DEP_PINS} && \
+    go mod tidy && \
+    go build -trimpath -ldflags "-s -w -X github.com/zricethezav/gitleaks/v8/version.Version=${GITLEAKS_VERSION}" -o /out/gitleaks . && \
+    /out/gitleaks version; \
+    fi
 
 # -----------------------------------------------------------------------------
 # Base Image
@@ -100,6 +179,7 @@ ARG INSTALL_HEADROOM
 ARG INSTALL_RTK
 ARG INSTALL_JETBRAINS
 ARG INSTALL_PLAYWRIGHT
+ARG INSTALL_REVIEW_TOOLS
 ARG PLAYWRIGHT_VERSION
 ARG JAVA_VERSION
 ARG ADDITIONAL_JAVA_VERSIONS
@@ -114,6 +194,16 @@ ARG KOTLIN_LS_SHA256_ARM64
 ARG RTK_VERSION
 ARG RTK_SHA256_AMD64
 ARG RTK_SHA256_ARM64
+ARG SPOTBUGS_VERSION
+ARG SPOTBUGS_SHA256
+ARG FINDSECBUGS_VERSION
+ARG FINDSECBUGS_SHA256
+ARG DETEKT_VERSION
+ARG DETEKT_SHA256
+ARG PMD_VERSION
+ARG PMD_SHA256
+ARG SEMGREP_VERSION
+ARG PYYAML_VERSION
 ARG JETBRAINS_BACKEND
 
 # Store build args as environment variables for runtime scripts.
@@ -129,7 +219,10 @@ ENV PROJECT_NAME=${PROJECT_NAME} \
     INSTALL_RTK=${INSTALL_RTK} \
     INSTALL_JETBRAINS=${INSTALL_JETBRAINS} \
     INSTALL_PLAYWRIGHT=${INSTALL_PLAYWRIGHT} \
+    INSTALL_REVIEW_TOOLS=${INSTALL_REVIEW_TOOLS} \
     PLAYWRIGHT_VERSION=${PLAYWRIGHT_VERSION} \
+    SEMGREP_VERSION=${SEMGREP_VERSION} \
+    PYYAML_VERSION=${PYYAML_VERSION} \
     JETBRAINS_BACKEND=${JETBRAINS_BACKEND}
 
 # -----------------------------------------------------------------------------
@@ -302,6 +395,7 @@ RUN if [ "${INSTALL_KOTLIN_LSP}" = "true" ]; then \
 # rtk — Rust Token Killer (Conditional, part of the local-first stack)
 # Transparent CLI-output compression. Per-arch release tarball from GitHub
 # (amd64 → x86_64-unknown-linux-musl, arm64 → aarch64-unknown-linux-gnu). The
+# Apache-2.0 rtk-oss edition (see RTK_VERSION for why not the default binary).
 # `rtk` binary lands in /usr/local/bin; post-create.sh installs its Claude Code
 # PreToolUse hook (`rtk init -g`). SHA-256 verified against GitHub's published
 # per-asset digest. The tarball layout isn't contractually fixed, so we locate
@@ -315,8 +409,8 @@ RUN if [ "${INSTALL_RTK}" = "true" ]; then \
     arm64) RTK_TRIPLE="aarch64-unknown-linux-gnu"; RTK_SHA256="${RTK_SHA256_ARM64}" ;; \
     *) echo "ERROR: unsupported architecture for rtk: $ARCH" >&2; exit 1 ;; \
     esac && \
-    echo "Installing rtk ${RTK_VERSION} (${ARCH})..." && \
-    curl -fsSL "https://github.com/rtk-ai/rtk/releases/download/v${RTK_VERSION}/rtk-${RTK_TRIPLE}.tar.gz" -o /tmp/rtk.tar.gz && \
+    echo "Installing rtk-oss ${RTK_VERSION} (${ARCH})..." && \
+    curl -fsSL "https://github.com/rtk-ai/rtk/releases/download/v${RTK_VERSION}/rtk-oss-${RTK_TRIPLE}.tar.gz" -o /tmp/rtk.tar.gz && \
     if [ -n "${RTK_SHA256}" ]; then \
     echo "${RTK_SHA256}  /tmp/rtk.tar.gz" | sha256sum -c - ; \
     else \
@@ -325,7 +419,41 @@ RUN if [ "${INSTALL_RTK}" = "true" ]; then \
     mkdir -p /tmp/rtk-extract && tar -xzf /tmp/rtk.tar.gz -C /tmp/rtk-extract && \
     RTK_BIN=$(find /tmp/rtk-extract -type f -name rtk | head -n1) && \
     [ -n "$RTK_BIN" ] && install -m 0755 "$RTK_BIN" /usr/local/bin/rtk && \
+    install -D -m 0644 /tmp/rtk-extract/LICENSE /usr/local/share/doc/rtk/LICENSE && \
     rm -rf /tmp/rtk.tar.gz /tmp/rtk-extract; \
+    fi
+
+# -----------------------------------------------------------------------------
+# Review tools (Conditional) — the tw-code-review plugin's static analysers
+# gitleaks comes from the build stage above. spotbugs is unpacked to
+# /opt/spotbugs; the FindSecBugs jar goes into its plugin/ directory, which
+# spotbugs loads on its own, so no -pluginList or review config is needed.
+# detekt is the self-contained CLI jar behind a small wrapper. PMD is unpacked
+# to /opt/pmd. Pins and the reasons for them: the ARG block at the top.
+# -----------------------------------------------------------------------------
+COPY --from=gitleaks-build /out/ /usr/local/bin/
+RUN if [ "${INSTALL_REVIEW_TOOLS}" = "true" ]; then \
+    set -eux && \
+    command -v java >/dev/null || { echo "ERROR: INSTALL_REVIEW_TOOLS needs INSTALL_JAVA=true (spotbugs, detekt, pmd)" >&2; exit 1; } && \
+    curl -fsSL "https://github.com/spotbugs/spotbugs/releases/download/${SPOTBUGS_VERSION}/spotbugs-${SPOTBUGS_VERSION}.tgz" -o /tmp/spotbugs.tgz && \
+    echo "${SPOTBUGS_SHA256}  /tmp/spotbugs.tgz" | sha256sum -c - && \
+    tar -xzf /tmp/spotbugs.tgz -C /opt && \
+    ln -sfn "/opt/spotbugs-${SPOTBUGS_VERSION}" /opt/spotbugs && \
+    curl -fsSL "https://repo1.maven.org/maven2/com/h3xstream/findsecbugs/findsecbugs-plugin/${FINDSECBUGS_VERSION}/findsecbugs-plugin-${FINDSECBUGS_VERSION}.jar" -o /opt/spotbugs/plugin/findsecbugs-plugin.jar && \
+    echo "${FINDSECBUGS_SHA256}  /opt/spotbugs/plugin/findsecbugs-plugin.jar" | sha256sum -c - && \
+    chmod 0755 /opt/spotbugs/bin/spotbugs && \
+    ln -sf /opt/spotbugs/bin/spotbugs /usr/local/bin/spotbugs && \
+    mkdir -p /opt/detekt && \
+    curl -fsSL "https://repo1.maven.org/maven2/io/gitlab/arturbosch/detekt/detekt-cli/${DETEKT_VERSION}/detekt-cli-${DETEKT_VERSION}-all.jar" -o /opt/detekt/detekt-cli-all.jar && \
+    echo "${DETEKT_SHA256}  /opt/detekt/detekt-cli-all.jar" | sha256sum -c - && \
+    printf '#!/bin/sh\nexec java -jar /opt/detekt/detekt-cli-all.jar "$@"\n' > /usr/local/bin/detekt && \
+    chmod 0755 /usr/local/bin/detekt && \
+    curl -fsSL "https://github.com/pmd/pmd/releases/download/pmd_releases%2F${PMD_VERSION}/pmd-dist-${PMD_VERSION}-bin.zip" -o /tmp/pmd.zip && \
+    echo "${PMD_SHA256}  /tmp/pmd.zip" | sha256sum -c - && \
+    unzip -q /tmp/pmd.zip -d /opt && \
+    ln -sfn "/opt/pmd-bin-${PMD_VERSION}" /opt/pmd && \
+    ln -sf /opt/pmd/bin/pmd /usr/local/bin/pmd && \
+    rm -f /tmp/spotbugs.tgz /tmp/pmd.zip; \
     fi
 
 # -----------------------------------------------------------------------------

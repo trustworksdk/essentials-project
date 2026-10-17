@@ -17,6 +17,8 @@ node_modules/
 **/frontend/generated/
 **/frontend/index.html
 package-lock.json
+# Except the devcontainer's markdownlint lockfile: post-create.sh runs `npm ci` from it.
+!.devcontainer/tools/markdownlint/package-lock.json
 webpack.generated.js
 tsconfig.json
 types.d.ts
