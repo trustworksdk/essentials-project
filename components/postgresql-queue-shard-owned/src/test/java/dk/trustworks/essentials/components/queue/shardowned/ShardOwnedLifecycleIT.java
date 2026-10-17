@@ -28,12 +28,15 @@ import org.slf4j.LoggerFactory;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
+import javax.sql.DataSource;
+import java.io.PrintWriter;
 import java.nio.charset.StandardCharsets;
-import java.sql.SQLException;
+import java.sql.*;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
+import java.util.function.*;
 
 import static org.assertj.core.api.Assertions.*;
 
@@ -1165,6 +1168,394 @@ class ShardOwnedLifecycleIT {
     }
 
     /**
+     * A {@code start()} that fails with an unchecked exception is not started, and a second {@code start()} runs again.
+     * Only an {@link SQLException} used to undo the run the start had installed: anything else - the ordered lane's
+     * refusal to start where {@code backend_xid} is not readable, which is an {@link IllegalStateException} by design, or
+     * a pool or proxy that fails unchecked - escaped with the run still installed. The queue then reported itself started
+     * with nothing leased and no heartbeat, and a retried start did nothing, since a run was already installed. The
+     * failure is made the start's first database access - the ordered lane's prerequisites check, the unordered lane's
+     * membership row - by a {@link DataSource} that refuses connections unchecked while told to.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"unordered", "ordered"})
+    void a_start_failing_with_an_unchecked_exception_is_not_started_and_a_second_start_runs_again(String lane) throws Exception {
+        var settings   = settingsWithShedGrace(Duration.ofSeconds(1));
+        var instanceId = "unchecked-start-failure-" + lane;
+        var refusing   = new ConnectionRefusingDataSource(dataSource);
+        var queue      = new ShardOwnedQueue(refusing, QUEUE_ID, SHARD_COUNT, instanceId);
+        try {
+            refusing.refuse(true);
+            assertThatThrownBy(() -> startConsuming(queue, lane, settings))
+                    .as("an unchecked failure escapes the start as it was thrown")
+                    .isSameAs(refusing.failure);
+            assertThat(refusing.refused()).as("premise: the start's first database access was refused").isPositive();
+            assertThat(queue.isStarted()).as("a start that failed is not started").isFalse();
+            assertThat(queue.shardsHeld()).isZero();
+
+            refusing.refuse(false);
+            startConsuming(queue, lane, settings);
+
+            assertThat(queue.isStarted()).as("the second start ran").isTrue();
+            var units = unitsOwnedBy(lane, instanceId);
+            assertThat(units).as("the second start leased").isPositive();
+            assertThat(queue.shardsHeld()).isEqualTo(units);
+        } finally {
+            refusing.refuse(false);
+            queue.stop();
+        }
+        assertThat(unitsOwnedBy(lane, instanceId)).as("the stop released what the second start leased").isZero();
+    }
+
+    /**
+     * A {@code start()} whose lease loop fails part-way leaves no lease row naming the instance. The start fails, so no
+     * owner is built for the units it had already leased, and no stop or heartbeat of it will ever release them: they
+     * used to stay leased to the instance, served by nobody, and no other instance could take them for as long as the
+     * instance's membership row - written before the loop - was live. A trigger fails the acquire of unit 1 only, after
+     * the start has leased unit 0.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"unordered", "ordered"})
+    void a_start_failing_part_way_through_its_lease_loop_releases_the_units_it_had_leased(String lane) throws Exception {
+        var settings   = settingsWithShedGrace(Duration.ofSeconds(1));
+        var instanceId = "start-fails-mid-lease-" + lane;
+        var queue      = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, instanceId);
+        failTheAcquireOf(lane, instanceId, 1, true);
+        try {
+            assertThatThrownBy(() -> startConsuming(queue, lane, settings))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasCauseInstanceOf(SQLException.class)
+                    .as("premise: the start failed acquiring unit 1, where the trigger fires, after it had leased unit 0")
+                    .hasStackTraceContaining("simulated failure acquiring " + lane + " unit 1");
+            assertThat(queue.isStarted()).isFalse();
+            assertThat(unitsOwnedBy(lane, instanceId)).as("no lease row names the instance whose start failed").isZero();
+        } finally {
+            failTheAcquireOf(lane, instanceId, 1, false);
+            queue.stop();
+        }
+        assertThat(new ShardOwnedStorage(dataSource, QUEUE_ID).acquireLeaseGrant(lane, 0, "successor", settings.leaseTtlMillis()))
+                .as("another instance takes unit 0 at once, while the failed instance's membership row is still live").isPresent();
+    }
+
+    /**
+     * A {@code stop()} called while a {@code start()} is still leasing returns within its shutdown budget, and no part of
+     * the start's run outlives it. The stop used to wait for the start to finish, its database work included, outside the
+     * 2 s budget, and with nothing in the queue to bound it. It now waits up to the budget, then takes the run out without
+     * waiting further; the start, once its database work returns, adopts nothing, schedules no heartbeat, and does the
+     * stop's work itself - releasing the units it leased, handing back the runtime and deregistering the instance. Had the
+     * start scheduled the run's heartbeat regardless, no stop would ever cancel it, and each of its ticks would keep the
+     * stopped instance live in the membership table. A trigger holds the start inside the acquire of unit 1 for longer
+     * than the budget.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"unordered", "ordered"})
+    void a_stop_called_while_a_start_is_still_leasing_returns_within_its_budget_and_leaves_nothing_of_the_start_running(String lane) throws Exception {
+        var settings   = settingsWithShedGrace(Duration.ofSeconds(1));
+        var instanceId = "stop-mid-start-" + lane;
+        var runtime    = ShardRuntime.acquireShared(dataSource, settings);
+        var reported   = new RecordedOwnership();
+        var metrics    = new ShardOwnerMetrics(reported);
+        var queue      = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, instanceId, metrics);
+        try {
+            slowTheAcquireOf(lane, instanceId, 1, 5);
+            var starting = CompletableFuture.runAsync(() -> startUnchecked(queue, lane, settings));
+            Awaitility.await().atMost(Duration.ofSeconds(10)).until(this::aHeartbeatIsSleeping);
+            assertThat(queue.isStarted()).as("premise: the start has installed its run").isTrue();
+
+            var stopCalled = System.nanoTime();
+            queue.stop();
+            var stopTook = Duration.ofNanos(System.nanoTime() - stopCalled);
+
+            assertThat(stopTook).as("the stop waits no longer than its 2 s budget, and a margin").isLessThan(Duration.ofMillis(3_500));
+            assertThat(starting).as("premise: the start was still leasing when the stop returned").isNotDone();
+            assertThat(queue.isStarted()).as("the stop ended the run the start installed").isFalse();
+
+            starting.get(20, TimeUnit.SECONDS);
+
+            assertThat(queue.isStarted()).as("the start, finding its run ended, left the queue stopped").isFalse();
+            // More than one heartbeat interval (a third of the 1 s lease TTL): a heartbeat of the started run would have
+            // registered the instance again by then.
+            Awaitility.await().during(Duration.ofSeconds(1)).atMost(Duration.ofSeconds(5)).until(
+                    () -> !instanceRegistered(instanceId) && unitsOwnedBy(lane, instanceId) == 0);
+            assertThat(runtime.unitsServed()).as("no owner of the start is on the shared runtime's pumps").isZero();
+            reported.assertEveryAcquisitionIsReleasedOnceAfterIt();
+            assertThat(metrics.shardsReleased.sum()).as("every acquisition counted released once")
+                                                    .isEqualTo(metrics.shardsAcquired.sum());
+        } finally {
+            dropSlowAcquire();
+            queue.stop();
+            ShardRuntime.releaseShared(dataSource);
+        }
+    }
+
+    /**
+     * A {@code stopAbruptly()} called while a {@code start()} is still leasing does not wait for it at all: it stands in
+     * for a crash, which waits for nothing. It used to wait for the start to finish, its database work included. The start
+     * then finds its run ended, adopts and serves nothing, and hands the runtime back.
+     */
+    @Test
+    void a_stop_abruptly_called_while_a_start_is_still_leasing_does_not_wait_for_it() throws Exception {
+        var settings   = settingsWithShedGrace(Duration.ofSeconds(1));
+        var instanceId = "stop-abruptly-mid-start";
+        var runtime    = ShardRuntime.acquireShared(dataSource, settings);
+        var queue      = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, instanceId);
+        try {
+            slowTheAcquireOf("unordered", instanceId, 1, 3);
+            var starting = CompletableFuture.runAsync(() -> startUnchecked(queue, "unordered", settings));
+            Awaitility.await().atMost(Duration.ofSeconds(10)).until(this::aHeartbeatIsSleeping);
+
+            var stopCalled = System.nanoTime();
+            queue.stopAbruptly();
+            var stopTook = Duration.ofNanos(System.nanoTime() - stopCalled);
+
+            assertThat(stopTook).as("stopAbruptly does not wait for the start").isLessThan(Duration.ofMillis(1_000));
+            assertThat(starting).as("premise: the start was still leasing when stopAbruptly returned").isNotDone();
+            assertThat(queue.isStarted()).isFalse();
+
+            starting.get(20, TimeUnit.SECONDS);
+
+            assertThat(queue.isStarted()).as("the start, finding its run ended, left the queue stopped").isFalse();
+            assertThat(runtime.unitsServed()).as("the start placed nothing on the shared runtime's pumps").isZero();
+        } finally {
+            dropSlowAcquire();
+            queue.stop();
+            ShardRuntime.releaseShared(dataSource);
+        }
+    }
+
+    /**
+     * A {@code stop()} on an interrupted thread, called while a {@code start()} is still leasing, returns at once with the
+     * thread's interrupt flag still set, and says it was interrupted: the timed wait for the lifecycle lock throws at once
+     * on an interrupted thread, and the WARN used to say the stop had given up waiting its full 2 s budget. The start,
+     * once its database work returns, does the stop's work itself, as for a stop that waited out its budget.
+     */
+    @Test
+    void a_stop_on_an_interrupted_thread_while_a_start_is_still_leasing_returns_at_once_and_keeps_the_interrupt() throws Exception {
+        var settings    = settingsWithShedGrace(Duration.ofSeconds(1));
+        var instanceId  = "interrupted-stop-mid-start";
+        var logged      = new ListAppender<ILoggingEvent>();
+        var queueLogger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(ShardOwnedQueue.class);
+        logged.start();
+        queueLogger.addAppender(logged);
+        var queue = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, instanceId);
+        try {
+            slowTheAcquireOf("unordered", instanceId, 1, 3);
+            var starting = CompletableFuture.runAsync(() -> startUnchecked(queue, "unordered", settings));
+            Awaitility.await().atMost(Duration.ofSeconds(10)).until(this::aHeartbeatIsSleeping);
+            assertThat(queue.isStarted()).as("premise: the start has installed its run").isTrue();
+
+            var stopTook         = new AtomicLong();
+            var stillInterrupted = new AtomicBoolean();
+            var stopping = new Thread(() -> {
+                Thread.currentThread().interrupt();
+                var stopCalled = System.nanoTime();
+                queue.stop();
+                stopTook.set(System.nanoTime() - stopCalled);
+                stillInterrupted.set(Thread.currentThread().isInterrupted());
+            });
+            stopping.start();
+            stopping.join(10_000);
+
+            assertThat(stopping.isAlive()).as("the interrupted stop returned").isFalse();
+            assertThat(Duration.ofNanos(stopTook.get())).as("an interrupted stop does not wait for the start").isLessThan(Duration.ofMillis(1_000));
+            assertThat(stillInterrupted).as("the stop left the thread's interrupt flag set").isTrue();
+            assertThat(starting).as("premise: the start was still leasing when the stop returned").isNotDone();
+            assertThat(queue.isStarted()).as("the stop ended the run the start installed").isFalse();
+            var warnings = logged.list.stream().map(ILoggingEvent::getFormattedMessage).filter(message -> message.contains("stop")).toList();
+            assertThat(warnings).as("the WARN says the stop was interrupted, not that it waited out its budget")
+                                .anyMatch(message -> message.contains("was interrupted"))
+                                .noneMatch(message -> message.contains("gave up waiting"));
+
+            starting.get(20, TimeUnit.SECONDS);
+
+            assertThat(queue.isStarted()).as("the start, finding its run ended, left the queue stopped").isFalse();
+            Awaitility.await().during(Duration.ofSeconds(1)).atMost(Duration.ofSeconds(5)).until(
+                    () -> !instanceRegistered(instanceId) && unitsOwnedBy("unordered", instanceId) == 0);
+        } finally {
+            dropSlowAcquire();
+            queue.stop();
+            queueLogger.detachAppender(logged);
+        }
+    }
+
+    /**
+     * What a failing {@code start()} throws is the failure itself, whatever undoing the start then throws. Every
+     * connection after the one that leased unit 0 fails with a new {@link Error}: first the acquire of unit 1, then the
+     * release of unit 0 that undoes the start. A critical error ({@code NoClassDefFoundError}, a {@link LinkageError})
+     * escapes untouched, with no undo attempted, as everywhere in this module ({@code Exceptions.rethrowIfCriticalError}).
+     * A non-critical one ({@link AssertionError}) is undone, and the undo's own failure is attached to it as suppressed.
+     * Both used to be undone, and an {@code Error} thrown by the undo replaced the start's failure.
+     */
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void a_start_failing_with_an_error_throws_that_error_and_not_the_undos(boolean critical) throws Exception {
+        var settings   = settingsWithShedGrace(Duration.ofSeconds(1));
+        var instanceId = "start-fails-with-error-" + critical;
+        var failing    = new ConnectionRefusingDataSource(dataSource);
+        try (var runtime = new ShardRuntime(dataSource, settings)) {
+            var queue = ShardOwnedQueue.builder().setDataSource(failing).setQueueId(QUEUE_ID).setShardCount(SHARD_COUNT)
+                                       .setInstanceId(instanceId).setRuntime(runtime).build();
+            try {
+                failing.failAfterTheFirstAcquire(critical ? () -> new NoClassDefFoundError("simulated critical error")
+                                                          : () -> new AssertionError("simulated non-critical error"));
+                var thrown = catchThrowable(() -> startConsuming(queue, "unordered", settings));
+
+                assertThat(failing.errorsThrown()).as("premise: the acquire of unit 1 failed").isNotEmpty();
+                assertThat(thrown).as("the start's own failure escapes").isSameAs(failing.errorsThrown().getFirst());
+                failing.refuse(false);
+                assertThat(unitsOwnedBy("unordered", instanceId)).as("premise: unit 0 was leased, and is still leased").isEqualTo(1);
+                if (critical) {
+                    assertThat(failing.errorsThrown()).as("nothing was undone after the critical error").hasSize(1);
+                    assertThat(thrown.getSuppressed()).isEmpty();
+                } else {
+                    assertThat(failing.errorsThrown()).as("premise: the release undoing the start failed too").hasSize(2);
+                    assertThat(thrown.getSuppressed()).as("the undo's failure is attached to the start's")
+                                                      .containsExactly(failing.errorsThrown().get(1));
+                    assertThat(queue.isStarted()).as("the failed start was undone").isFalse();
+                }
+            } finally {
+                failing.refuse(false);
+                queue.stop();
+            }
+        }
+    }
+
+    private static void startUnchecked(ShardOwnedQueue queue, String lane, ShardOwnerSettings settings) {
+        try {
+            startConsuming(queue, lane, settings);
+        } catch (SQLException e) {
+            throw new CompletionException(e);
+        }
+    }
+
+    /**
+     * Make the acquire of {@code unit} of {@code lane} by {@code instanceId} fail, as a database error would, or stop
+     * doing so. Every other unit is acquired as usual.
+     */
+    private void failTheAcquireOf(String lane, String instanceId, int unit, boolean fail) throws Exception {
+        try (var connection = dataSource.getConnection(); var statement = connection.createStatement()) {
+            if (fail) {
+                statement.execute("CREATE OR REPLACE FUNCTION fail_unit_acquire() RETURNS trigger AS $$ BEGIN "
+                                          + "RAISE EXCEPTION 'simulated failure acquiring % unit %', NEW.lane, NEW.shard; "
+                                          + "END $$ LANGUAGE plpgsql");
+                statement.execute("CREATE TRIGGER fail_unit_acquire BEFORE UPDATE ON " + ShardOwnedSchema.LEASE_TABLE
+                                          + " FOR EACH ROW WHEN (OLD.owner IS DISTINCT FROM NEW.owner AND NEW.owner = '" + instanceId + "'"
+                                          + " AND NEW.lane = '" + lane + "' AND NEW.shard = " + unit + ")"
+                                          + " EXECUTE FUNCTION fail_unit_acquire()");
+            } else {
+                statement.execute("DROP TRIGGER IF EXISTS fail_unit_acquire ON " + ShardOwnedSchema.LEASE_TABLE);
+            }
+        }
+    }
+
+    /**
+     * A {@link DataSource} that refuses every connection with an unchecked exception while told to, and otherwise hands
+     * out the delegate's.
+     */
+    private static final class ConnectionRefusingDataSource implements DataSource {
+        private final    DataSource                  delegate;
+        private final    AtomicBoolean               refusing     = new AtomicBoolean();
+        private final    AtomicInteger               refused      = new AtomicInteger();
+        private final    AtomicInteger               acquires     = new AtomicInteger();
+        private final    List<Error>                 errorsThrown = new CopyOnWriteArrayList<>();
+        private volatile Supplier<? extends Error>   errors;
+        final            IllegalStateException       failure      = new IllegalStateException("simulated unchecked failure getting a connection");
+
+        ConnectionRefusingDataSource(DataSource delegate) {
+            this.delegate = delegate;
+        }
+
+        void refuse(boolean refuse) {
+            refusing.set(refuse);
+            if (!refuse) {
+                errors = null;
+            }
+        }
+
+        int refused() {
+            return refused.get();
+        }
+
+        /**
+         * Let the first lease acquire have its connection, then throw a new error from {@code errors} for every
+         * connection asked for after it - the second acquire's first - until {@link #refuse refuse(false)}.
+         */
+        void failAfterTheFirstAcquire(Supplier<? extends Error> errors) {
+            acquires.set(0);
+            this.errors = errors;
+        }
+
+        List<Error> errorsThrown() {
+            return errorsThrown;
+        }
+
+        private void refuseIfTold() {
+            if (refusing.get()) {
+                refused.incrementAndGet();
+                throw failure;
+            }
+            var failWith = errors;
+            if (failWith != null) {
+                var acquiring = StackWalker.getInstance().walk(frames -> frames.anyMatch(frame -> frame.getMethodName().equals("acquireLeaseGrant")));
+                if (acquiring && acquires.incrementAndGet() == 1) {
+                    return;
+                }
+                if (acquires.get() > 1) {
+                    var error = failWith.get();
+                    errorsThrown.add(error);
+                    throw error;
+                }
+            }
+        }
+
+        @Override
+        public Connection getConnection() throws SQLException {
+            refuseIfTold();
+            return delegate.getConnection();
+        }
+
+        @Override
+        public Connection getConnection(String username, String password) throws SQLException {
+            refuseIfTold();
+            return delegate.getConnection(username, password);
+        }
+
+        @Override
+        public PrintWriter getLogWriter() throws SQLException {
+            return delegate.getLogWriter();
+        }
+
+        @Override
+        public void setLogWriter(PrintWriter out) throws SQLException {
+            delegate.setLogWriter(out);
+        }
+
+        @Override
+        public void setLoginTimeout(int seconds) throws SQLException {
+            delegate.setLoginTimeout(seconds);
+        }
+
+        @Override
+        public int getLoginTimeout() throws SQLException {
+            return delegate.getLoginTimeout();
+        }
+
+        @Override
+        public java.util.logging.Logger getParentLogger() throws SQLFeatureNotSupportedException {
+            return delegate.getParentLogger();
+        }
+
+        @Override
+        public <T> T unwrap(Class<T> iface) throws SQLException {
+            return delegate.unwrap(iface);
+        }
+
+        @Override
+        public boolean isWrapperFor(Class<?> iface) throws SQLException {
+            return delegate.isWrapperFor(iface);
+        }
+    }
+
+    /**
      * Make every lease acquire by {@code instanceId} fail, as a database error would, or stop doing so. A trigger rather
      * than a revoked grant: the test's role owns the table, and an owner keeps every privilege.
      */
@@ -1216,6 +1607,19 @@ class ShardOwnedLifecycleIT {
      * {@link #holdTheNextAcquireOfUnitZero}, for {@code unit} instead of unit 0.
      */
     private void holdTheNextAcquireOf(String lane, String instanceId, int unit, double sleepSeconds) throws Exception {
+        slowTheAcquireOf(lane, instanceId, unit, sleepSeconds);
+        try (var connection = dataSource.getConnection(); var statement = connection.createStatement()) {
+            statement.execute("UPDATE " + ShardOwnedSchema.LEASE_TABLE + " SET owner = 'departed' WHERE queue_id = " + QUEUE_ID
+                                      + " AND lane = '" + lane + "' AND shard = " + unit);
+        }
+        Awaitility.await().atMost(Duration.ofSeconds(10)).until(this::aHeartbeatIsSleeping);
+    }
+
+    /**
+     * Make every acquire of {@code unit} of {@code lane} by {@code instanceId} from another owner, or from none, sleep
+     * {@code sleepSeconds} inside the lease UPDATE, by a trigger. Drop it with {@link #dropSlowAcquire}.
+     */
+    private void slowTheAcquireOf(String lane, String instanceId, int unit, double sleepSeconds) throws Exception {
         try (var connection = dataSource.getConnection(); var statement = connection.createStatement()) {
             statement.execute("CREATE OR REPLACE FUNCTION slow_acquire() RETURNS trigger AS $$ BEGIN "
                                       + "PERFORM pg_sleep(" + sleepSeconds + "); RETURN NEW; END $$ LANGUAGE plpgsql");
@@ -1223,10 +1627,7 @@ class ShardOwnedLifecycleIT {
                                       + " FOR EACH ROW WHEN (OLD.owner IS DISTINCT FROM NEW.owner AND NEW.owner = '" + instanceId + "'"
                                       + " AND NEW.lane = '" + lane + "' AND NEW.shard = " + unit + ")"
                                       + " EXECUTE FUNCTION slow_acquire()");
-            statement.execute("UPDATE " + ShardOwnedSchema.LEASE_TABLE + " SET owner = 'departed' WHERE queue_id = " + QUEUE_ID
-                                      + " AND lane = '" + lane + "' AND shard = " + unit);
         }
-        Awaitility.await().atMost(Duration.ofSeconds(10)).until(this::aHeartbeatIsSleeping);
     }
 
     private void dropSlowAcquire() throws Exception {

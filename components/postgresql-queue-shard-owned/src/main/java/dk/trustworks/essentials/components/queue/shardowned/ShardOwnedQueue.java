@@ -25,6 +25,7 @@ import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.*;
 
 import static dk.trustworks.essentials.shared.FailFast.*;
@@ -100,25 +101,31 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
     /**
      * Held across the whole of {@link #start()}, {@link #stop()} and {@link #stopAbruptly()}, so they never run
      * concurrently: one runs at a time, and a {@code start()} called while a stop is still draining and releasing waits
-     * for it to finish.
+     * for it to finish. That wait is bounded by the stop: its drain by {@code shedGrace}, its database work by
+     * {@link #SHUTDOWN_BUDGET}.
      * <p>
-     * And the other way round: a {@code stop()}, {@link #close()} or {@code stopAbruptly()} called while a
-     * {@code start()} is still running waits for it to finish, its database work included - registering the instance
-     * and leasing its units. That wait comes before, and outside, the stop's 2 s {@link #SHUTDOWN_BUDGET}, and nothing in
-     * this queue bounds it. A start waiting for a connection the pool cannot make gives up at the pool's connection
-     * timeout (30 s at Hikari's default). A start whose statement is already running on a pooled connection when the
-     * network partitions is not covered by that timeout: the statement blocks until the driver's {@code socketTimeout},
-     * and without one indefinitely, and the stop waits as long.
+     * The other way round, a stop waits only so long for a {@code start()} still doing its database work - registering
+     * the instance and leasing its units, which nothing in this queue bounds: a statement caught by a network partition on
+     * a pooled connection blocks until the driver's {@code socketTimeout}, and without one indefinitely. A
+     * {@code stop()} or {@link #close()} waits up to {@link #SHUTDOWN_BUDGET} for this lock, {@code stopAbruptly()} not at
+     * all. One that gets no further takes the starting run out of {@link #currentRun} without the lock, under the run's
+     * monitor, and records on the run the stop it owes ({@link Run#owedStop}); {@link #isStarted()} is false from then on.
+     * The start, still holding this lock, adopts nothing into the ended run, schedules it no heartbeat, and does the
+     * stop's work itself before it lets go ({@link #endRunOfStart}). A stop that finds the start already past its database
+     * work ({@link Run#startFinished}) waits for the lock after all: all that start has left is telling the
+     * {@code QueueObserver} of its acquisitions.
      * <p>
      * A run's own lists need no such guard - a stop works on the {@link Run} it took out, and a start fills the one it
      * installed - but the queue-wide state a stop ends with does: {@link #releaseRuntime} hands back the runtime a start
-     * has just borrowed, and the stop's deregistration would remove the membership row a start has just written. Not a
-     * run's monitor: a heartbeat tick takes that one ({@link #adoptIntoRun}), and would then wait behind a stop's drain.
+     * has just borrowed, and the stop's deregistration would remove the membership row a start has just written. That is
+     * why a stop that gave up waiting leaves both to the start. Not a run's monitor: a heartbeat tick takes that one
+     * ({@link #adoptIntoRun}), and would then wait behind a stop's drain.
      */
-    private final    Object                   lifecycleLock       = new Object();
+    private final    ReentrantLock            lifecycleLock       = new ReentrantLock();
     /**
-     * Lease rows a heartbeat tick leased as its run ended and then could not release again ({@link #abandonAcquisition}):
-     * unit to the fence it leased the unit under. No owner of this queue's counts such a row - the tick built none - so
+     * Lease rows a heartbeat tick leased as its run ended and then could not release again ({@link #abandonAcquisition}),
+     * and those a start leased before its lease loop failed and could not release then ({@link #leaseAtStart}): unit to
+     * the fence it leased the unit under. No owner of this queue's counts such a row - none was built for it - so
      * while it names this instance nothing serves the unit: not this queue's lease check or fair share, which go by
      * {@code owners}, and not another instance, for as long as this instance's membership row is live, which it is again
      * once the queue is started under the same instance id. Each heartbeat retries the release
@@ -343,11 +350,26 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * <p>
      * Called while a {@link #stop()} is still running, on another thread, it waits for that stop to finish
      * ({@link #lifecycleLock}) and then starts a new run.
+     * <p>
+     * A start that fails with anything but a critical error ({@link Exceptions#isCriticalError}) leaves the queue not
+     * started, so a later {@code start()} runs again: it releases the units it had leased, ends any owner it had built,
+     * and hands back the runtime it borrowed. A {@link SQLException} escapes wrapped in an {@link IllegalStateException},
+     * anything else as it was thrown - the ordered lane's refusal to start on a database that hides
+     * {@code pg_stat_activity.backend_xid}, for one. A critical error escapes untouched, with nothing undone, and the
+     * queue stays started - a later {@code start()} doing nothing - until a {@link #stop()}. The
+     * instance's membership row, written before the lease loop, is left to age out rather than deleted: the two lanes of
+     * a {@code PostgresqlMessageQueue} subscription share one instance id, and deleting the row would drop the other
+     * lane's membership too, until its next heartbeat.
+     * <p>
+     * A stop that gave up waiting for this start ({@link #lifecycleLock}) has taken its run out already. This start then
+     * leases nothing more, adopts nothing, schedules no heartbeat, and does that stop's work itself before it returns
+     * ({@link #endRunOfStart}). It returns normally, with the queue not started.
      */
     @Override
     public void start() {
         requireTrue(activeSettings != null, "Nothing configured — call configureUnordered or configureOrdered first");
-        synchronized (lifecycleLock) {
+        lifecycleLock.lock();
+        try {
             // A fresh run, with nothing of any earlier run's in it. No lock beyond lifecycleLock: a heartbeat tick of an
             // earlier run compares the current run with its own, which this never is, so installing it changes nothing
             // for that tick (adoptIntoRun).
@@ -355,21 +377,111 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             if (!currentRun.compareAndSet(null, run)) {
                 return;
             }
+            List<Integer> adopted;
+            StopKind      owed;
             try {
-                if ("ordered".equals(activeLane)) {
-                    startOrdered(run);
-                } else {
-                    startUnordered(run);
-                }
+                adopted = "ordered".equals(activeLane) ? startOrdered(run) : startUnordered(run);
+                owed = startHeartbeatUnlessStopped(run);
             } catch (SQLException e) {
-                // Under the run's monitor, as every take-out is (Run).
-                synchronized (run) {
-                    currentRun.compareAndSet(run, null);
-                }
-                // The runtime is borrowed before the acquire loop, which is what can throw here: hand it back, or a shared
-                // runtime keeps a borrower that never stops. No owner exists yet - every statement precedes the placement.
+                // A critical error (Exceptions.isCriticalError, which looks at the causes too) escapes untouched, with no
+                // undo attempted: the JVM is then in no state to run one, and a failure of the undo must not stand in for it.
+                Exceptions.rethrowIfCriticalError(e);
+                throw undoFailedStart(run, new IllegalStateException("Failed to start consuming shards for instance " + instanceId, e));
+            } catch (RuntimeException e) {
+                Exceptions.rethrowIfCriticalError(e);
+                throw undoFailedStart(run, e);
+            } catch (Error e) {
+                Exceptions.rethrowIfCriticalError(e);
+                throw undoFailedStart(run, e);
+            }
+            if (owed != null) {
+                endRunOfStart(run, owed);
+                return;
+            }
+            // The shards taken at start-up are ownership changes like any other. Reporting only the ones rebalancing moves
+            // would leave an observer unable to tell which shards this instance serves. After the heartbeat is scheduled,
+            // so an observer that throws escapes the start with the run started: every unit it is told of is served.
+            reportAcquired(adopted);
+            log.info("Instance {} owns {}shards {}", instanceId, "ordered".equals(activeLane) ? "ordered " : "", adopted);
+        } finally {
+            lifecycleLock.unlock();
+        }
+    }
+
+    /**
+     * Schedule the heartbeat of the run a start has just filled, unless a stop that gave up waiting for the start has
+     * taken the run out meanwhile. Decided under the run's monitor, the one that stop takes the run out under
+     * ({@link #stopWithoutWaiting}): either the heartbeat is scheduled and the stop finds the start finished
+     * ({@link Run#startFinished}), or the stop took the run out first and no heartbeat is ever scheduled for it. One
+     * scheduled for an ended run would have no stop left to cancel it, and each of its ticks would keep the stopped
+     * instance live in the membership table.
+     *
+     * @return the stop the start owes, which took its run out ({@link Run#owedStop}); {@code null} when the run is current
+     * and its heartbeat scheduled
+     */
+    private StopKind startHeartbeatUnlessStopped(Run run) {
+        synchronized (run) {
+            if (currentRun.get() != run) {
+                return run.owedStop;
+            }
+            // The ordered lane had no heartbeat at all: its leases were taken once and left to expire, after which a
+            // second node could take the same shard while this one kept delivering.
+            startHeartbeat(run);
+            run.startFinished = true;
+            return null;
+        }
+    }
+
+    /**
+     * Undo a start that failed: take its run out, if no stop has, and end it ({@link #endRunOfStart}) - without
+     * deregistering, unless a stop that gave up waiting for the start is owed. Whatever the undo itself throws is added to
+     * {@code failure} as suppressed, so the start's own failure is what escapes - but for a critical error
+     * ({@link Exceptions#isCriticalError}), which escapes instead, with {@code failure} added to it as suppressed.
+     * {@code failure} itself is never a critical error: {@link #start()} rethrows one before it undoes anything.
+     *
+     * @return {@code failure}, for the caller to throw
+     */
+    private <T extends Throwable> T undoFailedStart(Run run, T failure) {
+        StopKind owed;
+        // Under the run's monitor, as every take-out is (Run).
+        synchronized (run) {
+            currentRun.compareAndSet(run, null);
+            owed = run.owedStop;
+        }
+        try {
+            endRunOfStart(run, owed);
+        } catch (RuntimeException | Error undo) {
+            if (Exceptions.isCriticalError(undo)) {
+                undo.addSuppressed(failure);
+                Exceptions.rethrowIfCriticalError(undo);
+            }
+            failure.addSuppressed(undo);
+        }
+        return failure;
+    }
+
+    /**
+     * End a run its own start has taken out, or found taken out by a stop that gave up waiting for it, while the start
+     * still holds {@link #lifecycleLock}: what that stop would have done, or for a failed start what undoes it.
+     * <p>
+     * The observer is told first of every owner the run adopted: each one's acquisition was counted
+     * ({@link #adoptIntoRun}), and ending the run reports its release. Then, for {@code stopAbruptly()}, only the
+     * runtime is handed back, as {@link #stopAbruptly()} does; otherwise the run is ended as {@link #stop()} ends one
+     * ({@link #endRun}): its owners drained, ended and released, the runtime handed back - and the instance deregistered
+     * only when a {@code stop()} is owed. With no owner adopted, which is every failure before the adoption and every run
+     * a stop took out before it, that is the runtime, and the deregistration when a {@code stop()} is owed.
+     *
+     * @param owed the stop the start owes, {@code null} for a failed start no stop is waiting on
+     */
+    private void endRunOfStart(Run run, StopKind owed) {
+        var adopted = run.owners.stream().map(LeasedOwner::shard).toList();
+        try {
+            reportAcquired(adopted);
+        } finally {
+            if (owed == StopKind.ABRUPT) {
                 releaseRuntime(run);
-                throw new IllegalStateException("Failed to start consuming shards for instance " + instanceId, e);
+            } else {
+                endRun(run, owed == StopKind.GRACEFUL);
             }
         }
     }
@@ -379,7 +491,12 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         return currentRun.get() != null;
     }
 
-    private void startOrdered(Run run) throws SQLException {
+    /**
+     * The ordered lane's start-up up to the adoption of its units; {@link #start()} schedules the heartbeat.
+     *
+     * @return the units adopted into {@code run}, in the order they were leased
+     */
+    private List<Integer> startOrdered(Run run) throws SQLException {
         // FIRST, before any other database access. The ordered lane's cursor cannot be safe on a
         // database that hides one backend's transaction id from another, and a reader of the failure
         // should see that rather than whatever unrelated statement happened to run first.
@@ -417,21 +534,14 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         storage.heartbeatInstance(instanceId);
 
         ensureRuntime(settings);
-        var leased  = leaseAtStart("ordered", orderedUnits(), maxShards);
-        var adopted = adoptAtStart(run, "ordered", leased, (entry, wakeup) -> {
+        var leased = leaseAtStart(run, "ordered", orderedUnits(), maxShards);
+        return adoptAtStart(run, "ordered", leased, (entry, wakeup) -> {
             var owner = new OrderedShardOwner(storage, entry.shard(), entry.grant().fence(), settings, handler, metrics,
                                               redeliveryPolicy, instanceId, wakeup,
                                               dispatch, entry.grant().previousOwnerReleased());
             owner.setDeliveryGate(this::deliveryPermitted);
             return owner;
         });
-        // The ordered lane had no heartbeat at all: its leases were taken once and left to expire,
-        // after which a second node could take the same shard while this one kept delivering.
-        startHeartbeat(run);
-        // The shards taken at start-up are ownership changes like any other. Reporting only the ones
-        // rebalancing moves would leave an observer unable to tell which shards this instance serves.
-        reportAcquired(adopted);
-        log.info("Instance {} owns ordered shards {}", instanceId, adopted);
     }
 
     public long orderedRemaining() throws SQLException {
@@ -458,7 +568,12 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         start();
     }
 
-    private void startUnordered(Run run) throws SQLException {
+    /**
+     * The unordered lane's start-up up to the adoption of its units; {@link #start()} schedules the heartbeat.
+     *
+     * @return the units adopted into {@code run}, in the order they were leased
+     */
+    private List<Integer> startUnordered(Run run) throws SQLException {
         var handler          = activeHandler;
         var settings         = activeSettings;
         var redeliveryPolicy = activePolicy;
@@ -473,28 +588,30 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         storage.heartbeatInstance(instanceId);
 
         ensureRuntime(settings);
-        var leased = leaseAtStart("unordered", shardCount, maxShards);
-        if (leased.isEmpty() && runtime.hasLivePump()) {
+        var leased = leaseAtStart(run, "unordered", shardCount, maxShards);
+        if (leased.isEmpty() && runtime.hasLivePump() && currentRun.get() == run) {
             log.warn("Instance {} leased no shards — another instance holds them all", instanceId);
         }
 
-        var adopted = adoptAtStart(run, "unordered", leased, (entry, wakeup) -> {
+        return adoptAtStart(run, "unordered", leased, (entry, wakeup) -> {
             var owner = new ShardOwner(storage, entry.shard(), entry.grant().fence(), settings, handler, metrics,
                                        redeliveryPolicy, wakeup,
                                        instanceId, dispatch, entry.grant().previousOwnerReleased());
             owner.setDeliveryGate(this::deliveryPermitted);
             return owner;
         });
-        startHeartbeat(run);
-        reportAcquired(adopted);
-        log.info("Instance {} owns shards {}", instanceId, adopted);
     }
 
     /**
      * Adopt the units a start-up leased into the run it is starting, each through {@link #adoptIntoRun}, as a heartbeat
-     * tick's acquire loops do, so a unit joins a run one way only. The run cannot end meanwhile - a stop waits for the
-     * start ({@link #lifecycleLock}) - so every unit is adopted. Were one refused, it and every unit leased after it would be
-     * released again ({@link #abandonAcquisition}), as a tick undoes an acquisition its run no longer wants.
+     * tick's acquire loops do, so a unit joins a run one way only. The run can end meanwhile: a stop that gave up waiting
+     * for the start takes it out without {@link #lifecycleLock}. Then the unit that finds it ended, and every unit leased
+     * after it, is released again ({@link #abandonAcquisition}), as a tick undoes an acquisition its run no longer wants;
+     * those adopted before are the run's, and the start ends them with it ({@link #endRunOfStart}). A unit whose owner
+     * cannot be built fails the start: it and every unit leased after it are released before the failure escapes
+     * ({@link #releaseLeasedByFailedStart}), and those adopted before it are ended with the run ({@link #undoFailedStart}) -
+     * unless the failure is a critical error ({@link Exceptions#isCriticalError}), which escapes untouched, with nothing
+     * released or ended.
      *
      * @return the units adopted, in the order they were leased
      */
@@ -504,7 +621,16 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         var adopted      = new ArrayList<Integer>();
         for (var index = 0; index < leased.size(); index++) {
             var entry = leased.get(index);
-            if (!adoptIntoRun(run, shardRuntime, lane, entry.shard(), wakeup -> build.apply(entry, wakeup))) {
+            boolean joined;
+            try {
+                joined = adoptIntoRun(run, shardRuntime, lane, entry.shard(), wakeup -> build.apply(entry, wakeup));
+            } catch (RuntimeException | Error e) {
+                // A critical error escapes untouched, with nothing released (start()).
+                Exceptions.rethrowIfCriticalError(e);
+                releaseLeasedByFailedStart(lane, leased.subList(index, leased.size()), e);
+                throw e;
+            }
+            if (!joined) {
                 leased.subList(index, leased.size()).forEach(refused -> abandonAcquisition(refused.shard(), refused.grant().fence()));
                 break;
             }
@@ -521,8 +647,17 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * would be placed on a dead pump, ended there on arrival ({@code ShardPump.add}), reported as owned and handed back a
      * heartbeat later — and for that third of a lease no other instance could take it. Left free instead, it shows in
      * {@code QueueHealth.unownedShards}, and the dead pump's ERROR says to restart the runtime.
+     * <p>
+     * Leases nothing more once {@code run} has ended - a stop that gave up waiting for the start took it out - and
+     * returns what it has leased, for {@link #adoptAtStart} to release again.
+     * <p>
+     * When an acquire throws, the units already leased are released before the failure escapes
+     * ({@link #releaseLeasedByFailedStart}): the start fails, so no owner will ever be built for them, and no stop or
+     * heartbeat of the run releases them. Left named to this instance, they would be served by nobody, and taken by no
+     * other instance while this one's membership row - written before this loop - is live. A critical error
+     * ({@link Exceptions#isCriticalError}) is the exception: it escapes untouched, with nothing released.
      */
-    private List<LeasedUnit> leaseAtStart(String lane, int units, int maxShards) throws SQLException {
+    private List<LeasedUnit> leaseAtStart(Run run, String lane, int units, int maxShards) throws SQLException {
         var leased = new ArrayList<LeasedUnit>();
         if (!runtime.hasLivePump()) {
             log.warn("Instance {} acquires no {} unit on queue {}: every pump of its ShardRuntime has died, so nothing would "
@@ -530,36 +665,148 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                      instanceId, lane, queueId);
             return leased;
         }
-        // Checked per unit too, as in rebalance: what is placed after the last live pump died is ended on arrival.
-        for (var shard = 0; shard < units && leased.size() < maxShards && runtime.hasLivePump(); shard++) {
-            var grant = storage.acquireLeaseGrant(lane, shard, instanceId, leaseTtlMillis);
-            if (grant.isPresent()) {
-                leased.add(new LeasedUnit(shard, grant.get()));
+        try {
+            // Checked per unit too, as in rebalance: what is placed after the last live pump died is ended on arrival.
+            for (var shard = 0; shard < units && leased.size() < maxShards && runtime.hasLivePump() && currentRun.get() == run; shard++) {
+                var grant = storage.acquireLeaseGrant(lane, shard, instanceId, leaseTtlMillis);
+                if (grant.isPresent()) {
+                    leased.add(new LeasedUnit(shard, grant.get()));
+                }
             }
+        } catch (SQLException | RuntimeException | Error e) {
+            // A critical error escapes untouched, with nothing released (start()).
+            Exceptions.rethrowIfCriticalError(e);
+            releaseLeasedByFailedStart(lane, leased, e);
+            throw e;
         }
         return leased;
     }
 
     /**
+     * Release, in one fenced statement, the units a failing start leased and will build no owner for, and add to
+     * {@code failure} as suppressed a release that fails - but for a critical error ({@link Exceptions#isCriticalError}),
+     * which escapes instead, with {@code failure} added to it as suppressed. Fenced as {@link #abandonAcquisition}'s release is, so a row
+     * leased again since under a newer fence is left alone. A release that fails puts the units in
+     * {@link #unreleasedAcquisitions}, which the heartbeat of the next run started retries; until then they stay leased
+     * to this instance, and free to another only once its membership row is older than the lease TTL.
+     */
+    private void releaseLeasedByFailedStart(String lane, List<LeasedUnit> units, Throwable failure) {
+        if (units.isEmpty()) {
+            return;
+        }
+        var fences = new HashMap<Integer, Long>();
+        units.forEach(unit -> fences.put(unit.shard(), unit.grant().fence()));
+        try {
+            storage.releaseFencedLeases(lane, fences, instanceId);
+            log.debug("Instance {} released {} unit(s) [{}] on queue {} again: its start failed after leasing them",
+                      instanceId, lane, summarise(fences.keySet()), queueId);
+        } catch (SQLException | RuntimeException | Error e) {
+            if (Exceptions.isCriticalError(e)) {
+                e.addSuppressed(failure);
+                Exceptions.rethrowIfCriticalError(e);
+            }
+            fences.forEach((unit, fence) -> unreleasedAcquisitions.merge(unit, fence, Math::max));
+            failure.addSuppressed(e);
+            log.warn("Instance {} could not release the {} unit(s) [{}] on queue {} its failed start had leased. Each stays leased "
+                             + "to this instance, served by nobody, until another instance can take it - once this instance's "
+                             + "membership row is older than the lease TTL ({} ms) - or a later start of this queue retries the "
+                             + "release on its heartbeat",
+                     instanceId, lane, summarise(fences.keySet()), queueId, leaseTtlMillis, e);
+        }
+    }
+
+    /**
      * Stop owning, without draining. Used by the crash-recovery tests, where the point is that
      * another instance picks up whatever was left.
+     * <p>
+     * Waits for no {@link #start()} still doing its database work, as a crash would not: it takes the starting run out
+     * and leaves the start to hand back the runtime ({@link #lifecycleLock}). It waits only for a start already past that
+     * work, and for a {@link #stop()} that has not yet taken its run out.
      */
     public void stopAbruptly() {
-        // One lifecycle operation at a time, as start() and stop() (lifecycleLock).
-        synchronized (lifecycleLock) {
-            // Takes the run out as stop() does, so a tick still acquiring cannot hand its owner to a later start() (Run).
-            // Its owners are neither ended nor released: this stands in for a crash.
-            var run = currentRun.get();
-            if (run != null) {
-                synchronized (run) {
-                    currentRun.compareAndSet(run, null);
-                }
-                run.cancelHeartbeat();
+        // Abandon without acknowledging, so the takeover path is exercised for real rather than
+        // handed a queue the outgoing owner had already emptied.
+        flushOnExit.set(false);
+        // One lifecycle operation at a time, as start() and stop() (lifecycleLock) - but without waiting for it.
+        if (!lifecycleLock.tryLock()) {
+            stopWithoutWaiting(StopKind.ABRUPT, false);
+            return;
+        }
+        try {
+            stopAbruptlyLocked();
+        } finally {
+            lifecycleLock.unlock();
+        }
+    }
+
+    /**
+     * {@link #stopAbruptly()}'s work, under {@link #lifecycleLock}.
+     */
+    private void stopAbruptlyLocked() {
+        // Takes the run out as stop() does, so a tick still acquiring cannot hand its owner to a later start() (Run).
+        // Its owners are neither ended nor released: this stands in for a crash.
+        var run = currentRun.get();
+        if (run != null) {
+            synchronized (run) {
+                currentRun.compareAndSet(run, null);
             }
-            // Abandon without acknowledging, so the takeover path is exercised for real rather than
-            // handed a queue the outgoing owner had already emptied.
-            flushOnExit.set(false);
-            releaseRuntime(run);
+            run.cancelHeartbeat();
+        }
+        releaseRuntime(run);
+    }
+
+    /**
+     * A stop that did not get {@link #lifecycleLock} - {@link #stop()} within {@link #SHUTDOWN_BUDGET},
+     * {@link #stopAbruptly()} at once. A run whose start is still running is taken out here, under the run's monitor,
+     * with the stop it owes recorded on it ({@link Run#owedStop}): the start, which holds the lock, does the stop's work
+     * ({@link #endRunOfStart}). A run whose start has finished its database work ({@link Run#startFinished}) is stopped
+     * under the lock after all, once that start lets go of it: all it has left is telling the observer of its
+     * acquisitions. No run current means there is nothing to stop: the holder is a stop already ending it, or a start
+     * that failed and is undoing its own.
+     *
+     * @param interrupted whether {@link #stop()} got no further because its thread was interrupted, rather than because
+     *                    it waited out {@link #SHUTDOWN_BUDGET}; an interrupted stop may not have waited at all
+     */
+    private void stopWithoutWaiting(StopKind stop, boolean interrupted) {
+        var run = currentRun.get();
+        if (run == null) {
+            return;
+        }
+        synchronized (run) {
+            if (currentRun.get() != run) {
+                return;
+            }
+            if (!run.startFinished) {
+                run.owedStop = stop;
+                currentRun.compareAndSet(run, null);
+                if (stop == StopKind.GRACEFUL && interrupted) {
+                    log.warn("Instance {} was interrupted while its stop of queue {} waited for the queue's start to finish its database "
+                                     + "work, and stopped the queue without it. The start does the stop's work itself once its statements "
+                                     + "return: it releases the units it leased, hands back the runtime and deregisters the instance",
+                             instanceId, queueId);
+                } else if (stop == StopKind.GRACEFUL) {
+                    log.warn("Instance {} gave up waiting {} for the start of queue {} to finish its database work, and stopped the "
+                                     + "queue without it. The start does the stop's work itself once its statements return: it "
+                                     + "releases the units it leased, hands back the runtime and deregisters the instance",
+                             instanceId, SHUTDOWN_BUDGET, queueId);
+                } else {
+                    log.warn("Instance {} stopped queue {} abruptly without waiting for its start to finish its database work. The "
+                                     + "start adopts none of the units it leases from then on, releasing each again, and hands back "
+                                     + "the runtime once its statements return",
+                             instanceId, queueId);
+                }
+                return;
+            }
+        }
+        lifecycleLock.lock();
+        try {
+            if (stop == StopKind.ABRUPT) {
+                stopAbruptlyLocked();
+            } else {
+                stopRun();
+            }
+        } finally {
+            lifecycleLock.unlock();
         }
     }
 
@@ -808,8 +1055,9 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
     }
 
     /**
-     * Release again the lease rows an earlier heartbeat tick could not release when it undid an acquisition
-     * ({@link #unreleasedAcquisitions}, {@link #abandonAcquisition}). One fenced statement for all of them; each entry is
+     * Release again the lease rows an earlier heartbeat tick could not release when it undid an acquisition, or a failed
+     * start could not release ({@link #unreleasedAcquisitions}, {@link #abandonAcquisition},
+     * {@link #releaseLeasedByFailedStart}). One fenced statement for all of them; each entry is
      * dropped once it has run, whether it released the row or found it taken meanwhile - by another instance, or by this
      * one again under a newer fence - and kept for the next heartbeat when it throws. An entry added while this runs, or
      * one for the same unit under a newer fence, stays.
@@ -822,13 +1070,13 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         var released = storage.releaseFencedLeases(activeLane, retrying, instanceId);
         retrying.forEach(unreleasedAcquisitions::remove);
         if (released > 0) {
-            log.info("Instance {} released {} of {} {} unit(s) [{}] on queue {} that a heartbeat tick leased as the queue stopped and "
-                             + "could not release then; any not released had been taken meanwhile, by another instance or by this "
-                             + "one under a newer fence",
+            log.info("Instance {} released {} of {} {} unit(s) [{}] on queue {} that a heartbeat tick leased as the queue stopped, or a "
+                             + "start leased before it failed, and that could not be released then; any not released had been "
+                             + "taken meanwhile, by another instance or by this one under a newer fence",
                      instanceId, released, retrying.size(), activeLane, summarise(retrying.keySet()), queueId);
         } else {
-            log.debug("Instance {} found the {} unit(s) [{}] on queue {} that a heartbeat tick could not release as the queue stopped "
-                              + "taken meanwhile, by another instance or by this one under a newer fence; nothing left to release",
+            log.debug("Instance {} found the {} unit(s) [{}] on queue {} that could not be released as the queue stopped, or as a start "
+                              + "failed, taken meanwhile, by another instance or by this one under a newer fence; nothing left to release",
                       instanceId, activeLane, summarise(retrying.keySet()), queueId);
         }
     }
@@ -1455,7 +1703,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
     }
 
     /**
-     * Tell the observer of every unit a start-up leased ({@code startOrdered}, {@code startUnordered}) or a heartbeat tick's
+     * Tell the observer of every unit a start-up adopted ({@link #start()}, {@link #endRunOfStart}) or a heartbeat tick's
      * acquire loop adopted ({@link #adoptIntoRun}), outside the run's monitor. Each one is told even when the observer throws
      * for an earlier one: its acquisition is counted and its release will be told, so a unit skipped here would leave the
      * observer's released count ahead of its acquired count.
@@ -1637,41 +1885,76 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * this stop drops is only ever the run it took out, but the runtime it hands back and the membership row it deletes
      * are the queue's.
      * <p>
-     * The other way round too: called while a {@code start()} is still running on another thread, this waits for that
-     * start to finish, its database work included, before it begins. That wait is not part of the 2 s
-     * {@link #SHUTDOWN_BUDGET}. Against a database the pool cannot connect to, it lasts until the start gives up waiting
-     * for a connection, at the pool's connection timeout (30 s at Hikari's default). Against a network partition that
-     * catches the start's statement on an already pooled connection, it lasts until the driver's {@code socketTimeout}
-     * ends that statement, and without one indefinitely.
+     * The other way round, called while a {@code start()} is still doing its database work on another thread -
+     * registering the instance and leasing its units, which nothing in this queue bounds - this waits for it up to the
+     * 2 s {@link #SHUTDOWN_BUDGET}, and no longer. Past that, it takes the starting run out and returns: the queue is not
+     * started from then on, and the start does this stop's work itself once its statements return - it adopts and serves
+     * nothing, releases what it leased, hands back the runtime and deregisters the instance ({@link #lifecycleLock}).
+     * The drain and release below, and their own budget, then run on the start's thread instead. A stop on a thread that
+     * is interrupted, or is interrupted while it waits, stops waiting at once and does the same, and returns with the
+     * thread's interrupt flag still set.
      */
     @Override
     public void stop() {
-        synchronized (lifecycleLock) {
+        boolean locked;
+        try {
+            locked = lifecycleLock.tryLock(SHUTDOWN_BUDGET.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            // Restored, so the caller still sees it; a drain and hand-back below then return without waiting, as they
+            // would for any interrupted stop.
+            Thread.currentThread().interrupt();
+            stopWithoutWaiting(StopKind.GRACEFUL, true);
+            return;
+        }
+        if (!locked) {
+            stopWithoutWaiting(StopKind.GRACEFUL, false);
+            return;
+        }
+        try {
             stopRun();
+        } finally {
+            lifecycleLock.unlock();
         }
     }
 
+    /**
+     * Take the current run out and end it ({@link #endRun}). Under {@link #lifecycleLock}.
+     */
     private void stopRun() {
-        // The run ends - taken out of currentRun - and its `owners` is read in one step under the run's monitor, which
-        // every adoption into it takes (adoptIntoRun): a unit a tick leases while this stop runs is either in the list read
-        // here, or refused and undone by the tick itself (abandonAcquisition). Never both. So `ending` is every owner this
-        // run will ever have listed: nothing adopts into it after this. Everything below works on this run's state alone.
-        // Only stop() and stopAbruptly() take a run out - they and a start() that fails, its own - one at a time
-        // (lifecycleLock), so the run read here is still the current one inside the monitor.
+        // Only stop() and stopAbruptly() take a run out - they and a start() that fails, its own - and they do it one at a
+        // time (lifecycleLock). A stop that did not get the lock takes out only a run whose start is still running, which
+        // holds the lock (stopWithoutWaiting), so the run read here is still the current one inside the monitor.
+        var run = currentRun.get();
+        if (run == null) {
+            return;
+        }
+        synchronized (run) {
+            currentRun.compareAndSet(run, null);
+        }
+        endRun(run, true);
+    }
+
+    /**
+     * End a run that has been taken out of {@link #currentRun}: drain, end and release its owners, hand back the runtime,
+     * and - when {@code deregister} - delete this instance's membership row. What {@link #stop()} does once it has taken
+     * its run out, and what a start does for a run a stop took out while it was starting, or that its own failure ended
+     * ({@link #endRunOfStart}). Under {@link #lifecycleLock}.
+     */
+    private void endRun(Run run, boolean deregister) {
+        // The run's `owners` is read under its monitor, which every adoption into it takes (adoptIntoRun), and the run is
+        // already out of currentRun: a unit a tick or a start leases from then on is refused and undone by whoever leased
+        // it (abandonAcquisition), never adopted. So `ending` is every owner this run will ever have listed, but those a
+        // heartbeat tick still running releases or drops itself meanwhile, and counts as released itself. Everything below
+        // works on this run's state alone.
         //
         // Snapshot before releaseRuntime clears anything: the leases still have to be handed back
         // afterwards, and the owner list is what says which ones this instance holds - every owner
         // whose row is still this instance's (holdsLeaseRow), the dead pumps' included: an owner its
         // pump ended as it died (ENDED_ROW_HELD) still holds its row until it is handed back
         // (handBackUnitsOnDeadPumps), which a stop before the next heartbeat does here.
-        var run = currentRun.get();
-        if (run == null) {
-            return;
-        }
         List<LeasedOwner> ending;
         List<LeasedOwner> held;
         synchronized (run) {
-            currentRun.compareAndSet(run, null);
             ending = List.copyOf(run.owners);
             held = ending.stream().filter(LeasedOwner::holdsLeaseRow).toList();
         }
@@ -1710,34 +1993,11 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         // registered. An unordered one is released regardless; at-least-once covers its redelivery.
         var kept = stillInHandler.stream().filter(owner -> "ordered".equals(owner.lane())).toList();
         var toRelease = held.stream().filter(owner -> !kept.contains(owner)).toList();
-        withinShutdownBudget(() -> {
-            // What the pumps would have flushed had they gone on serving these owners. Valid still:
-            // releasing a lease does not bump its fence, and the leases go only after this. Nothing to
-            // do for a runtime this queue closed itself - its pumps flushed on the way out. Not for an
-            // owner whose pump died: its state is not trusted (handBackUnitsOnDeadPumps).
-            flushAcknowledgements(serving);
-            releaseHeldLeases(run, toRelease);
-            if (!kept.isEmpty()) {
-                log.warn("Instance {} is keeping {} ordered unit(s) [{}] on queue {}: a key was still in a handler "
-                                 + "{} after stop began. They become available to another instance when this one's "
-                                 + "liveness lapses ({} ms), so no successor starts a key that may still be running here. "
-                                 + "Raise shedGrace if handlers routinely outlast it",
-                         instanceId, kept.size(), summarise(kept.stream().map(LeasedOwner::shard).toList()), queueId,
-                         Duration.ofNanos(activeSettings.shedGraceNanos()), leaseTtlMillis);
-                return;
-            }
-            // Stop counting towards everyone else's fair share. Releasing the leases without this
-            // frees the shards and simultaneously forbids any survivor from taking them, for the
-            // whole staleness window — which makes a graceful scale-in worse for the cluster than a
-            // crash.
-            try {
-                storage.deregisterInstance(instanceId);
-            } catch (SQLException e) {
-                log.warn("Instance {} could not deregister on stop; it will age out of the membership "
-                                 + "table instead, and survivors will be held at a stale fair share until it does",
-                         instanceId, e);
-            }
-        });
+        // Nothing against the database for a run with no lease row to hand back and no deregistration owed: a start that
+        // failed before it adopted anything.
+        if (!held.isEmpty() || deregister) {
+            withinShutdownBudget(() -> handBackWithinBudget(run, serving, toRelease, kept, deregister));
+        }
         // This queue drops every owner the ended run listed, released, left to lapse, or found taken (RELEASED, so not in
         // `held`): a shared runtime keeps running, and would otherwise count those on a dead pump in shardsOnDeadPumps until
         // it stops. Every owner, not only `held`: a dead pump's owner the lease check found taken is uncounted only by the
@@ -1765,6 +2025,44 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         // Last, once the stop's own work is done: an observer that throws (QueueObserver says why that is not caught)
         // escapes the stop with nothing of it left undone.
         reportReleases(givenUp);
+    }
+
+    /**
+     * The database half of {@link #endRun}, on the budget thread ({@link #withinShutdownBudget}): flush what the serving
+     * owners still hold, release the rows of {@code toRelease}, and deregister this instance when {@code deregister} and
+     * no ordered unit is {@code kept}.
+     */
+    private void handBackWithinBudget(Run run, List<LeasedOwner> serving, List<LeasedOwner> toRelease, List<LeasedOwner> kept,
+                                      boolean deregister) {
+        // What the pumps would have flushed had they gone on serving these owners. Valid still:
+        // releasing a lease does not bump its fence, and the leases go only after this. Nothing to
+        // do for a runtime this queue closed itself - its pumps flushed on the way out. Not for an
+        // owner whose pump died: its state is not trusted (handBackUnitsOnDeadPumps).
+        flushAcknowledgements(serving);
+        releaseHeldLeases(run, toRelease);
+        if (!kept.isEmpty()) {
+            log.warn("Instance {} is keeping {} ordered unit(s) [{}] on queue {}: a key was still in a handler "
+                             + "{} after stop began. They become available to another instance when this one's "
+                             + "liveness lapses ({} ms), so no successor starts a key that may still be running here. "
+                             + "Raise shedGrace if handlers routinely outlast it",
+                     instanceId, kept.size(), summarise(kept.stream().map(LeasedOwner::shard).toList()), queueId,
+                     Duration.ofNanos(activeSettings.shedGraceNanos()), leaseTtlMillis);
+            return;
+        }
+        if (!deregister) {
+            return;
+        }
+        // Stop counting towards everyone else's fair share. Releasing the leases without this
+        // frees the shards and simultaneously forbids any survivor from taking them, for the
+        // whole staleness window — which makes a graceful scale-in worse for the cluster than a
+        // crash.
+        try {
+            storage.deregisterInstance(instanceId);
+        } catch (SQLException e) {
+            log.warn("Instance {} could not deregister on stop; it will age out of the membership "
+                             + "table instead, and survivors will be held at a stale fair share until it does",
+                     instanceId, e);
+        }
     }
 
     /**
@@ -1999,19 +2297,28 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * <p>
      * <b>The protocol.</b>
      * <ul>
-     *   <li>{@code start()}, {@code stop()} and {@code stopAbruptly()} never run concurrently ({@link #lifecycleLock}).
+     *   <li>{@code start()}, {@code stop()} and {@code stopAbruptly()} run one at a time under {@link #lifecycleLock}.
      *       Only {@code start()} installs a run, only the two stops take one out - they and a {@code start()} that
-     *       fails, its own - so within any of them the current run changes only by its own hand.</li>
-     *   <li>A run is taken out under its own monitor, and {@code stop()} reads its {@link #owners} in the same section. A
-     *       unit joins a run only through {@link #adoptIntoRun}, under the same monitor and only while the run is still
-     *       current - a start-up's units as much as a heartbeat tick's. So every owner a run ever lists is in the list its
-     *       stop reads, or was never listed and is released again by whoever leased it ({@link #abandonAcquisition}).</li>
+     *       fails, its own. One exception: a stop that does not get the lock - {@code stop()} within the
+     *       {@link #SHUTDOWN_BUDGET}, {@code stopAbruptly()} at once - takes out a run whose start, holding the lock, is still
+     *       running, and records the stop on it ({@link #owedStop}). The start then ends the run itself, under the lock
+     *       ({@link #endRunOfStart}). So a stop under the lock always finds the current run its own to take out, and a start
+     *       finds its run current or taken out by the one stop it owes.</li>
+     *   <li>A run is taken out under its own monitor, and its {@link #owners} are read under it once it is out. A unit
+     *       joins a run only through {@link #adoptIntoRun}, under the same monitor and only while the run is still
+     *       current - a start-up's units as much as a heartbeat tick's. So every owner a run ever lists is in the list
+     *       whoever ends it reads ({@link #endRun}), or was never listed and is released again by whoever leased it
+     *       ({@link #abandonAcquisition}).</li>
+     *   <li>A run's heartbeat is scheduled under its monitor and only while it is still current
+     *       ({@link #startHeartbeatUnlessStopped}), so a run a stop took out during its start never gets one: it would
+     *       have no stop left to cancel it.</li>
      *   <li>Each heartbeat is scheduled for one run and every tick works on that run's lists alone. A tick still running
      *       after its run has ended - cancelling the heartbeat does not stop it - adopts nothing, and reaches no owner
      *       of a run started since.</li>
      *   <li>A stop works on the run it took out and on nothing of a later one. Of what is the queue's rather than a
      *       run's, the runtime and the membership row are what still need {@code lifecycleLock}: a stop hands back and
-     *       deregisters what a start may have just borrowed and written.</li>
+     *       deregisters what a start may have just borrowed and written. A stop without the lock touches neither, and
+     *       leaves both to the start it took the run from.</li>
      *   <li>{@link #unreleasedAcquisitions} is the queue's too, and outlives every run, but takes no lock: it is a
      *       concurrent map that any run's heartbeat ticks write ({@link #abandonAcquisition}) and retry
      *       ({@link #retryUnreleasedAcquisitions}), and a tick must never wait behind a stop's drain. A retry is safe
@@ -2056,6 +2363,19 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
          * This run's slot on the shared heartbeat scheduler; {@code null} until its start has scheduled it.
          */
         volatile ScheduledFuture<?>    heartbeat;
+        /**
+         * Whether this run's start has finished its database work and scheduled the heartbeat
+         * ({@link #startHeartbeatUnlessStopped}). Read and written under the run's monitor. A stop that did not get
+         * {@link #lifecycleLock} takes out only a run whose start has not finished; one whose start has finished it
+         * stops under the lock, after that start has told the observer of its acquisitions ({@link #stopWithoutWaiting}).
+         */
+        boolean                        startFinished;
+        /**
+         * The stop that took this run out while its start was still running, without {@link #lifecycleLock}
+         * ({@link #stopWithoutWaiting}); {@code null} otherwise. Read and written under the run's monitor. The start does
+         * that stop's work for it ({@link #endRunOfStart}).
+         */
+        StopKind                       owedStop;
 
         /**
          * Cancel this run's heartbeat, without interrupting a tick already running: that tick finishes on this run's
@@ -2067,5 +2387,19 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                 scheduled.cancel(false);
             }
         }
+    }
+
+    /**
+     * Which stop a start owes when a stop took its run out without {@link #lifecycleLock} ({@link Run#owedStop}).
+     */
+    private enum StopKind {
+        /**
+         * {@link #stop()} or {@link #close()}: the run is ended as a stop ends one, the instance deregistered.
+         */
+        GRACEFUL,
+        /**
+         * {@link #stopAbruptly()}: only the runtime is handed back.
+         */
+        ABRUPT
     }
 }
