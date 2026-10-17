@@ -2055,6 +2055,16 @@ public final class ShardOwnedStorage {
      * for that key that is dead-lettered <em>and not itself blocked</em> — the message that actually
      * has to be dealt with, not the one immediately in front — or, once an operator has deleted that
      * one, the lowest dead letter left for the key.
+     * <p>
+     * Not fenced, unlike the other writes an owner makes on its lanes. What it moves is decided by the
+     * table, not by the caller's view of it: the {@code EXISTS} takes a row only while a dead letter sits
+     * below it on the same key, and {@code blocked_by_key_order} is read in the same statement, so any
+     * owner of the shard — this one or a successor — would move the same rows the same way, and a fence
+     * would decide only which of them writes. It does not rest on the row being idle: an owner re-reads
+     * its dead-letter blocks only while it holds one or is asked to, so after an operator dead-letters an
+     * ordered row by hand, an owner holding no block can be delivering a row behind it until it learns of
+     * the block. A new owner write whose effect depends on the caller's own state rather than on the
+     * table's is fenced like {@link #moveToDeadLetterIfOwned}.
      *
      * @return the sequence values actually moved; a row whose key no longer has a dead letter below it
      *         stays in its lane and is left out
