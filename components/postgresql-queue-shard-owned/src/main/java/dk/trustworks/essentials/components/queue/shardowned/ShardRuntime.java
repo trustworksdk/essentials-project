@@ -372,6 +372,15 @@ public final class ShardRuntime implements Lifecycle, AutoCloseable {
     }
 
     /**
+     * The pumps whose owner list holds {@code owner} ({@link ShardPump#serves}): the pumps serving it now, not the one
+     * {@link #pumpFor} would route its unit to. Package-private: it is for asserting where an owner landed, and that a
+     * stopped queue's owners have left the pumps.
+     */
+    List<ShardPump> pumpsServing(LeasedOwner owner) {
+        return List.copyOf(pumps).stream().filter(pump -> pump.serves(owner)).toList();
+    }
+
+    /**
      * Equivalent to {@link #stop()}, so try-with-resources and a container both work.
      */
     @Override

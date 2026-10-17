@@ -251,17 +251,12 @@ class ShardOwnedOrderedWatermarkIT {
     }
 
     /**
-     * The safe cursor of the owner serving {@code unit}. Read reflectively so the engine carries no
-     * test-only accessor; a renamed field fails this loudly rather than passing. The field is written
-     * by the pump thread without a barrier, so a stale read can only be an OLDER, lower value — it
-     * could mask a step-over, never invent one.
+     * The safe cursor of the owner serving {@code unit}, found among the queue's owners
+     * ({@link ShardOwnedQueue#owners()}). The cursor is written by the pump thread without a barrier,
+     * so a stale read can only be an OLDER, lower value — it could mask a step-over, never invent one.
      */
-    private static long orderedCursor(ShardOwnedQueue queue, int unit) throws ReflectiveOperationException {
-        var field = ShardOwnedQueue.class.getDeclaredField("owners");
-        field.setAccessible(true);
-        @SuppressWarnings("unchecked")
-        var owners = (List<LeasedOwner>) field.get(queue);
-        return owners.stream()
+    private static long orderedCursor(ShardOwnedQueue queue, int unit) {
+        return queue.owners().stream()
                      .filter(owner -> owner instanceof OrderedShardOwner && owner.shard() == unit && owner.leaseHeld())
                      .map(owner -> ((OrderedShardOwner) owner).batchReadCursor())
                      .findFirst()

@@ -1406,6 +1406,54 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
     }
 
     /**
+     * A copy of the owners this queue lists for the units it leases, in list order: the list {@link #stop()} ends and
+     * releases, and the heartbeat's lease check and fair share go by. Package-private: it is for asserting which owner
+     * serves a unit, not a figure to operate on.
+     */
+    List<LeasedOwner> owners() {
+        return List.copyOf(owners);
+    }
+
+    /**
+     * The very monitor this queue's {@link #runLock} is: the one a heartbeat tick decides under, in {@link #adoptIntoRun},
+     * whether its acquisition joins the run or is refused, and that {@link #start()}, {@link #stop()} and
+     * {@link #stopAbruptly()} write {@code running} under. Package-private: it is for a test that holds it to keep every
+     * tick of this queue from adopting or refusing a unit until it lets go, not for synchronising on in production code.
+     */
+    Object runLock() {
+        return runLock;
+    }
+
+    /**
+     * List an owner the caller has already put on a pump, with the bookkeeping {@link #adoptIntoRun} does for an owner a
+     * heartbeat tick acquired - listed, mapped in {@code ownedShards} when it is an unordered {@link ShardOwner}, and its
+     * acquisition counted ({@link #countAcquisition}) - so {@link #stop()} ends, releases and reports it like any other.
+     * Package-private: it is for staging an owner whose behaviour a test controls, which a real acquisition cannot build.
+     * The observer is not told of the acquisition; whatever releases the owner ({@link #stop()}, or a dead-pump hand-back,
+     * {@link #handBackUnitsOnDeadPumps}) tells it of the release.
+     *
+     * @param owner the owner to list
+     * @param first list it ahead of every other owner, so it is the first one {@link #stop()} ends, rather than last
+     * @throws IllegalStateException when the queue is not running: {@link #adoptIntoRun} adopts into no stopped run either
+     */
+    void adoptPlacedOwner(LeasedOwner owner, boolean first) {
+        synchronized (runLock) {
+            if (!running.get()) {
+                throw new IllegalStateException("Queue " + queueId + " is not running, so it adopts no owner");
+            }
+            if (first) {
+                owners.addFirst(owner);
+            } else {
+                owners.add(owner);
+            }
+            if (owner instanceof ShardOwner unordered) {
+                ownedShards.put(owner.shard(), unordered);
+            }
+            countAcquisition(owner);
+        }
+    }
+
+    /**
      * Tell the observer of every unit a heartbeat tick's acquire loop adopted ({@link #adoptIntoRun}), outside
      * {@link #runLock}. Each one is told even when the observer throws for an earlier one: its acquisition is counted and its
      * release will be told, so a unit skipped here would leave the observer's released count ahead of its acquired count.

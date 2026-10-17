@@ -189,6 +189,16 @@ final class ShardPump implements Runnable {
     }
 
     /**
+     * Whether this pump's owner list holds this very {@code owner}, by identity: added ({@link #add}) and not yet dropped,
+     * either by a pass that found it ended or by {@link #handedBack}. The pump's exit leaves the list as it was: a dead or
+     * stopped pump still serves every owner it held until their queue hands each back. Package-private, for
+     * {@link ShardRuntime#pumpsServing}.
+     */
+    boolean serves(LeasedOwner owner) {
+        return owners.stream().anyMatch(held -> held == owner);
+    }
+
+    /**
      * Whether this pump's thread ended on a critical error while its runtime was running ({@link #run()}). A dead pump
      * serves nothing, and {@link ShardRuntime} routes new shards to the live ones. True only once every owner it held has
      * been counted and ended - or ending it threw, which still leaves it counted ({@link #markDead()}). The exception

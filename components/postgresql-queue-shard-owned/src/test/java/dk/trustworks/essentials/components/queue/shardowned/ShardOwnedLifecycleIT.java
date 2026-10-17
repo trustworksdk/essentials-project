@@ -603,7 +603,7 @@ class ShardOwnedLifecycleIT {
                 }
             });
             Awaitility.await().atMost(Duration.ofSeconds(10)).until(queue::isStarted);
-            synchronized (runLockOf(queue)) {
+            synchronized (queue.runLock()) {
                 assertThat(aHeartbeatIsSleeping()).as("premise: the tick was still acquiring when the test took the lock it refuses under").isTrue();
                 starting.get(20, TimeUnit.SECONDS);
             }
@@ -1088,17 +1088,6 @@ class ShardOwnedLifecycleIT {
                                       + " AND lane = '" + lane + "' AND shard = " + unit);
         }
         Awaitility.await().atMost(Duration.ofSeconds(10)).until(this::aHeartbeatIsSleeping);
-    }
-
-    /**
-     * The monitor {@code queue} decides under whether a heartbeat tick's acquisition joins its run (its private
-     * {@code runLock}, taken by {@code adoptIntoRun}). A test holding it keeps every tick of the queue from adopting or
-     * refusing a unit until it lets go.
-     */
-    private static Object runLockOf(ShardOwnedQueue queue) throws ReflectiveOperationException {
-        var field = ShardOwnedQueue.class.getDeclaredField("runLock");
-        field.setAccessible(true);
-        return field.get(queue);
     }
 
     private void dropSlowAcquire() throws Exception {
