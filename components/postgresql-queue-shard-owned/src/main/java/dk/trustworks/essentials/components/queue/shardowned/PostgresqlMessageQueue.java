@@ -582,19 +582,7 @@ public final class PostgresqlMessageQueue implements MessageQueue {
         // Calling consume() starts the queue if it was not already started, which is what every
         // caller of this contract expects and what the tests rely on.
         synchronized (consumers) {
-            try {
-                unorderedConsumer.start();
-                orderedConsumer.start();
-            } catch (RuntimeException | Error e) {
-                // A critical error (Exceptions.isCriticalError) escapes untouched, with no undo attempted, as a consumer's
-                // own start does. Otherwise both are stopped even when the first one's stop throws (an observer failing for
-                // a release), and the start's failure is what escapes: a stop's failure is added to it, never thrown in
-                // its place. A non-critical Error counts as a failed start too - an observer's AssertionError for an
-                // acquisition escapes a consumer's start with that consumer running.
-                Exceptions.rethrowIfCriticalError(e);
-                Exceptions.forEachCollectingFailures(List.of(unorderedConsumer, orderedConsumer), ShardOwnedQueue::stop, e);
-                throw e;
-            }
+            startEachOrStopAll(List.of(unorderedConsumer, orderedConsumer));
             // A competing consumer is legal and occasionally wanted, but the common reason for a
             // second consume() is the belief that one call serves the ordered lane and another the
             // unordered one. It does not — every consume() serves both, and the lane reaches the
@@ -643,10 +631,17 @@ public final class PostgresqlMessageQueue implements MessageQueue {
                 return orderedConsumer.shardsHeld();
             }
 
+            /**
+             * Starts both lanes, or neither: a start of either lane that fails with anything but a critical error
+             * ({@link Exceptions#isCriticalError}) stops both and escapes as it was thrown, with any failure of those
+             * stops added to it as suppressed, so the subscription is left not started and a later {@code start()} runs
+             * again ({@link #startEachOrStopAll}). It used to start them one after the other and stop at the first throw:
+             * a {@link QueueObserver} throwing for the unordered lane's acquisition left that lane running and the
+             * ordered lane never started.
+             */
             @Override
             public void start() {
-                unorderedConsumer.start();
-                orderedConsumer.start();
+                startEachOrStopAll(List.of(unorderedConsumer, orderedConsumer));
             }
 
             @Override
@@ -914,6 +909,16 @@ public final class PostgresqlMessageQueue implements MessageQueue {
      * Restarts consumers this queue created and then stopped. A queue that has never had a consumer
      * has nothing to start, and enqueueing and reading depth never required it — matching
      * {@code DurableQueues}, where the lifecycle governs the consuming side.
+     * <p>
+     * Starts every consumer or none. A consumer's start that fails with anything but a critical error
+     * ({@link Exceptions#isCriticalError}) - a {@link QueueObserver} throwing for an acquisition, say, which escapes that
+     * consumer's start with the consumer running - stops every consumer of this queue and escapes as it was thrown, with
+     * any failure of those stops added to it as suppressed; the queue is then not started, so a later {@code start()}
+     * runs again. It used to start them one after the other and stop at the first throw, which left the consumers
+     * before it running, the ones after it never started, and the queue reporting itself started, so a second
+     * {@code start()} did nothing. A critical error escapes untouched and the queue stays started, so a {@link #stop()}
+     * still stops what it left running: a start's critical error stops nothing, and a stop's while undoing a failed
+     * start leaves the consumers after it unstopped.
      */
     @Override
     public void start() {
@@ -925,7 +930,16 @@ public final class PostgresqlMessageQueue implements MessageQueue {
             if (!started.compareAndSet(false, true)) {
                 return;
             }
-            consumers.forEach(ShardOwnedQueue::start);
+            try {
+                startEachOrStopAll(consumers);
+            } catch (RuntimeException | Error e) {
+                // A non-critical failure has stopped every consumer. A critical error - the start's, or a stop's while
+                // undoing it - may have left some running, so the queue stays started and a stop() still reaches them.
+                if (!Exceptions.isCriticalError(e)) {
+                    started.set(false);
+                }
+                throw e;
+            }
         }
     }
 
@@ -964,6 +978,27 @@ public final class PostgresqlMessageQueue implements MessageQueue {
      */
     private static void stopEach(List<ShardOwnedQueue> consumers) {
         Exceptions.forEachThenThrowFirst(consumers, ShardOwnedQueue::stop);
+    }
+
+    /**
+     * Start every one of {@code consumers}, in order, or leave none of them started. A start that fails with anything
+     * but a critical error ({@link Exceptions#isCriticalError}) stops every one of them - those started before it, the
+     * one that failed, and those after it, for which a stop does nothing - each one even when an earlier one's stop
+     * throws, and then escapes as it was thrown, with every stop's failure added to it as suppressed, never thrown in
+     * its place ({@link Exceptions#forEachCollectingFailures}). A {@code RuntimeException} and a non-critical
+     * {@code Error} count alike: a {@link QueueObserver} that throws either for an acquisition escapes a consumer's
+     * start with that consumer running, and its fan-out observer is shared by every consumer of this queue. A start's
+     * critical error escapes untouched, with nothing stopped, as a consumer's own start leaves it; a stop's critical error
+     * ends the stopping at once and escapes, with the start's failure added to it as suppressed.
+     */
+    private static void startEachOrStopAll(List<ShardOwnedQueue> consumers) {
+        try {
+            consumers.forEach(ShardOwnedQueue::start);
+        } catch (RuntimeException | Error e) {
+            Exceptions.rethrowIfCriticalError(e);
+            Exceptions.forEachCollectingFailures(consumers, ShardOwnedQueue::stop, e);
+            throw e;
+        }
     }
 
     @Override

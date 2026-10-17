@@ -20,6 +20,7 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.zaxxer.hikari.*;
 import dk.trustworks.essentials.components.queue.shardowned.spi.*;
+import dk.trustworks.essentials.shared.Lifecycle;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -1206,6 +1207,58 @@ class ShardOwnedLifecycleIT {
             assertThat(instanceRegistered(instanceId)).as("the instance is deregistered").isFalse();
         } finally {
             throwing.set(false);
+        }
+    }
+
+    /**
+     * A restart of the queue or of a subscription whose first lane's start throws - an observer failing for that lane's
+     * acquisition, which escapes the start with the lane running - stops both lanes, throws the observer's failure and
+     * leaves the restarted thing not started, so a second start runs again. Both started their consumers one after the
+     * other and stopped at the first throw: the unordered lane went on leasing and dispatching, the ordered lane was never
+     * started, and the queue reported itself started, so a second {@code start()} did nothing.
+     */
+    @ParameterizedTest
+    @CsvSource({"queue, IllegalStateException", "subscription, IllegalStateException", "queue, AssertionError", "subscription, AssertionError"})
+    void a_restart_whose_first_lane_start_throws_an_observer_failure_stops_both_lanes_and_starts_again(String startedBy, String thrownType) throws Exception {
+        var instanceId = "spi-restart-observer-throws-" + startedBy + "-" + thrownType;
+        var throwing   = new AtomicBoolean();
+        try (var queue = new PostgresqlMessageQueue(dataSource, QUEUE_ID, SHARD_COUNT, instanceId)) {
+            queue.addObserver(new QueueObserver() {
+                @Override
+                public void shardOwnershipChanged(int shard, boolean acquired) {
+                    if (acquired && throwing.get()) {
+                        throwAsThrown(simulatedObserverFailure(thrownType, "simulated observer failure acquiring unit " + shard));
+                    }
+                }
+            });
+            var subscription = queue.consume((messageId, key, payload, payloadType) -> { }, ConsumerOptions.defaults());
+            Lifecycle restarted = "queue".equals(startedBy) ? queue : subscription;
+            try {
+                restarted.stop();
+                assertThat(subscription.isStarted()).as("premise: both lanes stopped").isFalse();
+                throwing.set(true);
+
+                assertThatThrownBy(restarted::start)
+                        .as("the observer's failure escapes the start")
+                        .isInstanceOf("AssertionError".equals(thrownType) ? AssertionError.class : IllegalStateException.class)
+                        .hasMessageStartingWith("simulated observer failure acquiring");
+
+                assertThat(restarted.isStarted()).as("the restarted %s is not started", startedBy).isFalse();
+                assertThat(subscription.isStarted()).as("neither lane's consumer is still started").isFalse();
+                assertThat(unitsOwnedBy("unordered", instanceId)).as("no unordered lease row names the instance").isZero();
+                assertThat(unitsOwnedBy("ordered", instanceId)).as("no ordered lease row names the instance").isZero();
+
+                throwing.set(false);
+                restarted.start();
+
+                assertThat(restarted.isStarted()).as("a second start runs again").isTrue();
+                Awaitility.await().atMost(Duration.ofSeconds(20))
+                          .alias("both lanes hold units after the second start")
+                          .until(() -> subscription.unorderedShardsHeld() > 0 && subscription.orderedUnitsHeld() > 0);
+            } finally {
+                throwing.set(false);
+                subscription.stop();
+            }
         }
     }
 

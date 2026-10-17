@@ -198,10 +198,33 @@ public class ShardOwnedDurableQueues implements DurableQueues {
 
     // ------------------------------------------------------------- lifecycle
 
+    /**
+     * {@inheritDoc}
+     * <p>
+     * Starts every consumer or none. A consumer's start that fails with anything but a critical error
+     * ({@link Exceptions#isCriticalError}) - a {@link DurableQueueException} for a failed subscription, or a
+     * {@code QueueObserver}'s non-critical {@code Error} for an acquisition, say - stops every consumer, each one even when
+     * an earlier one's stop throws, and escapes as it was thrown, with every stop's failure added to it as suppressed
+     * ({@link Exceptions#forEachCollectingFailures}). This then reports itself not started, so a later {@code start()}
+     * runs again. It used to start them one after the other and stop at the first throw, which left the consumers after
+     * it unstarted while this reported itself started. A critical error - a start's, escaping untouched with nothing
+     * stopped, or a stop's, ending the stopping at once with the start's failure added to it as suppressed - leaves this
+     * started, so a {@link #stop()} still stops what it left running.
+     * <p>
+     * This reports itself started from the moment the start begins, so a consumer {@code consumeFromQueue} adds
+     * meanwhile starts itself rather than being missed by the loop below.
+     */
     @Override
     public void start() {
         started = true;
-        consumers.values().forEach(ShardOwnedDurableQueueConsumer::start);
+        try {
+            consumers.values().forEach(ShardOwnedDurableQueueConsumer::start);
+        } catch (RuntimeException | Error e) {
+            Exceptions.rethrowIfCriticalError(e);
+            Exceptions.forEachCollectingFailures(consumers.values(), ShardOwnedDurableQueueConsumer::stop, e);
+            started = false;
+            throw e;
+        }
     }
 
     /**
