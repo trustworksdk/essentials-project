@@ -398,11 +398,14 @@ final class OrderedShardOwner implements BatchReadableOwner {
     /**
      * The takeover charge was refused by its fence: the unit's lease row no longer names this instance under this
      * owner's fence. As on the acknowledgement path, that is the lease lost; the pump drops the owner at the end of its
-     * pass, before it has dispatched anything.
+     * pass, before it has dispatched anything. Counted in {@code leasesLost} only when the owner was still {@code HELD} -
+     * see ShardOwner#leaseLostBeforeTakeover.
      */
     private void leaseLostBeforeTakeover() {
         var was = leaseRow.advanceTo(LeaseRow.RELEASED);
         if (was == LeaseRow.HELD) {
+            // May count a loss twice (F-346): a lease check that read the stale fence while the owner was HELD counts it too
+            metrics.leasesLost.increment();
             log.warn("Ordered shard {}: takeover charge rejected under fence {} — lease lost, stopping", shard, fence);
         } else {
             log.debug("Ordered shard {}: takeover charge rejected under fence {}; the owner had already stopped", shard, fence);

@@ -200,7 +200,8 @@ interface LeasedOwner {
      *     when it was {@code HELD} (the pump still had the owner in its selection). Called off the pump thread, by the
      *     queue's heartbeat or {@code stop()}.</li>
      *     <li>The owner's own fenced write refused - its acknowledgement flush, or the attempt charge in
-     *     {@link #onTakeover}: {@code RELEASED} and a WARN (the charge logs at DEBUG when the owner had already ended). No
+     *     {@link #onTakeover}: {@code RELEASED} and a WARN (the charge logs at DEBUG when the owner had already ended, and
+     *     counts {@code leasesLost} only when it had not; a refused acknowledgement counts {@code fencedOutAcks}). No
      *     wake-up: those writes run on the owner's own pump, inside a pass, or on {@code stop()}'s flush of owners it had
      *     already ended; the pump drops the owner at the end of that pass, and a wake-up would only cost it one empty
      *     pass more.</li>

@@ -16,11 +16,14 @@
 
 package dk.trustworks.essentials.components.queue.shardowned;
 
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.zaxxer.hikari.*;
 import dk.trustworks.essentials.components.queue.shardowned.ShardOwnedStorage.OrderedPayload;
 import dk.trustworks.essentials.components.queue.shardowned.spi.RedeliveryRequested;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.*;
+import org.slf4j.LoggerFactory;
 import org.testcontainers.junit.jupiter.*;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 
@@ -47,7 +50,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  *     charges the message one attempt and does not dead-letter it.</li>
  *     <li>The charge is fenced: an owner whose lease has already moved on when its pump first takes it over charges
  *     nothing, so the successor's in-flight rows are not charged a second time, and the owner reads as having lost
- *     its lease. An owner that still holds its lease and finds nothing to charge keeps it.</li>
+ *     its lease and is counted in {@code leasesLost}. An owner that {@code stop()} had already ended, and whose row it
+ *     released, charges nothing either and is neither warned about nor counted. An owner that still holds its lease
+ *     and finds nothing to charge keeps it.</li>
  * </ul>
  * Which rows a takeover charges, exactly: {@code ShardOwnedTakeoverChargeIT}.
  */
@@ -333,7 +338,9 @@ class ShardOwnedTakeoverAttemptsIT {
         assertThat(staleMetrics.takeoverAttemptBumps.sum()).as("refused by the fence").isZero();
         assertThat(attemptsOf(ShardOwnedSchema.UNORDERED_TABLE)).as("charged once, by the successor").containsOnly(1);
         assertThat(staleOwner.leaseRow()).as("a refused charge is a lost lease, as on the ack path").isEqualTo(LeasedOwner.LeaseRow.RELEASED);
+        assertThat(staleMetrics.leasesLost.sum()).as("counted as lost: the queue's lease check skips an owner already RELEASED").isEqualTo(1L);
         assertThat(successorOwner.leaseHeld()).isTrue();
+        assertThat(successorMetrics.leasesLost.sum()).isZero();
     }
 
     @Test
@@ -364,7 +371,91 @@ class ShardOwnedTakeoverAttemptsIT {
         assertThat(staleMetrics.takeoverAttemptBumps.sum()).as("refused by the fence").isZero();
         assertThat(attemptsOf(ShardOwnedSchema.ORDERED_TABLE)).as("charged once, by the successor").containsOnly(1);
         assertThat(staleOwner.leaseRow()).as("a refused charge is a lost lease, as on the ack path").isEqualTo(LeasedOwner.LeaseRow.RELEASED);
+        assertThat(staleMetrics.leasesLost.sum()).as("counted as lost: the queue's lease check skips an owner already RELEASED").isEqualTo(1L);
         assertThat(successorOwner.leaseHeld()).isTrue();
+        assertThat(successorMetrics.leasesLost.sum()).isZero();
+    }
+
+    /**
+     * The other way a lease moves on before {@code onTakeover} runs: {@code stop()} ended the owner and released its row
+     * (adoptIntoRun's window). The successor then takes the unit cleanly and charges nothing itself, so a late unfenced
+     * charge by the stale owner would be the only charge, and nothing else would expose it.
+     */
+    @Test
+    void an_unordered_owner_whose_unit_was_released_by_stop_before_its_takeover_charges_nothing() throws Exception {
+        var policy = RedeliveryPolicy.fixed(Duration.ofSeconds(1), 2);
+        try (var connection = dataSource.getConnection()) {
+            storage().enqueueBatch(connection, 0, List.of(bytes("a"), bytes("b"), bytes("c")), 1);
+        }
+        var stale        = takeUncleanly("unordered", "instance-1");
+        var staleMetrics = new ShardOwnerMetrics();
+        var staleOwner = new ShardOwner(storage(), 0, stale.fence(), ShardOwnerSettings.defaults(), (id, payload, type) -> { },
+                                        staleMetrics, policy, new ShardWakeup(), "instance-1", HandlerDispatch.inline(),
+                                        stale.previousOwnerReleased());
+
+        assertWarnsNothingWhenEndedAndReleasedBeforeItsTakeover(ShardOwner.class, "unordered", stale, staleOwner, staleMetrics,
+                                                                ShardOwnedSchema.UNORDERED_TABLE);
+    }
+
+    /**
+     * {@link #an_unordered_owner_whose_unit_was_released_by_stop_before_its_takeover_charges_nothing} on the ordered lane.
+     */
+    @Test
+    void an_ordered_owner_whose_unit_was_released_by_stop_before_its_takeover_charges_nothing() throws Exception {
+        var policy = RedeliveryPolicy.fixed(Duration.ofSeconds(1), 2);
+        insertOrdered("key-1", 0, 1);
+        insertOrdered("key-2", 0, 2);
+        var stale        = takeUncleanly("ordered", "instance-1");
+        var staleMetrics = new ShardOwnerMetrics();
+        var staleOwner = new OrderedShardOwner(storage(), 0, stale.fence(), ShardOwnerSettings.defaults(), (id, key, payload, type) -> { },
+                                               staleMetrics, policy, "instance-1", new ShardWakeup(), HandlerDispatch.inline(),
+                                               stale.previousOwnerReleased());
+
+        assertWarnsNothingWhenEndedAndReleasedBeforeItsTakeover(OrderedShardOwner.class, "ordered", stale, staleOwner, staleMetrics,
+                                                                ShardOwnedSchema.ORDERED_TABLE);
+    }
+
+    /**
+     * End {@code staleOwner} as {@code stop()} does and release its row, let instance-2 take the unit cleanly, then run the
+     * stale owner's takeover: it must charge nothing, end {@code RELEASED} without a WARN, and count no lost lease.
+     */
+    private void assertWarnsNothingWhenEndedAndReleasedBeforeItsTakeover(Class<?> ownerType, String lane, ShardOwnedStorage.LeaseGrant stale,
+                                                                         LeasedOwner staleOwner, ShardOwnerMetrics staleMetrics,
+                                                                         String table) throws Exception {
+        var logged      = new ListAppender<ILoggingEvent>();
+        var ownerLogger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(ownerType);
+        var ownerLevel  = ownerLogger.getLevel();
+        logged.start();
+        ownerLogger.addAppender(logged);
+        // The ended owner's refused charge is logged at DEBUG only
+        ownerLogger.setLevel(ch.qos.logback.classic.Level.DEBUG);
+        try {
+            staleOwner.endKeepingLeaseRow();
+            assertThat(storage().releaseFencedLeases(lane, Map.of(0, stale.fence()), "instance-1")).as("premise: stop() released the row").isEqualTo(1);
+            var successor = storage().acquireLeaseGrant(lane, 0, "instance-2", LEASE_TTL.toMillis()).orElseThrow();
+            assertThat(successor.previousOwnerReleased()).as("premise: a clean handover, so the successor charges nothing itself").isTrue();
+
+            try (var connection = dataSource.getConnection()) {
+                staleOwner.onTakeover(connection);
+            }
+
+            assertThat(staleMetrics.takeoverAttemptBumps.sum()).as("refused by the fence").isZero();
+            assertThat(attemptsOf(table)).as("nobody charged a clean handover").containsOnly(0);
+            assertThat(staleOwner.leaseRow()).isEqualTo(LeasedOwner.LeaseRow.RELEASED);
+            assertThat(staleMetrics.leasesLost.sum()).as("its own queue released the row: not a lost lease").isZero();
+            assertThat(logged.list).filteredOn(event -> event.getLevel() == ch.qos.logback.classic.Level.WARN)
+                                   .extracting(ILoggingEvent::getFormattedMessage)
+                                   .as("an owner that had already ended is not warned about")
+                                   .isEmpty();
+            assertThat(logged.list).filteredOn(event -> event.getLevel() == ch.qos.logback.classic.Level.DEBUG)
+                                   .extracting(ILoggingEvent::getFormattedMessage)
+                                   .as("premise: the charge was refused, and the owner read as already ended")
+                                   .anySatisfy(message -> assertThat(message).contains("takeover charge rejected under fence " + stale.fence()
+                                                                                               + "; the owner had already stopped"));
+        } finally {
+            ownerLogger.detachAppender(logged);
+            ownerLogger.setLevel(ownerLevel);
+        }
     }
 
     @Test

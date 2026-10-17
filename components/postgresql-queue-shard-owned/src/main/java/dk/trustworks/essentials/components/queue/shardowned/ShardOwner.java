@@ -345,10 +345,22 @@ final class ShardOwner implements LeasedOwner {
     /**
      * The takeover charge was refused by its fence: the shard's lease row no longer names this instance under this
      * owner's fence. As on the acknowledgement path, that is the lease lost; the pump drops the owner at the end of its pass.
+     * Counted in {@code leasesLost} when the owner was still {@code HELD}: the unit was taken from an owner that served it,
+     * and the queue's lease check, which counts the units it finds taken, skips an owner once its row is {@code RELEASED}.
+     * Not counted when the owner was no longer {@code HELD}, which its pump does not check before the takeover: it runs the
+     * takeover of every owner it was handed and drops the ended ones only at the end of that pass. Two cases reach that:
+     * <ul>
+     *     <li>{@code stop()} had ended the owner ({@code ENDED_ROW_HELD}), and its row was since released by that stop, or
+     *     taken by another instance before the stop released it.</li>
+     *     <li>The owner was already {@code RELEASED}: this instance released its row (a stop, or a rebalance shedding it),
+     *     or the queue's lease check found the unit taken and counted it in {@code leasesLost} there.</li>
+     * </ul>
      */
     private void leaseLostBeforeTakeover() {
         var was = leaseRow.advanceTo(LeaseRow.RELEASED);
         if (was == LeaseRow.HELD) {
+            // May count a loss twice (F-346): a lease check that read the stale fence while the owner was HELD counts it too
+            metrics.leasesLost.increment();
             log.warn("Shard {}: takeover charge rejected under fence {} — lease lost, stopping", shard, fence);
         } else {
             log.debug("Shard {}: takeover charge rejected under fence {}; the owner had already stopped", shard, fence);
