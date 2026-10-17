@@ -455,7 +455,10 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                 undo.addSuppressed(failure);
                 Exceptions.rethrowIfCriticalError(undo);
             }
-            failure.addSuppressed(undo);
+            // An observer that threw this very instance for an acquisition (the start's failure) and again for a release
+            if (undo != failure) {
+                failure.addSuppressed(undo);
+            }
         }
         return failure;
     }
@@ -1323,21 +1326,33 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         var held = run.owners.stream().filter(LeasedOwner::leaseHeld).toList();
         if (held.size() > fairShare) {
             var released = new ArrayList<Integer>();
-            for (var owner : held.subList(fairShare, held.size())) {
-                // One unit at a time: a failed release leaves this owner serving (HELD) and the next tick sheds it again.
-                // The owner may dispatch for the moment between the release and its end; a successor's acquire bumps the
-                // fence, so that is at worst a redelivery, which this lane allows.
-                releaseLeaseRows(List.of(owner));
-                run.ownedShards.remove(owner.shard(), owner);
-                reportReleased(run, owner);
-                released.add(owner.shard());
-                log.debug("Instance {} released unordered shard {}", instanceId, owner.shard());
-            }
-            if (!released.isEmpty()) {
-                log.info("Instance {} released {} unordered shard(s) [{}] on queue {} — fair share is {} of {} "
-                                 + "across {} instance(s); now holding {}",
-                         instanceId, released.size(), summarise(released), queueId, fairShare, shardCount,
-                         liveInstances, countHeld(run));
+            // Only the releases this loop is the first to count: a stop() of this run running meanwhile counts the
+            // others (countRelease).
+            var counted = new ArrayList<Integer>();
+            try {
+                for (var owner : held.subList(fairShare, held.size())) {
+                    // One unit at a time: a failed release leaves this owner serving (HELD) and the next tick sheds it again.
+                    // The owner may dispatch for the moment between the release and its end; a successor's acquire bumps the
+                    // fence, so that is at worst a redelivery, which this lane allows.
+                    releaseLeaseRows(List.of(owner));
+                    run.ownedShards.remove(owner.shard(), owner);
+                    if (countRelease(run, owner)) {
+                        counted.add(owner.shard());
+                    }
+                    released.add(owner.shard());
+                    log.debug("Instance {} released unordered shard {}", instanceId, owner.shard());
+                }
+            } finally {
+                // However the loop ended - a later shard's release throwing included - what it released is logged and
+                // reported. The observer last, once every release is done: told inside the loop, one that throws for the
+                // first unit left the rest of the excess unshed until the next tick.
+                if (!released.isEmpty()) {
+                    log.info("Instance {} released {} unordered shard(s) [{}] on queue {} — fair share is {} of {} "
+                                     + "across {} instance(s); now holding {}",
+                             instanceId, released.size(), summarise(released), queueId, fairShare, shardCount,
+                             liveInstances, countHeld(run));
+                }
+                reportReleases(counted);
             }
             return;
         }
@@ -1414,24 +1429,33 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         // Release the drained ones first, so a shard this instance has finished with is free before
         // it goes on to decide whether it wants more.
         var drained = new ArrayList<Integer>();
-        for (var owner : List.copyOf(run.owners)) {
-            if (owner instanceof OrderedShardOwner ordered && ordered.shedComplete()) {
-                // One unit at a time, as the unordered shed. A shed-complete owner dispatches nothing, so ending it after
-                // the release costs nothing.
-                releaseLeaseRows(List.of(ordered));
-                // A unit that finished its shed before its pump died, and whose hand-back failed this tick, is released
-                // here instead. Dropped from `owners` below, it would never be handed back, and stay counted in
-                // shardsOnDeadPumps (and shardsAwaitingTakeover) until the runtime stops. A no-op on a live pump.
-                shardRuntime.handedBack(ordered);
-                run.owners.remove(ordered);
-                reportReleased(run, ordered);
-                drained.add(ordered.shard());
-                log.debug("Instance {} released ordered unit {} after draining", instanceId, ordered.shard());
+        // As in rebalance()'s unordered shed: only the releases this loop is the first to count.
+        var counted = new ArrayList<Integer>();
+        try {
+            for (var owner : List.copyOf(run.owners)) {
+                if (owner instanceof OrderedShardOwner ordered && ordered.shedComplete()) {
+                    // One unit at a time, as the unordered shed. A shed-complete owner dispatches nothing, so ending it after
+                    // the release costs nothing.
+                    releaseLeaseRows(List.of(ordered));
+                    // A unit that finished its shed before its pump died, and whose hand-back failed this tick, is released
+                    // here instead. Dropped from `owners` below, it would never be handed back, and stay counted in
+                    // shardsOnDeadPumps (and shardsAwaitingTakeover) until the runtime stops. A no-op on a live pump.
+                    shardRuntime.handedBack(ordered);
+                    run.owners.remove(ordered);
+                    if (countRelease(run, ordered)) {
+                        counted.add(ordered.shard());
+                    }
+                    drained.add(ordered.shard());
+                    log.debug("Instance {} released ordered unit {} after draining", instanceId, ordered.shard());
+                }
             }
-        }
-        if (!drained.isEmpty()) {
-            log.info("Instance {} released {} ordered unit(s) [{}] on queue {} after draining; now holding {}",
-                     instanceId, drained.size(), summarise(drained), queueId, countHeld(run));
+        } finally {
+            // As in rebalance()'s unordered shed: logged and reported however the loop ended, the observer last.
+            if (!drained.isEmpty()) {
+                log.info("Instance {} released {} ordered unit(s) [{}] on queue {} after draining; now holding {}",
+                         instanceId, drained.size(), summarise(drained), queueId, countHeld(run));
+            }
+            reportReleases(counted);
         }
 
         // leaseHeld (HELD), as on the unordered lane: only an owner that serves its unit is asked to shed. One whose pump died
@@ -1731,7 +1755,9 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             } catch (RuntimeException e) {
                 if (failure == null) {
                     failure = e;
-                } else {
+                } else if (failure != e) {
+                    // An observer throwing one instance every time: suppressing it in itself would throw here, and the
+                    // units after this one would go untold
                     failure.addSuppressed(e);
                 }
             }
@@ -1744,8 +1770,8 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
     /**
      * Count an owner's release, if its acquisition was reported and its release is not yet: the owner leaves its run's
      * {@link Run#acquisitionReported}, atomically, so of a heartbeat tick and a {@link #stop()} of that run releasing it at
-     * once, one counts it. The caller tells the observer when this returns true, directly or through
-     * {@link #reportReleased}.
+     * once, one counts it. The caller collects the units this returns true for and tells the observer of them after its
+     * own work is done ({@link #reportReleases}), so an observer that throws leaves none of that work undone.
      *
      * @return whether this call counted it
      */
@@ -1755,12 +1781,6 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         }
         metrics.shardsReleased.increment();
         return true;
-    }
-
-    private void reportReleased(Run run, LeasedOwner owner) {
-        if (countRelease(run, owner)) {
-            metrics.observer().shardOwnershipChanged(owner.shard(), false);
-        }
     }
 
     /**
@@ -2011,11 +2031,11 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         run.owners.clear();
         run.ownedShards.clear();
         // Every owner this run listed leaves the queue here, so each one whose release nobody has counted yet is counted
-        // now: an ordered unit kept because a key was still in its handler, a unit whose release failed or ran out of the
-        // budget, and one found taken that no rebalance has dropped yet. This instance holds none of them any more, as far as
-        // the queue knows - a kept unit's row lapses with the instance's liveness - and nothing would report them later. A
-        // release still running on the abandoned budget thread, or on a heartbeat tick, counts nothing for an owner counted
-        // here (countRelease), and nothing here for one it counted first.
+        // now: a unit the budget thread released (releaseHeldLeases counts nothing), an ordered unit kept because a key was
+        // still in its handler, a unit whose release failed or ran out of the budget, and one found taken that no rebalance
+        // has dropped yet. This instance holds none of them any more, as far as the queue knows - a kept unit's row lapses
+        // with the instance's liveness - and nothing would report them later. A release still running on a heartbeat tick
+        // counts nothing for an owner counted here (countRelease), and nothing here for one it counted first.
         var givenUp = new ArrayList<Integer>();
         for (var owner : ending) {
             if (countRelease(run, owner)) {
@@ -2039,7 +2059,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         // do for a runtime this queue closed itself - its pumps flushed on the way out. Not for an
         // owner whose pump died: its state is not trusted (handBackUnitsOnDeadPumps).
         flushAcknowledgements(serving);
-        releaseHeldLeases(run, toRelease);
+        releaseHeldLeases(toRelease);
         if (!kept.isEmpty()) {
             log.warn("Instance {} is keeping {} ordered unit(s) [{}] on queue {}: a key was still in a handler "
                              + "{} after stop began. They become available to another instance when this one's "
@@ -2206,7 +2226,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * acknowledgements stay valid until a successor takes the shard and bumps it — which is why the
      * release is safe to do after the pumps have flushed rather than before.
      */
-    private void releaseHeldLeases(Run run, List<LeasedOwner> stillHeld) {
+    private void releaseHeldLeases(List<LeasedOwner> stillHeld) {
         if (stillHeld.isEmpty()) {
             return;
         }
@@ -2219,10 +2239,10 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         // need this split per lane, or the other lane's leases would be left to expire on stop.
         var lane = activeLane;
         try {
+            // Releases the rows only. Counting and telling the observer is endRun's, after this budget thread: told here,
+            // an observer that threw ended this thread before the deregistration, and its failure reached neither the log
+            // nor the caller of stop().
             releaseLeaseRows(stillHeld);
-            // Only those whose release nobody has reported: a heartbeat tick still running may have shed or handed back
-            // some of them meanwhile, and reported those itself.
-            stillHeld.forEach(owner -> reportReleased(run, owner));
         } catch (SQLException e) {
             // Best effort. A lease that cannot be released still expires on its own, so this
             // costs the successor its TTL rather than correctness — and a database that is
@@ -2340,7 +2360,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         /**
          * The owners whose acquisition this run has counted ({@link ShardOwnerMetrics#shardsAcquired}, by
          * {@link #countAcquisition}) and whose release it has not. A release is counted, and told to the
-         * {@code QueueObserver}, only by whoever removes the owner from here ({@link #countRelease}, {@link #reportReleased}),
+         * {@code QueueObserver}, only by whoever removes the owner from here ({@link #countRelease}, then {@link #reportReleases}),
          * so it is reported once, and only for an owner whose acquisition was counted: a heartbeat tick's fair-share shed or
          * dead-pump hand-back and {@link #stop()} can release the same owner at once, and both used to report it.
          * <p>

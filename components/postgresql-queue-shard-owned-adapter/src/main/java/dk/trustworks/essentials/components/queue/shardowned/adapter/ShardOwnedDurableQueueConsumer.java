@@ -128,8 +128,13 @@ class ShardOwnedDurableQueueConsumer implements DurableQueueConsumer {
         if (subscription == null) {
             return;
         }
-        subscription.stop();
-        subscription = null;
+        try {
+            subscription.stop();
+        } finally {
+            // Dropped even when the stop throws: a subscription's stop throws only once both of its lanes have stopped (a
+            // QueueObserver failing for a release), and one left here made every later start() return without consuming.
+            subscription = null;
+        }
         log.info("Consumer '{}' stopped on queue '{}'", consumerName(), queueName());
     }
 
@@ -141,8 +146,12 @@ class ShardOwnedDurableQueueConsumer implements DurableQueueConsumer {
 
     @Override
     public void cancel() {
-        stop();
-        onCancel.accept(this);
+        try {
+            stop();
+        } finally {
+            // Deregistered even when the stop throws, or the DurableQueues' next start() would start a cancelled consumer
+            onCancel.accept(this);
+        }
     }
 
     /**

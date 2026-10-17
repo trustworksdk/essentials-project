@@ -604,9 +604,9 @@ public final class PostgresqlMessageQueue implements MessageQueue {
                 unorderedConsumer.start();
                 orderedConsumer.start();
             } catch (RuntimeException e) {
-                unorderedConsumer.stop();
-                orderedConsumer.stop();
-                throw e;
+                // Both stopped even when the first one's stop throws (an observer failing for a release), and the start's
+                // failure is what escapes: a stop's failure is added to it, never thrown in its place.
+                throw stopEach(List.of(unorderedConsumer, orderedConsumer), e);
             }
             // A competing consumer is legal and occasionally wanted, but the common reason for a
             // second consume() is the belief that one call serves the ordered lane and another the
@@ -664,8 +664,7 @@ public final class PostgresqlMessageQueue implements MessageQueue {
 
             @Override
             public void stop() {
-                unorderedConsumer.stop();
-                orderedConsumer.stop();
+                stopEach(List.of(unorderedConsumer, orderedConsumer));
             }
 
             @Override
@@ -950,6 +949,9 @@ public final class PostgresqlMessageQueue implements MessageQueue {
      * {@code Lifecycle} means by restartable, and clearing them here made a restarted queue silently
      * consume nothing. Each consumer releases its shard leases on the way down, so a successor picks
      * them up immediately rather than waiting out the lease.
+     * <p>
+     * Every consumer is stopped even when an earlier one's stop throws - a {@link QueueObserver} failing for a release,
+     * say - and the first such failure is thrown once all of them have stopped, the others added to it as suppressed.
      */
     @Override
     public void stop() {
@@ -957,8 +959,44 @@ public final class PostgresqlMessageQueue implements MessageQueue {
             if (!started.compareAndSet(true, false)) {
                 return;
             }
-            consumers.forEach(ShardOwnedQueue::stop);
+            stopEach(consumers);
         }
+    }
+
+    /**
+     * Stop every one of {@code consumers}, each one even when an earlier one's stop throws, and then throw the first
+     * failure, the others added to it as suppressed. A consumer's stop throws only after it has done all of its stopping,
+     * when the {@link QueueObserver} it tells of a release, last, throws. The fan-out
+     * observer is shared by every consumer of this queue, so stopping at the first throw left the consumers after it
+     * started: still leasing, heartbeating and dispatching after the queue reported itself stopped, and a second
+     * {@code stop()} found the queue already stopped.
+     */
+    private static void stopEach(List<ShardOwnedQueue> consumers) {
+        var failure = stopEach(consumers, null);
+        if (failure != null) {
+            throw failure;
+        }
+    }
+
+    /**
+     * {@link #stopEach(List)}, adding each failure to {@code failure} when there already is one (the failure of the start
+     * a stop undoes), and returning the failure to throw instead of throwing it.
+     *
+     * @return {@code failure}, or the first stop's failure when {@code failure} is null and a stop threw, or null
+     */
+    private static RuntimeException stopEach(List<ShardOwnedQueue> consumers, RuntimeException failure) {
+        for (var consumer : consumers) {
+            try {
+                consumer.stop();
+            } catch (RuntimeException e) {
+                if (failure == null) {
+                    failure = e;
+                } else if (failure != e) {
+                    failure.addSuppressed(e);
+                }
+            }
+        }
+        return failure;
     }
 
     @Override

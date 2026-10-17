@@ -80,6 +80,10 @@ public interface QueueObserver {
      * lapse because its release failed. So, over the consumers this observer is attached to, acquisitions minus releases
      * is the number of shards they hold, and zero once they have stopped. One caveat on order: a shard the heartbeat
      * acquires just as its consumer stops can have its release told before its acquisition.
+     * <p>
+     * A stop tells its releases last. An implementation that throws for one leaves nothing of the stop undone - every
+     * shard is given up as above and told, and every consumer of the queue or subscription is stopped - and the first
+     * throw then escapes {@code stop()}.
      */
     default void shardOwnershipChanged(int shard, boolean acquired) {
     }

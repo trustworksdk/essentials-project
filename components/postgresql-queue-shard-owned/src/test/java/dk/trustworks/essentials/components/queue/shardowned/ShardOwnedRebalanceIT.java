@@ -18,6 +18,7 @@ package dk.trustworks.essentials.components.queue.shardowned;
 
 import com.zaxxer.hikari.*;
 import dk.trustworks.essentials.components.queue.shardowned.*;
+import dk.trustworks.essentials.components.queue.shardowned.spi.QueueObserver;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.*;
 import org.testcontainers.postgresql.PostgreSQLContainer;
@@ -27,6 +28,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -210,6 +212,48 @@ class ShardOwnedRebalanceIT {
                     assertThat(second.shardsHeld()).isEqualTo(SHARD_COUNT / 2);
                     assertThat(unitsLeasedTo("shed-fail-1")).as("the first's leases match what it serves").isEqualTo(SHARD_COUNT / 2);
                 });
+            }
+        }
+    }
+
+    /**
+     * The heartbeat's unordered shed releases the whole excess before it tells the observer of any of it, so an observer
+     * that throws for the first release leaves no shard of the excess held. Told inside the loop, it ended the shed at
+     * that first shard, and the rest stayed held until the next heartbeat. The observer reads the first instance's lease
+     * rows when it is first told of a release.
+     */
+    @Test
+    void an_observer_throwing_for_the_first_shed_release_leaves_none_of_the_excess_held() throws Exception {
+        var leasedWhenFirstTold = new AtomicInteger(-1);
+        var observer = new QueueObserver() {
+            @Override
+            public void shardOwnershipChanged(int shard, boolean acquired) {
+                if (!acquired && leasedWhenFirstTold.compareAndSet(-1, -2)) {
+                    try {
+                        leasedWhenFirstTold.set(unitsLeasedTo("observer-throws-1"));
+                    } catch (Exception e) {
+                        throw new IllegalStateException(e);
+                    }
+                    throw new IllegalStateException("simulated observer failure releasing unordered shard " + shard);
+                }
+            }
+        };
+        try (var first = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "observer-throws-1", new ShardOwnerMetrics(observer))) {
+            first.startConsuming((messageId, payload, payloadType) -> { }, FAST, SHARD_COUNT);
+            Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(first.shardsHeld()).isEqualTo(SHARD_COUNT));
+
+            try (var second = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "observer-throws-2")) {
+                second.startConsuming((messageId, payload, payloadType) -> { }, FAST, SHARD_COUNT);
+
+                Awaitility.await().atMost(Duration.ofSeconds(10)).until(() -> leasedWhenFirstTold.get() >= 0);
+                assertThat(leasedWhenFirstTold.get()).as("the shed had released the whole excess when the observer was first told")
+                                                     .isEqualTo(SHARD_COUNT / 2);
+                Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> {
+                    assertThat(first.shardsHeld()).isEqualTo(SHARD_COUNT / 2);
+                    assertThat(second.shardsHeld()).isEqualTo(SHARD_COUNT / 2);
+                });
+                assertThat(first.metrics().shardsReleased.sum()).as("every shed shard was counted released, the one the observer threw for too")
+                                                               .isEqualTo(SHARD_COUNT / 2);
             }
         }
     }

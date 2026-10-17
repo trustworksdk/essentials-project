@@ -1047,6 +1047,132 @@ class ShardOwnedLifecycleIT {
         }
     }
 
+    /**
+     * An observer that throws for the first unit a stop reports released leaves nothing of the stop undone: every lease
+     * row is released, the instance deregistered and every unit reported released, and the observer's failure escapes the
+     * stop. The stop used to tell the observer of each release on its shutdown-budget thread, before the deregistration:
+     * the throw ended that thread there, so the membership row stayed and held the surviving instances at a stale fair
+     * share until it aged out, and the failure went to the thread's default handler instead of the caller.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"unordered", "ordered"})
+    void an_observer_throwing_for_a_release_at_stop_still_lets_the_stop_release_every_unit_and_deregister(String lane) throws Exception {
+        var settings   = settingsWithShedGrace(Duration.ofSeconds(1));
+        var instanceId = "stop-observer-throws-" + lane;
+        var reported   = new RecordedOwnership();
+        var failure    = new IllegalStateException("simulated observer failure on the first release");
+        var thrown     = new AtomicBoolean();
+        var metrics = new ShardOwnerMetrics(new QueueObserver() {
+            @Override
+            public void shardOwnershipChanged(int shard, boolean acquired) {
+                reported.shardOwnershipChanged(shard, acquired);
+                if (!acquired && thrown.compareAndSet(false, true)) {
+                    throw failure;
+                }
+            }
+        });
+        var queue = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, instanceId, metrics);
+        try {
+            startConsuming(queue, lane, settings);
+            assertThat(unitsOwnedBy(lane, instanceId)).as("premise: the start acquired more than the unit the observer throws for")
+                                                      .isGreaterThan(1);
+            assertThat(instanceRegistered(instanceId)).as("premise: the start registered the instance").isTrue();
+
+            assertThatThrownBy(queue::stop).as("the observer's failure escapes the stop").isSameAs(failure);
+
+            assertThat(instanceRegistered(instanceId)).as("the stop deregistered the instance despite the observer's throw").isFalse();
+            assertThat(unitsOwnedBy(lane, instanceId)).as("the stop released every lease row").isZero();
+            reported.assertEveryAcquisitionIsReleasedOnceAfterIt();
+            assertThat(metrics.shardsReleased.sum()).as("every acquisition counted released once")
+                                                    .isEqualTo(metrics.shardsAcquired.sum());
+        } finally {
+            queue.stop();
+        }
+    }
+
+    /**
+     * An observer that throws for every release still lets a {@code PostgresqlMessageQueue.stop()}, or a
+     * {@code Subscription.stop()}, stop both lane consumers, and its failure escapes once they have. Each lane's consumer
+     * tells the observer of its releases last, and throws its failure after that; the queue stopped its consumers one after
+     * another and the subscription its two lanes, so the first consumer's throw skipped the stop of the ordered lane, which
+     * went on leasing, heartbeating and dispatching after the queue reported itself stopped.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"queue", "subscription"})
+    void an_observer_throwing_for_every_release_still_lets_the_spi_queue_stop_both_lanes(String stoppedBy) throws Exception {
+        var instanceId = "spi-stop-observer-throws-" + stoppedBy;
+        var throwing   = new AtomicBoolean(true);
+        try (var queue = new PostgresqlMessageQueue(dataSource, QUEUE_ID, SHARD_COUNT, instanceId)) {
+            queue.addObserver(throwingForEveryRelease(throwing));
+            var subscription = queue.consume((messageId, key, payload, payloadType) -> { }, ConsumerOptions.defaults());
+            try {
+                Awaitility.await().atMost(Duration.ofSeconds(20))
+                          .alias("premise: both lanes hold units")
+                          .until(() -> subscription.unorderedShardsHeld() > 0 && subscription.orderedUnitsHeld() > 0);
+
+                assertThatThrownBy("queue".equals(stoppedBy) ? queue::stop : subscription::stop)
+                        .as("the observer's failure escapes the stop")
+                        .isInstanceOf(IllegalStateException.class)
+                        .hasMessageStartingWith("simulated observer failure releasing");
+
+                assertThat(subscription.isStarted()).as("neither lane's consumer is still started").isFalse();
+                assertThat(unitsOwnedBy("unordered", instanceId)).as("no unordered lease row names the instance").isZero();
+                assertThat(unitsOwnedBy("ordered", instanceId)).as("no ordered lease row names the instance").isZero();
+                assertThat(instanceRegistered(instanceId)).as("the instance is deregistered").isFalse();
+            } finally {
+                throwing.set(false);
+                subscription.stop();
+            }
+        }
+    }
+
+    /**
+     * A {@code consume()} whose start fails stops both lanes and throws the start's failure even when the observer throws
+     * for a release while it stops them: the stop's failure is added to the start's. It used to be thrown in its place,
+     * so the caller saw an observer's failure for a start that had failed on the database. A trigger fails the ordered
+     * lane's acquire of unit 1, after the unordered lane has started.
+     */
+    @Test
+    void a_consume_whose_start_fails_throws_the_start_failure_when_the_observer_throws_while_it_stops_the_lanes() throws Exception {
+        var instanceId = "spi-start-fails-observer-throws";
+        var throwing   = new AtomicBoolean(true);
+        failTheAcquireOf("ordered", instanceId, 1, true);
+        try (var queue = new PostgresqlMessageQueue(dataSource, QUEUE_ID, SHARD_COUNT, instanceId)) {
+            queue.addObserver(throwingForEveryRelease(throwing));
+
+            var thrown = catchThrowable(() -> queue.consume((messageId, key, payload, payloadType) -> { }, ConsumerOptions.defaults()));
+
+            assertThat(thrown).as("the start's failure escapes, not the observer's")
+                              .isInstanceOf(IllegalStateException.class)
+                              .hasCauseInstanceOf(SQLException.class)
+                              .hasStackTraceContaining("simulated failure acquiring ordered unit 1");
+            assertThat(thrown.getSuppressed()).as("the observer's failure while the lanes stopped is added to it")
+                                              .anySatisfy(suppressed -> assertThat(suppressed)
+                                                      .hasMessageStartingWith("simulated observer failure releasing"));
+            assertThat(queue.isStarted()).isFalse();
+            assertThat(unitsOwnedBy("unordered", instanceId)).as("no unordered lease row names the instance").isZero();
+            assertThat(unitsOwnedBy("ordered", instanceId)).as("no ordered lease row names the instance").isZero();
+            assertThat(instanceRegistered(instanceId)).as("the instance is deregistered").isFalse();
+        } finally {
+            throwing.set(false);
+            failTheAcquireOf("ordered", instanceId, 1, false);
+        }
+    }
+
+    /**
+     * An observer that throws a new exception for every release it is told of, while {@code throwing} is set.
+     */
+    private static QueueObserver throwingForEveryRelease(AtomicBoolean throwing) {
+        return new QueueObserver() {
+            @Override
+            public void shardOwnershipChanged(int shard, boolean acquired) {
+                if (!acquired && throwing.get()) {
+                    throw new IllegalStateException("simulated observer failure releasing unit " + shard);
+                }
+            }
+        };
+    }
+
     private static void startConsuming(ShardOwnedQueue queue, String lane, ShardOwnerSettings settings) throws SQLException {
         if ("ordered".equals(lane)) {
             queue.startConsumingOrdered((messageId, key, payload, payloadType) -> { }, settings, SHARD_COUNT);

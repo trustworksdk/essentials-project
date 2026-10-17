@@ -203,10 +203,31 @@ public class ShardOwnedDurableQueues implements DurableQueues {
         consumers.values().forEach(ShardOwnedDurableQueueConsumer::start);
     }
 
+    /**
+     * {@inheritDoc}
+     * <p>
+     * Every consumer is stopped even when an earlier one's stop throws - a {@code QueueObserver} failing for a release,
+     * say - and the first such failure is thrown once all of them have stopped, the others added to it as suppressed.
+     * Stopping at the first throw left the consumers after it running, and this reporting itself started.
+     */
     @Override
     public void stop() {
-        consumers.values().forEach(ShardOwnedDurableQueueConsumer::stop);
+        RuntimeException failure = null;
+        for (var consumer : consumers.values()) {
+            try {
+                consumer.stop();
+            } catch (RuntimeException e) {
+                if (failure == null) {
+                    failure = e;
+                } else if (failure != e) {
+                    failure.addSuppressed(e);
+                }
+            }
+        }
         started = false;
+        if (failure != null) {
+            throw failure;
+        }
     }
 
     @Override
