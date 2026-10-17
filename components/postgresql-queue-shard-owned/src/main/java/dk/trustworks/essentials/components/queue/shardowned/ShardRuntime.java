@@ -312,8 +312,9 @@ public final class ShardRuntime implements Lifecycle, AutoCloseable {
      * Which pump, not what state: whether the owner's lease row still names this instance is the owner's own
      * {@link LeasedOwner#leaseRow()}, which the death moved to {@code ENDED_ROW_HELD}. The queue asks this for two things:
      * to pick the owners its hand-back is for, and to keep a dead pump's owners out of {@code stop()}'s acknowledgement
-     * flush, since their state is not trusted after the critical error. Both ask which pump, never the lease row. Asks each pump's {@link ShardPump#awaitsHandBack} alone, not gated on
-     * {@link ShardPump#isDead()}, which a dying pump sets only after it has ended every owner on it.
+     * flush, since their state is not trusted after the critical error. Both ask which pump, never the lease row.
+     * Asks each pump's {@link ShardPump#awaitsHandBack} alone, not gated on {@link ShardPump#isDead()}, which a dying pump
+     * sets only after it has ended every owner on it.
      */
     boolean onDeadPump(LeasedOwner owner) {
         for (var pump : pumps) {
