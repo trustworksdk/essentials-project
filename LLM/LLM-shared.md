@@ -883,8 +883,9 @@ try {
 }
 ```
 
-- Waits like `ReentrantLock.lock()`: an interrupt does not end the wait; it is deferred and set on the thread again once the lock is held.
+- Waits like `ReentrantLock.lock()`: an interrupt does not end the wait; it is deferred and set on the thread again once the lock is held. After `warn` has returned `true` that is the lock's own `lock()` doing it: every `java.util.concurrent.locks` lock (and `StampedLock`'s views) does; the `Lock` interface does not promise it.
 - `warn` is called on the waiting thread once `warnAfter` has passed without the lock, then after each further `warnAfter` until it returns `true` (return `false` when there is nothing to say yet). An interrupt does not restart the `warnAfter` it falls in.
+- Fair locks: until `warn` has returned `true` the wait is a timed `tryLock` per `warnAfter`, and each one that runs out gives up the thread's place in a fair lock's queue. Once `warn` has returned `true` the wait is `lock.lock()` itself and keeps its place.
 - An exception from `warn` escapes, the lock not taken, the interrupt set again.
 
 ---

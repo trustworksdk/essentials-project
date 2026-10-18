@@ -78,6 +78,38 @@ class LocksTest {
         assertThat(result.get(5, TimeUnit.SECONDS)).containsExactly(true, true);
     }
 
+    /**
+     * Guards the wait after the warning - {@code lock.lock()} since F-506 - rather than reproducing F-506: that the
+     * interrupt contract still holds there for a {@link ReentrantLock}, whose own {@code lock()} defers the interrupt.
+     */
+    @Test
+    void an_interrupt_after_the_warning_does_not_end_the_wait_and_is_set_again_once_the_lock_is_held() throws Exception {
+        lock.lock();
+        var warned = new CountDownLatch(1);
+        var waiter = new AtomicReference<Thread>();
+        var result = waiters.submit(() -> {
+            waiter.set(Thread.currentThread());
+            Locks.lockWarningOnce(lock, Duration.ofMillis(20), () -> {
+                warned.countDown();
+                return true;
+            });
+            try {
+                return new boolean[]{lock.isHeldByCurrentThread(), Thread.currentThread().isInterrupted()};
+            } finally {
+                lock.unlock();
+            }
+        });
+        assertThat(warned.await(5, TimeUnit.SECONDS)).isTrue();
+        await().atMost(Duration.ofSeconds(5)).until(() -> waiter.get() != null && lock.hasQueuedThread(waiter.get()));
+
+        waiter.get().interrupt();
+        Thread.sleep(200);
+        assertThat(result.isDone()).isFalse();
+
+        lock.unlock();
+        assertThat(result.get(5, TimeUnit.SECONDS)).containsExactly(true, true);
+    }
+
     @Test
     void warns_once_however_long_the_wait() throws Exception {
         lock.lock();
@@ -115,6 +147,43 @@ class LocksTest {
         lock.unlock();
         result.get(5, TimeUnit.SECONDS);
         assertThat(warnings).hasValue(3);
+    }
+
+    @Test
+    void once_warned_keeps_its_place_in_a_fair_locks_queue() throws Exception {
+        var fairLock = new ReentrantLock(true);
+        fairLock.lock();
+        var acquiredInOrder = new CopyOnWriteArrayList<String>();
+        var warned          = new CountDownLatch(1);
+        var first           = new AtomicReference<Thread>();
+        var firstResult = waiters.submit(() -> {
+            first.set(Thread.currentThread());
+            Locks.lockWarningOnce(fairLock, Duration.ofMillis(20), () -> {
+                warned.countDown();
+                return true;
+            });
+            acquiredInOrder.add("warned waiter");
+            fairLock.unlock();
+        });
+        assertThat(warned.await(5, TimeUnit.SECONDS)).isTrue();
+        // Queued again after the warning, ahead of the second waiter, which only now starts.
+        await().atMost(Duration.ofSeconds(5)).until(() -> first.get() != null && fairLock.hasQueuedThread(first.get()));
+
+        var second = new AtomicReference<Thread>();
+        var secondResult = waiters.submit(() -> {
+            second.set(Thread.currentThread());
+            fairLock.lock();
+            acquiredInOrder.add("later waiter");
+            fairLock.unlock();
+        });
+        await().atMost(Duration.ofSeconds(5)).until(() -> second.get() != null && fairLock.hasQueuedThread(second.get()));
+        // Ten warnAfters go by: a wait that gave up its place every warnAfter would now queue behind the later waiter.
+        Thread.sleep(200);
+
+        fairLock.unlock();
+        firstResult.get(5, TimeUnit.SECONDS);
+        secondResult.get(5, TimeUnit.SECONDS);
+        assertThat(acquiredInOrder).containsExactly("warned waiter", "later waiter");
     }
 
     @Test

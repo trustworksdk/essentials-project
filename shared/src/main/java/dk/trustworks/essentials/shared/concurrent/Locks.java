@@ -37,9 +37,17 @@ public final class Locks {
      * and the wait goes on in silence. {@code warn} returns {@code false} when it had nothing to say yet (the holder it
      * would name was just changing, say), so it is asked again one {@code warnAfter} later.
      * <p>
-     * An interrupt of the calling thread does not end the wait, and does not restart the {@code warnAfter} it falls in:
-     * it is deferred, and set on the thread again once this returns - with the lock held, or with the exception
-     * {@code warn} threw.
+     * Until {@code warn} has returned {@code true} the wait is a timed {@link Lock#tryLock(long, TimeUnit)} of one
+     * {@code warnAfter} at a time, and on a fair lock each one that runs out gives up the calling thread's place in the
+     * lock's queue, so a later waiter can be handed the lock first. From then on the wait is {@code lock.lock()} itself,
+     * which keeps its place as {@code lock()} does.
+     * <p>
+     * Until {@code warn} has returned {@code true}, an interrupt of the calling thread does not end the wait, and does
+     * not restart the {@code warnAfter} it falls in: it is deferred, and set on the thread again once this returns -
+     * with the lock held, or with the exception {@code warn} threw. After the warning, an interrupt is treated as the
+     * lock's own {@code lock()} treats it: every {@code java.util.concurrent.locks} lock (and {@link
+     * java.util.concurrent.locks.StampedLock}'s views) defers it the same way, but the {@link Lock} interface does not
+     * promise that.
      * <p>
      * {@code warn} runs on the calling thread, without the lock. An exception it throws escapes from here, the lock not
      * taken.
@@ -57,7 +65,6 @@ public final class Locks {
         requireTrue(warnAfter.isPositive(), "warnAfter must be positive");
         var budgetNanos = warnAfter.toNanos();
         var interrupted = false;
-        var warned      = false;
         var deadline    = System.nanoTime() + budgetNanos;
         try {
             while (true) {
@@ -70,8 +77,12 @@ public final class Locks {
                     interrupted = true;
                     continue;
                 }
-                if (!warned) {
-                    warned = warn.getAsBoolean();
+                if (warn.getAsBoolean()) {
+                    // Warned: wait in lock() itself from here, keeping this thread's place in a fair lock's queue - a timed
+                    // tryLock gives it up each time it runs out. An interrupt from here on is the lock's own lock()'s to
+                    // handle: the java.util.concurrent locks defer it and set it again on return, Lock does not promise it.
+                    lock.lock();
+                    return;
                 }
                 deadline = System.nanoTime() + budgetNanos;
             }

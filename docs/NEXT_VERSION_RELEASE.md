@@ -564,10 +564,14 @@ instance just no longer delivers it. (`1f31c123`)
   nested call with the same `failure` that hit the error added it first). (`<!-- fix:U-004 -->`)
 - **`Locks.lockWarningOnce(lock, warnAfter, warn)`** (`shared`, package `dk.trustworks.essentials.shared.concurrent`)
   takes a `Lock`, waiting as long as `ReentrantLock.lock()` would - an interrupt deferred, and set on the thread again
-  once the lock is held - but calls `warn` once the wait has lasted `warnAfter`, and after each further `warnAfter`
-  until `warn` returns `true`. The shard-owned queue's `ShardOwnedQueue.start()`, `PostgresqlMessageQueue`'s
+  once the lock is held (after the warning, by the lock's own `lock()`, as every `java.util.concurrent` lock does) -
+  but calls `warn` once the wait has lasted `warnAfter`, and after each further `warnAfter` until `warn` returns
+  `true`. The shard-owned queue's `ShardOwnedQueue.start()`, `PostgresqlMessageQueue`'s
   `consume()`/`start()`/`Subscription.start()` and the adapter consumer's `start()` wait for their lifecycle lock
-  through it. An interrupt during that wait no longer pushes the one WARN out by a further budget.
+  through it. An interrupt during that wait no longer pushes the one WARN out by a further budget. Once `warn` has
+  returned `true` the wait is `lock.lock()` itself, so on a fair lock the waiter keeps its place in the queue instead of
+  giving it up to later waiters every `warnAfter`; until then each `warnAfter` is a timed `tryLock`, which does give
+  it up. (`<!-- fix:U-005 -->`)
 
 - **Schema descriptions:** `SchemaChange.describedAs(String)`, `description()` and `describeObject()`,
   `SchemaChangeSet.describe()`/`describeObjects()`, and `PostgresqlEmitSchemaApplier.exitTriggered()`/
