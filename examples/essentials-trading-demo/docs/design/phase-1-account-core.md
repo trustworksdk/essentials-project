@@ -1,6 +1,6 @@
 # Phase 1 design — identity and the account core
 
-**Status:** proposal for review. No code yet.
+**Status:** decided (§10), being implemented.
 **Plan:** [`../EXPANSION_PLAN.md`](../EXPANSION_PLAN.md) phase 1, decisions D2–D5, D7, D10, D20–D24.
 
 Phase 1 builds the two things every later phase hangs off: a **user** who can log in, and the **trading account
@@ -51,9 +51,19 @@ old one; the new one is `Accounts`), so their streams, snapshots and closing-boo
 | (b) Event-sourced `User` aggregate, credentials in a side table | One lane throughout. User history in the admin console | Email uniqueness needs a separate guard table anyway; two stores for one concept; secrets must be kept out of events by discipline |
 | (c) External identity provider (Keycloak in compose, OIDC) | The realistic production answer | A second system to run for a demo whose point is elsewhere; heavier for load tests |
 
-**Recommendation: (a).** Identity is not where this demo's interest lies, and a plain table is the honest model
-for it. (c) is the obvious later upgrade and (a) does not block it: the user id is the only thing other contexts
-hold.
+**Decided: (b).** `User` is an event-sourced aggregate on the aggregate lane, like every other aggregate in the
+demo. Its events carry identity and lifecycle — `UserRegistered` (email, display name, roles), `UserRolesChanged`,
+`UserLocked`, `UserUnlocked` — and **never** a credential.
+
+Credentials live in a separate state-stored table, `user_credentials (user_id PK, email UNIQUE, password_hash,
+updated_at)`, which Spring Security's `UserDetailsService` reads. The table does a second job: its unique email
+column is the registration's uniqueness guard. `register_user` writes the credentials row and appends
+`UserRegistered` in **one unit of work**, so a duplicate email fails the whole registration and no aggregate is left
+without credentials, or credentials without an aggregate. A password change touches only the table; it is not a
+domain event. The email is in both places on purpose — the table for login and uniqueness, the event for history —
+and an email change (later) updates both in one unit of work.
+
+(c) stays the later upgrade: other contexts hold only the `UserId`.
 
 ### 2.3 Security
 
@@ -273,14 +283,14 @@ model), so phase 1 ends with a measurement as the plan requires.
 
 ---
 
-## 10. Questions
+## 10. Decisions
 
-| | Question | Proposal |
+| | Question | Decided |
 |---|---|---|
 | **Q-1** | Build the new account beside `brokerage`, which is frozen and deleted in phase 4? | Yes |
-| **Q-2** | Identity's write style: service-entity table, event-sourced `User`, or an external IdP? | Service-entity table |
+| **Q-2** | Identity's write style | Event-sourced `User` aggregate; credentials in a separate `user_credentials` table (§2.2) |
 | **Q-3** | Several accounts per user from the start? | The model allows it; phase 1 opens one per customer |
 | **Q-4** | May unsettled sale proceeds be used to buy? (They may never be withdrawn before settlement.) | Yes, as most cash accounts allow; "good-faith violations" are not modelled |
 | **Q-5** | Cost basis: average cost, or FIFO tax lots? | Average cost; lots are a later refinement |
 | **Q-6** | Build the whole ledger in phase 1, with operator endpoints, or only what phase 1 itself triggers? | The whole ledger |
-| **Q-7** | Deposit return window, in business days | 3 |
+| **Q-7** | Deposit return window, in business days | 3 by default, configurable (`trading-demo.accounts.deposit-return-window-business-days`). The window is applied when a deposit is credited and its `clearsOn` date is in `DepositCredited`, so a change affects new deposits only and replay is unaffected |
