@@ -179,6 +179,13 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      */
     private          int                      parallelConsumers   = 8;
     private          HandlerDispatch          dispatch;
+    /**
+     * Told the lane and number of each unit {@link #adoptIntoRun} is about to build an owner for, before it builds it; what
+     * it throws fails that build, as an owner that cannot be built would. Does nothing unless a test sets it.
+     * Package-private: no owner build fails short of a critical error today, and a test needs one that does, for one unit,
+     * to reach what the queue does with a unit whose owner cannot be built - and with the units adopted before it.
+     */
+    volatile BiConsumer<String, Integer>      ownerBuildFault     = (lane, unit) -> { };
 
     /**
      * Set before {@link #start()}. Per consumer, not per process — see {@code ConsumerOptions}.
@@ -1703,6 +1710,13 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * unit and so reused that wake-up: forgetting it left the unit's notifications reaching no owner, keeping it left an
      * entry nothing forgot until the runtime stopped. Placing the unit and building its owner are both in-memory work.
      * <p>
+     * <b>An owner that cannot be built leaves no wake-up behind either.</b> When {@code build} throws, the unit joins no
+     * run, so no {@link #releaseRuntime} forgets its wake-up: the placement is withdrawn ({@link ShardRuntime#withdraw})
+     * and the failure escapes, its row left to the caller: a start-up releases it ({@link #adoptAtStart}), and a heartbeat
+     * tick's acquire loop ends, leaving the row naming this instance for a later tick to take again. Withdrawn only when the placement
+     * created the wake-up: one it reused was there before, and the unit is in no list of this run, so no owner of the run
+     * waits on it. A critical error ({@link Exceptions#isCriticalError}) escapes untouched, with nothing withdrawn.
+     * <p>
      * <b>The observer is told by the caller, outside the lock, in a {@code finally} around its loop</b>
      * ({@link #reportAcquired}). It is the caller's code (a Micrometer binding, tracing, {@code PostgresqlMessageQueue}'s
      * fan-out): told under the lock, a slow one held up {@code stop()} and {@link #stopAbruptly()}, which take it, and one
@@ -1730,6 +1744,8 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * @param run   the run the unit was leased for: the one a heartbeat tick was scheduled for, or the one a start installed
      * @param build the unit's owner, built with the wake-up its placement chose
      * @return whether the unit was adopted; when not, nothing was placed or built, and the caller releases the row
+     * @throws RuntimeException what {@code build} throws (or an {@code Error}), the unit not adopted and its placement
+     *                          withdrawn; what becomes of its row is the caller's
      */
     private boolean adoptIntoRun(Run run, ShardRuntime shardRuntime, String lane, int unit,
                                  Function<ShardWakeup, LeasedOwner> build) {
@@ -1737,8 +1753,19 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             if (currentRun.get() != run) {
                 return false;
             }
-            var placement = shardRuntime.place(queueId, lane, unit);
-            var owner     = build.apply(placement.wakeup());
+            var         placement = shardRuntime.place(queueId, lane, unit);
+            LeasedOwner owner;
+            try {
+                ownerBuildFault.accept(lane, unit);
+                owner = build.apply(placement.wakeup());
+            } catch (RuntimeException | Error e) {
+                // A critical error escapes untouched, with nothing undone (start()).
+                Exceptions.rethrowIfCriticalError(e);
+                // The unit joins no run, so nothing forgets its wake-up later (releaseRuntime forgets only the owners a
+                // run lists). The caller releases its row.
+                shardRuntime.withdraw(placement);
+                throw e;
+            }
             run.owners.add(owner);
             if (owner instanceof ShardOwner unordered) {
                 run.ownedShards.put(owner.shard(), unordered);

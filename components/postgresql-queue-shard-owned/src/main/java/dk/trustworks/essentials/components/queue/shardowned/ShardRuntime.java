@@ -251,8 +251,12 @@ public final class ShardRuntime implements Lifecycle, AutoCloseable {
      * Should that pump die between {@link ShardRuntime#place} and {@link #register(LeasedOwner)}, the owner is ended on
      * the dead pump like the owners it held when it died, counted in {@link ShardOwnerMetrics#shardsOnDeadPumps}, and its
      * queue hands the lease back ({@link ShardPump#add(LeasedOwner)}).
+     *
+     * @param key           the shard's key in the runtime's wake-ups, as the notification payload names it
+     * @param createdWakeup whether this placement put {@link #wakeup()} there, rather than reusing the one it found
+     *                      ({@link ShardRuntime#withdraw})
      */
-    record Placement(ShardPump pump, ShardWakeup wakeup) {
+    record Placement(ShardPump pump, ShardWakeup wakeup, String key, boolean createdWakeup) {
         void register(LeasedOwner owner) {
             pump.add(owner);
         }
@@ -268,12 +272,30 @@ public final class ShardRuntime implements Lifecycle, AutoCloseable {
      * leave a re-acquired shard served only when its new pump's backstop fires.
      */
     Placement place(short queueId, String lane, int shard) {
-        var pump = pumpFor(queueId, lane, shard);
-        var wakeup = wakeups.compute(ShardWakeupListener.key(queueId, lane, shard),
-                                     (ignored, existing) -> existing != null && existing.cascadesTo(pump.wakeup())
-                                                            ? existing
-                                                            : new ShardWakeup(pump.wakeup()));
-        return new Placement(pump, wakeup);
+        var pump    = pumpFor(queueId, lane, shard);
+        var key     = ShardWakeupListener.key(queueId, lane, shard);
+        var created = new AtomicBoolean();
+        var wakeup = wakeups.compute(key, (ignored, existing) -> {
+            if (existing != null && existing.cascadesTo(pump.wakeup())) {
+                return existing;
+            }
+            created.set(true);
+            return new ShardWakeup(pump.wakeup());
+        });
+        return new Placement(pump, wakeup, key, created.get());
+    }
+
+    /**
+     * Undo a {@link #place placement} whose owner was never registered, because building it failed: forget the
+     * wake-up the placement put in this runtime, so the shard leaves no entry behind that nothing forgets until the runtime
+     * stops. A wake-up the placement reused is left: it was there before, kept per shard across ownerships, and the
+     * placement added nothing. Removed only while it is still the placement's own, so a wake-up a later placement put
+     * there in its stead is left too.
+     */
+    void withdraw(Placement placement) {
+        if (placement.createdWakeup()) {
+            wakeups.remove(placement.key(), placement.wakeup());
+        }
     }
 
     /**
@@ -370,6 +392,14 @@ public final class ShardRuntime implements Lifecycle, AutoCloseable {
      */
     int unitsServed() {
         return pumps.stream().mapToInt(ShardPump::shardsServed).sum();
+    }
+
+    /**
+     * How many shards this runtime holds a wake-up for ({@link #place}), across every queue and lane. Package-private: it
+     * is for asserting that a queue left no wake-up behind for a unit it did not keep, not a figure to operate on.
+     */
+    int wakeupsHeld() {
+        return wakeups.size();
     }
 
     /**

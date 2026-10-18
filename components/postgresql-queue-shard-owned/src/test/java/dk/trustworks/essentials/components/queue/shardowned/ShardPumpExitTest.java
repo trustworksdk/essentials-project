@@ -1265,7 +1265,7 @@ class ShardPumpExitTest {
      * Like {@link #healthyDataSource()}, and also lets a {@link ShardRuntime}'s wake-up listener {@code LISTEN} and wait
      * for notifications that never come, so it neither fails nor logs a reconnect every 200 ms.
      */
-    private static DataSource listenableDataSource() {
+    static DataSource listenableDataSource() {
         var loader    = ShardPumpExitTest.class.getClassLoader();
         var statement = (Statement) Proxy.newProxyInstance(loader, new Class<?>[]{Statement.class},
                                                            (proxy, method, args) -> switch (method.getName()) {

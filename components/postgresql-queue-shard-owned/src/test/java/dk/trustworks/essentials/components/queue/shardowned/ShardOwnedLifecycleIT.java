@@ -1505,6 +1505,99 @@ class ShardOwnedLifecycleIT {
     }
 
     /**
+     * A {@code start()} that fails after it has adopted units ends them as a {@code stop()} ends a run - drained, ended and
+     * released, the observer told of each one's acquisition before its release - but keeps the instance's membership row:
+     * the start's Javadoc leaves it to age out rather than deleting it, so the sibling lane sharing the instance id keeps
+     * its membership. Every other failing start in this class fails before any unit is adopted, with nothing in its run.
+     * Here the heartbeat's scheduling fails: the test stops the runtime it passed the queue while the start sleeps in the
+     * acquire of unit 1, and a stopped runtime's heartbeat refuses the task - by when the start has adopted every unit it
+     * leased.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"unordered", "ordered"})
+    void a_start_that_fails_after_adopting_units_releases_them_and_keeps_the_membership_row(String lane) throws Exception {
+        var settings   = settingsWithShedGrace(Duration.ofSeconds(1));
+        var instanceId = "fails-after-adoption-" + lane;
+        var reported   = new RecordedOwnership();
+        var metrics    = new ShardOwnerMetrics(reported);
+        try (var runtime = new ShardRuntime(dataSource, settings)) {
+            var queue = ShardOwnedQueue.builder().setDataSource(dataSource).setQueueId(QUEUE_ID).setShardCount(SHARD_COUNT)
+                                       .setInstanceId(instanceId).setRuntime(runtime).setMetrics(metrics).build();
+            try {
+                slowTheAcquireOf(lane, instanceId, 1, 3);
+                var starting = CompletableFuture.supplyAsync(() -> catchThrowable(() -> startConsuming(queue, lane, settings)));
+                Awaitility.await().atMost(Duration.ofSeconds(10)).until(this::aHeartbeatIsSleeping);
+
+                runtime.stop();
+
+                var thrown = starting.get(30, TimeUnit.SECONDS);
+                assertThat(thrown).as("the heartbeat's refusal escapes the start as it was thrown")
+                                  .isInstanceOf(RejectedExecutionException.class);
+                assertThat(metrics.shardsAcquired.sum()).as("premise: the start had adopted units when it failed").isGreaterThan(1L);
+                assertThat(queue.isStarted()).as("a start that failed is not started").isFalse();
+                assertThat(unitsOwnedBy(lane, instanceId)).as("the failed start released every unit it had adopted").isZero();
+                assertThat(instanceRegistered(instanceId)).as("a failed start keeps the membership row, for it to age out").isTrue();
+                reported.assertEveryAcquisitionIsReleasedOnceAfterIt();
+                assertThat(metrics.shardsReleased.sum()).as("every acquisition counted released once")
+                                                        .isEqualTo(metrics.shardsAcquired.sum());
+                assertThat(runtime.wakeupsHeld()).as("no wake-up of the failed start is left on the runtime").isZero();
+            } finally {
+                dropSlowAcquire();
+                queue.stop();
+            }
+        }
+    }
+
+    /**
+     * A {@code start()} whose owner for a later unit cannot be built releases every unit - those adopted before it are
+     * ended with the run, that unit and those leased after it released again - keeps the membership row, and leaves no
+     * wake-up behind on the runtime it was passed, which keeps running. The unit's placement used to keep its wake-up: the
+     * runtime forgets the wake-ups of the owners a run lists when the run ends, and the unit whose owner could not be built
+     * was never listed, so its entry stayed until the runtime stopped. No real owner build fails short of a critical error,
+     * so the test makes the build of unit 1 throw ({@code ownerBuildFault}), after unit 0 has been adopted.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"unordered", "ordered"})
+    void a_start_whose_owner_for_a_later_unit_cannot_be_built_releases_every_unit_and_leaves_no_wake_up_behind(String lane) throws Exception {
+        var settings   = settingsWithShedGrace(Duration.ofSeconds(1));
+        var instanceId = "owner-build-fails-" + lane;
+        var reported   = new RecordedOwnership();
+        var metrics    = new ShardOwnerMetrics(reported);
+        var failure    = new IllegalStateException("simulated failure building the owner of unit 1");
+        try (var runtime = new ShardRuntime(dataSource, settings)) {
+            var queue = ShardOwnedQueue.builder().setDataSource(dataSource).setQueueId(QUEUE_ID).setShardCount(SHARD_COUNT)
+                                       .setInstanceId(instanceId).setRuntime(runtime).setMetrics(metrics).build();
+            var buildsAttempted = new CopyOnWriteArrayList<Integer>();
+            queue.ownerBuildFault = (builtLane, unit) -> {
+                buildsAttempted.add(unit);
+                if (unit == 1) {
+                    throw failure;
+                }
+            };
+            try {
+                assertThatThrownBy(() -> startConsuming(queue, lane, settings))
+                        .as("the build's failure escapes the start as it was thrown")
+                        .isSameAs(failure);
+                assertThat(buildsAttempted).as("premise: unit 0 was adopted before the build of unit 1 failed").containsExactly(0, 1);
+                assertThat(queue.isStarted()).as("a start that failed is not started").isFalse();
+                assertThat(unitsOwnedBy(lane, instanceId)).as("no lease row names the instance whose start failed").isZero();
+                assertThat(instanceRegistered(instanceId)).as("a failed start keeps the membership row, for it to age out").isTrue();
+                assertThat(reported.events()).as("unit 0 is reported acquired, then released")
+                                             .containsExactly(new Reported(0, true), new Reported(0, false));
+                reported.assertEveryAcquisitionIsReleasedOnceAfterIt();
+                assertThat(metrics.shardsAcquired.sum()).as("only unit 0 was adopted").isEqualTo(1L);
+                assertThat(metrics.shardsReleased.sum()).as("its release counted once").isEqualTo(1L);
+                assertThat(runtime.isStarted()).as("premise: the runtime the queue was passed keeps running").isTrue();
+                assertThat(runtime.wakeupsHeld()).as("neither unit 0's wake-up nor that of unit 1, whose owner was never built, is left on the runtime")
+                                                 .isZero();
+            } finally {
+                queue.ownerBuildFault = (builtLane, unit) -> { };
+                queue.stop();
+            }
+        }
+    }
+
+    /**
      * A {@code stop()} called while a {@code start()} is still leasing returns within its shutdown budget, and no part of
      * the start's run outlives it. The stop used to wait for the start to finish, its database work included, outside the
      * 2 s budget, and with nothing in the queue to bound it. It now waits up to the budget, then takes the run out without
