@@ -180,12 +180,11 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
     private          int                      parallelConsumers   = 8;
     private          HandlerDispatch          dispatch;
     /**
-     * Told the lane and number of each unit {@link #adoptIntoRun} is about to build an owner for, before it builds it; what
-     * it throws fails that build, as an owner that cannot be built would. Does nothing unless a test sets it.
-     * Package-private: no owner build fails short of a critical error today, and a test needs one that does, for one unit,
-     * to reach what the queue does with a unit whose owner cannot be built - and with the units adopted before it.
+     * What a test does to each adoption ({@link #adoptIntoRun}); {@link AdoptionHook#NONE} unless a test passed one to the
+     * builder ({@link ShardOwnedQueueBuilder#setAdoptionHook}). Fixed at construction, so nothing can swap it while the
+     * queue runs.
      */
-    volatile BiConsumer<String, Integer>      ownerBuildFault     = (lane, unit) -> { };
+    private final    AdoptionHook             adoptionHook;
 
     /**
      * Set before {@link #start()}. Per consumer, not per process — see {@code ConsumerOptions}.
@@ -224,6 +223,17 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      */
     ShardOwnedQueue(DataSource dataSource, short queueId, int shardCount, String instanceId,
                     ShardOwnerMetrics metrics) {
+        this(dataSource, queueId, shardCount, instanceId, metrics, AdoptionHook.NONE);
+    }
+
+    /**
+     * @param metrics      the engine's observability wiring — its own counters, and the consumer-supplied
+     *                     {@link dk.trustworks.essentials.components.queue.shardowned.spi.QueueObserver}
+     * @param adoptionHook what a test does to each adoption ({@link AdoptionHook}); {@link AdoptionHook#NONE} outside tests
+     */
+    ShardOwnedQueue(DataSource dataSource, short queueId, int shardCount, String instanceId,
+                    ShardOwnerMetrics metrics, AdoptionHook adoptionHook) {
+        this.adoptionHook = requireNonNull(adoptionHook, "No adoptionHook provided");
         this.metrics = requireNonNull(metrics, "No metrics provided");
         this.dataSource = requireNonNull(dataSource, "No dataSource provided");
         this.queueId = queueId;
@@ -1748,10 +1758,14 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * @param build the unit's owner, built with the wake-up its placement chose
      * @return whether the unit was adopted; when not, nothing was placed or built, and the caller releases the row
      * @throws RuntimeException what {@code build} throws (or an {@code Error}), the unit not adopted and its placement
-     *                          withdrawn; what becomes of its row is the caller's
+     *                          withdrawn; or what the {@link AdoptionHook} throws - from
+     *                          {@link AdoptionHook#beforeAdopting} before anything is placed or the run checked, from
+     *                          {@link AdoptionHook#beforeBuildingOwner} as {@code build} would. What becomes of the
+     *                          unit's row is the caller's
      */
     private boolean adoptIntoRun(Run run, ShardRuntime shardRuntime, String lane, int unit,
                                  Function<ShardWakeup, LeasedOwner> build) {
+        adoptionHook.beforeAdopting(lane, unit);
         synchronized (run) {
             if (currentRun.get() != run) {
                 return false;
@@ -1759,7 +1773,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             var         placement = shardRuntime.place(queueId, lane, unit);
             LeasedOwner owner;
             try {
-                ownerBuildFault.accept(lane, unit);
+                adoptionHook.beforeBuildingOwner(lane, unit);
                 owner = build.apply(placement.wakeup());
             } catch (RuntimeException | Error e) {
                 // A critical error escapes untouched, with nothing undone (start()).
@@ -1776,6 +1790,37 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             placement.register(owner);
             countAcquisition(run, owner);
             return true;
+        }
+    }
+
+    /**
+     * What a test does to each adoption ({@link #adoptIntoRun}) to reach a state no real adoption can be made to hold:
+     * a start held between two adoptions, or an owner that cannot be built. Passed at construction, through the builder's
+     * package-private {@link ShardOwnedQueueBuilder#setAdoptionHook}, and fixed for the queue's life; every queue built
+     * otherwise has {@link #NONE}, which does nothing.
+     */
+    interface AdoptionHook {
+        AdoptionHook NONE = new AdoptionHook() { };
+
+        /**
+         * Told the lane and number of a unit about to be adopted, before the run's monitor is taken, so blocking here
+         * holds the adopting thread without holding that monitor. A heartbeat tick's acquire loop holds nothing a stop
+         * waits for. A start-up still holds {@link #lifecycleLock}, and a plain {@link #stop()} waits for that lock, up to
+         * {@link #SHUTDOWN_BUDGET}: only a stop that does not take it - {@code stop()} on an interrupted thread or past
+         * that budget, or {@link #stopAbruptly()} - takes the run out while a start-up is held here
+         * ({@link #stopWithoutWaiting}). What it throws escapes {@link #adoptIntoRun} before anything is placed or the
+         * run checked, as a failed build would escape it.
+         */
+        default void beforeAdopting(String lane, int unit) {
+        }
+
+        /**
+         * Told the lane and number of a unit whose owner is about to be built, under the run's monitor once the unit is
+         * placed; what it throws fails that build, as an owner that cannot be built would. No real owner build fails short
+         * of a critical error, and a test needs one that does to reach what the queue does with that unit's placement, its
+         * row, and the units adopted before it.
+         */
+        default void beforeBuildingOwner(String lane, int unit) {
         }
     }
 

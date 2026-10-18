@@ -1554,7 +1554,7 @@ class ShardOwnedLifecycleIT {
      * wake-up behind on the runtime it was passed, which keeps running. The unit's placement used to keep its wake-up: the
      * runtime forgets the wake-ups of the owners a run lists when the run ends, and the unit whose owner could not be built
      * was never listed, so its entry stayed until the runtime stopped. No real owner build fails short of a critical error,
-     * so the test makes the build of unit 1 throw ({@code ownerBuildFault}), after unit 0 has been adopted.
+     * so the test makes the build of unit 1 throw ({@code AdoptionHook.beforeBuildingOwner}), after unit 0 has been adopted.
      */
     @ParameterizedTest
     @ValueSource(strings = {"unordered", "ordered"})
@@ -1564,16 +1564,20 @@ class ShardOwnedLifecycleIT {
         var reported   = new RecordedOwnership();
         var metrics    = new ShardOwnerMetrics(reported);
         var failure    = new IllegalStateException("simulated failure building the owner of unit 1");
+        var buildsAttempted = new CopyOnWriteArrayList<Integer>();
         try (var runtime = new ShardRuntime(dataSource, settings)) {
             var queue = ShardOwnedQueue.builder().setDataSource(dataSource).setQueueId(QUEUE_ID).setShardCount(SHARD_COUNT)
-                                       .setInstanceId(instanceId).setRuntime(runtime).setMetrics(metrics).build();
-            var buildsAttempted = new CopyOnWriteArrayList<Integer>();
-            queue.ownerBuildFault = (builtLane, unit) -> {
-                buildsAttempted.add(unit);
-                if (unit == 1) {
-                    throw failure;
-                }
-            };
+                                       .setInstanceId(instanceId).setRuntime(runtime).setMetrics(metrics)
+                                       .setAdoptionHook(new ShardOwnedQueue.AdoptionHook() {
+                                           @Override
+                                           public void beforeBuildingOwner(String builtLane, int unit) {
+                                               buildsAttempted.add(unit);
+                                               if (unit == 1) {
+                                                   throw failure;
+                                               }
+                                           }
+                                       })
+                                       .build();
             try {
                 assertThatThrownBy(() -> startConsuming(queue, lane, settings))
                         .as("the build's failure escapes the start as it was thrown")
@@ -1591,7 +1595,6 @@ class ShardOwnedLifecycleIT {
                 assertThat(runtime.wakeupsHeld()).as("neither unit 0's wake-up nor that of unit 1, whose owner was never built, is left on the runtime")
                                                  .isZero();
             } finally {
-                queue.ownerBuildFault = (builtLane, unit) -> { };
                 queue.stop();
             }
         }
@@ -2414,81 +2417,78 @@ class ShardOwnedLifecycleIT {
      * stop it was, never saw it.
      * <p>
      * The observer is told only of units the run adopted, so the stop has to take the run out after the start has adopted
-     * one and before it schedules the heartbeat, and nothing in that window can be made to hold the start. The ordered lane
-     * adopts its units one at a time, each under the run's monitor, and a stop on an interrupted thread - which does not
-     * wait for the lifecycle lock - called as soon as the first is adopted waits for that monitor between two adoptions.
-     * When it gets the monitor only once the heartbeat is scheduled it stops the queue under the lock instead, after the
-     * start, and the observer's failure escapes the stop; the attempt is then made again under a new instance id.
+     * one and before it schedules the heartbeat. The test holds the start there: its {@code AdoptionHook} blocks the
+     * second adoption before the run's monitor is taken, so a stop on an interrupted thread - which does not wait for the
+     * lifecycle lock - takes the run out at once, with one unit adopted. Released, the start finds its run ended, adopts
+     * nothing more and does the stop's work.
      */
-    @Test
-    void a_start_doing_the_work_of_a_stop_that_did_not_wait_for_it_logs_the_observers_failure_instead_of_throwing_it() throws Exception {
-        var settings    = settingsWithShedGrace(Duration.ofSeconds(1));
-        var throwing    = new AtomicBoolean(true);
-        var logged      = new ListAppender<ILoggingEvent>();
-        var queueLogger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(ShardOwnedQueue.class);
+    @ParameterizedTest
+    @ValueSource(strings = {"unordered", "ordered"})
+    void a_start_doing_the_work_of_a_stop_that_did_not_wait_for_it_logs_the_observers_failure_instead_of_throwing_it(String lane) throws Exception {
+        var settings      = settingsWithShedGrace(Duration.ofSeconds(1));
+        var instanceId    = "owed-stop-observer-" + lane;
+        var throwing      = new AtomicBoolean(true);
+        var adoptions     = new CopyOnWriteArrayList<Integer>();
+        var secondHeld    = new CountDownLatch(1);
+        var letTheStartGo = new CountDownLatch(1);
+        var logged        = new ListAppender<ILoggingEvent>();
+        var queueLogger   = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(ShardOwnedQueue.class);
         logged.start();
         queueLogger.addAppender(logged);
-        ShardRuntime.acquireShared(dataSource, settings);
-        try {
-            var landed = false;
-            for (var attempt = 0; attempt < 20 && !landed; attempt++) {
-                var instanceId   = "owed-stop-observer-" + attempt;
-                var queue        = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, instanceId, new ShardOwnerMetrics(throwingForEveryRelease(throwing)));
-                var startFailure = new AtomicReference<Throwable>();
-                var starting = new Thread(() -> {
-                    try {
-                        startConsuming(queue, "ordered", settings);
-                    } catch (Throwable failure) {
-                        startFailure.set(failure);
-                    }
-                });
-                Throwable stopFailure = null;
-                try {
-                    starting.start();
-                    while (queue.owners().isEmpty() && starting.isAlive()) {
-                        Thread.onSpinWait();
-                    }
-                    Thread.currentThread().interrupt();
-                    try {
-                        queue.stop();
-                    } catch (RuntimeException | Error failure) {
-                        stopFailure = failure;
-                    } finally {
-                        Thread.interrupted();
-                    }
-                    starting.join(30_000);
-                    assertThat(starting.isAlive()).as("the start returned").isFalse();
-                    // The stop returned without the observer's failure only when it left its work to the start.
-                    landed = stopFailure == null;
-                    if (landed) {
-                        assertThat(startFailure.get()).as("the start, doing the stop's work, returned normally").isNull();
-                        assertThat(queue.isStarted()).as("the start left the queue stopped").isFalse();
-                        Awaitility.await().atMost(Duration.ofSeconds(5)).until(() -> !instanceRegistered(instanceId)
-                                                                                     && unitsOwnedBy("ordered", instanceId) == 0);
-                        assertThat(logged.list).filteredOn(event -> event.getFormattedMessage().contains("did the work of a stop()"))
-                                               .as("the observer's failure is logged at WARN, with what it threw")
-                                               .singleElement()
-                                               .satisfies(event -> assertThat(event.getThrowableProxy().getMessage())
-                                                       .startsWith("simulated observer failure releasing unit"));
-                    } else {
-                        assertThat(stopFailure).as("premise: a stop under the lock throws the observer's failure")
-                                               .hasMessageStartingWith("simulated observer failure releasing unit");
-                        // The release ran on the interrupted stop's budget thread, which it did not wait for.
-                        Awaitility.await().atMost(Duration.ofSeconds(10)).until(() -> !instanceRegistered(instanceId)
-                                                                                      && unitsOwnedBy("ordered", instanceId) == 0);
-                    }
-                } finally {
-                    Thread.interrupted();
-                    starting.join(30_000);
-                    throwing.set(false);
-                    queue.stop();
-                    throwing.set(true);
-                }
+        var queue = ShardOwnedQueue.builder().setDataSource(dataSource).setQueueId(QUEUE_ID).setShardCount(SHARD_COUNT)
+                                   .setInstanceId(instanceId).setMetrics(new ShardOwnerMetrics(throwingForEveryRelease(throwing)))
+                                   .setAdoptionHook(new ShardOwnedQueue.AdoptionHook() {
+                                       @Override
+                                       public void beforeAdopting(String adoptedLane, int unit) {
+                                           adoptions.add(unit);
+                                           if (adoptions.size() == 2) {
+                                               secondHeld.countDown();
+                                               awaitQuietly(letTheStartGo);
+                                           }
+                                       }
+                                   })
+                                   .build();
+        var startFailure = new AtomicReference<Throwable>();
+        var starting = new Thread(() -> {
+            try {
+                startConsuming(queue, lane, settings);
+            } catch (Throwable failure) {
+                startFailure.set(failure);
             }
-            assertThat(landed).as("premise: in one of 20 attempts a stop took the run out between an adoption and the heartbeat").isTrue();
+        });
+        try {
+            starting.start();
+            assertThat(secondHeld.await(20, TimeUnit.SECONDS)).as("premise: the start is held before its second adoption").isTrue();
+            assertThat(queue.owners()).as("premise: the start has adopted one unit").hasSize(1);
+
+            Thread.currentThread().interrupt();
+            try {
+                queue.stop();
+            } finally {
+                Thread.interrupted();
+            }
+            assertThat(queue.isStarted()).as("premise: the interrupted stop took the run out and returned").isFalse();
+            assertThat(starting.isAlive()).as("premise: the start is still running, owing the stop's work").isTrue();
+
+            letTheStartGo.countDown();
+            starting.join(30_000);
+
+            assertThat(starting.isAlive()).as("the start returned").isFalse();
+            assertThat(startFailure.get()).as("the start, doing the stop's work, returned normally").isNull();
+            assertThat(adoptions).as("premise: the start tried no unit after the held one, which found its run ended").hasSize(2);
+            assertThat(queue.isStarted()).as("the start left the queue stopped").isFalse();
+            Awaitility.await().atMost(Duration.ofSeconds(5)).until(() -> !instanceRegistered(instanceId) && unitsOwnedBy(lane, instanceId) == 0);
+            assertThat(logged.list).filteredOn(event -> event.getFormattedMessage().contains("did the work of a stop()"))
+                                   .as("the observer's failure is logged at WARN, with what it threw")
+                                   .singleElement()
+                                   .satisfies(event -> assertThat(event.getThrowableProxy().getMessage())
+                                           .startsWith("simulated observer failure releasing unit"));
         } finally {
+            letTheStartGo.countDown();
+            starting.join(30_000);
+            throwing.set(false);
+            queue.stop();
             queueLogger.detachAppender(logged);
-            ShardRuntime.releaseShared(dataSource);
         }
     }
 
