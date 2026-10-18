@@ -163,6 +163,10 @@ targets, with a `-N` suffix for plugin-only releases.
   polling interval per empty poll, capped at 20× the polling interval).
 - **Docs: supported PostgreSQL is 15+.** `LLM.md` states the floor (the majors the PostgreSQL community still patches)
   and the fenced-lock and shard-owned docs point at it instead of the old 9.5+ and 13+.
+- **Docs: `shared` helpers for Essentials 0.60.1** (`LLM-shared.md`). § Exceptions lists `ROOT_CAUSE_PREFIX`,
+  `prependRootCauseSummary`, `forEachThenThrowFirst` and `forEachCollectingFailures`, with examples for stopping
+  every part and undoing a failed start; § Locks documents `Locks.lockWarningOnce`, a lock wait, like `lock()`, that
+  warns once `warnAfter` has passed without the lock instead of blocking silently.
 
 ## 0.60.0-6 — targets Essentials 0.60.0
 - **`/essentials:upgrade` now moves a project to the plugin's Essentials release, code included.** A
