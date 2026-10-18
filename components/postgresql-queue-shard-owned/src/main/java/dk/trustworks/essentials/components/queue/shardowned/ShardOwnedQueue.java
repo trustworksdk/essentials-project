@@ -145,7 +145,6 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * a newer fence, and is left alone.
      */
     private final    Map<Integer, Long>       unreleasedAcquisitions = new ConcurrentHashMap<>();
-    private final    AtomicBoolean            flushOnExit         = new AtomicBoolean(true);
     private final    AtomicInteger            enqueueShardCursor  = new AtomicInteger();
     private          String                   activeLane          = "unordered";
     private final    ShardOwnerMetrics        metrics;
@@ -848,9 +847,11 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * work, and for a {@link #stop()} that has not yet taken its run out.
      */
     public void stopAbruptly() {
-        // Abandon without acknowledging, so the takeover path is exercised for real rather than
-        // handed a queue the outgoing owner had already emptied.
-        flushOnExit.set(false);
+        // No drain and no release: this stands in for a crash. The units stay leased to this instance, and another instance
+        // takes them over once this instance's membership row is older than the lease TTL: stopAbruptlyLocked() cancels the
+        // run's heartbeat, which refreshes that row, and does not deregister it. It holds back no acknowledgement - the
+        // runtime's pumps still flush the ones they hold when they exit - so a test that needs messages left unacknowledged
+        // keeps their handlers from returning.
         // One lifecycle operation at a time, as start() and stop() (lifecycleLock) - but without waiting for it.
         if (!lifecycleLock.tryLock()) {
             stopWithoutWaiting(StopKind.ABRUPT, false);
