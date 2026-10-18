@@ -2236,7 +2236,7 @@ class ShardOwnedLifecycleIT {
             }
             var failWith = errors;
             if (failWith != null) {
-                var acquiring = StackWalker.getInstance().walk(frames -> frames.anyMatch(frame -> frame.getMethodName().equals("acquireLeaseGrant")));
+                var acquiring = StackWalker.getInstance().walk(frames -> frames.anyMatch(frame -> "acquireLeaseGrant".equals(frame.getMethodName())));
                 if (acquiring && acquires.incrementAndGet() == 1) {
                     return;
                 }
