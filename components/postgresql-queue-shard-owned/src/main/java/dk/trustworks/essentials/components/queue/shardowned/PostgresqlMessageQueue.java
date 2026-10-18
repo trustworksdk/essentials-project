@@ -1329,6 +1329,16 @@ public final class PostgresqlMessageQueue implements MessageQueue {
         }
     }
 
+    /**
+     * How many {@link #stop()}s that did not get {@link #lifecycleLock} are still stopping consumers
+     * ({@link #stopsWithoutLock}), read under {@link #handOver}.
+     */
+    int stopsWithoutLock() {
+        synchronized (handOver) {
+            return stopsWithoutLock;
+        }
+    }
+
     private void stopForAStopThatDidNotWait() {
         try {
             stopEach(consumers);
