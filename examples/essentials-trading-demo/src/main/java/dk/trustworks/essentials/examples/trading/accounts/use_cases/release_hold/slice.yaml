@@ -1,0 +1,25 @@
+schemaVersion: "1.1"
+slice: accounts.release_hold
+kind: command
+bc: accounts
+owner: accounts-team
+status: live
+summary: "Release whatever remains of a hold, and close it."
+generator: essentials
+language: java
+
+handles: [ReleaseHold]
+# AccountBooksClosed/AccountOpened are emitted when the ON_ACCESS closing-books policy rolls the account while it is
+# being loaded for this command.
+publishes: [FundsReleased, AccountBooksClosed, AccountOpened]
+writes: [Account]
+reads:
+  - { name: Account }
+endpoints:
+  - { method: POST, path: "/api/admin/accounts/{accountId}/hold-releases", auth: operator }
+forbidden:
+  - cross-slice-internal:accounts
+tests:
+  unit: { present: true }
+  integration: { present: true }
+  contract: { present: false }

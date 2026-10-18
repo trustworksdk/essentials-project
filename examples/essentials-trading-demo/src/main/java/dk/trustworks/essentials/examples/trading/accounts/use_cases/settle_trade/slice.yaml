@@ -1,0 +1,25 @@
+schemaVersion: "1.1"
+slice: accounts.settle_trade
+kind: command
+bc: accounts
+owner: accounts-team
+status: live
+summary: "A booked trade settled: pending cash and shares become settled."
+generator: essentials
+language: java
+
+handles: [SettleTrade]
+# AccountBooksClosed/AccountOpened are emitted when the ON_ACCESS closing-books policy rolls the account while it is
+# being loaded for this command.
+publishes: [TradeSettled, AccountBooksClosed, AccountOpened]
+writes: [Account]
+reads:
+  - { name: Account }
+endpoints:
+  - { method: POST, path: "/api/admin/accounts/{accountId}/trade-settlements", auth: operator }
+forbidden:
+  - cross-slice-internal:accounts
+tests:
+  unit: { present: true }
+  integration: { present: true }
+  contract: { present: false }

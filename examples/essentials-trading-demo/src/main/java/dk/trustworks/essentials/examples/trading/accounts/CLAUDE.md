@@ -1,0 +1,42 @@
+# Bounded context: accounts
+
+The trading account ledger: cash buckets, positions, holds, reservations, and the figures customers see. Design:
+`docs/design/phase-1-account-core.md`. Lives **beside** the frozen `brokerage` context (its own `Accounts` stream,
+not `TradingAccounts`) until phase 4 deletes `brokerage` (design Q-1).
+
+**Write style: aggregate (§R5)** — `Account` behind `Accounts` (a `ClosingBooksLogicalAggregateRepository`), closing
+books `END_OF_DAY` in New York until EF-1, snapshots every 100 events.
+
+## Rules that are easy to break
+
+- **Requests are checked, facts are not.** `holdFunds`, `reserveShares` refuse with `LedgerRuleViolation` (`422`).
+  Deposits, returns, withdrawals, trades and settlements are facts from outside and are never refused for funds; they
+  can restrict the account (settled cash < 0). Do not add a funds check to a fact.
+- **Every mutating slice loads through `Accounts.getAccountForMutation`** — the closing-books trigger. Only
+  `roll_account_books` must not, or one roll becomes two.
+- **Idempotency is per external reference**, and open items carry into the next generation (`OpeningBalances`). A new
+  kind of open item must be added to `OpeningBalances` and `openStateForNextGeneration`, or it is lost at the next roll.
+- **Events carry their own effect** (`holdConsumed`, `costBasisChange`, `realizedPnl`, `unclearedReleased`).
+  Projections read those, never recompute them.
+- **The two balance projections apply deltas, so they are versioned** (generation + last `EventOrder`, the event-store
+  docs' "Version = EventOrder" pattern). A `ViewEventProcessor` may redeliver; an unguarded delta is wrong money.
+  `account_activity` is insert-only on `(stream, event order)` instead.
+- **Simple-name clashes with `brokerage` break Spring**: bean names are simple class names, so a new class may not be
+  named like one of `brokerage`'s (hence `ReleaseHold`, `RollAccountBooks`).
+- **`Money` in a request body is `{"amount": 100.50, "currency": "USD"}` with a JSON *number*.** Essentials' deserializer
+  refuses a string amount (`400`, `cannot coerce value "100.50"`).
+- **Snapshots**: test a change to `Account`'s state through `DefaultAggregateSnapshotStateAdapter` (see `AccountTest`),
+  not a plain serializer — the adapter is what leaves the `AggregateRoot` base fields out.
+
+## Slices
+
+| Slice | Kind | Driven by (from phase) |
+|---|---|---|
+| `open_account` | command | customer, for themselves (1) |
+| `adjust_cash` | command | operator; reconciliation (5) |
+| `credit_deposit`, `clear_deposit`, `return_deposit` | command | operator now; payment gateway (2) |
+| `hold_funds`, `release_hold`, `withdraw_cash` | command | operator now; orders (3), withdrawals (2) |
+| `reserve_shares`, `release_shares` | command | operator now; orders (3) |
+| `book_trade`, `settle_trade`, `reverse_trade_booking` | command | operator now; exchange (3), settlement (4) |
+| `roll_account_books` | command | operator; end of day (EF-1) |
+| `account_overview`, `positions`, `account_activity` | view | customer (own accounts) and operator |

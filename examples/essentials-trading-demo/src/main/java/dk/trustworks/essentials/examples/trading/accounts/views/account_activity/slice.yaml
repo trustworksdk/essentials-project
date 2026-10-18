@@ -1,0 +1,27 @@
+schemaVersion: "1.1"
+slice: accounts.account_activity
+kind: view
+bc: accounts
+owner: accounts-team
+status: live
+summary: An account's statement, one line per ledger event, newest first.
+generator: essentials
+language: java
+
+serves: [GetAccountActivity]
+endpoints:
+  - { method: GET, path: "/api/accounts/{accountId}/activity?limit=", auth: customer }
+reads:
+  - { name: ActivityEntry }
+projections:
+  - name: AccountActivityProjection
+    from: [AccountOpened, CashAdjusted, DepositCredited, DepositCleared, DepositReturned, FundsHeld, FundsReleased, CashWithdrawn,
+           SharesReserved, SharesReleased, TradeBooked, TradeSettled, TradeBookingReversed, AccountBooksClosed]
+    consistency: eventual
+    store: postgresql
+forbidden:
+  - cross-slice-internal:accounts
+tests:
+  unit: { present: false }
+  integration: { present: true }
+  contract: { present: false }

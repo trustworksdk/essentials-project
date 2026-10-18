@@ -1,0 +1,30 @@
+schemaVersion: "1.1"
+slice: accounts.positions
+kind: view
+bc: accounts
+owner: accounts-team
+status: live
+summary: An account's positions per instrument — settled, pending, reserved, sellable, cost basis.
+generator: essentials
+language: java
+
+serves: [GetPositions]
+endpoints:
+  - { method: GET, path: "/api/accounts/{accountId}/positions", auth: customer }
+reads:
+  - { name: PositionView }
+projections:
+  - name: PositionsProjection
+    from: [AccountOpened, SharesReserved, SharesReleased, TradeBooked, TradeSettled, TradeBookingReversed]
+    consistency: eventual
+    store: postgresql
+invariants:
+  - id: INV-PO-1
+    text: "Deltas are applied once, guarded per account by generation and last applied EventOrder"
+    enforcedBy: PositionsProjection
+forbidden:
+  - cross-slice-internal:accounts
+tests:
+  unit: { present: false }
+  integration: { present: true }
+  contract: { present: false }

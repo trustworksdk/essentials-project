@@ -1,0 +1,29 @@
+schemaVersion: "1.1"
+slice: accounts.open_account
+kind: command
+bc: accounts
+owner: accounts-team
+status: live
+summary: Open an empty trading account for a user, in one currency.
+generator: essentials
+language: java
+
+handles: [OpenAccount]
+publishes: [AccountOpened]
+writes: [Account]
+reads: []
+endpoints:
+  - { method: POST, path: /api/accounts, auth: customer }
+invariants:
+  - id: INV-OA-1
+    text: "A customer may open accounts only for themselves; an operator for anyone"
+    enforcedBy: OpenAccountAPI
+  - id: INV-OA-2
+    text: "Opening an account that exists is a no-op, so a retry is harmless"
+    enforcedBy: OpenAccountHandler
+forbidden:
+  - cross-slice-internal:accounts
+tests:
+  unit: { present: false }
+  integration: { present: true }
+  contract: { present: false }

@@ -49,7 +49,8 @@ public class AccountClosingBooksPolicy {
         evaluator = BuiltInClosingBooksPolicyEvaluator.<Account>builder()
                                                       .setAggregateType(Accounts.AGGREGATE_TYPE)
                                                       .setDefaultPolicy(configuration.defaultPolicy())
-                                                      .setEventThreshold(configuration.eventThreshold())
+                                                      // A pure time boundary declares no threshold; 0 is the evaluator's "none"
+                                                      .setEventThreshold(configuration.eventThreshold() == null ? 0L : configuration.eventThreshold())
                                                       .setTimeBoundary(configuration.timeBoundary())
                                                       .setZoneId(ZoneId.of(configuration.zoneId()))
                                                       .setIntervalDays(configuration.intervalDays())

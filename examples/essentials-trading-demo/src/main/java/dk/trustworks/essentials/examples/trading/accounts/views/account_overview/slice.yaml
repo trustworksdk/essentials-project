@@ -1,0 +1,35 @@
+schemaVersion: "1.1"
+slice: accounts.account_overview
+kind: view
+bc: accounts
+owner: accounts-team
+status: live
+summary: An account's cash buckets and the figures its owner sees — cash balance, buying power, withdrawable, restricted.
+generator: essentials
+language: java
+
+serves: [MyAccounts, GetAccountOverview]
+endpoints:
+  - { method: GET, path: /api/accounts, auth: customer }
+  - { method: GET, path: "/api/accounts/{accountId}", auth: customer }
+reads:
+  - { name: AccountOverview }
+projections:
+  - name: AccountOverviewProjection
+    from: [AccountOpened, CashAdjusted, DepositCredited, DepositCleared, DepositReturned, FundsHeld, FundsReleased, CashWithdrawn,
+           TradeBooked, TradeSettled, TradeBookingReversed, AccountBooksClosed, SharesReserved, SharesReleased]
+    consistency: eventual
+    store: postgresql
+invariants:
+  - id: INV-AO-1
+    text: "Deltas are applied once: guarded by the row's generation and last applied EventOrder; a new generation's AccountOpened resets the row absolutely"
+    enforcedBy: AccountOverviewProjection
+  - id: INV-AO-2
+    text: "Somebody else's account answers 404, not 403"
+    enforcedBy: AccountOverviewAPI
+forbidden:
+  - cross-slice-internal:accounts
+tests:
+  unit: { present: false }
+  integration: { present: true }
+  contract: { present: false }

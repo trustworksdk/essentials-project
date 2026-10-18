@@ -1,0 +1,25 @@
+schemaVersion: "1.1"
+slice: accounts.clear_deposit
+kind: command
+bc: accounts
+owner: accounts-team
+status: live
+summary: "A deposit has left its return window; it becomes withdrawable."
+generator: essentials
+language: java
+
+handles: [ClearDeposit]
+# AccountBooksClosed/AccountOpened are emitted when the ON_ACCESS closing-books policy rolls the account while it is
+# being loaded for this command.
+publishes: [DepositCleared, AccountBooksClosed, AccountOpened]
+writes: [Account]
+reads:
+  - { name: Account }
+endpoints:
+  - { method: POST, path: "/api/admin/accounts/{accountId}/deposit-clearances", auth: operator }
+forbidden:
+  - cross-slice-internal:accounts
+tests:
+  unit: { present: true }
+  integration: { present: true }
+  contract: { present: false }

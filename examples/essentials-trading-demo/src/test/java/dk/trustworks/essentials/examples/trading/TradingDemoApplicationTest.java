@@ -212,12 +212,12 @@ class TradingDemoApplicationTest {
         var lifecycleApi = applicationContext.getBean(AggregateLifecycleApi.class);
 
         assertThat(lifecycleApi.findAllAggregateSnapshotPolicies("demo-admin"))
-                .describedAs("Both snapshot policies must reach the registry, not merely annotate their classes")
+                .describedAs("Every snapshot policy must reach the registry, not merely annotate its class")
                 .extracting(policy -> policy.aggregateType().toString())
-                .containsExactlyInAnyOrder("TradingAccounts", "InstrumentPrices");
+                .containsExactlyInAnyOrder("TradingAccounts", "InstrumentPrices", "Accounts");
         assertThat(lifecycleApi.findAllAggregateClosingBooksPolicies("demo-admin"))
                 .extracting(policy -> policy.aggregateType().toString())
-                .containsExactly("TradingAccounts");
+                .containsExactlyInAnyOrder("TradingAccounts", "Accounts");
     }
 
     @Test

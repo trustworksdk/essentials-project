@@ -1,0 +1,27 @@
+schemaVersion: "1.1"
+slice: accounts.roll_account_books
+kind: command
+bc: accounts
+owner: accounts-team
+status: live
+summary: Close the current books generation and open the next period with the open state carried over.
+generator: essentials
+language: java
+
+handles: [RollAccountBooks]
+publishes: [AccountBooksClosed, AccountOpened]
+writes: [Account]
+reads:
+  - { name: Account }
+endpoints:
+  - { method: POST, path: "/api/admin/accounts/{accountId}/generations?nextPeriodId=", auth: operator }
+invariants:
+  - id: INV-RB-1
+    text: "Never loads through getAccountForMutation, or one requested roll becomes two"
+    enforcedBy: RollAccountBooksHandler
+forbidden:
+  - cross-slice-internal:accounts
+tests:
+  unit: { present: true }
+  integration: { present: true }
+  contract: { present: false }
