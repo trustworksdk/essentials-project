@@ -283,7 +283,9 @@ class ShardOwnedTakeoverChargeIT {
             statement.setInt(2, SHARD);
             statement.setLong(3, seq);
             try (var resultSet = statement.executeQuery()) {
-                resultSet.next();
+                if (!resultSet.next()) {
+                    throw new IllegalStateException("No row in " + table + " for queue " + QUEUE_ID + " shard " + SHARD + " seq " + seq);
+                }
                 var lease = resultSet.getLong(1);
                 return resultSet.wasNull() ? null : lease;
             }
