@@ -16,19 +16,23 @@
 
 package dk.trustworks.essentials.components.queue.shardowned;
 
+import ch.qos.logback.classic.spi.*;
+import ch.qos.logback.core.read.ListAppender;
 import com.zaxxer.hikari.*;
 import dk.trustworks.essentials.components.queue.shardowned.*;
 import dk.trustworks.essentials.components.queue.shardowned.spi.QueueObserver;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.*;
+import org.slf4j.LoggerFactory;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import java.nio.charset.StandardCharsets;
+import java.sql.SQLException;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.*;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -256,6 +260,146 @@ class ShardOwnedRebalanceIT {
                                                                .isEqualTo(SHARD_COUNT / 2);
             }
         }
+    }
+
+    /**
+     * A release that fails part-way through the unordered shed is the failure the heartbeat tick ends with, even when the
+     * observer then throws for a shard the shed released before it: the {@code Rebalance failed} WARN logs the database
+     * error, with the observer's failure added to it as suppressed. The observer was told from the loop's {@code finally},
+     * and its failure replaced the database error, so the WARN never named what left the rest of the excess held.
+     * The release of the last shard is refused; the shed releases the shards before it first.
+     */
+    @Test
+    void a_shed_release_that_fails_is_the_logged_failure_when_the_observer_throws_for_an_earlier_release() throws Exception {
+        var observerThrows = new AtomicBoolean(true);
+        var toldReleased   = new CopyOnWriteArrayList<Integer>();
+        var observer = new QueueObserver() {
+            @Override
+            public void shardOwnershipChanged(int shard, boolean acquired) {
+                if (!acquired && observerThrows.get()) {
+                    toldReleased.add(shard);
+                    throw new IllegalStateException("simulated observer failure releasing unordered shard " + shard);
+                }
+            }
+        };
+        var refusedUnit = SHARD_COUNT - 1;
+        var logged      = captureQueueLog();
+        try (var first = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "masked-shed-1", new ShardOwnerMetrics(observer))) {
+            first.startConsuming((messageId, payload, payloadType) -> { }, FAST, SHARD_COUNT);
+            Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(first.shardsHeld()).isEqualTo(SHARD_COUNT));
+
+            LeaseReleaseRefusals.failLeaseReleasesOf(dataSource, new short[]{QUEUE_ID}, "unordered", refusedUnit, true);
+            try (var second = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "masked-shed-2")) {
+                second.startConsuming((messageId, payload, payloadType) -> { }, FAST, SHARD_COUNT);
+
+                Awaitility.await().atMost(Duration.ofSeconds(10)).until(
+                        () -> LeaseReleaseRefusals.releasesRefused(dataSource, QUEUE_ID, refusedUnit) >= 1 && !toldReleased.isEmpty());
+                assertThat(toldReleased).as("premise: the observer threw for a shard the shed released before the refused one")
+                                        .doesNotContain(refusedUnit);
+
+                Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(
+                        () -> assertThat(rebalanceFailures(logged)).as("the tick that told the observer logged the refused release, with "
+                                                                               + "the observer's failure added to it")
+                                                                   .anyMatch(failure -> carries(failure, "simulated failure releasing",
+                                                                                                "simulated observer failure releasing")));
+                assertThat(rebalanceFailures(logged)).as("no tick logged the observer's failure in place of the database error")
+                                                     .noneMatch(failure -> failure instanceof IllegalStateException);
+            } finally {
+                observerThrows.set(false);
+                LeaseReleaseRefusals.failLeaseReleasesOf(dataSource, new short[]{QUEUE_ID}, "unordered", refusedUnit, false);
+            }
+        } finally {
+            releaseQueueLog(logged);
+        }
+    }
+
+    /**
+     * The heartbeat tick's unordered acquire loop, the same: an acquire statement that fails after the loop has adopted
+     * shards is the failure the tick ends with, and the observer's failure for one of those shards is added to it as
+     * suppressed rather than logged in its place. The first instance stops, so the second's next tick acquires every
+     * shard in order, and the last one's acquisition is refused.
+     */
+    @Test
+    void an_acquire_that_fails_is_the_logged_failure_when_the_observer_throws_for_an_earlier_acquisition() throws Exception {
+        var observerThrows = new AtomicBoolean(true);
+        var toldAcquired   = new CopyOnWriteArrayList<Integer>();
+        var observer = new QueueObserver() {
+            @Override
+            public void shardOwnershipChanged(int shard, boolean acquired) {
+                if (acquired && observerThrows.get()) {
+                    toldAcquired.add(shard);
+                    throw new IllegalStateException("simulated observer failure acquiring unordered shard " + shard);
+                }
+            }
+        };
+        var refusedUnit = SHARD_COUNT - 1;
+        var logged      = captureQueueLog();
+        try (var first = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "masked-acquire-1")) {
+            first.startConsuming((messageId, payload, payloadType) -> { }, FAST, SHARD_COUNT);
+            Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(first.shardsHeld()).isEqualTo(SHARD_COUNT));
+
+            LeaseAcquisitionRefusals.failLeaseAcquisitionsOf(dataSource, "unordered", refusedUnit, "masked-acquire-2", true);
+            try (var second = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "masked-acquire-2", new ShardOwnerMetrics(observer))) {
+                second.startConsuming((messageId, payload, payloadType) -> { }, FAST, SHARD_COUNT);
+                assertThat(second.shardsHeld()).as("premise: nothing was free when the second started").isZero();
+                // Every shard free at once, rather than only the first's shed excess: the second's next tick then acquires
+                // them in order and reaches the refused one with the others adopted.
+                first.close();
+
+                Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(
+                        () -> assertThat(rebalanceFailures(logged)).as("a tick that told the observer logged the refused acquisition, with "
+                                                                               + "the observer's failure added to it")
+                                                                   .anyMatch(failure -> carries(failure, "simulated failure acquiring",
+                                                                                                "simulated observer failure acquiring")));
+                assertThat(LeaseAcquisitionRefusals.acquisitionsRefused(dataSource)).as("premise: the acquisition was refused").isPositive();
+                assertThat(toldAcquired).as("premise: the observer threw for a shard the loop adopted before the refused one")
+                                        .isNotEmpty()
+                                        .doesNotContain(refusedUnit);
+            } finally {
+                observerThrows.set(false);
+                LeaseAcquisitionRefusals.failLeaseAcquisitionsOf(dataSource, "unordered", refusedUnit, "masked-acquire-2", false);
+            }
+        } finally {
+            releaseQueueLog(logged);
+        }
+    }
+
+    /**
+     * Capture what {@link ShardOwnedQueue} logs, its heartbeat's {@code Rebalance failed} WARN among it.
+     */
+    static ListAppender<ILoggingEvent> captureQueueLog() {
+        var logged = new ListAppender<ILoggingEvent>();
+        logged.start();
+        ((ch.qos.logback.classic.Logger) LoggerFactory.getLogger(ShardOwnedQueue.class)).addAppender(logged);
+        return logged;
+    }
+
+    static void releaseQueueLog(ListAppender<ILoggingEvent> logged) {
+        ((ch.qos.logback.classic.Logger) LoggerFactory.getLogger(ShardOwnedQueue.class)).detachAppender(logged);
+    }
+
+    /**
+     * The failure of every heartbeat tick whose rebalance failed, in the order they were logged.
+     */
+    static List<Throwable> rebalanceFailures(ListAppender<ILoggingEvent> logged) {
+        // The appender adds under its own monitor (AppenderBase.doAppend), from the heartbeat thread.
+        synchronized (logged) {
+            return logged.list.stream()
+                              .filter(event -> "Rebalance failed".equals(event.getMessage()) && event.getThrowableProxy() instanceof ThrowableProxy)
+                              .map(event -> ((ThrowableProxy) event.getThrowableProxy()).getThrowable())
+                              .toList();
+        }
+    }
+
+    /**
+     * Whether {@code failure} is the database error whose message contains {@code databaseError}, with an observer's
+     * failure whose message starts with {@code observerFailure} added to it as suppressed.
+     */
+    static boolean carries(Throwable failure, String databaseError, String observerFailure) {
+        return failure instanceof SQLException
+                && failure.getMessage().contains(databaseError)
+                && Arrays.stream(failure.getSuppressed())
+                         .anyMatch(suppressed -> suppressed instanceof IllegalStateException && suppressed.getMessage().startsWith(observerFailure));
     }
 
     /**

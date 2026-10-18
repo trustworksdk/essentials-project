@@ -20,6 +20,7 @@ import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.zaxxer.hikari.*;
+import dk.trustworks.essentials.components.queue.shardowned.spi.QueueObserver;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.*;
 import org.slf4j.LoggerFactory;
@@ -30,6 +31,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -307,6 +309,58 @@ class ShardOwnedOrderedRebalanceIT {
             blockHandlers.countDown();
             first.close();
             second.close();
+        }
+    }
+
+    /**
+     * The heartbeat tick's ordered acquire loop: an acquire statement that fails after the loop has adopted units is the
+     * failure the tick ends with, and the observer's failure for one of those units is added to it as suppressed, not
+     * logged in its place. The first instance stops, so the second's next tick acquires every unit in order, and the last
+     * one's acquisition is refused. {@code ShardOwnedRebalanceIT} pins the unordered lane's acquire loop and shed.
+     */
+    @Test
+    void an_ordered_acquire_that_fails_is_the_logged_failure_when_the_observer_throws_for_an_earlier_acquisition() throws Exception {
+        var observerThrows = new AtomicBoolean(true);
+        var toldAcquired   = new CopyOnWriteArrayList<Integer>();
+        var observer = new QueueObserver() {
+            @Override
+            public void shardOwnershipChanged(int shard, boolean acquired) {
+                if (acquired && observerThrows.get()) {
+                    toldAcquired.add(shard);
+                    throw new IllegalStateException("simulated observer failure acquiring ordered unit " + shard);
+                }
+            }
+        };
+        var refusedUnit = ShardOwnedSchema.ORDERED_UNITS - 1;
+        var logged      = ShardOwnedRebalanceIT.captureQueueLog();
+        try (var first = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "ord-masked-1")) {
+            first.startConsumingOrdered((messageId, key, payload, payloadType) -> { }, fast(Duration.ofSeconds(5)), SHARD_COUNT);
+            Awaitility.await().atMost(Duration.ofSeconds(10))
+                      .untilAsserted(() -> assertThat(first.shardsHeld()).isEqualTo(ShardOwnedSchema.ORDERED_UNITS));
+
+            LeaseAcquisitionRefusals.failLeaseAcquisitionsOf(dataSource, "ordered", refusedUnit, "ord-masked-2", true);
+            try (var second = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "ord-masked-2", new ShardOwnerMetrics(observer))) {
+                second.startConsumingOrdered((messageId, key, payload, payloadType) -> { }, fast(Duration.ofSeconds(5)), SHARD_COUNT);
+                assertThat(second.shardsHeld()).as("premise: nothing was free when the second started").isZero();
+                // Every unit free at once: the second's next tick acquires them in order and reaches the refused one with
+                // the others adopted.
+                first.close();
+
+                Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(
+                        () -> assertThat(ShardOwnedRebalanceIT.rebalanceFailures(logged))
+                                .as("a tick that told the observer logged the refused acquisition, with the observer's failure added to it")
+                                .anyMatch(failure -> ShardOwnedRebalanceIT.carries(failure, "simulated failure acquiring",
+                                                                                    "simulated observer failure acquiring")));
+                assertThat(LeaseAcquisitionRefusals.acquisitionsRefused(dataSource)).as("premise: the acquisition was refused").isPositive();
+                assertThat(toldAcquired).as("premise: the observer threw for a unit the loop adopted before the refused one")
+                                        .isNotEmpty()
+                                        .doesNotContain(refusedUnit);
+            } finally {
+                observerThrows.set(false);
+                LeaseAcquisitionRefusals.failLeaseAcquisitionsOf(dataSource, "ordered", refusedUnit, "ord-masked-2", false);
+            }
+        } finally {
+            ShardOwnedRebalanceIT.releaseQueueLog(logged);
         }
     }
 }

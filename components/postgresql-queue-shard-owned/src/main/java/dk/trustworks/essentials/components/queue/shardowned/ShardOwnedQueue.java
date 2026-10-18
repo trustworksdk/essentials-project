@@ -1469,6 +1469,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             // Only the releases this loop is the first to count: a stop() of this run running meanwhile counts the
             // others (countRelease).
             var counted = new ArrayList<Integer>();
+            Throwable loopFailure = null;
             try {
                 for (var owner : held.subList(fairShare, held.size())) {
                     // One unit at a time: a failed release leaves this owner serving (HELD) and the next tick sheds it again.
@@ -1482,17 +1483,21 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                     released.add(owner.shard());
                     log.debug("Instance {} released unordered shard {}", instanceId, owner.shard());
                 }
+            } catch (SQLException | RuntimeException | Error e) {
+                loopFailure = e;
+                throw e;
             } finally {
                 // However the loop ended - a later shard's release throwing included - what it released is logged and
                 // reported. The observer last, once every release is done: told inside the loop, one that throws for the
-                // first unit left the rest of the excess unshed until the next tick.
+                // first unit left the rest of the excess unshed until the next tick. A release that threw stays the failure
+                // the tick ends with, an observer's added to it (reportReleases).
                 if (!released.isEmpty()) {
                     log.info("Instance {} released {} unordered shard(s) [{}] on queue {} — fair share is {} of {} "
                                      + "across {} instance(s); now holding {}",
                              instanceId, released.size(), summarise(released), queueId, fairShare, shardCount,
                              liveInstances, countHeld(run));
                 }
-                reportReleases(counted);
+                reportReleases(counted, loopFailure);
             }
             return;
         }
@@ -1509,6 +1514,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         // count of served units took one free shard more per dead row, on top of the fair share. Counted once and kept up
         // to date below: a pump dying during the loop changes nothing, as an owner its death ends still holds its row.
         var rowsHeld = run.owners.stream().filter(LeasedOwner::holdsLeaseRow).count();
+        Throwable loopFailure = null;
         try {
             for (var shard = 0; shard < shardCount && rowsHeld < fairShare; shard++) {
                 if (!shardRuntime.hasLivePump()) {
@@ -1542,14 +1548,18 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                 acquired.add(shard);
                 log.debug("Instance {} acquired unordered shard {} under fence {}", instanceId, shard, fence);
             }
+        } catch (SQLException | RuntimeException | Error e) {
+            loopFailure = e;
+            throw e;
         } finally {
             // However the loop ended - a later shard's acquire throwing included - what it adopted is listed and counted,
-            // so it is logged and reported too. The observer last, outside the run's monitor (adoptIntoRun says why).
+            // so it is logged and reported too. The observer last, outside the run's monitor (adoptIntoRun says why). An
+            // acquire that threw stays the failure the tick ends with, an observer's added to it (reportAcquired).
             if (!acquired.isEmpty()) {
                 log.info("Instance {} acquired {} unordered shard(s) [{}] on queue {}; now holding {} of {}",
                          instanceId, acquired.size(), summarise(acquired), queueId, countHeld(run), shardCount);
             }
-            reportAcquired(acquired);
+            reportAcquired(acquired, loopFailure);
         }
     }
 
@@ -1571,6 +1581,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         var drained = new ArrayList<Integer>();
         // As in rebalance()'s unordered shed: only the releases this loop is the first to count.
         var counted = new ArrayList<Integer>();
+        Throwable loopFailure = null;
         try {
             for (var owner : List.copyOf(run.owners)) {
                 if (owner instanceof OrderedShardOwner ordered && ordered.shedComplete()) {
@@ -1589,13 +1600,17 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                     log.debug("Instance {} released ordered unit {} after draining", instanceId, ordered.shard());
                 }
             }
+        } catch (SQLException | RuntimeException | Error e) {
+            loopFailure = e;
+            throw e;
         } finally {
-            // As in rebalance()'s unordered shed: logged and reported however the loop ended, the observer last.
+            // As in rebalance()'s unordered shed: logged and reported however the loop ended, the observer last, and a
+            // release that threw stays the failure the tick ends with.
             if (!drained.isEmpty()) {
                 log.info("Instance {} released {} ordered unit(s) [{}] on queue {} after draining; now holding {}",
                          instanceId, drained.size(), summarise(drained), queueId, countHeld(run));
             }
-            reportReleases(counted);
+            reportReleases(counted, loopFailure);
         }
 
         // leaseHeld (HELD), as on the unordered lane: only an owner that serves its unit is asked to shed. One whose pump died
@@ -1644,6 +1659,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                                    .map(LeasedOwner::shard)
                                    .collect(java.util.stream.Collectors.toSet());
         var acquired   = new ArrayList<Integer>();
+        Throwable loopFailure = null;
         try {
             for (var shard = 0; shard < orderedUnits() && heldShards.size() < limit; shard++) {
                 if (heldShards.contains(shard)) {
@@ -1672,14 +1688,18 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                 acquired.add(shard);
                 log.debug("Instance {} acquired ordered unit {} under fence {}", instanceId, shard, fence);
             }
+        } catch (SQLException | RuntimeException | Error e) {
+            loopFailure = e;
+            throw e;
         } finally {
-            // As in rebalance()'s unordered loop: what this loop adopted is logged and reported however it ended. Not
+            // As in rebalance()'s unordered loop: what this loop adopted is logged and reported however it ended, and an
+            // acquire that threw stays the failure the tick ends with. Not
             // orderedUnits() here: the loop's first condition resolved it, so the field holds it whenever something was adopted.
             if (!acquired.isEmpty()) {
                 log.info("Instance {} acquired {} ordered unit(s) [{}] on queue {}; now holding {} of {}",
                          instanceId, acquired.size(), summarise(acquired), queueId, heldShards.size(), orderedUnits);
             }
-            reportAcquired(acquired);
+            reportAcquired(acquired, loopFailure);
         }
     }
 
@@ -1895,7 +1915,18 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * still logs the observer's failure.
      */
     private void reportAcquired(List<Integer> units) {
-        tellOwnershipChanged(units, true);
+        tellOwnershipChanged(units, true, null);
+    }
+
+    /**
+     * {@link #reportAcquired(List)} from the {@code finally} around a heartbeat tick's acquire loop, which may be ending
+     * with {@code loopFailure} - an acquire statement that failed after the loop had adopted units ({@link #tellOwnershipChanged}
+     * says what that changes).
+     *
+     * @param loopFailure what the loop is throwing, {@code null} when it ended normally
+     */
+    private void reportAcquired(List<Integer> units, Throwable loopFailure) {
+        tellOwnershipChanged(units, true, loopFailure);
     }
 
     /**
@@ -1904,7 +1935,18 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * told acquired, so a unit skipped here would leave the observer's acquired count ahead of its released count for good.
      */
     private void reportReleases(List<Integer> units) {
-        tellOwnershipChanged(units, false);
+        tellOwnershipChanged(units, false, null);
+    }
+
+    /**
+     * {@link #reportReleases(List)} from the {@code finally} around a heartbeat tick's shed loop - either lane's - which may
+     * be ending with {@code loopFailure}: a release statement that failed after the loop had released units
+     * ({@link #tellOwnershipChanged} says what that changes).
+     *
+     * @param loopFailure what the loop is throwing, {@code null} when it ended normally
+     */
+    private void reportReleases(List<Integer> units, Throwable loopFailure) {
+        tellOwnershipChanged(units, false, loopFailure);
     }
 
     /**
@@ -1912,9 +1954,24 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * {@code RuntimeException} or a non-critical {@code Error}, such as a test double's {@code AssertionError} - and then
      * throw the first failure as it was thrown, the others added to it as suppressed ({@link Exceptions#forEachThenThrowFirst}).
      * Only a critical error ({@link Exceptions#isCriticalError}) leaves the units after it untold.
+     * <p>
+     * Called from a {@code finally} whose loop is already throwing ({@code loopFailure} not {@code null}), it throws nothing
+     * of its own: every failure of the observer is added to {@code loopFailure} as suppressed
+     * ({@link Exceptions#forEachCollectingFailures}), and the loop's failure - the database error that left the rest of
+     * the loop's work undone - is what ends the heartbeat tick and what its {@code Rebalance failed} WARN logs. Thrown from
+     * the {@code finally}, the observer's failure replaced it, and the database error was lost. A critical error still
+     * escapes: one the observer throws, with {@code loopFailure} added to it as suppressed; and a {@code loopFailure} that
+     * is one escapes untouched, with no unit told.
+     *
+     * @param loopFailure what the caller's loop is throwing, {@code null} when there is none
      */
-    private void tellOwnershipChanged(List<Integer> units, boolean acquired) {
-        Exceptions.forEachThenThrowFirst(units, unit -> metrics.observer().shardOwnershipChanged(unit, acquired));
+    private void tellOwnershipChanged(List<Integer> units, boolean acquired, Throwable loopFailure) {
+        Consumer<Integer> tell = unit -> metrics.observer().shardOwnershipChanged(unit, acquired);
+        if (loopFailure == null) {
+            Exceptions.forEachThenThrowFirst(units, tell);
+        } else if (!Exceptions.isCriticalError(loopFailure)) {
+            Exceptions.forEachCollectingFailures(units, tell, loopFailure);
+        }
     }
 
     /**
