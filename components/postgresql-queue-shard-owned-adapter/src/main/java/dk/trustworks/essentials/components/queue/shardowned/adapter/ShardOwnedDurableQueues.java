@@ -162,18 +162,27 @@ public class ShardOwnedDurableQueues implements DurableQueues {
     private final List<DurableQueuesInterceptor> interceptors = new CopyOnWriteArrayList<>();
 
     /**
-     * Whether a consumer may start: once this reads false, no consumer {@link #doConsumeFromQueue} adds starts, and one
-     * whose start was already under way when it went false is stopped once that start returns. Set by {@link #start()}
-     * before it starts the consumers and cleared by {@link #stop()} and a failed start before they stop them.
-     * {@link #doConsumeFromQueue} registers a consumer before it reads this, and reads it again once the consumer's start
-     * has returned - see there.
+     * Whether a consumer may start: once this reads false, neither {@link #start()}'s loop nor {@link #doConsumeFromQueue}
+     * starts another consumer, and one whose start was already under way when it went false is stopped once that start
+     * returns. Set by {@link #start()} before it starts the consumers and cleared by {@link #stop()} and a failed start
+     * before they stop them. {@link #doConsumeFromQueue} registers a consumer before it reads this; it and {@link #start()}'s
+     * loop read it before each consumer's start, and again once that start has returned - the second time, when it reads
+     * false, under the consumer's lifecycle lock ({@link #stopConsumerStartedPastAStop}), so a {@link #start()} that set it
+     * again meanwhile is not undone.
      * <p>
      * It does not say that no consumer is running. While {@link #stop()} or a failed start is stopping the consumers, the
-     * ones it has not reached yet are still running although this already reads false. And a {@link #start()} racing a
-     * {@link #stop()} can still leave a consumer running while this reads false: the stop may pass a consumer before the
-     * start's loop reaches it, and the start then starts it.
+     * ones it has not reached yet are still running although this already reads false. A consumer whose start was still
+     * subscribing when the stop gave up waiting for it ({@link ShardOwnedDurableQueueConsumer#stop()}) is not started, but
+     * the lanes its queue's {@code consume()} has already started may deliver until that start has stopped them. And a
+     * critical error escaping {@link #start()} leaves this reading true over whatever that start had started.
      */
     private final AtomicBoolean started = new AtomicBoolean();
+
+    /**
+     * What a test does as a consumer is about to be started ({@link StartHook}); {@link StartHook#NONE} unless a test passed
+     * one to the constructor. Fixed at construction, so nothing can swap it while consumers start.
+     */
+    private final StartHook startHook;
 
     private final AtomicBoolean warnedAboutUnitOfWorkWithoutConnection = new AtomicBoolean();
 
@@ -184,6 +193,20 @@ public class ShardOwnedDurableQueues implements DurableQueues {
                             UnitOfWorkFactory<? extends UnitOfWork> unitOfWorkFactory,
                             DataSource dataSource,
                             int autoRegisterShardCount) {
+        this(queues, jsonSerializer, unitOfWorkFactory, dataSource, autoRegisterShardCount, StartHook.NONE);
+    }
+
+    /**
+     * @param startHook what a test does as a consumer is about to be started ({@link StartHook}); {@link StartHook#NONE}
+     *                  outside tests
+     */
+    ShardOwnedDurableQueues(MessageQueues queues,
+                            JSONSerializer jsonSerializer,
+                            UnitOfWorkFactory<? extends UnitOfWork> unitOfWorkFactory,
+                            DataSource dataSource,
+                            int autoRegisterShardCount,
+                            StartHook startHook) {
+        this.startHook = requireNonNull(startHook, "No startHook provided");
         this.queues = requireNonNull(queues, "No queues provided");
         this.jsonSerializer = requireNonNull(jsonSerializer, "No jsonSerializer provided");
         this.unitOfWorkFactory = unitOfWorkFactory;
@@ -231,6 +254,13 @@ public class ShardOwnedDurableQueues implements DurableQueues {
      * This reports itself started from the moment the start begins, so a consumer {@code consumeFromQueue} adds
      * meanwhile starts itself rather than being missed by the loop below. A failed start reports itself not started
      * before it stops the consumers, so one added while it stops them does not start.
+     * <p>
+     * A {@link #stop()} called while this is still starting the consumers ends the start: this starts no consumer once it
+     * reads itself stopped, and stops the one whose start returned after the stop, as {@code consumeFromQueue} does
+     * ({@link #stopConsumerStartedPastAStop}). The start used to go on through every consumer, so a stop that came while
+     * one consumer's start was held up - in its queue's {@code consume()}, by a network partition, say - and that gave up
+     * waiting for it, returned before the start reached the consumers after it; the start then started them, consuming
+     * while this reported itself not started, with no stop to come if that stop was the application's shutdown.
      */
     @Override
     public void start() {
@@ -238,7 +268,16 @@ public class ShardOwnedDurableQueues implements DurableQueues {
             return;
         }
         try {
-            consumers.values().forEach(ShardOwnedDurableQueueConsumer::start);
+            for (var consumer : consumers.values()) {
+                if (!started.get()) {
+                    break;
+                }
+                startHook.beforeStartingConsumer(consumer.queueName());
+                consumer.start();
+                if (stopConsumerStartedPastAStop(consumer)) {
+                    break;
+                }
+            }
         } catch (RuntimeException | Error e) {
             Exceptions.rethrowIfCriticalError(e);
             started.set(false);
@@ -481,16 +520,22 @@ public class ShardOwnedDurableQueues implements DurableQueues {
     /**
      * Registers the consumer, and starts it when this is started.
      * <p>
-     * A start that fails with anything but a critical error ({@link Exceptions#isCriticalError}) deregisters the consumer
-     * before its failure escapes, so {@code consumeFromQueue} for the same queue can be called again; left registered, it
-     * refused that until the whole {@code DurableQueues} was stopped. A critical error escapes untouched, as from
-     * {@link #start()}.
+     * A start that fails with anything but a critical error ({@link Exceptions#isCriticalError}) retires the consumer
+     * ({@link ShardOwnedDurableQueueConsumer#retire()}) and deregisters it before its failure escapes, so
+     * {@code consumeFromQueue} for the same queue can be called again; left registered, it refused that until the whole
+     * {@code DurableQueues} was stopped. Retired, because the consumer was registered - and so visible to a concurrent
+     * {@link #start()}'s loop - from before its start: that loop may have taken it already, and its start of the consumer,
+     * after this one failed, used to subscribe a consumer nothing reached any more - no {@link #stop()}, no caller, since
+     * {@code consumeFromQueue} threw - while a retried {@code consumeFromQueue} registered a second consumer on the queue.
+     * Retiring stops a subscription such a start has already made, and keeps one from starting it later. What that stop
+     * throws is added to the start's failure as suppressed. A critical error escapes untouched, as from {@link #start()}.
      * <p>
      * The consumer is registered before {@link #started} is read, and {@link #start()} and {@link #stop()} set it before
      * they go over the consumers. So a start or stop either finds the consumer when it goes over them, or has set the flag
      * before it is read here. A stop that clears it after it was read here finds the consumer, and stops it; but that stop
      * may run before the consumer's start has begun subscribing, find nothing to stop, and the start then subscribe. Which
-     * is why the flag is read again once the start has returned, and the consumer stopped when it has gone false.
+     * is why the flag is read again once the start has returned, and the consumer stopped when it has gone false
+     * ({@link #stopConsumerStartedPastAStop}).
      */
     private DurableQueueConsumer doConsumeFromQueue(ConsumeFromQueue operation) {
         var queueName = operation.getQueueName();
@@ -504,15 +549,18 @@ public class ShardOwnedDurableQueues implements DurableQueues {
         }
         if (started.get()) {
             try {
+                startHook.beforeStartingAddedConsumer(queueName);
                 consumer.start();
             } catch (RuntimeException | Error e) {
                 Exceptions.rethrowIfCriticalError(e);
-                consumers.remove(queueName, consumer);
+                try {
+                    Exceptions.forEachCollectingFailures(List.of(consumer), ShardOwnedDurableQueueConsumer::retire, e);
+                } finally {
+                    consumers.remove(queueName, consumer);
+                }
                 throw e;
             }
-            if (!started.get()) {
-                stopConsumerStartedPastAStop(consumer);
-            }
+            stopConsumerStartedPastAStop(consumer);
         }
         return consumer;
     }
@@ -524,20 +572,59 @@ public class ShardOwnedDurableQueues implements DurableQueues {
     }
 
     /**
-     * Stop a consumer whose start returned after this was stopped, or after a failed {@link #start()} stopped its
-     * consumers. It stays registered, so the next {@link #start()} starts it. Whatever its stop throws is logged at WARN
-     * rather than thrown from {@code consumeFromQueue}: the consumer is registered and stopped either way (a consumer's
-     * stop throws only once its subscription has stopped), and the caller did not ask for the stop.
+     * Called once a consumer's start - {@code consumeFromQueue}'s or {@link #start()}'s - has returned: stop the consumer
+     * if this was stopped meanwhile, or a failed {@link #start()} marked it not started, and say whether it was. It stays
+     * registered, so the next {@link #start()} starts it.
+     * <p>
+     * A {@link #started} that reads true needs nothing more: a stop that clears it later finds the consumer started, and
+     * stops it. One that reads false is read again under the consumer's lifecycle lock, and the consumer stopped only when
+     * it still reads false there ({@link ShardOwnedDurableQueueConsumer#stopIf}): a {@link #start()} that set it again
+     * meanwhile has either started the consumer already, or starts it again once this stop has let go of the lock. A plain
+     * stop after the read could undo such a start, leaving this reporting itself started with the consumer stopped, and the
+     * next {@code start()} doing nothing.
+     * <p>
+     * Whatever the consumer's stop throws is logged at WARN rather than thrown: the consumer is registered and stopped
+     * either way (a consumer's stop throws only once its subscription has stopped), and the caller did not ask for the stop.
+     *
+     * @return whether this read itself not started, the consumer then stopped
      */
-    private void stopConsumerStartedPastAStop(ShardOwnedDurableQueueConsumer consumer) {
+    private boolean stopConsumerStartedPastAStop(ShardOwnedDurableQueueConsumer consumer) {
+        if (started.get()) {
+            return false;
+        }
         try {
-            consumer.stop();
+            return consumer.stopIf(() -> !started.get());
         } catch (RuntimeException | Error e) {
             Exceptions.rethrowIfCriticalError(e);
             log.warn("Consumer '{}' on queue '{}' finished starting after ShardOwnedDurableQueues was stopped, or after a failed "
                              + "start() had marked it not started, and then failed to stop. "
                              + "It stays registered and is started by the next start()",
                      consumer.consumerName(), consumer.queueName(), e);
+            return true;
+        }
+    }
+
+    /**
+     * What a test does as a consumer is about to be started, to hold that start at a point no real start can be made to
+     * stop at: between reading {@code started} and starting the consumer. Passed to the package-private constructor and
+     * fixed for this object's life; every one built otherwise has {@link #NONE}, which does nothing. What it throws escapes
+     * as the consumer's start would.
+     */
+    interface StartHook {
+        StartHook NONE = new StartHook() { };
+
+        /**
+         * Told the queue of a consumer {@code consumeFromQueue} has registered, and read {@code started} true for, just
+         * before it starts the consumer.
+         */
+        default void beforeStartingAddedConsumer(QueueName queueName) {
+        }
+
+        /**
+         * Told the queue of a consumer {@code start()}'s loop has read {@code started} true for, just before it starts
+         * the consumer.
+         */
+        default void beforeStartingConsumer(QueueName queueName) {
         }
     }
 

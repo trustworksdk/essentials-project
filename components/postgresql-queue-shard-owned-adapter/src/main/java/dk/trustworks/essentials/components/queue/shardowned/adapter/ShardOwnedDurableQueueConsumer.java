@@ -35,6 +35,7 @@ import org.slf4j.*;
 import java.time.Duration;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
@@ -87,6 +88,10 @@ class ShardOwnedDurableQueueConsumer implements DurableQueueConsumer {
      * decides the hand-over from ({@link Holder}).
      */
     private       Holder        holder        = Holder.NONE;
+    /**
+     * Set by {@link #retire()}, and read, under {@link #lifecycleLock}: once set, a {@link #start()} does nothing.
+     */
+    private       boolean       retired;
 
     private volatile Subscription subscription;
 
@@ -141,12 +146,14 @@ class ShardOwnedDurableQueueConsumer implements DurableQueueConsumer {
      * that earlier start to return - as long as the queue's {@code consume()} takes, then the stop of the subscription it
      * returned - the thread's interrupt included: once it has waited {@link #STOP_WAITS_FOR_START} it logs one WARN naming
      * the consumer and the queue, and goes on waiting ({@link #lockForStart}).
+     * <p>
+     * Does nothing once the consumer has been {@link #retire() retired}.
      */
     @Override
     public void start() {
         lockForStart();
         try {
-            if (subscription != null) {
+            if (retired || subscription != null) {
                 return;
             }
             synchronized (handOver) {
@@ -201,31 +208,84 @@ class ShardOwnedDurableQueueConsumer implements DurableQueueConsumer {
      * earlier start still in the queue's {@code consume()} is not: that blocks as long as a statement does.
      */
     private void lockForStart() {
+        lockWarningOnce("start");
+    }
+
+    /**
+     * Take {@link #lifecycleLock} as {@link #lockForStart} does, for whatever {@code waitingTo} names in the WARN: "start",
+     * or "stop" for {@link #stopIf} and {@link #retire()}, which wait for an earlier start as long as a start does.
+     */
+    private void lockWarningOnce(String waitingTo) {
         Locks.lockWarningOnce(lifecycleLock, STOP_WAITS_FOR_START, () -> {
             Holder heldBy;
             synchronized (handOver) {
                 heldBy = holder;
             }
             if (heldBy == Holder.STOPPING) {
-                log.warn("Consumer '{}' has waited {} and is still waiting to start on queue '{}': a stop of the consumer is "
+                log.warn("Consumer '{}' has waited {} and is still waiting to {} on queue '{}': a stop of the consumer is "
                                  + "still stopping its subscription",
-                         consumerName(), STOP_WAITS_FOR_START, queueName());
+                         consumerName(), STOP_WAITS_FOR_START, waitingTo, queueName());
             } else if (heldBy == Holder.FINISHING_OWED_STOP) {
-                log.warn("Consumer '{}' has waited {} and is still waiting to start on queue '{}': an earlier start of the "
+                log.warn("Consumer '{}' has waited {} and is still waiting to {} on queue '{}': an earlier start of the "
                                  + "consumer is stopping the subscription the queue's consume() returned it, for a stop that gave "
                                  + "up waiting for it",
-                         consumerName(), STOP_WAITS_FOR_START, queueName());
+                         consumerName(), STOP_WAITS_FOR_START, waitingTo, queueName());
             } else {
                 // STARTING or STOP_OWED, or NONE: the lock has just changed hands (it is unfair), which is brief, so whatever has held
                 // it this long is most likely an earlier start still subscribing.
-                log.warn("Consumer '{}' has waited {} and is still waiting to start on queue '{}': an earlier start of the "
+                log.warn("Consumer '{}' has waited {} and is still waiting to {} on queue '{}': an earlier start of the "
                                  + "consumer still holds its lifecycle, in the queue's consume(), registering the instance and "
                                  + "leasing units. Nothing here bounds the consume(): a statement that hangs ends at the "
                                  + "driver's socketTimeout, and without one never",
-                         consumerName(), STOP_WAITS_FOR_START, queueName());
+                         consumerName(), STOP_WAITS_FOR_START, waitingTo, queueName());
             }
             return true;
         });
+    }
+
+    /**
+     * Stop the consumer if {@code condition} holds, read once this holds {@link #lifecycleLock} - the lock a
+     * {@link #start()} holds throughout - and say whether it held. A start called meanwhile has therefore either returned
+     * before the condition is read, or starts the consumer again once this has stopped it: whatever the condition reads
+     * cannot be undone by a start that slips in between the read and the stop.
+     * <p>
+     * Waits for the lock as long as a start does, with the same one WARN past {@link #STOP_WAITS_FOR_START}
+     * ({@link #lockForStart}), rather than giving up as {@link #stop()} does: a start still subscribing is a start this
+     * must see finished before it can tell whether to stop it. What the subscription's stop throws escapes, as from
+     * {@link #stop()}, with the consumer not started.
+     *
+     * @param condition read under the lock; the consumer is stopped only when it returns true
+     * @return the condition's value
+     */
+    boolean stopIf(BooleanSupplier condition) {
+        requireNonNull(condition, "No condition provided");
+        lockWarningOnce("stop");
+        try {
+            if (!condition.getAsBoolean()) {
+                return false;
+            }
+            stopSubscription();
+            return true;
+        } finally {
+            lifecycleLock.unlock();
+        }
+    }
+
+    /**
+     * Stop the consumer, under {@link #lifecycleLock} as {@link #stopIf} does, and keep every later {@link #start()} from
+     * starting it again. For a consumer {@link ShardOwnedDurableQueues} is dropping from its registry without anyone holding
+     * it: a {@code ShardOwnedDurableQueues.start()} may have taken it from the registry before it was dropped, and would
+     * otherwise start it, unregistered, after it had been dropped. What the subscription's stop throws escapes, as from
+     * {@link #stop()}, with the consumer retired and not started.
+     */
+    void retire() {
+        lockWarningOnce("stop");
+        try {
+            retired = true;
+            stopSubscription();
+        } finally {
+            lifecycleLock.unlock();
+        }
     }
 
     /**
@@ -280,26 +340,34 @@ class ShardOwnedDurableQueueConsumer implements DurableQueueConsumer {
             locked = tryLockAfterAHandOver();
         }
         try {
-            if (subscription == null) {
-                return;
-            }
-            synchronized (handOver) {
-                holder = Holder.STOPPING;
-            }
-            try {
-                subscription.stop();
-            } finally {
-                // Dropped even when the stop throws: a subscription's stop throws only once both of its lanes have stopped (a
-                // QueueObserver failing for a release), and one left here made every later start() return without consuming.
-                subscription = null;
-                synchronized (handOver) {
-                    holder = Holder.NONE;
-                }
-            }
-            log.info("Consumer '{}' stopped on queue '{}'", consumerName(), queueName());
+            stopSubscription();
         } finally {
             lifecycleLock.unlock();
         }
+    }
+
+    /**
+     * Stop the subscription, if there is one, holding {@link #lifecycleLock}: the part of {@link #stop()}, {@link #stopIf}
+     * and {@link #retire()} that runs once the lock is theirs.
+     */
+    private void stopSubscription() {
+        if (subscription == null) {
+            return;
+        }
+        synchronized (handOver) {
+            holder = Holder.STOPPING;
+        }
+        try {
+            subscription.stop();
+        } finally {
+            // Dropped even when the stop throws: a subscription's stop throws only once both of its lanes have stopped (a
+            // QueueObserver failing for a release), and one left here made every later start() return without consuming.
+            subscription = null;
+            synchronized (handOver) {
+                holder = Holder.NONE;
+            }
+        }
+        log.info("Consumer '{}' stopped on queue '{}'", consumerName(), queueName());
     }
 
     /**
@@ -360,7 +428,7 @@ class ShardOwnedDurableQueueConsumer implements DurableQueueConsumer {
          * and then hand back its units. The consumer ends not started, so the stop has nothing left to do.
          */
         FINISHING_OWED_STOP,
-        /** A {@link #stop()} stopping the subscription: the stop has nothing left to do. */
+        /** A {@link #stop()}, {@link #stopIf} or {@link #retire()} stopping the subscription: the stop has nothing left to do. */
         STOPPING
     }
 

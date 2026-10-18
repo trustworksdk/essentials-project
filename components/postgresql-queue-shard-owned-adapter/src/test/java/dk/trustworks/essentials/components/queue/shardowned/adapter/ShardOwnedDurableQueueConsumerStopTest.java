@@ -220,6 +220,57 @@ class ShardOwnedDurableQueueConsumerStopTest {
         assertThat(consumer.isStarted()).as("the start left the consumer not started").isFalse();
     }
 
+    /**
+     * {@code stopIf} reads its condition only once it holds the lifecycle lock a start holds throughout, so a start still
+     * subscribing has finished before the condition is read, and a condition that then reads false leaves the subscription
+     * that start made running. This is what keeps {@code ShardOwnedDurableQueues}' compensating stop from undoing a
+     * {@code start()} that set its flag again between its read and the stop: a condition read before the lock would see
+     * the consumer not yet started, here, and the stop then run after the start had subscribed.
+     */
+    @Test
+    void stopIf_reads_its_condition_only_once_a_start_still_subscribing_has_finished_and_stops_nothing_when_it_is_false() throws Exception {
+        var starting = CompletableFuture.runAsync(consumer::start);
+        var startedWhenRead = new AtomicReference<Boolean>();
+        var stopIfReturned  = new AtomicReference<Boolean>();
+        var stopping = new Thread(() -> stopIfReturned.set(consumer.stopIf(() -> {
+            startedWhenRead.set(consumer.isStarted());
+            return false;
+        })));
+        try {
+            assertThat(consuming.await(10, TimeUnit.SECONDS)).as("premise: the start is inside the queue's consume()").isTrue();
+
+            stopping.start();
+            org.awaitility.Awaitility.await()
+                                     .atMost(Duration.ofSeconds(10))
+                                     .until(() -> stopping.getState() == Thread.State.WAITING
+                                             || stopping.getState() == Thread.State.TIMED_WAITING);
+            assertThat(startedWhenRead.get()).as("the condition is not read while the start holds the lock").isNull();
+        } finally {
+            letConsumeEnd.countDown();
+        }
+
+        starting.get(10, TimeUnit.SECONDS);
+        stopping.join(10_000);
+
+        assertThat(stopping.isAlive()).as("stopIf returned once the start had").isFalse();
+        assertThat(stopIfReturned.get()).as("stopIf says the condition did not hold").isFalse();
+        assertThat(startedWhenRead.get()).as("the condition was read once the start had subscribed").isTrue();
+        assertThat(stopped).as("nothing was stopped").isEmpty();
+        assertThat(consumer.isStarted()).as("the subscription the start made is still running").isTrue();
+    }
+
+    @Test
+    void stopIf_stops_the_subscription_when_its_condition_holds() {
+        letConsumeEnd.countDown();
+        consumer.start();
+        assertThat(consumer.isStarted()).as("premise: started").isTrue();
+
+        assertThat(consumer.stopIf(() -> true)).as("stopIf says the condition held").isTrue();
+
+        assertThat(stopped).containsExactly("subscription");
+        assertThat(consumer.isStarted()).isFalse();
+    }
+
     private static List<String> waitingToStart(ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> logged) {
         return logged.list.stream()
                           .filter(event -> event.getLevel() == ch.qos.logback.classic.Level.WARN)
