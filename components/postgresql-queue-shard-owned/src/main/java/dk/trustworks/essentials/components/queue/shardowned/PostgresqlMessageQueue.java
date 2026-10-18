@@ -19,6 +19,7 @@ package dk.trustworks.essentials.components.queue.shardowned;
 import dk.trustworks.essentials.components.queue.shardowned.spi.*;
 import dk.trustworks.essentials.components.queue.shardowned.spi.operations.*;
 import dk.trustworks.essentials.shared.Exceptions;
+import dk.trustworks.essentials.shared.concurrent.Locks;
 import dk.trustworks.essentials.shared.interceptor.*;
 
 import org.slf4j.*;
@@ -1233,46 +1234,30 @@ public final class PostgresqlMessageQueue implements MessageQueue {
      *                  the WARN
      */
     private void holdLifecycle(Holder what, String operation) {
-        var interrupted = false;
-        var warned      = false;
-        try {
-            while (true) {
-                try {
-                    if (lifecycleLock.tryLock(ShardOwnedQueue.SHUTDOWN_BUDGET.toMillis(), TimeUnit.MILLISECONDS)) {
-                        break;
-                    }
-                } catch (InterruptedException e) {
-                    // Waited on regardless, as lock() would; the flag is set again once the lock is held.
-                    interrupted = true;
-                    continue;
-                }
-                Holder heldBy;
-                synchronized (handOver) {
-                    heldBy = holder;
-                }
-                // NONE: the holder has just taken the lock, or is just letting go of it - nothing to say yet.
-                if (!warned && heldBy != Holder.NONE) {
-                    warned = true;
-                    if (heldBy.isAStart()) {
-                        log.warn("Instance {} has waited {} and is still waiting to {} queue {}: an earlier consume() or start() of "
-                                         + "the queue, or start() of one of its subscriptions, is still starting its consumers - "
-                                         + "registering the instance and leasing its units, and, if a stop gave up waiting for "
-                                         + "it, stopping every consumer again once those statements return. Nothing in this "
-                                         + "queue bounds that wait: a statement that hangs ends at the driver's socketTimeout, "
-                                         + "and without one never",
-                                 instanceId, ShardOwnedQueue.SHUTDOWN_BUDGET, operation, queueId);
-                    } else {
-                        log.warn("Instance {} has waited {} and is still waiting to {} queue {}: a stop of the queue is still "
-                                         + "stopping its consumers",
-                                 instanceId, ShardOwnedQueue.SHUTDOWN_BUDGET, operation, queueId);
-                    }
-                }
+        Locks.lockWarningOnce(lifecycleLock, ShardOwnedQueue.SHUTDOWN_BUDGET, () -> {
+            Holder heldBy;
+            synchronized (handOver) {
+                heldBy = holder;
             }
-        } finally {
-            if (interrupted) {
-                Thread.currentThread().interrupt();
+            if (heldBy == Holder.NONE) {
+                // The holder has just taken the lock, or is just letting go of it - nothing to say yet: asked again one budget later.
+                return false;
             }
-        }
+            if (heldBy.isAStart()) {
+                log.warn("Instance {} has waited at least {} and is still waiting to {} queue {}: an earlier consume() or start() of "
+                                 + "the queue, or start() of one of its subscriptions, is still starting its consumers - "
+                                 + "registering the instance and leasing its units, and, if a stop gave up waiting for "
+                                 + "it, stopping every consumer again once those statements return. Nothing in this "
+                                 + "queue bounds that wait: a statement that hangs ends at the driver's socketTimeout, "
+                                 + "and without one never",
+                         instanceId, ShardOwnedQueue.SHUTDOWN_BUDGET, operation, queueId);
+            } else {
+                log.warn("Instance {} has waited at least {} and is still waiting to {} queue {}: a stop of the queue is still "
+                                 + "stopping its consumers",
+                         instanceId, ShardOwnedQueue.SHUTDOWN_BUDGET, operation, queueId);
+            }
+            return true;
+        });
         markHeld(what);
     }
 

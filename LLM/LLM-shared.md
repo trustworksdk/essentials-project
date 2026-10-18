@@ -834,6 +834,32 @@ ExecutorService executor = Executors.newScheduledThreadPool(10,
 );
 ```
 
+### Locks
+
+**Class**: `dk.trustworks.essentials.shared.concurrent.Locks`
+
+```java
+import dk.trustworks.essentials.shared.concurrent.Locks;
+
+// API
+static void lockWarningOnce(Lock lock, Duration warnAfter, BooleanSupplier warn)
+
+// Usage: wait for the lock as long as it takes, but say so once
+Locks.lockWarningOnce(lifecycleLock, Duration.ofSeconds(2), () -> {
+    log.warn("Still waiting to start after {}: a stop is still running", Duration.ofSeconds(2));
+    return true;   // warned - never called again
+});
+try {
+    // ...
+} finally {
+    lifecycleLock.unlock();
+}
+```
+
+- Waits like `ReentrantLock.lock()`: an interrupt does not end the wait; it is deferred and set on the thread again once the lock is held.
+- `warn` is called on the waiting thread once `warnAfter` has passed without the lock, then after each further `warnAfter` until it returns `true` (return `false` when there is nothing to say yet). An interrupt does not restart the `warnAfter` it falls in.
+- An exception from `warn` escapes, the lock not taken, the interrupt set again.
+
 ---
 
 ## Messages
@@ -953,6 +979,7 @@ static String hostName()  // Get local hostname
 | FailFast | Thread-safe (stateless) |
 | Exceptions | Thread-safe (stateless) |
 | MessageFormatter | Thread-safe (stateless) |
+| Locks | Thread-safe (stateless) |
 | Reflector | Thread-safe (concurrent caching) |
 | Tuple types | Thread-safe (immutable) |
 | Either | Thread-safe (immutable) |

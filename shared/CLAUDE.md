@@ -16,7 +16,7 @@ Cross-cutting primitives used by every other Essentials module. Maven: `shared`.
 | `.reflection.invocation` | `PatternMatchingMethodInvoker`, `MethodPatternMatcher` SPI, `InvocationStrategy`, `InvocationTracker`, `SingleArgumentAnnotatedMethodPatternMatcher` |
 | `.security` | `EssentialsSecurityProvider` SPI, `EssentialsSecurityRoles`, `EssentialsSecurityValidator`, `AllAccessSecurityProvider`, `NoAccessSecurityProvider` |
 | `.time` | `StopWatch`, `Timing`, `TimingWithResult` |
-| `.concurrent` | `ThreadFactoryBuilder` |
+| `.concurrent` | `ThreadFactoryBuilder`, `Locks` (`lockWarningOnce`: lock()-like wait, interrupt deferred, one WARN) |
 | `.collections` | `Lists`, `Streams` |
 | `.logic` | `IfExpression`, `ElseIfExpression`, `IfThenElseLogic`, `IfPredicate` — fluent if/else DSL |
 | `.network` | `Network` — local IP/hostname resolution |

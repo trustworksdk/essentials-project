@@ -561,6 +561,12 @@ instance just no longer delivers it. (`1f31c123`)
   non-critical `Error` is
   collected like a `RuntimeException`; a critical one (`Exceptions.isCriticalError`) is rethrown at once, with the
   failure collected so far added to it as suppressed.
+- **`Locks.lockWarningOnce(lock, warnAfter, warn)`** (`shared`, package `dk.trustworks.essentials.shared.concurrent`)
+  takes a `Lock`, waiting as long as `ReentrantLock.lock()` would - an interrupt deferred, and set on the thread again
+  once the lock is held - but calls `warn` once the wait has lasted `warnAfter`, and after each further `warnAfter`
+  until `warn` returns `true`. The shard-owned queue's `ShardOwnedQueue.start()`, `PostgresqlMessageQueue`'s
+  `consume()`/`start()`/`Subscription.start()` and the adapter consumer's `start()` wait for their lifecycle lock
+  through it. An interrupt during that wait no longer pushes the one WARN out by a further budget.
 
 - **Schema descriptions:** `SchemaChange.describedAs(String)`, `description()` and `describeObject()`,
   `SchemaChangeSet.describe()`/`describeObjects()`, and `PostgresqlEmitSchemaApplier.exitTriggered()`/

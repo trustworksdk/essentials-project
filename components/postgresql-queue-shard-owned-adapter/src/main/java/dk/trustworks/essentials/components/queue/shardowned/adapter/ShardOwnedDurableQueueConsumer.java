@@ -29,6 +29,7 @@ import dk.trustworks.essentials.components.queue.shardowned.spi.MessageQueue;
 import dk.trustworks.essentials.components.queue.shardowned.spi.RedeliveryRequested;
 import dk.trustworks.essentials.components.queue.shardowned.spi.Subscription;
 import dk.trustworks.essentials.shared.Exceptions;
+import dk.trustworks.essentials.shared.concurrent.Locks;
 import org.slf4j.*;
 
 import java.time.Duration;
@@ -200,50 +201,31 @@ class ShardOwnedDurableQueueConsumer implements DurableQueueConsumer {
      * earlier start still in the queue's {@code consume()} is not: that blocks as long as a statement does.
      */
     private void lockForStart() {
-        var interrupted = false;
-        var warned      = false;
-        try {
-            while (true) {
-                try {
-                    if (lifecycleLock.tryLock(STOP_WAITS_FOR_START.toMillis(), TimeUnit.MILLISECONDS)) {
-                        return;
-                    }
-                } catch (InterruptedException e) {
-                    // Waited on regardless, as lock() would; the flag is set again once the lock is held.
-                    interrupted = true;
-                    continue;
-                }
-                if (!warned) {
-                    warned = true;
-                    Holder heldBy;
-                    synchronized (handOver) {
-                        heldBy = holder;
-                    }
-                    if (heldBy == Holder.STOPPING) {
-                        log.warn("Consumer '{}' has waited {} and is still waiting to start on queue '{}': a stop of the consumer is "
-                                         + "still stopping its subscription",
-                                 consumerName(), STOP_WAITS_FOR_START, queueName());
-                    } else if (heldBy == Holder.FINISHING_OWED_STOP) {
-                        log.warn("Consumer '{}' has waited {} and is still waiting to start on queue '{}': an earlier start of the "
-                                         + "consumer is stopping the subscription the queue's consume() returned it, for a stop that gave "
-                                         + "up waiting for it",
-                                 consumerName(), STOP_WAITS_FOR_START, queueName());
-                    } else {
-                        // STARTING or STOP_OWED, or NONE: the lock has just changed hands (it is unfair), which is brief, so whatever has held
-                        // it this long is most likely an earlier start still subscribing.
-                        log.warn("Consumer '{}' has waited {} and is still waiting to start on queue '{}': an earlier start of the "
-                                         + "consumer still holds its lifecycle, in the queue's consume(), registering the instance and "
-                                         + "leasing units. Nothing here bounds the consume(): a statement that hangs ends at the "
-                                         + "driver's socketTimeout, and without one never",
-                                 consumerName(), STOP_WAITS_FOR_START, queueName());
-                    }
-                }
+        Locks.lockWarningOnce(lifecycleLock, STOP_WAITS_FOR_START, () -> {
+            Holder heldBy;
+            synchronized (handOver) {
+                heldBy = holder;
             }
-        } finally {
-            if (interrupted) {
-                Thread.currentThread().interrupt();
+            if (heldBy == Holder.STOPPING) {
+                log.warn("Consumer '{}' has waited {} and is still waiting to start on queue '{}': a stop of the consumer is "
+                                 + "still stopping its subscription",
+                         consumerName(), STOP_WAITS_FOR_START, queueName());
+            } else if (heldBy == Holder.FINISHING_OWED_STOP) {
+                log.warn("Consumer '{}' has waited {} and is still waiting to start on queue '{}': an earlier start of the "
+                                 + "consumer is stopping the subscription the queue's consume() returned it, for a stop that gave "
+                                 + "up waiting for it",
+                         consumerName(), STOP_WAITS_FOR_START, queueName());
+            } else {
+                // STARTING or STOP_OWED, or NONE: the lock has just changed hands (it is unfair), which is brief, so whatever has held
+                // it this long is most likely an earlier start still subscribing.
+                log.warn("Consumer '{}' has waited {} and is still waiting to start on queue '{}': an earlier start of the "
+                                 + "consumer still holds its lifecycle, in the queue's consume(), registering the instance and "
+                                 + "leasing units. Nothing here bounds the consume(): a statement that hangs ends at the "
+                                 + "driver's socketTimeout, and without one never",
+                         consumerName(), STOP_WAITS_FOR_START, queueName());
             }
-        }
+            return true;
+        });
     }
 
     /**

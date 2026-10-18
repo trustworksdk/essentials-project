@@ -17,6 +17,7 @@
 package dk.trustworks.essentials.components.queue.shardowned;
 
 import dk.trustworks.essentials.shared.*;
+import dk.trustworks.essentials.shared.concurrent.Locks;
 import org.slf4j.*;
 
 import javax.sql.DataSource;
@@ -427,40 +428,21 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * ({@link #endRunOfStart}).
      */
     private void lockForStart() {
-        var interrupted = false;
-        var warned      = false;
-        try {
-            while (true) {
-                try {
-                    if (lifecycleLock.tryLock(SHUTDOWN_BUDGET.toMillis(), TimeUnit.MILLISECONDS)) {
-                        return;
-                    }
-                } catch (InterruptedException e) {
-                    // Waited on regardless, as lock() would; the flag is set again once the lock is held.
-                    interrupted = true;
-                    continue;
-                }
-                if (!warned) {
-                    warned = true;
-                    if (startHoldsLifecycleLock) {
-                        log.warn("Instance {} has waited {} and is still waiting to start queue {}: an earlier start of the queue is "
-                                         + "still running - registering the instance and leasing its units, and, if a stop gave up "
-                                         + "waiting for it, doing that stop's work once its statements return. Nothing in this queue "
-                                         + "bounds that wait: a statement that hangs ends at the driver's socketTimeout, and without one "
-                                         + "never",
-                                 instanceId, SHUTDOWN_BUDGET, queueId);
-                    } else {
-                        log.warn("Instance {} has waited {} and is still waiting to start queue {}: a stop of the queue is still "
-                                         + "draining its handlers and handing its units back",
-                                 instanceId, SHUTDOWN_BUDGET, queueId);
-                    }
-                }
+        Locks.lockWarningOnce(lifecycleLock, SHUTDOWN_BUDGET, () -> {
+            if (startHoldsLifecycleLock) {
+                log.warn("Instance {} has waited {} and is still waiting to start queue {}: an earlier start of the queue is "
+                                 + "still running - registering the instance and leasing its units, and, if a stop gave up "
+                                 + "waiting for it, doing that stop's work once its statements return. Nothing in this queue "
+                                 + "bounds that wait: a statement that hangs ends at the driver's socketTimeout, and without one "
+                                 + "never",
+                         instanceId, SHUTDOWN_BUDGET, queueId);
+            } else {
+                log.warn("Instance {} has waited {} and is still waiting to start queue {}: a stop of the queue is still "
+                                 + "draining its handlers and handing its units back",
+                         instanceId, SHUTDOWN_BUDGET, queueId);
             }
-        } finally {
-            if (interrupted) {
-                Thread.currentThread().interrupt();
-            }
-        }
+            return true;
+        });
     }
 
     /**
