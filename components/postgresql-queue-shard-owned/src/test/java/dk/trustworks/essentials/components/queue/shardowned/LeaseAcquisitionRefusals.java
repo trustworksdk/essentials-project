@@ -62,7 +62,9 @@ final class LeaseAcquisitionRefusals {
     static long acquisitionsRefused(DataSource dataSource) throws Exception {
         try (var connection = dataSource.getConnection(); var statement = connection.createStatement();
              var resultSet = statement.executeQuery("SELECT CASE WHEN is_called THEN last_value ELSE 0 END FROM lease_acquisition_refusals")) {
-            resultSet.next();
+            if (!resultSet.next()) {
+                throw new IllegalStateException("Reading the lease_acquisition_refusals sequence returned no row");
+            }
             return resultSet.getLong(1);
         }
     }
