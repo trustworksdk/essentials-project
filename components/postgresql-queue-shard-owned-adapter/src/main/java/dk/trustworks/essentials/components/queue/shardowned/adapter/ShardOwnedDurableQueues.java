@@ -161,7 +161,19 @@ public class ShardOwnedDurableQueues implements DurableQueues {
 
     private final List<DurableQueuesInterceptor> interceptors = new CopyOnWriteArrayList<>();
 
-    private volatile boolean started;
+    /**
+     * Whether a consumer may start: once this reads false, no consumer {@link #doConsumeFromQueue} adds starts, and one
+     * whose start was already under way when it went false is stopped once that start returns. Set by {@link #start()}
+     * before it starts the consumers and cleared by {@link #stop()} and a failed start before they stop them.
+     * {@link #doConsumeFromQueue} registers a consumer before it reads this, and reads it again once the consumer's start
+     * has returned - see there.
+     * <p>
+     * It does not say that no consumer is running. While {@link #stop()} or a failed start is stopping the consumers, the
+     * ones it has not reached yet are still running although this already reads false. And a {@link #start()} racing a
+     * {@link #stop()} can still leave a consumer running while this reads false: the stop may pass a consumer before the
+     * start's loop reaches it, and the start then starts it.
+     */
+    private final AtomicBoolean started = new AtomicBoolean();
 
     private final AtomicBoolean warnedAboutUnitOfWorkWithoutConnection = new AtomicBoolean();
 
@@ -211,18 +223,26 @@ public class ShardOwnedDurableQueues implements DurableQueues {
      * stopped, or a stop's, ending the stopping at once with the start's failure added to it as suppressed - leaves this
      * started, so a {@link #stop()} still stops what it left running.
      * <p>
+     * Does nothing when this is already started, as {@code PostgresqlDurableQueues.start()} does: starting the consumers
+     * again would, on a failure, stop the ones that had been running all along. A consumer stopped through its own
+     * {@link DurableQueueConsumer#stop()} is started again by its own {@link DurableQueueConsumer#start()}, or by this
+     * after a {@link #stop()}.
+     * <p>
      * This reports itself started from the moment the start begins, so a consumer {@code consumeFromQueue} adds
-     * meanwhile starts itself rather than being missed by the loop below.
+     * meanwhile starts itself rather than being missed by the loop below. A failed start reports itself not started
+     * before it stops the consumers, so one added while it stops them does not start.
      */
     @Override
     public void start() {
-        started = true;
+        if (!started.compareAndSet(false, true)) {
+            return;
+        }
         try {
             consumers.values().forEach(ShardOwnedDurableQueueConsumer::start);
         } catch (RuntimeException | Error e) {
             Exceptions.rethrowIfCriticalError(e);
+            started.set(false);
             Exceptions.forEachCollectingFailures(consumers.values(), ShardOwnedDurableQueueConsumer::stop, e);
-            started = false;
             throw e;
         }
     }
@@ -236,19 +256,19 @@ public class ShardOwnedDurableQueues implements DurableQueues {
      * suppressed ({@link Exceptions#forEachThenThrowFirst}). Stopping at the first throw left the consumers after it
      * running, and this reporting itself started. Only a critical error ({@link Exceptions#isCriticalError}) ends the
      * stopping at once; this reports itself stopped then too.
+     * <p>
+     * This reports itself stopped from the moment the stop begins, so a consumer {@code consumeFromQueue} adds while the
+     * consumers are being stopped does not start.
      */
     @Override
     public void stop() {
-        try {
-            Exceptions.forEachThenThrowFirst(consumers.values(), ShardOwnedDurableQueueConsumer::stop);
-        } finally {
-            started = false;
-        }
+        started.set(false);
+        Exceptions.forEachThenThrowFirst(consumers.values(), ShardOwnedDurableQueueConsumer::stop);
     }
 
     @Override
     public boolean isStarted() {
-        return started;
+        return started.get();
     }
 
     // ------------------------------------------------------------ properties
@@ -458,21 +478,67 @@ public class ShardOwnedDurableQueues implements DurableQueues {
                 .proceed();
     }
 
+    /**
+     * Registers the consumer, and starts it when this is started.
+     * <p>
+     * A start that fails with anything but a critical error ({@link Exceptions#isCriticalError}) deregisters the consumer
+     * before its failure escapes, so {@code consumeFromQueue} for the same queue can be called again; left registered, it
+     * refused that until the whole {@code DurableQueues} was stopped. A critical error escapes untouched, as from
+     * {@link #start()}.
+     * <p>
+     * The consumer is registered before {@link #started} is read, and {@link #start()} and {@link #stop()} set it before
+     * they go over the consumers. So a start or stop either finds the consumer when it goes over them, or has set the flag
+     * before it is read here. A stop that clears it after it was read here finds the consumer, and stops it; but that stop
+     * may run before the consumer's start has begun subscribing, find nothing to stop, and the start then subscribe. Which
+     * is why the flag is read again once the start has returned, and the consumer stopped when it has gone false.
+     */
     private DurableQueueConsumer doConsumeFromQueue(ConsumeFromQueue operation) {
         var queueName = operation.getQueueName();
-        var existing  = consumers.get(queueName);
-        if (existing != null) {
-            throw new IllegalStateException("There is already a consumer on queue '" + queueName + "' in this process. "
-                                                    + "Two consumers for one queue would register as two instances and each be "
-                                                    + "allowed half its shards.");
+        if (consumers.containsKey(queueName)) {
+            throw alreadyConsuming(queueName);
         }
         var consumer = new ShardOwnedDurableQueueConsumer(operation, resolve(queueName), jsonSerializer,
                                                           this::stopConsuming, this::handleWithInterceptors);
-        consumers.put(queueName, consumer);
-        if (started) {
-            consumer.start();
+        if (consumers.putIfAbsent(queueName, consumer) != null) {
+            throw alreadyConsuming(queueName);
+        }
+        if (started.get()) {
+            try {
+                consumer.start();
+            } catch (RuntimeException | Error e) {
+                Exceptions.rethrowIfCriticalError(e);
+                consumers.remove(queueName, consumer);
+                throw e;
+            }
+            if (!started.get()) {
+                stopConsumerStartedPastAStop(consumer);
+            }
         }
         return consumer;
+    }
+
+    private static IllegalStateException alreadyConsuming(QueueName queueName) {
+        return new IllegalStateException("There is already a consumer on queue '" + queueName + "' in this process. "
+                                                 + "Two consumers for one queue would register as two instances and each be "
+                                                 + "allowed half its shards.");
+    }
+
+    /**
+     * Stop a consumer whose start returned after this was stopped, or after a failed {@link #start()} stopped its
+     * consumers. It stays registered, so the next {@link #start()} starts it. Whatever its stop throws is logged at WARN
+     * rather than thrown from {@code consumeFromQueue}: the consumer is registered and stopped either way (a consumer's
+     * stop throws only once its subscription has stopped), and the caller did not ask for the stop.
+     */
+    private void stopConsumerStartedPastAStop(ShardOwnedDurableQueueConsumer consumer) {
+        try {
+            consumer.stop();
+        } catch (RuntimeException | Error e) {
+            Exceptions.rethrowIfCriticalError(e);
+            log.warn("Consumer '{}' on queue '{}' finished starting after ShardOwnedDurableQueues was stopped, or after a failed "
+                             + "start() had marked it not started, and then failed to stop. "
+                             + "It stays registered and is started by the next start()",
+                     consumer.consumerName(), consumer.queueName(), e);
+        }
     }
 
     /**

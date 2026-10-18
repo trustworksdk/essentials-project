@@ -32,7 +32,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 import java.lang.reflect.Proxy;
 import java.time.Duration;
 import java.util.*;
-import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.*;
@@ -47,16 +47,24 @@ import static org.assertj.core.api.Assertions.*;
  */
 class ShardOwnedDurableQueuesStartTest {
 
-    private static final int FAILING_SUBSCRIPTION = 2;
-
     private final AtomicInteger subscriptions = new AtomicInteger();
     private final List<String>  subscribed    = new CopyOnWriteArrayList<>();
     private final List<String>  stopped       = new CopyOnWriteArrayList<>();
     /**
-     * The type of what the {@link #FAILING_SUBSCRIPTION}th subscription throws - {@code IllegalStateException},
+     * Which subscription, counted from the first {@code consume} of the test, fails while {@link #failure} is set.
+     */
+    private volatile int        failingSubscription = 2;
+    /**
+     * The type of what the {@link #failingSubscription}th subscription throws - {@code IllegalStateException},
      * {@code AssertionError} or {@code StackOverflowError} - or null for none to fail.
      */
     private volatile String     failure;
+    /**
+     * Counted down by the stop of a subscription of a queue whose name starts with {@code slow-stop}, which then waits
+     * for {@link #releaseSlowStop}.
+     */
+    private final CountDownLatch slowStopEntered = new CountDownLatch(1);
+    private final CountDownLatch releaseSlowStop = new CountDownLatch(1);
     private final MessageQueues queues        = proxy(MessageQueues.class, (method, args) -> switch (method) {
         case "findQueue" -> Optional.of(queue(((dk.trustworks.essentials.components.queue.shardowned.spi.QueueName) args[0]).toString()));
         case "queueNames" -> List.of();
@@ -140,6 +148,91 @@ class ShardOwnedDurableQueuesStartTest {
         assertThat(durableQueues.isStarted()).isFalse();
     }
 
+    /**
+     * {@code consumeFromQueue} on a started {@code DurableQueues} registers the consumer and starts it. A start that threw
+     * left it registered, so a retry for the same queue was refused with "There is already a consumer on queue" until the
+     * whole {@code DurableQueues} was stopped.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"IllegalStateException", "AssertionError"})
+    void a_consumer_whose_start_fails_is_not_left_registered_so_consuming_from_the_queue_again_succeeds(String thrownType) {
+        var durableQueues = newDurableQueues();
+        durableQueues.start();
+        failingSubscription = 1;
+        failure = thrownType;
+
+        var thrown = catchThrowable(() -> durableQueues.consumeFromQueue(consumeFrom("retried")));
+
+        if ("AssertionError".equals(thrownType)) {
+            assertThat(thrown).as("the consumer's error escapes as it was thrown").isInstanceOf(AssertionError.class)
+                              .hasMessage("simulated failure subscribing retried");
+        } else {
+            assertThat(thrown).as("the consumer's failure escapes").isInstanceOf(DurableQueueException.class)
+                              .hasRootCauseMessage("simulated failure subscribing retried");
+        }
+        failure = null;
+        var retried = durableQueues.consumeFromQueue(consumeFrom("retried"));
+        assertThat(retried.isStarted()).as("the retry's consumer is started").isTrue();
+        assertThat(subscribed).containsExactly("retried");
+    }
+
+    /**
+     * {@code start()} on a {@code DurableQueues} that is already started does nothing. It used to start every consumer
+     * again and, when one of them failed - one whose own {@code stop()} had stopped it, say - stop every consumer,
+     * the ones that had been running all along included, and report itself not started.
+     */
+    @Test
+    void a_start_of_a_started_durable_queues_leaves_its_running_consumers_running() {
+        var durableQueues = newDurableQueues();
+        var consumers     = consumeFromThreeQueues(durableQueues, "queue");
+        durableQueues.start();
+        assertThat(consumers).as("premise: every consumer started").allMatch(DurableQueueConsumer::isStarted);
+        consumers.getFirst().stop();
+        failingSubscription = subscriptions.get() + 1;
+        failure = "IllegalStateException";
+
+        assertThatCode(durableQueues::start).as("a start of a started DurableQueues does nothing").doesNotThrowAnyException();
+
+        assertThat(subscriptions.get()).as("no consumer was started again").isEqualTo(3);
+        assertThat(consumers.subList(1, 3)).as("the consumers that were running still run").allMatch(DurableQueueConsumer::isStarted);
+        assertThat(stopped).as("only the consumer stopped on its own was stopped").containsExactly(consumers.getFirst().queueName().toString());
+        assertThat(durableQueues.isStarted()).isTrue();
+    }
+
+    /**
+     * A consumer {@code consumeFromQueue} adds while a failed start is stopping the consumers it had started does not
+     * start: the {@code DurableQueues} reports itself not started from the moment the stopping begins. It used to report
+     * itself started until every consumer was stopped, so the added consumer started, and the stopping - iterating the
+     * consumers while it was added - could miss it, leaving it consuming with {@code isStarted()} false.
+     */
+    @Test
+    void a_consumer_added_while_a_failed_start_is_stopping_its_consumers_does_not_start() throws Exception {
+        var durableQueues = newDurableQueues();
+        var consumers     = new ArrayList<>(consumeFromThreeQueues(durableQueues, "slow-stop"));
+        failure = "IllegalStateException";
+        var executor = Executors.newSingleThreadExecutor();
+        try {
+            var starting = executor.submit(() -> catchThrowable(durableQueues::start));
+            await(slowStopEntered);
+
+            var late = durableQueues.consumeFromQueue(consumeFrom("late"));
+
+            releaseSlowStop.countDown();
+            assertThat(starting.get(10, TimeUnit.SECONDS)).as("premise: the start failed").isInstanceOf(DurableQueueException.class);
+            assertThat(subscribed).as("the consumer added meanwhile never subscribed").doesNotContain("late");
+            assertThat(late.isStarted()).isFalse();
+            assertThat(durableQueues.isStarted()).isFalse();
+
+            failure = null;
+            durableQueues.start();
+            consumers.add(late);
+            assertThat(consumers).as("the next start starts it with the others").allMatch(DurableQueueConsumer::isStarted);
+        } finally {
+            releaseSlowStop.countDown();
+            executor.shutdownNow();
+        }
+    }
+
     private ShardOwnedDurableQueues newDurableQueues() {
         return new ShardOwnedDurableQueues(queues, EssentialsObjectMappers.createJSONSerializer(), null, null, 0);
     }
@@ -153,11 +246,23 @@ class ShardOwnedDurableQueuesStartTest {
                        durableQueues.consumeFromQueue(consumeFrom(namePrefix + "-3")));
     }
 
+    private static void await(CountDownLatch latch) {
+        try {
+            if (!latch.await(10, TimeUnit.SECONDS)) {
+                throw new IllegalStateException("Timed out waiting for the test's latch");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(e);
+        }
+    }
+
     /**
-     * A queue whose {@code consume} counts the subscription and, when it is the {@link #FAILING_SUBSCRIPTION}th while
+     * A queue whose {@code consume} counts the subscription and, when it is the {@link #failingSubscription}th while
      * {@link #failure} is set, throws a new one of that type. Otherwise it records the queue's name and returns a
      * subscription that is started until it is stopped, and whose {@code stop()} then throws an
-     * {@link IllegalStateException} for a queue whose name starts with {@code stop-throws}.
+     * {@link IllegalStateException} for a queue whose name starts with {@code stop-throws}, and waits for
+     * {@link #releaseSlowStop} for one whose name starts with {@code slow-stop}.
      */
     private MessageQueue queue(String name) {
         return proxy(MessageQueue.class, (method, args) -> {
@@ -165,7 +270,7 @@ class ShardOwnedDurableQueuesStartTest {
                 throw new UnsupportedOperationException(method);
             }
             var failureType = failure;
-            if (subscriptions.incrementAndGet() == FAILING_SUBSCRIPTION && failureType != null) {
+            if (subscriptions.incrementAndGet() == failingSubscription && failureType != null) {
                 switch (failureType) {
                     case "StackOverflowError" -> throw new StackOverflowError("simulated critical error subscribing " + name);
                     case "AssertionError" -> throw new AssertionError("simulated failure subscribing " + name);
@@ -178,6 +283,10 @@ class ShardOwnedDurableQueuesStartTest {
             return proxy(Subscription.class, (subscriptionMethod, subscriptionArgs) -> switch (subscriptionMethod) {
                 case "isStarted" -> started[0];
                 case "stop" -> {
+                    if (name.startsWith("slow-stop")) {
+                        slowStopEntered.countDown();
+                        await(releaseSlowStop);
+                    }
                     started[0] = false;
                     stopped.add(name);
                     if (name.startsWith("stop-throws")) {
