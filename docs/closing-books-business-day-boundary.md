@@ -1,6 +1,7 @@
 # EF-1 — Business-Day Closing-Books Boundary
 
-**Status:** design proposal, not implemented. No code has changed.
+**Status:** design proposal, not implemented. No code has changed. Questions 1, 2, 4, 5 and 6 of §8 are
+decided (see "Decided" there); 3 and 7–9 are still open.
 **Module:** `components/eventsourced-aggregates` (package `…aggregates.closingbooks`), with small additive
 changes in `spring-boot-starter-postgresql-event-store` and the admin API contract.
 **Driven by:** the trading demo expansion, decisions D10, D20 and D22 in
@@ -431,6 +432,18 @@ The evaluation sits on every mutating command, so the number that matters is **a
 ---
 
 ## 8. Open questions for the maintainer
+
+**Decided** (recorded as D23 and D24 in the expansion plan):
+
+- **Q1:** the exchange stamps every execution with `tradeDate` and `intendedSettlementDate` (SR-29), because the
+  domain needs them anyway, not for this feature. The current business date is **not** added to `GET /api/clock`;
+  cold start is covered by the catch-up reader replaying the latest `BusinessDayClosed` (§5.4).
+- **Q2:** a new annotation member and a new `ClosingBooksPeriodSource` enum in a minor release is acceptable.
+- **Q4:** the scheduled-scan gaps are a separate change, EF-1b.
+- **Q5:** an unknown business date means no rollover, with a warning and a metric.
+- **Q6:** the library ships only the SPI and an in-memory implementation; the application owns the store.
+
+The original questions follow; 3 and 7–9 are still open.
 
 1. **Does the exchange stamp trades (and other events) with their `businessDate`, and can it expose the
    current business date on `GET /api/clock`?** The first enables exact event-time period assignment (§5.3);

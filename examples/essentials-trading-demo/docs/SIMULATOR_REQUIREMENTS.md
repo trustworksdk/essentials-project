@@ -352,6 +352,50 @@ demo learns them from the exchange, so instrument changes must be in the canonic
 of `Instrument`, plus `referenceSymbol` and session information when SR-16 exists) and `InstrumentUpdated` (trading
 enabled or disabled, or any other change). Declared instruments are listed at startup like any other.
 
+### SR-29 — Trade date and settlement date on every execution (MUST) [phase 3]
+
+A real exchange tells the member which business day a trade belongs to, with the execution itself: FIX tag 75
+`TradeDate` and tag 64 `SettlDate` on the execution report. The simulator already computes both — they are on
+`SettlementPending` (`tradeDate`, `intendedSettlementDate`) and on the clearing statement's lines — but not on the
+events a member books trades from. Without them the trading demo would have to re-implement the exchange's calendar
+(cutoff, time zone, weekends, per-market settlement cycles) to book a trade into the right day, compute its
+settlement date and reconcile it, which is exactly the "own clock" mistake D10 rules out.
+
+**Fields.** Add to the payload of:
+
+| Event | `tradeDate` | `intendedSettlementDate` |
+|---|---|---|
+| `TradeExecuted` | yes | yes |
+| `OrderPartiallyFilled`, `OrderFilled` | yes, of the execution named by `executionId` | yes |
+| The synchronous `OrderResult.executions[]` and `GET /api/trades` (`Trade` schema) | yes | yes |
+
+Both are ISO dates (`format: date`), never null on these events.
+
+**Rules.**
+
+- **One calendar, one answer.** For a given `executionId`, `tradeDate` and `intendedSettlementDate` are identical on
+  every event and response that carries them: `TradeExecuted`, the fill events, `SettlementPending`, every later
+  `Settlement*` event (until a `SettlementDelayed` moves the settlement date, which then applies to later events
+  only), and the `ClearingTrade` line. A test asserts this across all of them.
+- **The business-day rule does not depend on `clearing.enabled`.** A trade at or after the cutoff
+  (`clearing.cutoff` in `clearing.time_zone`), or on a non-business day, has the next business day as its
+  `tradeDate`. The same calendar decides `BusinessDayClosed` (SR-26), so a consumer that rolls its books on
+  `BusinessDayClosed` and books a trade by its `tradeDate` always agrees with itself.
+- **The settlement date** is `tradeDate` plus the instrument's market cycle (`settlement_days`,
+  `market_settlement_days`) in business days, also in `settlement.mode: external`, where it is the date the
+  exchange *expects*, not one it will simulate.
+- **Additive.** New fields on existing payloads; existing consumers are unaffected. Bump the events'
+  `schemaVersion` if the simulator's own versioning policy asks for it.
+- **On the virtual clock** both dates come from the exchange's domain time, like `executedAt`.
+
+**Accept when** (cutoff 17:30 Europe/Copenhagen, T+1):
+
+- a trade at 17:29 local on Tuesday has `tradeDate` Tuesday and `intendedSettlementDate` Wednesday;
+- a trade at 17:30 local on Tuesday has `tradeDate` Wednesday and `intendedSettlementDate` Thursday;
+- a trade at 18:00 local on Friday has `tradeDate` Monday;
+- for a sample of executions, `tradeDate` and `intendedSettlementDate` are equal on `TradeExecuted`, the fill
+  events, `SettlementPending` and the clearing statement line.
+
 ---
 
 ## Summary by demo phase
@@ -361,7 +405,7 @@ enabled or disabled, or any other change). Declared instruments are listed at st
 | 0 Foundation | SR-1, SR-3, SR-5, SR-28 (MUST); SR-19 (SHOULD) |
 | 1 Identity and account core | SR-24, SR-25, SR-26 (MUST) |
 | 2 Funding | SR-21 (MUST); SR-22, SR-27 (SHOULD) |
-| 3 Orders and execution | SR-2, SR-6–SR-10, SR-12, SR-13 (MUST); SR-16, SR-17 (SHOULD) |
+| 3 Orders and execution | SR-2, SR-6–SR-10, SR-12, SR-13, SR-29 (MUST); SR-16, SR-17 (SHOULD) |
 | 4 Settlement | SR-14 (MUST) |
 | 5 Reconciliation | SR-11 (SHOULD) |
 | 6 Realistic load | SR-4, SR-15, SR-20, SR-23 (SHOULD) |
