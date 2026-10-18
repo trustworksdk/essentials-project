@@ -54,4 +54,16 @@ public class AccountActivityQuery {
                                   accountId.toString(),
                                   Math.clamp(limit, 1, 1000));
     }
+
+    /**
+     * How many statement lines exist for accounts whose id starts with {@code accountIdPrefix}. For the demo harness's
+     * ledger load scenario, which uses it to see when this view has caught up with a run's commands.
+     */
+    public long countEntriesForAccountsStartingWith(String accountIdPrefix) {
+        requireNonNull(accountIdPrefix, "No accountIdPrefix provided");
+        var count = jdbcTemplate.queryForObject("SELECT count(*) FROM projection_account_activity WHERE account_id LIKE ?",
+                                                Long.class,
+                                                accountIdPrefix.replace("%", "\\%").replace("_", "\\_") + "%");
+        return count == null ? 0 : count;
+    }
 }
