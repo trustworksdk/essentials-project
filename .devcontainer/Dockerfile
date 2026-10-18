@@ -103,8 +103,10 @@ ARG RTK_SHA256_ARM64="ee24a43dac9162de55fea8460b5efcd56d401ec28b5117c921bffa8a57
 # finds 69 reachable vulnerabilities in it. Built with the Go below and the
 # dependency pins in GITLEAKS_DEP_PINS, govulncheck reports none reachable and
 # gitleaks' own test suite passes. GITLEAKS_COMMIT is the commit the v<ver> tag
-# points at; the build fails if the tag has moved. Refresh recipe:
-#   curl -fsSL https://api.github.com/repos/gitleaks/gitleaks/git/ref/tags/v<ver> | jq -r .object.sha
+# points at; the build fails, naming both shas, if the tag has moved. Refresh
+# recipe (the commits endpoint peels an annotated tag to its commit; the
+# git/ref/tags endpoint would return the tag object's sha, which never matches):
+#   curl -fsSL https://api.github.com/repos/gitleaks/gitleaks/commits/v<ver> | jq -r .sha
 #   docker buildx imagetools inspect golang:<go-ver>-trixie   # index digest
 #   in a checkout: go get <pins> && go mod tidy && go test ./... && govulncheck ./...
 ARG GITLEAKS_VERSION="8.30.1"
@@ -157,7 +159,11 @@ RUN mkdir -p /out && if [ "${INSTALL_REVIEW_TOOLS}" = "true" ]; then \
     export CGO_ENABLED=0 GOTOOLCHAIN=local GOFLAGS=-mod=mod && \
     git clone --quiet --depth 1 --branch "v${GITLEAKS_VERSION}" https://github.com/gitleaks/gitleaks.git /src && \
     cd /src && \
-    [ "$(git rev-parse HEAD)" = "${GITLEAKS_COMMIT}" ] && \
+    actual_commit="$(git rev-parse HEAD)" && \
+    if [ "${actual_commit}" != "${GITLEAKS_COMMIT}" ]; then \
+        echo "gitleaks v${GITLEAKS_VERSION}: tag resolves to commit ${actual_commit}, GITLEAKS_COMMIT is ${GITLEAKS_COMMIT}; the tag moved or the pin is not a commit sha (see the refresh recipe)" >&2; \
+        exit 1; \
+    fi && \
     go get ${GITLEAKS_DEP_PINS} && \
     go mod tidy && \
     go build -trimpath -ldflags "-s -w -X github.com/zricethezav/gitleaks/v8/version.Version=${GITLEAKS_VERSION}" -o /out/gitleaks . && \
