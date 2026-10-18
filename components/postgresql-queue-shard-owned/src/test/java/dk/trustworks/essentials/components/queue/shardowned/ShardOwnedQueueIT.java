@@ -182,6 +182,20 @@ class ShardOwnedQueueIT {
                                  SHARD_COUNT);
 
             var storage = new ShardOwnedStorage(dataSource, QUEUE_ID);
+
+            // startConsuming() returns before the owner takes shard 0 over: onTakeover runs later, on
+            // the pump, and starts the cursor just below the first visible row. A takeover that ran
+            // after B committed would start right below B, with A beneath the cursor, so no gap would
+            // ever be seen. Waiting for a warm-up message proves the takeover has run and the cursor
+            // sits below every value allocated from here on, so A and B both land above it.
+            // Enqueued through storage, not queue.enqueue, so the owner has to read it from the table
+            // rather than be handed it locally.
+            try (var warmUp = dataSource.getConnection()) {
+                storage.enqueueBatch(warmUp, 0, List.of("warm-up".getBytes(StandardCharsets.UTF_8)), 1);
+            }
+            Awaitility.await().atMost(Duration.ofSeconds(20))
+                      .untilAsserted(() -> assertThat(received).contains("warm-up"));
+
             try (var held = dataSource.getConnection()) {
                 held.setAutoCommit(false);
                 // A: allocates the earlier sequence value, stays uncommitted.
