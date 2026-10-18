@@ -557,10 +557,11 @@ instance just no longer delivers it. (`1f31c123`)
 - **`Exceptions.forEachThenThrowFirst(items, action)`** and **`Exceptions.forEachCollectingFailures(items, action,
   failure)`** (`shared`) run an action for every item even when it throws for an earlier one, then throw (or return)
   the first failure as it was thrown, later distinct ones added to it as suppressed - once each: an instance thrown
-  for several items is added once, and one the given `failure` already carries as suppressed is not added again. A
-  non-critical `Error` is
-  collected like a `RuntimeException`; a critical one (`Exceptions.isCriticalError`) is rethrown at once, with the
-  failure collected so far added to it as suppressed.
+  for several items is added once, and one the failure it would be added to already carries as suppressed when it is
+  about to be added - also one a nested call with the same `failure` added while the loop ran - is not added again. A
+  non-critical `Error` is collected like a `RuntimeException`; a critical one (`Exceptions.isCriticalError`) is
+  rethrown at once, with the failure collected so far added to it as suppressed, unless it already carries it (a
+  nested call with the same `failure` that hit the error added it first). (`<!-- fix:U-004 -->`)
 - **`Locks.lockWarningOnce(lock, warnAfter, warn)`** (`shared`, package `dk.trustworks.essentials.shared.concurrent`)
   takes a `Lock`, waiting as long as `ReentrantLock.lock()` would - an interrupt deferred, and set on the thread again
   once the lock is held - but calls `warn` once the wait has lasted `warnAfter`, and after each further `warnAfter`

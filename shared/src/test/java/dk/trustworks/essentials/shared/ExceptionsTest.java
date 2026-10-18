@@ -402,6 +402,69 @@ public class ExceptionsTest {
     }
 
     @Test
+    void forEachCollectingFailures_doesNotAddAnInstanceAgain_whenANestedCallAddsItToTheGivenFailureDuringTheLoop() {
+        var ran      = new ArrayList<String>();
+        var failure  = new IllegalStateException("the start's failure");
+        var observer = new IllegalStateException("one instance, collected into the failure by a nested call during the loop");
+
+        var returned = Exceptions.forEachCollectingFailures(List.of("a", "b"), item -> {
+            ran.add(item);
+            if ("a".equals(item)) {
+                // A nested undo with the same failure: it adds the observer's failure to it, and throws nothing itself
+                assertThat(Exceptions.forEachCollectingFailures(List.of("inner"), inner -> {
+                    throw observer;
+                }, failure)).isSameAs(failure);
+                return;
+            }
+            throw observer;
+        }, failure);
+
+        assertThat(ran).containsExactly("a", "b");
+        assertThat(returned).isSameAs(failure);
+        assertThat(returned.getSuppressed()).containsExactly(observer);
+    }
+
+    @Test
+    void forEachCollectingFailures_doesNotAddAnInstanceAgain_whenANestedCallAddsItToTheFirstFailureDuringTheLoop() {
+        var ran      = new ArrayList<String>();
+        var first    = new IllegalStateException("the first failure");
+        var observer = new IllegalStateException("one instance, collected into the first failure by a nested call during the loop");
+
+        var returned = Exceptions.forEachCollectingFailures(List.of("a", "b", "c"), item -> {
+            ran.add(item);
+            switch (item) {
+                case "a" -> throw first;
+                case "b" -> Exceptions.forEachCollectingFailures(List.of("inner"), inner -> {
+                    throw observer;
+                }, first);
+                default -> throw observer;
+            }
+        }, null);
+
+        assertThat(ran).containsExactly("a", "b", "c");
+        assertThat(returned).isSameAs(first);
+        assertThat(returned.getSuppressed()).containsExactly(observer);
+    }
+
+    @Test
+    void forEachCollectingFailures_doesNotAddTheFailureToACriticalErrorAgain_whenANestedCallAlreadyDid() {
+        var ran      = new ArrayList<String>();
+        var failure  = new IllegalStateException("the start's failure");
+        var critical = new StackOverflowError("thrown inside a nested undo with the same failure");
+
+        var thrown = catchThrowable(() -> Exceptions.forEachCollectingFailures(List.of("a", "b"), item -> {
+            ran.add(item);
+            Exceptions.forEachCollectingFailures(List.of("inner"), inner -> {
+                throw critical;
+            }, failure);
+        }, failure));
+
+        assertThat(thrown).isSameAs(critical);
+        assertThat(thrown.getSuppressed()).containsExactly(failure);
+        assertThat(ran).as("no item ran after the critical error").containsExactly("a");
+    }
+
+    @Test
     void forEachCollectingFailures_returnsNull_whenNoItemThrowsAndNoFailureIsGiven() {
         assertThat(Exceptions.forEachCollectingFailures(List.of("a"), item -> { }, null)).isNull();
     }

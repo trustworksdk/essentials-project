@@ -169,7 +169,8 @@ public final class Exceptions {
      * <p>
      * A {@link RuntimeException} and a non-critical {@link Error} (an {@link AssertionError}, for example) are collected
      * alike. A critical error ({@link #isCriticalError(Throwable)}) is rethrown at once, without running
-     * <code>action</code> for the items after it, with the failure collected so far added to it as suppressed.
+     * <code>action</code> for the items after it, with the failure collected so far added to it as suppressed, unless it
+     * already carries it.
      *
      * @param items  the items to run <code>action</code> for, in their iteration order
      * @param action the action to run for each item
@@ -190,9 +191,11 @@ public final class Exceptions {
      * to it as suppressed.
      * <p>
      * Each failure is added once, by identity: an instance thrown for several items is added once, and one that the
-     * failure it would be added to already carries as suppressed (collected into it by a nested call first, say) is not
-     * added again. That failure is <code>failure</code> when it is not null, otherwise the first failure of
-     * <code>action</code>.
+     * failure it would be added to already carries as suppressed when it is about to be added (collected into it by a
+     * nested call, before this call or during it, say) is not added again. That failure is <code>failure</code> when it is
+     * not null, otherwise the first failure of <code>action</code>. The same holds for a critical error: that failure is
+     * not added to it when it already carries it (a nested call with the same <code>failure</code> that hit the critical
+     * error added it first).
      *
      * @param items   the items to run <code>action</code> for, in their iteration order
      * @param action  the action to run for each item
@@ -202,42 +205,50 @@ public final class Exceptions {
      * later, distinct one added to it as suppressed; null when <code>failure</code> is null and <code>action</code> threw
      * for no item
      */
-    @SuppressWarnings("PMD.CompareObjectsWithEquals") // identity on purpose: see the comment in the loop
     public static <T> Throwable forEachCollectingFailures(Iterable<? extends T> items, Consumer<? super T> action, Throwable failure) {
         requireNonNull(items, "You must supply the items");
         requireNonNull(action, "You must supply an action");
         var collected = failure;
-        // Every failure already in the result - collected itself and what it carries as suppressed, whether collected is
-        // the given failure or the first one the action throws - by identity, so an action throwing one shared instance
-        // for every item adds it once, not once per item, and not at all to a collected failure that already carries it
-        var attached = Collections.newSetFromMap(new IdentityHashMap<Throwable, Boolean>());
-        if (collected != null) {
-            attached.add(collected);
-            Collections.addAll(attached, collected.getSuppressed());
-        }
         for (var item : items) {
             try {
                 action.accept(item);
             } catch (RuntimeException | Error e) {
                 if (isCriticalError(e)) {
-                    if (collected != null && collected != e) {
-                        e.addSuppressed(collected);
+                    if (collected != null) {
+                        addSuppressedOnce(e, collected);
                     }
                     sneakyThrow(e);
                 }
                 if (collected == null) {
                     collected = e;
-                    attached.add(e);
-                    Collections.addAll(attached, e.getSuppressed());
-                } else if (attached.add(e)) {
-                    // Identity, not equals(), and attached holds collected itself: Throwable.addSuppressed throws
-                    // IllegalArgumentException for the throwable itself, which it tells by identity - an action throwing
-                    // the collected instance again would otherwise end the loop here, with the items after it not run
-                    collected.addSuppressed(e);
+                } else {
+                    addSuppressedOnce(collected, e);
                 }
             }
         }
         return collected;
+    }
+
+    /**
+     * Adds <code>suppressed</code> to <code>holder</code> as suppressed, unless it is <code>holder</code> itself or
+     * <code>holder</code> carries it as suppressed already - read when it is about to be added, not when the loop of
+     * {@link #forEachCollectingFailures(Iterable, Consumer, Throwable)} began, since an action may add to
+     * <code>holder</code> through a nested call while that loop runs. By identity, not <code>equals()</code>:
+     * {@link Throwable#addSuppressed(Throwable)} throws {@link IllegalArgumentException} for the throwable itself, which it
+     * tells by identity - an action throwing the collected instance again would otherwise end the loop there, with the
+     * items after it not run.
+     */
+    @SuppressWarnings("PMD.CompareObjectsWithEquals")
+    private static void addSuppressedOnce(Throwable holder, Throwable suppressed) {
+        if (holder == suppressed) {
+            return;
+        }
+        for (var carried : holder.getSuppressed()) {
+            if (carried == suppressed) {
+                return;
+            }
+        }
+        holder.addSuppressed(suppressed);
     }
 
     /**
