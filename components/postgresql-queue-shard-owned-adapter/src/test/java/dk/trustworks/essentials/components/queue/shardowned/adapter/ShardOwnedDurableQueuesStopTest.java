@@ -178,9 +178,12 @@ class ShardOwnedDurableQueuesStopTest {
 
     @FunctionalInterface
     private interface Invocation {
-        Object handle(String method, Object[] args);
+        Object handle(String method, Object... args);
     }
 
+    // type's own loader, not the thread's context loader: a proxy class must be defined in a loader that sees its
+    // interface, which the context loader need not. equals is identity: calling self.equals would re-enter this handler.
+    @SuppressWarnings({"PMD.UseProperClassLoader", "PMD.CompareObjectsWithEquals"})
     private static <T> T proxy(Class<T> type, Invocation invocation) {
         return type.cast(Proxy.newProxyInstance(type.getClassLoader(), new Class<?>[]{type}, (self, method, args) -> switch (method.getName()) {
             case "toString" -> type.getSimpleName() + " proxy";
