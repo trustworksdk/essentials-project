@@ -80,6 +80,11 @@ Throwable getRootCause(Throwable e)
 boolean doesStackTraceContainExceptionOfType(Throwable e, Class<?> exceptionType)
 boolean isCriticalError(Throwable t)
 <T extends Throwable> void rethrowIfCriticalError(T t)
+String ROOT_CAUSE_PREFIX                                    // "Root cause: " (since 0.60.1)
+String prependRootCauseSummary(Throwable t, String description)                                   // since 0.60.1
+<T> void forEachThenThrowFirst(Iterable<? extends T> items, Consumer<? super T> action)            // since 0.60.1
+<T> Throwable forEachCollectingFailures(Iterable<? extends T> items, Consumer<? super T> action,
+                                        Throwable failure)                                         // since 0.60.1
 
 // Usage - Root cause
 Throwable root = Exceptions.getRootCause(e);
@@ -96,7 +101,29 @@ try {
     Exceptions.rethrowIfCriticalError(t);  // Rethrows if VirtualMachineError/ThreadDeath/LinkageError
     // Handle recoverable
 }
+
+// Lead a stored/logged description of a wrapped exception with its root cause
+String text = Exceptions.prependRootCauseSummary(e, Exceptions.getStackTrace(e));
+// "Root cause: java.sql.SQLException: <message>" + line separator + text; text unchanged when e has no cause
+
+// Fan one operation out over independent parts (List<Lifecycle> parts): stop every part, even when an earlier
+// stop throws, then throw the first failure as it was thrown, every later distinct one added to it as suppressed
+Exceptions.forEachThenThrowFirst(parts, Lifecycle::stop);
+
+// Undo a failed start: stop every part, adding each stop's failure to the start's failure, then throw that
+try {
+    parts.forEach(Lifecycle::start);
+} catch (RuntimeException | Error e) {
+    Exceptions.rethrowIfCriticalError(e);
+    Exceptions.forEachCollectingFailures(parts, Lifecycle::stop, e);  // returns e
+    throw e;
+}
 ```
+
+- `forEachThenThrowFirst` / `forEachCollectingFailures` collect a `RuntimeException` and a non-critical `Error` (an `AssertionError`, say) alike. A critical error (`isCriticalError`) is rethrown at once, the items after it not run, with the failure collected so far added to it as suppressed.
+- A failure is added once, by identity: an instance thrown for several items, or one the failure already carries as suppressed, is not added again.
+- `forEachCollectingFailures` returns `failure` when it is not null, else the action's first failure (later ones suppressed on it), else null - it does not throw the action's non-critical failures, so the caller throws the result with its own type.
+- The root-cause summary is the root cause's `toString()` verbatim, so it spans several lines when that message does (PostgreSQL `Detail:` / `Where:` lines): do not take only the first line as the whole root cause.
 
 ### Lifecycle
 
