@@ -220,3 +220,47 @@ backlog only appears once *producers* are made concurrent. A single synchronous 
 outrun the projections — 4 000 price updates in 6s never took the Inbox past a depth of 8. That the
 fence never moved is what the instance-liveness redesign was for; a lease-expiry design would have
 churned ownership exactly here, under load, while the pool was contended.
+
+## The ledger load scenario (phase 1)
+
+`LedgerLoadGenerator`, `/api/admin/ledger-load`: buy cycles (hold → book → release → settle) on the `accounts`
+ledger, fresh `LL-<run>-<n>` accounts per run. `ORDERED` sends every command through the `LedgerLoad:commands` inbox
+keyed by account id; `DIRECT` sends cycles on the command bus from a pool and retries conflicts. Each run reports
+drain, throughput, latency, conflicts, failures and how long `account_activity` takes to catch up afterwards.
+
+- **The inbox is created at startup on every instance**, its mode from `trading-demo.ledger-load.inbox-consumption-mode`
+  (default `SingleGlobalConsumer`) and `.inbox-consumers`. Created lazily it would exist only where a run started.
+- **Drain is detected by counting the run's events in the event store** (`AccountEventCounter`), because another
+  instance's handled-counter is not visible. Latency percentiles are the starting instance's share only.
+- **One producer thread enqueues**, so each account's key order is numbered in commit order (the shard-owned lane's
+  rule above). It is also the throughput ceiling below.
+
+### Measured, 2026-10-18, devcontainer, `compose` profile (shard-owned engine), one sample each
+
+1 000 accounts, 5 000 cycles (20 000 commands), 10 hot accounts taking 50 % of cycles.
+
+| Run | Instances | Drain | Commands/s | Handler p50 / p99 | Conflicts | View catch-up after drain |
+|---|---|---|---|---|---|---|
+| ORDERED, `SingleGlobalConsumer` | 1 | 15.3 s (enqueue 11.0 s) | 1 309 | 1.4 / 3.8 ms | 0 | 15.2 s |
+| DIRECT, 8 threads | 1 | 6.9 s | 2 896 | cycle 9.6 / 31.7 ms | **2 978** | **24.6 s** |
+| ORDERED, `SingleGlobalConsumer` | 2 | 22.5 s (enqueue 12.6 s) | 889 | 1.7 / 5.0 ms | 0 | 21.8 s |
+| ORDERED, `GlobalCompetingConsumers` | 1 | 15.0 s (enqueue 12.0 s) | 1 335 | 1.5 / 5.1 ms | 0 | 16.5 s |
+| ORDERED, `GlobalCompetingConsumers` | 2 | 17.6 s (enqueue 16.9 s) | 1 134 | 1.9 / 8.3 ms | 0 | 13.5 s |
+
+What it shows:
+
+- **Keying by account removes conflicts entirely**; racing the same commands costs 15 % retries at this hot share
+  (and at test size, 80 % on 2 hot accounts, commands exhausted 20 retries).
+- **A `SingleGlobalConsumer` inbox defeats the shard-owned engine.** It takes a fenced lock ("Exclusive
+  DurableQueueConsumer for Inbox" in the log), so one instance owns every shard (`liveInstances: 1`) and a second
+  instance adds nothing. `GlobalCompetingConsumers` lets the engine split keys (`liveInstances: 2`) with per-key
+  order intact — 0 conflicts with two instances.
+- **The command side keeps pace; the producer and the views do not.** With competing consumers the drain ends under a
+  second after the last enqueue. The single producer (~1.2–1.7 k messages/s in batches of 500) is the command-side
+  ceiling, and the projections — each an exclusive `ViewEventProcessor`, one instance cluster-wide — process roughly
+  700–800 events/s, so they trail every run by as long again as the run itself.
+- **On `PostgresqlDurableQueues` (the tests' engine) ordered delivery of a hot key is poll-bound**: ~60 commands/s at
+  test size with a 2 ms handler.
+
+Next measurements: parallel producers partitioned by account (keeping per-key commit order), 50 000+ cycles, and the
+views under a key-partitioned processor if EF-2 is built.

@@ -36,6 +36,9 @@ import dk.trustworks.essentials.reactive.command.CommandBus;
 import dk.trustworks.essentials.types.*;
 import org.slf4j.*;
 import org.springframework.beans.factory.DisposableBean;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
@@ -88,7 +91,8 @@ public class LedgerLoadGenerator implements DisposableBean {
 
     /**
      * @param hotSharePercent the share of all cycles that go to the {@code hotAccounts} first accounts
-     * @param threads         DIRECT: sending threads. ORDERED: the inbox's parallel consumers
+     * @param threads         DIRECT: sending threads. ORDERED: unused — the inbox's consumers are fixed at startup
+     *                        ({@code trading-demo.ledger-load.inbox-consumers})
      */
     public record Settings(Mode mode, int accounts, int cycles, int hotAccounts, int hotSharePercent, int threads) {
         public Settings {
@@ -109,18 +113,40 @@ public class LedgerLoadGenerator implements DisposableBean {
 
     private final    AtomicReference<LedgerLoadResultView> lastResult = new AtomicReference<>();
     private volatile Run                                   current;
+    private final    MessageConsumptionMode                consumptionMode;
+    private final    int                                   inboxConsumers;
     private volatile Inbox                                 inbox;
 
     public LedgerLoadGenerator(CommandBus commandBus,
                                Inboxes inboxes,
                                UnitOfWorkFactory<? extends UnitOfWork> unitOfWorkFactory,
                                AccountActivityQuery activityQuery,
-                               AccountEventCounter eventCounter) {
+                               AccountEventCounter eventCounter,
+                               @Value("${trading-demo.ledger-load.inbox-consumption-mode:SingleGlobalConsumer}") MessageConsumptionMode consumptionMode,
+                               @Value("${trading-demo.ledger-load.inbox-consumers:8}") int inboxConsumers) {
         this.commandBus = requireNonNull(commandBus, "No commandBus provided");
         this.inboxes = requireNonNull(inboxes, "No inboxes provided");
         this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory provided");
         this.activityQuery = requireNonNull(activityQuery, "No activityQuery provided");
         this.eventCounter = requireNonNull(eventCounter, "No eventCounter provided");
+        this.consumptionMode = requireNonNull(consumptionMode, "No consumptionMode provided");
+        this.inboxConsumers = inboxConsumers;
+    }
+
+    /**
+     * Every instance creates the inbox, and so offers to consume it, at startup — not lazily on the instance a run
+     * starts on, which would leave the others out of an ORDERED run whatever the consumption mode.
+     * <ul>
+     *     <li>{@code SingleGlobalConsumer} (default): a fenced lock picks one instance cluster-wide. On the shard-owned
+     *     engine that instance then owns every shard: measured, a second instance adds nothing.</li>
+     *     <li>{@code GlobalCompetingConsumers}: every instance consumes. On the shard-owned engine per-key order still
+     *     holds cluster-wide, because the engine assigns each key's unit to one owner; on {@code PostgresqlDurableQueues}
+     *     it does not, so use it there with one instance only.</li>
+     * </ul>
+     */
+    @EventListener(ApplicationReadyEvent.class)
+    public void createInbox() {
+        inbox();
     }
 
     public synchronized LedgerLoadResultView start(Settings settings) {
@@ -174,14 +200,13 @@ public class LedgerLoadGenerator implements DisposableBean {
         }
     }
 
-    private Inbox inbox(int consumers) {
-        // Created once: getOrCreateInbox returns the first instance under this name whatever the settings, so the
-        // consumer count is fixed by the first ORDERED run until restart
+    private synchronized Inbox inbox() {
         if (inbox == null) {
+            log.info("Ledger load inbox '{}': {} with {} consumer(s)", INBOX_NAME, consumptionMode, inboxConsumers);
             inbox = inboxes.getOrCreateInbox(InboxConfig.builder()
                                                         .inboxName(INBOX_NAME)
-                                                        .messageConsumptionMode(MessageConsumptionMode.SingleGlobalConsumer)
-                                                        .numberOfParallelMessageConsumers(consumers)
+                                                        .messageConsumptionMode(consumptionMode)
+                                                        .numberOfParallelMessageConsumers(inboxConsumers)
                                                         .redeliveryPolicy(RedeliveryPolicy.fixedBackoff(Duration.ofMillis(50), MAX_ATTEMPTS))
                                                         .build(),
                                              this::handleQueued);
@@ -275,7 +300,7 @@ public class LedgerLoadGenerator implements DisposableBean {
          * shard-owned engine's ordered lane depends on (see this package's {@code CLAUDE.md}).
          */
         void driveOrdered() throws InterruptedException {
-            var target  = inbox(settings.threads());
+            var target  = inbox();
             var started = System.nanoTime();
             var order   = new HashMap<AccountId, Long>();
             for (var from = 0; from < cycles.size(); from += ENQUEUE_BATCH / 4) {
@@ -334,11 +359,17 @@ public class LedgerLoadGenerator implements DisposableBean {
             latenciesNanos.add(System.nanoTime() - started);
         }
 
+        /**
+         * Done when the event store holds every event the run must produce — two per account (opened, deposit), four
+         * per cycle — whichever instance handled the commands. {@code handled} only counts this instance's share, so
+         * it cannot tell.
+         */
         private void awaitHandled(long startedNanos) throws InterruptedException {
+            var expected = 2L * settings.accounts() + 4L * settings.cycles();
             var deadline = System.nanoTime() + DRAIN_TIMEOUT.toNanos();
-            while (handled.get() + failures.get() < totalCommands()) {
+            while (eventCounter.countEventsForAccountsStartingWith(runId + "-") < expected) {
                 if (System.nanoTime() > deadline) {
-                    throw new IllegalStateException("ORDERED run handled " + handled.get() + " of " + totalCommands() + " within " + DRAIN_TIMEOUT);
+                    throw new IllegalStateException("ORDERED run appended fewer than " + expected + " events within " + DRAIN_TIMEOUT);
                 }
                 Thread.sleep(20);
             }
@@ -365,6 +396,9 @@ public class LedgerLoadGenerator implements DisposableBean {
 
         LedgerLoadResultView view(String state, String error) {
             var sorted = latenciesNanos.stream().mapToLong(Long::longValue).sorted().toArray();
+            // ORDERED counts every command once the events are in (other instances may have handled some); latency
+            // percentiles stay this instance's
+            var commandsDone = settings.mode() == Mode.ORDERED && drainMs > 0 ? totalCommands() : handled.get();
             return new LedgerLoadResultView(runId,
                                             settings.mode(),
                                             state,
@@ -372,11 +406,11 @@ public class LedgerLoadGenerator implements DisposableBean {
                                             settings.hotAccounts(),
                                             settings.cycles(),
                                             totalCommands(),
-                                            handled.get(),
+                                            commandsDone,
                                             setupMs,
                                             enqueueMs,
                                             drainMs,
-                                            drainMs > 0 ? handled.get() * 1000.0 / drainMs : 0,
+                                            drainMs > 0 ? commandsDone * 1000.0 / drainMs : 0,
                                             percentileMs(sorted, 0.50),
                                             percentileMs(sorted, 0.99),
                                             sorted.length == 0 ? 0 : sorted[sorted.length - 1] / 1_000_000.0,

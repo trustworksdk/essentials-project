@@ -116,3 +116,15 @@ demo depends on it.
 - **EF-1b — Scheduled-scan closing books.** Found while designing EF-1: the built-in evaluator never rolls on a
   scan (`asDecisionPolicy()` answers keep-open), and a scan rollover seeds no period id and carries no state
   forward. Separate change, after EF-1.
+- **EF-2 — Key-partitioned event processing on the shard-owned engine (candidate, from phase 1 measurements).**
+  `EventProcessor`/`ViewEventProcessor` always consume exclusively (one instance cluster-wide behind a fenced lock),
+  and so does a `SingleGlobalConsumer` inbox. On the shard-owned engine that throws away what the engine is for: it
+  already gives per-key order cluster-wide. Measured (`_demo_harness/CLAUDE.md`, "The ledger load scenario"): the
+  account views process ~700–800 events/s and trail a 20 000-command run by 13–25 s whatever the command side does,
+  while an inbox switched to `GlobalCompetingConsumers` splits keys across two instances with zero conflicts. A
+  processor mode where the subscription's events are keyed by aggregate id and consumed by every instance, with the
+  engine's per-key order instead of the fenced lock, is the candidate. Open: the subscription/resume-point model (today
+  one resume point per processor, owned by the lock holder), and how a view's catch-up and reset work when several
+  instances project.
+- **EF-3 — Doc fix (later, requested):** `LLM/LLM-foundation.md` and the `Inboxes` javadoc show `InboxConfig.builder().setInboxName(...)`; the builder's
+  methods are `inboxName(...)`, `messageConsumptionMode(...)`, etc.

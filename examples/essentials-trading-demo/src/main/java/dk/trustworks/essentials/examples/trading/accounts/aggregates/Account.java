@@ -63,7 +63,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
                              defaultPolicy = ClosingBooksDefaultPolicyType.TIME_BOUNDARY,
                              timeBoundary = ClosingBooksTimeBoundary.END_OF_DAY,
                              zoneId = "America/New_York")
-public class Account extends AggregateRoot<AccountGenerationId, AccountEvent, Account> {
+public class Account extends AggregateRoot<AccountGenerationId, AccountEvent, Account> implements HasClosingBooksPeriodId {
     private static final int COST_SCALE = 6;
 
     private AccountId                            accountId;
@@ -340,6 +340,15 @@ public class Account extends AggregateRoot<AccountGenerationId, AccountEvent, Ac
      */
     PeriodId periodId() {
         return periodId;
+    }
+
+    /**
+     * The framework's view of {@link #periodId()}. Required: with closing books enabled, the starter refuses to start
+     * when a time-boundary aggregate does not expose its period this way.
+     */
+    @Override
+    public String closingBooksPeriodId() {
+        return periodId.toString();
     }
 
     // ------------------------------------------------------------------------------------------------ Derived figures (§3.3)

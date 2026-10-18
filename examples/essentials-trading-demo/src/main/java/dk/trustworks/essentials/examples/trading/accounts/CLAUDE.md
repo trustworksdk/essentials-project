@@ -25,6 +25,9 @@ books `END_OF_DAY` in New York until EF-1, snapshots every 100 events.
   named like one of `brokerage`'s (hence `ReleaseHold`, `RollAccountBooks`).
 - **`Money` in a request body is `{"amount": 100.50, "currency": "USD"}` with a JSON *number*.** Essentials' deserializer
   refuses a string amount (`400`, `cannot coerce value "100.50"`).
+- **`Account` implements `HasClosingBooksPeriodId`, and must.** With `essentials.eventstore.closing-books.enabled`
+  (the `compose` profile, not the tests) the starter refuses to start a time-boundary aggregate without it. The tests
+  never enable it, so only a real run catches its absence.
 - **Snapshots**: test a change to `Account`'s state through `DefaultAggregateSnapshotStateAdapter` (see `AccountTest`),
   not a plain serializer — the adapter is what leaves the `AggregateRoot` base fields out.
 
