@@ -47,6 +47,9 @@ class ShardOwnedDurableQueueConsumerStopTest {
     private final CountDownLatch   letConsumeEnd = new CountDownLatch(1);
     private final List<String>     stopped       = new CopyOnWriteArrayList<>();
     private final AtomicBoolean    stopThrows    = new AtomicBoolean();
+    /** When set, the subscription's {@code stop()} counts down {@link #subscriptionStopping} and blocks until it is let go. */
+    private final AtomicReference<CountDownLatch> letSubscriptionStopEnd = new AtomicReference<>();
+    private final CountDownLatch   subscriptionStopping = new CountDownLatch(1);
     private final MessageQueue     queue         = proxy(MessageQueue.class, (method, args) -> {
         if (!"consume".equals(method)) {
             throw new UnsupportedOperationException(method);
@@ -59,6 +62,11 @@ class ShardOwnedDurableQueueConsumerStopTest {
             case "stop" -> {
                 started[0] = false;
                 stopped.add("subscription");
+                var blocking = letSubscriptionStopEnd.get();
+                if (blocking != null) {
+                    subscriptionStopping.countDown();
+                    awaitUninterruptibly(blocking);
+                }
                 if (stopThrows.get()) {
                     throw new IllegalStateException("simulated observer failure stopping");
                 }
@@ -173,6 +181,43 @@ class ShardOwnedDurableQueueConsumerStopTest {
             letConsumeEnd.countDown();
             logger.detachAppender(logged);
         }
+    }
+
+    /**
+     * A second stop called while the start is stopping the subscription for a stop that gave up waiting - each lane of it
+     * may drain for up to {@code shedGrace} and then hand back its units - returns within
+     * {@link ShardOwnedDurableQueueConsumer#STOP_WAITS_FOR_START}, as the first did, leaving that stopping to the start. It
+     * used to wait for the whole of the subscription's stop, spinning on the lock. For instance {@code DurableQueues.stop()}
+     * followed by an Inbox's {@code cancel()}, during a shutdown after a network partition.
+     */
+    @Test
+    void a_stop_called_while_the_start_stops_the_subscription_for_a_stop_that_did_not_wait_returns_within_its_wait() throws Exception {
+        var letStopEnd = new CountDownLatch(1);
+        letSubscriptionStopEnd.set(letStopEnd);
+        var starting = CompletableFuture.runAsync(consumer::start);
+        try {
+            assertThat(consuming.await(10, TimeUnit.SECONDS)).as("premise: the start is inside the queue's consume()").isTrue();
+            assertThat(stopOnAnotherThread(true).returned()).as("premise: the first stop returned while consume() had not").isTrue();
+            letConsumeEnd.countDown();
+            assertThat(subscriptionStopping.await(10, TimeUnit.SECONDS)).as("premise: the start is stopping the subscription consume() returned")
+                                                                        .isTrue();
+
+            var secondStop = stopOnAnotherThread(false);
+
+            assertThat(secondStop.returned()).as("the second stop returned while the subscription's stop had not").isTrue();
+            assertThat(secondStop.took()).as("the second stop waits no longer than its wait, and a margin")
+                                         .isLessThan(ShardOwnedDurableQueueConsumer.STOP_WAITS_FOR_START.plusMillis(1_500));
+            assertThat(starting).as("premise: the start was still stopping the subscription when the second stop returned").isNotDone();
+            assertThat(consumer.isStarted()).isFalse();
+        } finally {
+            letConsumeEnd.countDown();
+            letStopEnd.countDown();
+        }
+
+        starting.get(10, TimeUnit.SECONDS);
+
+        assertThat(stopped).as("the subscription was stopped once, by the start").containsExactly("subscription");
+        assertThat(consumer.isStarted()).as("the start left the consumer not started").isFalse();
     }
 
     private static List<String> waitingToStart(ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> logged) {
