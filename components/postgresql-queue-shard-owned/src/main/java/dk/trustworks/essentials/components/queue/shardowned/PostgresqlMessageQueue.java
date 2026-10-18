@@ -101,15 +101,16 @@ public final class PostgresqlMessageQueue implements MessageQueue {
      */
     private final AtomicBoolean                 started            = new AtomicBoolean();
     /**
-     * Held across the whole of {@link #consume}'s registration and starts, {@link #start()} and {@link #stop()}, so they
-     * run one at a time. A lock rather than {@code consumers}' monitor, which it used to be, because a stop must be able to
-     * stop waiting for it: a {@code consume()} or {@code start()} holds it across its consumers' starts, which register
-     * the instance and lease units on the database, and nothing in this queue bounds those - a statement caught by a
-     * network partition blocks until the driver's {@code socketTimeout}, and without one indefinitely. A {@code stop()}
-     * waiting on the monitor never reached the 2 s budget each {@link ShardOwnedQueue#stop()} keeps to. It now waits up to
-     * {@link ShardOwnedQueue#SHUTDOWN_BUDGET} for this lock, on an interrupted thread not at all, and then stops without
-     * it ({@link #stopWhileStarting}); what the holder still owes the stop, it does itself before it lets go
-     * ({@link #letGoOfLifecycle}).
+     * Held across the whole of {@link #consume}'s registration and starts, {@link #start()}, a {@link Subscription#start()}
+     * and {@link #stop()}, so they run one at a time. A lock rather than {@code consumers}' monitor, which it used to be,
+     * because a stop must be able to stop waiting for it: a {@code consume()} or a start holds it across its consumers'
+     * starts, which register the instance and lease units on the database, and nothing in this queue bounds those - a
+     * statement caught by a network partition blocks until the driver's {@code socketTimeout}, and without one
+     * indefinitely. A {@code stop()} waiting on the monitor never reached the 2 s budget each
+     * {@link ShardOwnedQueue#stop()} keeps to. It now waits up to {@link ShardOwnedQueue#SHUTDOWN_BUDGET} for this lock,
+     * on an interrupted thread not at all, and then stops without it ({@link #stopWhileStarting}); what the holder still
+     * owes the stop, it does itself before it lets go ({@link #letGoOfLifecycle}). A stop on the holder's own thread
+     * never takes it again ({@link #stopFromInsideTheHolder}).
      */
     private final ReentrantLock                 lifecycleLock      = new ReentrantLock();
     /**
@@ -129,9 +130,14 @@ public final class PostgresqlMessageQueue implements MessageQueue {
      */
     private       List<ShardOwnedQueue>         beingStarted       = List.of();
     /**
-     * Whether a stop that did not get {@link #lifecycleLock} has stopped the queue while a {@code consume()} or
-     * {@code start()} held it, so the holder must stop every consumer again once its own starts have returned: it may
-     * have started some after the stop stopped them, and it registers its new pair after.
+     * Whether a stop has marked the queue not started while a {@code consume()}, a {@code start()} or a
+     * {@link Subscription#start()} held {@link #lifecycleLock}, so that holder must stop every consumer again once its
+     * own starts have returned: it may have started some after the stop, and a {@code consume()} registers its new pair
+     * after. Set, only while the holder is {@link Holder#STARTING}, by a stop that did not get the lock
+     * ({@link #stopWhileStarting}), and by a stop on the holder's own thread - a {@link QueueObserver} told of an
+     * acquisition - which never takes the lock again ({@link #stopFromInsideTheHolder}). The holder of either kind may
+     * be a {@code Subscription.start()} as well as the queue's {@code consume()} or {@code start()}. Cleared by the holder
+     * as it does the owed stop ({@link #letGoOfLifecycle}).
      */
     private       boolean                       stopOwed;
     /**
@@ -622,6 +628,8 @@ public final class PostgresqlMessageQueue implements MessageQueue {
         // unordered consumer nobody had a handle to, and a caller retrying consume() took the next
         // subscription index, so the process registered as two instances and fairShare stranded half
         // of both lanes — the exact failure the per-subscription identity below exists to avoid.
+        // A critical error is the exception: it stops nothing, so whatever it left running is
+        // registered, and the queue marked started, for a stop() to reach (below).
         //
         // Calling consume() starts the queue if it was not already started, which is what every
         // caller of this contract expects and what the tests rely on.
@@ -637,7 +645,20 @@ public final class PostgresqlMessageQueue implements MessageQueue {
             synchronized (handOver) {
                 beingStarted = pair;
             }
-            startEachOrStopAll(pair, this::stopIsOwed);
+            try {
+                startEachOrStopAll(pair, this::stopIsOwed);
+            } catch (RuntimeException | Error e) {
+                // A non-critical failure has stopped both lanes, and nothing is registered (above). A critical error may
+                // have left one running - a QueueObserver throwing it for the unordered lane's acquisition escapes that
+                // lane's start with the lane running - so the pair is registered and the queue marked started, as the
+                // queue's start() leaves it, and a stop() or close() still reaches it. Unregistered, nothing did.
+                if (Exceptions.isCriticalError(e)) {
+                    consumers.add(unorderedConsumer);
+                    consumers.add(orderedConsumer);
+                    markStartedUnlessStopOwed();
+                }
+                throw e;
+            }
             // A competing consumer is legal and occasionally wanted, but the common reason for a
             // second consume() is the belief that one call serves the ordered lane and another the
             // unordered one. It does not — every consume() serves both, and the lane reaches the
@@ -659,15 +680,7 @@ public final class PostgresqlMessageQueue implements MessageQueue {
             }
             consumers.add(unorderedConsumer);
             consumers.add(orderedConsumer);
-            // Not when a stop that did not get the lock is owed: that stop has already marked the queue not started and
-            // may have returned, and letGoOfLifecycle only marks it not started again after it has waited for that stop's
-            // stopping, so isStarted() read true in between. Under handOver, where that stop marks it, so a stop arriving
-            // after this check still finds the flag set and clears it.
-            synchronized (handOver) {
-                if (!stopOwed) {
-                    started.set(true);
-                }
-            }
+            markStartedUnlessStopOwed();
         } finally {
             letGoOfLifecycle();
         }
@@ -702,13 +715,49 @@ public final class PostgresqlMessageQueue implements MessageQueue {
              * stops added to it as suppressed, so the subscription is left not started and a later {@code start()} runs
              * again ({@link #startEachOrStopAll}). It used to start them one after the other and stop at the first throw:
              * a {@link QueueObserver} throwing for the unordered lane's acquisition left that lane running and the
-             * ordered lane never started.
+             * ordered lane never started. A critical error escapes untouched, with nothing stopped, and the queue is
+             * marked started, as the queue's {@code start()} leaves it, so the queue's {@code stop()} and {@code close()}
+             * still reach a lane it left running; it used to leave the queue not started after a queue {@code stop()}, and
+             * those then stopped nothing.
+             * <p>
+             * Runs under the queue's lifecycle lock, one at a time with the queue's {@code consume()}, {@code start()} and
+             * {@code stop()}, and marks the queue started once both lanes have, so the queue's {@code stop()} and
+             * {@code close()} stop them again. A {@code start()} of the queue called afterwards then does nothing, the queue
+             * being started: another subscription of it that the queue's {@code stop()} stopped stays stopped until its own
+             * {@code start()}, or until the queue is stopped and started again. Called while a {@code consume()} or start of
+             * the queue is still starting its consumers, this waits for it, as the queue's {@code start()} does; and a queue
+             * {@code stop()} that gave up waiting for this one is handled as it is for the queue's {@code start()}: this starts
+             * neither lane it has not begun, stops every consumer of the queue again once the one it is starting returns, and
+             * leaves the queue not started. It used to take none of that: a {@code start()} after the queue's
+             * {@code stop()} brought both lanes back with the queue still reporting itself not started, and every later
+             * {@code stop()} or {@code close()} of the queue, finding it not started, stopped nothing, so the lanes leased,
+             * heartbeated and dispatched until the process exited.
              */
             @Override
             public void start() {
-                startEachOrStopAll(List.of(unorderedConsumer, orderedConsumer), () -> false);
+                holdLifecycle(Holder.STARTING, "start a subscription of");
+                try {
+                    try {
+                        startEachOrStopAll(List.of(unorderedConsumer, orderedConsumer), PostgresqlMessageQueue.this::stopIsOwed);
+                    } catch (RuntimeException | Error e) {
+                        // A non-critical failure has stopped both lanes, and the queue stays as it was. A critical error
+                        // may have left one running, so the queue is marked started, as the queue's start() leaves it, and
+                        // a stop() or close() still reaches it.
+                        if (Exceptions.isCriticalError(e)) {
+                            markStartedUnlessStopOwed();
+                        }
+                        throw e;
+                    }
+                    markStartedUnlessStopOwed();
+                } finally {
+                    letGoOfLifecycle();
+                }
             }
 
+            /**
+             * Stops this subscription's two lanes only, without the queue's lifecycle lock, and leaves the queue marked as
+             * it was: a {@code stop()} of the queue still stops them, each lane's stop doing nothing the second time.
+             */
             @Override
             public void stop() {
                 stopEach(List.of(unorderedConsumer, orderedConsumer));
@@ -1002,8 +1051,14 @@ public final class PostgresqlMessageQueue implements MessageQueue {
         // disagreeing about which consumers were running.
         holdLifecycle(Holder.STARTING, "start");
         try {
-            if (!started.compareAndSet(false, true)) {
-                return;
+            // Under handOver, and not while a stop is owed, as consume() sets it (markStartedUnlessStopOwed). A stop that
+            // did not get the lock, finding this start STARTING, has already marked the queue not started and may have
+            // returned; setting the flag after it made isStarted() read true until letGoOfLifecycle, which does that
+            // stop's work, cleared it again.
+            synchronized (handOver) {
+                if (stopOwed || !started.compareAndSet(false, true)) {
+                    return;
+                }
             }
             try {
                 startEachOrStopAll(consumers, this::stopIsOwed);
@@ -1033,31 +1088,42 @@ public final class PostgresqlMessageQueue implements MessageQueue {
      * was thrown once all of them have stopped, the others added to it as suppressed. A critical error
      * ({@link Exceptions#isCriticalError}) propagates at once, leaving the consumers after it unstopped.
      * <p>
-     * Called while a {@link #consume} or {@link #start()} on another thread is still starting its consumers - which
-     * registers the instance and leases units on the database, and nothing in this queue bounds that - this waits for it
-     * up to the 2 s {@link ShardOwnedQueue#SHUTDOWN_BUDGET}, and no longer; on an interrupted thread not at all, returning
-     * with the interrupt flag still set. Past that, the queue is not started from then on, and this stops every
-     * registered consumer and the pair a {@code consume()} is starting without waiting for it: the consumer still leasing
-     * waits for its start up to its own 2 s budget and then hands this stop's work to it ({@link ShardOwnedQueue#stop()}),
-     * the others stop as usual, and one not started yet has nothing to stop. The {@code consume()} or {@code start()}
-     * then starts none of the consumers it had not begun, stops every consumer again once its starts have returned -
-     * logging at WARN rather than throwing what a {@link QueueObserver} throws meanwhile, since this stop's caller has
-     * already returned - and leaves the queue not started; a {@code consume()} still registers its pair and returns its
-     * {@link Subscription}. A stop called while another stop holds the lock past the budget returns at once: that stop is
-     * stopping every consumer, and nothing can start one before it is done.
+     * Called while a {@link #consume}, a {@link #start()} or a {@link Subscription#start()} on another thread is still
+     * starting its consumers - which registers the instance and leases units on the database, and nothing in this queue
+     * bounds that - this waits for it up to the 2 s {@link ShardOwnedQueue#SHUTDOWN_BUDGET}, and no longer; on an
+     * interrupted thread not at all, returning with the interrupt flag still set. Past that, the queue is not started from
+     * then on, and this stops every registered consumer and the pair a {@code consume()} is starting without waiting for
+     * it: the consumer still leasing waits for its start up to its own 2 s budget and then hands this stop's work to it
+     * ({@link ShardOwnedQueue#stop()}), the others stop as usual, and one not started yet has nothing to stop. That
+     * {@code consume()} or start then starts none of the consumers it had not begun, stops every consumer again once its
+     * starts have returned - logging at WARN rather than throwing what a {@link QueueObserver} throws meanwhile, since this
+     * stop's caller has already returned - and leaves the queue not started; a {@code consume()} still registers its pair
+     * and returns its {@link Subscription}. A stop called while another stop holds the lock past the budget returns at
+     * once: that stop is stopping every consumer, and nothing can start one before it is done.
      * <p>
      * A stop that gave up waiting so returns <b>before</b> the consumer still leasing has released its units and
      * deregistered the instance ({@link ShardOwnedQueue#stop()}), though {@link #isStarted()} is false from then on. A
-     * {@link #start()} or {@code consume()} called afterwards waits for the {@code consume()} or {@code start()} still
+     * {@link #start()} or {@code consume()} called afterwards waits for the {@code consume()} or start still
      * running. And closing the {@code DataSource} before that call returns leaves the release and the deregistration to
      * fail against a closed pool: the units stay unserved until this instance's membership row is older than the lease
      * TTL, as after a crash. Stopping a {@code ShardRuntime} passed to {@code setRuntime} before then costs the drain
      * instead: the release and the deregistration go through the queue's {@code DataSource} and still succeed, but
      * handlers still running on units that consumer adopted before the stop are no longer waited for, so their
      * acknowledgements may be lost and those messages redelivered.
+     * <p>
+     * Called on the thread of a {@code consume()}, a {@link #start()} or a {@link Subscription#start()} of this queue
+     * still starting its consumers - a {@link QueueObserver} told of an acquisition, say - this marks the queue not
+     * started and returns without stopping anything itself: that start then starts none of the consumers it had not
+     * begun, and stops every consumer before it returns, leaving the queue not started, as after a stop that gave up
+     * waiting for it. Called on the thread of a stop, from an observer told of a release, it does nothing: that stop is
+     * stopping every consumer.
      */
     @Override
     public void stop() {
+        if (lifecycleLock.isHeldByCurrentThread()) {
+            stopFromInsideTheHolder();
+            return;
+        }
         var     interrupted = false;
         boolean locked;
         try {
@@ -1102,26 +1168,50 @@ public final class PostgresqlMessageQueue implements MessageQueue {
     }
 
     /**
+     * A {@link #stop()} on the thread that holds {@link #lifecycleLock} - a {@link QueueObserver} told of an acquisition
+     * while a {@code consume()} or a start starts its consumers, or of a release while a stop stops them. Inside a start
+     * it is owed exactly as a stop that did not get the lock is ({@link #stopWhileStarting}), less the stopping, which
+     * that start does before it returns ({@link #letGoOfLifecycle}); {@link #stopsWithoutLock} is left alone, as the
+     * holder would wait for itself. Inside a stop there is nothing left to do. It used to take the lock again, reentrantly,
+     * and do what a stop holding it does: nothing inside a {@code consume()}, which then marked the queue started; and
+     * inside a start, stop every consumer, after which the start went on to start the ones after the observer's, with the
+     * queue marked not started, so no later {@code stop()} reached them.
+     */
+    private void stopFromInsideTheHolder() {
+        synchronized (handOver) {
+            if (holder == Holder.STARTING) {
+                stopOwed = true;
+                started.set(false);
+            }
+        }
+    }
+
+    /**
      * What the holder of {@link #lifecycleLock} is doing, for a {@link #stop()} that did not get it.
      */
     private enum Holder {
         /** Just taken, or about to be let go of: the stop tries the lock again. */
         NONE,
-        /** A {@code consume()} or {@code start()}: the stop stops the queue without the lock, and the holder owes it. */
+        /**
+         * A {@code consume()}, a {@code start()} or a {@link Subscription#start()}: the stop stops the queue without the
+         * lock, and the holder owes it.
+         */
         STARTING,
         /** A {@code stop()}, which stops every consumer: the stop has nothing left to do. */
         STOPPING
     }
 
     /**
-     * Take {@link #lifecycleLock}, waiting as long as it takes, for a {@code consume()} or {@code start()}: a stop holding
-     * it is bounded by each consumer's own stop, and a start holding it is what this start has to wait for. That start
-     * is not bounded: its consumers' database work blocks as long as a statement does, and after a {@link #stop()} that
-     * gave up waiting for it, it stops every consumer again before it lets go ({@link #letGoOfLifecycle}). So the wait,
-     * like a plain {@code lock()}, goes on through the thread's interrupt, but it is not silent: once it has waited
-     * {@link ShardOwnedQueue#SHUTDOWN_BUDGET}, it logs one WARN saying what holds the lock.
+     * Take {@link #lifecycleLock}, waiting as long as it takes, for a {@code consume()}, a {@code start()} or a
+     * {@link Subscription#start()}: a stop holding it is bounded by each consumer's own stop, and a start holding it is
+     * what this start has to wait for. That start is not bounded: its consumers' database work blocks as long as a
+     * statement does, and after a {@link #stop()} that gave up waiting for it, it stops every consumer again before it
+     * lets go ({@link #letGoOfLifecycle}). So the wait, like a plain {@code lock()}, goes on through the thread's
+     * interrupt, but it is not silent: once it has waited {@link ShardOwnedQueue#SHUTDOWN_BUDGET}, it logs one WARN
+     * saying what holds the lock.
      *
-     * @param operation {@code "consume"} or {@code "start"}, the call waiting, for the WARN
+     * @param operation {@code "consume"}, {@code "start"} or {@code "start a subscription of"}, the call waiting, for
+     *                  the WARN
      */
     private void holdLifecycle(Holder what, String operation) {
         var interrupted = false;
@@ -1146,10 +1236,11 @@ public final class PostgresqlMessageQueue implements MessageQueue {
                     warned = true;
                     if (heldBy == Holder.STARTING) {
                         log.warn("Instance {} has waited {} and is still waiting to {} queue {}: an earlier consume() or start() of "
-                                         + "the queue is still starting its consumers - registering the instance and leasing its "
-                                         + "units, and, if a stop gave up waiting for it, stopping every consumer again once those "
-                                         + "statements return. Nothing in this queue bounds that wait: a statement that hangs ends at "
-                                         + "the driver's socketTimeout, and without one never",
+                                         + "the queue, or start() of one of its subscriptions, is still starting its consumers - "
+                                         + "registering the instance and leasing its units, and, if a stop gave up waiting for "
+                                         + "it, stopping every consumer again once those statements return. Nothing in this "
+                                         + "queue bounds that wait: a statement that hangs ends at the driver's socketTimeout, "
+                                         + "and without one never",
                                  instanceId, ShardOwnedQueue.SHUTDOWN_BUDGET, operation, queueId);
                     } else {
                         log.warn("Instance {} has waited {} and is still waiting to {} queue {}: a stop of the queue is still "
@@ -1167,7 +1258,8 @@ public final class PostgresqlMessageQueue implements MessageQueue {
     }
 
     private void markHeld(Holder what) {
-        // A reentrant hold (an observer stopping the queue from inside a start, say) leaves the outer holder's word.
+        // A reentrant hold (an observer starting the queue from inside a consume(), say) leaves the outer holder's word. A
+        // stop never holds the lock reentrantly: on the holder's thread it is owed instead (stopFromInsideTheHolder).
         if (lifecycleLock.getHoldCount() == 1) {
             synchronized (handOver) {
                 holder = what;
@@ -1268,21 +1360,38 @@ public final class PostgresqlMessageQueue implements MessageQueue {
     }
 
     /**
-     * A {@link #stop()} that did not get {@link #lifecycleLock} from a {@code consume()} or {@code start()} still starting
-     * its consumers: it has marked the stop owed and the queue not started, and now stops {@code toStop} without waiting
-     * for the holder.
+     * Mark the queue started, for a {@code consume()} or a {@link Subscription#start()} holding {@link #lifecycleLock},
+     * unless a stop is owed ({@link #stopOwed}). That stop has already marked the queue not started, and may have
+     * returned; {@link #letGoOfLifecycle} marks it not started again only once it has waited for that stop's stopping, so
+     * marking it here made {@link #isStarted()} read true in between. Under {@link #handOver}, where such a stop marks it,
+     * so a stop arriving after this check still finds the flag set and clears it.
+     */
+    private void markStartedUnlessStopOwed() {
+        synchronized (handOver) {
+            if (!stopOwed) {
+                started.set(true);
+            }
+        }
+    }
+
+    /**
+     * A {@link #stop()} that did not get {@link #lifecycleLock} from a {@code consume()}, a {@code start()} or a
+     * {@link Subscription#start()} still starting its consumers: it has marked the stop owed and the queue not started,
+     * and now stops {@code toStop} without waiting for the holder.
      */
     private void stopWhileStarting(List<ShardOwnedQueue> toStop, boolean interrupted) {
         try {
             if (interrupted) {
-                log.warn("Instance {} was interrupted while its stop of queue {} waited for a consume() or start() still starting "
-                                 + "its consumers, and stopped the queue without it. Each consumer still leasing does the stop's work "
-                                 + "itself once its statements return, and the consume() or start() stops every consumer again",
+                log.warn("Instance {} was interrupted while its stop of queue {} waited for a consume() or start() of "
+                                 + "the queue, or a start() of one of its subscriptions, still starting its consumers, and "
+                                 + "stopped the queue without it. Each consumer still leasing does the stop's work itself once "
+                                 + "its statements return, and that consume() or start() stops every consumer again",
                          instanceId, queueId);
             } else {
-                log.warn("Instance {} gave up waiting {} for a consume() or start() of queue {} still starting its consumers, and "
-                                 + "stopped the queue without it. Each consumer still leasing does the stop's work itself once its "
-                                 + "statements return, and the consume() or start() stops every consumer again",
+                log.warn("Instance {} gave up waiting {} for a consume() or start() of queue {}, or a start() of one "
+                                 + "of its subscriptions, still starting its consumers, and stopped the queue without it. Each "
+                                 + "consumer still leasing does the stop's work itself once its statements return, and that "
+                                 + "consume() or start() stops every consumer again",
                          instanceId, ShardOwnedQueue.SHUTDOWN_BUDGET, queueId);
             }
             stopEach(toStop);
@@ -1319,8 +1428,11 @@ public final class PostgresqlMessageQueue implements MessageQueue {
      * critical error escapes untouched, with nothing stopped, as a consumer's own start leaves it; a stop's critical error
      * ends the stopping at once and escapes, with the start's failure added to it as suppressed.
      * <p>
-     * Starts none of those after the moment {@code stopOwed} reports a stop that did not wait for this one
-     * ({@link #stopWhileStarting}): its caller stops every consumer again before it lets go of the lock.
+     * Starts none of those after the moment {@code stopOwed} reports a stop owed ({@link #stopOwed}) to its caller - a
+     * {@code consume()}, a {@code start()} or a {@link Subscription#start()} holding the lifecycle lock - by a stop that
+     * did not get the lock ({@link #stopWhileStarting}) or by one on the caller's own thread, from a
+     * {@link QueueObserver} told of an acquisition ({@link #stopFromInsideTheHolder}): that caller stops every consumer
+     * again before it lets go of the lock ({@link #letGoOfLifecycle}).
      */
     private static void startEachOrStopAll(List<ShardOwnedQueue> consumers, BooleanSupplier stopOwed) {
         try {

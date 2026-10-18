@@ -1799,11 +1799,15 @@ class ShardOwnedLifecycleIT {
      * it waited for the whole of a start caught by a network partition and never reached the timed wait each
      * {@code ShardOwnedQueue.stop()} keeps to. It now waits up to the 2 s budget for the lock (on an interrupted thread
      * not at all), then stops without it: the unordered lane's consumer, still leasing, waits up to its own 2 s budget and
-     * hands the stop's work to its start; the {@code consume()} or {@code start()} then starts no further lane and stops
-     * both lanes again. A trigger holds the unordered lane's start inside the acquire of shard 1 for 10 s.
+     * hands the stop's work to its start; the {@code consume()} or start then starts no further lane and stops both lanes
+     * again. A trigger holds the unordered lane's start inside the acquire of shard 1 for 10 s.
+     * <p>
+     * A {@code Subscription.start()} after the queue's stop is such a start too. It took neither the queue's lock nor its
+     * started flag, so the stop, finding the queue not started, returned at once having stopped nothing, and the
+     * subscription's start went on to start both lanes, which no later stop of the queue reached.
      */
     @ParameterizedTest
-    @CsvSource({"consume, false", "start, false", "consume, true"})
+    @CsvSource({"consume, false", "start, false", "consume, true", "subscription, false"})
     void a_message_queue_stop_called_while_a_start_is_still_leasing_returns_within_its_budget_and_leaves_nothing_running(String startedBy,
                                                                                                                           boolean interrupted) throws Exception {
         var instanceId   = "spi-stop-mid-" + startedBy + "-" + interrupted;
@@ -1820,7 +1824,8 @@ class ShardOwnedLifecycleIT {
                           .until(() -> subscription.get().unorderedShardsHeld() > 0 && subscription.get().orderedUnitsHeld() > 0);
                 queue.stop();
                 slowTheAcquireOf("unordered", instanceId, 1, 10);
-                starting = CompletableFuture.runAsync(queue::start);
+                starting = "subscription".equals(startedBy) ? CompletableFuture.runAsync(subscription.get()::start)
+                                                            : CompletableFuture.runAsync(queue::start);
             }
             Awaitility.await().atMost(Duration.ofSeconds(10)).until(this::aHeartbeatIsSleeping);
 
@@ -1966,6 +1971,206 @@ class ShardOwnedLifecycleIT {
             releaseSecondStop.countDown();
             queueLogger.detachAppender(holdingAppender);
             dropSlowAcquire();
+        }
+    }
+
+    /**
+     * A {@code MessageQueue.stop()} called by an observer from inside a {@code consume()} or {@code start()} - on its first
+     * acquisition, which a lane's start tells on the starting thread - stops the queue: once that start returns, the queue
+     * is not started, neither lane is, and no lease or membership row names the instance. The stop took the queue's
+     * lifecycle lock again, reentrantly, and did what a stop holding it does. Inside a {@code consume()}, where the queue
+     * was not started yet, that was nothing, and the {@code consume()} then marked the queue started with both lanes
+     * running. Inside a {@code start()}, it stopped every consumer, and the start went on to start the ordered lane, with
+     * the queue marked not started, so no later stop reached it.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"consume", "start"})
+    void a_message_queue_stop_called_by_an_observer_inside_a_start_stops_the_queue(String startedBy) throws Exception {
+        var instanceId        = "spi-observer-stops-" + startedBy;
+        var stopping          = new AtomicBoolean();
+        var stopReturned      = new AtomicBoolean();
+        var startedAfterStop  = new AtomicReference<Boolean>();
+        var subscription      = new AtomicReference<Subscription>();
+        try (var queue = new PostgresqlMessageQueue(dataSource, QUEUE_ID, SHARD_COUNT, instanceId)) {
+            queue.addObserver(new QueueObserver() {
+                @Override
+                public void shardOwnershipChanged(int shard, boolean acquired) {
+                    if (acquired && stopping.compareAndSet(true, false)) {
+                        queue.stop();
+                        stopReturned.set(true);
+                        startedAfterStop.set(queue.isStarted());
+                    }
+                }
+            });
+            try {
+                if ("consume".equals(startedBy)) {
+                    stopping.set(true);
+                    subscription.set(consumeUnchecked(queue));
+                } else {
+                    subscription.set(consumeUnchecked(queue));
+                    Awaitility.await().atMost(Duration.ofSeconds(20))
+                              .alias("premise: both lanes hold units before the queue is stopped and started again")
+                              .until(() -> subscription.get().unorderedShardsHeld() > 0 && subscription.get().orderedUnitsHeld() > 0);
+                    queue.stop();
+                    stopping.set(true);
+                    queue.start();
+                }
+
+                assertThat(stopReturned).as("premise: the observer's stop was called inside the %s() and returned", startedBy).isTrue();
+                assertThat(startedAfterStop.get()).as("the queue read not started once the observer's stop returned").isFalse();
+                assertThat(queue.isStarted()).as("the %s() left the queue not started", startedBy).isFalse();
+                assertThat(subscription.get().isStarted()).as("neither lane is started").isFalse();
+                Awaitility.await().during(Duration.ofSeconds(1)).atMost(Duration.ofSeconds(10)).until(
+                        () -> !instanceRegistered(instanceId) && unitsOwnedBy("unordered", instanceId) == 0 && unitsOwnedBy("ordered", instanceId) == 0);
+            } finally {
+                // What the queue's stop did not reach, so a failure leaves nothing leasing into the next test.
+                if (subscription.get() != null) {
+                    subscription.get().stop();
+                }
+            }
+        }
+    }
+
+    /**
+     * A {@code MessageQueue.start()} called while a stop is owed - here by an observer that stops the queue and then starts
+     * it again from inside a {@code consume()} - does not mark the queue started: the stop has marked it not started and
+     * returned, and the {@code consume()} stops every consumer before it returns. It marked the queue started before it
+     * looked at the stop owed, so {@code isStarted()} read true after that stop had returned, until the {@code consume()}
+     * marked it not started again. A stop that gave up waiting for the {@code start()} reaches the same moment from another
+     * thread when it lands between the start taking the lock and marking the queue started, which no test can time.
+     */
+    @Test
+    void a_message_queue_start_called_while_a_stop_is_owed_does_not_mark_the_queue_started() throws Exception {
+        var instanceId        = "spi-start-while-stop-owed";
+        var stopping          = new AtomicBoolean(true);
+        var startReturned     = new AtomicBoolean();
+        var startedAfterStart = new AtomicReference<Boolean>();
+        try (var queue = new PostgresqlMessageQueue(dataSource, QUEUE_ID, SHARD_COUNT, instanceId)) {
+            queue.addObserver(new QueueObserver() {
+                @Override
+                public void shardOwnershipChanged(int shard, boolean acquired) {
+                    if (acquired && stopping.compareAndSet(true, false)) {
+                        queue.stop();
+                        queue.start();
+                        startReturned.set(true);
+                        startedAfterStart.set(queue.isStarted());
+                    }
+                }
+            });
+
+            var subscription = consumeUnchecked(queue);
+            try {
+                assertThat(startReturned).as("premise: the observer's stop and start were called inside the consume() and returned").isTrue();
+                assertThat(startedAfterStart.get()).as("the start, called while the stop was owed, left the queue not started").isFalse();
+                assertThat(queue.isStarted()).as("the consume() left the queue not started").isFalse();
+                assertThat(subscription.isStarted()).as("neither lane is started").isFalse();
+                Awaitility.await().during(Duration.ofSeconds(1)).atMost(Duration.ofSeconds(10)).until(
+                        () -> !instanceRegistered(instanceId) && unitsOwnedBy("unordered", instanceId) == 0 && unitsOwnedBy("ordered", instanceId) == 0);
+            } finally {
+                subscription.stop();
+            }
+        }
+    }
+
+    /**
+     * A {@code Subscription.start()} after the queue's {@code stop()} marks the queue started, so the queue's
+     * {@code close()} stops both lanes again: no lease or membership row names the instance afterwards. It used to start
+     * both lanes with the queue still reporting itself not started, and the queue's {@code close()} (its {@code stop()})
+     * then found it not started and stopped nothing, so the lanes leased, heartbeated and dispatched until the process
+     * exited.
+     */
+    @Test
+    void a_subscription_started_after_the_message_queue_stopped_is_stopped_by_closing_the_queue() throws Exception {
+        var instanceId = "spi-subscription-restart";
+        var queue      = new PostgresqlMessageQueue(dataSource, QUEUE_ID, SHARD_COUNT, instanceId);
+        var subscribed = new AtomicReference<Subscription>();
+        try {
+            var subscription = consumeUnchecked(queue);
+            subscribed.set(subscription);
+            Awaitility.await().atMost(Duration.ofSeconds(20))
+                      .alias("premise: both lanes hold units before the queue is stopped")
+                      .until(() -> subscription.unorderedShardsHeld() > 0 && subscription.orderedUnitsHeld() > 0);
+            queue.stop();
+            assertThat(subscription.isStarted()).as("premise: the queue's stop stopped both lanes").isFalse();
+
+            subscription.start();
+
+            assertThat(queue.isStarted()).as("the subscription's start marked the queue started").isTrue();
+            Awaitility.await().atMost(Duration.ofSeconds(20))
+                      .alias("premise: both lanes hold units again")
+                      .until(() -> subscription.unorderedShardsHeld() > 0 && subscription.orderedUnitsHeld() > 0);
+
+            queue.close();
+
+            assertThat(queue.isStarted()).as("the queue's close() left it not started").isFalse();
+            assertThat(subscription.isStarted()).as("the queue's close() stopped both lanes").isFalse();
+            Awaitility.await().during(Duration.ofSeconds(1)).atMost(Duration.ofSeconds(10)).until(
+                    () -> !instanceRegistered(instanceId) && unitsOwnedBy("unordered", instanceId) == 0 && unitsOwnedBy("ordered", instanceId) == 0);
+        } finally {
+            queue.close();
+            // What the queue's close() did not reach, so a failure leaves nothing leasing into the next test.
+            if (subscribed.get() != null) {
+                subscribed.get().stop();
+            }
+        }
+    }
+
+    /**
+     * A {@code consume()} or a {@code Subscription.start()} - after the queue's {@code stop()} - escaping with a critical
+     * error leaves the queue marked started, as the queue's {@code start()} does, so the queue's {@code close()} stops
+     * the lane it left running: an observer throws a {@link LinkageError} for the first acquisition, which escapes the
+     * unordered lane's start with that lane running and is not undone. Both left the queue not started, and the
+     * {@code consume()} left its pair unregistered too, so {@code close()}, finding the queue not started, stopped
+     * nothing, and the unordered lane leased and heartbeated until the process exited.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"consume", "subscription"})
+    void a_start_escaping_with_a_critical_error_leaves_the_message_queue_started_so_closing_it_stops_the_lane_left_running(String startedBy)
+            throws Exception {
+        var instanceId   = "spi-critical-" + startedBy;
+        var critical     = new LinkageError("simulated critical error from an observer");
+        var throwing     = new AtomicBoolean();
+        var queue        = new PostgresqlMessageQueue(dataSource, QUEUE_ID, SHARD_COUNT, instanceId);
+        var subscription = new AtomicReference<Subscription>();
+        queue.addObserver(new QueueObserver() {
+            @Override
+            public void shardOwnershipChanged(int shard, boolean acquired) {
+                if (acquired && throwing.compareAndSet(true, false)) {
+                    throw critical;
+                }
+            }
+        });
+        try {
+            Throwable thrown;
+            if ("consume".equals(startedBy)) {
+                throwing.set(true);
+                thrown = catchThrowable(() -> subscription.set(consumeUnchecked(queue)));
+            } else {
+                subscription.set(consumeUnchecked(queue));
+                Awaitility.await().atMost(Duration.ofSeconds(20))
+                          .alias("premise: both lanes hold units before the queue is stopped")
+                          .until(() -> subscription.get().unorderedShardsHeld() > 0 && subscription.get().orderedUnitsHeld() > 0);
+                queue.stop();
+                throwing.set(true);
+                thrown = catchThrowable(() -> subscription.get().start());
+            }
+
+            assertThat(thrown).as("premise: the %s escaped with the observer's critical error", startedBy).isSameAs(critical);
+            assertThat(unitsOwnedBy("unordered", instanceId)).as("premise: the unordered lane was left running, leasing").isPositive();
+            assertThat(queue.isStarted()).as("the critical error left the queue started").isTrue();
+
+            queue.close();
+
+            assertThat(queue.isStarted()).as("the queue's close() left it not started").isFalse();
+            Awaitility.await().during(Duration.ofSeconds(1)).atMost(Duration.ofSeconds(10)).until(
+                    () -> !instanceRegistered(instanceId) && unitsOwnedBy("unordered", instanceId) == 0 && unitsOwnedBy("ordered", instanceId) == 0);
+        } finally {
+            queue.close();
+            // What the queue's close() did not reach, so a failure leaves nothing leasing into the next test. A consume()
+            // that escaped returned no subscription to stop.
+            if (subscription.get() != null) {
+                subscription.get().stop();
+            }
         }
     }
 

@@ -89,6 +89,10 @@ public interface QueueObserver {
      * {@code stopAbruptly()}, which never waits for one. The start then tells its acquisitions, and for a {@code stop()}
      * the releases; what the observer throws there, for either stop, is logged at WARN, and escapes neither the stop,
      * which has returned, nor the start.
+     * <p>
+     * A start tells its acquisitions on its own thread. A {@code MessageQueue.stop()} called from here then marks the queue
+     * not started and returns, and the {@code consume()} or start it was called from does the stopping before it returns:
+     * it starts no further consumer and stops every one.
      */
     default void shardOwnershipChanged(int shard, boolean acquired) {
     }
