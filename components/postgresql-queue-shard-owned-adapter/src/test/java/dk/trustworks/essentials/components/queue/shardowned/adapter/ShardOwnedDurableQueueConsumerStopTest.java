@@ -26,12 +26,12 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
-import java.lang.reflect.Proxy;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
 
+import static dk.trustworks.essentials.components.queue.shardowned.adapter.TestProxies.proxy;
 import static org.assertj.core.api.Assertions.*;
 
 /**
@@ -284,19 +284,5 @@ class ShardOwnedDurableQueueConsumerStopTest {
                                .setParallelConsumers(1)
                                .setQueueMessageHandler(message -> { })
                                .build();
-    }
-
-    @FunctionalInterface
-    private interface Invocation {
-        Object handle(String method, Object[] args);
-    }
-
-    private static <T> T proxy(Class<T> type, Invocation invocation) {
-        return type.cast(Proxy.newProxyInstance(type.getClassLoader(), new Class<?>[]{type}, (self, method, args) -> switch (method.getName()) {
-            case "toString" -> type.getSimpleName() + " proxy";
-            case "hashCode" -> System.identityHashCode(self);
-            case "equals" -> self == args[0];
-            default -> invocation.handle(method.getName(), args);
-        }));
     }
 }
