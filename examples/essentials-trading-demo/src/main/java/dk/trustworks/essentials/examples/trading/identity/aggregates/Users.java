@@ -1,0 +1,63 @@
+/*
+ * Copyright 2021-2026 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package dk.trustworks.essentials.examples.trading.identity.aggregates;
+
+import dk.trustworks.essentials.components.eventsourced.aggregates.stateful.StatefulAggregateRepository;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ConfigurableEventStore;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.SeparateTablePerAggregateEventStreamConfiguration;
+import dk.trustworks.essentials.examples.trading.identity.events.UserEvent;
+import dk.trustworks.essentials.examples.trading.identity.types.*;
+import org.springframework.stereotype.Component;
+
+import java.util.Optional;
+
+import static dk.trustworks.essentials.components.eventsourced.aggregates.stateful.StatefulAggregateInstanceFactory.reflectionBasedAggregateRootFactory;
+import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
+
+/**
+ * The repository for {@link User} aggregates and the owner of the {@code Users} stream. Persists an already-built
+ * aggregate; constructing one is the {@code register_user} slice's decision.
+ */
+@Component
+public class Users {
+    public static final AggregateType                                        AGGREGATE_TYPE = IdentityAggregateTypes.USERS;
+    private final       StatefulAggregateRepository<UserId, UserEvent, User> repository;
+
+    public Users(ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore) {
+        requireNonNull(eventStore, "No eventStore provided");
+        repository = StatefulAggregateRepository.from(eventStore,
+                                                      AGGREGATE_TYPE,
+                                                      reflectionBasedAggregateRootFactory(),
+                                                      User.class);
+    }
+
+    public User getUser(UserId userId) {
+        requireNonNull(userId, "No userId provided");
+        return repository.load(userId);
+    }
+
+    public Optional<User> findUser(UserId userId) {
+        requireNonNull(userId, "No userId provided");
+        return repository.tryLoad(userId);
+    }
+
+    public User registerNewUser(User user) {
+        requireNonNull(user, "No user provided");
+        return repository.save(user);
+    }
+}

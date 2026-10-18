@@ -18,6 +18,7 @@ mvn spring-boot:run -pl :essentials-trading-demo        # after `docker compose 
 |---|---|---|
 | `brokerage` | `TradingAccount`, `Trade`, `Settlement` | 19 command, 1 automation, 6 view |
 | `market_data` | `Instrument`, `InstrumentPrice` | 5 command, 1 automation, 2 view |
+| `identity` | `User` (+ `user_credentials` table) | 3 command, 1 view |
 
 Both on the **aggregate write style** (§R5) — `AggregateRoot` + `StatefulAggregateRepository`. Sanctioned
 lane. Do **not** convert to `Decider`s.
@@ -84,6 +85,20 @@ lane. Do **not** convert to `Decider`s.
 - **Command bus and handler registration are free.** `spring-boot-starter-postgresql` supplies
   `essentialsCommandBus` and `ReactiveHandlersBeanPostProcessor`; `@Service extends AnnotatedCommandHandler`
   is the whole wiring. No `@Transactional` on handlers — the bus owns the UnitOfWork.
+
+## Login (phase 1)
+
+Spring Security guards everything (`config/TradingDemoSecurityConfiguration`): `OPERATOR` for the admin API and
+pages, the harness endpoints and the Essentials admin console; `CUSTOMER` or `OPERATOR` for `/api/accounts/**`;
+open for health, login and `/webhooks/**` (signed instead). Seeded users are in `application.yml`
+(`trading-demo.identity.seed-users`, demo passwords) — `operator@demo.local` / `operator-demo-password`.
+
+- **Tests calling HTTP must authenticate** — `restTemplate.withBasicAuth(...)` as the seeded operator. An
+  unauthenticated `/api/**` call answers `401`; elsewhere it redirects to `/login`, which an HTTP client follows to a
+  misleading `200`.
+- **CSRF is off for `/api/**`** because the vanilla-JS admin pages send no token. A demo simplification the
+  customer UI must not inherit.
+- **The Essentials admin API's SPIs stay all-access**; the filter chain is what guards them.
 
 ## Running more than one instance
 

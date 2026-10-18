@@ -32,6 +32,26 @@ management:
       show-details: always
 
 trading-demo:
+  identity:
+    # Registered at startup when absent (_demo_harness/DemoUsersSeeder). Demo values, like the simulators' webhook
+    # secret: change them for anything but a local demo. The operator may do everything; customers only reach
+    # /api/accounts/** for their own accounts.
+    seed-users:
+      - user-id: USR-OPERATOR
+        email: operator@demo.local
+        display-name: Demo Operator
+        roles: [OPERATOR]
+        password: operator-demo-password
+      - user-id: USR-ALICE
+        email: alice@demo.local
+        display-name: Alice Customer
+        roles: [CUSTOMER]
+        password: alice-demo-password
+      - user-id: USR-BOB
+        email: bob@demo.local
+        display-name: Bob Customer
+        roles: [CUSTOMER]
+        password: bob-demo-password
   # Drives the shard-owned queue engine on BOTH lanes at once: unordered price ticks and
   # per-account ordered activity. Off by default so the demo still starts on a small machine;
   # POST /api/admin/queue-load/start turns it on, and /spike sends a burst.

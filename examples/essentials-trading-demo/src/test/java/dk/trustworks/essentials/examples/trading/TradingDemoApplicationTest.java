@@ -180,6 +180,14 @@ class TradingDemoApplicationTest {
     @Autowired
     private TestRestTemplate restTemplate;
 
+    /**
+     * Every endpoint these tests call is operator-only (TradingDemoSecurityConfiguration). The operator is seeded at
+     * startup from trading-demo.identity.seed-users in application.yml.
+     */
+    private TestRestTemplate operator() {
+        return restTemplate.withBasicAuth("operator@demo.local", "operator-demo-password");
+    }
+
     @BeforeEach
     void resetClosingBooksPolicy() {
         // One atomic swap of the whole settings value - the four independent setters this replaces are what let a
@@ -339,7 +347,7 @@ class TradingDemoApplicationTest {
         commandBus.send(new CloseBooksAndOpenNextPeriod(accountId, PeriodId.of("2026-04")));
 
         await().atMost(PROJECTION_TIMEOUT).untilAsserted(() -> {
-            var response = restTemplate.getForEntity("/api/admin/trading-accounts/{accountId}",
+            var response = operator().getForEntity("/api/admin/trading-accounts/{accountId}",
                                                      AccountOverview.class,
                                                      accountId.toString());
 
@@ -369,7 +377,7 @@ class TradingDemoApplicationTest {
                                                  Amount.of(BigDecimal.valueOf(25))));
         commandBus.send(new CloseBooksAndOpenNextPeriod(accountId, PeriodId.of("2026-04")));
 
-        var response = restTemplate.getForEntity("/api/admin/trading-accounts/{accountId}/generations/{generation}/events",
+        var response = operator().getForEntity("/api/admin/trading-accounts/{accountId}/generations/{generation}/events",
                                                  String.class,
                                                  accountId.toString(),
                                                  1);
@@ -397,15 +405,15 @@ class TradingDemoApplicationTest {
                                                  Amount.of(BigDecimal.valueOf(25))));
         commandBus.send(new CloseBooksAndOpenNextPeriod(accountId, PeriodId.of("2026-04")));
 
-        var archiveResponse = restTemplate.postForEntity("/api/admin/trading-accounts/{accountId}/generations/{generation}/archive",
+        var archiveResponse = operator().postForEntity("/api/admin/trading-accounts/{accountId}/generations/{generation}/archive",
                                                          null,
                                                          ApiArchivedGeneration.class,
                                                          accountId.toString(),
                                                          1);
-        var listResponse = restTemplate.getForEntity("/api/admin/trading-accounts/{accountId}/archives",
+        var listResponse = operator().getForEntity("/api/admin/trading-accounts/{accountId}/archives",
                                                      ApiArchivedGeneration[].class,
                                                      accountId.toString());
-        var archiveContentResponse = restTemplate.getForEntity("/api/admin/trading-accounts/{accountId}/generations/{generation}/archive-content",
+        var archiveContentResponse = operator().getForEntity("/api/admin/trading-accounts/{accountId}/generations/{generation}/archive-content",
                                                                String.class,
                                                                accountId.toString(),
                                                                1);
@@ -446,7 +454,7 @@ class TradingDemoApplicationTest {
      */
     @Test
     void admin_endpoint_can_update_closing_books_configuration_for_demoing() {
-        var initialResponse = restTemplate.getForEntity("/api/admin/trading-accounts/closing-books",
+        var initialResponse = operator().getForEntity("/api/admin/trading-accounts/closing-books",
                                                         ClosingBooksConfiguration.class);
 
         assertThat(initialResponse.getStatusCode()).isEqualTo(HttpStatusCode.valueOf(200));
@@ -455,7 +463,7 @@ class TradingDemoApplicationTest {
         assertThat(initialResponse.getBody().timeBoundary()).isEqualTo("end-of-month");
         assertThat(initialResponse.getBody().zoneId()).isEqualTo("Europe/Copenhagen");
 
-        var modeResponse = restTemplate.postForEntity("/api/admin/trading-accounts/closing-books",
+        var modeResponse = operator().postForEntity("/api/admin/trading-accounts/closing-books",
                                                       new UpdateClosingBooksSettings(ClosingBooksDefaultPolicyType.TIME_BOUNDARY,
                                                                                      null,
                                                                                      null,
@@ -465,7 +473,7 @@ class TradingDemoApplicationTest {
         assertThat(modeResponse.getStatusCode()).isEqualTo(HttpStatusCode.valueOf(200));
         assertThat(closingBooksConfiguration().mode()).isEqualTo("time-boundary");
 
-        var boundaryAndZoneResponse = restTemplate.postForEntity("/api/admin/trading-accounts/closing-books",
+        var boundaryAndZoneResponse = operator().postForEntity("/api/admin/trading-accounts/closing-books",
                                                                  new UpdateClosingBooksSettings(null,
                                                                                                 null,
                                                                                                 ClosingBooksTimeBoundary.END_OF_WEEK,
@@ -480,7 +488,7 @@ class TradingDemoApplicationTest {
         assertThat(updatedConfiguration.zoneId()).isEqualTo("UTC");
         assertThat(updatedConfiguration.description()).contains("end-of-week").contains("UTC");
 
-        var dashboardResponse = restTemplate.getForEntity("/api/admin/dashboard", DashboardSummaryView.class);
+        var dashboardResponse = operator().getForEntity("/api/admin/dashboard", DashboardSummaryView.class);
         assertThat(dashboardResponse.getStatusCode()).isEqualTo(HttpStatusCode.valueOf(200));
         assertThat(dashboardResponse.getBody()).isNotNull();
         assertThat(dashboardResponse.getBody().closingBooks().timeBoundary()).isEqualTo("end-of-week");
@@ -519,7 +527,7 @@ class TradingDemoApplicationTest {
 
         // Once this holds, the projection has consumed both price events for SAP.
         await().atMost(PROJECTION_TIMEOUT).untilAsserted(() -> {
-            var probe = restTemplate.getForEntity("/api/admin/trades/{tradeId}",
+            var probe = operator().getForEntity("/api/admin/trades/{tradeId}",
                                                   TradeValuation.class,
                                                   priceProbeTrade.toString());
             assertThat(probe.getStatusCode()).isEqualTo(HttpStatusCode.valueOf(200));
@@ -537,7 +545,7 @@ class TradingDemoApplicationTest {
                                        Amount.of(BigDecimal.valueOf(500))));
 
         await().atMost(PROJECTION_TIMEOUT).untilAsserted(() -> {
-            var late = restTemplate.getForEntity("/api/admin/trades/{tradeId}",
+            var late = operator().getForEntity("/api/admin/trades/{tradeId}",
                                                  TradeValuation.class,
                                                  lateTrade.toString());
             assertThat(late.getStatusCode()).isEqualTo(HttpStatusCode.valueOf(200));
@@ -577,10 +585,10 @@ class TradingDemoApplicationTest {
         commandBus.send(new MarkTradeSettled(tradeId));
 
         await().atMost(PROJECTION_TIMEOUT).untilAsserted(() -> {
-            var tradeResponse = restTemplate.getForEntity("/api/admin/trades/{tradeId}",
+            var tradeResponse = operator().getForEntity("/api/admin/trades/{tradeId}",
                                                           TradeValuation.class,
                                                           tradeId.toString());
-            var settlementResponse = restTemplate.getForEntity("/api/admin/settlements/{settlementId}",
+            var settlementResponse = operator().getForEntity("/api/admin/settlements/{settlementId}",
                                                                SettlementStatusView.class,
                                                                settlementId.toString());
 
@@ -606,7 +614,7 @@ class TradingDemoApplicationTest {
 
     @Test
     void load_generator_status_endpoint_is_exposed() {
-        var response = restTemplate.getForEntity("/api/admin/load-generator",
+        var response = operator().getForEntity("/api/admin/load-generator",
                                                  TradingLoadGeneratorStatusView.class);
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatusCode.valueOf(200));
@@ -619,11 +627,11 @@ class TradingDemoApplicationTest {
 
     @Test
     void load_generator_can_be_started_and_stopped_manually() {
-        var startResponse = restTemplate.exchange("/api/admin/load-generator/start",
+        var startResponse = operator().exchange("/api/admin/load-generator/start",
                                                   HttpMethod.POST,
                                                   null,
                                                   TradingLoadGeneratorStatusView.class);
-        var stopResponse = restTemplate.exchange("/api/admin/load-generator/stop",
+        var stopResponse = operator().exchange("/api/admin/load-generator/stop",
                                                  HttpMethod.POST,
                                                  null,
                                                  TradingLoadGeneratorStatusView.class);
@@ -644,7 +652,7 @@ class TradingDemoApplicationTest {
         // The dashboard's account list is projection-backed, so it can legitimately report zero accounts for a moment
         // after the command returns.
         await().atMost(PROJECTION_TIMEOUT).untilAsserted(() -> {
-            var summaryResponse = restTemplate.getForEntity("/api/admin/dashboard", DashboardSummaryView.class);
+            var summaryResponse = operator().getForEntity("/api/admin/dashboard", DashboardSummaryView.class);
 
             assertThat(summaryResponse.getStatusCode()).isEqualTo(HttpStatusCode.valueOf(200));
             assertThat(summaryResponse.getBody()).isNotNull();
@@ -661,7 +669,7 @@ class TradingDemoApplicationTest {
                     .contains(MarketDataAggregateTypes.INSTRUMENT_PRICES.toString());
         });
 
-        var htmlResponse = restTemplate.getForEntity("/admin", String.class);
+        var htmlResponse = operator().getForEntity("/admin", String.class);
 
         assertThat(htmlResponse.getStatusCode()).isEqualTo(HttpStatusCode.valueOf(200));
         assertThat(htmlResponse.getHeaders().getContentType()).isNotNull();
@@ -684,7 +692,7 @@ class TradingDemoApplicationTest {
     void async_price_stress_endpoint_starts_background_run() throws Exception {
         seedLoadGeneratorFixtures("price-stress-owner-");
 
-        var startResponse = restTemplate.exchange("/api/admin/load-generator/price-stress/start?count=5&intervalMs=1",
+        var startResponse = operator().exchange("/api/admin/load-generator/price-stress/start?count=5&intervalMs=1",
                                                   HttpMethod.POST,
                                                   null,
                                                   TradingLoadGeneratorStatusView.class);
@@ -697,7 +705,7 @@ class TradingDemoApplicationTest {
         TradingLoadGeneratorStatusView completedStatus = null;
         for (int attempt = 0; attempt < 20; attempt++) {
             Thread.sleep(25);
-            completedStatus = restTemplate.getForEntity("/api/admin/load-generator",
+            completedStatus = operator().getForEntity("/api/admin/load-generator",
                                                         TradingLoadGeneratorStatusView.class).getBody();
             if (completedStatus != null
                 && !completedStatus.priceStressRunning()
@@ -716,22 +724,22 @@ class TradingDemoApplicationTest {
     void load_generator_burst_endpoints_generate_usage_on_demand() {
         seedLoadGeneratorFixtures("burst-owner-");
 
-        ResponseEntity<TradingLoadGeneratorStatusView> priceBurstResponse = restTemplate.exchange(
+        ResponseEntity<TradingLoadGeneratorStatusView> priceBurstResponse = operator().exchange(
                 "/api/admin/load-generator/burst/price-updates?count=3",
                 HttpMethod.POST,
                 null,
                 TradingLoadGeneratorStatusView.class);
-        ResponseEntity<TradingLoadGeneratorStatusView> pendingTradeBurstResponse = restTemplate.exchange(
+        ResponseEntity<TradingLoadGeneratorStatusView> pendingTradeBurstResponse = operator().exchange(
                 "/api/admin/load-generator/burst/trades?count=2",
                 HttpMethod.POST,
                 null,
                 TradingLoadGeneratorStatusView.class);
-        ResponseEntity<TradingLoadGeneratorStatusView> settlementBurstResponse = restTemplate.exchange(
+        ResponseEntity<TradingLoadGeneratorStatusView> settlementBurstResponse = operator().exchange(
                 "/api/admin/load-generator/burst/settlements?count=2",
                 HttpMethod.POST,
                 null,
                 TradingLoadGeneratorStatusView.class);
-        ResponseEntity<TradingLoadGeneratorStatusView> lifecycleBurstResponse = restTemplate.exchange(
+        ResponseEntity<TradingLoadGeneratorStatusView> lifecycleBurstResponse = operator().exchange(
                 "/api/admin/load-generator/burst/trade-lifecycles?count=1",
                 HttpMethod.POST,
                 null,
@@ -764,7 +772,7 @@ class TradingDemoApplicationTest {
     void price_path_comparison_scenario_endpoint_compares_both_modes() {
         seedLoadGeneratorFixtures("comparison-owner-");
 
-        var response = restTemplate.exchange("/api/admin/load-generator/comparisons/price-path?count=5",
+        var response = operator().exchange("/api/admin/load-generator/comparisons/price-path?count=5",
                                              HttpMethod.POST,
                                              null,
                                              PricePathScenarioResultView.class);
@@ -779,7 +787,7 @@ class TradingDemoApplicationTest {
         assertThat(response.getBody().directWrite().completedCount()).isEqualTo(5);
         assertThat(response.getBody().winnerMode()).isNotBlank();
 
-        var dashboardResponse = restTemplate.getForEntity("/api/admin/dashboard", DashboardSummaryView.class);
+        var dashboardResponse = operator().getForEntity("/api/admin/dashboard", DashboardSummaryView.class);
         assertThat(dashboardResponse.getBody()).isNotNull();
         assertThat(dashboardResponse.getBody().latestPricePathScenario().available()).isTrue();
         assertThat(dashboardResponse.getBody().latestPricePathScenario().requestedCount()).isEqualTo(5);
@@ -787,7 +795,7 @@ class TradingDemoApplicationTest {
 
     @Test
     void trading_account_comparison_scenario_endpoint_compares_bootstrap_only_and_event_count() {
-        var response = restTemplate.exchange("/api/admin/load-generator/comparisons/trading-account?count=12&readPasses=4&eventThreshold=4",
+        var response = operator().exchange("/api/admin/load-generator/comparisons/trading-account?count=12&readPasses=4&eventThreshold=4",
                                              HttpMethod.POST,
                                              null,
                                              TradingAccountScenarioResultView.class);
@@ -809,7 +817,7 @@ class TradingDemoApplicationTest {
         assertThat(tradingAccountClosingBooksPolicy.settings().mode()).isEqualTo(ClosingBooksDefaultPolicyType.MANUAL_ONLY);
         assertThat(tradingAccountClosingBooksPolicy.settings().eventThreshold()).isEqualTo(100L);
 
-        var dashboardResponse = restTemplate.getForEntity("/api/admin/dashboard", DashboardSummaryView.class);
+        var dashboardResponse = operator().getForEntity("/api/admin/dashboard", DashboardSummaryView.class);
         assertThat(dashboardResponse.getStatusCode()).isEqualTo(HttpStatusCode.valueOf(200));
         assertThat(dashboardResponse.getBody()).isNotNull();
         assertThat(dashboardResponse.getBody().latestTradingAccountScenario()).isNotNull();
@@ -850,9 +858,9 @@ class TradingDemoApplicationTest {
                                                  Amount.of(BigDecimal.valueOf(12))));
 
         await().atMost(PROJECTION_TIMEOUT).untilAsserted(() -> {
-            var accountProjectionResponse = restTemplate.getForEntity("/api/admin/projections/account-statements",
+            var accountProjectionResponse = operator().getForEntity("/api/admin/projections/account-statements",
                                                                       AccountStatement[].class);
-            var tradeProjectionResponse = restTemplate.getForEntity("/api/admin/projections/trade-settlements",
+            var tradeProjectionResponse = operator().getForEntity("/api/admin/projections/trade-settlements",
                                                                     TradeSettlementStatus[].class);
 
             assertThat(accountProjectionResponse.getStatusCode()).isEqualTo(HttpStatusCode.valueOf(200));
@@ -887,7 +895,7 @@ class TradingDemoApplicationTest {
     }
 
     private ClosingBooksConfiguration closingBooksConfiguration() {
-        var response = restTemplate.getForEntity("/api/admin/trading-accounts/closing-books",
+        var response = operator().getForEntity("/api/admin/trading-accounts/closing-books",
                                                  ClosingBooksConfiguration.class);
         assertThat(response.getStatusCode()).isEqualTo(HttpStatusCode.valueOf(200));
         assertThat(response.getBody()).isNotNull();
