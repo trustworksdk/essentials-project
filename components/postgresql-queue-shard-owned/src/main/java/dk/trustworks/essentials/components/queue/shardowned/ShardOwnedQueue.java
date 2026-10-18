@@ -2238,7 +2238,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         // Nothing against the database for a run with no lease row to hand back and no deregistration owed: a start that
         // failed before it adopted anything.
         if (!held.isEmpty() || deregister) {
-            withinShutdownBudget(() -> handBackWithinBudget(run, serving, toRelease, kept, deregister));
+            withinShutdownBudget(() -> handBackWithinBudget(serving, toRelease, kept, deregister));
         }
         // This queue drops every owner the ended run listed, released, left to lapse, or found taken (RELEASED, so not in
         // `held`): a shared runtime keeps running, and would otherwise count those on a dead pump in shardsOnDeadPumps until
@@ -2275,8 +2275,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * owners still hold, release the rows of {@code toRelease}, and deregister this instance when {@code deregister} and
      * no ordered unit is {@code kept}.
      */
-    private void handBackWithinBudget(Run run, List<LeasedOwner> serving, List<LeasedOwner> toRelease, List<LeasedOwner> kept,
-                                      boolean deregister) {
+    private void handBackWithinBudget(List<LeasedOwner> serving, List<LeasedOwner> toRelease, List<LeasedOwner> kept, boolean deregister) {
         // What the pumps would have flushed had they gone on serving these owners. Valid still:
         // releasing a lease does not bump its fence, and the leases go only after this. Nothing to
         // do for a runtime this queue closed itself - its pumps flushed on the way out. Not for an
