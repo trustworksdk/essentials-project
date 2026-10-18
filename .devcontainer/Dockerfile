@@ -400,12 +400,13 @@ RUN if [ "${INSTALL_KOTLIN_LSP}" = "true" ]; then \
 # -----------------------------------------------------------------------------
 # rtk — Rust Token Killer (Conditional, part of the local-first stack)
 # Transparent CLI-output compression. Per-arch release tarball from GitHub
-# (amd64 → x86_64-unknown-linux-musl, arm64 → aarch64-unknown-linux-gnu). The
+# (amd64 → x86_64-unknown-linux-musl, arm64 → aarch64-unknown-linux-gnu), the
 # Apache-2.0 rtk-oss edition (see RTK_VERSION for why not the default binary).
-# `rtk` binary lands in /usr/local/bin; post-create.sh installs its Claude Code
+# The `rtk` binary lands in /usr/local/bin; post-create.sh installs its Claude Code
 # PreToolUse hook (`rtk init -g`). SHA-256 verified against GitHub's published
 # per-asset digest. The tarball layout isn't contractually fixed, so we locate
-# the `rtk` binary after extraction rather than assuming a path.
+# the `rtk` binary and its LICENSE after extraction rather than assuming a path;
+# a tarball without a LICENSE only warns.
 # -----------------------------------------------------------------------------
 RUN if [ "${INSTALL_RTK}" = "true" ]; then \
     set -eux && \
@@ -425,7 +426,12 @@ RUN if [ "${INSTALL_RTK}" = "true" ]; then \
     mkdir -p /tmp/rtk-extract && tar -xzf /tmp/rtk.tar.gz -C /tmp/rtk-extract && \
     RTK_BIN=$(find /tmp/rtk-extract -type f -name rtk | head -n1) && \
     [ -n "$RTK_BIN" ] && install -m 0755 "$RTK_BIN" /usr/local/bin/rtk && \
-    install -D -m 0644 /tmp/rtk-extract/LICENSE /usr/local/share/doc/rtk/LICENSE && \
+    RTK_LICENSE=$(find /tmp/rtk-extract -type f -name 'LICENSE*' | sort | head -n1) && \
+    if [ -n "$RTK_LICENSE" ]; then \
+    install -D -m 0644 "$RTK_LICENSE" /usr/local/share/doc/rtk/LICENSE ; \
+    else \
+    echo "WARNING: no LICENSE file in the rtk-oss ${RTK_VERSION} tarball — not installing /usr/local/share/doc/rtk/LICENSE." >&2 ; \
+    fi && \
     rm -rf /tmp/rtk.tar.gz /tmp/rtk-extract; \
     fi
 
