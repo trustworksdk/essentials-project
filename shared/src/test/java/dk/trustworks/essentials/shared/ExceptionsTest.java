@@ -283,6 +283,25 @@ public class ExceptionsTest {
     }
 
     @Test
+    void forEachThenThrowFirst_suppressesALaterSharedInstanceOnce_whenSeveralItemsThrowIt() {
+        var ran    = new ArrayList<String>();
+        var first  = new IllegalStateException("a");
+        var shared = new IllegalStateException("shared by b, c and d");
+
+        var thrown = catchThrowable(() -> Exceptions.forEachThenThrowFirst(List.of("a", "b", "c", "d"), item -> {
+            ran.add(item);
+            if ("a".equals(item)) {
+                throw first;
+            }
+            throw shared;
+        }));
+
+        assertThat(ran).containsExactly("a", "b", "c", "d");
+        assertThat(thrown).isSameAs(first);
+        assertThat(thrown.getSuppressed()).containsExactly(shared);
+    }
+
+    @Test
     void forEachThenThrowFirst_rethrowsACriticalErrorAtOnce_withTheFailureSoFarSuppressed() {
         var ran      = new ArrayList<String>();
         var first    = new IllegalStateException("a");
@@ -319,6 +338,67 @@ public class ExceptionsTest {
         assertThat(ran).containsExactly("a", "b");
         assertThat(returned).isSameAs(failure);
         assertThat(returned.getSuppressed()).as("not suppressed in itself when an item throws the given failure").containsExactly(stop);
+    }
+
+    @Test
+    void forEachCollectingFailures_addsASharedInstanceToTheGivenFailureOnce_whenEveryItemThrowsIt() {
+        var ran      = new ArrayList<String>();
+        var failure  = new IllegalStateException("the loop's failure");
+        var observer = new IllegalStateException("one instance, thrown for every item");
+
+        var returned = Exceptions.forEachCollectingFailures(List.of("a", "b", "c"), item -> {
+            ran.add(item);
+            throw observer;
+        }, failure);
+
+        assertThat(ran).containsExactly("a", "b", "c");
+        assertThat(returned).isSameAs(failure);
+        assertThat(returned.getSuppressed()).containsExactly(observer);
+    }
+
+    @Test
+    void forEachCollectingFailures_doesNotAddAnInstanceAgain_whenTheGivenFailureAlreadyCarriesItAsSuppressed() {
+        var ran      = new ArrayList<String>();
+        var failure  = new IllegalStateException("a nested start's failure");
+        var observer = new IllegalStateException("one instance, already collected into the failure by the nested call");
+        failure.addSuppressed(observer);
+        var other    = new IllegalStateException("a failure the failure does not carry yet");
+
+        var returned = Exceptions.forEachCollectingFailures(List.of("a", "b", "c"), item -> {
+            ran.add(item);
+            if ("b".equals(item)) {
+                throw other;
+            }
+            throw observer;
+        }, failure);
+
+        assertThat(ran).containsExactly("a", "b", "c");
+        assertThat(returned).isSameAs(failure);
+        assertThat(returned.getSuppressed()).containsExactly(observer, other);
+    }
+
+    @Test
+    void forEachCollectingFailures_doesNotAddAnInstanceAgain_whenTheFirstFailureAlreadyCarriesItAsSuppressed() {
+        var ran      = new ArrayList<String>();
+        var observer = new IllegalStateException("one instance, already collected into the first failure by a nested call");
+        var first    = new IllegalStateException("the first failure, coming back from a nested call");
+        first.addSuppressed(observer);
+        var other    = new IllegalStateException("a failure the first failure does not carry yet");
+
+        var returned = Exceptions.forEachCollectingFailures(List.of("a", "b", "c"), item -> {
+            ran.add(item);
+            if ("a".equals(item)) {
+                throw first;
+            }
+            if ("b".equals(item)) {
+                throw other;
+            }
+            throw observer;
+        }, null);
+
+        assertThat(ran).containsExactly("a", "b", "c");
+        assertThat(returned).isSameAs(first);
+        assertThat(returned.getSuppressed()).containsExactly(observer, other);
     }
 
     @Test

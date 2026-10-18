@@ -1957,12 +1957,13 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * Only a critical error ({@link Exceptions#isCriticalError}) leaves the units after it untold.
      * <p>
      * Called from a {@code finally} whose loop is already throwing ({@code loopFailure} not {@code null}), it throws nothing
-     * of its own: every failure of the observer is added to {@code loopFailure} as suppressed
-     * ({@link Exceptions#forEachCollectingFailures}), and the loop's failure - the database error that left the rest of
-     * the loop's work undone - is what ends the heartbeat tick and what its {@code Rebalance failed} WARN logs. Thrown from
-     * the {@code finally}, the observer's failure replaced it, and the database error was lost. A critical error still
-     * escapes: one the observer throws, with {@code loopFailure} added to it as suppressed; and a {@code loopFailure} that
-     * is one escapes untouched, with no unit told.
+     * of its own: every distinct failure of the observer is added to {@code loopFailure} as suppressed, once each
+     * ({@link Exceptions#forEachCollectingFailures}). An observer that throws one instance for every unit adds it once.
+     * The loop's failure is the database error that left the rest of the loop's work undone, and it is what ends the
+     * heartbeat tick and what its {@code Rebalance failed} WARN logs. Thrown from the {@code finally}, the observer's
+     * failure replaced it, and the database error was lost. A critical error still escapes: one the observer throws,
+     * with {@code loopFailure} added to it as suppressed; and a {@code loopFailure} that is one escapes untouched, with
+     * no unit told.
      *
      * @param loopFailure what the caller's loop is throwing, {@code null} when there is none
      */

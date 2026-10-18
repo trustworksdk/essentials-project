@@ -162,7 +162,7 @@ public final class Exceptions {
     /**
      * Runs <code>action</code> for every one of <code>items</code>, each one even when it throws for an earlier one, and then
      * throws the first failure - as it was thrown, using {@link #sneakyThrow(Throwable)} - with every later, distinct
-     * failure added to it as suppressed.
+     * failure added to it as suppressed. Distinct is by identity: an instance thrown for several items is added once.
      * <p>
      * Meant for fanning one operation out over independent parts, such as stopping every consumer of a queue, where
      * giving up at the first throw would leave the parts after it untouched (still running, say).
@@ -188,6 +188,11 @@ public final class Exceptions {
      * one - the failure of a start that the action undoes, say - and returning the failure instead of throwing it, so the
      * caller throws it with its own type. A critical error is thrown at once all the same, with <code>failure</code> added
      * to it as suppressed.
+     * <p>
+     * Each failure is added once, by identity: an instance thrown for several items is added once, and one that the
+     * failure it would be added to already carries as suppressed (collected into it by a nested call first, say) is not
+     * added again. That failure is <code>failure</code> when it is not null, otherwise the first failure of
+     * <code>action</code>.
      *
      * @param items   the items to run <code>action</code> for, in their iteration order
      * @param action  the action to run for each item
@@ -202,6 +207,14 @@ public final class Exceptions {
         requireNonNull(items, "You must supply the items");
         requireNonNull(action, "You must supply an action");
         var collected = failure;
+        // Every failure already in the result - collected itself and what it carries as suppressed, whether collected is
+        // the given failure or the first one the action throws - by identity, so an action throwing one shared instance
+        // for every item adds it once, not once per item, and not at all to a collected failure that already carries it
+        var attached = Collections.newSetFromMap(new IdentityHashMap<Throwable, Boolean>());
+        if (collected != null) {
+            attached.add(collected);
+            Collections.addAll(attached, collected.getSuppressed());
+        }
         for (var item : items) {
             try {
                 action.accept(item);
@@ -214,10 +227,12 @@ public final class Exceptions {
                 }
                 if (collected == null) {
                     collected = e;
-                } else if (collected != e) {
-                    // Identity, not equals(): Throwable.addSuppressed throws IllegalArgumentException for the throwable
-                    // itself, which it tells by identity - an action throwing one shared instance for every item would
-                    // otherwise end the loop here, with the items after it not run
+                    attached.add(e);
+                    Collections.addAll(attached, e.getSuppressed());
+                } else if (attached.add(e)) {
+                    // Identity, not equals(), and attached holds collected itself: Throwable.addSuppressed throws
+                    // IllegalArgumentException for the throwable itself, which it tells by identity - an action throwing
+                    // the collected instance again would otherwise end the loop here, with the items after it not run
                     collected.addSuppressed(e);
                 }
             }
