@@ -99,10 +99,12 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      */
     private final    AtomicReference<Run>     currentRun          = new AtomicReference<>();
     /**
-     * Held across the whole of {@link #start()}, {@link #stop()} and {@link #stopAbruptly()}, so they never run
-     * concurrently: one runs at a time, and a {@code start()} called while a stop is still draining and releasing waits
-     * for it to finish. That wait is bounded by the stop: its drain by {@code shedGrace}, its database work by
-     * {@link #SHUTDOWN_BUDGET}.
+     * Held across the whole of {@link #start()}, and of a {@link #stop()} or {@link #stopAbruptly()} that gets it, so
+     * those run one at a time: a {@code start()} called while a stop is still draining and releasing waits for it to
+     * finish. That wait is bounded by the stop: its drain by {@code shedGrace}, its database work by
+     * {@link #SHUTDOWN_BUDGET}. A {@code start()} called while an earlier start still holds it waits for that start,
+     * which nothing bounds (below); it logs one WARN once it has waited {@link #SHUTDOWN_BUDGET}, and goes on waiting
+     * ({@link #lockForStart}).
      * <p>
      * The other way round, a stop waits only so long for a {@code start()} still doing its database work - registering
      * the instance and leasing its units, which nothing in this queue bounds: a statement caught by a network partition on
@@ -123,6 +125,12 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * ({@link #adoptIntoRun}), and would then wait behind a stop's drain.
      */
     private final    ReentrantLock            lifecycleLock       = new ReentrantLock();
+    /**
+     * Whether the holder of {@link #lifecycleLock} is a {@link #start()} working on the run it installed, rather than a
+     * stop. Written by that start under the lock; read without it, only to say in a WARN what a later start is waiting
+     * for ({@link #lockForStart}).
+     */
+    private volatile boolean                  startHoldsLifecycleLock;
     /**
      * Lease rows a heartbeat tick leased as its run ended and then could not release again ({@link #abandonAcquisition}),
      * and those a start leased before its lease loop failed and could not release then ({@link #leaseAtStart}): unit to
@@ -350,7 +358,11 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * second set of owners onto the same shards.
      * <p>
      * Called while a {@link #stop()} is still running, on another thread, it waits for that stop to finish
-     * ({@link #lifecycleLock}) and then starts a new run.
+     * ({@link #lifecycleLock}) and then starts a new run. Called while an earlier start is still doing its database work -
+     * the case after a stop that gave up waiting for that start and returned, below - it waits for that start, which
+     * does the stop's work before it returns. Nothing in this queue bounds that wait: a statement of the earlier start
+     * that hangs ends at the driver's {@code socketTimeout}, and without one never. It is not silent: once it has waited
+     * {@link #SHUTDOWN_BUDGET}, this logs one WARN naming the queue and the instance, and goes on waiting.
      * <p>
      * A start that fails with anything but a critical error ({@link Exceptions#isCriticalError}) leaves the queue not
      * started, so a later {@code start()} runs again: it releases the units it had leased, ends any owner it had built,
@@ -372,7 +384,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
     @Override
     public void start() {
         requireTrue(activeSettings != null, "Nothing configured — call configureUnordered or configureOrdered first");
-        lifecycleLock.lock();
+        lockForStart();
         try {
             // A fresh run, with nothing of any earlier run's in it. No lock beyond lifecycleLock: a heartbeat tick of an
             // earlier run compares the current run with its own, which this never is, so installing it changes nothing
@@ -381,9 +393,11 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             if (!currentRun.compareAndSet(null, run)) {
                 return;
             }
+            startHoldsLifecycleLock = true;
             try {
                 startRun(run);
             } finally {
+                startHoldsLifecycleLock = false;
                 // Still STARTING only when the start escaped with a critical error before it scheduled the heartbeat, which
                 // leaves the run installed: from here no start is running for it, and a stop must not hand it its work
                 // (stopWithoutWaiting). Every other way out has moved the run on already.
@@ -395,6 +409,51 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             }
         } finally {
             lifecycleLock.unlock();
+        }
+    }
+
+    /**
+     * Take {@link #lifecycleLock} for {@link #start()}, waiting as long as it takes - as a plain {@code lock()} would,
+     * the thread's interrupt included - but not silently: once it has waited {@link #SHUTDOWN_BUDGET}, it logs one WARN
+     * saying what holds the lock, and goes on waiting. A stop holding it is bounded, by its drain's {@code shedGrace} and
+     * its database work's budget. An earlier start holding it is not: its database work blocks as long as a statement
+     * does, and after a stop that gave up waiting for it, it does that stop's work before it lets go
+     * ({@link #endRunOfStart}).
+     */
+    private void lockForStart() {
+        var interrupted = false;
+        var warned      = false;
+        try {
+            while (true) {
+                try {
+                    if (lifecycleLock.tryLock(SHUTDOWN_BUDGET.toMillis(), TimeUnit.MILLISECONDS)) {
+                        return;
+                    }
+                } catch (InterruptedException e) {
+                    // Waited on regardless, as lock() would; the flag is set again once the lock is held.
+                    interrupted = true;
+                    continue;
+                }
+                if (!warned) {
+                    warned = true;
+                    if (startHoldsLifecycleLock) {
+                        log.warn("Instance {} has waited {} and is still waiting to start queue {}: an earlier start of the queue is "
+                                         + "still running - registering the instance and leasing its units, and, if a stop gave up "
+                                         + "waiting for it, doing that stop's work once its statements return. Nothing in this queue "
+                                         + "bounds that wait: a statement that hangs ends at the driver's socketTimeout, and without one "
+                                         + "never",
+                                 instanceId, SHUTDOWN_BUDGET, queueId);
+                    } else {
+                        log.warn("Instance {} has waited {} and is still waiting to start queue {}: a stop of the queue is still "
+                                         + "draining its handlers and handing its units back",
+                                 instanceId, SHUTDOWN_BUDGET, queueId);
+                    }
+                }
+            }
+        } finally {
+            if (interrupted) {
+                Thread.currentThread().interrupt();
+            }
         }
     }
 
@@ -1972,11 +2031,23 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * The other way round, called while a {@code start()} is still doing its database work on another thread -
      * registering the instance and leasing its units, which nothing in this queue bounds - this waits for it up to the
      * 2 s {@link #SHUTDOWN_BUDGET}, and no longer. Past that, it takes the starting run out and returns: the queue is not
-     * started from then on, and the start does this stop's work itself once its statements return - it adopts and serves
-     * nothing, releases what it leased, hands back the runtime and deregisters the instance ({@link #lifecycleLock}).
+     * started from then on, and the start does this stop's work itself once its statements return - it adopts nothing
+     * more, drains and ends the units it adopted before, releases what it leased, hands back the runtime and deregisters
+     * the instance ({@link #lifecycleLock}).
      * The drain and release below, and their own budget, then run on the start's thread instead. A stop on a thread that
      * is interrupted, or is interrupted while it waits, stops waiting at once and does the same, and returns with the
      * thread's interrupt flag still set.
+     * <p>
+     * A stop that gave up waiting so returns <b>before</b> its work is done: the units the start leased are not released
+     * yet, the instance is still registered, and the start still holds the runtime it borrowed and {@link #lifecycleLock}.
+     * {@link #isStarted()} is false and {@link #shardsHeld()} 0 meanwhile; the WARN this stop logs is what says the start
+     * is still running. Two things follow. A {@link #start()} called afterwards waits for that start to return, as long as
+     * its statements take. And closing the {@code DataSource} before that start returns leaves it releasing and
+     * deregistering against a closed pool: both fail into WARNs, and the units stay unserved until this instance's
+     * membership row is older than the lease TTL, as after a crash. Stopping a {@code ShardRuntime} passed to the builder
+     * before then costs the drain instead: the release and the deregistration go through the queue's own
+     * {@code DataSource} and still succeed, but the start no longer waits for handlers still running on units it adopted
+     * before this stop, so their acknowledgements may be lost and those messages redelivered.
      */
     @Override
     public void stop() {

@@ -118,6 +118,71 @@ class ShardOwnedDurableQueueConsumerStopTest {
         assertThat(consumer.isStarted()).isFalse();
     }
 
+    /**
+     * After a stop that gave up waiting, a restart - {@code ShardOwnedDurableQueues.start()} restarts the same consumer
+     * objects - waits for the earlier start still inside {@code consume()}, as long as that takes, and interrupted too,
+     * as {@code lock()} would, with the flag set again once it returns. It used to wait in {@code lock()} without a word;
+     * once it has waited {@link ShardOwnedDurableQueueConsumer#STOP_WAITS_FOR_START} it now logs one WARN naming the
+     * consumer and the queue.
+     */
+    @Test
+    void a_start_after_a_stop_that_did_not_wait_waits_for_the_earlier_start_and_logs_one_warn_saying_so() throws Exception {
+        var logger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(ShardOwnedDurableQueueConsumer.class);
+        var logged = new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+        logged.start();
+        logger.addAppender(logged);
+        var restartReturned         = new CountDownLatch(1);
+        var restartStillInterrupted = new AtomicBoolean();
+        var restarting = new Thread(() -> {
+            consumer.start();
+            restartStillInterrupted.set(Thread.currentThread().isInterrupted());
+            restartReturned.countDown();
+        });
+        try {
+            var starting = CompletableFuture.runAsync(consumer::start);
+            try {
+                assertThat(consuming.await(10, TimeUnit.SECONDS)).as("premise: the start is inside the queue's consume()").isTrue();
+                assertThat(stopOnAnotherThread(true).returned()).as("premise: the stop returned while consume() had not").isTrue();
+
+                restarting.start();
+                var deadline = System.nanoTime() + ShardOwnedDurableQueueConsumer.STOP_WAITS_FOR_START.plusSeconds(5).toNanos();
+                while (waitingToStart(logged).isEmpty() && System.nanoTime() < deadline) {
+                    Thread.sleep(20);
+                }
+                assertThat(waitingToStart(logged)).as("the restart says it is waiting for the earlier start, naming the consumer and the queue")
+                                                  .singleElement()
+                                                  .satisfies(message -> assertThat(message).contains("'" + consumer.consumerName() + "'",
+                                                                                                     "'stuck'"));
+
+                restarting.interrupt();
+                assertThat(restartReturned.await(ShardOwnedDurableQueueConsumer.STOP_WAITS_FOR_START.toMillis() + 500, TimeUnit.MILLISECONDS))
+                        .as("the restart goes on waiting for the earlier start, interrupted or not")
+                        .isFalse();
+                assertThat(waitingToStart(logged)).as("one WARN per wait, not one per budget").hasSize(1);
+                assertThat(starting).as("premise: the earlier start is still subscribing").isNotDone();
+            } finally {
+                letConsumeEnd.countDown();
+            }
+
+            starting.get(10, TimeUnit.SECONDS);
+            assertThat(restartReturned.await(10, TimeUnit.SECONDS)).as("the restart returns once the earlier start has").isTrue();
+            assertThat(restartStillInterrupted).as("the restart set the interrupt it deferred again").isTrue();
+            assertThat(stopped).as("the earlier start stopped its own subscription").containsExactly("subscription");
+            assertThat(consumer.isStarted()).as("the restart subscribed afresh").isTrue();
+        } finally {
+            letConsumeEnd.countDown();
+            logger.detachAppender(logged);
+        }
+    }
+
+    private static List<String> waitingToStart(ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> logged) {
+        return logged.list.stream()
+                          .filter(event -> event.getLevel() == ch.qos.logback.classic.Level.WARN)
+                          .map(ch.qos.logback.classic.spi.ILoggingEvent::getFormattedMessage)
+                          .filter(message -> message.contains("still waiting to start"))
+                          .toList();
+    }
+
     @Test
     void a_stop_after_the_start_has_subscribed_stops_the_subscription_itself() {
         letConsumeEnd.countDown();

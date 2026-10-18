@@ -65,7 +65,7 @@ class ShardOwnedDurableQueueConsumer implements DurableQueueConsumer {
     /**
      * How long a {@link #stop()} waits for a {@link #start()} still subscribing: the 2 s each lane's own stop waits for
      * that lane's start ({@code ShardOwnedQueue.stop()}), and {@code PostgresqlMessageQueue.stop()} for a
-     * {@code consume()}.
+     * {@code consume()}. Also how long a {@link #start()} waits for the lock before it logs that it is still waiting.
      */
     static final Duration STOP_WAITS_FOR_START = Duration.ofSeconds(2);
 
@@ -136,10 +136,15 @@ class ShardOwnedDurableQueueConsumer implements DurableQueueConsumer {
      * A {@link #stop()} that gave up waiting for this start, still subscribing, has stopped the consumer without it. This
      * start then stops the subscription the queue returns, logging at WARN rather than throwing what that stop throws,
      * since the stop's caller has already returned, and returns with the consumer not started.
+     * <p>
+     * A start called meanwhile - {@link ShardOwnedDurableQueues#start()} restarts the same consumer objects - waits for
+     * that earlier start to return - as long as the queue's {@code consume()} takes, then the stop of the subscription it
+     * returned - the thread's interrupt included: once it has waited {@link #STOP_WAITS_FOR_START} it logs one WARN naming
+     * the consumer and the queue, and goes on waiting ({@link #lockForStart}).
      */
     @Override
     public void start() {
-        lifecycleLock.lock();
+        lockForStart();
         try {
             if (subscription != null) {
                 return;
@@ -178,6 +183,56 @@ class ShardOwnedDurableQueueConsumer implements DurableQueueConsumer {
             log.info("Consumer '{}' started on queue '{}'", consumerName(), queueName());
         } finally {
             lifecycleLock.unlock();
+        }
+    }
+
+    /**
+     * Take {@link #lifecycleLock} for {@link #start()}, waiting as long as it takes - as a plain {@code lock()} would, the
+     * thread's interrupt deferred and set again once the lock is held - but not silently: once it has waited
+     * {@link #STOP_WAITS_FOR_START}, it logs one WARN saying what holds the lock, and goes on waiting. A stop holding it is
+     * bounded by the subscription's own stop, and so is an earlier start stopping the subscription a stop left it. An
+     * earlier start still in the queue's {@code consume()} is not: that blocks as long as a statement does.
+     */
+    private void lockForStart() {
+        var interrupted = false;
+        var warned      = false;
+        try {
+            while (true) {
+                try {
+                    if (lifecycleLock.tryLock(STOP_WAITS_FOR_START.toMillis(), TimeUnit.MILLISECONDS)) {
+                        return;
+                    }
+                } catch (InterruptedException e) {
+                    // Waited on regardless, as lock() would; the flag is set again once the lock is held.
+                    interrupted = true;
+                    continue;
+                }
+                if (!warned) {
+                    warned = true;
+                    Holder heldBy;
+                    synchronized (handOver) {
+                        heldBy = holder;
+                    }
+                    if (heldBy == Holder.STOPPING) {
+                        log.warn("Consumer '{}' has waited {} and is still waiting to start on queue '{}': a stop of the consumer is "
+                                         + "still stopping its subscription",
+                                 consumerName(), STOP_WAITS_FOR_START, queueName());
+                    } else {
+                        // STARTING, or NONE: past the budget, NONE is almost always an earlier start stopping the subscription
+                        // a stop left it (the lock is unfair, so it may have just changed hands). The text covers both.
+                        log.warn("Consumer '{}' has waited {} and is still waiting to start on queue '{}': an earlier start of the "
+                                         + "consumer still holds its lifecycle - either still in the queue's consume(), registering the "
+                                         + "instance and leasing units, or stopping the subscription consume() returned, for a stop that "
+                                         + "gave up waiting for it. Nothing here bounds the consume(): a statement that hangs ends at the "
+                                         + "driver's socketTimeout, and without one never",
+                                 consumerName(), STOP_WAITS_FOR_START, queueName());
+                    }
+                }
+            }
+        } finally {
+            if (interrupted) {
+                Thread.currentThread().interrupt();
+            }
         }
     }
 
@@ -226,7 +281,9 @@ class ShardOwnedDurableQueueConsumer implements DurableQueueConsumer {
             if (heldBy == Holder.STOPPING) {
                 return;
             }
-            // Holder.NONE: whoever holds the lock has just taken it, or is just letting go of it.
+            // Holder.NONE: whoever holds the lock has just taken it or is just letting go of it, or is a start stopping the
+            // subscription a stop left it. The consumer may still be started (a start about to set its subscription, a stop
+            // about to stop it), so take the lock and look: returning here, as on STOPPING, could leave it running.
             Thread.onSpinWait();
             locked = lifecycleLock.tryLock();
         }
@@ -258,8 +315,9 @@ class ShardOwnedDurableQueueConsumer implements DurableQueueConsumer {
      */
     private enum Holder {
         /**
-         * A start or stop that found nothing to do, or one that has just taken the lock or is about to let go of it: all
-         * brief, so the stop tries the lock again.
+         * A start or stop that found nothing to do, or one that has just taken the lock or is about to let go of it - all
+         * brief - or a start stopping the subscription a stop that did not wait for it left it, which lasts as long as
+         * that subscription's stop. The stop tries the lock again.
          */
         NONE,
         /** A {@link #start()} subscribing: the stop leaves stopping the subscription to it. */

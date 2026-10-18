@@ -1646,6 +1646,60 @@ class ShardOwnedLifecycleIT {
     }
 
     /**
+     * A {@code start()} called after a {@code stop()} that gave up waiting for an earlier start waits for that start - which
+     * does the stop's work once its statements return - and says so: one WARN naming the queue and the instance once it
+     * has waited the 2 s budget, however long it goes on waiting. It used to block with nothing in the log for as long as
+     * the earlier start's statement did. It then starts the queue afresh. A trigger holds the earlier start inside the
+     * acquire of unit 1 for 8 s.
+     */
+    @Test
+    void a_start_called_while_an_earlier_start_still_owes_a_stop_waits_for_it_and_says_so_once() throws Exception {
+        var settings    = settingsWithShedGrace(Duration.ofSeconds(1));
+        var instanceId  = "restart-behind-start";
+        var logged      = new ListAppender<ILoggingEvent>();
+        var queueLogger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(ShardOwnedQueue.class);
+        logged.start();
+        queueLogger.addAppender(logged);
+        var queue = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, instanceId);
+        try {
+            slowTheAcquireOf("unordered", instanceId, 1, 8);
+            var starting = CompletableFuture.runAsync(() -> startUnchecked(queue, "unordered", settings));
+            Awaitility.await().atMost(Duration.ofSeconds(10)).until(this::aHeartbeatIsSleeping);
+            queue.stop();
+            assertThat(starting).as("premise: the stop handed its work to the start still leasing").isNotDone();
+
+            var restarting = CompletableFuture.runAsync(queue::start);
+            Awaitility.await().atMost(Duration.ofSeconds(5)).until(() -> !waitingToStart(logged).isEmpty());
+            assertThat(restarting).as("the restart waits for the earlier start").isNotDone();
+            assertThat(waitingToStart(logged).getFirst()).as("the WARN names the instance, the queue and what it waits for")
+                                                         .contains("Instance " + instanceId)
+                                                         .contains("queue " + QUEUE_ID)
+                                                         .contains("an earlier start");
+
+            // Waits for the held UPDATE to commit, so the restart's own acquire of unit 1 does not sleep.
+            dropSlowAcquire();
+            starting.get(20, TimeUnit.SECONDS);
+            restarting.get(20, TimeUnit.SECONDS);
+
+            assertThat(waitingToStart(logged)).as("one WARN, though the restart waited out more than one budget").hasSize(1);
+            assertThat(queue.isStarted()).as("the restart started the queue afresh").isTrue();
+            Awaitility.await().atMost(Duration.ofSeconds(10)).until(
+                    () -> instanceRegistered(instanceId) && unitsOwnedBy("unordered", instanceId) > 0);
+        } finally {
+            dropSlowAcquire();
+            queue.stop();
+            queueLogger.detachAppender(logged);
+        }
+    }
+
+    private static List<String> waitingToStart(ListAppender<ILoggingEvent> logged) {
+        return List.copyOf(logged.list).stream()
+                   .map(ILoggingEvent::getFormattedMessage)
+                   .filter(message -> message.contains("waiting to start queue") || message.contains("waiting to consume queue"))
+                   .toList();
+    }
+
+    /**
      * A {@code MessageQueue.stop()} called while a {@code consume()} or {@code start()} of the {@link PostgresqlMessageQueue}
      * is still leasing returns within its budget, and leaves nothing of that start running. The queue's stop used to take
      * the monitor {@code consume()} and {@code start()} hold across their consumers' starts, database work included, so
@@ -1708,6 +1762,51 @@ class ShardOwnedLifecycleIT {
                     () -> !instanceRegistered(instanceId) && unitsOwnedBy("unordered", instanceId) == 0 && unitsOwnedBy("ordered", instanceId) == 0);
         } finally {
             dropSlowAcquire();
+        }
+    }
+
+    /**
+     * A {@code MessageQueue.start()} called after a {@code MessageQueue.stop()} that gave up waiting for a {@code consume()}
+     * waits for that {@code consume()} - which stops both lanes again once its starts return - and says so: one WARN naming
+     * the queue and the instance once it has waited the 2 s budget, however long it goes on waiting. It used to block on
+     * the queue's lifecycle lock with nothing in the log for as long as the lane's statement did. It then starts both
+     * lanes afresh. A trigger holds the unordered lane's start inside the acquire of shard 1 for 10 s.
+     */
+    @Test
+    void a_message_queue_start_called_while_an_earlier_consume_still_owes_a_stop_waits_for_it_and_says_so_once() throws Exception {
+        var instanceId   = "spi-restart-behind-consume";
+        var subscription = new AtomicReference<Subscription>();
+        var logged       = new ListAppender<ILoggingEvent>();
+        var queueLogger  = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(PostgresqlMessageQueue.class);
+        logged.start();
+        queueLogger.addAppender(logged);
+        try (var queue = new PostgresqlMessageQueue(dataSource, QUEUE_ID, SHARD_COUNT, instanceId)) {
+            slowTheAcquireOf("unordered", instanceId, 1, 10);
+            var consuming = CompletableFuture.runAsync(() -> subscription.set(consumeUnchecked(queue)));
+            Awaitility.await().atMost(Duration.ofSeconds(10)).until(this::aHeartbeatIsSleeping);
+            queue.stop();
+            assertThat(consuming).as("premise: the stop handed its work to the consume() still leasing").isNotDone();
+
+            var restarting = CompletableFuture.runAsync(queue::start);
+            Awaitility.await().atMost(Duration.ofSeconds(5)).until(() -> !waitingToStart(logged).isEmpty());
+            assertThat(restarting).as("the restart waits for the earlier consume()").isNotDone();
+            assertThat(waitingToStart(logged).getFirst()).as("the WARN names the instance, the queue and what it waits for")
+                                                         .contains("Instance " + instanceId)
+                                                         .contains("queue " + QUEUE_ID)
+                                                         .contains("an earlier consume() or start()");
+
+            // Waits for the held UPDATE to commit, so the restart's own acquire of shard 1 does not sleep.
+            dropSlowAcquire();
+            consuming.get(30, TimeUnit.SECONDS);
+            restarting.get(30, TimeUnit.SECONDS);
+
+            assertThat(waitingToStart(logged)).as("one WARN, though the restart waited out more than one budget").hasSize(1);
+            assertThat(queue.isStarted()).as("the restart started the queue afresh").isTrue();
+            Awaitility.await().atMost(Duration.ofSeconds(10)).until(
+                    () -> subscription.get().unorderedShardsHeld() > 0 && subscription.get().orderedUnitsHeld() > 0);
+        } finally {
+            dropSlowAcquire();
+            queueLogger.detachAppender(logged);
         }
     }
 

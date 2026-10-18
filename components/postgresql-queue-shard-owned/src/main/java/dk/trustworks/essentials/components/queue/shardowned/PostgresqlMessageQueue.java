@@ -632,7 +632,7 @@ public final class PostgresqlMessageQueue implements MessageQueue {
         // registered, and letGoOfLifecycle stops every consumer again and leaves the queue not
         // started - as if the stop had come right after this consume().
         var pair = List.of(unorderedConsumer, orderedConsumer);
-        holdLifecycle(Holder.STARTING);
+        holdLifecycle(Holder.STARTING, "consume");
         try {
             synchronized (handOver) {
                 beingStarted = pair;
@@ -988,6 +988,11 @@ public final class PostgresqlMessageQueue implements MessageQueue {
      * A {@link #stop()} that gave up waiting for this start stops the queue without it. This start then starts none of
      * the consumers it has not begun yet, stops every consumer again once the one it is starting returns, and returns
      * with the queue not started.
+     * <p>
+     * Called while an earlier {@link #consume} or {@code start()} is still starting its consumers - after such a stop
+     * returned, say - this waits for it, as {@code consume()} does: as long as that start's statements take, which
+     * nothing in this queue bounds. Once it has waited {@link ShardOwnedQueue#SHUTDOWN_BUDGET}, it logs one WARN naming
+     * the queue and the instance, and goes on waiting.
      */
     @Override
     public void start() {
@@ -995,7 +1000,7 @@ public final class PostgresqlMessageQueue implements MessageQueue {
         // in which stop() had already declared the queue stopped but had not stopped anything, so a
         // concurrent consume() could observe the flag, set it back, and leave the two states
         // disagreeing about which consumers were running.
-        holdLifecycle(Holder.STARTING);
+        holdLifecycle(Holder.STARTING, "start");
         try {
             if (!started.compareAndSet(false, true)) {
                 return;
@@ -1040,6 +1045,16 @@ public final class PostgresqlMessageQueue implements MessageQueue {
      * already returned - and leaves the queue not started; a {@code consume()} still registers its pair and returns its
      * {@link Subscription}. A stop called while another stop holds the lock past the budget returns at once: that stop is
      * stopping every consumer, and nothing can start one before it is done.
+     * <p>
+     * A stop that gave up waiting so returns <b>before</b> the consumer still leasing has released its units and
+     * deregistered the instance ({@link ShardOwnedQueue#stop()}), though {@link #isStarted()} is false from then on. A
+     * {@link #start()} or {@code consume()} called afterwards waits for the {@code consume()} or {@code start()} still
+     * running. And closing the {@code DataSource} before that call returns leaves the release and the deregistration to
+     * fail against a closed pool: the units stay unserved until this instance's membership row is older than the lease
+     * TTL, as after a crash. Stopping a {@code ShardRuntime} passed to {@code setRuntime} before then costs the drain
+     * instead: the release and the deregistration go through the queue's {@code DataSource} and still succeed, but
+     * handlers still running on units that consumer adopted before the stop are no longer waited for, so their
+     * acknowledgements may be lost and those messages redelivered.
      */
     @Override
     public void stop() {
@@ -1100,10 +1115,54 @@ public final class PostgresqlMessageQueue implements MessageQueue {
 
     /**
      * Take {@link #lifecycleLock}, waiting as long as it takes, for a {@code consume()} or {@code start()}: a stop holding
-     * it is bounded by each consumer's own stop, and a start holding it is what this start has to wait for.
+     * it is bounded by each consumer's own stop, and a start holding it is what this start has to wait for. That start
+     * is not bounded: its consumers' database work blocks as long as a statement does, and after a {@link #stop()} that
+     * gave up waiting for it, it stops every consumer again before it lets go ({@link #letGoOfLifecycle}). So the wait,
+     * like a plain {@code lock()}, goes on through the thread's interrupt, but it is not silent: once it has waited
+     * {@link ShardOwnedQueue#SHUTDOWN_BUDGET}, it logs one WARN saying what holds the lock.
+     *
+     * @param operation {@code "consume"} or {@code "start"}, the call waiting, for the WARN
      */
-    private void holdLifecycle(Holder what) {
-        lifecycleLock.lock();
+    private void holdLifecycle(Holder what, String operation) {
+        var interrupted = false;
+        var warned      = false;
+        try {
+            while (true) {
+                try {
+                    if (lifecycleLock.tryLock(ShardOwnedQueue.SHUTDOWN_BUDGET.toMillis(), TimeUnit.MILLISECONDS)) {
+                        break;
+                    }
+                } catch (InterruptedException e) {
+                    // Waited on regardless, as lock() would; the flag is set again once the lock is held.
+                    interrupted = true;
+                    continue;
+                }
+                Holder heldBy;
+                synchronized (handOver) {
+                    heldBy = holder;
+                }
+                // NONE: the holder has just taken the lock, or is just letting go of it - nothing to say yet.
+                if (!warned && heldBy != Holder.NONE) {
+                    warned = true;
+                    if (heldBy == Holder.STARTING) {
+                        log.warn("Instance {} has waited {} and is still waiting to {} queue {}: an earlier consume() or start() of "
+                                         + "the queue is still starting its consumers - registering the instance and leasing its "
+                                         + "units, and, if a stop gave up waiting for it, stopping every consumer again once those "
+                                         + "statements return. Nothing in this queue bounds that wait: a statement that hangs ends at "
+                                         + "the driver's socketTimeout, and without one never",
+                                 instanceId, ShardOwnedQueue.SHUTDOWN_BUDGET, operation, queueId);
+                    } else {
+                        log.warn("Instance {} has waited {} and is still waiting to {} queue {}: a stop of the queue is still "
+                                         + "stopping its consumers",
+                                 instanceId, ShardOwnedQueue.SHUTDOWN_BUDGET, operation, queueId);
+                    }
+                }
+            }
+        } finally {
+            if (interrupted) {
+                Thread.currentThread().interrupt();
+            }
+        }
         markHeld(what);
     }
 
