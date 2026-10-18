@@ -55,9 +55,9 @@ owns — are never drafted; slice-enrich names them once as not inferable. `tier
 **A manifest another generator owns is not drift to reconcile.** When `generator` is not `essentials`,
 the tool that wrote the manifest may derive `tier` from its own project data and overwrite it on every
 refresh — it has a source to derive from, and this plugin does not. That manifest is its generator's
-to maintain; leave its `tier` alone, and leave its `flow` and `scenarios` alone too — a spec-driven
-generator writes those itself (`manifest-guide.md` §3), so `/essentials:slice-enrich` skips such a
-manifest with a note.
+to maintain; leave its `tier` alone, and leave its `flow`, `scenarios` and `requirements` alone too —
+a spec-driven generator writes those itself (`manifest-guide.md` §3), so `/essentials:slice-enrich`
+skips such a manifest with a note.
 
 **`--fix-manifests` still writes none of this.** It regenerates the machine-derived row and nothing on the
 human-owned row: it never invents a journey name, a scenario, a summary or an invariant, because prose a
