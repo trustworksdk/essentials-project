@@ -154,16 +154,23 @@ public final class DurableLocalCommandBus extends AbstractCommandBus implements 
                  UnitOfWorkControllingCommandBusInterceptor.class.getSimpleName());
     }
 
+    /**
+     * Stops the bus and cancels its {@link DurableQueueConsumer}, deregistering it from the {@link DurableQueues}, because
+     * the next {@link #start()} consumes from the command queue anew. {@link DurableQueueConsumer#stop()} alone is not
+     * enough on every backend: a {@code ShardOwnedDurableQueues} consumer stopped that way stays registered - so the
+     * {@code DurableQueues}' next {@code start()} starts it again - which made the bus's next {@link #start()} fail with
+     * "There is already a consumer on queue". On the other backends {@code cancel()} is {@code stop()}.
+     */
     @Override
     public void stop() {
         if (started) {
             log.info("Stopping...");
             started = false;
             if (durableQueueConsumer != null) {
-                log.debug("Stopping durableQueueConsumer");
-                durableQueueConsumer.stop();
+                log.debug("Cancelling durableQueueConsumer");
+                durableQueueConsumer.cancel();
                 durableQueueConsumer = null;
-                log.debug("Stopped durableQueueConsumer");
+                log.debug("Cancelled durableQueueConsumer");
             }
             log.info("Stopped");
         }
