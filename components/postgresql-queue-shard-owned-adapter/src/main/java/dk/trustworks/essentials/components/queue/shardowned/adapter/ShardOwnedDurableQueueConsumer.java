@@ -78,15 +78,14 @@ class ShardOwnedDurableQueueConsumer implements DurableQueueConsumer {
      */
     private final ReentrantLock lifecycleLock = new ReentrantLock();
     /**
-     * Guards {@link #holder} and {@link #stopOwed}. Held for a few reads and writes of them only.
+     * Guards {@link #holder}. Held for a few reads and writes of it only.
      */
     private final Object        handOver      = new Object();
-    private       Holder        holder        = Holder.NONE;
     /**
-     * Whether a {@link #stop()} that did not get {@link #lifecycleLock} has stopped the consumer while a {@link #start()}
-     * was subscribing, so the start must stop the subscription the queue returns.
+     * What the holder of {@link #lifecycleLock} is doing, and whether it owes a stop - one value every stop and start
+     * decides the hand-over from ({@link Holder}).
      */
-    private       boolean       stopOwed;
+    private       Holder        holder        = Holder.NONE;
 
     private volatile Subscription subscription;
 
@@ -170,8 +169,7 @@ class ShardOwnedDurableQueueConsumer implements DurableQueueConsumer {
                 throw new DurableQueueException("Failed to start consumer '" + consumerName() + "'", e, queueName());
             } finally {
                 synchronized (handOver) {
-                    owed = stopOwed;
-                    stopOwed = false;
+                    owed = holder == Holder.STOP_OWED;
                     // Set in the same block that reads the owed stop, so no stop sees NONE in between: one that did would
                     // wait for the whole of the subscription's stop below.
                     holder = owed && subscribed != null ? Holder.FINISHING_OWED_STOP : Holder.NONE;
@@ -231,7 +229,7 @@ class ShardOwnedDurableQueueConsumer implements DurableQueueConsumer {
                                          + "up waiting for it",
                                  consumerName(), STOP_WAITS_FOR_START, queueName());
                     } else {
-                        // STARTING, or NONE: the lock has just changed hands (it is unfair), which is brief, so whatever has held
+                        // STARTING or STOP_OWED, or NONE: the lock has just changed hands (it is unfair), which is brief, so whatever has held
                         // it this long is most likely an earlier start still subscribing.
                         log.warn("Consumer '{}' has waited {} and is still waiting to start on queue '{}': an earlier start of the "
                                          + "consumer still holds its lifecycle, in the queue's consume(), registering the instance and "
@@ -276,10 +274,10 @@ class ShardOwnedDurableQueueConsumer implements DurableQueueConsumer {
             synchronized (handOver) {
                 heldBy = holder;
                 if (heldBy == Holder.STARTING) {
-                    stopOwed = true;
+                    holder = Holder.STOP_OWED;
                 }
             }
-            if (heldBy == Holder.STARTING) {
+            if (heldBy == Holder.STARTING || heldBy == Holder.STOP_OWED) {
                 if (interrupted) {
                     log.warn("Consumer '{}' was interrupted while its stop waited for its start on queue '{}' to subscribe, and "
                                      + "stopped without it. The start stops the subscription once the queue's consume() returns",
@@ -349,7 +347,13 @@ class ShardOwnedDurableQueueConsumer implements DurableQueueConsumer {
     }
 
     /**
-     * What the holder of {@link #lifecycleLock} is doing, for a {@link #stop()} that did not get it.
+     * What the holder of {@link #lifecycleLock} is doing, and whether it owes a stop - one value, read and moved only under
+     * {@link #handOver}, so a {@link #stop()} that did not get the lock, the {@link #start()} holding it and a start waiting
+     * for it ({@link #lockForStart}) each decide from it.
+     * <p>
+     * The same hand-over as {@code ShardOwnedQueue}'s {@code Run.Phase} and {@code PostgresqlMessageQueue}'s lifecycle
+     * holder, but not forward-only: this describes whoever holds the lock now, and goes back to {@link #NONE} as each
+     * holder lets go, where a {@code Run.Phase} belongs to one run.
      */
     private enum Holder {
         /**
@@ -357,8 +361,17 @@ class ShardOwnedDurableQueueConsumer implements DurableQueueConsumer {
          * brief. The stop waits for the lock a few milliseconds at a time, reading the holder again in between.
          */
         NONE,
-        /** A {@link #start()} subscribing: the stop leaves stopping the subscription to it. */
+        /**
+         * A {@link #start()} subscribing, owing no stop: a stop that did not get the lock moves it to {@link #STOP_OWED}
+         * and leaves stopping the subscription to it.
+         */
         STARTING,
+        /**
+         * A {@link #start()} still subscribing, owing a stop that gave up waiting for it: the start stops the subscription
+         * the queue's {@code consume()} returns ({@link #FINISHING_OWED_STOP}). A further stop has nothing to add, and leaves
+         * it to the start too.
+         */
+        STOP_OWED,
         /**
          * A {@link #start()} stopping the subscription the queue's {@code consume()} returned it, for a stop that gave up
          * waiting for it - which lasts as long as that subscription's stop: each lane may drain for up to {@code shedGrace}

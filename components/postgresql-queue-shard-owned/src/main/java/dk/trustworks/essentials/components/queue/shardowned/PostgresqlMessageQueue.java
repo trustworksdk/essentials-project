@@ -110,17 +110,19 @@ public final class PostgresqlMessageQueue implements MessageQueue {
      * {@link ShardOwnedQueue#stop()} keeps to. It now waits up to {@link ShardOwnedQueue#SHUTDOWN_BUDGET} for this lock,
      * on an interrupted thread not at all, and then stops without it ({@link #stopWhileStarting}); what the holder still
      * owes the stop, it does itself before it lets go ({@link #letGoOfLifecycle}). A stop on the holder's own thread
-     * never takes it again ({@link #stopFromInsideTheHolder}).
+     * never takes it again ({@link #stopFromInsideTheHolder}). Who holds it and whether that holder owes a stop is one
+     * value, {@link #holder}.
      */
     private final ReentrantLock                 lifecycleLock      = new ReentrantLock();
     /**
-     * Guards {@link #holder}, {@link #beingStarted}, {@link #stopOwed} and {@link #stopsWithoutLock}. Held for a few
-     * reads and writes of them only, never across a start or a stop.
+     * Guards {@link #holder}, {@link #beingStarted} and {@link #stopsWithoutLock}. Held for a few reads and writes of them
+     * only, never across a start or a stop.
      */
     private final Object                        handOver           = new Object();
     /**
-     * What the holder of {@link #lifecycleLock} is doing: {@link Holder#NONE} while nobody holds it, and just after a
-     * holder took it or just before it lets go.
+     * What the holder of {@link #lifecycleLock} is doing, and whether it owes a stop: {@link Holder#NONE} while nobody
+     * holds it, and just after a holder took it or just before it lets go. The one value every stop, start and the holder
+     * itself decides the hand-over from ({@link Holder}).
      */
     private       Holder                        holder             = Holder.NONE;
     /**
@@ -129,17 +131,6 @@ public final class PostgresqlMessageQueue implements MessageQueue {
      * leasing hands the stop's work to its start, which then adopts nothing it leases.
      */
     private       List<ShardOwnedQueue>         beingStarted       = List.of();
-    /**
-     * Whether a stop has marked the queue not started while a {@code consume()}, a {@code start()} or a
-     * {@link Subscription#start()} held {@link #lifecycleLock}, so that holder must stop every consumer again once its
-     * own starts have returned: it may have started some after the stop, and a {@code consume()} registers its new pair
-     * after. Set, only while the holder is {@link Holder#STARTING}, by a stop that did not get the lock
-     * ({@link #stopWhileStarting}), and by a stop on the holder's own thread - a {@link QueueObserver} told of an
-     * acquisition - which never takes the lock again ({@link #stopFromInsideTheHolder}). The holder of either kind may
-     * be a {@code Subscription.start()} as well as the queue's {@code consume()} or {@code start()}. Cleared by the holder
-     * as it does the owed stop ({@link #letGoOfLifecycle}).
-     */
-    private       boolean                       stopOwed;
     /**
      * Stops that did not get {@link #lifecycleLock} and are still stopping consumers. The holder waits for them before it
      * lets go, so none of them stops a consumer a later {@code start()} or {@code consume()} has just started.
@@ -1052,11 +1043,11 @@ public final class PostgresqlMessageQueue implements MessageQueue {
         holdLifecycle(Holder.STARTING, "start");
         try {
             // Under handOver, and not while a stop is owed, as consume() sets it (markStartedUnlessStopOwed). A stop that
-            // did not get the lock, finding this start STARTING, has already marked the queue not started and may have
+            // did not get the lock, moving this start to STOP_OWED, has already marked the queue not started and may have
             // returned; setting the flag after it made isStarted() read true until letGoOfLifecycle, which does that
             // stop's work, cleared it again.
             synchronized (handOver) {
-                if (stopOwed || !started.compareAndSet(false, true)) {
+                if (holder == Holder.STOP_OWED || !started.compareAndSet(false, true)) {
                     return;
                 }
             }
@@ -1139,14 +1130,14 @@ public final class PostgresqlMessageQueue implements MessageQueue {
             List<ShardOwnedQueue> toStop = List.of();
             synchronized (handOver) {
                 heldBy = holder;
-                if (heldBy == Holder.STARTING) {
-                    stopOwed = true;
+                if (heldBy.isAStart()) {
+                    holder = Holder.STOP_OWED;
                     stopsWithoutLock++;
                     started.set(false);
                     toStop = registeredAndBeingStarted();
                 }
             }
-            if (heldBy == Holder.STARTING) {
+            if (heldBy.isAStart()) {
                 stopWhileStarting(toStop, interrupted);
                 return;
             }
@@ -1179,26 +1170,54 @@ public final class PostgresqlMessageQueue implements MessageQueue {
      */
     private void stopFromInsideTheHolder() {
         synchronized (handOver) {
-            if (holder == Holder.STARTING) {
-                stopOwed = true;
+            if (holder.isAStart()) {
+                holder = Holder.STOP_OWED;
                 started.set(false);
             }
         }
     }
 
     /**
-     * What the holder of {@link #lifecycleLock} is doing, for a {@link #stop()} that did not get it.
+     * What the holder of {@link #lifecycleLock} is doing, and whether it owes a stop - one value, read and moved only under
+     * {@link #handOver}, so a {@link #stop()} that did not get the lock, a stop on the holder's own thread, the holder's
+     * starts ({@link #stopIsOwed}, {@link #markStartedUnlessStopOwed}) and its letting go ({@link #letGoOfLifecycle}) each
+     * decide from it. {@link #stopsWithoutLock} and {@link #beingStarted} are data beside it, not part of the decision.
+     * <p>
+     * The same hand-over as {@code ShardOwnedQueue}'s {@code Run.Phase}, but not forward-only: that phase belongs to one
+     * run, a fresh object per start, while this queue has no per-start object to hang a phase on - this describes whoever
+     * holds the lock now, and goes back to {@link #NONE} as each holder lets go. A reentrant hold (an observer starting the
+     * queue from inside a {@code consume()}) does not move it ({@link #markHeld}).
      */
     private enum Holder {
-        /** Just taken, or about to be let go of: the stop tries the lock again. */
+        /** Nobody holds the lock, or a holder has just taken it or is about to let go of it: the stop tries the lock again. */
         NONE,
         /**
-         * A {@code consume()}, a {@code start()} or a {@link Subscription#start()}: the stop stops the queue without the
-         * lock, and the holder owes it.
+         * A {@code consume()}, a {@code start()} or a {@link Subscription#start()} starting its consumers, owing no stop. A
+         * stop that did not get the lock, or one on this holder's thread, moves it to {@link #STOP_OWED}.
          */
         STARTING,
+        /**
+         * A holder of the {@link #STARTING} kind owes a stop: the queue is marked not started, and the holder starts none of
+         * the consumers it has not begun, never marks the queue started, and once its starts have returned waits for the
+         * stops still stopping without the lock and stops every consumer again ({@link #FINISHING_OWED_STOP}). Also reached
+         * from {@link #FINISHING_OWED_STOP}, by a stop arriving while the holder does an owed stop: it does one more.
+         */
+        STOP_OWED,
+        /**
+         * The holder doing the stop it owed ({@link #letGoOfLifecycle}): stopping every consumer again, the queue marked not
+         * started. A stop arriving meanwhile is owed again, as while {@link #STARTING}, and the holder repeats the stopping.
+         */
+        FINISHING_OWED_STOP,
         /** A {@code stop()}, which stops every consumer: the stop has nothing left to do. */
-        STOPPING
+        STOPPING;
+
+        /**
+         * Whether the holder is a {@code consume()}, a {@code start()} or a {@link Subscription#start()} - starting, owing
+         * a stop, or doing it - so a stop that does not take the lock is owed by it.
+         */
+        boolean isAStart() {
+            return this == STARTING || this == STOP_OWED || this == FINISHING_OWED_STOP;
+        }
     }
 
     /**
@@ -1234,7 +1253,7 @@ public final class PostgresqlMessageQueue implements MessageQueue {
                 // NONE: the holder has just taken the lock, or is just letting go of it - nothing to say yet.
                 if (!warned && heldBy != Holder.NONE) {
                     warned = true;
-                    if (heldBy == Holder.STARTING) {
+                    if (heldBy.isAStart()) {
                         log.warn("Instance {} has waited {} and is still waiting to {} queue {}: an earlier consume() or start() of "
                                          + "the queue, or start() of one of its subscriptions, is still starting its consumers - "
                                          + "registering the instance and leasing its units, and, if a stop gave up waiting for "
@@ -1281,12 +1300,12 @@ public final class PostgresqlMessageQueue implements MessageQueue {
         var done = false;
         try {
             while (!done) {
-                // The last check and saying the lock is free are one step: a stop finding the holder still STARTING in
+                // The last check and saying the lock is free are one step: a stop finding the holder still a start in
                 // between would owe a stop nobody does.
                 synchronized (handOver) {
                     awaitStopsWithoutLock();
-                    if (stopOwed) {
-                        stopOwed = false;
+                    if (holder == Holder.STOP_OWED) {
+                        holder = Holder.FINISHING_OWED_STOP;
                         started.set(false);
                     } else {
                         holder = Holder.NONE;
@@ -1304,7 +1323,6 @@ public final class PostgresqlMessageQueue implements MessageQueue {
                 synchronized (handOver) {
                     holder = Holder.NONE;
                     beingStarted = List.of();
-                    stopOwed = false;
                 }
             }
             lifecycleLock.unlock();
@@ -1363,22 +1381,25 @@ public final class PostgresqlMessageQueue implements MessageQueue {
         return all;
     }
 
+    /**
+     * Whether the holder of {@link #lifecycleLock} owes a stop ({@link Holder#STOP_OWED}), read under {@link #handOver}.
+     */
     private boolean stopIsOwed() {
         synchronized (handOver) {
-            return stopOwed;
+            return holder == Holder.STOP_OWED;
         }
     }
 
     /**
      * Mark the queue started, for a {@code consume()} or a {@link Subscription#start()} holding {@link #lifecycleLock},
-     * unless a stop is owed ({@link #stopOwed}). That stop has already marked the queue not started, and may have
+     * unless a stop is owed ({@link Holder#STOP_OWED}). That stop has already marked the queue not started, and may have
      * returned; {@link #letGoOfLifecycle} marks it not started again only once it has waited for that stop's stopping, so
      * marking it here made {@link #isStarted()} read true in between. Under {@link #handOver}, where such a stop marks it,
      * so a stop arriving after this check still finds the flag set and clears it.
      */
     private void markStartedUnlessStopOwed() {
         synchronized (handOver) {
-            if (!stopOwed) {
+            if (holder != Holder.STOP_OWED) {
                 started.set(true);
             }
         }
@@ -1438,7 +1459,7 @@ public final class PostgresqlMessageQueue implements MessageQueue {
      * critical error escapes untouched, with nothing stopped, as a consumer's own start leaves it; a stop's critical error
      * ends the stopping at once and escapes, with the start's failure added to it as suppressed.
      * <p>
-     * Starts none of those after the moment {@code stopOwed} reports a stop owed ({@link #stopOwed}) to its caller - a
+     * Starts none of those after the moment {@code stopOwed} reports a stop owed ({@link Holder#STOP_OWED}) by its caller - a
      * {@code consume()}, a {@code start()} or a {@link Subscription#start()} holding the lifecycle lock - by a stop that
      * did not get the lock ({@link #stopWhileStarting}) or by one on the caller's own thread, from a
      * {@link QueueObserver} told of an acquisition ({@link #stopFromInsideTheHolder}): that caller stops every consumer
