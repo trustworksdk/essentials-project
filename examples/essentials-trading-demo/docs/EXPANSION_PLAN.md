@@ -72,7 +72,9 @@ buying-power and sell checks stay consistent without cross-aggregate coordinatio
 
 Each phase ends with a load scenario and before/after measurements. Performance work runs throughout, not at the end.
 
-0. **Foundation.** Simulators in compose and Testcontainers. `Money` (USD, D3). The ingest edge: webhook receiver → Inbox
+0. **Foundation.** Simulators in compose and Testcontainers. `Money` (USD, D3) is Essentials' own
+   `dk.trustworks.essentials.types.Money` (amount + currency, mixed currencies rejected; a JSON object, ESS-022) — no
+   demo type; existing `Amount` fields move to it as phase 1 rewrites the account. The ingest edge: webhook receiver → Inbox
    → per-account routing, with fault-injection tests (duplicates, out-of-order, missing fields). Needs SR-1, SR-3 and
    SR-5 from the simulator; the liquidity provider itself is needed by phase 3.
 1. **Identity and account core.** `User`, login, account opening, the cash-bucket and position ledger, a buying-power

@@ -123,6 +123,24 @@ for; one instance exercises none of its ownership, rebalancing or fencing.
   `spring.docker.compose.lifecycle-management: start-only`; the database outlives the demo and
   `docker compose down` stops it.
 
+## Simulators profile
+
+`run-instance.sh N simulators` (or profile `compose,simulators`): the exchange-simulator (`localhost:18080`) and the
+payment-gateway (`localhost:18081`) from `compose.yml`'s `simulators` compose profile; their configuration in
+`simulators/`. The demo is being expanded to trade against them — `docs/EXPANSION_PLAN.md`, and what the simulators
+must add in `docs/SIMULATOR_REQUIREMENTS.md`. Shared receiving mechanics in `integration/` (its own `CLAUDE.md`).
+
+- **The images are built locally** (`exchange-simulator:dev`, `payment-gateway:dev`) from the simulators' own
+  repository; nothing here builds or pulls them. Without them the profile fails at `docker compose up`, and the
+  real-simulator ITs skip.
+- **`spring.docker.compose.profiles.active` is a list, and Spring profiles replace it rather than merge it.** With
+  `observability,simulators` the last profile's YAML wins and one stack never starts. `run-instance.sh` passes the
+  union on the command line; an IDE run configuration combining both must do the same.
+- **One webhook secret for both simulators**, `simulators/secrets/webhook-secret.txt`, a demo value. Docker secret
+  for the containers, `trading-demo.simulators.webhook-secret-file` for the app.
+- **Business dates come from the simulators' events**, never the app's clock: they run a virtual clock, a simulated
+  day per real minute (`simulators/*.yaml`, `clock.mode: system` turns it off).
+
 ## Observability profile
 
 `run-instance.sh N observability` (or profile `compose,observability`): collector, Prometheus, Tempo, Loki,

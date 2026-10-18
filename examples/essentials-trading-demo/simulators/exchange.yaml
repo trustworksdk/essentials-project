@@ -1,0 +1,25 @@
+# The exchange-simulator as the trading demo runs it. Mounted at /etc/exchange/exchange.yaml, layered over the
+# simulator's built-in defaults; see SIMULATOR_REQUIREMENTS.md and the simulator's configuration guide.
+#
+# Webhook subscriptions are added here as the demo's bounded contexts start consuming events (phase 1 onwards).
+# Until then the demo reads nothing from the exchange.
+clock:
+  # A simulated day per real minute, starting on a Monday morning. Business dates always come from the exchange's
+  # events, never from the demo's own clock (EXPANSION_PLAN.md D10). `mode: system` turns the virtual clock off.
+  mode: virtual
+  start: "2030-01-07T13:00:00Z"
+  running: true
+  speed: 1440
+settlement:
+  mode: simulated
+  settlement_days: 1
+  fail_probability: 0.0
+  delay_probability: 0.0
+clearing:
+  # US stocks (D3, D16): the business day ends after the New York close.
+  enabled: true
+  cutoff: "16:30"
+  time_zone: America/New_York
+# Mounts /test: clock control, reset, fault injection and the reconciliation break lists. A demo environment only.
+test_control:
+  enabled: true

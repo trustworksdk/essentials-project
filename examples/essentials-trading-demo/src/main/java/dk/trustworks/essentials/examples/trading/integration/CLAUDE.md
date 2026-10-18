@@ -14,6 +14,13 @@ simulators' receiver guide ("A correct receiver, in five rules").
 | `SignedWebhookReceiver` | One subscription's receiving side: verify, parse, filter, validate, hand to the intake, answer |
 | `ExternalEventIntake` | Deduplicates per `(consumer, eventId)` and queues to the consumer's `Inbox`, in one unit of work |
 | `ExternalEventLogCatchUp` | Reads the source's `/api/events` log behind a fenced lock and feeds the same intake |
+| `SimulatorProperties`, `SimulatorIntegrationConfiguration` | `trading-demo.simulators.*` (set by the `simulators` profile) and the shared `WebhookSignatureVerifier` bean, which exists only when a secret file is configured |
+
+Tests: `ExternalEventIntakeIT` runs against a stub source and always runs. `ExchangeSimulatorWebhookIT` runs against
+the real `exchange-simulator:dev` image with its fault injection on (duplicates, missing fields, out-of-order), and
+**skips itself when the image is not built locally** (`SimulatorImages`) — a skip there is not a pass. Its webhook
+endpoint is created and `exposeHostPorts`-ed in a static block *before* the container fields: Testcontainers makes a
+host port reachable only from containers started after that call.
 
 ## Rules that are easy to break
 

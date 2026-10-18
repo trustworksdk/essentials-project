@@ -1,0 +1,46 @@
+/*
+ * Copyright 2021-2026 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package dk.trustworks.essentials.examples.trading.integration;
+
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.context.annotation.*;
+
+import java.io.*;
+import java.nio.file.*;
+import java.time.Clock;
+
+/**
+ * The beans every simulator-consuming translation slice shares. The verifier exists only when a secret file is
+ * configured, i.e. under the {@code simulators} profile; a slice's webhook endpoint that needs it is conditional on it
+ * too.
+ */
+@Configuration
+@EnableConfigurationProperties(SimulatorProperties.class)
+public class SimulatorIntegrationConfiguration {
+
+    @Bean
+    @ConditionalOnProperty(prefix = "trading-demo.simulators", name = "webhook-secret-file")
+    public WebhookSignatureVerifier webhookSignatureVerifier(SimulatorProperties properties) {
+        var secretFile = Path.of(properties.getWebhookSecretFile());
+        try {
+            return new WebhookSignatureVerifier(Files.readString(secretFile), properties.getSignatureTolerance(), Clock.systemUTC());
+        } catch (IOException e) {
+            throw new UncheckedIOException("Cannot read the simulators' webhook secret from '" + secretFile.toAbsolutePath() + "'", e);
+        }
+    }
+}

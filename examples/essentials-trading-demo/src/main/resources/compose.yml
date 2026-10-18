@@ -26,6 +26,46 @@ services:
     # be created in the database, which the application does at startup when it can.
     command: ["postgres", "-c", "shared_preload_libraries=pg_cron,pg_stat_statements", "-c", "cron.database_name=essentials-trading-demo", "-c", "wal_level=logical", "-c", "max_replication_slots=10", "-c", "max_wal_senders=10", "-c", "max_slot_wal_keep_size=2GB"]
 
+  # ---- Simulators, behind the `simulators` compose profile ---------------------------------------
+  # The exchange-simulator and the payment-gateway (docs/SIMULATOR_REQUIREMENTS.md). Built locally from the
+  # simulators' own repository as exchange-simulator:dev and payment-gateway:dev; nothing here builds them. Host
+  # ports 18080/18081, because 8080/8081 are the demo's own two instances. Activated by the `simulators` Spring
+  # profile (application-simulators.yml). Both sign their webhooks with the same demo secret.
+  exchange:
+    profiles: [simulators]
+    container_name: essentials-trading-demo-exchange
+    image: exchange-simulator:dev
+    ports:
+      - "18080:8080"
+    environment:
+      EXCHANGE_CONFIG: /etc/exchange/exchange.yaml
+    volumes:
+      - ../../simulators/exchange.yaml:/etc/exchange/exchange.yaml:ro
+      - exchange-data:/var/lib/exchange
+    secrets:
+      - webhook_secret
+    # Webhooks are delivered to the demo, which runs on the host, not in this network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  payment-gateway:
+    profiles: [simulators]
+    container_name: essentials-trading-demo-payment-gateway
+    image: payment-gateway:dev
+    ports:
+      - "18081:8081"
+    environment:
+      GATEWAY_CONFIG: /etc/gateway/gateway.yaml
+    volumes:
+      - ../../simulators/gateway.yaml:/etc/gateway/gateway.yaml:ro
+      - gateway-data:/var/lib/gateway
+    secrets:
+      - webhook_secret
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
   # ---- Observability, behind the `observability` compose profile ----------------------------------
   # Started only when that profile is active - the `observability` Spring profile activates it, see
   # application-observability.yml - so a plain run still starts PostgreSQL alone. Metrics and traces
@@ -124,6 +164,12 @@ services:
       - "3000:3000"
     restart: unless-stopped
 
+secrets:
+  webhook_secret:
+    file: ../../simulators/secrets/webhook-secret.txt
+
 volumes:
+  exchange-data:
+  gateway-data:
   prometheus:
   tempo:

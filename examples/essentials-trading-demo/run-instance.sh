@@ -5,10 +5,17 @@
 #   ./run-instance.sh 1        # port 8080, instance id demo-1
 #   ./run-instance.sh 2        # port 8081, instance id demo-2
 #   ./run-instance.sh 1 observability   # also metrics, traces and logs in Grafana
+#   ./run-instance.sh 1 simulators      # also the exchange-simulator and payment-gateway
+#   ./run-instance.sh 1 observability,simulators
 #
 # The optional second argument adds Spring profiles to `compose`. `observability` starts the
 # collector, Prometheus, Tempo, Loki and Grafana beside PostgreSQL (http://localhost:3000) and turns
 # on export. Pass it to every instance you want in the dashboards; each is labelled by its id.
+# `simulators` starts the exchange-simulator (http://localhost:18080) and the payment-gateway
+# (http://localhost:18081) beside PostgreSQL; it needs their images built locally.
+#
+# Each of those profiles names its compose profile in its own YAML, but a list property is not merged
+# across Spring profiles - the last one wins - so this script passes the union explicitly.
 #
 # The point of running more than one is the shard-owned queue engine: ownership,
 # fair-share rebalancing and fencing only do anything with several instances
@@ -46,6 +53,7 @@ set -euo pipefail
 N="${1:?usage: run-instance.sh <instance-number> [extra-spring-profiles]}"
 PORT=$((8079 + N))
 PROFILES="compose${2:+,$2}"
+COMPOSE_PROFILES="$(echo "${2:-}" | tr ',' '\n' | grep -xE 'observability|simulators' | paste -sd, - || true)"
 
 cd "$(dirname "$0")/../.."
 
@@ -53,5 +61,5 @@ JAVA_HOME="${JAVA_HOME:-/usr/lib/jvm/temurin-25-jdk-arm64}" \
 exec ./mvnw -o -pl examples/essentials-trading-demo -DskipDependencyCheck=true \
     -Dspring-boot.run.profiles="${PROFILES}" \
     -Dspring-boot.run.jvmArguments="-Dserver.port=${PORT}" \
-    -Dspring-boot.run.arguments="--essentials.shard-owned-queue.instance-id=demo-${N} --trading-demo.load.enabled=$([ "$N" = 1 ] && echo true || echo false)" \
+    -Dspring-boot.run.arguments="--essentials.shard-owned-queue.instance-id=demo-${N} --trading-demo.load.enabled=$([ "$N" = 1 ] && echo true || echo false)${COMPOSE_PROFILES:+ --spring.docker.compose.profiles.active=${COMPOSE_PROFILES}}" \
     spring-boot:run

@@ -1,0 +1,20 @@
+# The payment-gateway as the trading demo runs it. Mounted at /etc/gateway/gateway.yaml, layered over the gateway's
+# built-in defaults.
+clock:
+  # Same start and speed as the exchange. The two clocks are separate and drift apart by the length of any restart
+  # until SR-27 (the gateway follows the exchange's clock) exists.
+  mode: virtual
+  start: "2030-01-07T13:00:00Z"
+  running: true
+  speed: 1440
+payments:
+  currencies: [USD]
+  deposit: { fail_probability: 0.0, min_delay_seconds: 60, max_delay_seconds: 1800 }
+  withdrawal: { fail_probability: 0.0, min_delay_seconds: 600, max_delay_seconds: 14400 }
+  return_probability: 0.0
+statement:
+  cutoff: "16:30"
+  time_zone: America/New_York
+  opening_balances: { USD: "10000000.00" }
+test_control:
+  enabled: true
