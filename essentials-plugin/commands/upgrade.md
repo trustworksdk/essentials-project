@@ -206,7 +206,7 @@ grep -n "${PREFIX}.githooks/pre-commit" "${TOP}/${HOOKS}/pre-commit" 2>/dev/null
   lint gate does (into `/tmp/essentials-upgrade/` instead): the project's copy with `--json`, then the
   plugin's copy over the same tree with `--baseline` of that output. What the second run prints is
   what the refresh adds, and every one of those findings fails the hook and CI. State it in the offer:
-  "the refresh adds N findings in <files>; the hook and CI fail on them until they are fixed". Then
+  "the refresh adds N findings in `<files>`; the hook and CI fail on them until they are fixed". Then
   offer the manifest fixes **before** the refresh, one file at a time, by that section's list — for
   `14 tier`, `tier: cqrs-es` where the BC is event-sourced, otherwise delete the `tier` line — so the
   gate never goes red; rerun the measurement, and offer the refresh with what is left. Where findings
@@ -556,8 +556,8 @@ command keeps no file of its own. The note is written once the branch exists (4.
 row, its `reason`. When no required pin has a `tolerated` entry, ask once with `AskUserQuestion`:
 **Move all** / **Stop** / **Show impact**. Show impact prints the migration-guide sections the notes
 cite for the pins (each `cite`, and the `pins` step's `cites`) and asks again. When a pin has
-`tolerated` entries, ask per pin instead: a pin at a tolerated version offers **Keep <current>** /
-**Move to <target>** / **Stop**, any other pin **Move** / **Stop**, both with **Show impact**.
+`tolerated` entries, ask per pin instead: a pin at a tolerated version offers **Keep `<current>`** /
+**Move to `<target>`** / **Stop**, any other pin **Move** / **Stop**, both with **Show impact**.
 
 A pin Group D cannot move stops it before anything is written: a `move` row without `fix.ops` (set
 outside this project, in a parent or BOM it imports), an `unknown` one (its value could not be read),

@@ -374,7 +374,7 @@ adds. If the first line printed no JSON, say the cost could not be measured and 
 Step 1.5 slice-lint finding as possibly new.
 
 1. **No new findings** — offer the refresh, saying it adds none.
-2. **New findings** — state them in the offer: "the refresh adds N findings in <files>; the hook and
+2. **New findings** — state them in the offer: "the refresh adds N findings in `<files>`; the hook and
    CI fail on them until they are fixed". Then offer the manifest fixes **before** the refresh, one
    file at a time, each shown and applied only on a yes, so the gate never goes red:
    - `14 tier` — the hint's repair as a per-file edit: `tier: cqrs-es` if the BC is event-sourced

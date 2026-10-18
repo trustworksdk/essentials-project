@@ -422,4 +422,4 @@ An op not in this table is not applied: report it as unknown and leave the row f
 - A script exits 2 ⇒ its checks go under **Not run** with the script's message; the run continues
   with the others.
 - The change list is large ⇒ judge every in-scope file or list the ones not judged under **Not run**
-  ("judgement: <n> files not read"); never sample silently.
+  ("judgement: `<n>` files not read"); never sample silently.

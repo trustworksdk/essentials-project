@@ -203,7 +203,7 @@ anything else (exit 2), so ask again rather than letting it fail.
 
 - `TARGET_MODE == "current directory"` ⇒ `TARGET_DIR = WORKSPACE_DIR`.
 - `TARGET_MODE == "new subdirectory"` ⇒ `TARGET_DIR = WORKSPACE_DIR/<artifactId>`. If it exists and
-  is non-empty, abort: "directory <X> already exists and is non-empty; remove it or pick a
+  is non-empty, abort: "directory `<X>` already exists and is non-empty; remove it or pick a
   different artifactId". Do **not** overwrite.
 
 The renderer writes only into an absent or empty directory (`.git/` aside). An entry that already

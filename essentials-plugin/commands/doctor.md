@@ -67,7 +67,7 @@ that `JAVA_HOME` is what Maven uses, and how to point it at the newer JDK.
 
 ## Step 3 — Close
 
-One line: either "nothing here stops a command in <profile>" with the count of degraded lines, or the
+One line: either "nothing here stops a command in `<profile>`" with the count of degraded lines, or the
 blocking requirements with the one install that unblocks most (python3 3.11+ unblocks every profile).
 Suggest re-running `/essentials:doctor` after installing. Nothing else: no offer to install, no edit to
 any file, no build.
