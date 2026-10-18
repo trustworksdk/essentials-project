@@ -2578,8 +2578,8 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      *       {@link Phase#STARTING} to {@code STOP_OWED_*}). The start then ends the run itself, under the lock
      *       ({@link #endRunOfStart}). So a stop under the lock always finds the current run its own to take out, and a start
      *       finds its run current or taken out by the one stop it owes.</li>
-     *   <li>Whether a start is still running for a run is its {@link #phase}, one field moved only forward under the
-     *       run's monitor, and never inferred from anything else. {@link Phase#STARTING} is the only phase a stop without
+     *   <li>Whether a start is still running for a run is its {@link #phase}, one field moved only along
+     *       {@link Phase}'s edges ({@link #advanceTo}) under the run's monitor, and never inferred from anything else. {@link Phase#STARTING} is the only phase a stop without
      *       the lock hands its work over from. It is not enough that the start has not scheduled the heartbeat: a start
      *       that escapes with a critical error leaves its run installed with no heartbeat and lets go of the lock
      *       ({@link Phase#START_ABORTED}), and a stop that handed its work to it would hand it to nobody. Four separate
@@ -2609,7 +2609,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * The monitor is held only for short in-memory sections, never across a stop's drain or its database work, and the
      * {@code QueueObserver} is never called under it ({@link #adoptIntoRun} says why).
      */
-    private static final class Run {
+    static final class Run {
         /**
          * The owners of the units this run leases, in the order it adopted them: what {@link #stop()} ends and releases,
          * and what the run's heartbeat checks the leases of and computes its fair share from.
@@ -2647,7 +2647,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         volatile ScheduledFuture<?>    heartbeat;
         /**
          * Where this run stands in its lifecycle ({@link Phase}). Read and moved only under the run's monitor, and only
-         * forward ({@link #advanceTo}).
+         * along the edges of {@code Phase}'s diagram ({@link #advanceTo}).
          */
         private Phase                  phase               = Phase.STARTING;
 
@@ -2659,15 +2659,18 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         }
 
         /**
-         * Move this run to {@code target} if that is forward of where it stands, else leave it where it is. Under the
-         * run's monitor. The caller decides whether the move is one the protocol allows from where the run stands - a
-         * stop takes over a start's run only from {@link Phase#STARTING} - and this keeps the phase from ever moving back.
+         * Move this run to {@code target} if {@code Phase}'s diagram has an edge from where it stands to there
+         * ({@link Phase#canAdvanceTo}), else leave it where it is. Under the run's monitor. The rule lives here and
+         * nowhere else: {@link Phase#STARTING} moves to any other phase, every other phase only to {@link Phase#ENDED},
+         * and nothing leaves {@code ENDED}. So a started or aborted run is never moved into a stop-owed phase - that would
+         * hand a stop's work to a start no longer running for it - and a stop owed is never exchanged for another.
          *
-         * @return the phase the run was in before this call
+         * @return the phase the run was in before this call, so the caller can tell whether it moved the run and from where
          */
         Phase advanceTo(Phase target) {
+            requireNonNull(target, "No target phase provided");
             var previous = phase;
-            if (previous.ordinal() < target.ordinal()) {
+            if (previous.canAdvanceTo(target)) {
                 phase = target;
             }
             return previous;
@@ -2699,9 +2702,9 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
     }
 
     /**
-     * Where a {@link Run} stands, from the {@link #start()} that installs it to whoever ends it. A run moves only forward
-     * through these, under its monitor ({@link Run#advanceTo}), and each stop that finds it current reads from the phase
-     * whether a start is still running for it - nothing else does that inferring.
+     * Where a {@link Run} stands, from the {@link #start()} that installs it to whoever ends it. A run moves only along the
+     * edges below, under its monitor ({@link Run#advanceTo}, by {@link #canAdvanceTo}), and each stop that finds it
+     * current reads from the phase whether a start is still running for it - nothing else does that inferring.
      * <pre>
      *   STARTING -+-&gt; STARTED ------------+
      *             +-&gt; START_ABORTED ------+
@@ -2710,7 +2713,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      *             +-----------------------+   (a start that failed, undoing its own run)
      * </pre>
      */
-    private enum Phase {
+    enum Phase {
         /**
          * Installed by a {@link #start()} that is still doing its database work, holding {@link #lifecycleLock} - the one
          * phase in which a start is known to be running for the run. A stop that did not get the lock takes the run out
@@ -2744,7 +2747,20 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
          * Taken out of {@link #currentRun} by whoever ends it: a stop under {@link #lifecycleLock}, a start doing the work
          * of the stop it owes, or a start that failed undoing its own run.
          */
-        ENDED
+        ENDED;
+
+        /**
+         * Whether the diagram above has an edge from this phase to {@code target}: from {@link #STARTING} to every other
+         * phase, from {@link #STARTED}, {@link #START_ABORTED} and either {@code STOP_OWED_*} to {@link #ENDED} alone,
+         * and from {@code ENDED} to none. Staying where it is is not an edge.
+         */
+        boolean canAdvanceTo(Phase target) {
+            return switch (this) {
+                case STARTING -> target != STARTING;
+                case STARTED, START_ABORTED, STOP_OWED_GRACEFUL, STOP_OWED_ABRUPT -> target == ENDED;
+                case ENDED -> false;
+            };
+        }
     }
 
     /**
