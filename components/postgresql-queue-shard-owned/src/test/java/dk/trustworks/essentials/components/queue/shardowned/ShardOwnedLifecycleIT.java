@@ -2167,7 +2167,8 @@ class ShardOwnedLifecycleIT {
      * returned, and the {@code consume()} stops every consumer before it returns. It marked the queue started before it
      * looked at the stop owed, so {@code isStarted()} read true after that stop had returned, until the {@code consume()}
      * marked it not started again. A stop that gave up waiting for the {@code start()} reaches the same moment from another
-     * thread when it lands between the start taking the lock and marking the queue started, which no test can time.
+     * thread when it lands between the start taking the lock and marking the queue started:
+     * {@link #a_message_queue_stop_from_another_thread_landing_before_start_checks_for_it_leaves_the_queue_not_started}.
      */
     @Test
     void a_message_queue_start_called_while_a_stop_is_owed_does_not_mark_the_queue_started() throws Exception {
@@ -2198,6 +2199,183 @@ class ShardOwnedLifecycleIT {
                         () -> !instanceRegistered(instanceId) && unitsOwnedBy("unordered", instanceId) == 0 && unitsOwnedBy("ordered", instanceId) == 0);
             } finally {
                 subscription.stop();
+            }
+        }
+    }
+
+    /**
+     * A {@code MessageQueue.stop()} on another thread that lands while a {@code start()} holds the queue's lifecycle lock
+     * and has not yet looked for a stop owed leaves the queue not started. The stop gives up waiting for the lock after
+     * its 2 s budget and marks the queue not started; the start, finding the stop owed, does not mark it started, neither
+     * while it waits for that stop to finish stopping nor after, and no stop is left counted as stopping and no lease or
+     * membership row names the instance. The start used to mark the queue started before it looked for the stop owed, so
+     * {@code isStarted()} read true after that stop had marked it not started, until the start had waited for the stop
+     * and stopped every consumer again. The queue's {@code LifecycleHook} holds the start once it has taken the lock, and
+     * the stop is held in its WARN, still counted as stopping without the lock, so the start waits for it with the queue's
+     * flag as the start left it.
+     */
+    @Test
+    void a_message_queue_stop_from_another_thread_landing_before_start_checks_for_it_leaves_the_queue_not_started() throws Exception {
+        var instanceId      = "spi-stop-before-start-checks";
+        var holdTheStart    = new AtomicBoolean();
+        var startHeld       = new CountDownLatch(1);
+        var releaseTheStart = new CountDownLatch(1);
+        var startLetGo      = new AtomicBoolean();
+        var holdTheStop     = new AtomicBoolean();
+        var stopHeld        = new CountDownLatch(1);
+        var releaseTheStop  = new CountDownLatch(1);
+        var stopCalledAt    = new AtomicLong();
+        var stopGaveUpAfter = new AtomicLong();
+        var holdingAppender = new UnsynchronizedAppenderBase<ILoggingEvent>() {
+            @Override
+            protected void append(ILoggingEvent event) {
+                if (event.getFormattedMessage().contains("gave up waiting") && holdTheStop.compareAndSet(true, false)) {
+                    stopGaveUpAfter.set(System.nanoTime() - stopCalledAt.get());
+                    stopHeld.countDown();
+                    awaitQuietly(releaseTheStop);
+                }
+            }
+        };
+        var queueLogger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(PostgresqlMessageQueue.class);
+        holdingAppender.start();
+        queueLogger.addAppender(holdingAppender);
+        var queue = PostgresqlMessageQueue.builder()
+                                          .setDataSource(dataSource)
+                                          .setQueueId(QUEUE_ID)
+                                          .setShardCount(SHARD_COUNT)
+                                          .setInstanceId(instanceId)
+                                          .setLifecycleHook(new PostgresqlMessageQueue.LifecycleHook() {
+                                              @Override
+                                              public void afterLockTaken(String operation) {
+                                                  if ("start".equals(operation) && holdTheStart.compareAndSet(true, false)) {
+                                                      startHeld.countDown();
+                                                      awaitQuietly(releaseTheStart);
+                                                      startLetGo.set(true);
+                                                  }
+                                              }
+                                          })
+                                          .build();
+        Subscription subscription = null;
+        try {
+            subscription = consumeUnchecked(queue);
+            var subscribed = subscription;
+            Awaitility.await().atMost(Duration.ofSeconds(20))
+                      .alias("premise: both lanes hold units before the queue is stopped")
+                      .until(() -> subscribed.unorderedShardsHeld() > 0 && subscribed.orderedUnitsHeld() > 0);
+            queue.stop();
+            assertThat(queue.isStarted()).as("premise: the queue is stopped before it is started again").isFalse();
+
+            holdTheStart.set(true);
+            var starting = new Thread(queue::start);
+            starting.start();
+            assertThat(startHeld.await(10, TimeUnit.SECONDS))
+                    .as("premise: the start holds the lock, held before it looks for a stop owed").isTrue();
+
+            holdTheStop.set(true);
+            stopCalledAt.set(System.nanoTime());
+            var stopping = new Thread(queue::stop);
+            stopping.start();
+            assertThat(stopHeld.await(10, TimeUnit.SECONDS))
+                    .as("premise: the stop gave up waiting for the lock and is held in its WARN").isTrue();
+            assertThat(Duration.ofNanos(stopGaveUpAfter.get())).as("the stop waits 2 s for the queue's lock, and a margin")
+                                                               .isLessThan(ShardOwnedQueue.SHUTDOWN_BUDGET.plusMillis(1_500));
+            assertThat(queue.stopsWithoutLock()).as("premise: the stop is counted as stopping without the lock").isEqualTo(1);
+            assertThat(queue.isStarted()).as("the stop marked the queue not started").isFalse();
+
+            releaseTheStart.countDown();
+            // The start's one untimed wait once the hook has let it go is the wait for the held stop (letGoOfLifecycle).
+            Awaitility.await().atMost(Duration.ofSeconds(10)).during(Duration.ofMillis(500))
+                      .alias("premise: the start has looked for the stop owed and waits for that stop to finish stopping")
+                      .until(() -> startLetGo.get() && starting.getState() == Thread.State.WAITING && queue.stopsWithoutLock() == 1);
+            assertThat(queue.isStarted()).as("the start, finding the stop owed, did not mark the queue started").isFalse();
+
+            releaseTheStop.countDown();
+            stopping.join(20_000);
+            starting.join(20_000);
+
+            assertThat(stopping.isAlive()).as("the stop returned").isFalse();
+            assertThat(starting.isAlive()).as("the start returned").isFalse();
+            assertThat(queue.isStarted()).as("the start left the queue not started").isFalse();
+            assertThat(queue.stopsWithoutLock()).as("no stop is left counted as stopping without the lock").isZero();
+            assertThat(subscription.isStarted()).as("neither lane is started").isFalse();
+            Awaitility.await().during(Duration.ofSeconds(1)).atMost(Duration.ofSeconds(10)).until(
+                    () -> !instanceRegistered(instanceId) && unitsOwnedBy("unordered", instanceId) == 0 && unitsOwnedBy("ordered", instanceId) == 0);
+        } finally {
+            releaseTheStart.countDown();
+            releaseTheStop.countDown();
+            queue.close();
+            queueLogger.detachAppender(holdingAppender);
+            // What the queue's close() did not reach, so a failure leaves nothing leasing into the next test.
+            if (subscription != null) {
+                subscription.stop();
+            }
+        }
+    }
+
+    /**
+     * A {@code MessageQueue.start()} called by an observer told of a release, on the thread of a holder stopping every
+     * consumer - a {@code consume()} doing the stop it owes, after an observer stopped the queue on its first acquisition,
+     * or a plain {@code stop()} - does nothing: the queue ends not started, neither lane is started, no lease or
+     * membership row names the instance, and a later {@code start()} starts both lanes again. The start found no stop
+     * owed - the holder was doing the stop it owed, or was a stop - so it marked the queue started and started every
+     * consumer while that holder was still stopping them; the holder then stopped the ordered lane, after the
+     * observer's, and let go, leaving the queue marked started with the unordered lane running.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"owed-stop", "stop"})
+    void a_message_queue_start_called_by_an_observer_while_the_queue_is_being_stopped_does_not_mark_the_queue_started(String stoppedBy)
+            throws Exception {
+        var instanceId        = "spi-start-inside-" + stoppedBy;
+        var stopOnAcquire     = new AtomicBoolean("owed-stop".equals(stoppedBy));
+        var stoppingThread    = new AtomicReference<Thread>();
+        var startOnRelease    = new AtomicBoolean();
+        var startReturned     = new AtomicBoolean();
+        var startedAfterStart = new AtomicReference<Boolean>();
+        var subscription      = new AtomicReference<Subscription>();
+        try (var queue = new PostgresqlMessageQueue(dataSource, QUEUE_ID, SHARD_COUNT, instanceId)) {
+            queue.addObserver(new QueueObserver() {
+                @Override
+                public void shardOwnershipChanged(int shard, boolean acquired) {
+                    if (acquired && stopOnAcquire.compareAndSet(true, false)) {
+                        stoppingThread.set(Thread.currentThread());
+                        startOnRelease.set(true);
+                        queue.stop();
+                    } else if (!acquired && Thread.currentThread() == stoppingThread.get() && startOnRelease.compareAndSet(true, false)) {
+                        queue.start();
+                        startReturned.set(true);
+                        startedAfterStart.set(queue.isStarted());
+                    }
+                }
+            });
+            try {
+                subscription.set(consumeUnchecked(queue));
+                if ("stop".equals(stoppedBy)) {
+                    Awaitility.await().atMost(Duration.ofSeconds(20))
+                              .alias("premise: both lanes hold units before the queue is stopped")
+                              .until(() -> subscription.get().unorderedShardsHeld() > 0 && subscription.get().orderedUnitsHeld() > 0);
+                    stoppingThread.set(Thread.currentThread());
+                    startOnRelease.set(true);
+                    queue.stop();
+                }
+
+                assertThat(startReturned).as("premise: the observer's start was called inside the %s, told of a release, and returned", stoppedBy).isTrue();
+                assertThat(startedAfterStart.get()).as("the start, called while the queue was being stopped, left it not started").isFalse();
+                assertThat(queue.isStarted()).as("the queue ends not started").isFalse();
+                assertThat(subscription.get().isStarted()).as("neither lane is started").isFalse();
+                Awaitility.await().during(Duration.ofSeconds(1)).atMost(Duration.ofSeconds(10)).until(
+                        () -> !instanceRegistered(instanceId) && unitsOwnedBy("unordered", instanceId) == 0 && unitsOwnedBy("ordered", instanceId) == 0);
+
+                queue.start();
+
+                assertThat(queue.isStarted()).as("a start after the stop starts the queue again").isTrue();
+                Awaitility.await().atMost(Duration.ofSeconds(20))
+                          .alias("both lanes hold units again")
+                          .until(() -> subscription.get().unorderedShardsHeld() > 0 && subscription.get().orderedUnitsHeld() > 0);
+            } finally {
+                // What the queue's stop did not reach, so a failure leaves nothing leasing into the next test.
+                if (subscription.get() != null) {
+                    subscription.get().stop();
+                }
             }
         }
     }
