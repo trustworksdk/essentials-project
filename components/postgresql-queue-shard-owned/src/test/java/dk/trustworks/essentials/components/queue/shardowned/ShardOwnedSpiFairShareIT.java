@@ -125,7 +125,9 @@ class ShardOwnedSpiFairShareIT {
             statement.setShort(1, QUEUE_ID);
             statement.setString(2, lane);
             try (var resultSet = statement.executeQuery()) {
-                resultSet.next();
+                if (!resultSet.next()) {
+                    throw new IllegalStateException("Counting the free " + lane + " lease rows of queue " + QUEUE_ID + " returned no row");
+                }
                 return resultSet.getInt(1);
             }
         }
@@ -137,7 +139,9 @@ class ShardOwnedSpiFairShareIT {
                      "SELECT count(*) FROM " + ShardOwnedSchema.INSTANCE_TABLE + " WHERE queue_id = ?")) {
             statement.setShort(1, QUEUE_ID);
             try (var resultSet = statement.executeQuery()) {
-                resultSet.next();
+                if (!resultSet.next()) {
+                    throw new IllegalStateException("Counting the instance rows of queue " + QUEUE_ID + " returned no row");
+                }
                 return resultSet.getInt(1);
             }
         }

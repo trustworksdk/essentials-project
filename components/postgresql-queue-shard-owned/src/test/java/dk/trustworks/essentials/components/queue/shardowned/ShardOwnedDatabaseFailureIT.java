@@ -422,7 +422,9 @@ class ShardOwnedDatabaseFailureIT {
                      "SELECT count(pg_terminate_backend(pid)) FROM pg_stat_activity"
                      + " WHERE datname = current_database() AND pid <> pg_backend_pid()")) {
             try (var resultSet = statement.executeQuery()) {
-                resultSet.next();
+                if (!resultSet.next()) {
+                    throw new IllegalStateException("Terminating the other backends returned no row");
+                }
                 return resultSet.getInt(1);
             }
         }

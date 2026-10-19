@@ -1267,7 +1267,9 @@ class ShardOwnedDeadPumpHandBackIT {
             statement.setShort(1, QUEUE_ID);
             statement.setString(2, instanceId);
             try (var resultSet = statement.executeQuery()) {
-                resultSet.next();
+                if (!resultSet.next()) {
+                    throw new IllegalStateException("Counting the instance rows of " + instanceId + " returned no row");
+                }
                 return resultSet.getInt(1);
             }
         }
@@ -1298,7 +1300,9 @@ class ShardOwnedDeadPumpHandBackIT {
             statement.setString(2, lane);
             statement.setString(3, instanceId);
             try (var resultSet = statement.executeQuery()) {
-                resultSet.next();
+                if (!resultSet.next()) {
+                    throw new IllegalStateException("Counting the " + lane + " lease rows held by " + instanceId + " returned no row");
+                }
                 return resultSet.getInt(1);
             }
         }

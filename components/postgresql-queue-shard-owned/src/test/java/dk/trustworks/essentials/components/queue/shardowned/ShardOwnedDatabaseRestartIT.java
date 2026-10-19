@@ -217,7 +217,9 @@ class ShardOwnedDatabaseRestartIT {
         try (var connection = DriverManager.getConnection(jdbcUrl(), postgres.getUsername(), postgres.getPassword());
              var statement = connection.createStatement();
              var resultSet = statement.executeQuery("SELECT pg_postmaster_start_time()")) {
-            resultSet.next();
+            if (!resultSet.next()) {
+                throw new IllegalStateException("Reading pg_postmaster_start_time() returned no row");
+            }
             return resultSet.getObject(1, OffsetDateTime.class);
         }
     }

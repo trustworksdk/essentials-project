@@ -192,7 +192,9 @@ class ShardOwnedQueueRegistryIT {
             statement.setShort(1, queueId);
             statement.setInt(2, shard);
             try (var resultSet = statement.executeQuery()) {
-                resultSet.next();
+                if (!resultSet.next()) {
+                    throw new IllegalStateException("Counting the unordered rows of queue " + queueId + " at shard " + shard + " or above returned no row");
+                }
                 return resultSet.getLong(1);
             }
         }

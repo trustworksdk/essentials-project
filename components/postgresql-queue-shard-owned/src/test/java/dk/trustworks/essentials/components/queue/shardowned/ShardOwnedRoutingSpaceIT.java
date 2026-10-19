@@ -344,7 +344,9 @@ class ShardOwnedRoutingSpaceIT {
                      + " WHERE queue_id = ? AND lane = 'ordered'")) {
             statement.setShort(1, registered.queueId());
             try (var resultSet = statement.executeQuery()) {
-                resultSet.next();
+                if (!resultSet.next()) {
+                    throw new IllegalStateException("Counting the ordered lease rows of queue " + registered.queueId() + " returned no row");
+                }
                 assertThat(resultSet.getInt(1))
                         .as("every unit of the wider space needs a lease row")
                         .isEqualTo(wider);

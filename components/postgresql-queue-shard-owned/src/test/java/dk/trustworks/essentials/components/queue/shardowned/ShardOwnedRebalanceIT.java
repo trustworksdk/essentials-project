@@ -432,7 +432,9 @@ class ShardOwnedRebalanceIT {
         try (var connection = dataSource.getConnection();
              var statement = connection.createStatement();
              var resultSet = statement.executeQuery("SELECT CASE WHEN is_called THEN last_value ELSE 0 END FROM release_attempts")) {
-            resultSet.next();
+            if (!resultSet.next()) {
+                throw new IllegalStateException("Reading the release_attempts sequence returned no row");
+            }
             return resultSet.getLong(1);
         }
     }
@@ -444,7 +446,9 @@ class ShardOwnedRebalanceIT {
             statement.setShort(1, QUEUE_ID);
             statement.setString(2, instanceId);
             try (var resultSet = statement.executeQuery()) {
-                resultSet.next();
+                if (!resultSet.next()) {
+                    throw new IllegalStateException("Counting the unordered lease rows held by " + instanceId + " returned no row");
+                }
                 return resultSet.getInt(1);
             }
         }

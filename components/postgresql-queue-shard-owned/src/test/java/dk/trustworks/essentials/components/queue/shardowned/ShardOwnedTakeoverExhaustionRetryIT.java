@@ -720,7 +720,9 @@ class ShardOwnedTakeoverExhaustionRetryIT {
                              + " WHERE datname = current_database() AND application_name = ? AND pid <> pg_backend_pid()")) {
             statement.setString(1, applicationName);
             try (var resultSet = statement.executeQuery()) {
-                resultSet.next();
+                if (!resultSet.next()) {
+                    throw new IllegalStateException("Terminating the backends of " + applicationName + " returned no row");
+                }
                 return resultSet.getInt(1);
             }
         }
@@ -773,7 +775,9 @@ class ShardOwnedTakeoverExhaustionRetryIT {
              var statement = connection.createStatement();
              var result = statement.executeQuery(
                      "SELECT CASE WHEN is_called THEN last_value ELSE 0 END FROM dead_letter_insert_refusals")) {
-            result.next();
+            if (!result.next()) {
+                throw new IllegalStateException("Reading the dead_letter_insert_refusals sequence returned no row");
+            }
             return result.getLong(1);
         }
     }

@@ -266,7 +266,9 @@ class ShardOwnedSpiContractIT {
                      "SELECT count(*) FROM " + table + " WHERE queue_id = ?")) {
             statement.setShort(1, QUEUE_ID);
             try (var resultSet = statement.executeQuery()) {
-                resultSet.next();
+                if (!resultSet.next()) {
+                    throw new IllegalStateException("Counting the " + table + " rows of queue " + QUEUE_ID + " returned no row");
+                }
                 return resultSet.getLong(1);
             }
         }

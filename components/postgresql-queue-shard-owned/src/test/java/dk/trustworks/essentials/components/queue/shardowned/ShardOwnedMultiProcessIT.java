@@ -391,7 +391,9 @@ class ShardOwnedMultiProcessIT {
         try (var connection = dataSource.getConnection();
              var statement = connection.createStatement();
              var resultSet = statement.executeQuery("SELECT count(*) FROM shard_queue_observed")) {
-            resultSet.next();
+            if (!resultSet.next()) {
+                throw new IllegalStateException("Counting the shard_queue_observed rows returned no row");
+            }
             return resultSet.getLong(1);
         }
     }

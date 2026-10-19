@@ -376,7 +376,9 @@ class ShardOwnedLifecycleIT {
             statement.setShort(1, QUEUE_ID);
             statement.setString(2, instanceId);
             try (var resultSet = statement.executeQuery()) {
-                resultSet.next();
+                if (!resultSet.next()) {
+                    throw new IllegalStateException("Counting the ordered lease rows held by " + instanceId + " returned no row");
+                }
                 return resultSet.getInt(1);
             }
         }
@@ -420,7 +422,9 @@ class ShardOwnedLifecycleIT {
             statement.setShort(1, QUEUE_ID);
             statement.setString(2, instanceId);
             try (var resultSet = statement.executeQuery()) {
-                resultSet.next();
+                if (!resultSet.next()) {
+                    throw new IllegalStateException("Counting the instance rows of " + instanceId + " returned no row");
+                }
                 return resultSet.getInt(1) > 0;
             }
         }
@@ -2055,7 +2059,7 @@ class ShardOwnedLifecycleIT {
                     if (acquired && stopOnAcquire.compareAndSet(true, false)) {
                         holderThread.set(Thread.currentThread());
                         queue.stop();
-                    } else if (!acquired && Thread.currentThread() == holderThread.get() && holdTheRelease.compareAndSet(true, false)) {
+                    } else if (!acquired && Thread.currentThread().equals(holderThread.get()) && holdTheRelease.compareAndSet(true, false)) {
                         releaseHeld.countDown();
                         awaitQuietly(letTheReleaseGo);
                     }
@@ -2340,7 +2344,7 @@ class ShardOwnedLifecycleIT {
                         stoppingThread.set(Thread.currentThread());
                         startOnRelease.set(true);
                         queue.stop();
-                    } else if (!acquired && Thread.currentThread() == stoppingThread.get() && startOnRelease.compareAndSet(true, false)) {
+                    } else if (!acquired && Thread.currentThread().equals(stoppingThread.get()) && startOnRelease.compareAndSet(true, false)) {
                         queue.start();
                         startReturned.set(true);
                         startedAfterStart.set(queue.isStarted());
@@ -2908,7 +2912,9 @@ class ShardOwnedLifecycleIT {
             statement.setShort(1, QUEUE_ID);
             statement.setString(2, instanceId);
             try (var resultSet = statement.executeQuery()) {
-                resultSet.next();
+                if (!resultSet.next()) {
+                    throw new IllegalStateException("Counting the unordered lease rows held by " + instanceId + " returned no row");
+                }
                 return resultSet.getInt(1);
             }
         }
@@ -2918,7 +2924,9 @@ class ShardOwnedLifecycleIT {
         try (var connection = dataSource.getConnection();
              var statement = connection.createStatement();
              var resultSet = statement.executeQuery("SELECT count(*) FROM pg_stat_activity WHERE wait_event = 'PgSleep'")) {
-            resultSet.next();
+            if (!resultSet.next()) {
+                throw new IllegalStateException("Counting the backends sleeping in pg_sleep returned no row");
+            }
             return resultSet.getInt(1) > 0;
         }
     }

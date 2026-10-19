@@ -129,7 +129,9 @@ class ShardOwnedSessionClaimPlanIT {
                 }
                 statement.setInt(index, 32);
                 try (var resultSet = statement.executeQuery()) {
-                    resultSet.next();
+                    if (!resultSet.next()) {
+                        throw new IllegalStateException("EXPLAIN ANALYZE of the claim returned no plan row");
+                    }
                     return resultSet.getString(1);
                 }
             } finally {

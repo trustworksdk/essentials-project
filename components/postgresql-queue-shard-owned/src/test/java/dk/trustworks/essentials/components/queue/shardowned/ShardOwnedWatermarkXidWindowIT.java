@@ -154,7 +154,9 @@ class ShardOwnedWatermarkXidWindowIT {
         try (var connection = dataSource.getConnection();
              var statement = connection.prepareStatement("SELECT count(*) FROM pg_stat_activity WHERE wait_event = 'PgSleep'");
              var resultSet = statement.executeQuery()) {
-            resultSet.next();
+            if (!resultSet.next()) {
+                throw new IllegalStateException("Counting the backends sleeping in pg_sleep returned no row");
+            }
             return resultSet.getInt(1) == 1;
         }
     }

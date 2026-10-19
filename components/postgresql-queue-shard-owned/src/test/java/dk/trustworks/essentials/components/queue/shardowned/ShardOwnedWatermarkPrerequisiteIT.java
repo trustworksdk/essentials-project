@@ -209,7 +209,9 @@ class ShardOwnedWatermarkPrerequisiteIT {
         try (var connection = superuser.getConnection();
              var statement = connection.createStatement();
              var resultSet = statement.executeQuery(sql)) {
-            resultSet.next();
+            if (!resultSet.next()) {
+                throw new IllegalStateException("Counting with \"" + sql + "\" returned no row");
+            }
             return resultSet.getInt(1);
         }
     }

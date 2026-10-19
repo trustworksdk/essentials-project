@@ -558,7 +558,9 @@ class ShardOwnedAdminSurfaceIT {
                      + " WHERE queue_id = ?")) {
             statement.setShort(1, queueId);
             try (var resultSet = statement.executeQuery()) {
-                resultSet.next();
+                if (!resultSet.next()) {
+                    throw new IllegalStateException("Counting the occupied shards of queue " + queueId + " returned no row");
+                }
                 return resultSet.getInt(1);
             }
         }

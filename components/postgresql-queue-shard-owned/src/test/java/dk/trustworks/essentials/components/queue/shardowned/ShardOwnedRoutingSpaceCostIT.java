@@ -155,7 +155,9 @@ class ShardOwnedRoutingSpaceCostIT {
              var statement = connection.prepareStatement(
                      "SELECT xact_commit + xact_rollback FROM pg_stat_database WHERE datname = current_database()");
              var resultSet = statement.executeQuery()) {
-            resultSet.next();
+            if (!resultSet.next()) {
+                throw new IllegalStateException("Reading the transaction count of the current database from pg_stat_database returned no row");
+            }
             return resultSet.getLong(1);
         }
     }

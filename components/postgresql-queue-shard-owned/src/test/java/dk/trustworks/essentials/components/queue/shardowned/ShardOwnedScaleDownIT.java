@@ -163,7 +163,9 @@ class ShardOwnedScaleDownIT {
                      + " WHERE queue_id = ? AND last_seen > now() - interval '3 seconds'")) {
             statement.setShort(1, QUEUE_ID);
             try (var resultSet = statement.executeQuery()) {
-                resultSet.next();
+                if (!resultSet.next()) {
+                    throw new IllegalStateException("Counting the live instance rows of queue " + QUEUE_ID + " returned no row");
+                }
                 return resultSet.getInt(1);
             }
         }
@@ -175,7 +177,9 @@ class ShardOwnedScaleDownIT {
                      "SELECT count(*) FROM " + ShardOwnedSchema.INSTANCE_TABLE + " WHERE queue_id = ?")) {
             statement.setShort(1, QUEUE_ID);
             try (var resultSet = statement.executeQuery()) {
-                resultSet.next();
+                if (!resultSet.next()) {
+                    throw new IllegalStateException("Counting the instance rows of queue " + QUEUE_ID + " returned no row");
+                }
                 return resultSet.getInt(1);
             }
         }

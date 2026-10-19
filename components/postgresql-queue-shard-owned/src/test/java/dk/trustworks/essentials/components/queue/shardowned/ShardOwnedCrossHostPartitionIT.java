@@ -273,7 +273,9 @@ class ShardOwnedCrossHostPartitionIT {
                      "SELECT count(*) FROM shard_queue_lease WHERE lane = 'unordered' AND owner = ?")) {
             statement.setString(1, instanceId);
             try (var resultSet = statement.executeQuery()) {
-                resultSet.next();
+                if (!resultSet.next()) {
+                    throw new IllegalStateException("Counting the unordered lease rows held by " + instanceId + " returned no row");
+                }
                 return resultSet.getInt(1);
             }
         }

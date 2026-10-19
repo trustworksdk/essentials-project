@@ -192,7 +192,9 @@ class ShardOwnedStalledKeyCostIT {
     private static long scalar(Connection connection, String sql) throws Exception {
         try (var statement = connection.prepareStatement(sql);
              var resultSet = statement.executeQuery()) {
-            resultSet.next();
+            if (!resultSet.next()) {
+                throw new IllegalStateException("Reading the scalar \"" + sql + "\" returned no row");
+            }
             return resultSet.getLong(1);
         }
     }

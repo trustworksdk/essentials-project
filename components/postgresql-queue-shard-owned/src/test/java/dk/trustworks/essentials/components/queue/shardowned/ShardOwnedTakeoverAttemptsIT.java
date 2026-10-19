@@ -540,7 +540,9 @@ class ShardOwnedTakeoverAttemptsIT {
         try (var connection = dataSource.getConnection();
              var statement = connection.createStatement();
              var resultSet = statement.executeQuery("SELECT count(DISTINCT shard) FROM " + ShardOwnedSchema.UNORDERED_TABLE)) {
-            resultSet.next();
+            if (!resultSet.next()) {
+                throw new IllegalStateException("Counting the occupied shards returned no row");
+            }
             return resultSet.getLong(1);
         }
     }
