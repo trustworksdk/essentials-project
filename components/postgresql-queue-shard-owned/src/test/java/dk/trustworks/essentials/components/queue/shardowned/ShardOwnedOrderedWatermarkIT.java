@@ -284,6 +284,96 @@ class ShardOwnedOrderedWatermarkIT {
         });
     }
 
+    /**
+     * A candidate retires against the probe taken BEFORE the pass's cursor read, never the one taken after it. This builds
+     * the window between the two without relying on timing: the rows a pass applies are read while a writer is open, the
+     * writer then commits, and only then does the pass run, so the probe after the read no longer has the writer although
+     * the read never returned its row. {@code applyBatchRead} is the seam that lets the read and the pass be separated,
+     * as the pump's batched read separates them. Retiring on the after-read probe moves the watermark over the writer's
+     * row on that pass, every time; {@code ShardOwnedConcurrentProducersOrderIT} reaches the same window only under load.
+     */
+    @Test
+    void a_writer_committing_between_the_read_and_the_probe_is_not_stepped_over() throws Exception {
+        var shard     = 0;
+        var storage   = new ShardOwnedStorage(dataSource, QUEUE_ID);
+        var delivered = new CopyOnWriteArrayList<String>();
+        var metrics   = new ShardOwnerMetrics();
+        var settings  = byHand(500);
+        var grant     = storage.acquireLeaseGrant("ordered", shard, "instance-1", 60_000L).orElseThrow();
+        var owner = new OrderedShardOwner(storage, shard, grant.fence(), settings,
+                                          (id, key, payload, type) -> delivered.add(new String(payload, StandardCharsets.UTF_8)),
+                                          metrics, RedeliveryPolicy.fixed(Duration.ofSeconds(1), 3), "instance-1", new ShardWakeup(),
+                                          HandlerDispatch.inline(), grant.previousOwnerReleased());
+        var keys = keysOnShard(shard, 2);
+
+        try (var pumping = dataSource.getConnection();
+             var held = dataSource.getConnection()) {
+            owner.onTakeover(pumping);
+
+            // Writer W allocates s1 and stays open; writer V commits s2 above it.
+            held.setAutoCommit(false);
+            var heldSeq = storage.enqueueOrderedBatch(held, shard,
+                                                      List.of(new OrderedPayload(keys.get(0), 0, "held".getBytes(StandardCharsets.UTF_8), 1)))
+                                 .getFirst();
+            long laterSeq;
+            try (var committing = dataSource.getConnection()) {
+                laterSeq = storage.enqueueOrderedBatch(committing, shard,
+                                                       List.of(new OrderedPayload(keys.get(1), 0, "later".getBytes(StandardCharsets.UTF_8), 1)))
+                                  .getFirst();
+            }
+            assertThat(heldSeq).as("premise: the held row sits below the committed one").isLessThan(laterSeq);
+
+            // Pass 1 reads "later" and records a candidate at its seq, with W in the candidate's running set.
+            owner.pumpOnce(pumping);
+            assertThat(delivered).as("premise: the committed row is read while W is open").containsExactly("later");
+            assertThat(metrics.maxWatermarkLagSeq.get()).as("premise: pass 1 recorded a candidate above the watermark").isPositive();
+            assertThat(storage.runningWriteTransactionIds(pumping))
+                    .as("premise: W holds an xid the horizon probe sees, so pass 1's candidate records W as running")
+                    .contains(backendXidOf(pumping, held));
+
+            // Pass 2's read, taken while W is still open: it returns "later" again (acknowledgements are never flushed,
+            // see byHand) and not "held". W commits after the read and before the pass, which is the window under test.
+            var readWhileWOpen = storage.readOrderedFromCursor(pumping, shard, owner.batchReadCursor(), settings.readBatchSize());
+            assertThat(readWhileWOpen).as("premise: the read did not see W's row").extracting(ShardOwnedStorage.OrderedRow::seq)
+                                      .doesNotContain(heldSeq);
+            held.commit();
+            owner.applyBatchRead(readWhileWOpen, settings.readBatchSize(), null, OptionalLong.empty());
+            owner.pumpOnce(pumping);
+
+            // The discriminating assertion. The probe before pass 2's read still had W, so the candidate stays. The
+            // probe after it no longer does; retiring on that one would put the watermark at "later", over "held",
+            // which no read has returned and which only the head sweep (20 s away) could find.
+            assertThat(owner.batchReadCursor())
+                    .as("W committed after pass 2's read returned without its seq %d; the watermark must not pass it to "
+                        + "the candidate's maxSeen %d", heldSeq, laterSeq)
+                    .isLessThan(heldSeq);
+
+            // Pass 3 reads from the watermark, finds "held" through the cursor, and retires the candidate.
+            owner.pumpOnce(pumping);
+            assertThat(delivered).as("W's row delivered by the cursor read").containsExactly("later", "held");
+            assertThat(owner.batchReadCursor()).isEqualTo(laterSeq);
+            assertThat(metrics.sweepRecoveries.sum()).as("nothing was left for the head sweep to recover").isZero();
+            assertThat(metrics.watermarkCapped.sum()).as("the horizon, not the wall-clock cap, moved the watermark").isZero();
+        }
+    }
+
+    /** The xid {@code writer}'s backend holds, as {@code pg_stat_activity.backend_xid} shows it to {@code observer}; fails if it holds none. */
+    private static long backendXidOf(Connection observer, Connection writer) throws SQLException {
+        int pid;
+        try (var statement = writer.prepareStatement("SELECT pg_backend_pid()");
+             var resultSet = statement.executeQuery()) {
+            resultSet.next();
+            pid = resultSet.getInt(1);
+        }
+        try (var statement = observer.prepareStatement("SELECT backend_xid::text::bigint FROM pg_stat_activity WHERE pid = ? AND backend_xid IS NOT NULL")) {
+            statement.setInt(1, pid);
+            try (var resultSet = statement.executeQuery()) {
+                assertThat(resultSet.next()).as("backend %d holds no xid", pid).isTrue();
+                return resultSet.getLong(1);
+            }
+        }
+    }
+
     @FunctionalInterface
     private interface Pass {
         int run(OrderedShardOwner owner, Connection connection, ShardOwnedStorage storage) throws Exception;
@@ -324,7 +414,10 @@ class ShardOwnedOrderedWatermarkIT {
             pass.run(owner, pumping, storage);
             assertThat(delivered).as("premise: the committed rows are read while the writer is open")
                                  .containsExactlyInAnyOrder("later-0", "later-1");
-            assertThat(owner.batchReadCursor()).as("premise: the watermark waits for the open writer").isLessThan(heldSeqs.getFirst());
+            assertThat(metrics.maxWatermarkLagSeq.get()).as("premise: pass 1 recorded a candidate above the watermark").isPositive();
+            assertThat(storage.runningWriteTransactionIds(pumping))
+                    .as("premise: the held writer holds an xid the horizon probe sees, so pass 1's candidate records it as running")
+                    .contains(backendXidOf(pumping, held));
 
             held.commit();
 

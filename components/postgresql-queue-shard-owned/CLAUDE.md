@@ -197,13 +197,16 @@ Every message is assigned to a shard at enqueue. Each shard has exactly one owni
   writer commit between that read and that probe: missing from the probe, its rows invisible to the read, so the cursor
   stepped over them and the head sweep delivered them late — behind later `key_order`s of the same key. Seen in the
   trading demo as lost ledger cycles; `ShardOwnedConcurrentProducersOrderIT` (8 producers, disjoint keys, multi-unit
-  transactions) hit it in 4 of 5 runs before the fix. `OrderedShardOwner.runningAtLastProbe` is the pre-read probe; a
-  pass whose read hit its row limit advances no further than the last row it read. That limit is the one the read was
-  ISSUED with: a pump's batched read uses the `ShardRuntime`'s `readBatchSize`, which can be smaller than the queue's,
-  so `applyBatchRead` carries it (`cursorLimit`); judged against the owner's own, a truncated batch looked complete and
-  the cap never fired. `ShardOwnedOrderedWatermarkIT` drives both by hand (limit 5). Cost, measured A/B on 40 000
-  messages: drain +1.2 % median (inside the spread), read statements unchanged, watermark lag +21 % (one pass later).
-  `sweepRecoveries` is the signal — zero exactly when nothing was stepped over.
+  transactions) hit it in 4 of 5 runs before the fix;
+  `ShardOwnedOrderedWatermarkIT.a_writer_committing_between_the_read_and_the_probe_is_not_stepped_over` pins it on
+  every run, committing the writer between a read and the pass `applyBatchRead` hands it to.
+  `OrderedShardOwner.runningAtLastProbe` is the pre-read probe; a pass whose read hit its row limit advances no further
+  than the last row it read. That limit is the one the read was ISSUED with: a pump's batched read uses the
+  `ShardRuntime`'s `readBatchSize`, which can be smaller than the queue's, so `applyBatchRead` carries it
+  (`cursorLimit`); judged against the owner's own, a truncated batch looked complete and the cap never fired.
+  `ShardOwnedOrderedWatermarkIT` drives both by hand (limit 5). Cost, measured A/B on 40 000 messages: drain +1.2 %
+  median (inside the spread), read statements unchanged, watermark lag +21 % (one pass later). `sweepRecoveries` is
+  the signal — zero exactly when nothing was stepped over.
 - **A long READ-ONLY transaction does not hold the xid horizon back**, however long it runs — only a writing one does, because only a writer is assigned an xid. Do not cite `pg_dump` or an analytics query as a hazard for anything keyed on `pg_snapshot_xmin`; a 13 s reader is indistinguishable from no reader.
 - **The ordered lane's cursor is a safe watermark, not a high-water mark.** It advances to a value only once every write transaction running when that value was observed has ended — `max(backend_xid)` over `pg_stat_activity`, compared by set identity because `backend_xid` is a wrapping 32-bit `xid` and `pg_snapshot_xmin` is a non-wrapping `xid8` with no cast between them. Probe AFTER the read, never before, and skip it entirely when caught up or the idle poll pays 0.086 ms for nothing. Hole chasing, `holeExpiry`, `maxHolesPerChase` and `chaseDelay` are gone from THIS lane; the unordered lane still uses all of them, so the settings stay.
 - **`watermarkCap` is not `holeExpiry` and must stay far larger.** Both say "stop waiting", but `holeExpiry` was held low by a map entry and a chase query per unresolved value, and the watermark costs one deque entry and no query. Set the cap as low as `holeExpiry` and the two mechanisms become behaviourally identical — the watermark force-advances on the same timer that abandoned a hole, and the exactness is thrown away. A test written against the old, reused setting passed against a deliberately broken implementation for exactly this reason.
