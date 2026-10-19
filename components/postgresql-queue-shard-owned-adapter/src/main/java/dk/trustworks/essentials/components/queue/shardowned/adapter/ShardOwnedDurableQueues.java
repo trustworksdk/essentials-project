@@ -554,7 +554,10 @@ public class ShardOwnedDurableQueues implements DurableQueues {
             } catch (RuntimeException | Error e) {
                 Exceptions.rethrowIfCriticalError(e);
                 try {
-                    Exceptions.forEachCollectingFailures(List.of(consumer), ShardOwnedDurableQueueConsumer::retire, e);
+                    Exceptions.forEachCollectingFailures(List.of(consumer), failed -> {
+                        startHook.beforeRetiringAddedConsumer(queueName);
+                        failed.retire();
+                    }, e);
                 } finally {
                     consumers.remove(queueName, consumer);
                 }
@@ -605,10 +608,11 @@ public class ShardOwnedDurableQueues implements DurableQueues {
     }
 
     /**
-     * What a test does as a consumer is about to be started, to hold that start at a point no real start can be made to
-     * stop at: between reading {@code started} and starting the consumer. Passed to the package-private constructor and
-     * fixed for this object's life; every one built otherwise has {@link #NONE}, which does nothing. What it throws escapes
-     * as the consumer's start would.
+     * What a test does as a consumer is about to be started, or retired after its start failed, to hold the thread at a
+     * point no real start can be made to stop at: between reading {@code started} and starting the consumer, or between
+     * the failed start and retiring the consumer. Passed to the package-private constructor and fixed for this object's
+     * life; every one built otherwise has {@link #NONE}, which does nothing. What {@link #beforeStartingAddedConsumer} or
+     * {@link #beforeStartingConsumer} throws escapes as the consumer's start would.
      */
     interface StartHook {
         StartHook NONE = new StartHook() { };
@@ -625,6 +629,15 @@ public class ShardOwnedDurableQueues implements DurableQueues {
          * the consumer.
          */
         default void beforeStartingConsumer(QueueName queueName) {
+        }
+
+        /**
+         * Told the queue of a consumer whose start {@code consumeFromQueue} has seen fail, just before it retires the
+         * consumer ({@link ShardOwnedDurableQueueConsumer#retire()}) - after the failed start has let go of the consumer's
+         * lifecycle lock, so a concurrent {@code start()}'s loop may take that lock first. What it throws is added to the
+         * start's failure as suppressed, and the consumer is then neither retired nor registered.
+         */
+        default void beforeRetiringAddedConsumer(QueueName queueName) {
         }
     }
 

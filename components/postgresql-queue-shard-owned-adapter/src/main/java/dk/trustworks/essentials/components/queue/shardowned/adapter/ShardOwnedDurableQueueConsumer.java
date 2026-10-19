@@ -89,9 +89,10 @@ class ShardOwnedDurableQueueConsumer implements DurableQueueConsumer {
      */
     private       Holder        holder        = Holder.NONE;
     /**
-     * Set by {@link #retire()}, and read, under {@link #lifecycleLock}: once set, a {@link #start()} does nothing.
+     * Set by {@link #retire()}, under {@link #lifecycleLock}, and by {@link #cancel()} before it takes that lock - hence
+     * volatile; read by {@link #start()} under the lock. Once set, a start that has not read it yet does nothing.
      */
-    private       boolean       retired;
+    private volatile boolean    retired;
 
     private volatile Subscription subscription;
 
@@ -147,7 +148,7 @@ class ShardOwnedDurableQueueConsumer implements DurableQueueConsumer {
      * returned - the thread's interrupt included: once it has waited {@link #STOP_WAITS_FOR_START} it logs one WARN naming
      * the consumer and the queue, and goes on waiting ({@link #lockForStart}).
      * <p>
-     * Does nothing once the consumer has been {@link #retire() retired}.
+     * Does nothing once the consumer has been {@link #retire() retired} or {@link #cancel() cancelled}.
      */
     @Override
     public void start() {
@@ -510,8 +511,22 @@ class ShardOwnedDurableQueueConsumer implements DurableQueueConsumer {
         return current != null && current.isStarted();
     }
 
+    /**
+     * {@inheritDoc}
+     * <p>
+     * Stops the consumer as {@link #stop()} does - waiting for a start still subscribing up to
+     * {@link #STOP_WAITS_FOR_START}, and no longer - and deregisters it from the {@link ShardOwnedDurableQueues}, even when
+     * the stop throws. From the start of the cancel on, no {@link #start()} starts the consumer again: a
+     * {@code ShardOwnedDurableQueues.start()} may have taken it from the registry before it was deregistered, and used to
+     * start it afterwards - a consumer no {@code stop()} reaches and its caller has let go of. A start already subscribing
+     * when the cancel begins is stopped as by {@link #stop()}: by the cancel, or by that start itself once the queue's
+     * {@code consume()} returns. Unlike {@link #retire()}, which waits for such a start as long as it takes, this stays
+     * bounded by {@code STOP_WAITS_FOR_START}.
+     */
     @Override
     public void cancel() {
+        // Set before the stop: a start that has not yet read it, under the lifecycle lock, then does not subscribe.
+        retired = true;
         try {
             stop();
         } finally {

@@ -81,6 +81,17 @@ class ShardOwnedDurableQueuesStartTest {
     private final AtomicReference<Runnable> beforeStartingAddedConsumer = new AtomicReference<>();
     private final AtomicReference<Runnable> beforeStartingConsumer      = new AtomicReference<>();
     /**
+     * Run, once, by the {@link ShardOwnedDurableQueues.StartHook} as {@code consumeFromQueue} is about to retire a consumer
+     * whose start failed.
+     */
+    private final AtomicReference<Runnable> beforeRetiringAddedConsumer = new AtomicReference<>();
+    /**
+     * Run, once, by the {@link #failingSubscription}th {@code consume} just before it throws, and by the first
+     * {@code consume} that subscribes just after it has recorded the queue's name in {@link #subscribed}.
+     */
+    private final AtomicReference<Runnable> beforeFailingSubscription   = new AtomicReference<>();
+    private final AtomicReference<Runnable> afterSubscribing            = new AtomicReference<>();
+    /**
      * A field, not a local, and shut down after each test once every latch a task may wait for is released: closing it
      * (try-with-resources) would wait for a task still waiting for one, and hang the build when a test fails.
      */
@@ -421,6 +432,97 @@ class ShardOwnedDurableQueuesStartTest {
         assertThat(durableQueues.getActiveQueueNames()).containsExactly(QueueName.of("flaky"));
     }
 
+    /**
+     * The other ordering of the race above: the concurrent {@code start()} wins the consumer's lifecycle lock once the
+     * {@code consumeFromQueue}'s own start has failed, and subscribes it before that {@code consumeFromQueue} retires it.
+     * Retiring then stops that subscription, and what the stop throws is added to the start's failure as suppressed,
+     * rather than replacing it.
+     */
+    @Test
+    void a_consumer_whose_start_fails_has_the_subscription_a_start_that_had_already_taken_it_made_stopped_by_its_retirement() throws Exception {
+        var durableQueues = newDurableQueues();
+        durableQueues.start();
+        failingSubscription = 1;
+        failure = "IllegalStateException";
+        var loopHasTheConsumer = new CountDownLatch(1);
+        var releaseLoop        = new CountDownLatch(1);
+        var restarting         = new AtomicReference<Future<?>>();
+        beforeStartingConsumer.set(() -> {
+            loopHasTheConsumer.countDown();
+            await(releaseLoop);
+        });
+        beforeStartingAddedConsumer.set(() -> {
+            durableQueues.stop();
+            restarting.set(executor.submit(durableQueues::start));
+            await(loopHasTheConsumer);
+        });
+        // The failing subscription lets the loop go on to the consumer's start, which waits for the lock the failing start
+        // holds; the retirement waits for the loop's start to have subscribed.
+        beforeFailingSubscription.set(releaseLoop::countDown);
+        var loopSubscribed = new CountDownLatch(1);
+        afterSubscribing.set(loopSubscribed::countDown);
+        beforeRetiringAddedConsumer.set(() -> await(loopSubscribed));
+
+        Throwable thrown;
+        try {
+            thrown = catchThrowable(() -> durableQueues.consumeFromQueue(consumeFrom("stop-throws-flaky")));
+        } finally {
+            releaseLoop.countDown();
+        }
+        restarting.get().get(10, TimeUnit.SECONDS);
+
+        assertThat(thrown).as("the start's failure escapes, not the stop's").isInstanceOf(DurableQueueException.class)
+                          .hasRootCauseMessage("simulated failure subscribing stop-throws-flaky");
+        assertThat(subscribed).as("premise: the start that had taken the failed consumer subscribed it").containsExactly("stop-throws-flaky");
+        assertThat(thrown.getSuppressed()).as("the stop's failure is added to it")
+                                          .singleElement()
+                                          .satisfies(suppressed -> assertThat(suppressed).hasMessage("simulated failure stopping stop-throws-flaky"));
+        assertThat(stopped).as("retiring the consumer stopped that subscription").containsExactly("stop-throws-flaky");
+        assertThat(durableQueues.isStarted()).as("premise: the concurrent start went through").isTrue();
+        assertThat(durableQueues.getActiveQueueNames()).isEmpty();
+    }
+
+    /**
+     * A consumer cancelled while a {@code start()} of the {@code DurableQueues} has taken it from the registry, and has
+     * not started it yet, is not subscribed by that start. {@code cancel()} used to stop the consumer and deregister it,
+     * and the start then subscribed it: a consumer no {@code stop()} reached any more and its caller had let go of - a
+     * {@code DurableLocalCommandBus} stopping, an {@code Inbox} handing its lock over - leasing units for a cancelled
+     * handler, beside the consumer a later {@code consumeFromQueue} registers on the same queue.
+     */
+    @Test
+    void a_consumer_cancelled_while_a_start_had_already_taken_it_is_not_subscribed_by_that_start() throws Exception {
+        var durableQueues      = newDurableQueues();
+        var consumer           = durableQueues.consumeFromQueue(consumeFrom("cancelled"));
+        var loopHasTheConsumer = new CountDownLatch(1);
+        var releaseLoop        = new CountDownLatch(1);
+        beforeStartingConsumer.set(() -> {
+            loopHasTheConsumer.countDown();
+            await(releaseLoop);
+        });
+        var starting = executor.submit(durableQueues::start);
+        await(loopHasTheConsumer);
+
+        try {
+            consumer.cancel();
+        } finally {
+            releaseLoop.countDown();
+        }
+        starting.get(10, TimeUnit.SECONDS);
+
+        assertThat(durableQueues.isStarted()).as("premise: the start went through").isTrue();
+        assertThat(subscribed).as("the start that had taken the cancelled consumer did not subscribe it").isEmpty();
+        assertThat(consumer.isStarted()).isFalse();
+        assertThat(durableQueues.getActiveQueueNames()).isEmpty();
+
+        consumer.start();
+        assertThat(subscribed).as("nor does the cancelled consumer's own start").isEmpty();
+
+        var anew = durableQueues.consumeFromQueue(consumeFrom("cancelled"));
+        assertThat(anew.isStarted()).isTrue();
+        assertThat(subscribed).as("one subscription on the queue: the new consumer's").containsExactly("cancelled");
+        assertThat(durableQueues.getActiveQueueNames()).containsExactly(QueueName.of("cancelled"));
+    }
+
     @AfterEach
     void releaseEveryLatchAndStopTheExecutor() {
         releaseSlowStop.countDown();
@@ -438,6 +540,11 @@ class ShardOwnedDurableQueuesStartTest {
             @Override
             public void beforeStartingConsumer(QueueName queueName) {
                 runOnce(beforeStartingConsumer);
+            }
+
+            @Override
+            public void beforeRetiringAddedConsumer(QueueName queueName) {
+                runOnce(beforeRetiringAddedConsumer);
             }
         });
     }
@@ -489,6 +596,7 @@ class ShardOwnedDurableQueuesStartTest {
                 await(releaseConsume);
             }
             if (subscription == failingSubscription && failureType != null) {
+                runOnce(beforeFailingSubscription);
                 switch (failureType) {
                     case "StackOverflowError" -> throw new StackOverflowError("simulated critical error subscribing " + name);
                     case "AssertionError" -> throw new AssertionError("simulated failure subscribing " + name);
@@ -497,6 +605,7 @@ class ShardOwnedDurableQueuesStartTest {
                 }
             }
             subscribed.add(name);
+            runOnce(afterSubscribing);
             var started = new boolean[]{true};
             return proxy(Subscription.class, (subscriptionMethod, subscriptionArgs) -> switch (subscriptionMethod) {
                 case "isStarted" -> started[0];
