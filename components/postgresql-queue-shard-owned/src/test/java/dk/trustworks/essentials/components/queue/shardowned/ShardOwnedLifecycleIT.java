@@ -2166,6 +2166,88 @@ class ShardOwnedLifecycleIT {
     }
 
     /**
+     * A {@code MessageQueue.stop()} on another thread that gives up waiting for a {@code consume()} stops that
+     * {@code consume()}'s pair also after a {@code consume()} made by a {@link QueueObserver} on its thread - told of the
+     * first acquisition of its unordered lane - has returned: when the stop returns, no unordered lease row names the
+     * outer pair's instance and a message enqueued then is delivered to no handler, while the outer {@code consume()} is
+     * still starting its ordered lane. The nested {@code consume()} overwrote the pair being started with its own and
+     * never set it back, so the stop stopped the nested pair only, and the outer pair's unordered lane went on leasing and
+     * dispatching until the outer {@code consume()} stopped every consumer before it let go. Once the nested
+     * {@code consume()} has returned, the observer arms a trigger that holds the next membership upsert of the outer
+     * pair's instance for 12 s: the outer ordered lane's start registering the instance, before the outer pair is
+     * registered with the queue. The nested pair's ordered lane, started first, holds every ordered unit by then.
+     */
+    @Test
+    void a_message_queue_stop_giving_up_on_a_consume_stops_its_pair_after_an_observers_nested_consume_returned() throws Exception {
+        var instanceId    = "spi-nested-consume-stop";
+        var nestedId      = instanceId + "-1";
+        var consumeNested = new AtomicBoolean(true);
+        var nested        = new AtomicReference<Subscription>();
+        var outer         = new AtomicReference<Subscription>();
+        var delivered     = ConcurrentHashMap.<String>newKeySet();
+        MessageHandler recording = (messageId, key, payload, payloadType) -> delivered.add(new String(payload, StandardCharsets.UTF_8));
+        try (var queue = new PostgresqlMessageQueue(dataSource, QUEUE_ID, SHARD_COUNT, instanceId)) {
+            queue.addObserver(new QueueObserver() {
+                @Override
+                public void shardOwnershipChanged(int shard, boolean acquired) {
+                    if (acquired && consumeNested.compareAndSet(true, false)) {
+                        var subscription = consumeUnchecked(queue, recording);
+                        try {
+                            slowTheRegistrationOf(instanceId, 12);
+                        } catch (Exception e) {
+                            throw new IllegalStateException(e);
+                        }
+                        nested.set(subscription);
+                    }
+                }
+            });
+            var consuming = new Thread(() -> outer.set(consumeUnchecked(queue, recording)));
+            try {
+                consuming.start();
+                Awaitility.await().atMost(Duration.ofSeconds(20))
+                          .alias("premise: the nested consume() returned and the outer one is starting its ordered lane")
+                          .until(() -> nested.get() != null && aHeartbeatIsSleeping());
+                assertThat(unitsOwnedBy("unordered", instanceId)).as("premise: the outer pair's unordered lane holds shards").isPositive();
+
+                var stopping = CompletableFuture.runAsync(queue::stop);
+
+                assertThat(stopping).as("the stop returned").succeedsWithin(Duration.ofSeconds(8));
+                assertThat(consuming.isAlive()).as("premise: the outer consume() was still starting its ordered lane when the stop returned")
+                                               .isTrue();
+                queue.enqueue(List.of(Message.of("after-the-stop".getBytes(StandardCharsets.UTF_8), 1)));
+                // Held for the whole window, so a lease the outer unordered lane takes again after the stop is caught too.
+                Awaitility.await().during(Duration.ofSeconds(1)).atMost(Duration.ofSeconds(5))
+                          .alias("the stop stopped the outer pair's unordered lane: no unordered lease row names its instance and no lane dispatches after the stop returned")
+                          .until(() -> unitsOwnedBy("unordered", instanceId) == 0 && delivered.isEmpty());
+
+                dropSlowRegistration();
+                consuming.join(30_000);
+
+                assertThat(consuming.isAlive()).as("the outer consume() returned").isFalse();
+                assertThat(outer.get()).as("the outer consume() still returns its subscription").isNotNull();
+                assertThat(queue.isStarted()).as("the outer consume() left the queue not started").isFalse();
+                assertThat(outer.get().isStarted()).as("neither lane of the outer pair is started").isFalse();
+                assertThat(nested.get().isStarted()).as("neither lane of the nested pair is started").isFalse();
+                Awaitility.await().during(Duration.ofSeconds(1)).atMost(Duration.ofSeconds(10)).until(
+                        () -> !instanceRegistered(instanceId) && unitsOwnedBy("unordered", instanceId) == 0 && unitsOwnedBy("ordered", instanceId) == 0
+                                && !instanceRegistered(nestedId) && unitsOwnedBy("unordered", nestedId) == 0 && unitsOwnedBy("ordered", nestedId) == 0);
+                assertThat(delivered).as("nothing was delivered").isEmpty();
+            } finally {
+                dropSlowRegistration();
+                // A failed assertion must not leave the outer consume() running against the DataSource tearDown closes.
+                consuming.join(30_000);
+                // What the queue's stop did not reach, so a failure leaves nothing leasing into the next test.
+                if (outer.get() != null) {
+                    outer.get().stop();
+                }
+                if (nested.get() != null) {
+                    nested.get().stop();
+                }
+            }
+        }
+    }
+
+    /**
      * A {@code MessageQueue.start()} called while a stop is owed - here by an observer that stops the queue and then starts
      * it again from inside a {@code consume()} - does not mark the queue started: the stop has marked it not started and
      * returned, and the {@code consume()} stops every consumer before it returns. It marked the queue started before it
@@ -2686,8 +2768,12 @@ class ShardOwnedLifecycleIT {
     }
 
     private static Subscription consumeUnchecked(PostgresqlMessageQueue queue) {
+        return consumeUnchecked(queue, (messageId, key, payload, payloadType) -> { });
+    }
+
+    private static Subscription consumeUnchecked(PostgresqlMessageQueue queue, MessageHandler handler) {
         try {
-            return queue.consume((messageId, key, payload, payloadType) -> { }, ConsumerOptions.defaults());
+            return queue.consume(handler, ConsumerOptions.defaults());
         } catch (SQLException e) {
             throw new IllegalStateException(e);
         }
@@ -3081,6 +3167,26 @@ class ShardOwnedLifecycleIT {
                                       + " FOR EACH ROW WHEN (OLD.owner IS DISTINCT FROM NEW.owner AND NEW.owner = '" + instanceId + "'"
                                       + " AND NEW.lane = '" + lane + "' AND NEW.shard = " + unit + ")"
                                       + " EXECUTE FUNCTION slow_acquire()");
+        }
+    }
+
+    /**
+     * Make every membership upsert of {@code instanceId} - a lane's start registering it, a heartbeat refreshing it - sleep
+     * {@code sleepSeconds}, by a trigger. Drop it with {@link #dropSlowRegistration}.
+     */
+    private void slowTheRegistrationOf(String instanceId, double sleepSeconds) throws Exception {
+        try (var connection = dataSource.getConnection(); var statement = connection.createStatement()) {
+            statement.execute("CREATE OR REPLACE FUNCTION slow_registration() RETURNS trigger AS $$ BEGIN "
+                                      + "PERFORM pg_sleep(" + sleepSeconds + "); RETURN NEW; END $$ LANGUAGE plpgsql");
+            statement.execute("CREATE TRIGGER slow_registration BEFORE INSERT OR UPDATE ON " + ShardOwnedSchema.INSTANCE_TABLE
+                                      + " FOR EACH ROW WHEN (NEW.instance_id = '" + instanceId + "')"
+                                      + " EXECUTE FUNCTION slow_registration()");
+        }
+    }
+
+    private void dropSlowRegistration() throws Exception {
+        try (var connection = dataSource.getConnection(); var statement = connection.createStatement()) {
+            statement.execute("DROP TRIGGER IF EXISTS slow_registration ON " + ShardOwnedSchema.INSTANCE_TABLE);
         }
     }
 

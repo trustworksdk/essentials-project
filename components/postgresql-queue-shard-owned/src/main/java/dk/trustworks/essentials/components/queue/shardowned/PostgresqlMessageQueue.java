@@ -134,11 +134,17 @@ public final class PostgresqlMessageQueue implements MessageQueue {
      */
     private       Holder                        holder             = Holder.NONE;
     /**
-     * The lane consumers a {@code consume()} holding {@link #lifecycleLock} is starting, not registered in
-     * {@link #consumers} until their starts return: a stop that did not get the lock stops them too, so the one still
-     * leasing hands the stop's work to its start, which then adopts nothing it leases.
+     * The lane consumers of every {@code consume()} holding {@link #lifecycleLock} that has not yet registered its pair
+     * in {@link #consumers} - it does so once its starts return: a stop that did not get the lock stops them too, so the
+     * one still leasing hands the stop's work to its start, which then adopts nothing it leases. More than one pair when a
+     * {@link QueueObserver} told of an acquisition calls {@code consume()} on the thread of a {@code consume()} still
+     * starting, holding the lock reentrantly: each {@code consume()} adds its own pair and takes out only that pair once
+     * it has registered it, or failed, so the outer pair stays here until the outer {@code consume()} registers it. It
+     * used to be one field the nested {@code consume()} overwrote with its own pair and never set back, so a stop that
+     * gave up waiting from then on did not stop the outer pair, and its unordered lane leased and dispatched after that
+     * stop had returned, until the outer {@code consume()} stopped every consumer before it let go.
      */
-    private       List<ShardOwnedQueue>         beingStarted       = List.of();
+    private final List<ShardOwnedQueue>         beingStarted       = new ArrayList<>();
     /**
      * Stops that did not get {@link #lifecycleLock} and are still stopping consumers. The holder waits for them before it
      * lets go, so none of them stops a consumer a later {@code start()} or {@code consume()} has just started.
@@ -713,7 +719,7 @@ public final class PostgresqlMessageQueue implements MessageQueue {
         try {
             lifecycleHook.afterLockTaken("consume");
             synchronized (handOver) {
-                beingStarted = pair;
+                beingStarted.addAll(pair);
             }
             // Read before the starts: whether this is the queue's first subscription, which alone marks the queue started
             // (above). The competing-consumer WARN below asks what is registered once the starts have run instead: a
@@ -766,6 +772,13 @@ public final class PostgresqlMessageQueue implements MessageQueue {
                 markStartedUnlessHolderLetsNothingStart();
             }
         } finally {
+            // This pair only, and only once it is registered (consumers has it from here, for a stop to reach) or its
+            // failed starts are undone: called by an observer on the thread of a consume() still starting, this lets go of
+            // the lock reentrantly while that consume()'s pair is still being started, and a stop that gives up waiting
+            // meanwhile must still find that pair here.
+            synchronized (handOver) {
+                beingStarted.removeAll(pair);
+            }
             letGoOfLifecycle();
         }
 
@@ -1817,7 +1830,7 @@ public final class PostgresqlMessageQueue implements MessageQueue {
                         }
                     } else {
                         moveHolder(Holder.NONE);
-                        beingStarted = List.of();
+                        beingStarted.clear();
                         done = true;
                     }
                 }
@@ -1833,7 +1846,7 @@ public final class PostgresqlMessageQueue implements MessageQueue {
                 // the queue, or a later start() starts them with nothing holding them.
                 synchronized (handOver) {
                     moveHolder(Holder.NONE);
-                    beingStarted = List.of();
+                    beingStarted.clear();
                     for (var deregistration : toDeregister) {
                         consumers.removeAll(deregistration.lanes);
                     }
@@ -1905,7 +1918,8 @@ public final class PostgresqlMessageQueue implements MessageQueue {
     }
 
     /**
-     * Under {@link #handOver}: every registered consumer, then the pair a {@code consume()} is starting.
+     * Under {@link #handOver}: every registered consumer, then the pair of every {@code consume()} still starting
+     * ({@link #beingStarted}) - an observer's {@code consume()} on the thread of one still starting, and that one.
      */
     private List<ShardOwnedQueue> registeredAndBeingStarted() {
         var all = new ArrayList<ShardOwnedQueue>(consumers);
