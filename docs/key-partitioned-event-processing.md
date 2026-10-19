@@ -321,6 +321,19 @@ catch-up after drain, as it does today.
 | M4 | Batched forwarder prototype | Same as M3, but the forwarder is a demo-side `FencedLock` + `batchSubscribeToAggregateEventsAsynchronously` + `inbox.addMessagesReceived(batch)`, at batch sizes 10 / 100 / 500 | The reader ceiling with batching. This is the number that justifies (a1) |
 | M5 | Single-instance parallelism control | M3 with **one** instance and 8 consumer threads | Whether the gain comes from partitioning across instances or simply from leaving the single-threaded loop. If one instance gets most of it, EF-2's cluster story matters less than its batching |
 
+**M1 measured** (2026-10-19, one instance, `compose` profile, fixed-window rate over a 690 000-event `Accounts`
+backlog, warm-up discarded, one sample each; harness `NoOpAccountsViewProcessor` / `NoOpAccountsEventProcessor`):
+
+| Processor, handler does nothing but count | Steady rate | Note |
+|---|---|---|
+| `ViewEventProcessor` | **~1 500 events/s** | 43–46 k per 30 s window. Twice the real account views (700–800/s), so the views' own SQL costs about half |
+| `EventProcessor` (forward to inbox, one consumer) | **~850 events/s forwarded** | ~25 k handled per 30 s plus inbox depth climbing 6 → 1 606: the per-event forward costs ~45 % of the reader, and the single default consumer already trails |
+
+Read against the rule below: the plain reader (1 500/s) is above 800/s, so for a `ViewEventProcessor` the handler is
+the larger cost — but forwarding event by event (what (a0) does) caps the reader at ~850/s, no better than today's
+views. Partitioned handling alone therefore cannot win; a batched forward (M4) is what (a1) has to deliver, and
+cheaper handler work (batched view writes) is a second, independent lever.
+
 **Decision rule.** Build (a1) if M4 forwards at least 3× M1 and M4 with two instances cuts catch-up materially below
 M5. If M1 already runs well above 800/s, the handler is the cost. Then (a0) plus parallel consumers may be enough, and
 EF-2 shrinks to documentation and the capability check.

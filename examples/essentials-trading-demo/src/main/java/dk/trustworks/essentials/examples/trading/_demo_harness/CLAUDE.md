@@ -298,3 +298,11 @@ Rerun of the same 200 000-command run (two instances, 8 producers, 50 % hot), 20
 events, 0 ordering warnings on either instance, 1 365 commands/s, handler p50/p99 2.3/6.0 ms, enqueue 24.5 s, drain
 146.5 s — and `account_activity` needed another **147 s** to catch up, the views (~700–800 events/s) now plainly the
 bottleneck (EF-2).
+
+## EF-2 measurement processors
+
+`NoOpAccountsViewProcessor` and `NoOpAccountsEventProcessor` — off unless `trading-demo.ef2.noop-view-processor` /
+`noop-event-processor` is `true`; `/api/admin/ef2/noop-stats` (GET, `POST /reset`). Handlers only count, so their rate
+is the reader's ceiling (M1 in `docs/key-partitioned-event-processing.md` §5, results there). A fresh one reads the
+stream from the beginning, so the existing backlog is the workload — measure a fixed window after warm-up, one
+processor at a time. Their resume points persist under their own names; they do nothing while switched off.
