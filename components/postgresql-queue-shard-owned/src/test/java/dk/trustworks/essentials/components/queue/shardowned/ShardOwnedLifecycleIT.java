@@ -282,44 +282,77 @@ class ShardOwnedLifecycleIT {
     /**
      * An ordered handler that outlasts the grace. Releasing its unit would let a successor start the
      * same key while it still runs here, so the unit is kept - and the instance stays registered - until
-     * this instance's liveness lapses.
+     * this instance's liveness lapses, as far as any other instance is concerned.
+     * <p>
+     * This queue restarted meanwhile, under the same instance id, leaves the kept unit alone while the key is in its
+     * handler, and a heartbeat takes it once the handler has returned, under a NEW fence, so the old incarnation's writes
+     * are refused rather than accepted alongside the new owner's. The restart used to take the kept unit at once
+     * ({@code acquireLeaseGrant} accepts a row naming its own owner) and deliver the key again beside the handler.
      */
     @Test
     void an_ordered_unit_whose_key_outlasts_the_grace_is_kept_rather_than_handed_on() throws Exception {
+        var entries  = new AtomicInteger();
         var entered  = new CountDownLatch(1);
         var release  = new CountDownLatch(1);
         var settings = settingsWithShedGrace(Duration.ofMillis(300));
         try (var runtime = new ShardRuntime(dataSource, settings)) {
             var queue = ShardOwnedQueue.builder().setDataSource(dataSource).setQueueId(QUEUE_ID).setShardCount(SHARD_COUNT)
                                        .setInstanceId("drain-ordered").setRuntime(runtime).build();
-            queue.startConsumingOrdered((messageId, key, payload, payloadType) -> {
-                entered.countDown();
-                awaitQuietly(release);
-            }, settings, SHARD_COUNT);
-            queue.enqueueOrdered(List.of(new ShardOwnedStorage.OrderedPayload("ACC-1", 0, "0".getBytes(StandardCharsets.UTF_8), 1)));
-            assertThat(entered.await(20, TimeUnit.SECONDS)).isTrue();
-            var heldBefore = orderedUnitsOwnedBy("drain-ordered");
-            assertThat(heldBefore).isPositive();
-
-            var started = System.nanoTime();
-            queue.stop();
-            assertThat(Duration.ofNanos(System.nanoTime() - started)).as("bounded by the grace").isLessThan(Duration.ofSeconds(5));
-
-            assertThat(orderedUnitsOwnedBy("drain-ordered")).as("the busy unit is kept, the idle ones handed back").isEqualTo(1);
-            assertThat(instanceRegistered("drain-ordered")).as("kept units need the instance to age out, not deregister").isTrue();
-
-            // Restarting in the same JVM, under the same instance id, while the old handler still runs:
-            // the kept unit is taken over under a NEW fence, so the old incarnation's writes are refused
-            // rather than accepted alongside the new owner's.
-            var keptFence = keptOrderedFence("drain-ordered");
-            var restarted = ShardOwnedQueue.builder().setDataSource(dataSource).setQueueId(QUEUE_ID).setShardCount(SHARD_COUNT)
-                                           .setInstanceId("drain-ordered").setRuntime(runtime).build();
             try {
-                restarted.startConsumingOrdered((messageId, key, payload, payloadType) -> { }, settings, SHARD_COUNT);
-                assertThat(fenceOf("ordered", keptFence.shard())).isGreaterThan(keptFence.fence());
+                queue.startConsumingOrdered((messageId, key, payload, payloadType) -> {
+                    // The first delivery of the key holds its handler; a later one returns at once.
+                    if (entries.incrementAndGet() == 1) {
+                        entered.countDown();
+                        awaitQuietly(release);
+                    }
+                }, settings, SHARD_COUNT);
+                queue.enqueueOrdered(List.of(new ShardOwnedStorage.OrderedPayload("ACC-1", 0, "0".getBytes(StandardCharsets.UTF_8), 1)));
+                assertThat(entered.await(20, TimeUnit.SECONDS)).isTrue();
+                var heldBefore = orderedUnitsOwnedBy("drain-ordered");
+                assertThat(heldBefore).isPositive();
+
+                var started = System.nanoTime();
+                queue.stop();
+                assertThat(Duration.ofNanos(System.nanoTime() - started)).as("bounded by the grace").isLessThan(Duration.ofSeconds(5));
+
+                assertThat(orderedUnitsOwnedBy("drain-ordered")).as("the busy unit is kept, the idle ones handed back").isEqualTo(1);
+                assertThat(instanceRegistered("drain-ordered")).as("kept units need the instance to age out, not deregister").isTrue();
+                assertThat(queue.keptOrderedUnitStillInHandler()).as("premise: the key is still in the handler of the kept unit").isTrue();
+
+                // Restarted under the same instance id, while the old handler still runs, past several heartbeats (one a
+                // third of the 1 s lease TTL): every unit but the kept one is taken, and the kept one is left alone.
+                var keptFence = keptOrderedFence("drain-ordered");
+                queue.start();
+                Awaitility.await().during(Duration.ofMillis(1_500)).atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
+                    assertThat(fenceOf("ordered", keptFence.shard())).as("the kept unit is not taken while its key is in the handler")
+                                                                     .isEqualTo(keptFence.fence());
+                    assertThat(entries).as("the key is not delivered again beside its handler").hasValue(1);
+                    assertThat(queue.shardsHeld()).as("every unit but the kept one").isEqualTo(ShardOwnedSchema.ORDERED_UNITS - 1);
+                });
+
+                // Stopped again, keeping nothing of its own: the unit the first stop kept still names the instance, so the
+                // instance stays registered - deregistered, the unit would read as ownerless and another instance could
+                // start the key beside the handler - and the run after this one leaves the unit alone too.
+                queue.stop();
+                assertThat(instanceRegistered("drain-ordered")).as("the earlier stop's kept unit keeps the instance registered").isTrue();
+                assertThat(orderedUnitsOwnedBy("drain-ordered")).as("only the kept unit names the instance").isEqualTo(1);
+                assertThat(queue.keptOrderedUnitStillInHandler()).as("the queue still knows the key is in the handler").isTrue();
+                queue.start();
+                Awaitility.await().during(Duration.ofMillis(700)).atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
+                    assertThat(fenceOf("ordered", keptFence.shard())).as("the kept unit is still left alone").isEqualTo(keptFence.fence());
+                    assertThat(queue.shardsHeld()).isEqualTo(ShardOwnedSchema.ORDERED_UNITS - 1);
+                });
+
+                release.countDown();
+                Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+                    assertThat(queue.keptOrderedUnitStillInHandler()).isFalse();
+                    assertThat(fenceOf("ordered", keptFence.shard())).as("taken once the handler has returned, under a new fence")
+                                                                     .isGreaterThan(keptFence.fence());
+                    assertThat(queue.shardsHeld()).as("every unit").isEqualTo(ShardOwnedSchema.ORDERED_UNITS);
+                });
             } finally {
                 release.countDown();
-                restarted.stop();
+                queue.stop();
             }
         } finally {
             release.countDown();

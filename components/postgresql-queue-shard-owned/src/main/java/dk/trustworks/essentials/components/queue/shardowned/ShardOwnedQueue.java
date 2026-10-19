@@ -169,19 +169,23 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      */
     private          boolean                  borrowedShared;
     /**
-     * Whether the last run to end kept an ordered unit ({@link #keptOrderedUnitsOnLastStop()}). Written by
-     * {@link #endRun} alone.
+     * The ordered owners ended runs of this queue kept, because a key was still in their handler {@code shedGrace} after
+     * the stop began, whose key may still be there: the owners the last run to end kept, and those an earlier run kept
+     * whose handler had not returned when it ended. Each one's lease row still names this instance id, under the fence
+     * of the run that kept it. While its key is in its handler ({@code inFlight() > 0}), no later run of this queue
+     * acquires its unit ({@link #keptUnitsStillInHandler()}): {@link ShardOwnedStorage#acquireLeaseGrant} accepts a row
+     * naming its own owner, so a restart would take the unit at once and could start that key beside the handler. Once
+     * it has returned, the unit is acquired as any other, under a newer fence. Replaced by {@link #endRun} alone, with
+     * the owners still in a handler then and those the run it ends keeps.
      * <p>
      * A queue-wide field a run writes, which the rule that everything a run owns lives on its {@link Run} otherwise
-     * forbids. Exempt because it is not state of a run in progress but the outcome of the run that ended last: written
-     * once per run, as {@link #endRun} ends it under {@link #lifecycleLock}, never by a heartbeat tick. Read after a
-     * {@code stop()} has returned, which does not always mean after the run has ended: a stop that gave up waiting for a
-     * start still running returns before that start ends the run ({@link #endRunOfStart}) and writes this, so a read
-     * then answers for the run before. {@link PostgresqlMessageQueue} reads it after every stop of a subscription's lanes
-     * it owes - one of them, on a hand-over, by the holder that started the lanes, after its starts have returned - and
-     * ORs the reads, so the last of them answers for the run that ended.
+     * forbids. Exempt because it is not state of a run in progress but what the runs that ended left behind: written
+     * once per run, as {@link #endRun} ends it under {@link #lifecycleLock}, never by a heartbeat tick, and read by the
+     * acquire loops of the run after it. Read after a {@code stop()} has returned, which does not always mean after the
+     * run has ended: a stop that gave up waiting for a start still running returns before that start ends the run
+     * ({@link #endRunOfStart}) and writes this, so a read then does not see what that run keeps.
      */
-    private volatile boolean                  keptOrderedUnitsOnLastStop;
+    private volatile List<LeasedOwner>        keptOrderedOwners   = List.of();
     /**
      * How many hand-backs of an ended run - {@link #handBackWithinBudget} on its budget thread
      * ({@link #withinShutdownBudget}) - are still running ({@link #handBackStillRunning()}): counted up by {@link #endRun}
@@ -198,12 +202,13 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
     private volatile ShardOwnedQueue          membershipSharedWith;
     /**
      * Whether a run of this queue still needs the instance's membership row ({@link #needsMembership()}). Set by
-     * {@link #start()} as it installs a run; set by {@link #endRun} to whether the run kept an ordered unit, once it has
-     * decided that, after draining. A run a stop has taken out still needs the row until then - while its owners drain,
+     * {@link #start()} as it installs a run; set by {@link #endRun} to whether an ordered unit is kept - by the run it
+     * ends, or by an earlier one whose key is still in its handler ({@link #keptOrderedOwners}) - once it has decided
+     * that, after draining. A run a stop has taken out still needs the row until then - while its owners drain,
      * and while a start still running ends it for a stop that gave up waiting ({@link #endRunOfStart}). An abrupt stop
      * leaves it set, as it leaves the units leased: it stands in for a crash, whose membership row ages out.
      * <p>
-     * A queue-wide field a run writes, exempt from the rule against those for the reason {@link #keptOrderedUnitsOnLastStop}
+     * A queue-wide field a run writes, exempt from the rule against those for the reason {@link #keptOrderedOwners}
      * is: written under {@link #lifecycleLock} as a run starts and as it ends, never by a heartbeat tick, and at most one
      * run is installed or being ended at a time.
      */
@@ -837,9 +842,21 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                      instanceId, lane, queueId);
             return leased;
         }
+        // A unit an earlier stop of this queue kept, whose key is still in its handler: its row names this instance, so
+        // acquireLeaseGrant would take it at once and the new owner could start that key beside the handler.
+        var stillInHandler = "ordered".equals(lane) ? keptUnitsStillInHandler() : Set.<Integer>of();
+        if (!stillInHandler.isEmpty()) {
+            log.info("Instance {} leaves ordered unit(s) [{}] on queue {} unacquired for now: a stop of this queue kept them "
+                             + "because a key was still in a handler, which has not returned. A heartbeat of this run takes "
+                             + "them once it has, so the key is not started beside it",
+                     instanceId, summarise(stillInHandler), queueId);
+        }
         try {
             // Checked per unit too, as in rebalance: what is placed after the last live pump died is ended on arrival.
             for (var shard = 0; shard < units && leased.size() < maxShards && runtime.hasLivePump() && currentRun.get() == run; shard++) {
+                if (stillInHandler.contains(shard)) {
+                    continue;
+                }
                 var grant = storage.acquireLeaseGrant(lane, shard, instanceId, leaseTtlMillis);
                 if (grant.isPresent()) {
                     leased.add(new LeasedUnit(shard, grant.get()));
@@ -1708,11 +1725,18 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                                    .filter(LeasedOwner::holdsLeaseRow)
                                    .map(LeasedOwner::shard)
                                    .collect(java.util.stream.Collectors.toSet());
+        // A unit an earlier stop of this queue kept stays unacquired while its key is in its handler, as at start-up
+        // (leaseAtStart); asked on every tick, so the first tick after the handler has returned takes it.
+        var stillInHandler = keptUnitsStillInHandler();
+        if (!stillInHandler.isEmpty()) {
+            log.debug("Instance {} leaves ordered unit(s) [{}] on queue {} unacquired: a stop of this queue kept them, and a key "
+                              + "is still in their handler", instanceId, summarise(stillInHandler), queueId);
+        }
         var acquired   = new ArrayList<Integer>();
         Throwable loopFailure = null;
         try {
             for (var shard = 0; shard < orderedUnits() && heldShards.size() < limit; shard++) {
-                if (heldShards.contains(shard)) {
+                if (heldShards.contains(shard) || stillInHandler.contains(shard)) {
                     continue;
                 }
                 var grant = storage.acquireLeaseGrant("ordered", shard, instanceId, leaseTtlMillis);
@@ -2169,21 +2193,38 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
     }
 
     /**
-     * Whether the last run of this queue that a {@link #stop()} ended - or a start that ended its own run ({@link #endRun})
-     * - kept an ordered unit because a key was still in its handler {@code shedGrace} after the stop began. Such a unit's
-     * lease row still names this instance id, and the instance stays registered, until the instance's liveness lapses, a
-     * lease TTL after its last heartbeat. A queue started under the same instance id before then takes the unit at once
-     * ({@link ShardOwnedStorage#acquireLeaseGrant} accepts a row naming its own owner) and may start that key beside the
-     * handler still running here; another instance id cannot take it until then. {@link PostgresqlMessageQueue} asks this
-     * before it lets the next {@code consume()} register under an unsubscribed subscription's instance id.
+     * Whether an ordered unit a {@link #stop()} of this queue kept - or a start that ended its own run ({@link #endRun})
+     * - still has its key in a handler: kept because the key was still there {@code shedGrace} after the stop began, its
+     * lease row still names this instance id, and the instance stays registered. Another instance id cannot take the unit
+     * until the instance's liveness lapses, a lease TTL after its last heartbeat. This queue's own later runs do not take
+     * it while the key is in its handler ({@link #keptUnitsStillInHandler()}), and take it as any other unit once it has
+     * returned. A queue that is not this one but registers under the same instance id - a new {@link PostgresqlMessageQueue}
+     * subscription given the id, another {@code ShardOwnedQueue} built with it - knows nothing of it, and would take the
+     * unit at once ({@link ShardOwnedStorage#acquireLeaseGrant} accepts a row naming its own owner) and could start that
+     * key beside the handler still running here. {@link PostgresqlMessageQueue} asks this before it lets the next
+     * {@code consume()} register under an ended subscription's instance id.
      * <p>
-     * False again once a later run ends keeping nothing; a stop that finds no run leaves it as it is, and so does a
-     * {@link #stopAbruptly()}, which releases nothing. Asked right after a {@code stop()} that gave up waiting for a
-     * start still running, it answers for the run before: that start ends its run, and sets this, only once its
-     * statements return.
+     * Asked of the owners themselves, so false from the moment the last such handler returns, whether or not this queue
+     * runs again. A {@link #stopAbruptly()} keeps no unit, as it releases nothing. Asked right after a {@code stop()} that
+     * gave up waiting for a start still running, it does not yet see what that start's run keeps: that start ends its
+     * run, and records what it kept, only once its statements return.
      */
-    boolean keptOrderedUnitsOnLastStop() {
-        return keptOrderedUnitsOnLastStop;
+    boolean keptOrderedUnitStillInHandler() {
+        return keptOrderedOwners.stream().anyMatch(owner -> owner.inFlight() > 0);
+    }
+
+    /**
+     * The ordered units whose kept owner ({@link #keptOrderedOwners}) still has a key in its handler: the units no run of
+     * this queue acquires until it has returned.
+     */
+    private Set<Integer> keptUnitsStillInHandler() {
+        var units = new TreeSet<Integer>();
+        for (var owner : keptOrderedOwners) {
+            if (owner.inFlight() > 0) {
+                units.add(owner.shard());
+            }
+        }
+        return units;
     }
 
     /**
@@ -2193,7 +2234,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * membership row of this queue's instance id ({@link ShardOwnedStorage#deregisterInstance(String)}), however
      * long after the stop returned: a queue registering under the same id meanwhile can lose its row to it, and other
      * instances then read its units as ownerless. {@link PostgresqlMessageQueue} asks this before it lets the next
-     * {@code consume()} register under an ended subscription's instance id. Like {@link #keptOrderedUnitsOnLastStop()},
+     * {@code consume()} register under an ended subscription's instance id. Like {@link #keptOrderedUnitStillInHandler()},
      * asked right after a {@code stop()} that gave up waiting for a start still running, it does not yet count the
      * hand-back that start does once its statements return.
      */
@@ -2232,7 +2273,8 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
     /**
      * Whether this queue still needs its instance's membership row: from the moment a {@link #start()} installs a run
      * until that run is ended, once drained, keeping no ordered unit - by a stop, or by the undo of a failed start - and,
-     * when it kept one, until a later run ends keeping nothing. A stop that gave up waiting for a start still running
+     * when it kept one, until a later run ends keeping nothing, with no key an earlier stop kept a unit for still in its
+     * handler ({@link #keptOrderedOwners}). A stop that gave up waiting for a start still running
      * ({@link #lifecycleLock}) leaves it true until that start has ended the run; an abrupt stop leaves it true, as it
      * leaves the units leased. Read by the stop of the other lane of the subscription ({@link #shareMembershipWith})
      * before it deletes the row.
@@ -2410,14 +2452,21 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         // still running counts it as this instance's, so its acquire loop cannot take the unit again.
         held.forEach(this::endOnStop);
         // An ordered unit with a key still in a handler is NOT handed back: a successor taking it now
-        // could start that key while it runs here, which is reordering. It is kept until this
+        // could start that key while it runs here, which is reordering. Another instance can take it once this
         // instance's liveness lapses - a lease TTL - which is also why the instance must stay
-        // registered. An unordered one is released regardless; at-least-once covers its redelivery.
+        // registered. A later run of this queue leaves it alone until the handler has returned (keptOrderedOwners), and
+        // its acquire loop may take it after that. An unordered one is released regardless; at-least-once covers its
+        // redelivery.
         var kept = stillInHandler.stream().filter(owner -> "ordered".equals(owner.lane())).toList();
-        keptOrderedUnitsOnLastStop = !kept.isEmpty();
-        // This run's own need for the membership row ends here, unless it kept a unit: written before the hand-back reads
+        // Units an earlier stop kept whose key is still in its handler: this run did not take them (keptUnitsStillInHandler),
+        // and their rows still name this instance, so they keep it registered as this run's own kept units do.
+        var keptEarlier = keptOrderedOwners.stream().filter(owner -> owner.inFlight() > 0).toList();
+        var stillKept   = new ArrayList<LeasedOwner>(keptEarlier);
+        stillKept.addAll(kept);
+        keptOrderedOwners = List.copyOf(stillKept);
+        // This run's own need for the membership row ends here, unless a unit is kept: written before the hand-back reads
         // the other lane's (handBackWithinBudget), so of two lanes ending at once at least one reads the other's as ended.
-        runNeedsMembership = !kept.isEmpty();
+        runNeedsMembership = !stillKept.isEmpty();
         var toRelease = held.stream().filter(owner -> !kept.contains(owner)).toList();
         // Nothing against the database for a run with no lease row to hand back and no deregistration owed: a start that
         // failed before it adopted anything.
@@ -2427,7 +2476,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             handBacksRunning.incrementAndGet();
             withinShutdownBudget(() -> {
                 try {
-                    handBackWithinBudget(serving, toRelease, kept, deregister);
+                    handBackWithinBudget(serving, toRelease, kept, keptEarlier, deregister);
                 } finally {
                     handBacksRunning.decrementAndGet();
                 }
@@ -2466,12 +2515,14 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
     /**
      * The database half of {@link #endRun}, on the budget thread ({@link #withinShutdownBudget}): flush what the serving
      * owners still hold, release the rows of {@code toRelease}, and deregister this instance
-     * ({@link ShardOwnedStorage#deregisterInstance(String)}) when {@code deregister}, no ordered unit is {@code kept}, and
-     * the other lane of the {@code PostgresqlMessageQueue} subscription, which shares the membership row
-     * ({@link #shareMembershipWith}), no longer needs it ({@link #needsMembership()}). When it does, that lane's own stop
-     * deletes the row later, or leaves it to age out if it keeps an ordered unit.
+     * ({@link ShardOwnedStorage#deregisterInstance(String)}) when {@code deregister}, no ordered unit is {@code kept} by
+     * this run nor still {@code keptEarlier} by an earlier one, and the other lane of the {@code PostgresqlMessageQueue}
+     * subscription, which shares the membership row ({@link #shareMembershipWith}), no longer needs it
+     * ({@link #needsMembership()}). When it does, that lane's own stop deletes the row later, or leaves it to age out if
+     * it keeps an ordered unit.
      */
-    private void handBackWithinBudget(List<LeasedOwner> serving, List<LeasedOwner> toRelease, List<LeasedOwner> kept, boolean deregister) {
+    private void handBackWithinBudget(List<LeasedOwner> serving, List<LeasedOwner> toRelease, List<LeasedOwner> kept,
+                                      List<LeasedOwner> keptEarlier, boolean deregister) {
         // What the pumps would have flushed had they gone on serving these owners. Valid still:
         // releasing a lease does not bump its fence, and the leases go only after this. Nothing to
         // do for a runtime this queue closed itself - its pumps flushed on the way out. Not for an
@@ -2481,13 +2532,23 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         if (!kept.isEmpty()) {
             log.warn("Instance {} is keeping {} ordered unit(s) [{}] on queue {}: a key was still in a handler "
                              + "{} after stop began. They become available to another instance when this one's "
-                             + "liveness lapses ({} ms), so no successor starts a key that may still be running here. "
+                             + "liveness lapses ({} ms), and to a restart of this queue once those handlers have returned, "
+                             + "so no successor starts a key that may still be running here. "
                              + "Raise shedGrace if handlers routinely outlast it",
                      instanceId, kept.size(), summarise(kept.stream().map(LeasedOwner::shard).toList()), queueId,
                      Duration.ofNanos(activeSettings.shedGraceNanos()), leaseTtlMillis);
             return;
         }
         if (!deregister) {
+            return;
+        }
+        // Deleted, the row would make those units read as ownerless at once, and another instance could start the key
+        // beside the handler an earlier stop kept the unit for.
+        if (!keptEarlier.isEmpty()) {
+            log.info("Instance {} stays registered on queue {}: an earlier stop kept {} ordered unit(s) [{}] whose key is still "
+                             + "in a handler, and their leases name this instance until its liveness lapses ({} ms)",
+                     instanceId, queueId, keptEarlier.size(), summarise(keptEarlier.stream().map(LeasedOwner::shard).toList()),
+                     leaseTtlMillis);
             return;
         }
         // The membership row is the instance's, and a PostgresqlMessageQueue subscription's two lanes share it. Deleted

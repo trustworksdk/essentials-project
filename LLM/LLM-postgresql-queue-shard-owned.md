@@ -100,12 +100,23 @@ ordered handler and reported two live instances for one process.
 **`Subscription.stop()` keeps it registered; `unsubscribe()` ends it.** A stopped (or closed)
 subscription stays with its queue, and the queue's `start()` starts it again. Letting go of one and
 calling `consume()` anew needs `unsubscribe()` first, which stops both lanes and takes them out of the
-queue: the next `consume()` then takes the same instance id and is not a competing consumer. One
-exception: when the stop kept an ordered unit because a key was still in its handler past `shedGrace`,
-that unit stays leased under the old id until the lease TTL runs out, and a new subscription under the
-same id would take it at once and could start the key beside the running handler. So the id stays out
-of use for a lease TTL, and a `consume()` before then registers under the next suffix (`<id>-1`), with
-no COMPETING WARN; the old id's membership row ages out meanwhile. Stopping
+queue: its instance id is free for the next `consume()`, which is not counted as competing with the
+unsubscribed subscription (it still is with any other subscription of the queue, and logs the COMPETING
+WARN for it). Two cases delay the id, either one enough, and when both apply it is free only once both
+have passed: when the stop kept an ordered unit, because a key was still in its handler past
+`shedGrace`, the id stays out of use until that handler has returned, as that unit's lease names the id
+and a subscription under it would take the unit at once and could start the key beside the running
+handler; and when the stop gave up waiting for its lanes' hand-back to the database (releasing the
+leases and deregistering the id), the id stays out of use until that hand-back has returned, as it may
+still delete the id's membership row. A `consume()` before then registers under another instance id,
+the lowest one free (`<id>-1` when the unsubscribed subscription held `<id>` and no other is registered
+or held back), with no COMPETING WARN unless another subscription is registered. Nothing heartbeats an
+unsubscribed id, so another instance can take its kept unit once the id's membership row has aged out
+(`leaseTtl`). A subscription or queue restarted instead (`Subscription.start()`, the queue's `start()`)
+stays registered under the id and heartbeats it, so no other instance takes the kept unit; the restart
+itself leaves that unit alone until the handler has returned, and a heartbeat may take it after that.
+Until then no key of that unit is delivered, so a handler that never returns leaves the unit unserved
+for as long as the restarted instance runs. Stopping
 instead left one stopped subscription behind per round — a COMPETING WARN with a new `-N` instance id
 suffix each time, and a queue `stop()`/`start()` restarting every abandoned handler. `ShardOwnedDurableQueues`
 unsubscribes on every consumer stop and cancel, so a `DurableLocalCommandBus` restart or an `Inbox`

@@ -32,6 +32,7 @@ import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
+import java.util.function.*;
 
 import static ch.qos.logback.classic.Level.*;
 import static dk.trustworks.essentials.components.queue.shardowned.SingleRowQueries.*;
@@ -284,12 +285,13 @@ class ShardOwnedUnsubscribeIT {
 
     /**
      * A subscription whose stop kept an ordered unit - a key still in its handler past {@code shedGrace} - leaves that
-     * unit leased under its instance id until the instance's liveness lapses, a lease TTL later. A {@code consume()}
-     * before then registers under the next instance id, with no COMPETING warning, and that id cannot take the kept unit
-     * while the old instance is still live, so the key is not started again beside the handler still running it. Once a
-     * lease TTL has passed, the id is free again. It used to be given back as soon as the lanes had stopped: the next
-     * {@code consume()} registered under the same id, took the kept unit at once ({@code acquireLeaseGrant} accepts a row
-     * naming its own owner) and delivered the key's message a second time while the first handler still ran it.
+     * unit leased under its instance id. A {@code consume()} while the key is in its handler registers under the next
+     * instance id, with no COMPETING warning, and that id cannot take the kept unit while the old instance is still live,
+     * so the key is not started again beside the handler still running it. Once the handler has returned, the id is free
+     * again at once - not a lease TTL later, which both outlasts a handler that returns sooner and says nothing about one
+     * that runs longer. The id used to be given back as soon as the lanes had stopped: the next {@code consume()}
+     * registered under the same id, took the kept unit at once ({@code acquireLeaseGrant} accepts a row naming its own
+     * owner) and delivered the key's message a second time while the first handler still ran it.
      * <p>
      * Also the membership row: the unordered lane stops first and used to delete the subscription's membership row, which
      * the ordered lane shares, although the ordered lane went on to keep a unit. With no row the kept unit's owner reads as
@@ -297,8 +299,8 @@ class ShardOwnedUnsubscribeIT {
      * leaves it to age out as it keeps the unit.
      */
     @Test
-    void a_subscription_whose_stop_kept_an_ordered_unit_keeps_its_instance_id_out_of_use_for_a_lease_ttl() throws Exception {
-        var leaseTtl        = Duration.ofSeconds(5);
+    void a_subscription_whose_stop_kept_an_ordered_unit_keeps_its_instance_id_out_of_use_while_the_key_is_in_its_handler() throws Exception {
+        var leaseTtl        = Duration.ofSeconds(10);
         var entered         = new CountDownLatch(1);
         var release         = new CountDownLatch(1);
         var deliveredAgain  = ConcurrentHashMap.<String>newKeySet();
@@ -310,6 +312,7 @@ class ShardOwnedUnsubscribeIT {
                         awaitQuietly(release);
                     }
                 }, ConsumerOptions.defaults());
+                var firstLanes = queue.registeredConsumers();
                 queue.enqueue(Message.ordered("in-handler".getBytes(StandardCharsets.UTF_8), 1, "ACC-1", 0));
                 assertThat(entered.await(20, TimeUnit.SECONDS)).as("premise: the key is in its handler").isTrue();
 
@@ -319,11 +322,12 @@ class ShardOwnedUnsubscribeIT {
                                                            .isEqualTo(1);
                 assertThat(registeredInstances()).as("the kept unit keeps the subscription's instance registered, whichever lane stopped first")
                                                  .containsExactly(INSTANCE_ID);
-                assertThat(infos()).as("the queue says once why the instance id stays out of use, and for how long")
+                assertThat(infos()).as("the queue says once why the instance id stays out of use, and until when")
                                    .filteredOn(info -> info.contains("keeps the instance id '" + INSTANCE_ID + "'"))
                                    .singleElement()
                                    .satisfies(info -> assertThat(info).contains("of an unsubscribed subscription",
-                                                                                "out of use for " + leaseTtl + ": it kept an ordered unit"));
+                                                                                "out of use until the handler of the key it kept an ordered unit for has returned")
+                                                                      .doesNotContain("out of use for "));
 
                 var second = queue.consume((messageId, key, payload, payloadType) -> {
                     if (key != null) {
@@ -340,19 +344,24 @@ class ShardOwnedUnsubscribeIT {
                           });
                 assertThat(registeredInstances()).as("the new subscription registered under the next instance id")
                                                  .containsExactly(INSTANCE_ID, INSTANCE_ID + "-1");
-                assertThat(Duration.ofNanos(System.nanoTime() - unsubscribedAt)).as("premise: all of that within the lease TTL")
-                                                                               .isLessThan(leaseTtl);
 
                 release.countDown();
                 second.unsubscribe();
-                var lapsedAt = unsubscribedAt + leaseTtl.toNanos();
-                Awaitility.await().atMost(leaseTtl.plusSeconds(1)).until(() -> System.nanoTime() - lapsedAt > 0);
+                Awaitility.await().atMost(Duration.ofSeconds(5))
+                          .untilAsserted(() -> assertThat(firstLanes).as("premise: the key has left the handler its unit was kept for")
+                                                                     .noneMatch(ShardOwnedQueue::keptOrderedUnitStillInHandler));
 
                 var third = consumeUnchecked(queue);
                 assertThat(third.isStarted()).isTrue();
                 assertThat(queue.registeredConsumers()).hasSize(2);
-                assertThat(registeredInstances()).as("a lease TTL later the instance id is the caller's own again")
-                                                 .containsExactly(INSTANCE_ID);
+                // Registered under the caller's own id, the new subscription takes the unit that id kept as well as every
+                // other; under another id it could not take that one while the old id's membership row is live.
+                Awaitility.await().atMost(Duration.ofSeconds(5))
+                          .untilAsserted(() -> assertThat(orderedUnitsOwnedBy(INSTANCE_ID))
+                                  .as("once the handler has returned the instance id is the caller's own again")
+                                  .isEqualTo(ShardOwnedSchema.ORDERED_UNITS));
+                assertThat(Duration.ofNanos(System.nanoTime() - unsubscribedAt)).as("premise: all of that within the lease TTL, so no TTL freed the id")
+                                                                               .isLessThan(leaseTtl);
                 assertThat(competingWarnings()).isEmpty();
             } finally {
                 release.countDown();
@@ -361,17 +370,121 @@ class ShardOwnedUnsubscribeIT {
     }
 
     /**
+     * A {@code stop()} of the queue whose ordered lane kept a unit - a key still in its handler past {@code shedGrace} -
+     * and the queue's {@code start()} while that handler still runs: the restarted ordered lane registers under the same
+     * instance id and takes every other unit, but leaves the kept one alone until the handler has returned, so the key is
+     * not delivered again beside it; a heartbeat then takes the unit, under a newer fence. The restart used to take the
+     * kept unit at once ({@code acquireLeaseGrant} accepts a row naming its own owner) and deliver the key's message a
+     * second time while the first handler still ran it.
+     */
+    @Test
+    void a_queue_restarted_while_a_key_is_in_the_handler_its_stop_kept_an_ordered_unit_for_leaves_that_unit_alone() throws Exception {
+        restartWhileAKeptKeyIsInItsHandler((queue, subscription) -> {
+            queue.stop();
+            return queue::start;
+        });
+    }
+
+    /**
+     * {@link #a_queue_restarted_while_a_key_is_in_the_handler_its_stop_kept_an_ordered_unit_for_leaves_that_unit_alone}
+     * for a {@link Subscription#stop()} and {@link Subscription#start()}: the same lanes restart under the same instance
+     * id, and the same guard applies.
+     */
+    @Test
+    void a_subscription_restarted_while_a_key_is_in_the_handler_its_stop_kept_an_ordered_unit_for_leaves_that_unit_alone() throws Exception {
+        restartWhileAKeptKeyIsInItsHandler((queue, subscription) -> {
+            subscription.stop();
+            return subscription::start;
+        });
+    }
+
+    /**
+     * A stop and restart of what {@code stopAndThenRestart} names, with an ordered handler holding key ACC-1 past
+     * {@code shedGrace}: the stop keeps that key's unit, and the restart - well inside the lease TTL, so nothing has lapsed
+     * - must leave it alone until the handler has returned, then take it under a newer fence.
+     *
+     * @param stopAndThenRestart stops the queue or the subscription, and returns what restarts it
+     */
+    private void restartWhileAKeptKeyIsInItsHandler(BiFunction<PostgresqlMessageQueue, Subscription, Runnable> stopAndThenRestart) throws Exception {
+        // A heartbeat every second, so the restarted lane's acquire loop runs several times while the handler is held.
+        var leaseTtl = Duration.ofSeconds(3);
+        var entries  = new AtomicInteger();
+        var entered  = new CountDownLatch(1);
+        var release  = new CountDownLatch(1);
+        try (var queue = newQueue(PostgresqlMessageQueue.LifecycleHook.NONE, settingsWith(Duration.ofMillis(300), leaseTtl))) {
+            try {
+                var subscription = queue.consume((messageId, key, payload, payloadType) -> {
+                    // The first delivery of the key holds its handler; a later one returns at once.
+                    if (key != null && entries.incrementAndGet() == 1) {
+                        entered.countDown();
+                        awaitQuietly(release);
+                    }
+                }, ConsumerOptions.defaults());
+                var lanes = queue.registeredConsumers();
+                queue.enqueue(Message.ordered("in-handler".getBytes(StandardCharsets.UTF_8), 1, "ACC-1", 0));
+                assertThat(entered.await(20, TimeUnit.SECONDS)).as("premise: the key is in its handler").isTrue();
+
+                var restart = stopAndThenRestart.apply(queue, subscription);
+                assertThat(subscription.isStarted()).as("premise: stopped").isFalse();
+                assertThat(orderedUnitsOwnedBy(INSTANCE_ID)).as("premise: the stop kept the unit whose key is still in its handler")
+                                                           .isEqualTo(1);
+                assertThat(lanes).as("premise: a lane knows the key is still in the handler of the unit it kept")
+                                 .anyMatch(ShardOwnedQueue::keptOrderedUnitStillInHandler);
+                var kept = keptOrderedFence(INSTANCE_ID);
+
+                restart.run();
+                assertThat(subscription.isStarted()).as("restarted").isTrue();
+                assertThat(registeredInstances()).as("under the same instance id").containsExactly(INSTANCE_ID);
+                Awaitility.await().during(Duration.ofMillis(1_500)).atMost(Duration.ofSeconds(5))
+                          .untilAsserted(() -> {
+                              assertThat(entries).as("the key in the old handler is not delivered again beside it").hasValue(1);
+                              assertThat(fenceOf(kept.shard())).as("the kept unit is not taken while its key is in the handler")
+                                                               .isEqualTo(kept.fence());
+                              assertThat(subscription.orderedUnitsHeld()).as("every ordered unit but the kept one")
+                                                                         .isEqualTo(ShardOwnedSchema.ORDERED_UNITS - 1);
+                          });
+
+                release.countDown();
+                Awaitility.await().atMost(Duration.ofSeconds(10))
+                          .untilAsserted(() -> {
+                              assertThat(fenceOf(kept.shard())).as("taken once the handler has returned, under a newer fence")
+                                                               .isGreaterThan(kept.fence());
+                              assertThat(subscription.orderedUnitsHeld()).as("every ordered unit").isEqualTo(ShardOwnedSchema.ORDERED_UNITS);
+                          });
+            } finally {
+                release.countDown();
+            }
+        }
+    }
+
+    private record UnitFence(int shard, long fence) {
+    }
+
+    private UnitFence keptOrderedFence(String instanceId) throws SQLException {
+        return queryForRow(dataSource, "Reading the ordered unit kept under " + instanceId,
+                           "SELECT shard, fence FROM " + ShardOwnedSchema.LEASE_TABLE + " WHERE queue_id = ? AND lane = 'ordered' AND owner = ?",
+                           resultSet -> new UnitFence(resultSet.getInt(1), resultSet.getLong(2)),
+                           QUEUE_ID, instanceId);
+    }
+
+    private long fenceOf(int orderedUnit) throws SQLException {
+        return queryForLong(dataSource, "Reading the fence of ordered unit " + orderedUnit,
+                            "SELECT fence FROM " + ShardOwnedSchema.LEASE_TABLE + " WHERE queue_id = ? AND lane = 'ordered' AND shard = ?",
+                            QUEUE_ID, orderedUnit);
+    }
+
+    /**
      * A {@code consume()} whose ordered lane's start fails once that lane has handed a key to the handler - a
      * {@link QueueObserver} throwing for one of its unit acquisitions, which a start tells last, after its units are
      * served - stops both lanes, and the ordered lane's stop keeps the unit whose key is still in its handler past
-     * {@code shedGrace}. The failed {@code consume()} then holds its subscription index as an unsubscribe does, for a lease
-     * TTL: a {@code consume()} retried before then registers under the next instance id, which cannot take the kept unit
-     * while the old instance is live. It used to give the index back at once, so the retry registered under the same
+     * {@code shedGrace}. The failed {@code consume()} then holds its subscription index as an unsubscribe does, until the
+     * key has left its handler: a {@code consume()} retried before then registers under the next instance id, which cannot
+     * take the kept unit while the old instance is live. It used to give the index back at once, so the retry registered under the same
      * instance id, took the kept unit at once ({@code acquireLeaseGrant} accepts a row naming its own owner) and delivered
      * the key a second time while the first handler still ran it.
      */
     @Test
-    void a_failed_consume_whose_ordered_lane_kept_a_unit_keeps_its_instance_id_out_of_use_for_a_lease_ttl() throws Exception {
+    void a_failed_consume_whose_ordered_lane_kept_a_unit_keeps_its_instance_id_out_of_use_while_the_key_is_in_its_handler() throws Exception {
         var leaseTtl            = Duration.ofSeconds(5);
         var entered             = new CountDownLatch(1);
         var release             = new CountDownLatch(1);
@@ -427,11 +540,12 @@ class ShardOwnedUnsubscribeIT {
                                                  .containsExactly(INSTANCE_ID, INSTANCE_ID + "-1");
                 assertThat(Duration.ofNanos(System.nanoTime() - failedAt)).as("premise: all of that within the lease TTL")
                                                                          .isLessThan(leaseTtl);
-                assertThat(infos()).as("the queue says once why the instance id stays out of use, and for how long")
+                assertThat(infos()).as("the queue says once why the instance id stays out of use, and until when")
                                    .filteredOn(info -> info.contains("keeps the instance id '" + INSTANCE_ID + "'"))
                                    .singleElement()
                                    .satisfies(info -> assertThat(info).contains("of a failed consume()",
-                                                                                "out of use for " + leaseTtl + ": it kept an ordered unit"));
+                                                                                "out of use until the handler of the key it kept an ordered unit for has returned")
+                                                                      .doesNotContain("out of use for "));
             } finally {
                 release.countDown();
             }
