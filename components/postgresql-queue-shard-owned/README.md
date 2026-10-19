@@ -194,10 +194,28 @@ Re-registering a name with a *different* shard count is refused rather than acce
 | Call | Effect |
 |---|---|
 | `consume(handler, options)` | Registers a consumer and starts it. Returns a `Subscription`. A `consume()` made while no subscription is registered also starts the queue; any other, like `Subscription.start()`, starts its own consumer only and leaves the queue as it is, so after a `stop()` the queue's `start()` still restarts the others |
-| `start()` | Restarts consumers this queue created and then stopped. A queue that has never consumed has nothing to start |
+| `start()` | Starts the consumers of every subscription still registered — after a `stop()`, the ones it stopped, including a subscription stopped on its own with `Subscription.stop()`. It does this only while `isStarted()` reads false; on a queue marked started it returns at once. An unsubscribed subscription is no longer registered and is never started again. A queue that has never consumed has nothing to start |
 | `stop()` | Stops every registered consumer, whether `isStarted()` reads true or not: dispatches nothing new, **waits up to `shedGrace` for handlers already running** and acknowledges them, then **releases the shard leases** so a successor picks them up immediately rather than waiting the lease out. An ordered unit with a key still in a handler after the grace is kept instead, until this instance's liveness lapses, so no successor starts that key while it runs. They stay registered, so `start()` brings them back. **If a `consume()`/`start()` is still doing its database work, `stop()` does not wait for it past about 4 s** (2 s on a `ShardOwnedQueue`; on an interrupted thread not at all): it returns with `isStarted()` false and logs a WARN, and that start releases the leases and deregisters the instance only once its statements return, which nothing bounds but the driver's `socketTimeout`. Closing the `DataSource` before that start returns makes the release fail — the case a Spring shutdown is most likely to hit, since it closes the pool once `stop()` has returned. Under a partition, or after a failed release, the units stay unserved as after a crash: a successor takes them only once this instance's membership row is older than `leaseTtl`. Set `socketTimeout` on the pool ([Prerequisites](#prerequisites)) |
 | `close()` | `stop()` |
 | `isStarted()` | Whether the queue is marked started — by `start()` or by a `consume()` made while no subscription is registered — not whether anything runs. After a `stop()`, a `Subscription.start()` or a later `consume()` runs that subscription's consumers while `isStarted()` reads false |
+
+**`Subscription.stop()` keeps a subscription registered; `Subscription.unsubscribe()` ends it.** A
+subscription stopped with `Subscription.stop()` stays with its queue, so the queue's next `start()`
+after a `stop()` starts it again. `unsubscribe()` stops both lanes and takes them out of the queue: no
+`start()` starts them again, the subscription's own `start()` throws, and its instance id is free for
+the next `consume()`, which is not counted as competing with the unsubscribed subscription (it still is
+with any other subscription of the queue, and logs the competing-consumer WARN for it). A caller that
+lets go of a subscription and consumes anew must unsubscribe it first (see
+[The Two Lanes](#the-two-lanes)). Two cases delay the id, either one enough, and when both apply it
+is free only once both have passed: when the stop kept an ordered unit, because a key was still in
+its handler past `shedGrace`, the id stays out of use for a lease TTL, as that unit's lease names it
+until then; and when the stop gave up waiting for its lanes' hand-back to the database (releasing the
+leases and deregistering the id, which the stop stops waiting for after 2 s when the database does
+not answer, and at once on an interrupted thread), the id stays out of use until that hand-back has
+returned, as it may still delete the id's membership row. A `consume()` before then registers under
+another instance id, the lowest one free (`<id>-1` when the unsubscribed subscription held `<id>` and
+no other is registered or held back), with no competing-consumer WARN unless another subscription is
+registered.
 
 **A `Lifecycle` manager that stops only a bean reporting itself started skips a partly started queue.**
 `foundation`'s `DefaultLifecycleManager` does that at shutdown, as `Lifecycle`'s contract allows, so a
@@ -231,6 +249,15 @@ handler, and one process reported as two live instances.
 Neither symptom loses messages — the second identity is a real consumer and its share of the units is
 served — so the engine allows it rather than refusing a legitimate competing consumer. It does log a
 WARN naming the additional instance, since that is the only signal either symptom produces.
+
+Stopping a subscription does not end it. `Subscription.stop()` keeps it registered, so the queue's
+`start()` after a `stop()` starts it again: a caller that stops one subscription and consumes anew
+leaves the stopped one behind, gets the competing-consumer WARN under a new instance id suffix, and
+has the abandoned handler restarted by the next queue `stop()`/`start()`. Call
+`Subscription.unsubscribe()` on the old subscription first: it stops both lanes and removes them from
+the queue, so the next `consume()` is not counted as competing with it, and its instance id is free
+again (unless the stop kept an ordered unit or gave up waiting for its hand-back to the database — see
+[Lifecycle](#lifecycle)).
 
 ### What a handler is given
 
@@ -988,7 +1015,8 @@ that owns the queue.
   are per `(queue, shard)`, so `u-0-1` exists in every queue. Every admin operation therefore takes the
   queue name too, and there is no `getQueueNameFor(messageId)` — the question has no answer.
 - **A second `consume()` is a second competing consumer**, not the second lane. One `consume()` serves
-  both.
+  both. Replacing a subscription therefore means `Subscription.unsubscribe()` on the old one first:
+  `Subscription.stop()` keeps it registered, and the queue's `start()` after a `stop()` runs it again.
 - **`payloadType` is yours, not the engine's.** An `int` you define, stored and handed back. Never
   compared, indexed or interpreted, and there is no registry mapping it to a type name — keeping two
   services' mappings in step is your job.
