@@ -22,6 +22,9 @@ import dk.trustworks.essentials.examples.trading.accounts.types.AccountsAggregat
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
+import java.time.Instant;
+import java.util.*;
+
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
@@ -49,5 +52,33 @@ public class AccountEventCounter {
                        + " WHERE " + configuration.eventStreamTableColumnNames.aggregateIdColumn + " LIKE ?";
         var count = jdbcTemplate.queryForObject(countSql, Long.class, accountIdPrefix + "%");
         return count == null ? 0 : count;
+    }
+
+    /**
+     * @param eventSimpleName the event's simple class name; the table stores the fully qualified one
+     */
+    public long countEventsOfTypeForAccountsStartingWith(String accountIdPrefix, String eventSimpleName) {
+        var configuration = eventStore.getAggregateEventStreamConfiguration(AccountsAggregateTypes.ACCOUNTS);
+        var columns       = configuration.eventStreamTableColumnNames;
+        var countSql = "SELECT count(*) FROM " + configuration.eventStreamTableName
+                       + " WHERE " + columns.aggregateIdColumn + " LIKE ? AND " + columns.eventTypeColumn + " LIKE ?";
+        var count = jdbcTemplate.queryForObject(countSql, Long.class, accountIdPrefix + "%", "%." + eventSimpleName);
+        return count == null ? 0 : count;
+    }
+
+    /**
+     * Execution id to the time its {@code TradeBooked} was appended, for the order-flow scenario's end-to-end latency.
+     */
+    public Map<String, Instant> tradeBookingTimesForAccountsStartingWith(String accountIdPrefix) {
+        var configuration = eventStore.getAggregateEventStreamConfiguration(AccountsAggregateTypes.ACCOUNTS);
+        var columns       = configuration.eventStreamTableColumnNames;
+        var sql = "SELECT " + columns.eventPayloadColumn + "->'trade'->>'executionId' AS execution_id, " + columns.timestampColumn + " AS booked_at"
+                  + " FROM " + configuration.eventStreamTableName
+                  + " WHERE " + columns.aggregateIdColumn + " LIKE ? AND " + columns.eventTypeColumn + " LIKE ?";
+        var bookedAt = new HashMap<String, Instant>();
+        jdbcTemplate.query(sql, rs -> {
+            bookedAt.put(rs.getString("execution_id"), rs.getTimestamp("booked_at").toInstant());
+        }, accountIdPrefix + "%", "%.TradeBooked");
+        return bookedAt;
     }
 }

@@ -436,6 +436,26 @@ scale-out claim can be tested at all.
 M5. If M1 already runs well above 800/s, the handler is the cost. Then (a0) plus parallel consumers may be enough, and
 EF-2 shrinks to documentation and the capability check.
 
+**Field evidence: the trading demo's order flow** (2026-10-19, phase 3, one instance, `compose` profile, stub
+exchange; `_demo_harness/CLAUDE.md`, "The order flow scenario"). This is the first workload where processors chain
+rather than project: an order's life is two `EventProcessor`s deep (`ExchangeOrderRouter` submits it and its reports
+come back as five `Orders` events; `OrderLedgerProcessor` books and releases it on the account).
+
+| 10 000 orders, 200 customers, 32 at once | |
+|---|---|
+| Placement (HTTP-equivalent command, order + hold in one unit of work) | **3 174 orders/s**, p99 67 ms, 0 conflicts |
+| Completion (placed → booked and released) | **109 orders/s** |
+| End to end, placement → `TradeBooked` | p50 59 s, p99 89 s (a backlog: completion is 30× slower than placement) |
+| `Orders` stream growth while draining | ~690 events/s (50 000 in 73 s), gated by the router reaching `OrderPlaced` |
+| placed → submitted / filled → booked | p50 45 s / 15 s |
+
+The handlers are not the cost: the stub answers in microseconds and the reports' inbox handles them as fast as they
+arrive (submitted → filled p50 ≈ 0). Each processor forwards every `Orders` event, five per order, although each
+handles two, and does so one event per unit of work. The rate matches M1's per-event forward. That makes the
+forward, not handling, the cap on a realistic chain, and it supports building the batched forward (a1) first. A
+processor-side filter that does not forward events it has no handler for would cut this workload's forwards by more
+than half on its own; it is a candidate to add to §4.
+
 Two hazards to watch during M3/M4. Kill the reader's instance with `kill -9` mid-run to see the PK collision in §3.5,
 or show that it does not happen. And compare per-key order against the exact `EventOrder` sequence, not `isSorted()`
 (the trap recorded in adapter `CLAUDE.md`, first gotcha).

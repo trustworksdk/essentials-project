@@ -249,6 +249,9 @@ Where it deviates from the sections above:
   the view. `orders` reads it through a published read seam, `market_data/types/MarketQuotes` (`bestAsk`/`bestBid`,
   fresh quotes only). Market buys hold quantity × ask × 1.05 (Q-5); no fresh quote is `422`. The stub exchange
   matches on arrival against the same quotes.
+- **The order-flow load scenario exists** (§8), against the stub exchange: `_demo_harness/OrderFlowLoadGenerator`.
+  First measurement, one instance: placement 3 174 orders/s, completion 109 orders/s, capped by the two
+  `EventProcessor` hops' per-event forward (EF-2 doc §5, "Field evidence").
 - **Not built yet:** DAY expiry, average fill price, `EXCHANGE_UNAVAILABLE` after a retry budget,
   `UnknownExchangeOrder`.
 

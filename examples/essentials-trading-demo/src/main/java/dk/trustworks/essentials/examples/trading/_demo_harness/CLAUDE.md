@@ -14,6 +14,7 @@ What lives here is the machinery that makes the demo demonstrate something:
 | `TradingDashboard*` | The lightweight status screen and its SSE stream |
 | `DirectInstrumentPriceService` | A deliberately **non**-event-sourced latest-price table, written with raw JDBC, whose only purpose is to be benchmarked against the `market_data` aggregate path |
 | `QueueLoadGenerator` | Drives the **shard-owned queue engine** on both lanes at once — sustained trickle plus on-demand spikes — and checks per-key ordering as messages arrive |
+| `OrderFlowLoadGenerator` | Phase 3: simulated customers placing and cancelling orders against the stub exchange; placement vs completion throughput and end-to-end latency |
 | `QueueLoadGeneratorController` | `/api/admin/queue-load` — status, start/stop, `POST /spike?size=N`, `POST /faults?retries=N&poison=M&failures=K`, `POST /faults/blocked-key?behind=N` |
 
 **The dashboard's SSE emitters never time out, so `TradingDashboardStreamService` completes them on `ContextClosedEvent`.** Without that an open dashboard tab held Spring Boot's graceful shutdown for the full 30 s phase timeout on every Ctrl-C, ending in `AsyncRequestTimeoutException`.
@@ -298,6 +299,32 @@ Rerun of the same 200 000-command run (two instances, 8 producers, 50 % hot), 20
 events, 0 ordering warnings on either instance, 1 365 commands/s, handler p50/p99 2.3/6.0 ms, enqueue 24.5 s, drain
 146.5 s — and `account_activity` needed another **147 s** to catch up, the views (~700–800 events/s) now plainly the
 bottleneck (EF-2).
+
+## The order flow scenario (phase 3)
+
+`OrderFlowLoadGenerator`, `POST /api/admin/order-flow/start?customers&ordersPerCustomer&threads&marketSharePercent&restingSharePercent&instrument`
+(`GET /api/admin/order-flow` for the result). Simulated customers, each one account placing its orders one after
+another, `threads` at once, through `PlaceOrder`/`CancelOrder` against the stub exchange: market buys, marketable
+limit buys, and resting limits that are cancelled at once. It needs a fresh quote for `instrument` (the synthetic feed
+quotes `ACME` by default). Done when every order released its hold and every fillable one is booked, counted in the
+`Accounts` event table; end to end is the `TradeBooked` timestamp minus the moment `PlaceOrder` returned.
+
+- **Placement and completion are separate numbers, on purpose.** Placement is the HTTP-equivalent write; completion
+  includes both `EventProcessor` hops. They differ by 30×.
+- **Per-stage latency comes from the event tables**: the `OrderPlaced`, `OrderSubmitted`, `OrderFilled` timestamps
+  in `orders_events` and `TradeBooked` in `accounts_events`, joined on `EXE-<orderId>`.
+
+### Measured, 2026-10-19, devcontainer, `compose` profile, one instance
+
+| Run | Placed | Placement | Completion | End to end p50 / p99 |
+|---|---|---|---|---|
+| 50 × 20, 16 at once | 1 000 | 1 408/s | 71/s | 7.6 s / 13.5 s |
+| 200 × 50, 32 at once | 10 000 | 3 174/s, p99 67 ms | 109/s | 59 s / 89 s |
+
+No conflicts and no refusals in either. The cap is the `EventProcessor` forward: the router reaches `OrderPlaced`
+45 s late (p50) and the ledger processor adds 15 s, while the stub and the reports' inbox add nothing measurable.
+Each processor forwards all five `Orders` events of an order, one per unit of work. Analysis and what it means for
+EF-2: `docs/key-partitioned-event-processing.md` §5, "Field evidence".
 
 ## EF-2 measurement processors
 
