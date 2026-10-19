@@ -1,6 +1,6 @@
 # Phase 3 design — orders and execution
 
-**Status:** proposal for review. No code yet.
+**Status:** decided (§10), being implemented — the order core first, against a stub exchange (Q-7).
 **Plan:** [`../EXPANSION_PLAN.md`](../EXPANSION_PLAN.md) phase 3; decisions D8–D11, D14–D19, D21, D23; simulator
 requirements SR-1–3, SR-5–SR-10, SR-12, SR-13, SR-16, SR-17, SR-28, SR-29.
 **Builds on:** the account ledger of phase 1 ([`phase-1-account-core.md`](phase-1-account-core.md)), whose commands
@@ -75,7 +75,28 @@ The customer waits for an answer, and buying power must be checked against the r
 | **(a) One unit of work** | The `place_order` handler appends `OrderPlaced` and holds funds on the account in the same unit of work (`FundsHeld` with `HoldId` = `OrderId`) | The customer gets "insufficient buying power" at once, from the aggregate. No order without a hold, no hold without an order | Two aggregates in one transaction. An HTTP request then writes to an account stream that fills also write to, so a rare optimistic-concurrency conflict is retried |
 | (b) Saga | `OrderPlaced` first; an automation keyed by account holds funds and then confirms or rejects the order | Strict one-writer-per-account (D1) | The customer is told "accepted" and then maybe "rejected for buying power" a moment later; two more events and states |
 
-**Proposal: (a).** It is what a brokerage's order ticket does. The conflict is cheap: the account stream's writers are
+**Decided: (a).** It is what a brokerage's order ticket does.
+
+**No account lock is needed, and that is a guarantee, not an assumption.** A trading platform split into services
+typically locks the account, or reserves through a protocol, between accepting an order and submitting it, so two
+orders cannot spend the same buying power. Here the hold *is* that protection, enforced by the event store:
+
+- every account mutation appends to the account's stream at an expected `EventOrder`, and PostgreSQL's unique
+  constraint on `(aggregate_id, event_order)` rejects the second of two appends at the same position — across
+  instances as well;
+- two orders placed at once both load the account at version N, both see enough buying power, both try to append
+  `FundsHeld` at N+1: one commits, the other's whole unit of work (its `OrderPlaced` included) fails with
+  `OptimisticAppendToStreamException`;
+- the API retries the losing order (a few attempts, then `409`); the retry reloads the account with the first hold in
+  place and refuses with `422` if buying power no longer covers it.
+
+So there is never a window in which two orders spend the same money. The hold also outlives a lock-until-submitted:
+it stays until the order is terminal and is consumed fill by fill. And it holds nothing across the exchange call,
+where a lock is dangerous — an exchange timeout would freeze the account. It works because D1 keeps the order and the
+account in one service, so one transaction; split into services, this would need the reservation protocol after all.
+**Pinned by a test**: concurrent orders that together exceed buying power — exactly one is placed.
+
+ The conflict is cheap: the account stream's writers are
 this command, fills and settlements, and a retry is one reload. Phase 1's load test measured what racing does under
 contention (15 % retries at a 50 % hot share); order placement is far below that rate per account.
 
@@ -185,9 +206,11 @@ before the simulator features land; the translation slices need the real contrac
 
 ---
 
-## 10. Questions
+## 10. Decisions
 
-| | Question | Proposal |
+All seven proposals accepted (2026-10-19).
+
+| | Question | Decided |
 |---|---|---|
 | **Q-1** | Place an order and hold funds in one unit of work, or as a saga? | One unit of work (§3) |
 | **Q-2** | Book the executions in the synchronous submit answer, or wait for the webhook? | Book them at once; the webhook copy deduplicates |
