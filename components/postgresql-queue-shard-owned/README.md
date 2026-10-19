@@ -193,10 +193,19 @@ Re-registering a name with a *different* shard count is refused rather than acce
 
 | Call | Effect |
 |---|---|
-| `consume(handler, options)` | Registers a consumer and starts it. Returns a `Subscription`. The first `consume()` also starts the queue; a later one, like `Subscription.start()`, starts its own consumer only and leaves the queue as it is, so after a `stop()` the queue's `start()` still restarts the others |
+| `consume(handler, options)` | Registers a consumer and starts it. Returns a `Subscription`. A `consume()` made while no subscription is registered also starts the queue; any other, like `Subscription.start()`, starts its own consumer only and leaves the queue as it is, so after a `stop()` the queue's `start()` still restarts the others |
 | `start()` | Restarts consumers this queue created and then stopped. A queue that has never consumed has nothing to start |
 | `stop()` | Stops every registered consumer, whether `isStarted()` reads true or not: dispatches nothing new, **waits up to `shedGrace` for handlers already running** and acknowledges them, then **releases the shard leases** so a successor picks them up immediately rather than waiting the lease out. An ordered unit with a key still in a handler after the grace is kept instead, until this instance's liveness lapses, so no successor starts that key while it runs. They stay registered, so `start()` brings them back. **If a `consume()`/`start()` is still doing its database work, `stop()` does not wait for it past about 4 s** (2 s on a `ShardOwnedQueue`; on an interrupted thread not at all): it returns with `isStarted()` false and logs a WARN, and that start releases the leases and deregisters the instance only once its statements return, which nothing bounds but the driver's `socketTimeout`. Closing the `DataSource` before that start returns makes the release fail — the case a Spring shutdown is most likely to hit, since it closes the pool once `stop()` has returned. Under a partition, or after a failed release, the units stay unserved as after a crash: a successor takes them only once this instance's membership row is older than `leaseTtl`. Set `socketTimeout` on the pool ([Prerequisites](#prerequisites)) |
 | `close()` | `stop()` |
+| `isStarted()` | Whether the queue is marked started — by `start()` or by a `consume()` made while no subscription is registered — not whether anything runs. After a `stop()`, a `Subscription.start()` or a later `consume()` runs that subscription's consumers while `isStarted()` reads false |
+
+**A `Lifecycle` manager that stops only a bean reporting itself started skips a partly started queue.**
+`foundation`'s `DefaultLifecycleManager` does that at shutdown, as `Lifecycle`'s contract allows, so a
+`PostgresqlMessageQueue` it manages, stopped and then given a `Subscription.start()` or a later
+`consume()`, is not stopped, and that subscription goes on leasing units and handling messages. Call
+the queue's `stop()`/`close()` whatever `isStarted()` reads (the starter's `ShardOwnedQueueFactory.close()`
+does), or bring the queue back to started with its own `start()` first. `Subscription.isStarted()`
+answers for one subscription.
 
 Enqueueing and reading depth never require the queue to be started — matching `DurableQueues`, where
 the lifecycle governs the consuming side.

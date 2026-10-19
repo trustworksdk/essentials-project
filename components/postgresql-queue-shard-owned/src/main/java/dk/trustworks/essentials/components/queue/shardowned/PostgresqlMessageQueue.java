@@ -99,9 +99,10 @@ public final class PostgresqlMessageQueue implements MessageQueue {
      */
     private final List<ShardOwnedQueue>         consumers          = new CopyOnWriteArrayList<>();
     /**
-     * Whether the queue is started: by {@link #start()}, or by the {@link #consume} of its first subscription. False
-     * until then - it used to be seeded {@code true}, so a queue that had never consumed reported itself started and the
-     * first {@link #start()} was a no-op - and again after a {@link #stop()}, until the next {@code start()}. A
+     * Whether the queue is started: by {@link #start()}, or by a {@link #consume} made while no subscription is
+     * registered ({@link #consumers} empty - so again once every subscription has been unsubscribed). False until then
+     * - it used to be seeded {@code true}, so a queue that had never consumed reported itself started and the first
+     * {@link #start()} was a no-op - and again after a {@link #stop()}, until the next {@code start()}. A
      * {@link Subscription#start()}, or a
      * {@code consume()} after a {@code stop()} left other subscriptions stopped, starts its own lanes and leaves it as it
      * is, so a later {@code start()} still starts those others. It decides what {@code start()} does and what
@@ -700,8 +701,8 @@ public final class PostgresqlMessageQueue implements MessageQueue {
         // A critical error is the exception: it stops nothing, so whatever it left running is
         // registered, for a stop() to reach (below) - a stop() stops every registered consumer.
         //
-        // The first consume() starts the queue, which is what every caller of this contract expects
-        // and what the tests rely on. A later one starts its own pair only: it leaves a started queue
+        // A consume() made while no subscription is registered starts the queue, which is what every
+        // caller of this contract expects and what the tests rely on. Any other starts its own pair only: it leaves a started queue
         // started, and a queue a stop() left with other subscriptions stopped NOT started, so a later
         // start() still starts those. Marking it started there made that start() return at once with
         // the other subscriptions consuming nothing while isStarted() read true.
@@ -721,7 +722,7 @@ public final class PostgresqlMessageQueue implements MessageQueue {
             synchronized (handOver) {
                 beingStarted.addAll(pair);
             }
-            // Read before the starts: whether this is the queue's first subscription, which alone marks the queue started
+            // Read before the starts: whether no other subscription is registered, which alone marks the queue started
             // (above). The competing-consumer WARN below asks what is registered once the starts have run instead: a
             // QueueObserver told of this pair's first acquisition can call consume() on this thread, and that pair is
             // registered by the time this one is.
@@ -1952,7 +1953,8 @@ public final class PostgresqlMessageQueue implements MessageQueue {
     }
 
     /**
-     * Mark the queue started, for the {@code consume()} of its first subscription holding {@link #lifecycleLock}, unless
+     * Mark the queue started, for a {@code consume()} made while no subscription was registered, holding
+     * {@link #lifecycleLock}, unless
      * the holder lets nothing start ({@link Holder#letsNothingStart}). A stop owed ({@link Holder#STOP_OWED}) has
      * already marked the queue not started, and may have returned; {@link #letGoOfLifecycle} marks it not started again
      * only once it has waited for that stop's stopping, so marking it here made {@link #isStarted()} read true in between.
@@ -2087,6 +2089,14 @@ public final class PostgresqlMessageQueue implements MessageQueue {
         }
     }
 
+    /**
+     * {@inheritDoc}
+     * <p>
+     * Whether the queue is marked started ({@link #started}), not whether any consumer runs: after a {@link #stop()}, a
+     * {@link Subscription#start()} or a later {@link #consume} runs its own lanes with this reading false. A
+     * {@code Lifecycle} manager that stops only a bean reporting itself started therefore leaves those lanes running;
+     * stop the queue whatever this reads - see {@link MessageQueue}'s class javadoc.
+     */
     @Override
     public boolean isStarted() {
         return started.get();

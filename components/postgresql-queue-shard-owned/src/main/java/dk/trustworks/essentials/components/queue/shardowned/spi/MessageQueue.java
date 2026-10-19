@@ -69,6 +69,23 @@ import java.util.*;
  * Transactional enqueue, handler-driven consumption, per-key ordering, retry policy and dead letters,
  * depth and dead-letter inspection, and purge. Those are consumer needs rather than artefacts of
  * either implementation, and dropping them would be building a different product.
+ *
+ * <h2>{@code isStarted()} says whether the queue is started, not whether anything runs</h2>
+ * {@link #isStarted()} reads whether the queue is marked started - by {@link #start()}, or by a {@link #consume} made
+ * while no subscription is registered - and false again after a {@link #stop()}. After that stop, a {@link Subscription#start()}, or a
+ * {@code consume()} of another subscription, runs that subscription's consumers and leaves the queue marked not
+ * started, so the queue's {@code start()} still starts every subscription the stop stopped. The queue is then partly
+ * started: {@code isStarted()} reads false while a subscription leases units and handles messages. The queue's
+ * {@code stop()} and {@code close()} stop every subscription registered with it whatever {@code isStarted()} reads.
+ * <p>
+ * <b>A {@code Lifecycle} manager that calls {@code stop()} only on a bean reporting itself started skips a partly
+ * started queue</b>, as {@code Lifecycle}'s contract lets it - {@code foundation}'s {@code DefaultLifecycleManager} does
+ * at shutdown - and the running subscription goes on leasing units and handling messages after the manager has
+ * moved on. Stop such a queue whatever {@code isStarted()} reads (the Spring starter's {@code ShardOwnedQueueFactory}
+ * does on {@code close()}), or bring it back to started with its own {@code start()} first. Reading
+ * {@code isStarted()} as "any subscription is running" would fail the other way: a manager calling {@code start()}
+ * only on a bean reporting itself not started would then never restart the subscriptions the queue's stop stopped.
+ * {@link Subscription#isStarted()} answers for one subscription.
  */
 public interface MessageQueue extends Lifecycle, AutoCloseable {
 

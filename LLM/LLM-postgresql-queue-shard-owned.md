@@ -112,6 +112,14 @@ unsubscribes on every consumer stop and cancel, so a `DurableLocalCommandBus` re
 lock hand-over keeps one subscription. An unsubscribed subscription's `start()` throws, and its counts
 leave `statistics()`.
 
+**The queue's `isStarted()` says whether the queue is started, not whether anything runs.** Only
+`start()` and a `consume()` made while no subscription is registered mark it started. After a queue `stop()`, a
+`Subscription.start()` or a later `consume()` runs that subscription with `isStarted()` false, so the
+queue's `start()` still restarts the others. The queue's `stop()`/`close()` stop every registered
+subscription whatever `isStarted()` reads; a manager that stops only a `Lifecycle` reporting itself
+started (`DefaultLifecycleManager` at shutdown) skips the queue and leaves that subscription running —
+see Gotchas.
+
 ### The low-level path serves ONE lane
 
 `ShardOwnedQueue` is the engine underneath, and a single instance consumes a single lane —
@@ -597,6 +605,7 @@ the obstacle.
 - **`payloadType` is yours, not the engine's.** An `int` you define, stored and handed back to the handler (and on `PulledMessage` / `DeadLetter`). Never compared, indexed or interpreted; there is no registry mapping it to a type name, so keeping two services' mappings in step is your job.
 - **The contract is at-least-once.** A shard moving mid-flight legitimately redelivers. Do not assert exactly-once.
 - **A `stop()` that gives up waiting returns before the queue has let go.** `stop()` waits for a `consume()`/`start()` still doing its database work at most 2 s on `ShardOwnedQueue` (about 4 s on `PostgresqlMessageQueue`, whose leasing lane's own stop waits too), on an interrupted thread not at all, then returns with `isStarted()` false and logs a WARN: that start releases its units and deregisters the instance only once its statements return, which nothing bounds but the driver's `socketTimeout`. Until it does, a later `start()`/`consume()` waits for it (one WARN after 2 s, then it keeps waiting), and closing the `DataSource` makes the release fail: the units stay unserved as after a crash, until this instance's membership row is older than `leaseTtl`. Stopping a `ShardRuntime` you passed to `setRuntime` meanwhile skips the drain instead (the release still succeeds): acknowledgements of handlers still running may be lost and those messages redelivered. Set `socketTimeout` on the pool.
+- **A partly started `PostgresqlMessageQueue` is skipped by a manager that stops only what reports itself started.** After a queue `stop()`, a `Subscription.start()` or a later `consume()` runs that subscription while the queue's `isStarted()` reads false. `DefaultLifecycleManager` calls `stop()` at shutdown only on a `Lifecycle` reporting itself started, so a queue you register as a `Lifecycle` bean is then not stopped and the subscription goes on leasing units and handling messages. Stop the queue whatever `isStarted()` reads — `stop()` and `close()` stop every registered subscription, and `ShardOwnedQueueFactory.close()` does exactly that — or bring it back to started with the queue's own `start()` first. Reading `isStarted()` as "anything running" would fail the other way: a start gated on it would never restart the subscriptions the stop stopped. `Subscription.isStarted()` answers for one subscription.
 - **Ordering holds across processes**, which the current implementation's documentation says it does not — but only within a lane, per key, and only while the key's shard has one owner.
 - **`enqueue` routes unordered messages round-robin and ordered messages by `mix(hash(key)) mod orderedUnits`.** The two lanes route on different numbers, which is why growing `shardCount` is safe with ordered traffic in flight: the ordered lane never reads it.
 - **By-id operations exist**: `getMessage`, `deleteMessage`, `retryMessage`, `markAsDeadLetter`, `resurrect`. `MessageId` is `(lane, shard, seq)` which IS the primary key, so these are point lookups that cost delivery nothing. Acknowledging by id is still a `QueueSession` operation — the engine cannot know an arbitrary caller did the work.

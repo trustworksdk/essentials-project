@@ -2560,6 +2560,71 @@ class ShardOwnedLifecycleIT {
     }
 
     /**
+     * The limit of {@code isStarted()} for a generic {@code Lifecycle} manager, pinned as it is: after the queue's
+     * {@code stop()}, a {@code Subscription.start()} - or a {@code consume()} of a second subscription - runs its own lanes
+     * while the queue's {@code isStarted()} reads false, so a manager that calls {@code stop()} only on a queue reporting
+     * itself started, as {@code DefaultLifecycleManager} does at shutdown, leaves those lanes leasing and registered. A
+     * {@code stop()} called whatever {@code isStarted()} reads, as {@code ShardOwnedQueueFactory.close()} does, stops them.
+     * {@code MessageQueue}'s class javadoc and the module's docs name this state; a change that makes the gated stop reach
+     * the lanes must update them too.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"subscription", "consume"})
+    void a_stop_called_only_when_the_message_queue_reports_itself_started_leaves_a_subscription_started_on_its_own_running(String startedBy) throws Exception {
+        var instanceId    = "spi-gated-stop-" + startedBy;
+        var queue         = new PostgresqlMessageQueue(dataSource, QUEUE_ID, SHARD_COUNT, instanceId);
+        var subscriptions = new CopyOnWriteArrayList<Subscription>();
+        try {
+            var first = consumeUnchecked(queue);
+            subscriptions.add(first);
+            Awaitility.await().atMost(Duration.ofSeconds(20))
+                      .alias("premise: both lanes hold units before the queue is stopped")
+                      .until(() -> first.unorderedShardsHeld() > 0 && first.orderedUnitsHeld() > 0);
+            queue.stop();
+            assertThat(first.isStarted()).as("premise: the queue's stop stopped the subscription").isFalse();
+
+            Subscription startedOnItsOwn;
+            String       runningInstanceId;
+            if ("subscription".equals(startedBy)) {
+                first.start();
+                startedOnItsOwn = first;
+                runningInstanceId = instanceId;
+            } else {
+                startedOnItsOwn = consumeUnchecked(queue);
+                subscriptions.add(startedOnItsOwn);
+                // The second subscription registered with the queue competes under an instance id of its own.
+                runningInstanceId = instanceId + "-1";
+            }
+            Awaitility.await().atMost(Duration.ofSeconds(20))
+                      .alias("premise: the " + startedBy + "'s lanes hold units")
+                      .until(() -> startedOnItsOwn.unorderedShardsHeld() > 0 && startedOnItsOwn.orderedUnitsHeld() > 0);
+            assertThat(queue.isStarted()).as("premise: the %s left the queue not started", startedBy).isFalse();
+
+            // DefaultLifecycleManager.stopWithinShutdownTimeout: a bean that reports itself not started is not stopped.
+            if (queue.isStarted()) {
+                queue.stop();
+            }
+
+            Awaitility.await().during(Duration.ofSeconds(1)).atMost(Duration.ofSeconds(10))
+                      .alias("the stop gated on isStarted() left the " + startedBy + "'s lanes running")
+                      .until(() -> startedOnItsOwn.isStarted() && instanceRegistered(runningInstanceId)
+                              && unitsOwnedBy("unordered", runningInstanceId) > 0 && unitsOwnedBy("ordered", runningInstanceId) > 0);
+
+            // ShardOwnedQueueFactory.close(): stopped whatever isStarted() reads.
+            queue.stop();
+
+            assertThat(startedOnItsOwn.isStarted()).as("the queue's stop, not gated on isStarted(), stopped the %s's lanes", startedBy).isFalse();
+            Awaitility.await().during(Duration.ofSeconds(1)).atMost(Duration.ofSeconds(10)).until(
+                    () -> !instanceRegistered(runningInstanceId) && unitsOwnedBy("unordered", runningInstanceId) == 0
+                            && unitsOwnedBy("ordered", runningInstanceId) == 0);
+        } finally {
+            queue.close();
+            // What the queue's close() did not reach, so a failure leaves nothing leasing into the next test.
+            subscriptions.forEach(Subscription::stop);
+        }
+    }
+
+    /**
      * A {@code MessageQueue.start()} that fails on one subscription leaves running the other, which the caller started
      * on its own after the queue's {@code stop()} and which is consuming: registered before the failing subscription, the
      * start finds its lanes started and leaves them be; registered after it, the start never reaches it. The start stops
