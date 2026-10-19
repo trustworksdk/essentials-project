@@ -76,7 +76,10 @@ essentials:
     archives:
       enabled: true
     subscription-manager:
-      event-store-polling-batch-size: 5
+      # Events per event-store read for every subscription (projections, processors, the harness). It was 5, which
+      # made a batched subscription read a 100-event batch in ~21 queries (plus as many gap-table lookups) and capped
+      # the EF-2 forwarder measurement; see docs/key-partitioned-event-processing.md. The starter's default is 10.
+      event-store-polling-batch-size: 100
       snapshot-resume-points-every: 2s
       event-store-polling-interval: 200
     snapshots:
