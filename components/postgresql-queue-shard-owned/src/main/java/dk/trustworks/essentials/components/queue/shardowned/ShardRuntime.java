@@ -261,7 +261,7 @@ public final class ShardRuntime implements Lifecycle, AutoCloseable {
     }
 
     HandlerDispatch dispatch(int parallelConsumers) {
-        return new HandlerDispatch(handlerExecutor, new Semaphore(Math.max(1, parallelConsumers)));
+        return new HandlerDispatch(handlerExecutor, Math.max(1, parallelConsumers));
     }
 
     /**

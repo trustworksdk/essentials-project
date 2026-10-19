@@ -144,6 +144,8 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         return new ShardOwnedQueueBuilder();
     }
 
+    private volatile long lastSharedInstanceIdWarningNanos;
+
     public ShardOwnedQueue(DataSource dataSource, short queueId, int shardCount, String instanceId) {
         this(dataSource, queueId, shardCount, instanceId, new ShardOwnerMetrics());
     }
@@ -360,23 +362,23 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         // for the first ten seconds of its life.
         storage.heartbeatInstance(instanceId);
 
-        var leased = new ArrayList<int[]>();
+        var leased = new ArrayList<LeasedUnit>();
         for (var shard = 0; shard < orderedUnits() && leased.size() < maxShards; shard++) {
-            var fence = storage.acquireLease("ordered", shard, instanceId, leaseTtlMillis);
-            if (fence.isPresent()) {
-                leased.add(new int[]{shard, fence.get().intValue()});
+            var grant = storage.acquireLeaseGrant("ordered", shard, instanceId, leaseTtlMillis);
+            if (grant.isPresent()) {
+                leased.add(new LeasedUnit(shard, grant.get()));
             }
         }
 
         ensureRuntime(settings);
         for (var entry : leased) {
-            var owner = new OrderedShardOwner(storage, entry[0], entry[1], settings, handler, metrics,
+            var owner = new OrderedShardOwner(storage, entry.shard(), entry.grant().fence(), settings, handler, metrics,
                                               redeliveryPolicy, instanceId,
-                                              runtime.wakeupFor(queueId, "ordered", entry[0]),
-                                              dispatch);
+                                              runtime.wakeupFor(queueId, "ordered", entry.shard()),
+                                              dispatch, entry.grant().previousOwnerReleased());
             owner.setDeliveryGate(this::deliveryPermitted);
             owners.add(owner);
-            runtime.register(queueId, "ordered", entry[0], owner);
+            runtime.register(queueId, "ordered", entry.shard(), owner);
             metrics.shardsAcquired.increment();
         }
         // The ordered lane had no heartbeat at all: its leases were taken once and left to expire,
@@ -384,8 +386,8 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         startHeartbeat();
         // The shards taken at start-up are ownership changes like any other. Reporting only the ones
         // rebalancing moves would leave an observer unable to tell which shards this instance serves.
-        leased.forEach(entry -> metrics.observer().shardOwnershipChanged(entry[0], true));
-        log.info("Instance {} owns ordered shards {}", instanceId, leased.stream().map(e -> e[0]).toList());
+        leased.forEach(entry -> metrics.observer().shardOwnershipChanged(entry.shard(), true));
+        log.info("Instance {} owns ordered shards {}", instanceId, leased.stream().map(LeasedUnit::shard).toList());
     }
 
     public long orderedRemaining() throws SQLException {
@@ -418,7 +420,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         var redeliveryPolicy = activePolicy;
         var maxShards        = maxShardsHeld;
 
-        var leased = new ArrayList<int[]>();
+        var leased = new ArrayList<LeasedUnit>();
         leaseTtlMillis = Math.max(1_000L, settings.leaseTtlMillis());
         // BEFORE acquiring anything. A unit owned by an instance carries no expiry — its liveness is
         // this row — so an owner that has not registered yet looks DEAD to everyone else, and its
@@ -427,9 +429,9 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         // for the first ten seconds of its life.
         storage.heartbeatInstance(instanceId);
         for (var shard = 0; shard < shardCount && leased.size() < maxShards; shard++) {
-            var fence = storage.acquireLease("unordered", shard, instanceId, leaseTtlMillis);
-            if (fence.isPresent()) {
-                leased.add(new int[]{shard, fence.get().intValue()});
+            var grant = storage.acquireLeaseGrant("unordered", shard, instanceId, leaseTtlMillis);
+            if (grant.isPresent()) {
+                leased.add(new LeasedUnit(shard, grant.get()));
             }
         }
         if (leased.isEmpty()) {
@@ -439,18 +441,18 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         ensureRuntime(settings);
 
         for (var entry : leased) {
-            var owner = new ShardOwner(storage, entry[0], entry[1], settings, handler, metrics,
-                                       redeliveryPolicy, runtime.wakeupFor(queueId, "unordered", entry[0]),
-                                       instanceId, dispatch);
+            var owner = new ShardOwner(storage, entry.shard(), entry.grant().fence(), settings, handler, metrics,
+                                       redeliveryPolicy, runtime.wakeupFor(queueId, "unordered", entry.shard()),
+                                       instanceId, dispatch, entry.grant().previousOwnerReleased());
             owner.setDeliveryGate(this::deliveryPermitted);
             owners.add(owner);
-            ownedShards.put(entry[0], owner);
-            runtime.register(queueId, "unordered", entry[0], owner);
+            ownedShards.put(entry.shard(), owner);
+            runtime.register(queueId, "unordered", entry.shard(), owner);
             metrics.shardsAcquired.increment();
         }
         startHeartbeat();
-        leased.forEach(entry -> metrics.observer().shardOwnershipChanged(entry[0], true));
-        log.info("Instance {} owns shards {}", instanceId, leased.stream().map(e -> e[0]).toList());
+        leased.forEach(entry -> metrics.observer().shardOwnershipChanged(entry.shard(), true));
+        log.info("Instance {} owns shards {}", instanceId, leased.stream().map(LeasedUnit::shard).toList());
     }
 
     /**
@@ -595,11 +597,31 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * superseded and stops immediately; it does not wait to find out at acknowledgement time,
      * because by then it may have dispatched work its successor is also dispatching.
      */
+    /**
+     * Another live process heartbeats under this instance id. Both then count as one instance in the rebalance and
+     * keep taking the same shards from each other - safe, because the fence refuses the loser's writes, but the queue
+     * churns. Typically two JVMs on one host with the hostname default. Logged at most once a minute.
+     */
+    private void reportSharedInstanceId() {
+        metrics.sharedInstanceIdHeartbeats.increment();
+        var now  = System.nanoTime();
+        var last = lastSharedInstanceIdWarningNanos;
+        if (last == 0 || now - last >= TimeUnit.MINUTES.toNanos(1)) {
+            lastSharedInstanceIdWarningNanos = now;
+            log.warn("Another process is running queue {} under the same instance id '{}' as this one. The rebalance counts "
+                             + "the two as one instance, and they keep taking the same shards from each other. Give every "
+                             + "process its own instance id (Spring Boot: essentials.shard-owned-queue.instance-id; it defaults "
+                             + "to the hostname, which two JVMs on one host share)", queueId, instanceId);
+        }
+    }
+
     private void startHeartbeat() {
         var interval = Math.max(200L, leaseTtlMillis / 3);
         heartbeat = runtime.scheduleHeartbeat(() -> {
             try {
-                storage.heartbeatInstance(instanceId);
+                if (storage.heartbeat(instanceId)) {
+                    reportSharedInstanceId();
+                }
                 confirmLiveness();
                 // Garbage collection, not liveness: ten lease lifetimes is far past anything
                 // fairShare looks at, so this can never remove a row that still counts.
@@ -806,13 +828,14 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             if (ownedShards.containsKey(shard)) {
                 continue;
             }
-            var fence = storage.acquireLease("unordered", shard, instanceId, leaseTtlMillis);
-            if (fence.isEmpty()) {
+            var grant = storage.acquireLeaseGrant("unordered", shard, instanceId, leaseTtlMillis);
+            if (grant.isEmpty()) {
                 continue;
             }
-            var owner = new ShardOwner(storage, shard, fence.get(), activeSettings, activeHandler, metrics,
+            var fence = grant.get().fence();
+            var owner = new ShardOwner(storage, shard, fence, activeSettings, activeHandler, metrics,
                                        activePolicy, runtime.wakeupFor(queueId, "unordered", shard),
-                                       instanceId, dispatch);
+                                       instanceId, dispatch, grant.get().previousOwnerReleased());
             owner.setDeliveryGate(this::deliveryPermitted);
             owners.add(owner);
             ownedShards.put(shard, owner);
@@ -820,7 +843,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             metrics.shardsAcquired.increment();
             metrics.observer().shardOwnershipChanged(shard, true);
             acquired.add(shard);
-            log.debug("Instance {} acquired unordered shard {} under fence {}", instanceId, shard, fence.get());
+            log.debug("Instance {} acquired unordered shard {} under fence {}", instanceId, shard, fence);
         }
         if (!acquired.isEmpty()) {
             log.info("Instance {} acquired {} unordered shard(s) [{}] on queue {}; now holding {} of {}",
@@ -896,14 +919,15 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             if (heldShards.contains(shard)) {
                 continue;
             }
-            var fence = storage.acquireLease("ordered", shard, instanceId, leaseTtlMillis);
-            if (fence.isEmpty()) {
+            var grant = storage.acquireLeaseGrant("ordered", shard, instanceId, leaseTtlMillis);
+            if (grant.isEmpty()) {
                 continue;
             }
-            var owner = new OrderedShardOwner(storage, shard, fence.get(), activeSettings, activeOrderedHandler,
+            var fence = grant.get().fence();
+            var owner = new OrderedShardOwner(storage, shard, fence, activeSettings, activeOrderedHandler,
                                               metrics, activePolicy, instanceId,
                                               runtime.wakeupFor(queueId, "ordered", shard),
-                                              dispatch);
+                                              dispatch, grant.get().previousOwnerReleased());
             owner.setDeliveryGate(this::deliveryPermitted);
             owners.add(owner);
             heldShards.add(shard);
@@ -911,7 +935,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             metrics.shardsAcquired.increment();
             metrics.observer().shardOwnershipChanged(shard, true);
             acquired.add(shard);
-            log.debug("Instance {} acquired ordered unit {} under fence {}", instanceId, shard, fence.get());
+            log.debug("Instance {} acquired ordered unit {} under fence {}", instanceId, shard, fence);
         }
         if (!acquired.isEmpty()) {
             log.info("Instance {} acquired {} ordered unit(s) [{}] on queue {}; now holding {} of {}",
@@ -1237,5 +1261,11 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             }
         }
         return remaining;
+    }
+
+    /**
+     * A unit leased at start-up, with how its previous owner left it
+     */
+    private record LeasedUnit(int shard, ShardOwnedStorage.LeaseGrant grant) {
     }
 }

@@ -185,6 +185,21 @@ Through the `DurableQueues` adapter these come from the `ConsumeFromQueue`'s `Re
 `calculateNextRedeliveryDelay`, so exponential, linear and fixed policies wait exactly as they do on
 `postgresql-queue`.
 
+**What counts as a failure.** Any `RuntimeException`, and any non-critical `Error` such as an `AssertionError`,
+is a failed attempt that runs through the policy. Critical errors (`VirtualMachineError`, `LinkageError`) propagate
+uncounted, as they do on `postgresql-queue`. To deliver a message again later without it being a failure, throw
+`spi.RedeliveryRequested(delay)`. The message comes back after `delay`, the attempt counts, and the request never
+dead-letters it. Through the adapter, `QueuedMessage.markForRedeliveryIn(delay)` does exactly this.
+
+**A failure is recorded only under the owner's lease fence.** An owner that has lost a shard does not
+schedule the retry or dead-letter the message; the next owner redelivers it.
+
+**Attempts survive a change of owner.** A message that failed under one instance continues from its stored count
+under the next. A clean handover (the previous owner stopped and released the shard) charges nothing. A takeover
+after a crash or a lost lease charges one attempt to the few rows the previous owner could have had in flight, and a
+message that has taken its owner down `maxAttempts` times is dead-lettered with an error saying no failure was ever
+recorded for it.
+
 ### What a handler is given
 
 `handle(messageId, key, payload, payloadType)`. `key` is null on the unordered lane.
@@ -285,7 +300,7 @@ The ceiling is reported as `maxInstances` on the **admin API's** queue status
 itself carries the two ceilings separately — `shardCount()` and `orderedUnits()` — and no combined
 accessor.
 
-**Instance identity is the hostname** by default (`Network.hostName()`, as the fenced lock manager and scheduler use), overridable with `essentials.shard-owned-queue.instance-id`. Set it where one host runs several instances: two processes sharing an id look like one instance, so each is allowed only half the shards.
+**Instance identity is the hostname** by default (`Network.hostName()`, as the fenced lock manager and scheduler use), overridable with `essentials.shard-owned-queue.instance-id`. Set it where one host runs several instances: two processes sharing an id look like one instance, so each is allowed only half the shards. Since 0.60.1 the engine logs a WARN naming the property when it detects two live processes under one id (metric `sharedInstanceIdHeartbeats`); a restart is not reported.
 
 **Autoscaling specifics.** Membership is a row per instance, refreshed every `leaseTtl / 3` and
 counted live within `leaseTtl`. A gracefully stopped instance deregisters immediately, so scaling in

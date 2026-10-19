@@ -633,7 +633,7 @@ public final class MongoDurableQueues implements DurableQueues {
                                                    var update = new Update().inc("redeliveryAttempts", 1)
                                                                             .set("isBeingDelivered", false)
                                                                             .set("deliveryTimestamp", null)
-                                                                            .set("lastDeliveryError", operation.getCauseForRetry() != null ? Exceptions.getStackTrace(operation.getCauseForRetry()) : RetryMessage.MANUALLY_REQUESTED_REDELIVERY);
+                                                                            .set("lastDeliveryError", operation.getCauseForRetry() != null ? DeliveryErrorDescription.describe(operation.getCauseForRetry()) : RetryMessage.MANUALLY_REQUESTED_REDELIVERY);
                                                    var updateResult = mongoTemplate.findAndModify(findMessageToRetry,
                                                                                                   update,
                                                                                                   FindAndModifyOptions.options().returnNew(true),

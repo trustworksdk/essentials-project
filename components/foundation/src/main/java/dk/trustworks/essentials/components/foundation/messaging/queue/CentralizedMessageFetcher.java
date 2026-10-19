@@ -155,22 +155,52 @@ public class CentralizedMessageFetcher implements Lifecycle {
         if (started.compareAndSet(false, true)) {
             log.info("Starting CentralizedMessageFetcher with polling interval {} ms", pollingIntervalMs);
 
-            scheduler.scheduleAtFixedRate(() -> {
-                if (!started.get()) {
-                    return;
-                }
+            scheduler.scheduleAtFixedRate(() -> pollOnce(null), 0, pollingIntervalMs, TimeUnit.MILLISECONDS);
+        }
+    }
 
-                try {
-                    fetchAndDistributeMessages();
-                } catch (Throwable e) {
-                    rethrowIfCriticalError(e);
-                    if (IOExceptionUtil.isIOException(e)) {
-                        log.debug("I/O issue while polling queues", e);
-                    } else {
-                        log.error("Error during centralized message fetching", e);
-                    }
-                }
-            }, 0, pollingIntervalMs, TimeUnit.MILLISECONDS);
+    /**
+     * One poll, on the scheduler's single thread - so the periodic polls and the refill polls never overlap.
+     *
+     * @param onlyQueue the queue a refill poll is for, or {@code null} for the periodic poll of every queue
+     */
+    private void pollOnce(QueueName onlyQueue) {
+        if (!started.get()) {
+            return;
+        }
+        try {
+            fetchAndDistributeMessages(onlyQueue);
+        } catch (Throwable e) {
+            rethrowIfCriticalError(e);
+            if (IOExceptionUtil.isIOException(e)) {
+                log.debug("I/O issue while polling queues", e);
+            } else {
+                log.error("Error during centralized message fetching", e);
+            }
+        }
+    }
+
+    /**
+     * Refill a saturated queue as soon as enough of its workers are free, rather than at the next polling interval.
+     * <p>
+     * A poll claims at most a queue's free worker slots, so polling only once per interval capped a queue at
+     * {@code parallelConsumers / pollingInterval} messages per second however fast its handler was - 400 msg/s for 8
+     * consumers at 20 ms. A queue whose last poll filled every free slot most likely has more waiting, so it is polled
+     * again once half its workers are free. Waiting for half, rather than for the first free one, batches the claims:
+     * one claim statement per message would cost the database more than the interval saved. Never more than the free
+     * slots are claimed, so this cannot over-fetch (see {@link #calculateAvailableWorkerSlotsPerQueue}).
+     */
+    private void refillIfSaturated(DurableQueueConsumerRegistration registration) {
+        var freeSlots = registration.maxParallelConsumers - registration.activeWorkers.get();
+        if (freeSlots >= registration.refillThreshold && registration.saturated.compareAndSet(true, false)) {
+            if (!started.get()) {
+                return;
+            }
+            try {
+                scheduler.execute(() -> pollOnce(registration.queueName));
+            } catch (RejectedExecutionException e) {
+                // Stopped in between - nothing left to refill
+            }
         }
     }
 
@@ -199,7 +229,7 @@ public class CentralizedMessageFetcher implements Lifecycle {
     /**
      * Main method that fetches and distributes messages to workers
      */
-    private void fetchAndDistributeMessages() {
+    private void fetchAndDistributeMessages(QueueName onlyQueue) {
         if (consumerRegistrations.isEmpty()) {
             log.trace("No consumers registered, skipping fetch and distribute");
             return;
@@ -207,6 +237,9 @@ public class CentralizedMessageFetcher implements Lifecycle {
 
         // Collect active queue names and determine available worker slots
         var availableWorkerSlotsPerQueue = calculateAvailableWorkerSlotsPerQueue();
+        if (onlyQueue != null) {
+            availableWorkerSlotsPerQueue.keySet().retainAll(Set.of(onlyQueue));
+        }
 
         // Skip if no capacity available
         if (availableWorkerSlotsPerQueue.values().stream().mapToInt(Integer::intValue).sum() == 0) {
@@ -260,6 +293,9 @@ public class CentralizedMessageFetcher implements Lifecycle {
                                   queueName, message.getId(), e.getMessage(), e);
                     }
                 }
+                // After dispatching, so the workers the messages occupy are counted
+                markSaturatedQueues(availableWorkerSlotsPerQueue,
+                                    messages.stream().collect(Collectors.groupingBy(QueuedMessage::getQueueName, Collectors.counting())));
             } else {
                 // Fall back to per-queue fetching for non-batch-capable implementations
                 availableWorkerSlotsPerQueue.forEach((queueName, availableSlots) -> {
@@ -270,6 +306,7 @@ public class CentralizedMessageFetcher implements Lifecycle {
                     var keysBeingProcessed = inProcessOrderedKeys.getOrDefault(queueName, Collections.emptySet());
 
                     try {
+                        var claimed = 0L;
                         for (int i = 0; i < availableSlots; i++) {
                             var messageOpt = durableQueues.getNextMessageReadyForDelivery(
                                     new GetNextMessageReadyForDelivery(queueName, new ArrayList<>(keysBeingProcessed)));
@@ -279,8 +316,10 @@ public class CentralizedMessageFetcher implements Lifecycle {
                                 break;
                             }
 
+                            claimed++;
                             processMessage(queueName, messageOpt.get());
                         }
+                        markSaturatedQueues(Map.of(queueName, availableSlots), Map.of(queueName, claimed));
                     } catch (Exception e) {
                         if (IOExceptionUtil.isIOException(e)) {
                             log.debug("[{}] Error fetching messages: {}", queueName, e.getMessage(), e);
@@ -368,7 +407,11 @@ public class CentralizedMessageFetcher implements Lifecycle {
                               message.getId());
 
                     try {
-                        boolean acknowledged = durableQueues.acknowledgeMessageAsHandled(message.getId());
+                        // Acknowledged already when an interceptor did it inside the handler's transaction
+                        var     acknowledgedWithHandler = operation.getAcknowledgedWithHandler();
+                        boolean acknowledged            = acknowledgedWithHandler != null
+                                                          ? acknowledgedWithHandler
+                                                          : durableQueues.acknowledgeMessageAsHandled(message.getId());
                         if (!acknowledged) {
                             // Message was already acknowledged or deleted
                             log.debug("[{}:{}] Message acknowledgment reported message already handled or deleted",
@@ -437,6 +480,26 @@ public class CentralizedMessageFetcher implements Lifecycle {
                 }
 
                 registration.activeWorkers.decrementAndGet();
+                refillIfSaturated(registration);
+            }
+        });
+    }
+
+    /**
+     * Mark every queue whose poll claimed all of its free slots, so its next free workers trigger a refill poll. Then
+     * check at once: handlers fast enough to have finished before the mark was set would otherwise leave the queue
+     * waiting for the next polling interval.
+     */
+    private void markSaturatedQueues(Map<QueueName, Integer> availableWorkerSlotsPerQueue, Map<QueueName, Long> claimedPerQueue) {
+        availableWorkerSlotsPerQueue.forEach((queueName, availableSlots) -> {
+            var claimed = claimedPerQueue.getOrDefault(queueName, 0L);
+            if (availableSlots <= 0 || claimed < availableSlots) {
+                return;
+            }
+            var registration = consumerRegistrations.get(queueName);
+            if (registration != null) {
+                registration.saturated.set(true);
+                refillIfSaturated(registration);
             }
         });
     }
@@ -512,6 +575,14 @@ public class CentralizedMessageFetcher implements Lifecycle {
         private final ExecutorService      workerPool;
         private final int                  maxParallelConsumers;
         private final AtomicInteger        activeWorkers     = new AtomicInteger(0);
+        /**
+         * The last poll filled every free slot - see {@link CentralizedMessageFetcher#refillIfSaturated}
+         */
+        private final AtomicBoolean        saturated         = new AtomicBoolean(false);
+        /**
+         * How many workers must be free before a saturated queue is polled again: half of them, at least one
+         */
+        private final int                  refillThreshold;
 
         private DurableQueueConsumerRegistration(QueueName queueName,
                                                  DurableQueueConsumer consumer,
@@ -523,6 +594,7 @@ public class CentralizedMessageFetcher implements Lifecycle {
             this.messageHandler = requireNonNull(messageHandler, "No messageHandler provided");
             this.workerPool = requireNonNull(workerPool, "No workerPool provided");
             this.maxParallelConsumers = maxParallelConsumers;
+            this.refillThreshold = Math.max(1, (maxParallelConsumers + 1) / 2);
         }
     }
 }

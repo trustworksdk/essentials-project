@@ -27,6 +27,8 @@ import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 
+import java.io.File;
+import java.nio.file.*;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.*;
@@ -149,6 +151,26 @@ class ShardOwnedCrossHostPartitionIT {
     }
 
     /**
+     * The node runs this test's own classpath, so every classpath entry must exist at the same path inside its
+     * container. Each entry is bind-mounted read-only where it is, with the local Maven repository mounted once for
+     * every jar in it. This was a hardcoded {@code /workspace} and {@code ~/.m2}, which only fit a checkout at
+     * {@code /workspace}: from anywhere else - a worktree, a CI checkout - the node found none of the project's classes
+     * and exited before it was ready.
+     */
+    private static GenericContainer<?> withClasspathMounted(GenericContainer<?> container) {
+        var mavenRepository = Path.of(System.getProperty("user.home"), ".m2").toAbsolutePath().normalize();
+        var roots           = new TreeSet<String>();
+        for (var entry : System.getProperty("java.class.path").split(File.pathSeparator)) {
+            var path = Path.of(entry).toAbsolutePath().normalize();
+            if (Files.exists(path)) {
+                roots.add(path.startsWith(mavenRepository) ? mavenRepository.toString() : path.toString());
+            }
+        }
+        roots.forEach(root -> container.withFileSystemBind(root, root, BindMode.READ_ONLY));
+        return container;
+    }
+
+    /**
      * One arm: start a node in its own container, let it take the shards, cut it off at the network,
      * and time both sides of what follows.
      */
@@ -157,11 +179,8 @@ class ShardOwnedCrossHostPartitionIT {
         var jdbcUrl = "jdbc:postgresql://" + databaseIp + ":" + PostgreSQLContainer.POSTGRESQL_PORT
                       + "/" + postgres.getDatabaseName() + urlSuffix;
 
-        try (var node = new GenericContainer<>(NODE_IMAGE)
+        try (var node = withClasspathMounted(new GenericContainer<>(NODE_IMAGE))
                 .withNetwork(network)
-                .withFileSystemBind("/workspace", "/workspace", BindMode.READ_ONLY)
-                .withFileSystemBind(System.getProperty("user.home") + "/.m2",
-                                    System.getProperty("user.home") + "/.m2", BindMode.READ_ONLY)
                 .withCommand("java", "-cp", System.getProperty("java.class.path"),
                              ShardOwnedNodeMain.class.getName(),
                              jdbcUrl, postgres.getUsername(), postgres.getPassword(),
