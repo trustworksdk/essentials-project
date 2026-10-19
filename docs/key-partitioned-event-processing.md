@@ -402,6 +402,30 @@ each instance pinned to its own two cores with `taskset` and `-XX:ActiveProcesso
 6. Absolute rates drifted across the session (single-instance 4 300–5 200 → 3 581 after dozens of runs, `VACUUM` or
    not): compare only runs from the same batch.
 
+**Investigation of the forwarder slowdown** (2026-10-19, uniform stretch, `pg_stat_statements` reset per run, one
+wait sample per second):
+
+| PostgreSQL time | 1 instance | 2 instances (polling batch 100) |
+|---|---|---|
+| Engine batched cursor reads (`LATERAL`) | ~2 s | **~25 s** (28 500 calls, 0.7–0.9 ms) |
+| Watermark horizon probes (`backend_xid` from `pg_stat_activity`) | 2.3 s (97 712 calls) | **9.4 s (204 548 calls, ~4 800/s)** |
+| Acknowledge deletes | 1.9 s | 6.8 s |
+| Forwarder `INSERT` into the ordered lane | 2.7 s | 3.2 s |
+| `pg_notify` | 0.08 s | 0.1 s |
+
+- **The forwarder's own statements are cheap and unchanged.** `NOTIFY` is ruled out (the per-commit notify lock was
+  a candidate), and so is insert contention. The forwarder is latency-bound per batch: sequential round trips plus a
+  commit, sharing a busier database.
+- **The demo's `event-store-polling-batch-size: 5`** (`application-compose.yml`) made the batched subscription read
+  the event store 5 events at a time: 42 087 reads (and as many gap-table lookups) for ~2 020 batches. At 100 it is
+  ~4 reads per batch. Raise it for any throughput measurement.
+- **The engine's consumer-side work grows with instances, not with messages**: each instance's owners poll and probe
+  independently, so a second instance multiplied the cursor-read time ~12× and the horizon probes to ~4 800/s, with
+  `LWLock:WALWrite` waits 8 → 27 samples. Engine candidates with evidence: one horizon probe per pump (or per
+  instance) instead of per owner, and the batched cursor read's cost when units are split across instances.
+- **Two-instance runs are not repeatable enough here**: identical configurations gave 3 334 and 4 751 forwarded/s.
+  Single-instance runs were within ~15 %.
+
 **Conclusion so far.** Batching the forward is proven and is the part of EF-2 worth building. Multi-instance handling
 cannot be judged yet, because the single forwarder is slower than the handling and is itself slowed by consumption on
 other instances. The next measurement is the forwarder's enqueue under concurrent consumption (statement latency,
