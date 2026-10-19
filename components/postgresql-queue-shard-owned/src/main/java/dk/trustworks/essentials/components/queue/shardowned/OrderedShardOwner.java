@@ -1053,6 +1053,17 @@ final class OrderedShardOwner implements BatchReadableOwner {
      * running is in the set recorded alongside. Once none of that set is running, every value at or
      * below that {@code maxSeen} has resolved: committed and visible, or aborted and never coming.
      * <p>
+     * Resolved is not yet read, and the cursor may only pass what a read has covered. So the argument has a second
+     * premise: <b>the writers must have ended before a read that bounds the advance.</b> Two mechanisms carry it.
+     * A candidate is recorded with the probe taken after this pass's read, but retired only against the probe taken
+     * before it ({@link #runningAtLastProbe}, the previous pass's): a writer missing from that probe ended before the
+     * read ran, so the read saw its rows. Retired on the probe taken after the read, a writer committing between the
+     * read and that probe was missing from it while its rows were invisible to the read, and the watermark stepped over
+     * them - the head sweep then delivered them behind later {@code key_order}s of the same key. And when that read
+     * returned as many rows as its limit, rows above the last one it returned were not read by it, so the advance stops at
+     * {@code readReachedSeq} and the candidate stays for a later pass: advancing to the candidate's {@code maxSeen}
+     * stepped over a late commit the truncated read did not reach.
+     * <p>
      * This is what replaces hole detection on this lane, and it is exact where hole detection was a
      * guess. A gap is not chased, not timed, and not written off after {@code holeExpiry} — it is
      * simply read again on the next pass, and the cursor does not step over it until the database says
