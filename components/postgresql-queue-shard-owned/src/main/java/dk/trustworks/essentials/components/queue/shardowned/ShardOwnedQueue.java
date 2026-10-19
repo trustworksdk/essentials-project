@@ -133,6 +133,12 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      */
     private volatile boolean                  startHoldsLifecycleLock;
     /**
+     * Whether this queue has been retired ({@link #retire()}): from then on {@link #start()} starts nothing. Set once, never
+     * cleared; read by a start under {@link #lifecycleLock}, and without it by {@link #isRetired()} - which the volatile
+     * write makes safe - for {@link PostgresqlMessageQueue} to skip a retired lane before starting it.
+     */
+    private volatile boolean                  retired;
+    /**
      * Lease rows a heartbeat tick leased as its run ended and then could not release again ({@link #abandonAcquisition}),
      * and those a start leased before its lease loop failed and could not release then ({@link #leaseAtStart}): unit to
      * the fence it leased the unit under. No owner of this queue's counts such a row - none was built for it - so
@@ -408,12 +414,20 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * ({@link #endRunOfStart}). It returns normally, with the queue not started: a failure of that work - a
      * {@code QueueObserver} throwing for the ownership changes it tells - is the stop's, whose caller has returned, and is
      * logged at WARN rather than thrown from here. A critical error is the exception, and escapes.
+     * <p>
+     * On a queue {@link #retire() retired}, this starts no run: a queue not started stays so, and one still running until
+     * the {@link #stop()} that follows {@code retire()} is left as it is.
      */
     @Override
     public void start() {
         requireTrue(activeSettings != null, "Nothing configured — call configureUnordered or configureOrdered first");
         lockForStart();
         try {
+            // Read under the lock: a retire() just before a stop() that then waits for this lock, or hands its work to this
+            // start, is seen here, or this start began before it and that stop ends what it starts.
+            if (retired) {
+                return;
+            }
             // A fresh run, with nothing of any earlier run's in it. No lock beyond lifecycleLock: a heartbeat tick of an
             // earlier run compares the current run with its own, which this never is, so installing it changes nothing
             // for that tick (adoptIntoRun).
@@ -2134,6 +2148,25 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      */
     boolean keptOrderedUnitsOnLastStop() {
         return keptOrderedUnitsOnLastStop;
+    }
+
+    /**
+     * Retire this queue for good: no {@link #start()} from now on starts it. It does not stop it: a {@link #stop()}
+     * called after this ends whatever runs, a run whose start was already under way when this was called included - that
+     * stop waits for the start, or hands its work to it, as for any start - and no start after that brings it back.
+     * {@link PostgresqlMessageQueue} retires the lanes of an unsubscribed subscription before it stops them, so a
+     * {@code start()} of the queue that still goes over them - the holder of its lifecycle lock, which an unsubscribe that
+     * did not get that lock leaves to take them out - starts neither of them from then on.
+     */
+    void retire() {
+        retired = true;
+    }
+
+    /**
+     * Whether {@link #retire()} has been called.
+     */
+    boolean isRetired() {
+        return retired;
     }
 
     /**

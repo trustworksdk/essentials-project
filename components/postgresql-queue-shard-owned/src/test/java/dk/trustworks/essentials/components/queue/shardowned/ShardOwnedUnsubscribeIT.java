@@ -58,6 +58,8 @@ class ShardOwnedUnsubscribeIT {
     private HikariDataSource                dataSource;
     private ListAppender<ILoggingEvent>     logged;
     private ch.qos.logback.classic.Logger   queueLogger;
+    private ListAppender<ILoggingEvent>     laneLogged;
+    private ch.qos.logback.classic.Logger   laneLogger;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -74,12 +76,20 @@ class ShardOwnedUnsubscribeIT {
         logged.start();
         queueLogger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(PostgresqlMessageQueue.class);
         queueLogger.addAppender(logged);
+
+        laneLogged = new ListAppender<>();
+        laneLogged.start();
+        laneLogger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(ShardOwnedQueue.class);
+        laneLogger.addAppender(laneLogged);
     }
 
     @AfterEach
     void tearDown() {
         if (queueLogger != null) {
             queueLogger.detachAppender(logged);
+        }
+        if (laneLogger != null) {
+            laneLogger.detachAppender(laneLogged);
         }
         if (dataSource != null) {
             dataSource.close();
@@ -139,10 +149,13 @@ class ShardOwnedUnsubscribeIT {
 
     /**
      * An unsubscribe that does not get the queue's lifecycle lock - a {@code start()} of the queue holds it past the 2 s
-     * budget - returns within that budget and leaves taking the lanes out to that start, which may still start them: it
-     * goes over the registered consumers. Once the start returns, the unsubscribed subscription is neither registered nor
-     * started, the other one is, and the instance id the unsubscribed one registered under is free for the next
-     * {@code consume()}. The queue's {@code LifecycleHook} holds the start once it has taken the lock.
+     * budget - returns within that budget and leaves taking the lanes out to that start. That start goes over the
+     * registered consumers, the unsubscribed subscription's lanes still among them, and starts neither of those lanes: it
+     * used to start them, so after {@code unsubscribe()} had returned they registered the instance again and leased every
+     * unit, delivering to a handler the caller had let go of until the start let go of the lock. Once the start returns,
+     * the unsubscribed subscription is neither registered nor started, the other one is, and the instance id the
+     * unsubscribed one registered under is free for the next {@code consume()}. The queue's {@code LifecycleHook} holds the
+     * start once it has taken the lock.
      */
     @Test
     void an_unsubscribe_that_does_not_get_the_lock_leaves_taking_the_lanes_out_to_the_holder() throws Exception {
@@ -164,9 +177,16 @@ class ShardOwnedUnsubscribeIT {
             // A competing subscription holds units only once a rebalance has moved some to it; started is all this needs.
             assertThat(kept.isStarted()).as("premise: the second subscription started").isTrue();
             queue.stop();
+            // Registered in consume() order, two lanes per subscription sharing one metrics: the first two are the
+            // unsubscribed subscription's.
+            var unsubscribedMetrics = queue.registeredConsumers().getFirst().metrics();
+            assertThat(queue.registeredConsumers().get(1).metrics()).as("premise: the first two lanes are one subscription's")
+                                                                   .isSameAs(unsubscribedMetrics);
 
             holdTheStart.set(true);
-            var starting = CompletableFuture.runAsync(queue::start);
+            long acquiredWhenUnsubscribed;
+            int  startsWhenUnsubscribed;
+            var  starting = CompletableFuture.runAsync(queue::start);
             try {
                 assertThat(startHeld.await(10, TimeUnit.SECONDS)).as("premise: the queue's start() holds the lock").isTrue();
 
@@ -178,13 +198,19 @@ class ShardOwnedUnsubscribeIT {
                 assertThat(warnings()).as("the unsubscribe says it left taking the lanes out to the holder")
                                       .anyMatch(warning -> warning.contains("to unsubscribe one of its subscriptions"));
                 assertThat(queue.registeredConsumers()).as("premise: the holder has not taken the lanes out yet").hasSize(4);
+                acquiredWhenUnsubscribed = unsubscribedMetrics.shardsAcquired.sum();
+                startsWhenUnsubscribed = laneStartsOf(INSTANCE_ID).size();
             } finally {
                 releaseTheStart.countDown();
             }
             starting.get(30, TimeUnit.SECONDS);
 
+            assertThat(laneStartsOf(INSTANCE_ID)).as("the holder started neither lane of the unsubscribed subscription")
+                                                 .hasSize(startsWhenUnsubscribed);
+            assertThat(unsubscribedMetrics.shardsAcquired.sum()).as("no unit acquired for the unsubscribed subscription after unsubscribe() returned")
+                                                                .isEqualTo(acquiredWhenUnsubscribed);
             assertThat(queue.registeredConsumers()).as("the holder took the unsubscribed subscription's lanes out").hasSize(2);
-            assertThat(unsubscribed.isStarted()).as("the holder stopped the lanes it had started again").isFalse();
+            assertThat(unsubscribed.isStarted()).as("the unsubscribed subscription's lanes are stopped").isFalse();
             assertThat(kept.isStarted()).as("the other subscription was started").isTrue();
             assertThat(queue.isStarted()).isTrue();
             Awaitility.await().atMost(Duration.ofSeconds(20)).untilAsserted(
@@ -200,13 +226,17 @@ class ShardOwnedUnsubscribeIT {
 
     /**
      * An unsubscribe called by a {@link QueueObserver} on the thread of a {@code start()} of the queue - told of the first
-     * acquisition of another subscription's lane - hands taking the lanes out to that start, which then starts the
-     * unsubscribed subscription's lanes as it goes over the registered consumers, and stops them again before it lets go
-     * of the lock.
+     * acquisition of another subscription's lane - hands taking the lanes out to that start, which then goes over the
+     * registered consumers, the unsubscribed subscription's lanes still among them, starts neither of those lanes, and
+     * takes them out before it lets go of the lock. It used to start them after the unsubscribe had returned, and stop them
+     * again only as it let go.
      */
     @Test
     void an_unsubscribe_on_the_thread_of_a_queue_start_is_finished_by_that_start() throws Exception {
-        var target = new AtomicReference<Subscription>();
+        var target                   = new AtomicReference<Subscription>();
+        var unsubscribedMetrics      = new AtomicReference<ShardOwnerMetrics>();
+        var acquiredWhenUnsubscribed = new AtomicLong(-1);
+        var startsWhenUnsubscribed   = new AtomicInteger(-1);
         try (var queue = newQueue(PostgresqlMessageQueue.LifecycleHook.NONE)) {
             queue.addObserver(new QueueObserver() {
                 @Override
@@ -214,6 +244,8 @@ class ShardOwnedUnsubscribeIT {
                     var subscription = target.getAndSet(null);
                     if (acquired && subscription != null) {
                         subscription.unsubscribe();
+                        acquiredWhenUnsubscribed.set(unsubscribedMetrics.get().shardsAcquired.sum());
+                        startsWhenUnsubscribed.set(laneStartsOf(INSTANCE_ID + "-1").size());
                     }
                 }
             });
@@ -222,6 +254,11 @@ class ShardOwnedUnsubscribeIT {
             awaitBothLanesHoldUnits(kept);
             assertThat(unsubscribed.isStarted()).as("premise: the second subscription started").isTrue();
             queue.stop();
+            // Registered in consume() order, two lanes per subscription sharing one metrics: the last two are the
+            // unsubscribed subscription's.
+            unsubscribedMetrics.set(queue.registeredConsumers().get(2).metrics());
+            assertThat(queue.registeredConsumers().get(3).metrics()).as("premise: the last two lanes are one subscription's")
+                                                                   .isSameAs(unsubscribedMetrics.get());
 
             // The kept subscription's lanes come first in the registered consumers, so the first acquisition the observer
             // is told of is the kept unordered lane's, before the start reaches the unsubscribed subscription's lanes.
@@ -229,8 +266,14 @@ class ShardOwnedUnsubscribeIT {
             queue.start();
 
             assertThat(target.get()).as("premise: the observer unsubscribed during the start").isNull();
+            assertThat(startsWhenUnsubscribed.get()).as("premise: the observer counted the lane starts once it had unsubscribed")
+                                                    .isNotNegative();
+            assertThat(laneStartsOf(INSTANCE_ID + "-1")).as("the start started neither lane of the unsubscribed subscription")
+                                                        .hasSize(startsWhenUnsubscribed.get());
+            assertThat(unsubscribedMetrics.get().shardsAcquired.sum()).as("no unit acquired for the unsubscribed subscription after unsubscribe() returned")
+                                                                      .isEqualTo(acquiredWhenUnsubscribed.get());
             assertThat(queue.registeredConsumers()).as("the start took the unsubscribed subscription's lanes out").hasSize(2);
-            assertThat(unsubscribed.isStarted()).as("the start stopped the lanes it had started after the unsubscribe").isFalse();
+            assertThat(unsubscribed.isStarted()).as("the unsubscribed subscription's lanes are stopped").isFalse();
             assertThat(kept.isStarted()).isTrue();
             Awaitility.await().atMost(Duration.ofSeconds(20)).untilAsserted(
                     () -> assertThat(registeredInstances()).as("only the kept subscription's instance id is registered")
@@ -388,6 +431,21 @@ class ShardOwnedUnsubscribeIT {
                           .filter(event -> event.getLevel() == INFO)
                           .map(ILoggingEvent::getFormattedMessage)
                           .toList();
+    }
+
+    /**
+     * Every start of a lane registered under {@code instanceId} that completed: a lane's start logs which units it owns
+     * once it has leased them, none included.
+     */
+    private List<String> laneStartsOf(String instanceId) {
+        // The appender adds under its own monitor (AppenderBase.doAppend), from the start's and the heartbeat's threads.
+        synchronized (laneLogged) {
+            return laneLogged.list.stream()
+                                  .filter(event -> event.getLevel() == INFO)
+                                  .map(ILoggingEvent::getFormattedMessage)
+                                  .filter(message -> message.startsWith("Instance " + instanceId + " owns "))
+                                  .toList();
+        }
     }
 
     private List<String> competingWarnings() {

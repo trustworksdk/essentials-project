@@ -60,8 +60,9 @@ public interface Subscription extends Lifecycle, AutoCloseable {
 
     /**
      * End the subscription for good: stop both lanes, as {@link #stop()} does, and remove them from the queue that
-     * returned it. From then on nothing starts them again - neither the queue's {@code start()} nor this subscription's
-     * {@link #start()}, which throws - and they no longer count as one of the queue's subscriptions, so the next
+     * returned it. From then on nothing starts them again - neither the queue's {@code start()}, one already under way
+     * when this is called included, nor this subscription's {@link #start()}, which throws once this has been called -
+     * and they no longer count as one of the queue's subscriptions, so the next
      * {@code consume()} in this process is not reported as a competing consumer of one nobody holds.
      * <p>
      * {@link #stop()} leaves the subscription registered, which is right for a caller that will {@link #start()} it again,
