@@ -143,22 +143,38 @@ class ShardOwnedDurableQueueConsumer implements DurableQueueConsumer {
      * {@link Subscription#unsubscribe()} ({@link #stopSubscription()}), so the queue holds no subscription of it while it
      * is stopped, and the restart registers under the same instance id rather than as a competing consumer.
      * <p>
-     * A {@link #stop()} that gave up waiting for this start, still subscribing, has stopped the consumer without it. This
-     * start then stops - unsubscribes - the subscription the queue returns, logging at WARN rather than throwing what that
-     * throws, since the stop's caller has already returned, and returns with the consumer not started.
+     * A {@link #stop()} that gave up waiting for this start, still subscribing, or that was called on this start's own
+     * thread inside the queue's {@code consume()}, has stopped the consumer without it. This start then stops -
+     * unsubscribes - the subscription the queue returns, logging at WARN rather than throwing what that throws, since the
+     * stop's caller has already returned, and returns with the consumer not started.
      * <p>
      * A start called meanwhile - {@link ShardOwnedDurableQueues#start()} restarts the same consumer objects - waits for
      * that earlier start to return - as long as the queue's {@code consume()} takes, then the stop of the subscription it
      * returned - the thread's interrupt included: once it has waited {@link #STOP_WAITS_FOR_START} it logs one WARN naming
      * the consumer and the queue, and goes on waiting ({@link #lockForStart}).
      * <p>
-     * Does nothing once the consumer has been {@link #retire() retired} or {@link #cancel() cancelled}.
+     * Does nothing, silently, once the consumer has been {@link #retire() retired} or {@link #cancel() cancelled} - on any
+     * thread. Nor does it do anything on the thread that already holds the consumer's lifecycle - a {@code QueueObserver}
+     * told of an acquisition inside the queue's {@code consume()}, or of a release while the subscription is unsubscribed:
+     * the start or stop running on that thread decides whether the consumer ends started. Inside a start still subscribing
+     * and owing no stop, that start starts it, and this is logged at DEBUG; anywhere else - inside a stop, or a start owing
+     * one - it is logged at WARN, as the consumer then ends not started. Such a start used to subscribe a second time
+     * inside {@code consume()}, leaving one of the two subscriptions running where no stop reached it.
      */
     @Override
     public void start() {
         lockForStart();
         try {
-            if (retired || subscription != null) {
+            if (retired) {
+                // Before the reentrancy check: a retired or cancelled consumer is never started again, so a start on the
+                // thread holding its lifecycle has nothing to say about it either.
+                return;
+            }
+            if (lifecycleLock.getHoldCount() > 1) {
+                startFromInsideTheHolder();
+                return;
+            }
+            if (subscription != null) {
                 return;
             }
             moveHolder(Holder.STARTING);
@@ -202,6 +218,26 @@ class ShardOwnedDurableQueueConsumer implements DurableQueueConsumer {
     }
 
     /**
+     * A {@link #start()} of a consumer neither retired nor cancelled, on the thread that already holds
+     * {@link #lifecycleLock}: it does nothing, and says so. The holder moves nowhere - the start or stop running on this
+     * thread owns it. Anywhere but inside a start owing no stop, the consumer ends not started, and can be started again
+     * once that start or stop has returned.
+     */
+    private void startFromInsideTheHolder() {
+        var heldBy = holder();
+        if (heldBy == Holder.STARTING) {
+            log.debug("Consumer '{}' was asked to start on queue '{}' on the thread of its start still subscribing, inside the queue's "
+                              + "consume(), and leaves starting it to that start",
+                      consumerName(), queueName());
+        } else {
+            log.warn("Consumer '{}' was asked to start on queue '{}' on the thread that holds its lifecycle ({}), and does nothing: "
+                             + "the start or stop running on this thread decides whether the consumer ends started. Start it again "
+                             + "once that has returned",
+                     consumerName(), queueName(), heldBy);
+        }
+    }
+
+    /**
      * Take {@link #lifecycleLock} for {@link #start()}, waiting as long as it takes - as a plain {@code lock()} would, the
      * thread's interrupt deferred and set again once the lock is held - but not silently: once it has waited
      * {@link #STOP_WAITS_FOR_START}, it logs one WARN saying what holds the lock, and goes on waiting. When the
@@ -235,8 +271,8 @@ class ShardOwnedDurableQueueConsumer implements DurableQueueConsumer {
                          consumerName(), STOP_WAITS_FOR_START, waitingTo, queueName());
             } else if (heldBy == Holder.FINISHING_OWED_STOP) {
                 log.warn("Consumer '{}' has waited {} and is still waiting to {} on queue '{}': an earlier start of the "
-                                 + "consumer is stopping the subscription the queue's consume() returned it, for a stop that gave "
-                                 + "up waiting for it",
+                                 + "consumer is stopping the subscription the queue's consume() returned it, for a stop that did "
+                                 + "not wait for it",
                          consumerName(), STOP_WAITS_FOR_START, waitingTo, queueName());
             } else {
                 // STARTING or STOP_OWED: an earlier start still in the queue's consume().
@@ -304,10 +340,20 @@ class ShardOwnedDurableQueueConsumer implements DurableQueueConsumer {
      * still set. Past that, the consumer is not started from then on, and the start stops the subscription itself once
      * {@code consume()} returns. Until then, a lane that {@code consume()} has already started may still deliver to the
      * handler. A stop called while another stop is stopping the subscription, or while the start is stopping it for a stop
-     * that gave up waiting, returns at once past that wait, leaving the stopping to them.
+     * that did not wait for it, returns at once past that wait, leaving the stopping to them.
+     * <p>
+     * Called on the thread that already holds the consumer's lifecycle, it does not wait at all
+     * ({@link #stopFromInsideTheHolder}): inside a start still subscribing - a {@code QueueObserver} told of an
+     * acquisition inside the queue's {@code consume()} - it is owed exactly as a stop that gave up waiting is, and the
+     * start stops the subscription once {@code consume()} returns; inside a stop stopping the subscription - an observer
+     * told of a release - it has nothing left to do.
      */
     @Override
     public void stop() {
+        if (lifecycleLock.isHeldByCurrentThread()) {
+            stopFromInsideTheHolder();
+            return;
+        }
         var     interrupted = false;
         boolean locked;
         try {
@@ -353,6 +399,31 @@ class ShardOwnedDurableQueueConsumer implements DurableQueueConsumer {
         } finally {
             lifecycleLock.unlock();
         }
+    }
+
+    /**
+     * A {@link #stop()} on the thread that already holds {@link #lifecycleLock}. Inside a {@link #start()} still
+     * subscribing ({@link Holder#STARTING}) it moves the holder to {@link Holder#STOP_OWED}, as a stop that did not get the
+     * lock does, and the start stops the subscription the queue's {@code consume()} returns
+     * ({@link #stopForAStopThatDidNotWait}). Inside a start that already owes a stop, or a stop or start stopping the
+     * subscription ({@link Holder#STOPPING}, {@link Holder#FINISHING_OWED_STOP}), the consumer ends not started without
+     * it. Holding the lock with nothing under way ({@link Holder#NONE}: {@link #stopIf}'s condition, say), it stops the
+     * subscription itself. It used to take the lock again, reentrantly, and stop the subscription: inside a start there
+     * was none yet, so the start went on to keep the subscription {@code consume()} returned - a {@link #cancel()} there
+     * left a cancelled consumer delivering, which no stop reached - and inside a stop it unsubscribed it a second time.
+     */
+    private void stopFromInsideTheHolder() {
+        synchronized (handOver) {
+            var heldBy = holder;
+            if (heldBy == Holder.STARTING) {
+                moveHolder(Holder.STOP_OWED);
+                return;
+            }
+            if (heldBy != Holder.NONE) {
+                return;
+            }
+        }
+        stopSubscription();
     }
 
     /**
@@ -471,20 +542,23 @@ class ShardOwnedDurableQueueConsumer implements DurableQueueConsumer {
          */
         NONE,
         /**
-         * A {@link #start()} subscribing, owing no stop: a stop that did not get the lock moves it to {@link #STOP_OWED}
-         * and leaves stopping the subscription to it.
+         * A {@link #start()} subscribing, owing no stop: a stop that did not get the lock, or one called on the start's own
+         * thread ({@link #stopFromInsideTheHolder}), moves it to {@link #STOP_OWED} and leaves stopping the subscription to
+         * it.
          */
         STARTING,
         /**
-         * A {@link #start()} still subscribing, owing a stop that gave up waiting for it: the start stops the subscription
-         * the queue's {@code consume()} returns ({@link #FINISHING_OWED_STOP}), or, when {@code consume()} threw, has none
-         * to stop ({@link #NONE}). A further stop has nothing to add, and leaves it to the start too.
+         * A {@link #start()} still subscribing, owing a stop that gave up waiting for it or was called on its own thread
+         * from inside the queue's {@code consume()}: the start stops the subscription the queue's {@code consume()} returns
+         * ({@link #FINISHING_OWED_STOP}), or, when {@code consume()} threw, has none to stop ({@link #NONE}). A further
+         * stop has nothing to add, and leaves it to the start too.
          */
         STOP_OWED,
         /**
          * A {@link #start()} stopping the subscription the queue's {@code consume()} returned it, for a stop that gave up
-         * waiting for it - which lasts as long as that subscription's stop: each lane may drain for up to {@code shedGrace}
-         * and then hand back its units. The consumer ends not started, so a stop arriving meanwhile has nothing left to do.
+         * waiting for it or was called on its own thread from inside {@code consume()} - which lasts as long as that
+         * subscription's stop: each lane may drain for up to {@code shedGrace} and then hand back its units. The consumer
+         * ends not started, so a stop arriving meanwhile has nothing left to do.
          */
         FINISHING_OWED_STOP,
         /** A {@link #stop()}, {@link #stopIf} or {@link #retire()} stopping the subscription: the stop has nothing left to do. */
@@ -507,7 +581,8 @@ class ShardOwnedDurableQueueConsumer implements DurableQueueConsumer {
     }
 
     /**
-     * Unsubscribe the subscription the queue's {@code consume()} returned a start for a stop that gave up waiting for it:
+     * Unsubscribe the subscription the queue's {@code consume()} returned a start for a stop that gave up waiting for it,
+     * or that was called on the start's own thread from inside {@code consume()} ({@link #stopFromInsideTheHolder}):
      * unsubscribed, as {@link #stopSubscription()} does, or it stayed registered with the queue, stopped, and the next
      * start's {@code consume()} added another.
      */
@@ -538,8 +613,9 @@ class ShardOwnedDurableQueueConsumer implements DurableQueueConsumer {
      * {@code ShardOwnedDurableQueues.start()} may have taken it from the registry before it was deregistered, and used to
      * start it afterwards - a consumer no {@code stop()} reaches and its caller has let go of. A start already subscribing
      * when the cancel begins is stopped as by {@link #stop()}: by the cancel, or by that start itself once the queue's
-     * {@code consume()} returns. Unlike {@link #retire()}, which waits for such a start as long as it takes, this stays
-     * bounded by {@code STOP_WAITS_FOR_START}.
+     * {@code consume()} returns - always the latter for a cancel called on that start's own thread, from inside
+     * {@code consume()} (a {@code QueueObserver} told of an acquisition). Unlike {@link #retire()}, which waits for such a
+     * start as long as it takes, this stays bounded by {@code STOP_WAITS_FOR_START}.
      */
     @Override
     public void cancel() {

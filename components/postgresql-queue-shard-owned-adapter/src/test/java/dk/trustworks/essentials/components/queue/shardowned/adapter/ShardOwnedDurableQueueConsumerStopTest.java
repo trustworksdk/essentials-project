@@ -50,18 +50,34 @@ class ShardOwnedDurableQueueConsumerStopTest {
     /** When set, the subscription's {@code unsubscribe()} counts down {@link #subscriptionStopping} and blocks until it is let go. */
     private final AtomicReference<CountDownLatch> letSubscriptionStopEnd = new AtomicReference<>();
     private final CountDownLatch   subscriptionStopping = new CountDownLatch(1);
+    private final AtomicInteger    consumeCalls  = new AtomicInteger();
+    /**
+     * When set, run once on the start's thread just before {@code consume()} returns - as a {@code QueueObserver} told of
+     * an acquisition runs inside it.
+     */
+    private final AtomicReference<Runnable> insideConsume     = new AtomicReference<>();
+    /**
+     * When set, run once on the stopping thread inside the subscription's {@code unsubscribe()} - as a
+     * {@code QueueObserver} told of a release runs inside it.
+     */
+    private final AtomicReference<Runnable> insideUnsubscribe = new AtomicReference<>();
     private final MessageQueue     queue         = proxy(MessageQueue.class, (method, args) -> {
         if (!"consume".equals(method)) {
             throw new UnsupportedOperationException(method);
         }
+        consumeCalls.incrementAndGet();
         consuming.countDown();
         awaitUninterruptibly(letConsumeEnd);
         var started = new boolean[]{true};
-        return proxy(Subscription.class, (subscriptionMethod, subscriptionArgs) -> switch (subscriptionMethod) {
+        var subscription = proxy(Subscription.class, (subscriptionMethod, subscriptionArgs) -> switch (subscriptionMethod) {
             case "isStarted" -> started[0];
             case "unsubscribe" -> {
                 started[0] = false;
                 stopped.add("subscription");
+                var observer = insideUnsubscribe.getAndSet(null);
+                if (observer != null) {
+                    observer.run();
+                }
                 var blocking = letSubscriptionStopEnd.get();
                 if (blocking != null) {
                     subscriptionStopping.countDown();
@@ -74,10 +90,16 @@ class ShardOwnedDurableQueueConsumerStopTest {
             }
             default -> throw new UnsupportedOperationException(subscriptionMethod);
         });
+        var observer = insideConsume.getAndSet(null);
+        if (observer != null) {
+            observer.run();
+        }
+        return subscription;
     });
+    private final List<Object>     cancelled     = new CopyOnWriteArrayList<>();
     private final ShardOwnedDurableQueueConsumer consumer = new ShardOwnedDurableQueueConsumer(consumeFrom("stuck"), queue,
                                                                                                 EssentialsObjectMappers.createJSONSerializer(),
-                                                                                                cancelled -> { },
+                                                                                                cancelled::add,
                                                                                                 (message, handler) -> handler.handle(message));
 
     @ParameterizedTest
@@ -347,6 +369,216 @@ class ShardOwnedDurableQueueConsumerStopTest {
 
         assertThat(stopped).containsExactly("subscription");
         assertThat(consumer.isStarted()).isFalse();
+    }
+
+    /**
+     * A stop or cancel on the start's own thread, from inside the queue's {@code consume()} - a {@code QueueObserver} told
+     * of an acquisition - is owed as a stop that gave up waiting is: the start unsubscribes the subscription
+     * {@code consume()} returns, and the consumer ends not started. It used to take the lifecycle lock again, reentrantly,
+     * find no subscription yet and stop nothing, and the start then kept the subscription: after a cancel, a consumer
+     * delivering though dropped from the {@code DurableQueues}, which no stop reached.
+     */
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void a_stop_or_cancel_on_the_starts_own_thread_inside_consume_is_owed_and_the_start_unsubscribes(boolean cancel) {
+        letConsumeEnd.countDown();
+        insideConsume.set(cancel ? consumer::cancel : consumer::stop);
+
+        consumer.start();
+
+        assertThat(insideConsume.get()).as("premise: the stop ran inside consume()").isNull();
+        assertThat(stopped).as("the start unsubscribed the subscription consume() returned").containsExactly("subscription");
+        assertThat(consumer.isStarted()).isFalse();
+        assertThat(consumer.holder()).as("the start let go of the holder").isEqualTo(ShardOwnedDurableQueueConsumer.Holder.NONE);
+        assertThat(cancelled).as("a cancel deregisters the consumer").isEqualTo(cancel ? List.of(consumer) : List.of());
+
+        consumer.start();
+
+        if (cancel) {
+            assertThat(consumeCalls).as("a cancelled consumer does not start again").hasValue(1);
+            assertThat(consumer.isStarted()).isFalse();
+        } else {
+            assertThat(consumeCalls).as("a later start subscribes afresh").hasValue(2);
+            assertThat(consumer.isStarted()).isTrue();
+        }
+    }
+
+    /**
+     * A start on the start's own thread, from inside the queue's {@code consume()}, does nothing: the start subscribing is
+     * the one starting the consumer. It used to subscribe a second time inside {@code consume()}, and the outer start then
+     * replaced the inner start's subscription with its own, leaving that one running where no stop reached it.
+     */
+    @Test
+    void a_start_on_the_starts_own_thread_inside_consume_does_nothing_and_the_consumer_subscribes_once() {
+        letConsumeEnd.countDown();
+        insideConsume.set(consumer::start);
+        var logged = captureLogs();
+        try {
+            consumer.start();
+
+            assertThat(insideConsume.get()).as("premise: the start ran inside consume()").isNull();
+            assertThat(consumeCalls).as("the queue's consume() was called once").hasValue(1);
+            assertThat(consumer.isStarted()).isTrue();
+            assertThat(warningsOrErrors(logged)).as("nothing to warn about: the start subscribing starts the consumer").isEmpty();
+
+            consumer.stop();
+
+            assertThat(stopped).as("the one subscription was the consumer's, and its stop ended it").containsExactly("subscription");
+            assertThat(consumer.isStarted()).isFalse();
+        } finally {
+            detach(logged);
+        }
+    }
+
+    /**
+     * A stop or cancel on the thread of a stop, from inside the subscription's {@code unsubscribe()} - a
+     * {@code QueueObserver} told of a release - leaves the stopping to that stop. It used to take the lifecycle lock again,
+     * reentrantly, and unsubscribe the subscription a second time.
+     */
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void a_stop_or_cancel_on_the_stopping_thread_inside_unsubscribe_leaves_the_stopping_to_that_stop(boolean cancel) {
+        letConsumeEnd.countDown();
+        consumer.start();
+        assertThat(consumer.isStarted()).as("premise: started").isTrue();
+        insideUnsubscribe.set(cancel ? consumer::cancel : consumer::stop);
+
+        consumer.stop();
+
+        assertThat(insideUnsubscribe.get()).as("premise: the second stop ran inside unsubscribe()").isNull();
+        assertThat(stopped).as("the subscription was unsubscribed once").containsExactly("subscription");
+        assertThat(consumer.isStarted()).isFalse();
+        assertThat(consumer.holder()).as("the stop let go of the holder").isEqualTo(ShardOwnedDurableQueueConsumer.Holder.NONE);
+    }
+
+    /**
+     * A start on the thread of a stop, from inside the subscription's {@code unsubscribe()}, does nothing - the stop ends the
+     * consumer not started - and says so at WARN, naming the consumer, the queue and the holder.
+     */
+    @Test
+    void a_start_on_the_stopping_thread_inside_unsubscribe_does_nothing_and_says_so() {
+        letConsumeEnd.countDown();
+        consumer.start();
+        insideUnsubscribe.set(consumer::start);
+        var logged = captureLogs();
+        try {
+            consumer.stop();
+
+            assertThat(insideUnsubscribe.get()).as("premise: the start ran inside unsubscribe()").isNull();
+            assertThat(consumeCalls).as("the start did not subscribe").hasValue(1);
+            assertThat(consumer.isStarted()).isFalse();
+            assertThat(warningsOrErrors(logged)).singleElement()
+                                                .satisfies(message -> assertThat(message).contains("'" + consumer.consumerName() + "'", "'stuck'",
+                                                                                                   "(STOPPING)", "does nothing"));
+        } finally {
+            detach(logged);
+        }
+    }
+
+    /**
+     * A start on the start's own thread, from inside the queue's {@code consume()}, after a cancel there - an observer that
+     * cancels and then starts - does nothing and says nothing: a cancelled consumer is never started again, so there is
+     * nothing to start again once the start has returned. It used to log a WARN telling the operator to start it again.
+     */
+    @Test
+    void a_start_inside_consume_after_a_cancel_there_does_nothing_and_says_nothing() {
+        letConsumeEnd.countDown();
+        insideConsume.set(() -> {
+            consumer.cancel();
+            consumer.start();
+        });
+        var logged = captureLogs();
+        try {
+            consumer.start();
+
+            assertThat(insideConsume.get()).as("premise: the cancel and the start ran inside consume()").isNull();
+            assertThat(consumeCalls).as("the queue's consume() was called once").hasValue(1);
+            assertThat(stopped).as("the start unsubscribed the subscription consume() returned").containsExactly("subscription");
+            assertThat(consumer.isStarted()).isFalse();
+            assertThat(warningsOrErrors(logged)).as("a cancelled consumer's start has nothing to warn about").isEmpty();
+        } finally {
+            detach(logged);
+        }
+    }
+
+    /**
+     * A start on the thread of a cancel or retire, from inside the subscription's {@code unsubscribe()} - a
+     * {@code QueueObserver} told of a release - does nothing and says nothing, as a start of a retired or cancelled
+     * consumer does on any other thread.
+     */
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void a_start_inside_unsubscribe_of_a_cancel_or_retire_does_nothing_and_says_nothing(boolean retire) {
+        letConsumeEnd.countDown();
+        consumer.start();
+        assertThat(consumer.isStarted()).as("premise: started").isTrue();
+        insideUnsubscribe.set(consumer::start);
+        var logged = captureLogs();
+        try {
+            if (retire) {
+                consumer.retire();
+            } else {
+                consumer.cancel();
+            }
+
+            assertThat(insideUnsubscribe.get()).as("premise: the start ran inside unsubscribe()").isNull();
+            assertThat(consumeCalls).as("the start did not subscribe").hasValue(1);
+            assertThat(consumer.isStarted()).isFalse();
+            assertThat(warningsOrErrors(logged)).as("a retired or cancelled consumer's start has nothing to warn about").isEmpty();
+        } finally {
+            detach(logged);
+        }
+    }
+
+    /**
+     * Further stops on the start's own thread, once one inside {@code consume()} has made the start owe it - a second one
+     * inside {@code consume()} ({@code STOP_OWED}), and one inside the owed stop's {@code unsubscribe()}
+     * ({@code FINISHING_OWED_STOP}) - add nothing: the subscription is unsubscribed once, by the start.
+     */
+    @Test
+    void further_stops_on_the_starts_own_thread_after_an_owed_one_leave_the_stopping_to_the_start() {
+        letConsumeEnd.countDown();
+        var holdersSeen = new CopyOnWriteArrayList<ShardOwnedDurableQueueConsumer.Holder>();
+        insideConsume.set(() -> {
+            holdersSeen.add(consumer.holder());
+            consumer.stop();
+            holdersSeen.add(consumer.holder());
+            consumer.stop();
+        });
+        insideUnsubscribe.set(() -> {
+            holdersSeen.add(consumer.holder());
+            consumer.stop();
+        });
+
+        consumer.start();
+
+        assertThat(insideConsume.get()).as("premise: the stops ran inside consume()").isNull();
+        assertThat(insideUnsubscribe.get()).as("premise: the last stop ran inside the owed stop's unsubscribe()").isNull();
+        assertThat(holdersSeen).as("premise: the holder each nested stop found")
+                               .containsExactly(ShardOwnedDurableQueueConsumer.Holder.STARTING,
+                                                ShardOwnedDurableQueueConsumer.Holder.STOP_OWED,
+                                                ShardOwnedDurableQueueConsumer.Holder.FINISHING_OWED_STOP);
+        assertThat(stopped).as("the subscription was unsubscribed once").containsExactly("subscription");
+        assertThat(consumer.isStarted()).isFalse();
+        assertThat(consumer.holder()).as("the start let go of the holder").isEqualTo(ShardOwnedDurableQueueConsumer.Holder.NONE);
+    }
+
+    private static ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> captureLogs() {
+        var logged = new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+        logged.start();
+        ((ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(ShardOwnedDurableQueueConsumer.class)).addAppender(logged);
+        return logged;
+    }
+
+    private static void detach(ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> logged) {
+        ((ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(ShardOwnedDurableQueueConsumer.class)).detachAppender(logged);
+    }
+
+    private static List<String> warningsOrErrors(ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> logged) {
+        return logged.list.stream()
+                          .filter(event -> event.getLevel().isGreaterOrEqual(ch.qos.logback.classic.Level.WARN))
+                          .map(ch.qos.logback.classic.spi.ILoggingEvent::getFormattedMessage)
+                          .toList();
     }
 
     private record Stopped(boolean returned, Duration took, boolean stillInterrupted) {
