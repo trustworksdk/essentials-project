@@ -2385,11 +2385,10 @@ class ShardOwnedLifecycleIT {
     }
 
     /**
-     * A {@code Subscription.start()} after the queue's {@code stop()} marks the queue started, so the queue's
-     * {@code close()} stops both lanes again: no lease or membership row names the instance afterwards. It used to start
-     * both lanes with the queue still reporting itself not started, and the queue's {@code close()} (its {@code stop()})
-     * then found it not started and stopped nothing, so the lanes leased, heartbeated and dispatched until the process
-     * exited.
+     * A {@code Subscription.start()} after the queue's {@code stop()} leaves the queue not started, and the queue's
+     * {@code close()} still stops both lanes again: no lease or membership row names the instance afterwards. The queue's
+     * {@code close()} (its {@code stop()}) used to stop consumers only when the queue was marked started, so after such a
+     * start it stopped nothing, and the lanes leased, heartbeated and dispatched until the process exited.
      */
     @Test
     void a_subscription_started_after_the_message_queue_stopped_is_stopped_by_closing_the_queue() throws Exception {
@@ -2407,7 +2406,7 @@ class ShardOwnedLifecycleIT {
 
             subscription.start();
 
-            assertThat(queue.isStarted()).as("the subscription's start marked the queue started").isTrue();
+            assertThat(queue.isStarted()).as("the subscription's start left the queue not started").isFalse();
             Awaitility.await().atMost(Duration.ofSeconds(20))
                       .alias("premise: both lanes hold units again")
                       .until(() -> subscription.unorderedShardsHeld() > 0 && subscription.orderedUnitsHeld() > 0);
@@ -2428,16 +2427,69 @@ class ShardOwnedLifecycleIT {
     }
 
     /**
-     * A {@code consume()} or a {@code Subscription.start()} - after the queue's {@code stop()} - escaping with a critical
-     * error leaves the queue marked started, as the queue's {@code start()} does, so the queue's {@code close()} stops
-     * the lane it left running: an observer throws a {@link LinkageError} for the first acquisition, which escapes the
-     * unordered lane's start with that lane running and is not undone. Both left the queue not started, and the
-     * {@code consume()} left its pair unregistered too, so {@code close()}, finding the queue not started, stopped
-     * nothing, and the unordered lane leased and heartbeated until the process exited.
+     * After the queue's {@code stop()}, a {@code Subscription.start()} of one of two subscriptions - or a {@code consume()}
+     * of a third - starts its own lanes only and leaves the queue not started, so the queue's {@code start()} then starts
+     * every subscription the stop stopped, and the queue's {@code close()} stops all of them again. Both used to mark the
+     * queue started, and the queue's {@code start()}, finding it started, returned at once: the other subscription stayed
+     * stopped, consuming nothing, while {@code isStarted()} read true.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"subscription", "consume"})
+    void a_message_queue_start_after_one_subscription_started_on_its_own_starts_every_subscription(String startedBy) throws Exception {
+        var instanceId    = "spi-start-after-" + startedBy;
+        var queue         = new PostgresqlMessageQueue(dataSource, QUEUE_ID, SHARD_COUNT, instanceId);
+        var subscriptions = new CopyOnWriteArrayList<Subscription>();
+        try {
+            var first  = consumeUnchecked(queue);
+            subscriptions.add(first);
+            var second = consumeUnchecked(queue);
+            subscriptions.add(second);
+            assertThat(first.isStarted() && second.isStarted()).as("premise: both subscriptions are started").isTrue();
+            queue.stop();
+            assertThat(first.isStarted() || second.isStarted()).as("premise: the queue's stop stopped both subscriptions").isFalse();
+
+            Subscription startedOnItsOwn;
+            if ("subscription".equals(startedBy)) {
+                first.start();
+                startedOnItsOwn = first;
+            } else {
+                startedOnItsOwn = consumeUnchecked(queue);
+                subscriptions.add(startedOnItsOwn);
+            }
+
+            assertThat(startedOnItsOwn.isStarted()).as("premise: the %s started its own lanes", startedBy).isTrue();
+            assertThat(second.isStarted()).as("premise: the %s left the other subscription stopped", startedBy).isFalse();
+            assertThat(queue.isStarted()).as("the %s left the queue not started", startedBy).isFalse();
+
+            queue.start();
+
+            assertThat(subscriptions).as("the queue's start started every subscription").allMatch(Subscription::isStarted);
+            assertThat(queue.isStarted()).as("the queue's start marked the queue started").isTrue();
+
+            queue.close();
+
+            assertThat(queue.isStarted()).as("the queue's close() left it not started").isFalse();
+            assertThat(subscriptions).as("the queue's close() stopped every subscription").noneMatch(Subscription::isStarted);
+        } finally {
+            queue.close();
+            // What the queue's close() did not reach, so a failure leaves nothing leasing into the next test.
+            subscriptions.forEach(Subscription::stop);
+        }
+    }
+
+    /**
+     * A {@code consume()} - the queue's first - or a {@code Subscription.start()} after the queue's {@code stop()}
+     * escaping with a critical error leaves the lane it left running for the queue's {@code close()} to stop: an observer
+     * throws a {@link LinkageError} for the first acquisition, which escapes the unordered lane's start with that lane
+     * running and is not undone. The {@code consume()} registers its pair and marks the queue started, as on success; the
+     * {@code Subscription.start()} leaves the queue not started, as on success, and {@code close()} stops every registered
+     * consumer either way. The {@code consume()} used to leave its pair unregistered, and {@code close()} stopped
+     * consumers only when the queue was marked started, which neither left it: it stopped nothing, and the unordered lane
+     * leased and heartbeated until the process exited.
      */
     @ParameterizedTest
     @ValueSource(strings = {"consume", "subscription"})
-    void a_start_escaping_with_a_critical_error_leaves_the_message_queue_started_so_closing_it_stops_the_lane_left_running(String startedBy)
+    void a_start_escaping_with_a_critical_error_leaves_the_lane_it_left_running_for_closing_the_message_queue_to_stop(String startedBy)
             throws Exception {
         var instanceId   = "spi-critical-" + startedBy;
         var critical     = new LinkageError("simulated critical error from an observer");
@@ -2469,7 +2521,7 @@ class ShardOwnedLifecycleIT {
 
             assertThat(thrown).as("premise: the %s escaped with the observer's critical error", startedBy).isSameAs(critical);
             assertThat(unitsOwnedBy("unordered", instanceId)).as("premise: the unordered lane was left running, leasing").isPositive();
-            assertThat(queue.isStarted()).as("the critical error left the queue started").isTrue();
+            assertThat(queue.isStarted()).as("the %s marked the queue as on success", startedBy).isEqualTo("consume".equals(startedBy));
 
             queue.close();
 
