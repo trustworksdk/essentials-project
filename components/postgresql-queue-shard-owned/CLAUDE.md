@@ -198,7 +198,10 @@ Every message is assigned to a shard at enqueue. Each shard has exactly one owni
   stepped over them and the head sweep delivered them late — behind later `key_order`s of the same key. Seen in the
   trading demo as lost ledger cycles; `ShardOwnedConcurrentProducersOrderIT` (8 producers, disjoint keys, multi-unit
   transactions) hit it in 4 of 5 runs before the fix. `OrderedShardOwner.runningAtLastProbe` is the pre-read probe; a
-  pass whose read hit `readBatchSize` advances no further than the last row it read. Cost, measured A/B on 40 000
+  pass whose read hit its row limit advances no further than the last row it read. That limit is the one the read was
+  ISSUED with: a pump's batched read uses the `ShardRuntime`'s `readBatchSize`, which can be smaller than the queue's,
+  so `applyBatchRead` carries it (`cursorLimit`); judged against the owner's own, a truncated batch looked complete and
+  the cap never fired. `ShardOwnedOrderedWatermarkIT` drives both by hand (limit 5). Cost, measured A/B on 40 000
   messages: drain +1.2 % median (inside the spread), read statements unchanged, watermark lag +21 % (one pass later).
   `sweepRecoveries` is the signal — zero exactly when nothing was stepped over.
 - **A long READ-ONLY transaction does not hold the xid horizon back**, however long it runs — only a writing one does, because only a writer is assigned an xid. Do not cite `pg_dump` or an analytics query as a hazard for anything keyed on `pg_snapshot_xmin`; a 13 s reader is indistinguishable from no reader.

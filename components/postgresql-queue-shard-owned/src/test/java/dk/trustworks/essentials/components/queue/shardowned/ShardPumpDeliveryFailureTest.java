@@ -263,8 +263,13 @@ class ShardPumpDeliveryFailureTest {
     }
 
     private void runUntil(Callable<Boolean> done, LeasedOwner... owners) throws InterruptedException {
+        runUntil(healthyDataSource(), ShardOwnerSettings.defaults(), done, owners);
+    }
+
+    private void runUntil(DataSource dataSource, ShardOwnerSettings settings, Callable<Boolean> done, LeasedOwner... owners)
+            throws InterruptedException {
         var running = new AtomicBoolean(true);
-        var pump = new ShardPump(new ShardOwnedStorage(healthyDataSource(), PUMP_QUEUE_ID), ShardOwnerSettings.defaults(),
+        var pump = new ShardPump(new ShardOwnedStorage(dataSource, PUMP_QUEUE_ID), settings,
                                  new ShardOwnerMetrics(), running, new AtomicBoolean(false), "pump-0", Optional::empty);
         for (var owner : owners) {
             pump.add(owner);
@@ -377,6 +382,31 @@ class ShardPumpDeliveryFailureTest {
                 .contains("java.lang.AssertionError: broken cursor");
     }
 
+    /**
+     * The pump reads its batch with ITS settings' {@code readBatchSize} - the runtime's - and an owner's own can be larger
+     * (a runtime keeps its first borrower's settings, and a queue given a runtime keeps its own). The owner caps its
+     * watermark at the last row of a read that returned a full batch, and it judged "full" against its own
+     * {@code readBatchSize}, so a truncated batched read passed for a complete one and the watermark stepped over rows
+     * the read never reached. The pump now hands each owner the limit its read was issued with.
+     */
+    @Test
+    void a_batched_read_hands_each_owner_the_row_limit_the_pump_read_it_with() throws InterruptedException {
+        var d = ShardOwnerSettings.defaults();
+        var pumpSettings = new ShardOwnerSettings(7, d.ackBatchSize(), d.ackFlushInterval(), d.chaseDelay(), d.holeExpiry(),
+                                                  d.sweepInterval(), d.maxHolesPerChase(), d.keyConcurrency(), d.pollBackstop(),
+                                                  d.maxSweepInterval(), d.pumpThreads(), d.shedGrace(), d.leaseTtl(), d.watermarkCap());
+        var metrics = new ShardOwnerMetrics();
+        var first   = new BatchStubOwner((short) 9, 0, metrics);
+        var second  = new BatchStubOwner((short) 9, 1, metrics);
+
+        runUntil(emptyResultDataSource(), pumpSettings, () -> first.batchesApplied.get() >= 3 && second.batchesApplied.get() >= 3,
+                 first, second);
+
+        assertThat(metrics.batchedReadFailures.sum()).as("the batched read succeeds").isZero();
+        assertThat(first.cursorLimits).as("the pump's readBatchSize, not the default 500").isNotEmpty().containsOnly(7);
+        assertThat(second.cursorLimits).as("the pump's readBatchSize, not the default 500").isNotEmpty().containsOnly(7);
+    }
+
     private List<ILoggingEvent> aboutShard(int shard) {
         return logged.list.stream()
                           .filter(event -> event.getFormattedMessage().contains("shard " + shard + " "))
@@ -406,6 +436,51 @@ class ShardPumpDeliveryFailureTest {
                                                        case "hashCode" -> System.identityHashCode(proxy);
                                                        case "equals" -> proxy == args[0];
                                                        case "toString" -> "stub data source";
+                                                       default -> throw new UnsupportedOperationException(method.getName());
+                                                   });
+    }
+
+    /**
+     * Hands out connections whose every statement succeeds and returns no rows, so the pump's batched read completes and
+     * is applied to the owners.
+     */
+    private static DataSource emptyResultDataSource() {
+        var loader = ShardPumpDeliveryFailureTest.class.getClassLoader();
+        var resultSet = (ResultSet) Proxy.newProxyInstance(loader, new Class<?>[]{ResultSet.class},
+                                                           (proxy, method, args) -> switch (method.getName()) {
+                                                               case "next", "wasNull" -> false;
+                                                               case "close" -> null;
+                                                               case "hashCode" -> System.identityHashCode(proxy);
+                                                               case "equals" -> proxy == args[0];
+                                                               case "toString" -> "empty result set";
+                                                               default -> throw new UnsupportedOperationException(method.getName());
+                                                           });
+        var statement = (PreparedStatement) Proxy.newProxyInstance(loader, new Class<?>[]{PreparedStatement.class},
+                                                                   (proxy, method, args) -> switch (method.getName()) {
+                                                                       case "setArray", "setShort", "setInt", "setLong", "close" -> null;
+                                                                       case "executeQuery" -> resultSet;
+                                                                       case "hashCode" -> System.identityHashCode(proxy);
+                                                                       case "equals" -> proxy == args[0];
+                                                                       case "toString" -> "empty statement";
+                                                                       default -> throw new UnsupportedOperationException(method.getName());
+                                                                   });
+        var connection = (Connection) Proxy.newProxyInstance(loader, new Class<?>[]{Connection.class},
+                                                             (proxy, method, args) -> switch (method.getName()) {
+                                                                 case "isValid" -> true;
+                                                                 case "prepareStatement" -> statement;
+                                                                 case "createArrayOf", "close" -> null;
+                                                                 case "isClosed" -> false;
+                                                                 case "hashCode" -> System.identityHashCode(proxy);
+                                                                 case "equals" -> proxy == args[0];
+                                                                 case "toString" -> "empty-result connection";
+                                                                 default -> throw new UnsupportedOperationException(method.getName());
+                                                             });
+        return (DataSource) Proxy.newProxyInstance(loader, new Class<?>[]{DataSource.class},
+                                                   (proxy, method, args) -> switch (method.getName()) {
+                                                       case "getConnection" -> connection;
+                                                       case "hashCode" -> System.identityHashCode(proxy);
+                                                       case "equals" -> proxy == args[0];
+                                                       case "toString" -> "empty-result data source";
                                                        default -> throw new UnsupportedOperationException(method.getName());
                                                    });
     }
@@ -552,7 +627,9 @@ class ShardPumpDeliveryFailureTest {
      * attentive in the same pass.
      */
     private static class BatchStubOwner extends StubOwner implements BatchReadableOwner {
-        final AtomicInteger batchesApplied = new AtomicInteger();
+        final AtomicInteger                  batchesApplied = new AtomicInteger();
+        /** The cursor read's row limit of every batch applied, in order. */
+        final ConcurrentLinkedQueue<Integer> cursorLimits   = new ConcurrentLinkedQueue<>();
 
         BatchStubOwner(short queueId, int shard, ShardOwnerMetrics metrics) {
             super(queueId, shard, metrics, () -> new IllegalStateException("never thrown"), 0);
@@ -574,8 +651,9 @@ class ShardPumpDeliveryFailureTest {
         }
 
         @Override
-        public void applyBatchRead(List<ShardOwnedStorage.OrderedRow> cursorRows, List<ShardOwnedStorage.OrderedRow> sweptRows,
+        public void applyBatchRead(List<ShardOwnedStorage.OrderedRow> cursorRows, int cursorLimit, List<ShardOwnedStorage.OrderedRow> sweptRows,
                                    OptionalLong nextVisibleMillis) {
+            cursorLimits.add(cursorLimit);
             batchesApplied.incrementAndGet();
         }
     }

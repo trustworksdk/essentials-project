@@ -24,6 +24,7 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import java.nio.charset.StandardCharsets;
+import java.sql.*;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
@@ -46,6 +47,8 @@ class ShardOwnedOrderedWatermarkIT {
 
     private static final short QUEUE_ID    = 1;
     private static final int   SHARD_COUNT = 4;
+    /** The cursor read's row limit in the truncated-read tests: smaller than the held writer's six rows. */
+    private static final int   TRUNCATING_LIMIT = 5;
 
     /**
      * Deliberately hostile, and every value here is load-bearing.
@@ -248,6 +251,117 @@ class ShardOwnedOrderedWatermarkIT {
                         + "open: %s", metrics)
                     .isZero();
         }
+    }
+
+    /**
+     * A pass whose cursor read returned as many rows as its limit may have stopped short of the backlog, so the watermark
+     * advances no further than the last row that read returned. This drives one owner by hand with a limit of 5 through
+     * the step-over that cap exists for: a writer's rows committing below values a pass already saw, filling the next
+     * reads, and the writer's retirement then due while the read is still short of the candidate's {@code maxSeen}.
+     * Without the cap the watermark jumps to that {@code maxSeen}, over the writer's sixth row, which the cursor has
+     * never read and only the head sweep would find.
+     */
+    @Test
+    void a_read_that_hit_the_owners_limit_holds_the_watermark_at_its_last_row() throws Exception {
+        assertNotSteppedOverByATruncatedRead(byHand(TRUNCATING_LIMIT), (owner, connection, storage) -> owner.pumpOnce(connection));
+    }
+
+    /**
+     * The same step-over, with the rows read by the pump: its batched read is issued with the runtime's
+     * {@code readBatchSize}, which can be smaller than the queue's own (a runtime keeps its first borrower's settings, and a
+     * queue given a runtime keeps its own). The owner judged "the read hit its limit" against its own 500, so a batch
+     * truncated at 5 passed for a complete read and the watermark stepped over the row past it. Each pass here does what
+     * {@code ShardPump.batchReadQueue} does: one {@code readOrderedFromCursors} with the pump's limit, handed to the owner
+     * with that limit, then the owner's pass.
+     */
+    @Test
+    void a_batched_read_that_hit_the_pumps_smaller_limit_holds_the_watermark_at_its_last_row() throws Exception {
+        assertNotSteppedOverByATruncatedRead(byHand(500), (owner, connection, storage) -> {
+            var rows = storage.readOrderedFromCursors(connection, QUEUE_ID, new int[]{owner.shard()}, new long[]{owner.batchReadCursor()},
+                                                      TRUNCATING_LIMIT);
+            owner.applyBatchRead(rows.getOrDefault(owner.shard(), List.of()), TRUNCATING_LIMIT, null, OptionalLong.empty());
+            return owner.pumpOnce(connection);
+        });
+    }
+
+    @FunctionalInterface
+    private interface Pass {
+        int run(OrderedShardOwner owner, Connection connection, ShardOwnedStorage storage) throws Exception;
+    }
+
+    private void assertNotSteppedOverByATruncatedRead(ShardOwnerSettings settings, Pass pass) throws Exception {
+        var shard     = 0;
+        var storage   = new ShardOwnedStorage(dataSource, QUEUE_ID);
+        var delivered = new CopyOnWriteArrayList<String>();
+        var metrics   = new ShardOwnerMetrics();
+        var grant     = storage.acquireLeaseGrant("ordered", shard, "instance-1", 60_000L).orElseThrow();
+        var owner = new OrderedShardOwner(storage, shard, grant.fence(), settings,
+                                          (id, key, payload, type) -> delivered.add(new String(payload, StandardCharsets.UTF_8)),
+                                          metrics, RedeliveryPolicy.fixed(Duration.ofSeconds(1), 3), "instance-1", new ShardWakeup(),
+                                          HandlerDispatch.inline(), grant.previousOwnerReleased());
+        var keys = keysOnShard(shard, 8);
+
+        try (var pumping = dataSource.getConnection();
+             var held = dataSource.getConnection()) {
+            owner.onTakeover(pumping);
+
+            // Six rows allocated, invisible until the commit below, then two committed above them.
+            held.setAutoCommit(false);
+            var heldPayloads = new ArrayList<OrderedPayload>();
+            for (var index = 0; index < 6; index++) {
+                heldPayloads.add(new OrderedPayload(keys.get(index), 0, ("held-" + index).getBytes(StandardCharsets.UTF_8), 1));
+            }
+            var heldSeqs = storage.enqueueOrderedBatch(held, shard, heldPayloads);
+            List<Long> laterSeqs;
+            try (var committing = dataSource.getConnection()) {
+                laterSeqs = storage.enqueueOrderedBatch(committing, shard,
+                                                        List.of(new OrderedPayload(keys.get(6), 0, "later-0".getBytes(StandardCharsets.UTF_8), 1),
+                                                                new OrderedPayload(keys.get(7), 0, "later-1".getBytes(StandardCharsets.UTF_8), 1)));
+            }
+            assertThat(heldSeqs.getLast()).as("premise: the held rows sit below the committed ones").isLessThan(laterSeqs.getFirst());
+
+            // Pass 1 reads the two committed rows and records a candidate at their maxSeen, the held writer running.
+            pass.run(owner, pumping, storage);
+            assertThat(delivered).as("premise: the committed rows are read while the writer is open")
+                                 .containsExactlyInAnyOrder("later-0", "later-1");
+            assertThat(owner.batchReadCursor()).as("premise: the watermark waits for the open writer").isLessThan(heldSeqs.getFirst());
+
+            held.commit();
+
+            // Pass 2: the held rows fill the read (5 of 6). The candidate is not retired yet - the probe before this
+            // read still saw the writer. Every pass from here re-reads the same five: acknowledgements are never
+            // flushed (byHand), so the rows stay in the table.
+            pass.run(owner, pumping, storage);
+            assertThat(owner.batchReadCursor()).isLessThanOrEqualTo(heldSeqs.get(4));
+
+            // Pass 3: the probe before this read no longer has the writer, so the candidate retires - while the read,
+            // full at 5 rows, never reached heldSeqs[5]. The discriminating assertion.
+            pass.run(owner, pumping, storage);
+            assertThat(owner.batchReadCursor())
+                    .as("a read that returned its limit of %d rows reached seq %d; the watermark must not pass it to the "
+                        + "candidate's maxSeen %d, over seq %d that no read has returned", TRUNCATING_LIMIT, heldSeqs.get(4),
+                        laterSeqs.getLast(), heldSeqs.get(5))
+                    .isEqualTo(heldSeqs.get(4));
+
+            // Pass 4 reads on from there and finds the sixth row - through the cursor, not the head sweep.
+            pass.run(owner, pumping, storage);
+            assertThat(delivered).as("every row delivered, by the cursor read").contains("held-5").hasSize(8);
+            assertThat(owner.batchReadCursor()).isEqualTo(laterSeqs.getLast());
+            assertThat(metrics.sweepRecoveries.sum()).as("nothing was left for the head sweep to recover").isZero();
+            assertThat(metrics.watermarkCapped.sum()).as("the horizon, not the wall-clock cap, moved the watermark").isZero();
+        }
+    }
+
+    /**
+     * For an owner driven pass by pass: an acknowledgement flush interval and batch size no pass reaches, so a delivered row
+     * stays in the table and every read from the watermark returns it again, and a 20 s sweep interval, so the head sweep
+     * runs at most on the first pass and cannot recover a row the watermark stepped over. {@code watermarkCap} is 30 s,
+     * longer than the test.
+     */
+    private static ShardOwnerSettings byHand(int readBatchSize) {
+        return new ShardOwnerSettings(readBatchSize, 1_000, Duration.ofDays(36_500), Duration.ofMillis(2), Duration.ofMillis(200),
+                                      Duration.ofSeconds(20), 1_000, 8, Duration.ofMillis(500), Duration.ofSeconds(20), 2,
+                                      Duration.ofSeconds(5), Duration.ofSeconds(30), Duration.ofSeconds(30));
     }
 
     /**

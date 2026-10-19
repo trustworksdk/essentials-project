@@ -53,6 +53,12 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 final class OrderedShardOwner implements BatchReadableOwner {
     private static final Logger log = LoggerFactory.getLogger(OrderedShardOwner.class);
 
+    /**
+     * {@link #advanceWatermark}'s {@code readReachedSeq} for a pass whose cursor read returned fewer rows than its
+     * limit: the read reached the end of what was visible, so it does not cap the advance.
+     */
+    private static final long READ_NOT_CAPPED = Long.MAX_VALUE;
+
     private final ShardOwnedStorage     storage;
     private final int                   shard;
     private final long                  fence;
@@ -110,7 +116,12 @@ final class OrderedShardOwner implements BatchReadableOwner {
      */
     private BatchRead pendingBatch;
 
+    /**
+     * @param cursorLimit the row limit the pump's cursor read used - the runtime's {@code readBatchSize}, not
+     *                    necessarily this owner's. See {@link BatchReadableOwner#applyBatchRead}.
+     */
     private record BatchRead(List<ShardOwnedStorage.OrderedRow> cursorRows,
+                             int cursorLimit,
                              List<ShardOwnedStorage.OrderedRow> sweptRows,
                              OptionalLong nextVisibleMillis) {
     }
@@ -519,9 +530,10 @@ final class OrderedShardOwner implements BatchReadableOwner {
 
     @Override
     public void applyBatchRead(List<ShardOwnedStorage.OrderedRow> cursorRows,
+                               int cursorLimit,
                                List<ShardOwnedStorage.OrderedRow> sweptRows,
                                OptionalLong nextVisibleMillis) {
-        pendingBatch = new BatchRead(cursorRows, sweptRows, nextVisibleMillis);
+        pendingBatch = new BatchRead(cursorRows, cursorLimit, sweptRows, nextVisibleMillis);
     }
 
     @Override
@@ -536,10 +548,16 @@ final class OrderedShardOwner implements BatchReadableOwner {
         // not committed when an earlier pass went by is read again rather than chased. The window
         // between the two is bounded by the horizon, not by the backlog, and `seen` deduplicates it.
         List<ShardOwnedStorage.OrderedRow> rows;
+        // The limit the read was ISSUED with, which decides whether it may have stopped short of the backlog. The
+        // pump reads with the runtime's readBatchSize, which need not be this owner's: compared against a larger
+        // one, a truncated batch looked complete and the watermark stepped over rows it never read.
+        int readLimit;
         if (batch != null) {
             rows = batch.cursorRows();
+            readLimit = batch.cursorLimit();
         } else {
-            rows = storage.readOrderedFromCursor(connection, shard, safeCursor, settings.readBatchSize());
+            readLimit = settings.readBatchSize();
+            rows = storage.readOrderedFromCursor(connection, shard, safeCursor, readLimit);
             metrics.orderedReadStatements.increment();
         }
         // Counts owners SERVED, not statements issued — the two stopped being the same when the pump
@@ -554,7 +572,7 @@ final class OrderedShardOwner implements BatchReadableOwner {
         // The new candidate's probe comes AFTER the read, never before: a transaction that allocates a value after
         // the probe is not in the set, and treating it as retired would step over it. See ShardOwnedStorage. Retiring
         // uses the PREVIOUS probe instead - see runningAtLastProbe.
-        advanceWatermark(connection, rows.size() >= settings.readBatchSize() ? lastSeqRead : Long.MAX_VALUE);
+        advanceWatermark(connection, rows.size() >= readLimit ? lastSeqRead : READ_NOT_CAPPED);
 
         var now           = System.nanoTime();
         var sweptThisPass = false;
@@ -1039,6 +1057,10 @@ final class OrderedShardOwner implements BatchReadableOwner {
      * pushes the bound down, where {@code holeExpiry} was held low by the cost of the map and the
      * chase query per unresolved value. Reusing {@code holeExpiry} here would reproduce the mechanism
      * this replaces rather than replacing it.
+     *
+     * @param readReachedSeq the last seq this pass's cursor read returned when the read returned as many rows as
+     *                       the limit it was issued with (it may have stopped short of the backlog, so no candidate
+     *                       moves the watermark past it), or {@link #READ_NOT_CAPPED} when it returned fewer
      */
     private void advanceWatermark(Connection connection, long readReachedSeq) throws SQLException {
         if (watermarkCandidates.isEmpty() && maxSeen <= safeCursor) {

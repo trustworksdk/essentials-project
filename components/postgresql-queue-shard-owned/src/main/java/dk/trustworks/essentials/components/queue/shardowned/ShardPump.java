@@ -896,9 +896,10 @@ final class ShardPump implements Runnable {
             }
         }
         // A FULL batch per shard, never a share of one: the batched read must return exactly what the
-        // per-shard read it replaces would have.
-        var cursorRows = storage.readOrderedFromCursors(connection, queueId, shards, cursors,
-                                                        settings.readBatchSize());
+        // per-shard read it replaces would have. Handed to each owner with its rows: this pump's settings are the
+        // runtime's, and an owner whose own readBatchSize is larger cannot tell a truncated read from a complete one.
+        var cursorLimit = settings.readBatchSize();
+        var cursorRows = storage.readOrderedFromCursors(connection, queueId, shards, cursors, cursorLimit);
         var sweptShards = new int[sweeping.size()];
         for (var index = 0; index < sweeping.size(); index++) {
             sweptShards[index] = sweeping.get(index).shard();
@@ -921,7 +922,7 @@ final class ShardPump implements Runnable {
             var until = nextVisible.containsKey(owner.shard())
                         ? OptionalLong.of(nextVisible.get(owner.shard()))
                         : OptionalLong.empty();
-            owner.applyBatchRead(cursorRows.getOrDefault(owner.shard(), List.of()), swept, until);
+            owner.applyBatchRead(cursorRows.getOrDefault(owner.shard(), List.of()), cursorLimit, swept, until);
         }
     }
 
