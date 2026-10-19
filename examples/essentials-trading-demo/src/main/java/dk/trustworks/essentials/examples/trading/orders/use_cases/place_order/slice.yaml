@@ -1,0 +1,36 @@
+schemaVersion: "1.1"
+slice: orders.place_order
+kind: command
+bc: orders
+owner: orders-team
+status: live
+summary: "Place a limit order for an account; its hold (buy) or share reservation (sell) is taken in the same unit of work."
+generator: essentials
+language: java
+
+handles: [PlaceOrder]
+emits: [OrderPlaced]
+sends: [HoldFunds, ReserveShares]
+writes:
+  - { name: Order }
+endpoints:
+  - { method: POST, path: "/api/accounts/{accountId}/orders", auth: customer }
+invariants:
+  - id: INV-PO-1
+    text: "An order exists only together with its hold or reservation: a ledger refusal rolls the order back"
+    enforcedBy: PlaceOrderHandler
+  - id: INV-PO-2
+    text: "Concurrent orders on one account cannot both spend the same buying power: the account stream's optimistic append serialises them, and the loser is retried against the new balance"
+    enforcedBy: PlaceOrderHandler
+  - id: INV-PO-3
+    text: "A repeated orderId places nothing"
+    enforcedBy: PlaceOrderHandler
+  - id: INV-PO-4
+    text: "Market orders are refused until market data exists"
+    enforcedBy: PlaceOrderHandler
+forbidden:
+  - cross-slice-internal:orders
+tests:
+  unit: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/orders/aggregates/OrderTest.java" }
+  integration: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/orders/OrdersIT.java" }
+  contract: { present: false }

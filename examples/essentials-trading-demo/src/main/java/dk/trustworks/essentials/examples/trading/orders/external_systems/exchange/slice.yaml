@@ -1,0 +1,29 @@
+schemaVersion: "1.1"
+slice: orders.exchange
+kind: external_system
+bc: orders
+owner: orders-team
+status: live
+summary: "Sends orders and cancel requests to the exchange and records what it reports back. A stub until the exchange-simulator adapter exists."
+generator: essentials
+language: java
+
+reactsTo: [OrderPlaced, OrderCancelRequested]
+sends: [RecordExchangeAnswer, RecordFill, RecordCancellation]
+endpoints: []
+invariants:
+  - id: INV-EX-1
+    text: "The exchange is called with no UnitOfWork active, so no database connection is held for the duration of the call"
+    enforcedBy: ExchangeOrderRouter
+  - id: INV-EX-2
+    text: "Every exchange report reaches the order through the Orders:ExchangeReports inbox, which redelivers a report that collided with another write"
+    enforcedBy: ExchangeReports
+  - id: INV-EX-3
+    text: "A resubmitted order is answered as it was the first time (idempotent per orderId)"
+    enforcedBy: StubExchangeGateway
+forbidden:
+  - cross-slice-internal:orders
+tests:
+  unit: { present: false }
+  integration: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/orders/OrdersIT.java" }
+  contract: { present: false }

@@ -1,0 +1,31 @@
+schemaVersion: "1.1"
+slice: orders.orders
+kind: view
+bc: orders
+owner: orders-team
+status: live
+summary: "An account's orders and where each stands."
+generator: essentials
+language: java
+
+serves: [AccountOrders, GetOrder]
+endpoints:
+  - { method: GET, path: "/api/accounts/{accountId}/orders", auth: customer }
+  - { method: GET, path: "/api/accounts/{accountId}/orders/{orderId}", auth: customer }
+reads:
+  - { name: OrderView }
+projections:
+  - name: OrdersProjection
+    from: [OrderPlaced, OrderSubmitted, OrderAccepted, OrderRejected, OrderFilled, OrderCancelRequested, OrderCancelled, OrderClosed]
+    consistency: eventual
+    store: postgresql
+invariants:
+  - id: INV-OV-1
+    text: "A redelivered or late event never moves an order's status back: every update is guarded by the row's last applied EventOrder"
+    enforcedBy: OrdersProjection
+forbidden:
+  - cross-slice-internal:orders
+tests:
+  unit: { present: false }
+  integration: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/orders/OrdersIT.java" }
+  contract: { present: false }

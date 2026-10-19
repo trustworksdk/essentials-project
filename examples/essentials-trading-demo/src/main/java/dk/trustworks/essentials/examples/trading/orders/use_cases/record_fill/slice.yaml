@@ -1,0 +1,25 @@
+schemaVersion: "1.1"
+slice: orders.record_fill
+kind: command
+bc: orders
+owner: orders-team
+status: live
+summary: "Record one execution of an order at the exchange."
+generator: essentials
+language: java
+
+handles: [RecordFill]
+emits: [OrderAccepted, OrderFilled, OrderClosed]
+writes:
+  - { name: Order }
+endpoints: []
+invariants:
+  - id: INV-RF-1
+    text: "An execution is recorded once per executionId, also after a cancel request"
+    enforcedBy: Order
+forbidden:
+  - cross-slice-internal:orders
+tests:
+  unit: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/orders/aggregates/OrderTest.java" }
+  integration: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/orders/OrdersIT.java" }
+  contract: { present: false }

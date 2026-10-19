@@ -17,6 +17,7 @@
 package dk.trustworks.essentials.examples.trading.config;
 
 import dk.trustworks.essentials.examples.trading.accounts.types.LedgerRuleViolation;
+import dk.trustworks.essentials.examples.trading.orders.types.OrderRuleViolation;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -44,6 +45,18 @@ public class TradingDemoErrorHandler {
      */
     @ExceptionHandler(LedgerRuleViolation.class)
     public ResponseEntity<Map<String, Object>> handleLedgerRuleViolation(LedgerRuleViolation e) {
+        return ResponseEntity.status(HttpStatus.UNPROCESSABLE_CONTENT)
+                             .body(Map.of("timestamp", OffsetDateTime.now().toString(),
+                                          "status", HttpStatus.UNPROCESSABLE_CONTENT.value(),
+                                          "error", HttpStatus.UNPROCESSABLE_CONTENT.getReasonPhrase(),
+                                          "message", e.getMessage()));
+    }
+
+    /**
+     * The order rules refused a request (a market order before market data exists, a cancel of a closed order).
+     */
+    @ExceptionHandler(OrderRuleViolation.class)
+    public ResponseEntity<Map<String, Object>> handleOrderRuleViolation(OrderRuleViolation e) {
         return ResponseEntity.status(HttpStatus.UNPROCESSABLE_CONTENT)
                              .body(Map.of("timestamp", OffsetDateTime.now().toString(),
                                           "status", HttpStatus.UNPROCESSABLE_CONTENT.value(),

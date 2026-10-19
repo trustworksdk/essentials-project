@@ -1,6 +1,7 @@
 # Phase 3 design — orders and execution
 
-**Status:** decided (§10), being implemented — the order core first, against a stub exchange (Q-7).
+**Status:** decided (§10). The order core is built against a stub exchange (Q-7); what was built, and where it
+deviates from this note, is in §11.
 **Plan:** [`../EXPANSION_PLAN.md`](../EXPANSION_PLAN.md) phase 3; decisions D8–D11, D14–D19, D21, D23; simulator
 requirements SR-1–3, SR-5–SR-10, SR-12, SR-13, SR-16, SR-17, SR-28, SR-29.
 **Builds on:** the account ledger of phase 1 ([`phase-1-account-core.md`](phase-1-account-core.md)), whose commands
@@ -219,3 +220,30 @@ All seven proposals accepted (2026-10-19).
 | **Q-5** | Market-order hold: collar on the best ask, and how wide? | Best ask × 1.05, configurable |
 | **Q-6** | Offer `IOC` before SR-17, emulated by the brokerage? | No — DAY and GTC only until the exchange supports it |
 | **Q-7** | Build the order aggregate and ledger wiring against a stub exchange now, before the simulator features? | Yes |
+
+---
+
+## 11. Implementation notes — the order core (stub exchange)
+
+Built in `orders/` (its `CLAUDE.md` has the rules). Tested by `OrderTest` and `OrdersIT`, including the guarantee of §3:
+eight orders racing for buying power that covers one — exactly one placed, seven refused with `422`.
+
+Where it deviates from the sections above:
+
+- **`OrderClosed` instead of `OrderCompleted`** (§2). The order emits `OrderClosed` (final status, filled quantity,
+  side, account, instrument) together with the event that made it terminal, and that event is what triggers the
+  release. There is no second "released" event on the order: the account's `FundsReleased` / `SharesReleased` is the
+  record that the remainder came back, and an order that waited for it would need the account to call back.
+- **Booking and release are one processor keyed by order, not by account** (§5). `apply_order_to_account` reacts to
+  `Orders` events, so one order's fills and its release arrive in order. Fills of *different* orders on one account
+  may reach the account concurrently; they collide on the account stream and the processor redelivers the loser —
+  the ledger's commands are idempotent on `executionId` and hold/reservation id.
+- **Every exchange report reaches the order through one inbox**, `Orders:ExchangeReports`, as `orders` commands
+  (`RecordExchangeAnswer`, `RecordFill`, `RecordCancellation`). The submitting handler queues the submission's answer
+  there too, rather than writing the order itself. The adapter will put the synchronous executions of the `201` (Q-2)
+  and the webhook events in the same inbox.
+- **A late fill on a terminal order does not change its status** (Q-3). It is recorded and booked as a fact; the
+  order stays `REJECTED` (or `CANCELLED`). The operator case for it is not built yet.
+- **Not built yet:** DAY expiry, average fill price, market orders (refused with `422`), `EXCHANGE_UNAVAILABLE` after a
+  retry budget, `UnknownExchangeOrder`.
+
