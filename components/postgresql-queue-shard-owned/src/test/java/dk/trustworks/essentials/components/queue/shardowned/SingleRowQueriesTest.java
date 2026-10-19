@@ -123,11 +123,16 @@ class SingleRowQueriesTest {
 
         ResultSet resultSet() {
             return proxy(ResultSet.class, (method, args) -> switch (method) {
-                case "next" -> ++position <= rows.size();
+                case "next" -> next();
                 case "getInt", "getLong", "getString" -> rows.get(position - 1);
                 case "close" -> closed.add("result set");
                 default -> throw new UnsupportedOperationException(method);
             });
+        }
+
+        private boolean next() {
+            position++;
+            return position <= rows.size();
         }
 
         private interface Answer {
