@@ -292,7 +292,8 @@ class ShardOwnedUnsubscribeIT {
      * <p>
      * Also the membership row: the unordered lane stops first and used to delete the subscription's membership row, which
      * the ordered lane shares, although the ordered lane went on to keep a unit. With no row the kept unit's owner reads as
-     * gone, so any other instance id could take it at once; the row now stays while a lease row names the instance.
+     * gone, so any other instance id could take it at once; the unordered lane now leaves the row to the ordered lane, which
+     * leaves it to age out as it keeps the unit.
      */
     @Test
     void a_subscription_whose_stop_kept_an_ordered_unit_keeps_its_instance_id_out_of_use_for_a_lease_ttl() throws Exception {
@@ -488,6 +489,89 @@ class ShardOwnedUnsubscribeIT {
             assertThat(third.isStarted()).isTrue();
             assertThat(registeredInstances()).as("once the hand-back has finished the instance id is free again")
                                              .containsExactly(INSTANCE_ID, INSTANCE_ID + "-1");
+        }
+    }
+
+    /**
+     * A subscription whose unordered lane could not release its shards as it stopped - a database error - and whose
+     * ordered lane then stopped cleanly leaves no membership row: the ordered lane, stopping last, deletes it, so the
+     * unreleased shards are free to another instance at once - all of them, to the only live instance. The ordered lane's
+     * stop used to keep the row while a lease row of the other lane named the instance, which those unreleased shards did:
+     * nobody served them, and the other instance, counting the stopped one as live, was held to a fair share of half the
+     * shards and could take none of them until the row aged past the lease TTL.
+     */
+    @Test
+    void a_subscription_whose_unordered_release_failed_leaves_no_membership_row_once_its_ordered_lane_stopped_cleanly() throws Exception {
+        // A lease TTL far beyond the test, so nothing below is taken because the stopped instance aged out.
+        var leaseTtl = Duration.ofSeconds(60);
+        try (var queue = newQueue(PostgresqlMessageQueue.LifecycleHook.NONE, settingsWith(Duration.ofMillis(300), leaseTtl))) {
+            var first = consumeUnchecked(queue);
+            Awaitility.await().atMost(Duration.ofSeconds(20))
+                      .untilAsserted(() -> assertThat(unorderedShardsOwnedBy(INSTANCE_ID)).as("premise: the only instance holds every shard")
+                                                                                         .isEqualTo(SHARD_COUNT));
+            awaitBothLanesHoldUnits(first);
+
+            failUnorderedLeaseReleasesBy(INSTANCE_ID, true);
+            try {
+                first.unsubscribe();
+                assertThat(laneWarnings()).as("premise: the unordered lane's release failed")
+                                          .anyMatch(warning -> warning.contains("could not release its unordered shards on stop"));
+                assertThat(unorderedShardsOwnedBy(INSTANCE_ID)).as("premise: every unordered shard still names the stopped instance")
+                                                               .isEqualTo(SHARD_COUNT);
+                assertThat(orderedUnitsOwnedBy(INSTANCE_ID)).as("premise: the ordered lane released its units").isZero();
+                assertThat(registeredInstances()).as("the ordered lane, stopping last, deleted the subscription's membership row")
+                                                 .isEmpty();
+            } finally {
+                failUnorderedLeaseReleasesBy(INSTANCE_ID, false);
+            }
+
+            try (var other = PostgresqlMessageQueue.builder()
+                                                   .setDataSource(dataSource)
+                                                   .setQueueId(QUEUE_ID)
+                                                   .setShardCount(SHARD_COUNT)
+                                                   .setInstanceId("survivor")
+                                                   .setSettings(settingsWith(Duration.ofMillis(300), leaseTtl))
+                                                   .build()) {
+                var survivor = consumeUnchecked(other);
+                Awaitility.await().atMost(Duration.ofSeconds(10))
+                          .untilAsserted(() -> assertThat(survivor.unorderedShardsHeld())
+                                  .as("another instance takes every shard the stopped one could not release, well within the lease TTL")
+                                  .isEqualTo(SHARD_COUNT));
+                assertThat(unorderedShardsOwnedBy(INSTANCE_ID)).isZero();
+            }
+        }
+    }
+
+    /**
+     * Make every release of an unordered lease row held by {@code instanceId} fail, as a database error would, or stop
+     * doing so. A trigger rather than a revoked grant: the test's role owns the table, and an owner keeps every privilege.
+     * Another instance taking such a row over sets an owner, which the trigger lets through.
+     */
+    private void failUnorderedLeaseReleasesBy(String instanceId, boolean fail) throws SQLException {
+        try (var connection = dataSource.getConnection(); var statement = connection.createStatement()) {
+            if (fail) {
+                statement.execute("CREATE OR REPLACE FUNCTION fail_unordered_lease_release_by() RETURNS trigger AS $$ BEGIN "
+                                          + "IF NEW.lane = 'unordered' AND NEW.owner IS NULL AND OLD.owner = '" + instanceId + "' THEN "
+                                          + "RAISE EXCEPTION 'simulated failure releasing unordered shard %', OLD.shard; END IF; "
+                                          + "RETURN NEW; END $$ LANGUAGE plpgsql");
+                statement.execute("CREATE TRIGGER fail_unordered_lease_release_by BEFORE UPDATE ON " + ShardOwnedSchema.LEASE_TABLE
+                                          + " FOR EACH ROW EXECUTE FUNCTION fail_unordered_lease_release_by()");
+            } else {
+                statement.execute("DROP TRIGGER IF EXISTS fail_unordered_lease_release_by ON " + ShardOwnedSchema.LEASE_TABLE);
+            }
+        }
+    }
+
+    private int unorderedShardsOwnedBy(String instanceId) throws SQLException {
+        try (var connection = dataSource.getConnection();
+             var statement = connection.prepareStatement("SELECT count(*) FROM " + ShardOwnedSchema.LEASE_TABLE
+                                                                 + " WHERE queue_id = ? AND lane = 'unordered' AND owner = ?")) {
+            statement.setShort(1, QUEUE_ID);
+            statement.setString(2, instanceId);
+            try (var resultSet = statement.executeQuery()) {
+                assertThat(resultSet.next()).as("a count(*) returns one row").isTrue();
+                return resultSet.getInt(1);
+            }
         }
     }
 

@@ -190,6 +190,24 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * on a lock, and may still release units and deregister the instance id long after the stop has returned.
      */
     private final    AtomicInteger            handBacksRunning = new AtomicInteger();
+    /**
+     * The other lane of the {@link PostgresqlMessageQueue} subscription this queue is a lane of, which shares its instance
+     * id and so its membership row ({@link #shareMembershipWith}); {@code null} for a queue built on its own, whose stop
+     * deletes the row whenever it keeps no ordered unit.
+     */
+    private volatile ShardOwnedQueue          membershipSharedWith;
+    /**
+     * Whether a run of this queue still needs the instance's membership row ({@link #needsMembership()}). Set by
+     * {@link #start()} as it installs a run; set by {@link #endRun} to whether the run kept an ordered unit, once it has
+     * decided that, after draining. A run a stop has taken out still needs the row until then - while its owners drain,
+     * and while a start still running ends it for a stop that gave up waiting ({@link #endRunOfStart}). An abrupt stop
+     * leaves it set, as it leaves the units leased: it stands in for a crash, whose membership row ages out.
+     * <p>
+     * A queue-wide field a run writes, exempt from the rule against those for the reason {@link #keptOrderedUnitsOnLastStop}
+     * is: written under {@link #lifecycleLock} as a run starts and as it ends, never by a heartbeat tick, and at most one
+     * run is installed or being ended at a time.
+     */
+    private volatile boolean                  runNeedsMembership;
     private          long                     leaseTtlMillis;
     private          PayloadHandler           activeHandler;
     private          OrderedPayloadHandler    activeOrderedHandler;
@@ -446,6 +464,9 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             if (!currentRun.compareAndSet(null, run)) {
                 return;
             }
+            // Before this start registers the instance: a stop of the other lane of the subscription reading it from then
+            // on leaves the membership row to this one (handBackWithinBudget).
+            runNeedsMembership = true;
             startHoldsLifecycleLock = true;
             try {
                 startRun(run);
@@ -1895,8 +1916,10 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                                  + "through, and until then the unit stays leased to this instance and unserved",
                          instanceId, activeLane, unit, queueId, e);
             } else {
-                // The stop deregisters this instance, or, when it kept an ordered unit or could not deregister, the
-                // cancelled heartbeat stops refreshing the membership row: gone, or older than the lease TTL, either way.
+                // The stop deregisters this instance - or leaves that to the other lane of its PostgresqlMessageQueue
+                // subscription while that lane still runs, whose heartbeat keeps the row live until its own stop - or, when
+                // an ordered unit was kept or the deregistration failed, the cancelled heartbeat stops refreshing the
+                // membership row: gone, or older than the lease TTL, either way.
                 log.warn("Instance {} leased {} unit {} on queue {} as the queue stopped, and could not release it again; it is "
                                  + "free to another instance once this instance's membership row is gone or older than the "
                                  + "lease TTL ({} ms). Should the queue be started again under the same instance id first, the "
@@ -2167,7 +2190,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * Whether the database hand-back of a run this queue has ended - flushing acknowledgements, releasing lease rows and
      * deregistering the instance id - is still running on the thread a stop gave up waiting for after
      * {@link #SHUTDOWN_BUDGET} ({@link #withinShutdownBudget}). Until it is done, that thread may still delete the
-     * membership row of this queue's instance id ({@link ShardOwnedStorage#deregisterInstance(String, String)}), however
+     * membership row of this queue's instance id ({@link ShardOwnedStorage#deregisterInstance(String)}), however
      * long after the stop returned: a queue registering under the same id meanwhile can lose its row to it, and other
      * instances then read its units as ownerless. {@link PostgresqlMessageQueue} asks this before it lets the next
      * {@code consume()} register under an ended subscription's instance id. Like {@link #keptOrderedUnitsOnLastStop()},
@@ -2176,6 +2199,46 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      */
     boolean handBackStillRunning() {
         return handBacksRunning.get() > 0;
+    }
+
+    /**
+     * Make this queue a lane of one {@link PostgresqlMessageQueue} subscription, whose other lane is {@code otherLane}:
+     * both register under one instance id, and so share one membership row. Called on both lanes, before either starts.
+     * <p>
+     * The row's lifetime is the pair's, decided by the lanes' own stops: the stop of one lane deletes it only when the
+     * other no longer needs it ({@link #needsMembership()}) and it kept no ordered unit itself, and otherwise leaves it to
+     * that lane's stop. So the row is deleted by the lane stopping last when neither lane's stop kept an ordered unit.
+     * When either kept one, because a key was still in its handler past {@code shedGrace}, nobody deletes it - the lane
+     * that kept the unit still needs it, so the other lane's later stop leaves it too - and it ages out a lease TTL after
+     * the last heartbeat, when the kept unit becomes takeable.
+     * Without this, the unordered lane, which {@code PostgresqlMessageQueue} stops first, deleted the row while the
+     * ordered lane still served its units, or went on to keep one, and another instance could take that unit at once and
+     * start its key beside the handler still running it. The lanes, not the subscription, because each lane alone knows
+     * when its stop has finished: a stop may hand its work to a start still running, and its hand-back to the database
+     * may outlast its {@link #SHUTDOWN_BUDGET} on a thread the stop no longer waits for.
+     * <p>
+     * A queue never paired deletes the row whenever its stop keeps no ordered unit, as before.
+     *
+     * @param otherLane the subscription's other lane, registering under the same instance id on the same queue
+     */
+    void shareMembershipWith(ShardOwnedQueue otherLane) {
+        requireNonNull(otherLane, "No otherLane provided");
+        requireTrue(otherLane != this, "A queue shares its membership row with the other lane of its subscription, not with itself");
+        requireTrue(otherLane.queueId == queueId && otherLane.instanceId.equals(instanceId),
+                    "The two lanes of a subscription register under one instance id on one queue");
+        membershipSharedWith = otherLane;
+    }
+
+    /**
+     * Whether this queue still needs its instance's membership row: from the moment a {@link #start()} installs a run
+     * until that run is ended, once drained, keeping no ordered unit - by a stop, or by the undo of a failed start - and,
+     * when it kept one, until a later run ends keeping nothing. A stop that gave up waiting for a start still running
+     * ({@link #lifecycleLock}) leaves it true until that start has ended the run; an abrupt stop leaves it true, as it
+     * leaves the units leased. Read by the stop of the other lane of the subscription ({@link #shareMembershipWith})
+     * before it deletes the row.
+     */
+    boolean needsMembership() {
+        return runNeedsMembership;
     }
 
     /**
@@ -2294,7 +2357,8 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
 
     /**
      * End a run that has been taken out of {@link #currentRun}: drain, end and release its owners, hand back the runtime,
-     * and - when {@code deregister} - delete this instance's membership row. What {@link #stop()} does once it has taken
+     * and - when {@code deregister} - delete this instance's membership row, unless an ordered unit is kept or the other
+     * lane of the subscription still needs the row ({@link #handBackWithinBudget}). What {@link #stop()} does once it has taken
      * its run out, and what a start does for a run a stop took out while it was starting, or that its own failure ended
      * ({@link #endRunOfStart}). Under {@link #lifecycleLock}.
      */
@@ -2351,6 +2415,9 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         // registered. An unordered one is released regardless; at-least-once covers its redelivery.
         var kept = stillInHandler.stream().filter(owner -> "ordered".equals(owner.lane())).toList();
         keptOrderedUnitsOnLastStop = !kept.isEmpty();
+        // This run's own need for the membership row ends here, unless it kept a unit: written before the hand-back reads
+        // the other lane's (handBackWithinBudget), so of two lanes ending at once at least one reads the other's as ended.
+        runNeedsMembership = !kept.isEmpty();
         var toRelease = held.stream().filter(owner -> !kept.contains(owner)).toList();
         // Nothing against the database for a run with no lease row to hand back and no deregistration owed: a start that
         // failed before it adopted anything.
@@ -2398,10 +2465,11 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
 
     /**
      * The database half of {@link #endRun}, on the budget thread ({@link #withinShutdownBudget}): flush what the serving
-     * owners still hold, release the rows of {@code toRelease}, and deregister this instance when {@code deregister} and
-     * no ordered unit is {@code kept} - which leaves the membership row while a lease row of the other lane still names
-     * the instance: the other lane of a {@code PostgresqlMessageQueue} subscription, which shares it
-     * ({@link ShardOwnedStorage#deregisterInstance(String, String)}).
+     * owners still hold, release the rows of {@code toRelease}, and deregister this instance
+     * ({@link ShardOwnedStorage#deregisterInstance(String)}) when {@code deregister}, no ordered unit is {@code kept}, and
+     * the other lane of the {@code PostgresqlMessageQueue} subscription, which shares the membership row
+     * ({@link #shareMembershipWith}), no longer needs it ({@link #needsMembership()}). When it does, that lane's own stop
+     * deletes the row later, or leaves it to age out if it keeps an ordered unit.
      */
     private void handBackWithinBudget(List<LeasedOwner> serving, List<LeasedOwner> toRelease, List<LeasedOwner> kept, boolean deregister) {
         // What the pumps would have flushed had they gone on serving these owners. Valid still:
@@ -2422,12 +2490,27 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         if (!deregister) {
             return;
         }
+        // The membership row is the instance's, and a PostgresqlMessageQueue subscription's two lanes share it. Deleted
+        // while the other lane still serves its units, or has kept an ordered unit whose key is still in a handler, those
+        // read as ownerless at once, and another instance may start that key beside the handler. Read after this run wrote
+        // its own need (endRun), as the other lane's stop reads this one's after writing its own: of two lanes ending at
+        // once, at least one sees the other's ended and deletes the row - unless that one kept a unit, which it writes
+        // first. Not from the database: a lease row of the other lane naming the instance may equally be a unit whose
+        // release failed, which nobody serves, and keeping the row for it only held the other instances at a stale fair
+        // share until the row aged out.
+        var otherLane = membershipSharedWith;
+        if (otherLane != null && otherLane.needsMembership()) {
+            log.debug("Instance {} leaves its membership row on queue {} to the {} lane of the same subscription, which still "
+                              + "needs it: it is running, its stop is still draining, or that stop kept an ordered unit",
+                      instanceId, queueId, otherLane.activeLane);
+            return;
+        }
         // Stop counting towards everyone else's fair share. Releasing the leases without this
         // frees the shards and simultaneously forbids any survivor from taking them, for the
         // whole staleness window — which makes a graceful scale-in worse for the cluster than a
         // crash.
         try {
-            storage.deregisterInstance(instanceId, activeLane);
+            storage.deregisterInstance(instanceId);
         } catch (SQLException e) {
             log.warn("Instance {} could not deregister on stop; it will age out of the membership "
                              + "table instead, and survivors will be held at a stale fair share until it does",

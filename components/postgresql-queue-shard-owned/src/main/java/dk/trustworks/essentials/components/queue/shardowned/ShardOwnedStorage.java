@@ -703,6 +703,18 @@ public final class ShardOwnedStorage {
      * {@code ceil(shardCount / liveInstances)} for a cluster that no longer exists, and every survivor
      * is already at that quota. The shards sit unowned and nobody is allowed to take them. That is
      * exactly the shape of an autoscaler scaling in.
+     * <p>
+     * Unconditional: whether the row may go is the caller's to decide, and only the caller knows. Liveness is this row
+     * ({@link #ownerIsGoneClause()}), so once it is gone any instance takes a unit naming the instance at once. The
+     * engine deletes it from the stop of a {@code ShardOwnedQueue} that kept no ordered unit - one whose key was still in
+     * its handler past {@code shedGrace}, which must stay away from other instances until the instance's liveness lapses,
+     * a lease TTL after its last heartbeat. The two lanes of one {@code PostgresqlMessageQueue} subscription share an
+     * instance id, and so this row; there a lane's stop leaves it to the other lane while that one is still running or
+     * has kept an ordered unit, so the lane stopping last deletes it when neither lane's stop kept an ordered unit, and
+     * nobody does when either kept one ({@code ShardOwnedQueue}'s {@code shareMembershipWith}). The pair knows that in memory, exactly, where the database does not: a lease row of
+     * the other lane naming the instance - what an earlier revision of the engine went by - may be a unit that lane is
+     * serving or kept, or one whose release failed, which nobody serves and which only held the other instances at a
+     * stale fair share until the row aged out.
      */
     public void deregisterInstance(String instanceId) throws SQLException {
         try (var connection = dataSource.getConnection();
@@ -710,37 +722,6 @@ public final class ShardOwnedStorage {
                      "DELETE FROM " + INSTANCE_TABLE + " WHERE queue_id = ? AND instance_id = ?")) {
             statement.setShort(1, queueId);
             statement.setString(2, instanceId);
-            statement.executeUpdate();
-        }
-    }
-
-    /**
-     * {@link #deregisterInstance(String)} for a consumer of {@code lane} stopping, unless a lease row of the OTHER lane
-     * still names the instance.
-     * <p>
-     * Liveness is the membership row ({@link #ownerIsGoneClause()}): without it any instance takes a unit naming the
-     * instance at once. The two lanes of one {@code PostgresqlMessageQueue} subscription share an instance id, and the
-     * unordered lane stops first: deleting the row there let another instance take an ordered unit the ordered lane was
-     * still serving, or went on to keep because a key was still in its handler past {@code shedGrace}, and start that key
-     * beside the handler. So the row stays for the lane stopping last, and once that lane has released its own units it
-     * deletes the row - or, when it keeps an ordered unit, leaves it to age out a lease TTL after the last heartbeat, when
-     * the kept unit becomes takeable. Rows of the stopping lane itself do not count: whatever of them it could not release
-     * (a failed release, or a unit leased by a start that escaped before adopting it) is served by nobody, and keeping
-     * the instance registered for them only held the other instances at a stale fair share.
-     */
-    public void deregisterInstance(String instanceId, String lane) throws SQLException {
-        requireNonNull(instanceId, "No instanceId provided");
-        // A null lane would make `l.lane <> ?` NULL for every row, so NOT EXISTS would always hold and the row be deleted
-        // unconditionally - the very deletion this overload exists to hold back.
-        requireNonNull(lane, "No lane provided");
-        try (var connection = dataSource.getConnection();
-             var statement = connection.prepareStatement(
-                     "DELETE FROM " + INSTANCE_TABLE + " i WHERE i.queue_id = ? AND i.instance_id = ?"
-                             + " AND NOT EXISTS (SELECT 1 FROM " + LEASE_TABLE + " l"
-                             + "                 WHERE l.queue_id = i.queue_id AND l.lane <> ? AND l.owner = i.instance_id)")) {
-            statement.setShort(1, queueId);
-            statement.setString(2, instanceId);
-            statement.setString(3, lane);
             statement.executeUpdate();
         }
     }

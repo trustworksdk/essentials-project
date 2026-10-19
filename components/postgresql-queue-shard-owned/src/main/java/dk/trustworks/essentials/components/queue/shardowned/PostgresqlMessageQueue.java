@@ -709,6 +709,14 @@ public final class PostgresqlMessageQueue implements MessageQueue {
                                             }
                                         },
                                          settings, options.maxShards(), policy);
+        // The pair shares one membership row (one instance id), and its lifetime is the pair's: each lane's stop deletes it
+        // only when it kept no ordered unit itself and the other lane no longer needs it - neither running, nor draining,
+        // nor keeping an ordered unit whose key is still in a handler. So the lane stopping last deletes it when neither
+        // kept a unit; a unit kept by either leaves it to age out a lease TTL later (ShardOwnedQueue.shareMembershipWith says why the lanes decide it and not this queue). The unordered lane, stopped
+        // first, used to delete it while the ordered lane still served or went on to keep units, which any other instance
+        // could then take at once.
+        unorderedConsumer.shareMembershipWith(orderedConsumer);
+        orderedConsumer.shareMembershipWith(unorderedConsumer);
         // Registration, the started flag and the two start() calls are ONE critical section, and the
         // same lock start() and stop() take. Guarding only the list left two holes.
         //
@@ -1049,6 +1057,13 @@ public final class PostgresqlMessageQueue implements MessageQueue {
      * as the caller has retired them ({@link #startEachOrUndo}), and takes them out and stops them again before it lets
      * go ({@link #letGoOfLifecycle}). The caller stops them either way ({@link Deregistration#stopLanes}); a lane the
      * holder started before the retirement is stopped by whichever of the two stops gets there first.
+     * <p>
+     * Deregisters the pair from this queue, not the instance id from the database: the pair's membership row is deleted
+     * by a lane's own stop, and only when that stop kept no ordered unit and the other lane no longer needs the row - it
+     * is not running, not still draining, and its last stop kept no ordered unit ({@link ShardOwnedQueue#shareMembershipWith}).
+     * A unit kept by either lane's stop therefore leaves the row to age out a lease TTL after the last heartbeat, even
+     * when the other lane stops after it keeping nothing. Only the lanes know when their stops have finished - a lane's stop may hand its work to a start still running, and
+     * its hand-back may outlast {@link ShardOwnedQueue#SHUTDOWN_BUDGET} - which is why that is not done here.
      */
     private void deregister(Deregistration deregistration) {
         if (lifecycleLock.isHeldByCurrentThread()) {
