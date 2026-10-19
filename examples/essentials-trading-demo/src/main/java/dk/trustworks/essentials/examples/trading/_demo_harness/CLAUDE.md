@@ -290,3 +290,11 @@ Two instances, `GlobalCompetingConsumers`, 1 000 accounts, 5 000 cycles, one sam
   `BookTrade`; both were no-ops (an unknown reference is ignored by design), so the hold was never released and the
   trade never settled — 201 998 of 202 000 events, with an empty queue and no dead letters. Not yet reproduced in the
   engine's own tests.
+
+**Fixed in the engine** (`cbe0f747` on `queue_improvements`, merged here as `cd1e0616`): the ordered watermark retired
+candidates against the horizon probe taken after a pass's read, so a writer committing between the two was stepped
+over and its rows recovered late by the head sweep. Reproduced at engine level by `ShardOwnedConcurrentProducersOrderIT`.
+Rerun of the same 200 000-command run (two instances, 8 producers, 50 % hot), 2026-10-19: DONE, 202 000 of 202 000
+events, 0 ordering warnings on either instance, 1 365 commands/s, handler p50/p99 2.3/6.0 ms, enqueue 24.5 s, drain
+146.5 s — and `account_activity` needed another **147 s** to catch up, the views (~700–800 events/s) now plainly the
+bottleneck (EF-2).
