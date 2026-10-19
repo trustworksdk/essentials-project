@@ -27,7 +27,7 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import java.nio.charset.StandardCharsets;
-import java.sql.SQLException;
+import java.sql.*;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
@@ -317,8 +317,11 @@ class ShardOwnedUnsubscribeIT {
                                                            .isEqualTo(1);
                 assertThat(registeredInstances()).as("the kept unit keeps the subscription's instance registered, whichever lane stopped first")
                                                  .containsExactly(INSTANCE_ID);
-                assertThat(infos()).as("the queue says why the instance id stays out of use")
-                                   .anyMatch(info -> info.contains("keeps the instance id '" + INSTANCE_ID + "'"));
+                assertThat(infos()).as("the queue says once why the instance id stays out of use, and for how long")
+                                   .filteredOn(info -> info.contains("keeps the instance id '" + INSTANCE_ID + "'"))
+                                   .singleElement()
+                                   .satisfies(info -> assertThat(info).contains("of an unsubscribed subscription",
+                                                                                "out of use for " + leaseTtl + ": it kept an ordered unit"));
 
                 var second = queue.consume((messageId, key, payload, payloadType) -> {
                     if (key != null) {
@@ -351,6 +354,150 @@ class ShardOwnedUnsubscribeIT {
                 assertThat(competingWarnings()).isEmpty();
             } finally {
                 release.countDown();
+            }
+        }
+    }
+
+    /**
+     * A {@code consume()} whose ordered lane's start fails once that lane has handed a key to the handler - a
+     * {@link QueueObserver} throwing for one of its unit acquisitions, which a start tells last, after its units are
+     * served - stops both lanes, and the ordered lane's stop keeps the unit whose key is still in its handler past
+     * {@code shedGrace}. The failed {@code consume()} then holds its subscription index as an unsubscribe does, for a lease
+     * TTL: a {@code consume()} retried before then registers under the next instance id, which cannot take the kept unit
+     * while the old instance is live. It used to give the index back at once, so the retry registered under the same
+     * instance id, took the kept unit at once ({@code acquireLeaseGrant} accepts a row naming its own owner) and delivered
+     * the key a second time while the first handler still ran it.
+     */
+    @Test
+    void a_failed_consume_whose_ordered_lane_kept_a_unit_keeps_its_instance_id_out_of_use_for_a_lease_ttl() throws Exception {
+        var leaseTtl            = Duration.ofSeconds(5);
+        var entered             = new CountDownLatch(1);
+        var release             = new CountDownLatch(1);
+        var deliveredAgain      = ConcurrentHashMap.<String>newKeySet();
+        var acquisitionsTold    = new AtomicInteger();
+        var failTheOrderedStart = new AtomicBoolean(true);
+        var keyInHandlerAtFail  = new AtomicBoolean();
+        try (var queue = newQueue(PostgresqlMessageQueue.LifecycleHook.NONE, settingsWith(Duration.ofMillis(300), leaseTtl))) {
+            queue.addObserver(new QueueObserver() {
+                @Override
+                public void shardOwnershipChanged(int shard, boolean acquired) {
+                    // The unordered lane starts first and tells its SHARD_COUNT acquisitions; the next is the ordered lane's
+                    // first, told once its units are served.
+                    if (acquired && failTheOrderedStart.get() && acquisitionsTold.incrementAndGet() == SHARD_COUNT + 1) {
+                        try {
+                            keyInHandlerAtFail.set(entered.await(20, TimeUnit.SECONDS));
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                        }
+                        throw new IllegalStateException("The observer refuses the ordered lane's first acquisition");
+                    }
+                }
+            });
+            try {
+                queue.enqueue(Message.ordered("in-handler".getBytes(StandardCharsets.UTF_8), 1, "ACC-1", 0));
+                assertThatThrownBy(() -> queue.consume((messageId, key, payload, payloadType) -> {
+                    if (key != null) {
+                        entered.countDown();
+                        awaitQuietly(release);
+                    }
+                }, ConsumerOptions.defaults())).as("premise: the ordered lane's start failed")
+                                               .isInstanceOf(IllegalStateException.class)
+                                               .hasMessageContaining("refuses the ordered lane's first acquisition");
+                failTheOrderedStart.set(false);
+                var failedAt = System.nanoTime();
+                assertThat(keyInHandlerAtFail).as("premise: the key was in its handler when the ordered lane's start failed").isTrue();
+                assertThat(queue.registeredConsumers()).as("premise: the failed consume() registered nothing").isEmpty();
+                assertThat(orderedUnitsOwnedBy(INSTANCE_ID)).as("premise: the stop kept the unit whose key is still in its handler")
+                                                           .isEqualTo(1);
+
+                var retried = queue.consume((messageId, key, payload, payloadType) -> {
+                    if (key != null) {
+                        deliveredAgain.add(key);
+                    }
+                }, ConsumerOptions.defaults());
+                assertThat(retried.isStarted()).isTrue();
+                Awaitility.await().during(Duration.ofMillis(1_500)).atMost(Duration.ofSeconds(3))
+                          .untilAsserted(() -> {
+                              assertThat(deliveredAgain).as("the key in the old handler is not started again beside it").isEmpty();
+                              assertThat(orderedUnitsOwnedBy(INSTANCE_ID)).as("the kept unit still names the old instance id").isEqualTo(1);
+                          });
+                assertThat(registeredInstances()).as("the retried consume() registered under the next instance id")
+                                                 .containsExactly(INSTANCE_ID, INSTANCE_ID + "-1");
+                assertThat(Duration.ofNanos(System.nanoTime() - failedAt)).as("premise: all of that within the lease TTL")
+                                                                         .isLessThan(leaseTtl);
+                assertThat(infos()).as("the queue says once why the instance id stays out of use, and for how long")
+                                   .filteredOn(info -> info.contains("keeps the instance id '" + INSTANCE_ID + "'"))
+                                   .singleElement()
+                                   .satisfies(info -> assertThat(info).contains("of a failed consume()",
+                                                                                "out of use for " + leaseTtl + ": it kept an ordered unit"));
+            } finally {
+                release.countDown();
+            }
+        }
+    }
+
+    /**
+     * An unsubscribe whose lane's stop gave up waiting for its hand-back to the database - here the deregistration of the
+     * instance id, blocked behind a row lock a test transaction holds on its membership row, as behind a database that does
+     * not answer - keeps the instance id out of use until that hand-back has finished: the abandoned thread deletes the
+     * id's membership row once it gets through, and a pair registering under the id before then could lose its row to it.
+     * The next {@code consume()} meanwhile registers under the next instance id, and once the hand-back has finished the
+     * id is free again - however long after a lease TTL that is, which is why the hold is not a lease TTL. It used to be
+     * given back as soon as the lanes' stops had returned: the next {@code consume()} registered under the same id, here
+     * waiting behind the same lock as the abandoned deregistration.
+     */
+    @Test
+    void an_unsubscribe_whose_stop_gave_up_on_its_hand_back_keeps_its_instance_id_out_of_use_until_the_hand_back_finished() throws Exception {
+        // A heartbeat every 20 s: none upserts the locked row while the test runs.
+        try (var queue = newQueue(PostgresqlMessageQueue.LifecycleHook.NONE, settingsWith(Duration.ofMillis(300), Duration.ofSeconds(60)));
+             var locking = dataSource.getConnection()) {
+            var first = consumeUnchecked(queue);
+            awaitBothLanesHoldUnits(first);
+            var lanes = queue.registeredConsumers();
+            assertThat(lanes).as("premise: the first subscription's two lanes").hasSize(2);
+
+            locking.setAutoCommit(false);
+            try {
+                assertThat(lockMembershipRowOf(locking, INSTANCE_ID)).as("premise: the test holds the subscription's membership row").isTrue();
+                first.unsubscribe();
+                assertThat(laneWarnings()).as("premise: a lane's stop gave up waiting for its hand-back")
+                                          .anyMatch(warning -> warning.contains("gave up handing back queue"));
+                assertThat(lanes).as("premise: that hand-back is still running").anyMatch(ShardOwnedQueue::handBackStillRunning);
+                assertThat(registeredInstances()).as("premise: it has not deregistered the instance id yet").containsExactly(INSTANCE_ID);
+
+                var next = CompletableFuture.supplyAsync(() -> consumeUnchecked(queue)).get(15, TimeUnit.SECONDS);
+                assertThat(next.isStarted()).as("the next consume() did not wait behind the abandoned deregistration").isTrue();
+                assertThat(registeredInstances()).as("the next consume() registered under the next instance id")
+                                                 .containsExactly(INSTANCE_ID, INSTANCE_ID + "-1");
+                assertThat(infos()).as("the queue says once why the instance id stays out of use, and until when")
+                                   .filteredOn(info -> info.contains("keeps the instance id '" + INSTANCE_ID + "'"))
+                                   .singleElement()
+                                   .satisfies(info -> assertThat(info).contains("of an unsubscribed subscription",
+                                                                                "out of use until the hand-back of its lanes to the database has finished")
+                                                                      .doesNotContain("out of use for "));
+            } finally {
+                locking.rollback();
+            }
+
+            Awaitility.await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
+                assertThat(lanes).as("the abandoned hand-back finished").noneMatch(ShardOwnedQueue::handBackStillRunning);
+                assertThat(registeredInstances()).as("it deregistered the old instance id, and left the next subscription's")
+                                                 .containsExactly(INSTANCE_ID + "-1");
+            });
+            var third = consumeUnchecked(queue);
+            assertThat(third.isStarted()).isTrue();
+            assertThat(registeredInstances()).as("once the hand-back has finished the instance id is free again")
+                                             .containsExactly(INSTANCE_ID, INSTANCE_ID + "-1");
+        }
+    }
+
+    private boolean lockMembershipRowOf(Connection connection, String instanceId) throws SQLException {
+        try (var statement = connection.prepareStatement("SELECT 1 FROM " + ShardOwnedSchema.INSTANCE_TABLE
+                                                                 + " WHERE queue_id = ? AND instance_id = ? FOR UPDATE")) {
+            statement.setShort(1, QUEUE_ID);
+            statement.setString(2, instanceId);
+            try (var resultSet = statement.executeQuery()) {
+                return resultSet.next();
             }
         }
     }
@@ -424,6 +571,16 @@ class ShardOwnedUnsubscribeIT {
                           .filter(event -> event.getLevel() == WARN)
                           .map(ILoggingEvent::getFormattedMessage)
                           .toList();
+    }
+
+    private List<String> laneWarnings() {
+        // The appender adds under its own monitor (AppenderBase.doAppend), from the stops' and the heartbeat's threads.
+        synchronized (laneLogged) {
+            return laneLogged.list.stream()
+                                  .filter(event -> event.getLevel() == WARN)
+                                  .map(ILoggingEvent::getFormattedMessage)
+                                  .toList();
+        }
     }
 
     private List<String> infos() {

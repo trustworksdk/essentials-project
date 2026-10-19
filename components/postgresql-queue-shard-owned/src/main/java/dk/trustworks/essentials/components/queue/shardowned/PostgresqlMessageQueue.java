@@ -125,7 +125,7 @@ public final class PostgresqlMessageQueue implements MessageQueue {
     private final ReentrantLock                 lifecycleLock      = new ReentrantLock();
     /**
      * Guards {@link #holder}, {@link #beingStarted}, {@link #stopsWithoutLock}, {@link #toDeregister},
-     * {@link #subscriptionIndexes} and {@link #heldUntilKeptUnitsLapse}. Held for a few reads and writes of them only, never across a start or a stop.
+     * {@link #subscriptionIndexes} and {@link #heldIndexes}. Held for a few reads and writes of them only, never across a start or a stop.
      */
     private final Object                        handOver           = new Object();
     /**
@@ -164,22 +164,29 @@ public final class PostgresqlMessageQueue implements MessageQueue {
     /**
      * The subscription index of every subscription this queue has handed out and not yet ended: reserved by
      * {@link #consume}, given back when it fails without registering anything or when its subscription has been
-     * unsubscribed and both its lanes stopped - unless a lane kept an ordered unit, see {@link #heldUntilKeptUnitsLapse}.
-     * A {@code consume()} takes the lowest index free, so the instance id a subscription registers under
-     * ({@link #consume}) is the caller's verbatim again once every earlier subscription has ended, rather than one more
-     * suffix per subscription the process ever made.
+     * unsubscribed and both its lanes stopped - unless a lane kept an ordered unit, or its hand-back to the database is
+     * still running, see {@link #heldIndexes}. A {@code consume()} takes the lowest index free, so the instance id a
+     * subscription registers under ({@link #consume}) is the caller's verbatim again once every earlier subscription has
+     * ended, rather than one more suffix per subscription the process ever made.
      */
     private final BitSet                        subscriptionIndexes = new BitSet();
     /**
-     * Subscription indexes still set in {@link #subscriptionIndexes} after their subscription ended because one of its
-     * lanes kept an ordered unit on stop ({@link ShardOwnedQueue#keptOrderedUnitsOnLastStop()}), each with the
-     * {@link System#nanoTime()} past which it is free again: a lease TTL after the lanes stopped, when the instance's
-     * liveness has lapsed and any instance may take the unit. Until then the unit's lease row names that instance id, and
-     * a new pair registering under it would take the unit at once and could start a key beside the handler still running
-     * it; the next {@code consume()} registers under another index instead. {@link #reserveSubscriptionIndex} frees the
+     * Subscription indexes still set in {@link #subscriptionIndexes} after their subscription ended - unsubscribed, or a
+     * {@code consume()} that failed - because their instance id is still in use on the database
+     * ({@link #releaseSubscriptionIndex}). Two reasons, either enough:
+     * <ul>
+     *     <li>A lane kept an ordered unit on stop ({@link ShardOwnedQueue#keptOrderedUnitsOnLastStop()}): the unit's lease
+     *     row names the id until the instance's liveness lapses, a lease TTL after the lanes stopped, and a new pair
+     *     registering under it would take the unit at once and could start a key beside the handler still running it.</li>
+     *     <li>A lane's hand-back to the database is still running on a thread its stop gave up waiting for
+     *     ({@link ShardOwnedQueue#handBackStillRunning()}): it may still delete the id's membership row, and a new pair
+     *     registering under the id meanwhile could lose its row to it, its units then read as ownerless by every other
+     *     instance until its next heartbeat.</li>
+     * </ul>
+     * The next {@code consume()} registers under another index meanwhile. {@link #reserveSubscriptionIndex} frees the
      * ones that are due.
      */
-    private final Map<Integer, Long>            heldUntilKeptUnitsLapse = new HashMap<>();
+    private final Map<Integer, HeldIndex>       heldIndexes         = new HashMap<>();
     /**
      * What a test does once a {@code consume()}, a {@link #start()} or a {@link Subscription#start()} has taken
      * {@link #lifecycleLock}; {@link LifecycleHook#NONE} unless a test passed one to the builder
@@ -618,29 +625,45 @@ public final class PostgresqlMessageQueue implements MessageQueue {
         // one does get its own identity. The index is the lowest no live subscription holds: one
         // given back by a failed consume() or an unsubscribed subscription is taken again, so a caller
         // that unsubscribes and consumes anew keeps its instance id instead of a new suffix each time -
-        // unless the old pair kept an ordered unit on stop, whose lease names that id for a lease TTL
-        // (heldUntilKeptUnitsLapse): taking the id then would start the key beside its running handler.
+        // unless the old pair kept an ordered unit on stop, whose lease names that id for a lease TTL,
+        // or its stop gave up waiting for its hand-back to the database, which may still deregister
+        // the id (heldIndexes): taking the id then would start the key beside its running handler, or
+        // lose the new pair's membership row to that late deregistration.
         var subscriptionIndex = reserveSubscriptionIndex();
-        // Set once the pair is registered - also by a critical error escaping its starts (subscribe) - after which the
-        // index is the pair's until it is unsubscribed.
-        var registered = new boolean[1];
+        var attempt           = new SubscribeAttempt();
         try {
-            return subscribe(handler, options, policy, subscriptionIndex, registered);
+            return subscribe(handler, options, policy, subscriptionIndex, attempt);
         } finally {
-            if (!registered[0]) {
-                // Nothing registered and nothing running: a failed start has stopped both lanes.
-                releaseSubscriptionIndex(subscriptionIndex);
+            if (!attempt.registered) {
+                // Nothing registered and nothing running: a failed start has stopped both lanes. A stop like an
+                // unsubscribe's, with what it may leave behind under the id: the ordered lane's stop keeps a unit whose key
+                // is still in its handler - a QueueObserver throwing for that lane's acquisition escapes its start once it
+                // has dispatched - and either lane's hand-back may outlast its stop's budget.
+                releaseSubscriptionIndex(subscriptionIndex, attempt.lanes,
+                                         attempt.lanes.stream().anyMatch(ShardOwnedQueue::keptOrderedUnitsOnLastStop),
+                                         "a failed consume()");
             }
         }
     }
 
     /**
+     * What {@link #subscribe} tells {@link #consume} about its attempt, on the consuming thread alone: the pair once
+     * built, and whether it is registered - also by a critical error escaping its starts - after which the subscription
+     * index is the pair's until it is unsubscribed. {@code consume()} gives the index back only when it is not, and
+     * holds it ({@link #releaseSubscriptionIndex}) on what the pair's stops left behind.
+     */
+    private static final class SubscribeAttempt {
+        private List<ShardOwnedQueue> lanes = List.of();
+        private boolean               registered;
+    }
+
+    /**
      * The whole of {@link #consume} once the subscription index is reserved: build the pair, start it and register it.
-     * Sets {@code registered[0]} once the pair is in {@link #consumers}, so {@code consume()} gives the index back only
-     * when it is not.
+     * Sets {@code attempt}'s lanes once the pair is built and its {@code registered} once the pair is in
+     * {@link #consumers}, so {@code consume()} gives the index back only when it is not.
      */
     private Subscription subscribe(MessageHandler handler, ConsumerOptions options, RedeliveryPolicy policy, int subscriptionIndex,
-                                   boolean[] registered) {
+                                   SubscribeAttempt attempt) {
         var consumerInstanceId = consumerInstanceId(subscriptionIndex);
 
         // The engine reports retries, dead letters and shard ownership from the places that know the
@@ -719,6 +742,7 @@ public final class PostgresqlMessageQueue implements MessageQueue {
         // observer told of a release), this starts neither lane: it registers the pair and leaves the
         // queue not started, for a later start().
         var pair = List.of(unorderedConsumer, orderedConsumer);
+        attempt.lanes = pair;
         holdLifecycle(Holder.STARTING, "consume");
         try {
             lifecycleHook.afterLockTaken("consume");
@@ -740,7 +764,7 @@ public final class PostgresqlMessageQueue implements MessageQueue {
                 if (Exceptions.isCriticalError(e)) {
                     consumers.add(unorderedConsumer);
                     consumers.add(orderedConsumer);
-                    registered[0] = true;
+                    attempt.registered = true;
                     if (firstSubscription) {
                         markStartedUnlessHolderLetsNothingStart();
                     }
@@ -771,7 +795,7 @@ public final class PostgresqlMessageQueue implements MessageQueue {
             }
             consumers.add(unorderedConsumer);
             consumers.add(orderedConsumer);
-            registered[0] = true;
+            attempt.registered = true;
             if (firstSubscription) {
                 markStartedUnlessHolderLetsNothingStart();
             }
@@ -899,8 +923,10 @@ public final class PostgresqlMessageQueue implements MessageQueue {
              * stops gets there first. It used to start them, after this had returned, and stop them again only as it let
              * go. The instance id the pair registered under is given back once its lanes have stopped, for the next
              * {@code consume()} - a lease TTL later when a lane's stop kept an ordered unit because a key was still in its
-             * handler, as that unit's lease names the id until then ({@link #heldUntilKeptUnitsLapse}). What a lane's stop
-             * throws escapes, once both have stopped, as from {@link #stop()}; the subscription is unsubscribed either way.
+             * handler, as that unit's lease names the id until then, and only once a lane's hand-back to the database
+             * that its stop gave up waiting for has finished, as that may still deregister the id ({@link #heldIndexes}).
+             * What a lane's stop throws escapes, once both have stopped, as from {@link #stop()}; the subscription is
+             * unsubscribed either way.
              */
             @Override
             public void unsubscribe() {
@@ -926,18 +952,18 @@ public final class PostgresqlMessageQueue implements MessageQueue {
     }
 
     /**
-     * The lowest subscription index no live subscription holds and no ended one still holds for a kept unit
-     * ({@link #heldUntilKeptUnitsLapse}), now reserved ({@link #subscriptionIndexes}).
+     * The lowest subscription index no live subscription holds and no ended one still holds for its instance id's use on
+     * the database ({@link #heldIndexes}), now reserved ({@link #subscriptionIndexes}).
      */
     private int reserveSubscriptionIndex() {
         synchronized (handOver) {
             var now = System.nanoTime();
-            var lapsed = heldUntilKeptUnitsLapse.entrySet().iterator();
-            while (lapsed.hasNext()) {
-                var held = lapsed.next();
-                if (now - held.getValue() >= 0) {
-                    subscriptionIndexes.clear(held.getKey());
-                    lapsed.remove();
+            var held = heldIndexes.entrySet().iterator();
+            while (held.hasNext()) {
+                var entry = held.next();
+                if (entry.getValue().isDue(now)) {
+                    subscriptionIndexes.clear(entry.getKey());
+                    held.remove();
                 }
             }
             var index = subscriptionIndexes.nextClearBit(0);
@@ -946,29 +972,56 @@ public final class PostgresqlMessageQueue implements MessageQueue {
         }
     }
 
-    private void releaseSubscriptionIndex(int index) {
-        synchronized (handOver) {
-            subscriptionIndexes.clear(index);
-        }
-    }
-
     /**
-     * Give an ended subscription's index back, or, when one of its lanes kept an ordered unit on stop, only a lease TTL
-     * from now ({@link #heldUntilKeptUnitsLapse}).
+     * Give back the index of a subscription that has ended - unsubscribed, or a {@code consume()} that failed without
+     * registering it - once every stop of its {@code lanes} owed has returned. At once, unless the instance id is still in
+     * use on the database ({@link #heldIndexes}): when {@code keptOrderedUnits} - a stop of a lane kept an ordered unit -
+     * only a lease TTL from now, and either way only once no lane's hand-back is still running
+     * ({@link ShardOwnedQueue#handBackStillRunning()}), which {@link #reserveSubscriptionIndex} asks each time.
+     *
+     * @param ended what ended, for the log: {@code "an unsubscribed subscription"} or {@code "a failed consume()"}
      */
-    private void releaseSubscriptionIndexOf(Deregistration deregistration) {
-        if (!deregistration.keptOrderedUnits.get()) {
-            releaseSubscriptionIndex(deregistration.subscriptionIndex);
+    private void releaseSubscriptionIndex(int index, List<ShardOwnedQueue> lanes, boolean keptOrderedUnits, String ended) {
+        var handBackStillRunning = lanes.stream().anyMatch(ShardOwnedQueue::handBackStillRunning);
+        if (!keptOrderedUnits && !handBackStillRunning) {
+            synchronized (handOver) {
+                subscriptionIndexes.clear(index);
+            }
             return;
         }
         var leaseTtl = Duration.ofMillis(leaseTtlMillis());
+        var freeFrom = keptOrderedUnits ? System.nanoTime() + leaseTtl.toNanos() : System.nanoTime();
         synchronized (handOver) {
-            heldUntilKeptUnitsLapse.put(deregistration.subscriptionIndex, System.nanoTime() + leaseTtl.toNanos());
+            heldIndexes.put(index, new HeldIndex(freeFrom, lanes));
         }
-        log.info("Instance {} keeps the instance id '{}' of an unsubscribed subscription of queue {} out of use for {}: it kept an "
-                         + "ordered unit whose key was still in a handler, and the unit's lease names that id until it lapses. "
-                         + "A consume() of the queue before then registers under another instance id",
-                 instanceId, deregistration.consumerInstanceId(), queueId, leaseTtl);
+        // One line per hold, naming every reason it has and what ends it: both reasons must have passed (HeldIndex.isDue).
+        String until;
+        String because;
+        if (keptOrderedUnits && handBackStillRunning) {
+            until = "for at least " + leaseTtl + ", and until the hand-back of its lanes to the database has finished, whichever "
+                    + "comes later";
+            because = "it kept an ordered unit whose key was still in a handler, and the unit's lease names that id until it lapses; "
+                      + "and the stop of its lanes gave up waiting for their hand-back, which may still deregister that id";
+        } else if (keptOrderedUnits) {
+            until = "for " + leaseTtl;
+            because = "it kept an ordered unit whose key was still in a handler, and the unit's lease names that id until it lapses";
+        } else {
+            until = "until the hand-back of its lanes to the database has finished";
+            because = "the stop of its lanes gave up waiting for that hand-back, which may still deregister that id";
+        }
+        log.info("Instance {} keeps the instance id '{}' of {} of queue {} out of use {}: {}. A consume() of the queue before then "
+                         + "registers under another instance id",
+                 instanceId, consumerInstanceId(index), ended, queueId, until, because);
+    }
+
+    /**
+     * An index in {@link #heldIndexes}: free again from {@code freeFromNanos} ({@link System#nanoTime()}) on, once no
+     * hand-back of its {@code lanes} is still running.
+     */
+    private record HeldIndex(long freeFromNanos, List<ShardOwnedQueue> lanes) {
+        private boolean isDue(long nowNanos) {
+            return nowNanos - freeFromNanos >= 0 && lanes.stream().noneMatch(ShardOwnedQueue::handBackStillRunning);
+        }
     }
 
     /**
@@ -1051,14 +1104,18 @@ public final class PostgresqlMessageQueue implements MessageQueue {
     /**
      * An unsubscribed subscription on its way out: its two lanes and its subscription index, which goes back to
      * {@link #subscriptionIndexes} - the instance id the lanes registered under then free for the next {@link #consume}
-     * - once every stop of the lanes owed has completed: the unsubscribe's own, and, when it handed the deregistration to
+     * - once every stop of the lanes owed has returned: the unsubscribe's own, and, when it handed the deregistration to
      * the holder of {@link #lifecycleLock}, that holder's too. Given back earlier, a {@code consume()} could start a pair
      * under the same instance id while one of those stops was still releasing the old pair's units and deregistering
-     * that id. A critical error ({@link Exceptions#isCriticalError}) from a stop may leave a lane running under the id, so
-     * the index is kept then. A stop that kept an ordered unit because a key was still in its handler
+     * that id. A stop returning does not mean its database work is done, though: each lane's stop waits for its hand-back
+     * - flushing acknowledgements, releasing lease rows, deregistering the id - no longer than
+     * {@link ShardOwnedQueue#SHUTDOWN_BUDGET}, and the abandoned thread may deregister the id later; so the index stays
+     * held until no lane's hand-back is still running ({@link ShardOwnedQueue#handBackStillRunning()},
+     * {@link #heldIndexes}). A critical error ({@link Exceptions#isCriticalError}) from a stop may leave a lane running
+     * under the id, so the index is kept then. A stop that kept an ordered unit because a key was still in its handler
      * ({@link ShardOwnedQueue#keptOrderedUnitsOnLastStop()}) leaves the unit's lease row naming the id until the
      * instance's liveness lapses, so the index is given back only a lease TTL after the last stop
-     * ({@link #releaseSubscriptionIndexOf}): a pair registering under the id before then would take that unit at once.
+     * ({@link #releaseSubscriptionIndex}): a pair registering under the id before then would take that unit at once.
      */
     private final class Deregistration {
         private final List<ShardOwnedQueue> lanes;
@@ -1101,20 +1158,16 @@ public final class PostgresqlMessageQueue implements MessageQueue {
         }
 
         /**
-         * One owed stop of both lanes has completed; the last gives the subscription index back
-         * ({@link #releaseSubscriptionIndexOf}).
+         * One owed stop of both lanes has returned; the last gives the subscription index back
+         * ({@link #releaseSubscriptionIndex}).
          */
         private void stopped() {
             if (lanes.stream().anyMatch(ShardOwnedQueue::keptOrderedUnitsOnLastStop)) {
                 keptOrderedUnits.set(true);
             }
             if (stopsToGo.decrementAndGet() == 0) {
-                releaseSubscriptionIndexOf(this);
+                releaseSubscriptionIndex(subscriptionIndex, lanes, keptOrderedUnits.get(), "an unsubscribed subscription");
             }
-        }
-
-        private String consumerInstanceId() {
-            return PostgresqlMessageQueue.this.consumerInstanceId(subscriptionIndex);
         }
     }
 

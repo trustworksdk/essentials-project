@@ -174,11 +174,22 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * <p>
      * A queue-wide field a run writes, which the rule that everything a run owns lives on its {@link Run} otherwise
      * forbids. Exempt because it is not state of a run in progress but the outcome of the run that ended last: written
-     * once per run, as {@link #endRun} ends it under {@link #lifecycleLock}, never by a heartbeat tick, and read only
-     * after the {@code stop()} that ended the run has returned ({@link PostgresqlMessageQueue} asks it once the lanes of
-     * an unsubscribed subscription have stopped), so nothing reads it while a run is active.
+     * once per run, as {@link #endRun} ends it under {@link #lifecycleLock}, never by a heartbeat tick. Read after a
+     * {@code stop()} has returned, which does not always mean after the run has ended: a stop that gave up waiting for a
+     * start still running returns before that start ends the run ({@link #endRunOfStart}) and writes this, so a read
+     * then answers for the run before. {@link PostgresqlMessageQueue} reads it after every stop of a subscription's lanes
+     * it owes - one of them, on a hand-over, by the holder that started the lanes, after its starts have returned - and
+     * ORs the reads, so the last of them answers for the run that ended.
      */
     private volatile boolean                  keptOrderedUnitsOnLastStop;
+    /**
+     * How many hand-backs of an ended run - {@link #handBackWithinBudget} on its budget thread
+     * ({@link #withinShutdownBudget}) - are still running ({@link #handBackStillRunning()}): counted up by {@link #endRun}
+     * before it starts the thread, and down by that thread once its work has returned or thrown. Not by the stop, which
+     * stops waiting for the thread after {@link #SHUTDOWN_BUDGET}: the abandoned thread goes on, blocked in the pool or
+     * on a lock, and may still release units and deregister the instance id long after the stop has returned.
+     */
+    private final    AtomicInteger            handBacksRunning = new AtomicInteger();
     private          long                     leaseTtlMillis;
     private          PayloadHandler           activeHandler;
     private          OrderedPayloadHandler    activeOrderedHandler;
@@ -2144,10 +2155,27 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * before it lets the next {@code consume()} register under an unsubscribed subscription's instance id.
      * <p>
      * False again once a later run ends keeping nothing; a stop that finds no run leaves it as it is, and so does a
-     * {@link #stopAbruptly()}, which releases nothing.
+     * {@link #stopAbruptly()}, which releases nothing. Asked right after a {@code stop()} that gave up waiting for a
+     * start still running, it answers for the run before: that start ends its run, and sets this, only once its
+     * statements return.
      */
     boolean keptOrderedUnitsOnLastStop() {
         return keptOrderedUnitsOnLastStop;
+    }
+
+    /**
+     * Whether the database hand-back of a run this queue has ended - flushing acknowledgements, releasing lease rows and
+     * deregistering the instance id - is still running on the thread a stop gave up waiting for after
+     * {@link #SHUTDOWN_BUDGET} ({@link #withinShutdownBudget}). Until it is done, that thread may still delete the
+     * membership row of this queue's instance id ({@link ShardOwnedStorage#deregisterInstance(String, String)}), however
+     * long after the stop returned: a queue registering under the same id meanwhile can lose its row to it, and other
+     * instances then read its units as ownerless. {@link PostgresqlMessageQueue} asks this before it lets the next
+     * {@code consume()} register under an ended subscription's instance id. Like {@link #keptOrderedUnitsOnLastStop()},
+     * asked right after a {@code stop()} that gave up waiting for a start still running, it does not yet count the
+     * hand-back that start does once its statements return.
+     */
+    boolean handBackStillRunning() {
+        return handBacksRunning.get() > 0;
     }
 
     /**
@@ -2327,7 +2355,16 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         // Nothing against the database for a run with no lease row to hand back and no deregistration owed: a start that
         // failed before it adopted anything.
         if (!held.isEmpty() || deregister) {
-            withinShutdownBudget(() -> handBackWithinBudget(serving, toRelease, kept, deregister));
+            // Counted until the work is done, not until the budget runs out: past it the stop goes on without the thread,
+            // which may still deregister the instance id (handBackStillRunning).
+            handBacksRunning.incrementAndGet();
+            withinShutdownBudget(() -> {
+                try {
+                    handBackWithinBudget(serving, toRelease, kept, deregister);
+                } finally {
+                    handBacksRunning.decrementAndGet();
+                }
+            });
         }
         // This queue drops every owner the ended run listed, released, left to lapse, or found taken (RELEASED, so not in
         // `held`): a shared runtime keeps running, and would otherwise count those on a dead pump in shardsOnDeadPumps until
