@@ -1163,6 +1163,13 @@ final class OrderedShardOwner implements BatchReadableOwner {
             }
             if (!known) {
                 metrics.sweepRecoveries.increment();
+                // Applied after this pass's advanceWatermark, so this is the watermark the next cursor read starts
+                // from: a row at or below it is one no cursor read will return. A row above it is one the next cursor
+                // read would still return - most often one committed after the cursor read and before the sweep, or one
+                // put back for redelivery - and is no sign of anything stepped over.
+                if (row.seq() <= safeCursor) {
+                    metrics.sweepRecoveriesBehindCursor.increment();
+                }
                 accept(row);
             }
         }

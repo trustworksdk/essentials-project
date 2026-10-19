@@ -28,7 +28,6 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
-import java.util.concurrent.atomic.AtomicLong;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -52,8 +51,14 @@ import static org.assertj.core.api.Assertions.assertThat;
  * concurrency, not consumer parallelism, is what opens the window (measured: 1 producer, 0 of 5 runs affected; 8, 4 of 5).
  * <p>
  * Two assertions, because the second alone is luck-dependent: a stepped-over row only shows as a violation when its key
- * has a later row delivered first. {@code sweepRecoveries} is zero exactly when nothing was stepped over, as
- * {@link ShardOwnedOrderedWatermarkIT} also requires.
+ * has a later row delivered first. The first is {@code sweepRecoveriesBehindCursor}, the rows the head sweep found at
+ * or below an owner's watermark: with no delayed message, no failing or interrupted handler and no wall-clock cap firing, as here, it
+ * is zero unless the watermark stepped over a row. Not {@code sweepRecoveries}: that also counts a row a producer
+ * committed between a pass's cursor read and its sweep, which nothing stepped over, and with eight producers
+ * committing throughout it can be non-zero on a correct engine.
+ * <p>
+ * Delivery is at-least-once, and a unit that changes hands mid-flight may legitimately redeliver: the test asserts every
+ * message delivered, redeliveries within a small bound, and key order over each message's first delivery only.
  */
 @Testcontainers(disabledWithoutDocker = true)
 class ShardOwnedConcurrentProducersOrderIT {
@@ -94,26 +99,33 @@ class ShardOwnedConcurrentProducersOrderIT {
 
     @RepeatedTest(3)
     void every_key_is_delivered_in_key_order_when_several_producers_enqueue_disjoint_keys_concurrently() throws Exception {
-        var lastDelivered = new ConcurrentHashMap<String, Long>();
-        var violations    = new ConcurrentLinkedQueue<String>();
-        var duplicates    = new ConcurrentLinkedQueue<String>();
-        var seen          = ConcurrentHashMap.<String>newKeySet();
-        var delivered     = new AtomicLong();
-        var sweepRecoveries = 0L;
+        var highestDelivered = new ConcurrentHashMap<String, Long>();
+        var violations       = new ConcurrentLinkedQueue<String>();
+        var duplicates       = new ConcurrentLinkedQueue<String>();
+        var seen             = ConcurrentHashMap.<String>newKeySet();
+        var sweepRecoveries             = 0L;
+        var sweepRecoveriesBehindCursor = 0L;
         KeyOrderedHandler handler = (key, order) -> {
             if (!seen.add(key + "#" + order)) {
+                // A redelivery, which at-least-once allows. Not an order check: the key's later orders may rightly
+                // have been delivered since the first time, and that is not a reordering.
                 duplicates.add(key + "#" + order);
-            }
-            var previous = lastDelivered.put(key, order);
-            if (previous != null && previous > order) {
-                violations.add(key + ": " + order + " after " + previous);
+            } else {
+                // Against the highest order delivered for the key so far, so a first delivery below it is a violation
+                // whatever was redelivered in between.
+                highestDelivered.compute(key, (ignored, highest) -> {
+                    if (highest != null && highest > order) {
+                        violations.add(key + ": " + order + " after " + highest);
+                        return highest;
+                    }
+                    return order;
+                });
             }
             try {
                 Thread.sleep(1); // a handler that does some work, as the demo's (~2 ms) did
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             }
-            delivered.incrementAndGet();
         };
 
         // Built exactly as PostgresqlMessageQueue.consume builds its ordered consumer for the DurableQueues adapter, with
@@ -124,19 +136,28 @@ class ShardOwnedConcurrentProducersOrderIT {
             produceConcurrently();
 
             Awaitility.await().atMost(Duration.ofMinutes(5))
-                      .until(() -> delivered.get() >= (long) KEYS * PER_KEY);
+                      .until(() -> seen.size() >= KEYS * PER_KEY);
             Thread.sleep(2_000); // let any late redelivery show itself
-            // The engine's own count of rows the cursor stepped over and the head sweep recovered late
+            // The engine's own count of rows its watermark had passed when the head sweep found them
             for (var queue : List.of(first, second)) {
-                sweepRecoveries += (Long) queue.metrics().snapshot().get("sweepRecoveries");
+                var metrics = queue.metrics().snapshot();
+                sweepRecoveries += (Long) metrics.get("sweepRecoveries");
+                sweepRecoveriesBehindCursor += (Long) metrics.get("sweepRecoveriesBehindCursor");
             }
         }
 
-        assertThat(sweepRecoveries).as("rows the cursor stepped over and the head sweep recovered late - the cause of "
-                                       + "out-of-order delivery, whether or not it showed this time").isZero();
-        assertThat(violations).as("deliveries out of key_order (%d of them)", violations.size()).isEmpty();
-        assertThat(duplicates).as("messages delivered more than once").isEmpty();
-        assertThat(delivered.get()).isEqualTo((long) KEYS * PER_KEY);
+        assertThat(sweepRecoveriesBehindCursor)
+                .as("rows the cursor stepped over and the head sweep recovered late - the cause of out-of-order delivery, "
+                    + "whether or not it showed this time (all sweep recoveries, including rows committed between a "
+                    + "pass's cursor read and its sweep: %d)", sweepRecoveries)
+                .isZero();
+        assertThat(violations).as("first deliveries out of key_order (%d of them)", violations.size()).isEmpty();
+        assertThat(seen).as("every message delivered").hasSize(KEYS * PER_KEY);
+        // Redelivery is legal when a unit changes hands mid-flight (the 32-unit rebalance to producers-b runs while
+        // messages flow), and is confined to what was in a handler or awaiting its acknowledgement flush at that
+        // moment. Ownership that stopped being exclusive would redeliver far more than 1% of the messages.
+        assertThat(duplicates).as("messages delivered more than once, within the at-least-once overlap of a hand-over")
+                              .hasSizeLessThan(KEYS * PER_KEY / 100);
     }
 
     @FunctionalInterface

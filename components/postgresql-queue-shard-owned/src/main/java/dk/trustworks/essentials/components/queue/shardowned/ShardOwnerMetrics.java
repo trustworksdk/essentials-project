@@ -76,6 +76,21 @@ public final class ShardOwnerMetrics {
     public final LongAdder     headSweeps                       = new LongAdder();
     public final LongAdder     sweepRecoveries                  = new LongAdder();
     /**
+     * Ordered lane only: the part of {@code sweepRecoveries} the cursor had already passed. A row the head sweep found
+     * that this owner held neither as read nor as awaiting acknowledgement, with a {@code seq} at or below the safe
+     * watermark at the moment the sweep's rows were applied - so no later cursor read would have returned it.
+     * <p>
+     * {@code sweepRecoveries} also counts a row that committed between a pass's cursor read and its sweep (two
+     * statements, two snapshots), which the next cursor read would have found anyway; this counter does not. What it
+     * does count: a row the watermark stepped over (a defect, or a write transaction that outlived {@code watermarkCap},
+     * see {@code watermarkCapped}), a row that was not yet visible when the cursor passed it (a delayed message, a
+     * retry or requested redelivery still in its backoff), and a message this owner put back for another delivery (a
+     * retry that came due, a handler interrupted) when the sweep reaches it before it is delivered again. On traffic
+     * with none of those, it is zero unless the watermark stepped over a row. On {@link #snapshot()} only, not on
+     * {@code QueueStatistics}, which is the admin API's published shape.
+     */
+    public final LongAdder     sweepRecoveriesBehindCursor      = new LongAdder();
+    /**
      * Ordered lane only. The hole counters above describe the unordered lane's mechanism; the ordered
      * lane replaced it with a safe watermark and these describe that one.
      * <p>
@@ -447,6 +462,7 @@ public final class ShardOwnerMetrics {
         snapshot.put("holeChaseQueries", holeChaseQueries.sum());
         snapshot.put("headSweeps", headSweeps.sum());
         snapshot.put("sweepRecoveries", sweepRecoveries.sum());
+        snapshot.put("sweepRecoveriesBehindCursor", sweepRecoveriesBehindCursor.sum());
         snapshot.put("ackFlushes", ackFlushes.sum());
         snapshot.put("handlerFailures", handlerFailures.sum());
         snapshot.put("takeoverAttemptBumps", takeoverAttemptBumps.sum());

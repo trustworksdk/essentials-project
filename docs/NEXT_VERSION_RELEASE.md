@@ -779,7 +779,14 @@ instance just no longer delivers it. (`1f31c123`)
   `shardsOnDeadPumps` staying above zero (§3). Both are readable only through `ShardOwnedQueue.metrics()`:
   `PostgresqlMessageQueue` keeps its metrics private and no `QueueObserver` callback reports them, so through
   `MessageQueue` (the Spring starter, the `DurableQueues` adapter) a dead pump is reported by its ERROR log line
-  alone, and the hand-back that follows by `QueueObserver.shardOwnershipChanged`.
+  alone, and the hand-back that follows by `QueueObserver.shardOwnershipChanged`. Also `sweepRecoveriesBehindCursor`
+  (ordered lane only, `ShardOwnedQueue.metrics().snapshot()`): the part of `sweepRecoveries` whose rows the safe
+  watermark had already passed when the head sweep found them. `sweepRecoveries` also counts a row that committed
+  between a pass's cursor read and its sweep, which nothing stepped over; this one does not. It does count a
+  delayed message, a retry or requested redelivery and a message whose handler was interrupted, each reached by the
+  sweep after the cursor passed it, and a row a `watermarkCapped` advance stepped over; with none of those, a non-zero
+  value means the watermark stepped over a row.
+  `sweepRecoveries` itself is unchanged. (`<!-- fix:U-029 -->`)
 - **Shard-owned engine: `QueueObserver.takeoverStalled(MessageId.Lane, int shard, boolean stalled)`** and the
   Micrometer gauge **`essentials.queue.shards.awaiting.takeover`** (`MicrometerQueueObserver.SHARDS_AWAITING_TAKEOVER_GAUGE`).
   The callback is told once when a shard's takeover starts failing and once when the stall ends (the takeover

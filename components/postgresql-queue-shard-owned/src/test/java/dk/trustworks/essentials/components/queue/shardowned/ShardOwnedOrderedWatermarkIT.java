@@ -188,7 +188,10 @@ class ShardOwnedOrderedWatermarkIT {
             // enough to hit it (reproduced with a 300 ms pause between the two statements: 3 of 3,
             // headSweeps=64, i.e. only the start-up sweep). QueueStatistics documents it as not a
             // defect by itself. Whether the cursor stepped over the value is asserted directly above,
-            // before the commit.
+            // before the commit, and again here on the part of the sweep's count the watermark had passed.
+            assertThat((Long) metrics.get("sweepRecoveriesBehindCursor"))
+                    .as("no row was found by the head sweep behind the watermark: %s", metrics)
+                    .isZero();
             assertThat((Long) metrics.get("watermarkCapped"))
                     .as("the horizon, not the wall-clock cap, must be what held the cursor back: %s", metrics)
                     .isZero();
@@ -437,6 +440,134 @@ class ShardOwnedOrderedWatermarkIT {
                     .as("one candidate taken on the cap, advanced over three passes, is one cap event")
                     .isEqualTo(1L);
             longWriter.rollback();
+        }
+    }
+
+    /**
+     * A row that commits between a pass's cursor read and its head sweep is found by the sweep first - two statements,
+     * two snapshots - although the cursor never passed it. It counts in {@code sweepRecoveries}, and must not count in
+     * {@code sweepRecoveriesBehindCursor}, or that counter is non-zero on a correct engine whenever producers commit
+     * while an owner sweeps, which is what made {@code ShardOwnedConcurrentProducersOrderIT}'s assertion on
+     * {@code sweepRecoveries} able to fail with nothing stepped over. The pump's batched read is driven by hand so the
+     * commit lands between the two statements every time.
+     */
+    @Test
+    void a_row_committed_between_the_cursor_read_and_the_sweep_is_not_counted_behind_the_cursor() throws Exception {
+        var shard     = 0;
+        var storage   = new ShardOwnedStorage(dataSource, QUEUE_ID);
+        var delivered = new CopyOnWriteArrayList<String>();
+        var metrics   = new ShardOwnerMetrics();
+        var settings  = byHand(500);
+        var grant     = storage.acquireLeaseGrant("ordered", shard, "instance-1", 60_000L).orElseThrow();
+        var owner = new OrderedShardOwner(storage, shard, grant.fence(), settings,
+                                          (id, key, payload, type) -> delivered.add(new String(payload, StandardCharsets.UTF_8)),
+                                          metrics, RedeliveryPolicy.fixed(Duration.ofSeconds(1), 3), "instance-1", new ShardWakeup(),
+                                          HandlerDispatch.inline(), grant.previousOwnerReleased());
+        var keys = keysOnShard(shard, 2);
+
+        try (var pumping = dataSource.getConnection()) {
+            owner.onTakeover(pumping);
+            long firstSeq;
+            try (var committing = dataSource.getConnection()) {
+                firstSeq = storage.enqueueOrderedBatch(committing, shard,
+                                                       List.of(new OrderedPayload(keys.get(0), 0, "first".getBytes(StandardCharsets.UTF_8), 1)))
+                                  .getFirst();
+            }
+
+            // Pass 1 reads "first" and records a candidate; pass 2 retires it, so the watermark stands at "first".
+            owner.pumpOnce(pumping);
+            owner.pumpOnce(pumping);
+            assertThat(delivered).as("premise: the committed row was delivered by the cursor read").containsExactly("first");
+            assertThat(owner.batchReadCursor()).as("premise: the watermark has moved up to the first row").isEqualTo(firstSeq);
+
+            // Pass 3, batched: the cursor read finds nothing above the watermark, then "late" commits, then the sweep runs.
+            var cursorRows = storage.readOrderedFromCursor(pumping, shard, owner.batchReadCursor(), settings.readBatchSize());
+            assertThat(cursorRows).as("premise: nothing above the watermark when the cursor read ran").isEmpty();
+            long lateSeq;
+            try (var committing = dataSource.getConnection()) {
+                lateSeq = storage.enqueueOrderedBatch(committing, shard,
+                                                      List.of(new OrderedPayload(keys.get(1), 0, "late".getBytes(StandardCharsets.UTF_8), 1)))
+                                 .getFirst();
+            }
+            var sweptRows = storage.sweepOrderedFromHead(pumping, shard, settings.readBatchSize());
+            assertThat(sweptRows).as("premise: the sweep's snapshot has the row the cursor read's did not")
+                                 .extracting(ShardOwnedStorage.OrderedRow::seq).contains(lateSeq);
+            owner.applyBatchRead(cursorRows, settings.readBatchSize(), sweptRows, OptionalLong.empty());
+            owner.pumpOnce(pumping);
+
+            assertThat(delivered).as("the late row delivered from the sweep").containsExactly("first", "late");
+            assertThat(metrics.sweepRecoveries.sum()).as("premise: the sweep recovered the late row").isEqualTo(1L);
+            // The discriminating assertion: the late row sits above the watermark, where the next cursor read would have found it.
+            assertThat(metrics.sweepRecoveriesBehindCursor.sum())
+                    .as("seq %d is above the watermark %d, so the cursor had not passed it", lateSeq, owner.batchReadCursor())
+                    .isZero();
+        }
+    }
+
+    /**
+     * The counterpart: a row the watermark really stepped over is counted in {@code sweepRecoveriesBehindCursor} when the
+     * head sweep recovers it. The wall-clock cap is the one legitimate way to step over a row, so it constructs one: a
+     * writer holds a row below a committed one past a 2 s cap, the cap moves the watermark over it, and the writer then
+     * commits, leaving the row behind the cursor where only the sweep finds it.
+     */
+    @Test
+    void a_row_the_watermark_stepped_over_is_counted_behind_the_cursor_when_the_sweep_recovers_it() throws Exception {
+        var shard     = 0;
+        var storage   = new ShardOwnedStorage(dataSource, QUEUE_ID);
+        var delivered = new CopyOnWriteArrayList<String>();
+        var metrics   = new ShardOwnerMetrics();
+        var cap       = Duration.ofSeconds(2);
+        var settings  = byHand(500, cap);
+        var grant     = storage.acquireLeaseGrant("ordered", shard, "instance-1", 60_000L).orElseThrow();
+        var owner = new OrderedShardOwner(storage, shard, grant.fence(), settings,
+                                          (id, key, payload, type) -> delivered.add(new String(payload, StandardCharsets.UTF_8)),
+                                          metrics, RedeliveryPolicy.fixed(Duration.ofSeconds(1), 3), "instance-1", new ShardWakeup(),
+                                          HandlerDispatch.inline(), grant.previousOwnerReleased());
+        var keys = keysOnShard(shard, 2);
+
+        try (var pumping = dataSource.getConnection();
+             var held = dataSource.getConnection()) {
+            owner.onTakeover(pumping);
+
+            held.setAutoCommit(false);
+            var heldSeq = storage.enqueueOrderedBatch(held, shard,
+                                                      List.of(new OrderedPayload(keys.get(0), 0, "held".getBytes(StandardCharsets.UTF_8), 1)))
+                                 .getFirst();
+            long laterSeq;
+            try (var committing = dataSource.getConnection()) {
+                laterSeq = storage.enqueueOrderedBatch(committing, shard,
+                                                       List.of(new OrderedPayload(keys.get(1), 0, "later".getBytes(StandardCharsets.UTF_8), 1)))
+                                  .getFirst();
+            }
+            assertThat(heldSeq).as("premise: the held row sits below the committed one").isLessThan(laterSeq);
+
+            // Pass 1 reads "later" and records a candidate with the held writer running.
+            owner.pumpOnce(pumping);
+            assertThat(delivered).as("premise: the committed row is read while the writer is open").containsExactly("later");
+            assertThat(storage.runningWriteTransactionIds(pumping))
+                    .as("premise: the held writer holds an xid the horizon probe sees, so the candidate records it as running")
+                    .contains(backendXidOf(pumping, held));
+
+            // Pass 2, past the cap with the writer still open: the cap moves the watermark over the held row.
+            Thread.sleep(cap.toMillis() + 200);
+            owner.pumpOnce(pumping);
+            assertThat(metrics.watermarkCapped.sum()).as("premise: the cap fired").isEqualTo(1L);
+            assertThat(owner.batchReadCursor()).as("premise: the watermark stepped over seq %d", heldSeq).isEqualTo(laterSeq);
+
+            // The writer commits; no cursor read from the watermark can return its row, the sweep does.
+            held.commit();
+            var cursorRows = storage.readOrderedFromCursor(pumping, shard, owner.batchReadCursor(), settings.readBatchSize());
+            assertThat(cursorRows).as("premise: the cursor read no longer reaches the held row").isEmpty();
+            var sweptRows = storage.sweepOrderedFromHead(pumping, shard, settings.readBatchSize());
+            assertThat(sweptRows).as("premise: the sweep finds the held row").extracting(ShardOwnedStorage.OrderedRow::seq).contains(heldSeq);
+            owner.applyBatchRead(cursorRows, settings.readBatchSize(), sweptRows, OptionalLong.empty());
+            owner.pumpOnce(pumping);
+
+            assertThat(delivered).as("the stepped-over row delivered late, from the sweep").containsExactly("later", "held");
+            assertThat(metrics.sweepRecoveries.sum()).as("premise: the sweep recovered the held row").isEqualTo(1L);
+            assertThat(metrics.sweepRecoveriesBehindCursor.sum())
+                    .as("seq %d is below the watermark %d: the cursor stepped over it", heldSeq, owner.batchReadCursor())
+                    .isEqualTo(1L);
         }
     }
 
