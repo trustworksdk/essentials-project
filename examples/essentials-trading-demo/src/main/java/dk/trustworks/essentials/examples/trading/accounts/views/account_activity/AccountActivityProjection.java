@@ -140,6 +140,11 @@ public class AccountActivityProjection extends ViewEventProcessor {
     }
 
     @MessageHandler
+    void handle(UnknownReferenceIgnored e, OrderedMessage m) {
+        record(e, m, "IGNORED", e.reference(), e.kind() + " for a reference this account never opened - changed nothing", null);
+    }
+
+    @MessageHandler
     void handle(AccountBooksClosed e, OrderedMessage m) {
         record(e, m, "BOOKS_CLOSED", e.nextPeriodId().toString(), "Books closed; next period " + e.nextPeriodId(), null);
     }

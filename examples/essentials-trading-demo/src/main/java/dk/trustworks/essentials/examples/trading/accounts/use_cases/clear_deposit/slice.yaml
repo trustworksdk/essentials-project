@@ -11,7 +11,7 @@ language: java
 handles: [ClearDeposit]
 # AccountBooksClosed/AccountOpened are emitted when the ON_ACCESS closing-books policy rolls the account while it is
 # being loaded for this command.
-publishes: [DepositCleared, AccountBooksClosed, AccountOpened]
+publishes: [DepositCleared, UnknownReferenceIgnored, AccountBooksClosed, AccountOpened]
 writes: [Account]
 reads:
   - { name: Account }

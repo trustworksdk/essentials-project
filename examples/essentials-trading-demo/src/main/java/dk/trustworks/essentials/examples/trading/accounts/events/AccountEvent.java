@@ -25,7 +25,8 @@ import dk.trustworks.essentials.types.Money;
  */
 public sealed interface AccountEvent permits AccountOpened, CashAdjusted, DepositCredited, DepositCleared, DepositReturned,
                                              FundsHeld, FundsReleased, CashWithdrawn, SharesReserved, SharesReleased,
-                                             TradeBooked, TradeSettled, TradeBookingReversed, AccountBooksClosed {
+                                             TradeBooked, TradeSettled, TradeBookingReversed, AccountBooksClosed,
+                                             UnknownReferenceIgnored {
 
     AccountGenerationId accountStreamId();
 

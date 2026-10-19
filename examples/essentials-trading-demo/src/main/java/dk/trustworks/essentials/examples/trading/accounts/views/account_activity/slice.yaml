@@ -16,7 +16,8 @@ reads:
 projections:
   - name: AccountActivityProjection
     from: [AccountOpened, CashAdjusted, DepositCredited, DepositCleared, DepositReturned, FundsHeld, FundsReleased, CashWithdrawn,
-           SharesReserved, SharesReleased, TradeBooked, TradeSettled, TradeBookingReversed, AccountBooksClosed]
+           SharesReserved, SharesReleased, TradeBooked, TradeSettled, TradeBookingReversed, AccountBooksClosed,
+           UnknownReferenceIgnored]
     consistency: eventual
     store: postgresql
 forbidden:

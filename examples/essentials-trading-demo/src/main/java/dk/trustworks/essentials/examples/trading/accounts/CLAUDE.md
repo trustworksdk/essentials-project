@@ -16,6 +16,10 @@ books `END_OF_DAY` in New York until EF-1, snapshots every 100 events.
   `roll_account_books` must not, or one roll becomes two.
 - **Idempotency is per external reference**, and open items carry into the next generation (`OpeningBalances`). A new
   kind of open item must be added to `OpeningBalances` and `openStateForNextGeneration`, or it is lost at the next roll.
+- **A close that finds nothing open is silent only if it is a duplicate.** Opened and closed in this generation → no
+  event. Never opened here → `UnknownReferenceIgnored`, once per kind and reference. That is how reordering shows
+  instead of silently leaving a hold or trade open (it cost a cycle in the phase 1 load test). Any new closing command
+  must call `ignoreIfUnknown` the same way.
 - **Events carry their own effect** (`holdConsumed`, `costBasisChange`, `realizedPnl`, `unclearedReleased`).
   Projections read those, never recompute them.
 - **The two balance projections apply deltas, so they are versioned** (generation + last `EventOrder`, the event-store

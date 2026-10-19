@@ -244,4 +244,32 @@ class AccountTest {
         assertMoney(restored.buyingPower(), "700");
         assertThat(restored.sellable(ACME)).isEqualTo(Quantity.of(1));
     }
+
+    @Test
+    void a_close_that_overtakes_its_open_is_recorded_once_and_a_duplicate_close_stays_silent() {
+        var account = openAccount();
+        account.creditDeposit(DepositId.of("DEP-1"), usd("10000"), TRADE_DATE, TRADE_DATE.plusDays(3));
+
+        // The reordering the trading demo's ledger load hit on the unfixed queue engine: a cycle's release and settle
+        // delivered before its hold and booking
+        account.releaseFunds(HoldId.of("H-1"));
+        account.settleTrade(ExecutionId.of("X-1"));
+        account.releaseFunds(HoldId.of("H-1")); // redelivered: reported once only
+        account.holdFunds(HoldId.of("H-1"), HoldPurpose.ORDER, usd("1010"));
+        account.bookTrade(ExecutionId.of("X-1"), ACME, TradeSide.BUY, Quantity.of(10), usd("100.50"), TRADE_DATE, SETTLES_ON, HoldId.of("H-1"), null);
+
+        var events = account.getUncommittedChanges().events;
+        assertThat(events).hasExactlyElementsOfTypes(AccountOpened.class, DepositCredited.class, UnknownReferenceIgnored.class,
+                                                     UnknownReferenceIgnored.class, FundsHeld.class, TradeBooked.class);
+        assertThat(events).filteredOn(UnknownReferenceIgnored.class::isInstance)
+                          .extracting(event -> ((UnknownReferenceIgnored) event).kind())
+                          .containsExactly(IgnoredCommandKind.HOLD_RELEASE, IgnoredCommandKind.TRADE_SETTLEMENT);
+        // The consequence the event exists to make visible: the hold and the trade are left open
+        assertMoney(account.buyingPower(), "8990");
+
+        // A close of something opened and closed in this generation is an ordinary duplicate: silent
+        account.releaseFunds(HoldId.of("H-1"));
+        account.releaseFunds(HoldId.of("H-1"));
+        assertThat(account.getUncommittedChanges().events).hasSize(7).last().isInstanceOf(FundsReleased.class);
+    }
 }

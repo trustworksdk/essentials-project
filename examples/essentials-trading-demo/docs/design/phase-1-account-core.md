@@ -161,6 +161,7 @@ Grouped by the phase that first sends the command; all are designed now.
 | `TradeSettled` | execution id | Buy: `pendingOut −`, `settled −`, `pos.pendingIn −`, `pos.settled +`. Sell: the mirror | `SettlementCompleted` (4) |
 | `TradeBookingReversed` | execution id, reason | Undoes a `TradeBooked` that was never settled | `SettlementCancelled`, correction (4) |
 | `AccountBooksClosed` | next period | Closes the generation | Closing books (unchanged) |
+| `UnknownReferenceIgnored` | kind of closing command, reference | None — a close named a reference this generation never opened | Any closing command that overtook its open (added after the phase 1 load test: out-of-order delivery lost a cycle silently) |
 
 Notes:
 
@@ -213,6 +214,12 @@ and the commands that close an item treat an unknown reference as already done:
   redelivery that late would have to outlive the queue's redelivery policy.
 
 The cost is bounded by the number of open items, not by history.
+
+**Added after the phase 1 load test:** a closing command for a reference this generation never opened is no longer
+silent. It emits `UnknownReferenceIgnored` (once per kind and reference) and still changes nothing. A queue defect
+delivered a cycle's release and settle before its hold and booking, and the ledger's silent no-ops hid it: the hold
+stayed open and the trade unsettled with no trace. A close of an item opened and closed in this generation remains an
+ordinary, silent duplicate.
 
 ---
 

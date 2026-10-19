@@ -48,8 +48,11 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  *
  * <h2>Idempotency</h2>
  * Every command names an external reference. A command that opens an item (a hold, a reservation, a deposit, a trade)
- * is a no-op when that reference is already open or was handled in this generation; a command that closes one is a
- * no-op when the reference is not open. Open items are carried into the next generation, closed ones are not (§5).
+ * is a no-op when that reference is already open or was handled in this generation. A command that closes one changes
+ * nothing when the reference is not open: silently for a duplicate (opened and closed in this generation), and with an
+ * {@link UnknownReferenceIgnored} event otherwise — a close that overtook its open, which out-of-order delivery causes
+ * and which would otherwise leave the item open for good without a trace. Open items are carried into the next
+ * generation, closed ones are not (§5).
  *
  * <h2>Money</h2>
  * One currency per account, enforced on every amount. Average-cost bookkeeping: a buy adds its gross to the
@@ -137,6 +140,7 @@ public class Account extends AggregateRoot<AccountGenerationId, AccountEvent, Ac
         requireNonNull(depositId, "No depositId provided");
         var deposit = unclearedDeposits.get(depositId);
         if (deposit == null) {
+            ignoreIfUnknown(IgnoredCommandKind.DEPOSIT_CLEARANCE, ref("DEP", depositId), depositId);
             return;
         }
         apply(new DepositCleared(aggregateId(), accountId, depositId, deposit.amount()));
@@ -177,6 +181,7 @@ public class Account extends AggregateRoot<AccountGenerationId, AccountEvent, Ac
         requireNonNull(holdId, "No holdId provided");
         var hold = holds.get(holdId);
         if (hold == null) {
+            ignoreIfUnknown(IgnoredCommandKind.HOLD_RELEASE, ref("HOLD", holdId), holdId);
             return;
         }
         apply(new FundsReleased(aggregateId(), accountId, holdId, hold.remaining()));
@@ -217,6 +222,7 @@ public class Account extends AggregateRoot<AccountGenerationId, AccountEvent, Ac
         requireNonNull(reservationId, "No reservationId provided");
         var reservation = reservations.get(reservationId);
         if (reservation == null) {
+            ignoreIfUnknown(IgnoredCommandKind.SHARE_RELEASE, ref("RES", reservationId), reservationId);
             return;
         }
         apply(new SharesReleased(aggregateId(), accountId, reservationId, reservation.instrumentId(), reservation.remaining()));
@@ -281,6 +287,7 @@ public class Account extends AggregateRoot<AccountGenerationId, AccountEvent, Ac
         requireNonNull(executionId, "No executionId provided");
         var trade = openTrades.get(executionId);
         if (trade == null) {
+            ignoreIfUnknown(IgnoredCommandKind.TRADE_SETTLEMENT, ref("EXEC", executionId), executionId);
             return;
         }
         apply(new TradeSettled(aggregateId(), accountId, trade));
@@ -292,9 +299,21 @@ public class Account extends AggregateRoot<AccountGenerationId, AccountEvent, Ac
         requireNonNull(reason, "No reason provided");
         var trade = openTrades.get(executionId);
         if (trade == null) {
+            ignoreIfUnknown(IgnoredCommandKind.TRADE_REVERSAL, ref("EXEC", executionId), executionId);
             return;
         }
         apply(new TradeBookingReversed(aggregateId(), accountId, trade, reason));
+    }
+
+    /**
+     * A closing command found nothing open under its reference. A duplicate — the item was opened in this generation
+     * and has been closed — stays silent; anything else is recorded once per kind and reference.
+     */
+    private void ignoreIfUnknown(IgnoredCommandKind kind, String openingReference, CharSequence reference) {
+        if (handledReferences.contains(openingReference) || handledReferences.contains(ref("IGN:" + kind, reference))) {
+            return;
+        }
+        apply(new UnknownReferenceIgnored(aggregateId(), accountId, kind, reference.toString()));
     }
 
     // ------------------------------------------------------------------------------------------------ Closing books
@@ -606,6 +625,11 @@ public class Account extends AggregateRoot<AccountGenerationId, AccountEvent, Ac
         }
         storePosition(position);
         openTrades.remove(trade.executionId());
+    }
+
+    @EventHandler
+    private void on(UnknownReferenceIgnored e) {
+        handledReferences.add(ref("IGN:" + e.kind(), e.reference()));
     }
 
     @EventHandler
