@@ -271,6 +271,64 @@ class ShardOwnedDurableQueueConsumerStopTest {
         assertThat(consumer.isStarted()).isFalse();
     }
 
+    /**
+     * A start waiting for the lifecycle lock while the holder reads {@code NONE} - here a {@code stopIf} reading its
+     * condition; otherwise a holder that has just taken the lock or is about to let go of it - says nothing yet, and asks
+     * again one {@link ShardOwnedDurableQueueConsumer#STOP_WAITS_FOR_START} later, as {@code PostgresqlMessageQueue}'s
+     * {@code holdLifecycle} does. It used to log at once that an earlier start was still in the queue's {@code consume()},
+     * leasing units until the driver's {@code socketTimeout}: a guess, and the one WARN the wait logs. Once the holder is a
+     * stop stopping the subscription, the WARN says that.
+     */
+    @Test
+    void a_start_waiting_while_the_holder_reads_none_says_nothing_until_a_later_read_names_the_holder() throws Exception {
+        letConsumeEnd.countDown();
+        consumer.start();
+        assertThat(consumer.isStarted()).as("premise: started").isTrue();
+        var letStopEnd = new CountDownLatch(1);
+        letSubscriptionStopEnd.set(letStopEnd);
+        var conditionRead   = new CountDownLatch(1);
+        var letConditionEnd = new CountDownLatch(1);
+        var logger          = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(ShardOwnedDurableQueueConsumer.class);
+        var logged          = new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+        logged.start();
+        logger.addAppender(logged);
+        CompletableFuture<Boolean> stopping;
+        CompletableFuture<Void>    restarting;
+        try {
+            stopping = CompletableFuture.supplyAsync(() -> consumer.stopIf(() -> {
+                conditionRead.countDown();
+                awaitUninterruptibly(letConditionEnd);
+                return true;
+            }));
+            assertThat(conditionRead.await(10, TimeUnit.SECONDS)).as("premise: stopIf holds the lock, reading its condition").isTrue();
+
+            restarting = CompletableFuture.runAsync(consumer::start);
+            Thread.sleep(ShardOwnedDurableQueueConsumer.STOP_WAITS_FOR_START.plusMillis(700).toMillis());
+            assertThat(restarting).as("premise: the restart has waited past its first wait for the lock").isNotDone();
+            assertThat(waitingToStart(logged)).as("nothing said while the holder reads NONE").isEmpty();
+
+            letConditionEnd.countDown();
+            assertThat(subscriptionStopping.await(10, TimeUnit.SECONDS)).as("premise: stopIf is stopping the subscription").isTrue();
+            var deadline = System.nanoTime() + ShardOwnedDurableQueueConsumer.STOP_WAITS_FOR_START.plusSeconds(5).toNanos();
+            while (waitingToStart(logged).isEmpty() && System.nanoTime() < deadline) {
+                Thread.sleep(20);
+            }
+            assertThat(waitingToStart(logged)).as("one WARN, once a read names the holder: the stop stopping the subscription")
+                                              .singleElement()
+                                              .satisfies(message -> assertThat(message).contains("a stop of the consumer is still stopping its subscription")
+                                                                                       .doesNotContain("consume()"));
+        } finally {
+            letConditionEnd.countDown();
+            letStopEnd.countDown();
+            logger.detachAppender(logged);
+        }
+
+        assertThat(stopping.get(10, TimeUnit.SECONDS)).as("stopIf says the condition held").isTrue();
+        restarting.get(10, TimeUnit.SECONDS);
+        assertThat(stopped).as("the stopIf stopped the first subscription").containsExactly("subscription");
+        assertThat(consumer.isStarted()).as("the restart subscribed afresh").isTrue();
+    }
+
     private static List<String> waitingToStart(ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> logged) {
         return logged.list.stream()
                           .filter(event -> event.getLevel() == ch.qos.logback.classic.Level.WARN)

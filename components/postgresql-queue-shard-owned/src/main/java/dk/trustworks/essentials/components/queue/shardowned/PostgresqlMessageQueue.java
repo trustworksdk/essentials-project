@@ -123,7 +123,7 @@ public final class PostgresqlMessageQueue implements MessageQueue {
     /**
      * What the holder of {@link #lifecycleLock} is doing, and whether it owes a stop: {@link Holder#NONE} while nobody
      * holds it, and just after a holder took it or just before it lets go. The one value every stop, start and the holder
-     * itself decides the hand-over from ({@link Holder}).
+     * itself decides the hand-over from ({@link Holder}), moved only along its diagram ({@link #moveHolder}).
      */
     private       Holder                        holder             = Holder.NONE;
     /**
@@ -1170,7 +1170,7 @@ public final class PostgresqlMessageQueue implements MessageQueue {
             synchronized (handOver) {
                 heldBy = holder;
                 if (heldBy.isAStart()) {
-                    holder = Holder.STOP_OWED;
+                    moveHolder(Holder.STOP_OWED);
                     stopsWithoutLock++;
                     started.set(false);
                     toStop = registeredAndBeingStarted();
@@ -1183,9 +1183,10 @@ public final class PostgresqlMessageQueue implements MessageQueue {
             if (heldBy == Holder.STOPPING) {
                 return;
             }
-            // Holder.NONE: whoever holds the lock has just taken it, or is just letting go of it.
-            Thread.onSpinWait();
-            locked = lifecycleLock.tryLock();
+            // Holder.NONE: whoever holds the lock has just taken it, or is just letting go of it. The queue may still be
+            // started, so take the lock and look, a few milliseconds at a time, parked; returning here, as on STOPPING,
+            // could leave it running.
+            locked = tryLockAfterAHandOver();
         }
         markHeld(Holder.STOPPING);
         try {
@@ -1210,26 +1211,98 @@ public final class PostgresqlMessageQueue implements MessageQueue {
     private void stopFromInsideTheHolder() {
         synchronized (handOver) {
             if (holder.isAStart()) {
-                holder = Holder.STOP_OWED;
+                moveHolder(Holder.STOP_OWED);
                 started.set(false);
             }
         }
     }
 
     /**
-     * What the holder of {@link #lifecycleLock} is doing, and whether it owes a stop - one value, read and moved only under
-     * {@link #handOver}, so a {@link #stop()} that did not get the lock, a stop on the holder's own thread, the holder's
-     * starts ({@link #holderStopsTheQueue}, {@link #markStartedUnlessHolderStopsTheQueue}) and its letting go
-     * ({@link #letGoOfLifecycle}) each decide from it. {@link #stopsWithoutLock} and {@link #beingStarted} are data beside it, not part of the decision.
-     * <p>
-     * The same hand-over as {@code ShardOwnedQueue}'s {@code Run.Phase}, but not forward-only: that phase belongs to one
-     * run, a fresh object per start, while this queue has no per-start object to hang a phase on - this describes whoever
-     * holds the lock now, and goes back to {@link #NONE} as each holder lets go. A reentrant hold (an observer starting the
-     * queue from inside a {@code consume()}) does not move it ({@link #markHeld}); inside a holder that leaves the queue
-     * not started ({@link #stopsTheQueue}), such a hold starts nothing and does not mark the queue started.
+     * How long a {@link #stop()} that read {@link Holder#NONE} waits for {@link #lifecycleLock} before it reads
+     * {@link #holder} again. Short, because the lock may meanwhile have passed to a start, which the stop must stop without
+     * the lock rather than wait for; a lock let go of meanwhile is taken without waiting out the rest.
      */
-    private enum Holder {
-        /** Nobody holds the lock, or a holder has just taken it or is about to let go of it: the stop tries the lock again. */
+    private static final long HAND_OVER_WAIT_MILLIS = 10;
+
+    /**
+     * Wait up to {@link #HAND_OVER_WAIT_MILLIS} for {@link #lifecycleLock}, parked rather than spinning. An interrupt
+     * pending on entry is cleared for the wait, so it does not cut the wait short. An interrupt arriving during the wait
+     * does: the timed {@code tryLock} throws, the wait ends without the lock ({@code false}) and the caller reads
+     * {@link #holder} again. Either way the flag is set again afterwards, so the stop leaves it set as it found or got it,
+     * and each consumer's stop still sees it.
+     */
+    private boolean tryLockAfterAHandOver() {
+        var interrupted = Thread.interrupted();
+        try {
+            return lifecycleLock.tryLock(HAND_OVER_WAIT_MILLIS, TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            interrupted = true;
+            return false;
+        } finally {
+            if (interrupted) {
+                Thread.currentThread().interrupt();
+            }
+        }
+    }
+
+    /**
+     * Move {@link #holder} to {@code target} if {@link Holder}'s diagram has an edge from where it stands to there
+     * ({@link Holder#canMoveTo}), else leave it where it is. Under {@link #handOver}, which this takes; a caller that reads
+     * the holder and moves it as one step holds it already. Every move of the holder goes through here, so the rule lives
+     * once, as {@link ShardOwnedQueue}'s {@code Run.advanceTo} keeps it for a run's phase.
+     *
+     * @return the holder before this call, so the caller can tell whether it moved it and from where
+     */
+    Holder moveHolder(Holder target) {
+        requireNonNull(target, "No target holder provided");
+        synchronized (handOver) {
+            var previous = holder;
+            if (previous.canMoveTo(target)) {
+                holder = target;
+            }
+            return previous;
+        }
+    }
+
+    /**
+     * What the holder of {@link #lifecycleLock} is doing now ({@link #holder}), read under {@link #handOver}.
+     */
+    Holder holder() {
+        synchronized (handOver) {
+            return holder;
+        }
+    }
+
+    /**
+     * What the holder of {@link #lifecycleLock} is doing, and whether it owes a stop - one value, read under
+     * {@link #handOver} and moved only by {@link #moveHolder}, along the edges below, so a {@link #stop()} that did not get
+     * the lock, a stop on the holder's own thread, the holder's starts ({@link #holderStopsTheQueue},
+     * {@link #markStartedUnlessHolderStopsTheQueue}) and its letting go ({@link #letGoOfLifecycle}) each decide from it.
+     * {@link #stopsWithoutLock} and {@link #beingStarted} are data beside it, not part of the decision.
+     * <pre>
+     *   NONE ----------------&gt; STARTING | STOPPING
+     *   STARTING ------------&gt; STOP_OWED | NONE
+     *   STOP_OWED -----------&gt; FINISHING_OWED_STOP | NONE   (NONE: a critical error escaping the holder)
+     *   FINISHING_OWED_STOP -&gt; STOP_OWED | NONE             (STOP_OWED: a stop arriving meanwhile)
+     *   STOPPING ------------&gt; NONE
+     * </pre>
+     * A stop that did not get the lock stops every consumer itself, counted in {@link #stopsWithoutLock}; the holder waits
+     * for those stops, then stops every consumer again ({@link #FINISHING_OWED_STOP}), and is owed again by a stop arriving
+     * meanwhile, so it repeats the stopping. The adapter's {@code ShardOwnedDurableQueueConsumer}, whose stop without the
+     * lock stops nothing, has the same five values without that last edge.
+     * <p>
+     * Not forward-only, as {@code ShardOwnedQueue}'s {@code Run.Phase} is: that phase belongs to one run, a fresh object
+     * per start, while this queue has no per-start object to hang a phase on - this describes whoever holds the lock now,
+     * and goes back to {@link #NONE} as each holder lets go. A reentrant hold (an observer starting the queue from inside a
+     * {@code consume()}) does not move it ({@link #markHeld}); inside a holder that leaves the queue not started
+     * ({@link #stopsTheQueue}), such a hold starts nothing and does not mark the queue started.
+     */
+    enum Holder {
+        /**
+         * Nobody holds the lock, or a holder has just taken it or is about to let go of it: the stop tries the lock again,
+         * a few milliseconds at a time, parked; a start waiting for it says nothing yet, and reads it again one
+         * {@link ShardOwnedQueue#SHUTDOWN_BUDGET} later ({@link #holdLifecycle}).
+         */
         NONE,
         /**
          * A {@code consume()}, a {@code start()} or a {@link Subscription#start()} starting its consumers, owing no stop. A
@@ -1257,6 +1330,23 @@ public final class PostgresqlMessageQueue implements MessageQueue {
          */
         boolean isAStart() {
             return this == STARTING || this == STOP_OWED || this == FINISHING_OWED_STOP;
+        }
+
+        /**
+         * Whether the diagram above has an edge from this holder to {@code target}: from {@link #NONE} to
+         * {@link #STARTING} and {@link #STOPPING}; from {@code STARTING} to {@link #STOP_OWED} and {@code NONE}; from
+         * {@code STOP_OWED} to {@link #FINISHING_OWED_STOP} and {@code NONE}; from {@code FINISHING_OWED_STOP} to
+         * {@code STOP_OWED} and {@code NONE}; from {@code STOPPING} to {@code NONE} alone. Staying where it is is not an
+         * edge.
+         */
+        boolean canMoveTo(Holder target) {
+            return switch (this) {
+                case NONE -> target == STARTING || target == STOPPING;
+                case STARTING -> target == STOP_OWED || target == NONE;
+                case STOP_OWED -> target == FINISHING_OWED_STOP || target == NONE;
+                case FINISHING_OWED_STOP -> target == STOP_OWED || target == NONE;
+                case STOPPING -> target == NONE;
+            };
         }
 
         /**
@@ -1338,9 +1428,7 @@ public final class PostgresqlMessageQueue implements MessageQueue {
         // A reentrant hold (an observer starting the queue from inside a consume(), say) leaves the outer holder's word. A
         // stop never holds the lock reentrantly: on the holder's thread it is owed instead (stopFromInsideTheHolder).
         if (lifecycleLock.getHoldCount() == 1) {
-            synchronized (handOver) {
-                holder = what;
-            }
+            moveHolder(what);
         }
     }
 
@@ -1363,10 +1451,10 @@ public final class PostgresqlMessageQueue implements MessageQueue {
                 synchronized (handOver) {
                     awaitStopsWithoutLock();
                     if (holder == Holder.STOP_OWED) {
-                        holder = Holder.FINISHING_OWED_STOP;
+                        moveHolder(Holder.FINISHING_OWED_STOP);
                         started.set(false);
                     } else {
-                        holder = Holder.NONE;
+                        moveHolder(Holder.NONE);
                         beingStarted = List.of();
                         done = true;
                     }
@@ -1379,7 +1467,7 @@ public final class PostgresqlMessageQueue implements MessageQueue {
             if (!done) {
                 // Only a critical error from the stopping gets here.
                 synchronized (handOver) {
-                    holder = Holder.NONE;
+                    moveHolder(Holder.NONE);
                     beingStarted = List.of();
                 }
             }
