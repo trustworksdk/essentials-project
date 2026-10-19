@@ -356,6 +356,33 @@ subscriber per run reading the existing ~890 000-event backlog; 90 s window afte
   to be measured with the database on its own host before the second half of the rule can be applied.
 - Handled can exceed forwarded within a window because it includes draining the warm-up backlog.
 
+**M4 on a partitioned box** (2026-10-19, follow-up): PostgreSQL pinned to cores 0–3 (`docker update --cpuset-cpus`),
+each instance pinned to its own two cores with `taskset` and `-XX:ActiveProcessorCount=2`, started from
+`target/classes` (no Maven JVM beside it); batch 100; 1 and 2 instances alternated, three rounds:
+
+| Round | 1 instance, handled/s | 2 instances, handled/s (sum) |
+|---|---|---|
+| 1 | 3 481 | 6 116 |
+| 2 | 5 384 | 4 420 |
+| 3 | 5 774 | 3 792 |
+| **Median** | **5 384** | **4 420** |
+
+- **Forwarding with the reader isolated: 6 100–7 100 events/s** on one instance — 4–5× the plain view reader. With two
+  instances it drops to 4 500–5 200, because the forwarding instance also handles half the messages on its two cores.
+- **A second instance did not raise handled throughput, even isolated.** Not database CPU (PostgreSQL used 104–365 % of
+  its 400 %), not app CPU in the sense of a shared pool (each instance had its own two cores), not rebalancing (the
+  second instance held 32 of 64 units before the measurement window opened). PostgreSQL waits sampled during a
+  two-instance run (196 active-session samples): 46 % on CPU, 20 % the CDC walsender (off the message path), 14 % data
+  file reads (default `shared_buffers` against a ~890 000-event table), 8 % WAL sync/write, 4 % vacuum delay — no
+  dominant database wait. **Cause unresolved.**
+- **Method flaw found:** every run reuses the `Ef2BatchedForward` inbox, so a run inherits the previous run's backlog
+  (end depths ranged 4 000–234 000). Part of the round-to-round spread (single instance 3 481–5 774) is that. A clean
+  rerun purges the inbox between runs; profiling the instances (JFR) is the next step for the scale-out question.
+
+**Conclusion so far.** Batching the forward is proven and is the part of EF-2 worth building. Scaling the *handling*
+across instances is not demonstrated: on this box it adds nothing, for a reason not yet found. EF-2's value case should
+rest on the batched reader, with multi-instance handling an open question rather than a promise.
+
 **Decision rule.** Build (a1) if M4 forwards at least 3× M1 and M4 with two instances cuts catch-up materially below
 M5. If M1 already runs well above 800/s, the handler is the cost. Then (a0) plus parallel consumers may be enough, and
 EF-2 shrinks to documentation and the capability check.
