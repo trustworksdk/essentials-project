@@ -306,3 +306,8 @@ bottleneck (EF-2).
 is the reader's ceiling (M1 in `docs/key-partitioned-event-processing.md` §5, results there). A fresh one reads the
 stream from the beginning, so the existing backlog is the workload — measure a fixed window after warm-up, one
 processor at a time. Their resume points persist under their own names; they do nothing while switched off.
+`BatchedAccountsForwarder` (`trading-demo.ef2.batched-forwarder=true`, `.batch-size`, `.consumers`, `.run-token`) is
+M4: the proposed EF-2 topology built from today's parts — fenced lock, batched subscription, one `addMessagesReceived`
+per batch, competing inbox. A new `run-token` reads the backlog from the start. **Horizontal results from this
+devcontainer are not evidence**: PostgreSQL and every JVM share 8 cores, PostgreSQL alone takes 2.5–4 of them under
+load, and identical runs vary by tens of percent on the handling side.

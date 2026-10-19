@@ -334,6 +334,28 @@ the larger cost — but forwarding event by event (what (a0) does) caps the read
 views. Partitioned handling alone therefore cannot win; a batched forward (M4) is what (a1) has to deliver, and
 cheaper handler work (batched view writes) is a second, independent lever.
 
+**M4 measured** (2026-10-19, harness `BatchedAccountsForwarder`: one reader behind a fenced lock, a batched
+subscription to `Accounts`, one `addMessagesReceived` per batch carrying the deserialized events, keyed by aggregate id
+with `EventOrder` as the order; inbox `GlobalCompetingConsumers`, 8 consumers per instance, handler only counts; fresh
+subscriber per run reading the existing ~890 000-event backlog; 90 s window after 30 s warm-up; one sample per row):
+
+| Batch | Instances | Forwarded/s | Handled/s (sum) | Inbox depth at end |
+|---|---|---|---|---|
+| 10 | 1 | 2 176 | 2 651 | 865 |
+| 100 | 1 | **4 107** | 2 962 | 104 276 |
+| 500 | 1 | **4 000** | 4 816 | 6 475 |
+| 100 | 2 | 3 587 | 2 797 | ~72 000 |
+| 100 | 2 (rerun, CPU sampled) | 4 057 | 3 702 | ~38 000 |
+
+- **The batched forward is stable at ~4 000 events/s** from batch 100 up: 2.7× the plain `ViewEventProcessor` reader
+  (M1, ~1 500/s) and 4.7× the per-event `EventProcessor` forward (M1, ~850/s). Against the rule below that is just
+  under the 3× bar measured against the view reader, and well over it against today's forwarding processor.
+- **The handled rate is not conclusive.** Identical runs varied from ~2 800 to ~4 800/s, and a second instance did
+  not reliably add to it. The devcontainer has 8 cores shared by PostgreSQL and every JVM; during the two-instance
+  rerun the host was 65–75 % busy and PostgreSQL alone used 2.5–4 cores. Horizontal scaling of the handling side has
+  to be measured with the database on its own host before the second half of the rule can be applied.
+- Handled can exceed forwarded within a window because it includes draining the warm-up backlog.
+
 **Decision rule.** Build (a1) if M4 forwards at least 3× M1 and M4 with two instances cuts catch-up materially below
 M5. If M1 already runs well above 800/s, the handler is the cost. Then (a0) plus parallel consumers may be enough, and
 EF-2 shrinks to documentation and the capability check.
