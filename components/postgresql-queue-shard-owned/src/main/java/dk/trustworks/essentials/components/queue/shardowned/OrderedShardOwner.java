@@ -90,6 +90,14 @@ final class OrderedShardOwner implements BatchReadableOwner {
     }
 
     /**
+     * The running write transactions at the most recent horizon probe, which by construction was taken BEFORE the
+     * current pass's cursor read. Candidates are retired against this, never against the probe taken after the read:
+     * a writer that commits between a pass's read and its probe is absent from that probe, yet its rows were invisible
+     * to that read, and retiring on the later probe stepped the watermark over them. {@code null} until the first probe.
+     */
+    private Set<Long> runningAtLastProbe;
+
+    /**
      * Rows the pump read on this owner's behalf, consumed by the next pass. Pump thread only.
      */
     private BatchRead pendingBatch;
@@ -442,13 +450,16 @@ final class OrderedShardOwner implements BatchReadableOwner {
         // Counts owners SERVED, not statements issued — the two stopped being the same when the pump
         // began batching. orderedReadStatements is the one to compare against.
         metrics.cursorReads.increment();
+        var lastSeqRead = -1L;
         for (var row : rows) {
             maxSeen = Math.max(maxSeen, row.seq());
+            lastSeqRead = Math.max(lastSeqRead, row.seq());
             accept(row);
         }
-        // AFTER the read, never before: a transaction that allocates a value after this probe is not
-        // in the set, and treating it as retired would step over it. See ShardOwnedStorage.
-        advanceWatermark(connection);
+        // The new candidate's probe comes AFTER the read, never before: a transaction that allocates a value after
+        // the probe is not in the set, and treating it as retired would step over it. See ShardOwnedStorage. Retiring
+        // uses the PREVIOUS probe instead - see runningAtLastProbe.
+        advanceWatermark(connection, rows.size() >= settings.readBatchSize() ? lastSeqRead : Long.MAX_VALUE);
 
         var now           = System.nanoTime();
         var sweptThisPass = false;
@@ -909,14 +920,19 @@ final class OrderedShardOwner implements BatchReadableOwner {
      * chase query per unresolved value. Reusing {@code holeExpiry} here would reproduce the mechanism
      * this replaces rather than replacing it.
      */
-    private void advanceWatermark(Connection connection) throws SQLException {
+    private void advanceWatermark(Connection connection, long readReachedSeq) throws SQLException {
         if (watermarkCandidates.isEmpty() && maxSeen <= safeCursor) {
             // Fully caught up: nothing to retire and nothing worth recording. This is the idle poll,
             // which is the overwhelming majority of them, and it must not pay for the horizon probe.
             return;
         }
-        var now     = System.nanoTime();
-        var running = storage.runningWriteTransactionIds(connection);
+        // Taken before this pass's read, so a writer missing from it had committed (or aborted) before the read ran,
+        // and its rows were visible to it. The probe below, taken after the read, cannot say that: a writer that
+        // committed between the read and that probe is missing from it although the read never saw its rows.
+        var runningBeforeRead = runningAtLastProbe;
+        var now               = System.nanoTime();
+        var running           = storage.runningWriteTransactionIds(connection);
+        runningAtLastProbe = running;
         lastHorizonProbeNanos = now;
         metrics.horizonProbes.increment();
 
@@ -924,9 +940,17 @@ final class OrderedShardOwner implements BatchReadableOwner {
         var capped    = false;
         while (!watermarkCandidates.isEmpty()) {
             var candidate = watermarkCandidates.peekFirst();
-            var retired   = Collections.disjoint(candidate.runningXids(), running);
+            var retired   = runningBeforeRead != null && Collections.disjoint(candidate.runningXids(), runningBeforeRead);
             var expired   = now - candidate.observedAtNanos() > settings.watermarkCapNanos();
             if (!retired && !expired) {
+                break;
+            }
+            if (candidate.maxSeen() > readReachedSeq) {
+                // This pass's read stopped at its batch limit, so rows above readReachedSeq were not read since the
+                // writers retired - possibly including a late commit. Advance only as far as the read reached; the
+                // candidate stays for the next pass to finish.
+                capped |= !retired;
+                advanceTo = Math.max(advanceTo, readReachedSeq);
                 break;
             }
             capped |= !retired;

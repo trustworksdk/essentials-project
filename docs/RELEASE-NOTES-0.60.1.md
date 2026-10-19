@@ -211,6 +211,19 @@ not reported.
 start-up with `SchemaOwnership.COMPONENT`. If you run the schema harness in `validate` mode, apply
 `ALTER TABLE shard_queue_instance ADD COLUMN IF NOT EXISTS incarnation text` first.
 
+### 2.9 Shard-owned: ordered messages from concurrent producers are no longer delivered out of order
+
+With several producers enqueueing ordered messages concurrently — even on disjoint keys, each producer numbering and
+committing its own keys strictly in order — a message could be delivered after a later `key_order` of the same key. The
+ordered lane's watermark retired a pending observation against the running-transaction probe it took *after* reading,
+so a writer that committed between the read and the probe looked finished although the read had not seen its rows.
+The cursor stepped over them, and the head sweep delivered them late. The engine logged it as `key 'X' is being
+delivered key_order N after M was already delivered` and counted `orderViolations` and `sweepRecoveries`. Found by the
+trading demo's ledger load test, where it cost a cycle's release and settlement in a 200 000-message run;
+`ShardOwnedConcurrentProducersOrderIT` reproduced it in 4 of 5 runs. The watermark now retires against the probe taken
+before the read. Measured cost: none beyond noise in drain time and read statements; the watermark trails one pass
+longer.
+
 ## 3. Documentation
 
 - The polling-optimizer docs describe the new defaults, and the stale-statistics guidance is next to the claim
