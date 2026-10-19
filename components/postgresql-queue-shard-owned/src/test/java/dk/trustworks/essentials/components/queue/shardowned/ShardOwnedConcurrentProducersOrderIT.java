@@ -21,6 +21,7 @@ import dk.trustworks.essentials.components.queue.shardowned.ShardOwnedStorage.Or
 import dk.trustworks.essentials.components.queue.shardowned.spi.*;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.*;
+import org.junit.jupiter.api.condition.DisabledIfSystemProperty;
 import org.testcontainers.junit.jupiter.*;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 
@@ -59,8 +60,13 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <p>
  * Delivery is at-least-once, and a unit that changes hands mid-flight may legitimately redeliver: the test asserts every
  * message delivered, redeliveries within a small bound, and key order over each message's first delivery only.
+ * <p>
+ * A load suite: each repetition enqueues and drains {@code KEYS * PER_KEY} (40 000) messages. <b>On by default</b>, it
+ * asserts behaviour under volume; turn it off for a faster inner loop with {@code -Dloadtest.skip=true}. The
+ * deterministic pin of the same rule, {@code ShardOwnedOrderedWatermarkIT}, is not gated and keeps running.
  */
 @Testcontainers(disabledWithoutDocker = true)
+@DisabledIfSystemProperty(named = "loadtest.skip", matches = "true")
 class ShardOwnedConcurrentProducersOrderIT {
     private static final String QUEUE_NAME    = "concurrent-producers";
     private static final int    SHARD_COUNT   = 4;
