@@ -162,6 +162,17 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * True when this queue borrowed the shared runtime and must hand it back on stop.
      */
     private          boolean                  borrowedShared;
+    /**
+     * Whether the last run to end kept an ordered unit ({@link #keptOrderedUnitsOnLastStop()}). Written by
+     * {@link #endRun} alone.
+     * <p>
+     * A queue-wide field a run writes, which the rule that everything a run owns lives on its {@link Run} otherwise
+     * forbids. Exempt because it is not state of a run in progress but the outcome of the run that ended last: written
+     * once per run, as {@link #endRun} ends it under {@link #lifecycleLock}, never by a heartbeat tick, and read only
+     * after the {@code stop()} that ended the run has returned ({@link PostgresqlMessageQueue} asks it once the lanes of
+     * an unsubscribed subscription have stopped), so nothing reads it while a run is active.
+     */
+    private volatile boolean                  keptOrderedUnitsOnLastStop;
     private          long                     leaseTtlMillis;
     private          PayloadHandler           activeHandler;
     private          OrderedPayloadHandler    activeOrderedHandler;
@@ -2110,6 +2121,22 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
     }
 
     /**
+     * Whether the last run of this queue that a {@link #stop()} ended - or a start that ended its own run ({@link #endRun})
+     * - kept an ordered unit because a key was still in its handler {@code shedGrace} after the stop began. Such a unit's
+     * lease row still names this instance id, and the instance stays registered, until the instance's liveness lapses, a
+     * lease TTL after its last heartbeat. A queue started under the same instance id before then takes the unit at once
+     * ({@link ShardOwnedStorage#acquireLeaseGrant} accepts a row naming its own owner) and may start that key beside the
+     * handler still running here; another instance id cannot take it until then. {@link PostgresqlMessageQueue} asks this
+     * before it lets the next {@code consume()} register under an unsubscribed subscription's instance id.
+     * <p>
+     * False again once a later run ends keeping nothing; a stop that finds no run leaves it as it is, and so does a
+     * {@link #stopAbruptly()}, which releases nothing.
+     */
+    boolean keptOrderedUnitsOnLastStop() {
+        return keptOrderedUnitsOnLastStop;
+    }
+
+    /**
      * Wake-up hints the process received — a property of the shared listener, not of this queue.
      */
     public long notificationsReceived() {
@@ -2262,6 +2289,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         // instance's liveness lapses - a lease TTL - which is also why the instance must stay
         // registered. An unordered one is released regardless; at-least-once covers its redelivery.
         var kept = stillInHandler.stream().filter(owner -> "ordered".equals(owner.lane())).toList();
+        keptOrderedUnitsOnLastStop = !kept.isEmpty();
         var toRelease = held.stream().filter(owner -> !kept.contains(owner)).toList();
         // Nothing against the database for a run with no lease row to hand back and no deregistration owed: a start that
         // failed before it adopted anything.
@@ -2301,7 +2329,9 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
     /**
      * The database half of {@link #endRun}, on the budget thread ({@link #withinShutdownBudget}): flush what the serving
      * owners still hold, release the rows of {@code toRelease}, and deregister this instance when {@code deregister} and
-     * no ordered unit is {@code kept}.
+     * no ordered unit is {@code kept} - which leaves the membership row while a lease row of the other lane still names
+     * the instance: the other lane of a {@code PostgresqlMessageQueue} subscription, which shares it
+     * ({@link ShardOwnedStorage#deregisterInstance(String, String)}).
      */
     private void handBackWithinBudget(List<LeasedOwner> serving, List<LeasedOwner> toRelease, List<LeasedOwner> kept, boolean deregister) {
         // What the pumps would have flushed had they gone on serving these owners. Valid still:
@@ -2327,7 +2357,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         // whole staleness window — which makes a graceful scale-in worse for the cluster than a
         // crash.
         try {
-            storage.deregisterInstance(instanceId);
+            storage.deregisterInstance(instanceId, activeLane);
         } catch (SQLException e) {
             log.warn("Instance {} could not deregister on stop; it will age out of the membership "
                              + "table instead, and survivors will be held at a stale fair share until it does",

@@ -580,7 +580,7 @@ class ShardOwnedDurableQueuesStartTest {
      * A queue whose {@code consume} counts the subscription, waits for {@link #releaseConsume} when it is the
      * {@link #heldUpSubscription}th and, when it is the {@link #failingSubscription}th while {@link #failure} is set, throws
      * a new one of that type. Otherwise it records the queue's name and returns a
-     * subscription that is started until it is stopped, and whose {@code stop()} then throws an
+     * subscription that is started until it is unsubscribed, and whose {@code unsubscribe()} then throws an
      * {@link IllegalStateException} for a queue whose name starts with {@code stop-throws}, and waits for
      * {@link #releaseSlowStop} for one whose name starts with {@code slow-stop}.
      */
@@ -609,7 +609,7 @@ class ShardOwnedDurableQueuesStartTest {
             var started = new boolean[]{true};
             return proxy(Subscription.class, (subscriptionMethod, subscriptionArgs) -> switch (subscriptionMethod) {
                 case "isStarted" -> started[0];
-                case "stop" -> {
+                case "unsubscribe" -> {
                     if (name.startsWith("slow-stop")) {
                         slowStopEntered.countDown();
                         await(releaseSlowStop);

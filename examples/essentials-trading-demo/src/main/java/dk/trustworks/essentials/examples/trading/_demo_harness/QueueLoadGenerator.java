@@ -516,12 +516,17 @@ public class QueueLoadGenerator {
         return body.getBytes(StandardCharsets.UTF_8);
     }
 
+    /**
+     * Unsubscribed, not closed: {@link #start()} consumes anew, and a closed subscription stays registered with the
+     * queue, so every stop and start from the admin API left one more behind - the next {@code consume()} warned of a
+     * competing consumer under a new instance id suffix.
+     */
     private static void closeQuietly(Subscription subscription) {
         if (subscription != null) {
             try {
-                subscription.close();
+                subscription.unsubscribe();
             } catch (Exception e) {
-                log.warn("Could not close a queue subscription cleanly", e);
+                log.warn("Could not unsubscribe a queue subscription cleanly", e);
             }
         }
     }

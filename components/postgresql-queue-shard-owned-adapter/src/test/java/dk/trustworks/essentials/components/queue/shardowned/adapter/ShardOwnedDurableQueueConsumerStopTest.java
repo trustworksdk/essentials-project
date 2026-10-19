@@ -47,7 +47,7 @@ class ShardOwnedDurableQueueConsumerStopTest {
     private final CountDownLatch   letConsumeEnd = new CountDownLatch(1);
     private final List<String>     stopped       = new CopyOnWriteArrayList<>();
     private final AtomicBoolean    stopThrows    = new AtomicBoolean();
-    /** When set, the subscription's {@code stop()} counts down {@link #subscriptionStopping} and blocks until it is let go. */
+    /** When set, the subscription's {@code unsubscribe()} counts down {@link #subscriptionStopping} and blocks until it is let go. */
     private final AtomicReference<CountDownLatch> letSubscriptionStopEnd = new AtomicReference<>();
     private final CountDownLatch   subscriptionStopping = new CountDownLatch(1);
     private final MessageQueue     queue         = proxy(MessageQueue.class, (method, args) -> {
@@ -59,7 +59,7 @@ class ShardOwnedDurableQueueConsumerStopTest {
         var started = new boolean[]{true};
         return proxy(Subscription.class, (subscriptionMethod, subscriptionArgs) -> switch (subscriptionMethod) {
             case "isStarted" -> started[0];
-            case "stop" -> {
+            case "unsubscribe" -> {
                 started[0] = false;
                 stopped.add("subscription");
                 var blocking = letSubscriptionStopEnd.get();

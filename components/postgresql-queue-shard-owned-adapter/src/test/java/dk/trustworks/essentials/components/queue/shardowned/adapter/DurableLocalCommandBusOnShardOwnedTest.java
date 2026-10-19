@@ -100,7 +100,7 @@ class DurableLocalCommandBusOnShardOwnedTest {
 
     /**
      * A queue whose {@code consume} records the queue's name and returns a subscription that is started until it is
-     * stopped, which records the queue's name again.
+     * unsubscribed, which records the queue's name again.
      */
     private MessageQueue queue(String name) {
         return proxy(MessageQueue.class, (method, args) -> {
@@ -111,7 +111,7 @@ class DurableLocalCommandBusOnShardOwnedTest {
             var started = new boolean[]{true};
             return proxy(Subscription.class, (subscriptionMethod, subscriptionArgs) -> switch (subscriptionMethod) {
                 case "isStarted" -> started[0];
-                case "stop" -> {
+                case "unsubscribe" -> {
                     started[0] = false;
                     stopped.add(name);
                     yield null;

@@ -21,6 +21,10 @@ import dk.trustworks.essentials.shared.Lifecycle;
 /**
  * A running consumer. Closing it releases the shards it holds, so that another instance can pick them
  * up without waiting out a lease.
+ * <p>
+ * Stopping or closing it leaves it registered with its queue, so the queue's {@code start()} starts it again.
+ * A caller letting go of it for good - one that may {@code consume()} again in its place - ends it with
+ * {@link #unsubscribe()} instead.
  */
 public interface Subscription extends Lifecycle, AutoCloseable {
 
@@ -47,10 +51,27 @@ public interface Subscription extends Lifecycle, AutoCloseable {
     int orderedUnitsHeld();
 
     /**
-     * Equivalent to {@link #stop()}.
+     * Equivalent to {@link #stop()}: the subscription stays registered with its queue.
      */
     @Override
     default void close() {
+        stop();
+    }
+
+    /**
+     * End the subscription for good: stop both lanes, as {@link #stop()} does, and remove them from the queue that
+     * returned it. From then on nothing starts them again - neither the queue's {@code start()} nor this subscription's
+     * {@link #start()}, which throws - and they no longer count as one of the queue's subscriptions, so the next
+     * {@code consume()} in this process is not reported as a competing consumer of one nobody holds.
+     * <p>
+     * {@link #stop()} leaves the subscription registered, which is right for a caller that will {@link #start()} it again,
+     * and wrong for one that lets go of it and consumes anew: every such stop and {@code consume()} left one more stopped
+     * pair of lanes registered with the queue, which the queue's {@code start()} then started again, running a handler its
+     * caller had let go of. Calling it again does nothing.
+     * <p>
+     * The default only stops, for an implementation that keeps no registry of its subscriptions.
+     */
+    default void unsubscribe() {
         stop();
     }
 }

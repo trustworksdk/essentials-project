@@ -63,6 +63,22 @@ class ShardOwnedStoragePublicSurfaceTest {
     }
 
     @Test
+    void deregisterInstance_for_a_lane_refuses_a_null_lane_instead_of_deleting_the_row_unconditionally() {
+        // `l.lane <> NULL` is NULL for every lease row, so NOT EXISTS would always hold and the membership row be deleted
+        // whatever the other lane still holds.
+        assertThatThrownBy(() -> storage.deregisterInstance("instance-1", null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("No lane provided");
+    }
+
+    @Test
+    void deregisterInstance_for_a_lane_refuses_a_null_instance_id() {
+        assertThatThrownBy(() -> storage.deregisterInstance(null, "unordered"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("No instanceId provided");
+    }
+
+    @Test
     void the_0_60_0_signatures_are_still_there_and_deprecated_for_removal() throws NoSuchMethodException {
         var signatures = List.of(
                 ShardOwnedStorage.class.getMethod("releaseLeases", String.class, Collection.class, String.class),

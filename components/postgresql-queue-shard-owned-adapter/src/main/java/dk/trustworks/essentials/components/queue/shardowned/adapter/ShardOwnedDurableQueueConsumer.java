@@ -139,9 +139,13 @@ class ShardOwnedDurableQueueConsumer implements DurableQueueConsumer {
     /**
      * {@inheritDoc}
      * <p>
+     * Subscribes with the queue's {@code consume()} each time: every way this consumer stops ends its subscription with
+     * {@link Subscription#unsubscribe()} ({@link #stopSubscription()}), so the queue holds no subscription of it while it
+     * is stopped, and the restart registers under the same instance id rather than as a competing consumer.
+     * <p>
      * A {@link #stop()} that gave up waiting for this start, still subscribing, has stopped the consumer without it. This
-     * start then stops the subscription the queue returns, logging at WARN rather than throwing what that stop throws,
-     * since the stop's caller has already returned, and returns with the consumer not started.
+     * start then stops - unsubscribes - the subscription the queue returns, logging at WARN rather than throwing what that
+     * throws, since the stop's caller has already returned, and returns with the consumer not started.
      * <p>
      * A start called meanwhile - {@link ShardOwnedDurableQueues#start()} restarts the same consumer objects - waits for
      * that earlier start to return - as long as the queue's {@code consume()} takes, then the stop of the subscription it
@@ -352,8 +356,16 @@ class ShardOwnedDurableQueueConsumer implements DurableQueueConsumer {
     }
 
     /**
-     * Stop the subscription, if there is one, holding {@link #lifecycleLock}: the part of {@link #stop()}, {@link #stopIf}
+     * End the subscription, if there is one, holding {@link #lifecycleLock}: the part of {@link #stop()}, {@link #stopIf}
      * and {@link #retire()} that runs once the lock is theirs.
+     * <p>
+     * Unsubscribed ({@link Subscription#unsubscribe()}), not only stopped: the next {@link #start()} consumes from the
+     * queue anew, and a subscription merely stopped stays registered with the queue. Each stop and start of this consumer,
+     * and each cancel of one followed by a {@code consumeFromQueue} - a {@code DurableLocalCommandBus} restarting, an
+     * {@code Inbox} handing its lock over - then left one more stopped subscription with the queue: the next
+     * {@code consume()} logged a WARN calling this consumer a COMPETING consumer under a new instance id suffix, and a
+     * {@code start()} of the queue after its {@code stop()} started every such subscription again, running the handler of
+     * a consumer nobody held any more.
      */
     private void stopSubscription() {
         if (subscription == null) {
@@ -361,9 +373,9 @@ class ShardOwnedDurableQueueConsumer implements DurableQueueConsumer {
         }
         moveHolder(Holder.STOPPING);
         try {
-            subscription.stop();
+            subscription.unsubscribe();
         } finally {
-            // Dropped even when the stop throws: a subscription's stop throws only once both of its lanes have stopped (a
+            // Dropped even when it throws: a subscription's unsubscribe throws only once both of its lanes have stopped (a
             // QueueObserver failing for a release), and one left here made every later start() return without consuming.
             subscription = null;
             moveHolder(Holder.NONE);
@@ -493,9 +505,14 @@ class ShardOwnedDurableQueueConsumer implements DurableQueueConsumer {
         }
     }
 
+    /**
+     * Unsubscribe the subscription the queue's {@code consume()} returned a start for a stop that gave up waiting for it:
+     * unsubscribed, as {@link #stopSubscription()} does, or it stayed registered with the queue, stopped, and the next
+     * start's {@code consume()} added another.
+     */
     private void stopForAStopThatDidNotWait(Subscription subscribed) {
         try {
-            subscribed.stop();
+            subscribed.unsubscribe();
             log.info("Consumer '{}' stopped on queue '{}' as it finished starting, for a stop that did not wait for it", consumerName(), queueName());
         } catch (RuntimeException | Error e) {
             Exceptions.rethrowIfCriticalError(e);

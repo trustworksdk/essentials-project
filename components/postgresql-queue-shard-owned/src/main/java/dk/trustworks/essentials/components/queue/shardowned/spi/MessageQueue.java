@@ -111,8 +111,14 @@ public interface MessageQueue extends Lifecycle, AutoCloseable {
     /**
      * Consume with a handler. The engine leases shards, enforces per-key order, retries and
      * dead-letters according to {@code policy}, and acknowledges on the handler's behalf.
+     * <p>
+     * Each call is a subscription of its own, registered with the queue until it is
+     * {@link Subscription#unsubscribe() unsubscribed}: stopped, it stays registered, and the queue's
+     * {@code start()} starts it again. A second subscription registered in one process is a competing
+     * consumer under an instance id of its own.
      *
-     * @return a handle that stops consumption; closing it releases the leases
+     * @return a handle that stops consumption; closing it releases the leases, unsubscribing it also
+     * takes it out of the queue
      */
     Subscription consume(MessageHandler handler, ConsumerOptions options) throws SQLException;
 
@@ -146,17 +152,6 @@ public interface MessageQueue extends Lifecycle, AutoCloseable {
     MessageQueue addInterceptor(MessageQueueInterceptor interceptor);
 
     /**
-     * Messages enqueued and not yet acknowledged, per lane. Cheap enough to poll for monitoring.
-     */
-    /**
-     * What this process's consumers of this queue have done since they started — see
-     * {@link QueueStatistics} for why the scope matters before the numbers do.
-     * <p>
-     * In-memory and free to call. An instance consuming none of this queue reports
-     * {@link QueueStatistics#NONE}; that is "served elsewhere", not "stalled", and {@link #health()}
-     * is what tells those apart because it reads the database.
-     */
-    /**
      * Whether the ordered lane already holds a message for this key.
      * <p>
      * For a producer deciding between handling an event inline and queueing it behind what is already
@@ -169,8 +164,24 @@ public interface MessageQueue extends Lifecycle, AutoCloseable {
      */
     boolean hasOrderedMessagesForKey(String key) throws SQLException;
 
+    /**
+     * What this process's consumers of this queue have done since they started — see
+     * {@link QueueStatistics} for why the scope matters before the numbers do.
+     * <p>
+     * In-memory and free to call. An instance consuming none of this queue reports
+     * {@link QueueStatistics#NONE}; that is "served elsewhere", not "stalled", and {@link #health()}
+     * is what tells those apart because it reads the database.
+     * <p>
+     * The sum covers the subscriptions registered now. A subscription's counts leave it when the
+     * subscription is {@link Subscription#unsubscribe() unsubscribed}, so the running totals of a
+     * caller that unsubscribes and consumes anew start again from zero; a {@code stop()} and
+     * {@code start()} of the queue keep them.
+     */
     QueueStatistics statistics();
 
+    /**
+     * Messages enqueued and not yet acknowledged, per lane. Cheap enough to poll for monitoring.
+     */
     QueueDepth depth() throws SQLException;
 
     /**

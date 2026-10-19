@@ -715,6 +715,37 @@ public final class ShardOwnedStorage {
     }
 
     /**
+     * {@link #deregisterInstance(String)} for a consumer of {@code lane} stopping, unless a lease row of the OTHER lane
+     * still names the instance.
+     * <p>
+     * Liveness is the membership row ({@link #ownerIsGoneClause()}): without it any instance takes a unit naming the
+     * instance at once. The two lanes of one {@code PostgresqlMessageQueue} subscription share an instance id, and the
+     * unordered lane stops first: deleting the row there let another instance take an ordered unit the ordered lane was
+     * still serving, or went on to keep because a key was still in its handler past {@code shedGrace}, and start that key
+     * beside the handler. So the row stays for the lane stopping last, and once that lane has released its own units it
+     * deletes the row - or, when it keeps an ordered unit, leaves it to age out a lease TTL after the last heartbeat, when
+     * the kept unit becomes takeable. Rows of the stopping lane itself do not count: whatever of them it could not release
+     * (a failed release, or a unit leased by a start that escaped before adopting it) is served by nobody, and keeping
+     * the instance registered for them only held the other instances at a stale fair share.
+     */
+    public void deregisterInstance(String instanceId, String lane) throws SQLException {
+        requireNonNull(instanceId, "No instanceId provided");
+        // A null lane would make `l.lane <> ?` NULL for every row, so NOT EXISTS would always hold and the row be deleted
+        // unconditionally - the very deletion this overload exists to hold back.
+        requireNonNull(lane, "No lane provided");
+        try (var connection = dataSource.getConnection();
+             var statement = connection.prepareStatement(
+                     "DELETE FROM " + INSTANCE_TABLE + " i WHERE i.queue_id = ? AND i.instance_id = ?"
+                             + " AND NOT EXISTS (SELECT 1 FROM " + LEASE_TABLE + " l"
+                             + "                 WHERE l.queue_id = i.queue_id AND l.lane <> ? AND l.owner = i.instance_id)")) {
+            statement.setShort(1, queueId);
+            statement.setString(2, instanceId);
+            statement.setString(3, lane);
+            statement.executeUpdate();
+        }
+    }
+
+    /**
      * Drop membership rows far past any liveness window.
      * <p>
      * Rows were only ever upserted, never removed, so an instance id that changes per boot — which is

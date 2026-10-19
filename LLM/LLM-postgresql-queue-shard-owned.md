@@ -97,6 +97,21 @@ queue is therefore a separate competing consumer with its own instance identity 
 lane". Registering one per lane is a mistake the demo made: it delivered unordered messages to the
 ordered handler and reported two live instances for one process.
 
+**`Subscription.stop()` keeps it registered; `unsubscribe()` ends it.** A stopped (or closed)
+subscription stays with its queue, and the queue's `start()` starts it again. Letting go of one and
+calling `consume()` anew needs `unsubscribe()` first, which stops both lanes and takes them out of the
+queue: the next `consume()` then takes the same instance id and is not a competing consumer. One
+exception: when the stop kept an ordered unit because a key was still in its handler past `shedGrace`,
+that unit stays leased under the old id until the lease TTL runs out, and a new subscription under the
+same id would take it at once and could start the key beside the running handler. So the id stays out
+of use for a lease TTL, and a `consume()` before then registers under the next suffix (`<id>-1`), with
+no COMPETING WARN; the old id's membership row ages out meanwhile. Stopping
+instead left one stopped subscription behind per round — a COMPETING WARN with a new `-N` instance id
+suffix each time, and a queue `stop()`/`start()` restarting every abandoned handler. `ShardOwnedDurableQueues`
+unsubscribes on every consumer stop and cancel, so a `DurableLocalCommandBus` restart or an `Inbox`
+lock hand-over keeps one subscription. An unsubscribed subscription's `start()` throws, and its counts
+leave `statistics()`.
+
 ### The low-level path serves ONE lane
 
 `ShardOwnedQueue` is the engine underneath, and a single instance consumes a single lane —
@@ -316,7 +331,8 @@ accessor.
 
 **Autoscaling specifics.** Membership is a row per instance, refreshed every `leaseTtl / 3` and
 counted live within `leaseTtl`. A gracefully stopped instance deregisters immediately, so scaling in
-frees its shards and lets survivors take them at once. An instance that *crashes* is counted live
+frees its shards and lets survivors take them at once — unless it kept an ordered unit because a key
+outlasted `shedGrace`: its row then ages out with `leaseTtl`, and that unit becomes takeable with it. An instance that *crashes* is counted live
 until its row goes stale, which is the same window its leases take to expire — that is the designed
 failover time, not an extra cost. Rows for departed instances are pruned by the heartbeat.
 

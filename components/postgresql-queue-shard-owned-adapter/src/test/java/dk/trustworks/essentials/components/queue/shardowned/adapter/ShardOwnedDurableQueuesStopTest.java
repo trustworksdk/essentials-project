@@ -138,7 +138,7 @@ class ShardOwnedDurableQueuesStopTest {
 
     /**
      * A queue whose {@code consume} records the queue's name and returns a subscription that is started until it is
-     * stopped, and whose {@code stop()} then throws, as one throws when the observer it tells of a release throws - an
+     * unsubscribed, and whose {@code unsubscribe()} then throws, as one throws when the observer it tells of a release throws - an
      * {@link AssertionError} for a queue whose name starts with {@code asserting}, a {@link StackOverflowError} (a critical
      * error) for one whose name starts with {@code critical}, an {@link IllegalStateException} otherwise.
      */
@@ -151,7 +151,7 @@ class ShardOwnedDurableQueuesStopTest {
             var started = new boolean[]{true};
             return proxy(Subscription.class, (subscriptionMethod, subscriptionArgs) -> switch (subscriptionMethod) {
                 case "isStarted" -> started[0];
-                case "stop" -> {
+                case "unsubscribe" -> {
                     started[0] = false;
                     stopped.add(name);
                     if (name.startsWith("critical")) {
