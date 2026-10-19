@@ -201,21 +201,24 @@ class ShardOwnedConcurrentProducersOrderIT {
      * one transaction across whatever units its keys hash to.
      */
     private void produceConcurrently() throws Exception {
-        var pool = Executors.newFixedThreadPool(PRODUCERS);
-        try {
-            var futures = new ArrayList<Future<?>>();
-            for (var producer = 0; producer < PRODUCERS; producer++) {
-                var owned = producer;
-                futures.add(pool.submit(() -> {
-                    produce(owned);
-                    return null;
-                }));
+        // close() waits for the producers to end; shutdownNow() first interrupts them and produce() stops before its
+        // next batch, so a failed or timed-out future does not leave close() waiting for every remaining batch.
+        try (var pool = Executors.newFixedThreadPool(PRODUCERS)) {
+            try {
+                var futures = new ArrayList<Future<?>>();
+                for (var producer = 0; producer < PRODUCERS; producer++) {
+                    var owned = producer;
+                    futures.add(pool.submit(() -> {
+                        produce(owned);
+                        return null;
+                    }));
+                }
+                for (var future : futures) {
+                    future.get(5, TimeUnit.MINUTES);
+                }
+            } finally {
+                pool.shutdownNow();
             }
-            for (var future : futures) {
-                future.get(5, TimeUnit.MINUTES);
-            }
-        } finally {
-            pool.shutdownNow();
         }
     }
 
@@ -238,6 +241,10 @@ class ShardOwnedConcurrentProducersOrderIT {
         var numbered = new HashMap<String, Long>();
         var storage  = new ShardOwnedStorage(dataSource, queueId);
         for (var from = 0; from < stream.size(); from += BATCH) {
+            if (Thread.interrupted()) {
+                // produceConcurrently gave up on the producers (shutdownNow); stop, so its executor's close() returns
+                throw new InterruptedException("Producer " + producer + " interrupted after " + from + " messages");
+            }
             var byUnit = new TreeMap<Integer, List<OrderedPayload>>();
             for (var i = from; i < Math.min(stream.size(), from + BATCH); i++) {
                 var key   = stream.get(i);
