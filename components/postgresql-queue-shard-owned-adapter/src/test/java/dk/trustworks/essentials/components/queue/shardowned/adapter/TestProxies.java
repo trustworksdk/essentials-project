@@ -23,6 +23,8 @@ import java.lang.reflect.Proxy;
  * {@code Subscription}) the adapter's unit tests drive: one {@link Invocation} answers every method but
  * {@code toString}, {@code hashCode} and {@code equals}, which the proxy answers by identity.
  */
+// a proxy helper the adapter's unit tests share, not a test class: the name says what it serves, not what it is
+@SuppressWarnings("PMD.TestClassWithoutTestCases")
 final class TestProxies {
     private TestProxies() {
     }
