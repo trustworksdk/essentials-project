@@ -34,6 +34,7 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
 
 import static ch.qos.logback.classic.Level.*;
+import static dk.trustworks.essentials.components.queue.shardowned.SingleRowQueries.*;
 import static org.assertj.core.api.Assertions.*;
 
 /**
@@ -563,16 +564,9 @@ class ShardOwnedUnsubscribeIT {
     }
 
     private int unorderedShardsOwnedBy(String instanceId) throws SQLException {
-        try (var connection = dataSource.getConnection();
-             var statement = connection.prepareStatement("SELECT count(*) FROM " + ShardOwnedSchema.LEASE_TABLE
-                                                                 + " WHERE queue_id = ? AND lane = 'unordered' AND owner = ?")) {
-            statement.setShort(1, QUEUE_ID);
-            statement.setString(2, instanceId);
-            try (var resultSet = statement.executeQuery()) {
-                assertThat(resultSet.next()).as("a count(*) returns one row").isTrue();
-                return resultSet.getInt(1);
-            }
-        }
+        return queryForInt(dataSource, "Counting the unordered lease rows held by " + instanceId,
+                           "SELECT count(*) FROM " + ShardOwnedSchema.LEASE_TABLE + " WHERE queue_id = ? AND lane = 'unordered' AND owner = ?",
+                           QUEUE_ID, instanceId);
     }
 
     private boolean lockMembershipRowOf(Connection connection, String instanceId) throws SQLException {
@@ -609,16 +603,9 @@ class ShardOwnedUnsubscribeIT {
     }
 
     private int orderedUnitsOwnedBy(String instanceId) throws SQLException {
-        try (var connection = dataSource.getConnection();
-             var statement = connection.prepareStatement("SELECT count(*) FROM " + ShardOwnedSchema.LEASE_TABLE
-                                                                 + " WHERE queue_id = ? AND lane = 'ordered' AND owner = ?")) {
-            statement.setShort(1, QUEUE_ID);
-            statement.setString(2, instanceId);
-            try (var resultSet = statement.executeQuery()) {
-                assertThat(resultSet.next()).as("a count(*) returns one row").isTrue();
-                return resultSet.getInt(1);
-            }
-        }
+        return queryForInt(dataSource, "Counting the ordered lease rows held by " + instanceId,
+                           "SELECT count(*) FROM " + ShardOwnedSchema.LEASE_TABLE + " WHERE queue_id = ? AND lane = 'ordered' AND owner = ?",
+                           QUEUE_ID, instanceId);
     }
 
     private static Subscription consumeUnchecked(PostgresqlMessageQueue queue) {
