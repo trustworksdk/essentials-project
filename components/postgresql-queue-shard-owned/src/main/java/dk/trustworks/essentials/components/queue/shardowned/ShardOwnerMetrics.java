@@ -84,7 +84,9 @@ public final class ShardOwnerMetrics {
      * {@code watermarkCapped} counts advances forced by the wall-clock cap instead — an advance the
      * horizon had not authorised, which is the ordered lane's remaining exposure to a late commit and
      * therefore the number to watch. A non-zero value means some transaction outlived
-     * {@code watermarkCap}, exactly as an abandoned hole outlived {@code holeExpiry}.
+     * {@code watermarkCap}, exactly as an abandoned hole outlived {@code holeExpiry}. An advance past
+     * one capped candidate counts once, even when reads full at their row limit spread it over several
+     * passes.
      */
     /**
      * Statements actually issued for the ordered lane's reads, as against {@code cursorReads}, which

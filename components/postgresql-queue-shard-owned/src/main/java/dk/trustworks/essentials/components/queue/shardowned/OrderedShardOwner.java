@@ -104,6 +104,15 @@ final class OrderedShardOwner implements BatchReadableOwner {
     }
 
     /**
+     * The candidate at the head of {@link #watermarkCandidates} whose advance on the wall-clock cap has already been
+     * counted in {@code watermarkCapped}, or {@code null}. A capped candidate taken while the read was full advances the
+     * watermark only as far as that read reached and stays at the head, so it can move the watermark again on every pass
+     * while a backlog keeps the reads full; it is counted on the first of those passes only. Compared by identity: two
+     * candidates can be equal as records. Pump thread only.
+     */
+    private WatermarkCandidate cappedCandidateCounted;
+
+    /**
      * The running write transactions at the most recent horizon probe, which by construction was taken BEFORE the
      * current pass's cursor read. Candidates are retired against this, never against the probe taken after the read:
      * a writer that commits between a pass's read and its probe is absent from that probe, yet its rows were invisible
@@ -1052,7 +1061,8 @@ final class OrderedShardOwner implements BatchReadableOwner {
      * <b>The cap.</b> The horizon is database-global, so a long-running <em>writing</em> transaction
      * anywhere holds it back. Read-only transactions do not, however long they run — only a writer is
      * assigned an xid. Rather than stall the lane behind an unrelated batch writer, a candidate older
-     * than {@code watermarkCap} is taken anyway and counted. That is the same exposure an abandoned
+     * than {@code watermarkCap} is taken anyway and counted - once, even when a full read makes the
+     * advance past it take several passes. That is the same exposure an abandoned
      * hole carried, but on its own setting and a far more generous one: nothing about the watermark
      * pushes the bound down, where {@code holeExpiry} was held low by the cost of the map and the
      * chase query per unresolved value. Reusing {@code holeExpiry} here would reproduce the mechanism
@@ -1079,7 +1089,10 @@ final class OrderedShardOwner implements BatchReadableOwner {
         metrics.horizonProbes.increment();
 
         var advanceTo = -1L;
-        var capped    = false;
+        // The cap moved the watermark for a candidate not counted yet. A capped candidate this pass advances only part
+        // of the way stays at the head, and is counted once however many passes it takes - see cappedCandidateCounted.
+        var                capped        = false;
+        WatermarkCandidate cappedAndKept = null;
         while (!watermarkCandidates.isEmpty()) {
             var candidate = watermarkCandidates.peekFirst();
             var retired   = runningBeforeRead != null && Collections.disjoint(candidate.runningXids(), runningBeforeRead);
@@ -1087,21 +1100,27 @@ final class OrderedShardOwner implements BatchReadableOwner {
             if (!retired && !expired) {
                 break;
             }
+            capped |= !retired && candidate != cappedCandidateCounted;
             if (candidate.maxSeen() > readReachedSeq) {
                 // This pass's read stopped at its batch limit, so rows above readReachedSeq were not read since the
                 // writers retired - possibly including a late commit. Advance only as far as the read reached; the
                 // candidate stays for the next pass to finish.
-                capped |= !retired;
+                cappedAndKept = retired ? null : candidate;
                 advanceTo = Math.max(advanceTo, readReachedSeq);
                 break;
             }
-            capped |= !retired;
             advanceTo = Math.max(advanceTo, candidate.maxSeen());
             watermarkCandidates.removeFirst();
+            if (candidate == cappedCandidateCounted) {
+                cappedCandidateCounted = null;
+            }
         }
         if (advanceTo > safeCursor) {
             safeCursor = advanceTo;
             metrics.watermarkAdvances.increment();
+            if (cappedAndKept != null) {
+                cappedCandidateCounted = cappedAndKept;
+            }
             if (capped) {
                 metrics.watermarkCapped.increment();
                 log.debug("Ordered shard {}: watermark advanced to {} on the wall-clock cap — a write "

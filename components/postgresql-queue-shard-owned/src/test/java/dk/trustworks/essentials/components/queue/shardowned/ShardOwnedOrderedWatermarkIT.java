@@ -357,6 +357,89 @@ class ShardOwnedOrderedWatermarkIT {
         }
     }
 
+    /**
+     * The wall-clock cap is counted once per candidate it advances the watermark for, not once per pass. A candidate the
+     * cap took while the read was full advances only as far as that read reached and stays at the head of the deque, so
+     * while a backlog keeps every read full the same expired candidate moves the watermark again on each pass. Counted
+     * on each of those passes, one long writer read as several cap events on {@code watermarkCapped}. Here a writer that
+     * never commits keeps one candidate unretired past a 2 s cap while twelve rows committed below its {@code maxSeen}
+     * are read five at a time: three passes advance the watermark on that one candidate, and the cap is counted once.
+     */
+    @Test
+    void a_capped_candidate_advanced_over_several_full_reads_is_counted_once() throws Exception {
+        var shard     = 0;
+        var storage   = new ShardOwnedStorage(dataSource, QUEUE_ID);
+        var delivered = new CopyOnWriteArrayList<String>();
+        var metrics   = new ShardOwnerMetrics();
+        var cap       = Duration.ofSeconds(2);
+        var grant     = storage.acquireLeaseGrant("ordered", shard, "instance-1", 60_000L).orElseThrow();
+        var owner = new OrderedShardOwner(storage, shard, grant.fence(), byHand(TRUNCATING_LIMIT, cap),
+                                          (id, key, payload, type) -> delivered.add(new String(payload, StandardCharsets.UTF_8)),
+                                          metrics, RedeliveryPolicy.fixed(Duration.ofSeconds(1), 3), "instance-1", new ShardWakeup(),
+                                          HandlerDispatch.inline(), grant.previousOwnerReleased());
+        var keys = keysOnShard(shard, 14);
+
+        try (var pumping = dataSource.getConnection();
+             var longWriter = dataSource.getConnection();
+             var held = dataSource.getConnection()) {
+            owner.onTakeover(pumping);
+
+            // The long writer: an xid and nothing else, open for the whole test. It is what keeps the candidate unretired.
+            longWriter.setAutoCommit(false);
+            try (var statement = longWriter.prepareStatement("SELECT pg_current_xact_id()")) {
+                statement.executeQuery().close();
+            }
+
+            // Twelve rows allocated and held invisible, then two committed above them.
+            held.setAutoCommit(false);
+            var heldPayloads = new ArrayList<OrderedPayload>();
+            for (var index = 0; index < 12; index++) {
+                heldPayloads.add(new OrderedPayload(keys.get(index), 0, ("held-" + index).getBytes(StandardCharsets.UTF_8), 1));
+            }
+            var heldSeqs = storage.enqueueOrderedBatch(held, shard, heldPayloads);
+            List<Long> laterSeqs;
+            try (var committing = dataSource.getConnection()) {
+                laterSeqs = storage.enqueueOrderedBatch(committing, shard,
+                                                        List.of(new OrderedPayload(keys.get(12), 0, "later-0".getBytes(StandardCharsets.UTF_8), 1),
+                                                                new OrderedPayload(keys.get(13), 0, "later-1".getBytes(StandardCharsets.UTF_8), 1)));
+            }
+            assertThat(heldSeqs.getLast()).as("premise: the held rows sit below the committed ones").isLessThan(laterSeqs.getFirst());
+
+            // Pass 1 reads the two committed rows and records the candidate at their maxSeen, the long writer running.
+            owner.pumpOnce(pumping);
+            assertThat(delivered).as("premise: the committed rows are read while the held rows are invisible")
+                                 .containsExactlyInAnyOrder("later-0", "later-1");
+            assertThat(metrics.maxWatermarkLagSeq.get()).as("premise: pass 1 recorded a candidate above the watermark").isPositive();
+            assertThat(storage.runningWriteTransactionIds(pumping))
+                    .as("premise: the long writer holds an xid the horizon probe sees, so the candidate records it as running")
+                    .contains(backendXidOf(pumping, longWriter));
+
+            held.commit();
+            Thread.sleep(cap.toMillis() + 200);
+
+            // Passes 2 and 3: each read is full (5 of the 12 held rows), the candidate has expired and the long writer still
+            // runs, so the cap moves the watermark to the last row read and the candidate stays at the head of the deque.
+            owner.pumpOnce(pumping);
+            assertThat(owner.batchReadCursor()).as("premise: the cap advanced the watermark to the full read's last row")
+                                               .isEqualTo(heldSeqs.get(4));
+            assertThat(metrics.watermarkCapped.sum()).as("premise: the cap fired").isEqualTo(1L);
+            owner.pumpOnce(pumping);
+            assertThat(owner.batchReadCursor()).as("premise: the same capped candidate advanced the watermark again")
+                                               .isEqualTo(heldSeqs.get(9));
+
+            // Pass 4: the read is short (4 rows), so the candidate is taken whole and leaves the deque.
+            owner.pumpOnce(pumping);
+            assertThat(owner.batchReadCursor()).isEqualTo(laterSeqs.getLast());
+            assertThat(delivered).as("every row delivered, by the cursor read").hasSize(14);
+            assertThat(metrics.watermarkAdvances.sum()).as("each of the three passes moved the watermark").isEqualTo(3L);
+            // The discriminating assertion: one candidate, one cap event, however many passes it took to advance past it.
+            assertThat(metrics.watermarkCapped.sum())
+                    .as("one candidate taken on the cap, advanced over three passes, is one cap event")
+                    .isEqualTo(1L);
+            longWriter.rollback();
+        }
+    }
+
     /** The xid {@code writer}'s backend holds, as {@code pg_stat_activity.backend_xid} shows it to {@code observer}; fails if it holds none. */
     private static long backendXidOf(Connection observer, Connection writer) throws SQLException {
         int pid;
@@ -452,9 +535,14 @@ class ShardOwnedOrderedWatermarkIT {
      * longer than the test.
      */
     private static ShardOwnerSettings byHand(int readBatchSize) {
+        return byHand(readBatchSize, Duration.ofSeconds(30));
+    }
+
+    /** {@link #byHand(int)} with the given {@code watermarkCap}, for a test that wants the cap to fire. */
+    private static ShardOwnerSettings byHand(int readBatchSize, Duration watermarkCap) {
         return new ShardOwnerSettings(readBatchSize, 1_000, Duration.ofDays(36_500), Duration.ofMillis(2), Duration.ofMillis(200),
                                       Duration.ofSeconds(20), 1_000, 8, Duration.ofMillis(500), Duration.ofSeconds(20), 2,
-                                      Duration.ofSeconds(5), Duration.ofSeconds(30), Duration.ofSeconds(30));
+                                      Duration.ofSeconds(5), Duration.ofSeconds(30), watermarkCap);
     }
 
     /**

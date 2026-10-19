@@ -54,7 +54,8 @@ package dk.trustworks.essentials.components.queue.shardowned.spi;
  *                                         during one and fencing when it does not
  * @param watermarkCapped                  times the ordered lane advanced its cursor on the wall-clock cap rather
  *                                         than on proof. Each one may have skipped a message; a long write
- *                                         transaction is the cause
+ *                                         transaction is the cause. An advance past one capped observation counts
+ *                                         once, however many reads it takes
  * @param keysBlockedByDeadLetter          times a key was recorded as stopped behind a dead letter. A key never
  *                                         advances past one, so non-zero means some key is waiting for a human to
  *                                         resurrect or delete the message holding it. Counted per recording, not as a
