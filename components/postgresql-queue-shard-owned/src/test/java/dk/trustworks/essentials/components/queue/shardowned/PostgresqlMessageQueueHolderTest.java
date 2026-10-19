@@ -38,7 +38,8 @@ class PostgresqlMessageQueueHolderTest {
 
     private static final Map<Holder, Set<Holder>> EDGES = Map.of(
             NONE, EnumSet.of(STARTING, STOPPING),
-            STARTING, EnumSet.of(STOP_OWED, NONE),
+            STARTING, EnumSet.of(UNDOING_A_START, STOP_OWED, NONE),
+            UNDOING_A_START, EnumSet.of(STARTING, STOP_OWED),
             STOP_OWED, EnumSet.of(FINISHING_OWED_STOP, NONE),
             FINISHING_OWED_STOP, EnumSet.of(STOP_OWED, NONE),
             STOPPING, EnumSet.of(NONE));
@@ -49,6 +50,7 @@ class PostgresqlMessageQueueHolderTest {
     private static final Map<Holder, List<Holder>> PATH_FROM_NONE = Map.of(
             NONE, List.of(),
             STARTING, List.of(STARTING),
+            UNDOING_A_START, List.of(STARTING, UNDOING_A_START),
             STOP_OWED, List.of(STARTING, STOP_OWED),
             FINISHING_OWED_STOP, List.of(STARTING, STOP_OWED, FINISHING_OWED_STOP),
             STOPPING, List.of(STOPPING));
@@ -79,13 +81,41 @@ class PostgresqlMessageQueueHolderTest {
 
     @Test
     void a_stop_never_takes_over_from_a_start_or_another_stop() {
-        for (var start : List.of(STARTING, STOP_OWED, FINISHING_OWED_STOP, STOPPING)) {
+        for (var start : List.of(STARTING, UNDOING_A_START, STOP_OWED, FINISHING_OWED_STOP, STOPPING)) {
             var queue = queueHeldBy(start);
 
             queue.moveHolder(STOPPING);
 
             assertThat(queue.holder()).as("%s asked for STOPPING", start).isEqualTo(start);
         }
+    }
+
+    /**
+     * A stop arriving while a failed start stops what it started is owed, as during the starts, and the end of that undo
+     * does not take it back: there is no edge from {@link Holder#STOP_OWED} to {@link Holder#STARTING}.
+     */
+    @Test
+    void a_stop_arriving_while_a_failed_start_is_undone_stays_owed_once_the_undo_ends() {
+        var queue = queueHeldBy(UNDOING_A_START);
+
+        queue.moveHolder(STOP_OWED);
+        queue.moveHolder(STARTING);
+
+        assertThat(queue.holder()).isEqualTo(STOP_OWED);
+    }
+
+    /**
+     * Nothing starts while a holder stops the queue or undoes a failed start of its own, and only those; a stop that does
+     * not get the lock is owed by every kind of start, the undoing one included.
+     */
+    @Test
+    void nothing_starts_while_the_holder_stops_the_queue_or_undoes_a_failed_start() {
+        assertThat(EnumSet.allOf(Holder.class).stream().filter(Holder::letsNothingStart))
+                .containsExactlyInAnyOrder(UNDOING_A_START, STOP_OWED, FINISHING_OWED_STOP, STOPPING);
+        assertThat(EnumSet.allOf(Holder.class).stream().filter(Holder::stopsTheQueue))
+                .containsExactlyInAnyOrder(STOP_OWED, FINISHING_OWED_STOP, STOPPING);
+        assertThat(EnumSet.allOf(Holder.class).stream().filter(Holder::isAStart))
+                .containsExactlyInAnyOrder(STARTING, UNDOING_A_START, STOP_OWED, FINISHING_OWED_STOP);
     }
 
     @Test

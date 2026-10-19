@@ -2478,6 +2478,153 @@ class ShardOwnedLifecycleIT {
     }
 
     /**
+     * A {@code MessageQueue.start()} that fails on one subscription leaves running the other, which the caller started
+     * on its own after the queue's {@code stop()} and which is consuming: registered before the failing subscription, the
+     * start finds its lanes started and leaves them be; registered after it, the start never reaches it. The start stops
+     * only the lanes it started, throws, and leaves the queue not started, while the subscription started on its own
+     * stays started, keeps its units and still delivers. The start used to stop every registered consumer on such a
+     * failure, so that subscription read not started and consumed nothing, and nothing started it again. A trigger fails
+     * the membership row the failing subscription registers, under its own instance id, as a database failure would.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"first", "second"})
+    void a_failed_message_queue_start_leaves_a_subscription_started_on_its_own_running(String startedOnItsOwn) throws Exception {
+        var instanceId        = "spi-failed-start-keeps-" + startedOnItsOwn;
+        var firstStarted      = "first".equals(startedOnItsOwn);
+        var failingInstanceId = firstStarted ? instanceId + "-1" : instanceId;
+        var runningInstanceId = firstStarted ? instanceId : instanceId + "-1";
+        var delivered         = ConcurrentHashMap.<String>newKeySet();
+        MessageHandler handler = (messageId, key, payload, payloadType) -> delivered.add(new String(payload, StandardCharsets.UTF_8));
+        var queue         = new PostgresqlMessageQueue(dataSource, QUEUE_ID, SHARD_COUNT, instanceId);
+        var subscriptions = new CopyOnWriteArrayList<Subscription>();
+        try {
+            var first = queue.consume(handler, ConsumerOptions.defaults());
+            subscriptions.add(first);
+            var second = queue.consume(handler, ConsumerOptions.defaults());
+            subscriptions.add(second);
+            queue.stop();
+            assertThat(first.isStarted() || second.isStarted()).as("premise: the queue's stop stopped both subscriptions").isFalse();
+
+            var running = firstStarted ? first : second;
+            var failing = firstStarted ? second : first;
+            running.start();
+            Awaitility.await().atMost(Duration.ofSeconds(20))
+                      .alias("premise: the subscription started on its own holds units in both lanes")
+                      .until(() -> running.unorderedShardsHeld() > 0 && running.orderedUnitsHeld() > 0);
+            assertThat(queue.isStarted()).as("premise: the subscription's start left the queue not started").isFalse();
+            failTheRegistrationOf(failingInstanceId, true);
+
+            var thrown = catchThrowable(queue::start);
+
+            assertThat(thrown).as("premise: the queue's start failed registering the other subscription")
+                              .isInstanceOf(IllegalStateException.class)
+                              .hasStackTraceContaining("simulated failure registering instance " + failingInstanceId);
+            assertThat(queue.isStarted()).as("the failed start left the queue not started").isFalse();
+            assertThat(failing.isStarted()).as("the subscription the start failed on is not started").isFalse();
+            assertThat(running.isStarted()).as("the subscription started on its own is still started").isTrue();
+            assertThat(instanceRegistered(runningInstanceId)).as("its instance is still registered").isTrue();
+            assertThat(running.unorderedShardsHeld() > 0 && running.orderedUnitsHeld() > 0).as("it still holds units in both lanes").isTrue();
+
+            queue.enqueue(List.of(Message.of("after-the-failed-start".getBytes(StandardCharsets.UTF_8), 1)));
+            Awaitility.await().atMost(Duration.ofSeconds(20))
+                      .untilAsserted(() -> assertThat(delivered).as("it still delivers").contains("after-the-failed-start"));
+        } finally {
+            failTheRegistrationOf(failingInstanceId, false);
+            queue.close();
+            // What the queue's close() did not reach, so a failure leaves nothing leasing into the next test.
+            subscriptions.forEach(Subscription::stop);
+        }
+    }
+
+    /**
+     * A {@code MessageQueue.start()} called by a {@code QueueObserver} told of a release while a failed
+     * {@code Subscription.start()} stops the lane it started does nothing: the observer throws for the unordered lane's
+     * first acquisition, which escapes that lane's start with the lane running, and the subscription's start stops it,
+     * telling the observer of each release on the starting thread. The queue ends not started, neither lane is started,
+     * no lease or membership row names the instance, and a later {@code start()} starts both lanes again. While it
+     * stopped the lane, the subscription's start still read as a start under way, so the observer's {@code start()}
+     * marked the queue started and started every consumer, the lane being stopped included, for a
+     * {@code Subscription.start()} that then failed.
+     */
+    @Test
+    void a_message_queue_start_called_by_an_observer_while_a_failed_subscription_start_is_undone_starts_nothing() throws Exception {
+        var instanceId        = "spi-start-inside-undo";
+        var failOnAcquire     = new AtomicBoolean();
+        var undoingThread     = new AtomicReference<Thread>();
+        var startOnRelease    = new AtomicBoolean();
+        var startReturned     = new AtomicBoolean();
+        var startedAfterStart = new AtomicReference<Boolean>();
+        try (var queue = new PostgresqlMessageQueue(dataSource, QUEUE_ID, SHARD_COUNT, instanceId)) {
+            queue.addObserver(new QueueObserver() {
+                @Override
+                public void shardOwnershipChanged(int shard, boolean acquired) {
+                    if (acquired && failOnAcquire.compareAndSet(true, false)) {
+                        undoingThread.set(Thread.currentThread());
+                        startOnRelease.set(true);
+                        throw new IllegalStateException("simulated observer failure acquiring unit " + shard);
+                    } else if (!acquired && Thread.currentThread().equals(undoingThread.get()) && startOnRelease.compareAndSet(true, false)) {
+                        queue.start();
+                        startReturned.set(true);
+                        startedAfterStart.set(queue.isStarted());
+                    }
+                }
+            });
+            var subscription = consumeUnchecked(queue);
+            try {
+                Awaitility.await().atMost(Duration.ofSeconds(20))
+                          .alias("premise: both lanes hold units before the queue is stopped")
+                          .until(() -> subscription.unorderedShardsHeld() > 0 && subscription.orderedUnitsHeld() > 0);
+                queue.stop();
+                assertThat(queue.isStarted() || subscription.isStarted()).as("premise: the queue and both lanes are stopped").isFalse();
+                failOnAcquire.set(true);
+
+                var thrown = catchThrowable(subscription::start);
+
+                assertThat(thrown).as("premise: the observer's failure escaped the subscription's start")
+                                  .isInstanceOf(IllegalStateException.class)
+                                  .hasMessageStartingWith("simulated observer failure acquiring");
+                assertThat(startReturned).as("premise: the observer's start was called while the lane was being stopped, and returned").isTrue();
+                assertThat(startedAfterStart.get()).as("the observer's start left the queue not started").isFalse();
+                assertThat(queue.isStarted()).as("the queue ends not started").isFalse();
+                assertThat(subscription.isStarted()).as("neither lane is started").isFalse();
+                Awaitility.await().during(Duration.ofSeconds(1)).atMost(Duration.ofSeconds(10)).until(
+                        () -> !instanceRegistered(instanceId) && unitsOwnedBy("unordered", instanceId) == 0 && unitsOwnedBy("ordered", instanceId) == 0);
+
+                queue.start();
+
+                assertThat(queue.isStarted()).as("a start afterwards starts the queue").isTrue();
+                Awaitility.await().atMost(Duration.ofSeconds(20))
+                          .alias("both lanes hold units again")
+                          .until(() -> subscription.unorderedShardsHeld() > 0 && subscription.orderedUnitsHeld() > 0);
+            } finally {
+                failOnAcquire.set(false);
+                // What the queue's stop did not reach, so a failure leaves nothing leasing into the next test.
+                subscription.stop();
+            }
+        }
+    }
+
+    /**
+     * Make every registration of {@code instanceId} in the membership table - the first, and each heartbeat after it -
+     * fail, as a database error would, or stop doing so.
+     */
+    private void failTheRegistrationOf(String instanceId, boolean fail) throws Exception {
+        try (var connection = dataSource.getConnection(); var statement = connection.createStatement()) {
+            if (fail) {
+                statement.execute("CREATE OR REPLACE FUNCTION fail_instance_registration() RETURNS trigger AS $$ BEGIN "
+                                          + "RAISE EXCEPTION 'simulated failure registering instance %', NEW.instance_id; "
+                                          + "END $$ LANGUAGE plpgsql");
+                statement.execute("CREATE TRIGGER fail_instance_registration BEFORE INSERT OR UPDATE ON " + ShardOwnedSchema.INSTANCE_TABLE
+                                          + " FOR EACH ROW WHEN (NEW.instance_id = '" + instanceId + "')"
+                                          + " EXECUTE FUNCTION fail_instance_registration()");
+            } else {
+                statement.execute("DROP TRIGGER IF EXISTS fail_instance_registration ON " + ShardOwnedSchema.INSTANCE_TABLE);
+                statement.execute("DROP FUNCTION IF EXISTS fail_instance_registration()");
+            }
+        }
+    }
+
+    /**
      * A {@code consume()} - the queue's first - or a {@code Subscription.start()} after the queue's {@code stop()}
      * escaping with a critical error leaves the lane it left running for the queue's {@code close()} to stop: an observer
      * throws a {@link LinkageError} for the first acquisition, which escapes the unordered lane's start with that lane

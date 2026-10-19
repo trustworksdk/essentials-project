@@ -452,15 +452,17 @@ class ShardOwnedDurableQueueConsumer implements DurableQueueConsumer {
      * Not forward-only, as {@code ShardOwnedQueue}'s {@code Run.Phase} is: this describes whoever holds the lock now, and
      * goes back to {@link #NONE} as each holder lets go, where a {@code Run.Phase} belongs to one run.
      * <p>
-     * {@code PostgresqlMessageQueue}'s lifecycle holder has the same five values but not the same edges, because its stop
-     * does more without the lock. A {@code PostgresqlMessageQueue.stop()} that did not get the lock stops every consumer
-     * itself, counted in its {@code stopsWithoutLock}, and the holder waits for it and then stops every consumer again; so
-     * a stop arriving while the holder does that ({@code FINISHING_OWED_STOP}) is owed again ({@code STOP_OWED}), and the
-     * holder repeats the stopping. A {@link #stop()} here that did not get the lock stops nothing, and leaves all of it to
-     * the start: once that start is stopping the subscription ({@link #FINISHING_OWED_STOP}), after which the consumer is
-     * not started, a stop arriving owes nothing further, and returns. Both read {@link #NONE} the same way: a start waiting
-     * for the lock asks again one {@link #STOP_WAITS_FOR_START} later rather than guess what holds it, and a stop waits for
-     * the lock a few milliseconds at a time, parked.
+     * {@code PostgresqlMessageQueue}'s lifecycle holder has these five values, and a sixth, {@code UNDOING_A_START},
+     * for a failed start of its own stopping the consumers it started, which this consumer leaves to the queue's
+     * {@code consume()}. Nor are the edges the same, because its stop does more without the lock. A
+     * {@code PostgresqlMessageQueue.stop()} that did not get the lock stops every consumer itself, counted in its
+     * {@code stopsWithoutLock}, and the holder waits for it and then stops every consumer again; so a stop arriving
+     * while the holder does that ({@code FINISHING_OWED_STOP}) is owed again ({@code STOP_OWED}), and the holder
+     * repeats the stopping. A {@link #stop()} here that did not get the lock stops nothing, and leaves all of it to the
+     * start: once that start is stopping the subscription ({@link #FINISHING_OWED_STOP}), after which the consumer is
+     * not started, a stop arriving owes nothing further, and returns. Both read {@link #NONE} the same way: a start
+     * waiting for the lock asks again one {@link #STOP_WAITS_FOR_START} later rather than guess what holds it, and a
+     * stop waits for the lock a few milliseconds at a time, parked.
      */
     enum Holder {
         /**

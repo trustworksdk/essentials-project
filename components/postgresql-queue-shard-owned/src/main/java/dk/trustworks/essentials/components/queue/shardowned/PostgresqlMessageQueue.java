@@ -705,8 +705,9 @@ public final class PostgresqlMessageQueue implements MessageQueue {
         // included. The starts below then stop at the first one not yet begun, the pair is still
         // registered, and letGoOfLifecycle stops every consumer again and leaves the queue not
         // started - as if the stop had come right after this consume(). Called on the thread of a
-        // stop, or of a holder doing the stop it owes (an observer told of a release), this starts
-        // neither lane: it registers the pair and leaves the queue not started, for a later start().
+        // stop, or of a holder doing the stop it owes or stopping what its failed start started (an
+        // observer told of a release), this starts neither lane: it registers the pair and leaves the
+        // queue not started, for a later start().
         var pair = List.of(unorderedConsumer, orderedConsumer);
         holdLifecycle(Holder.STARTING, "consume");
         try {
@@ -720,7 +721,7 @@ public final class PostgresqlMessageQueue implements MessageQueue {
             // registered by the time this one is.
             var firstSubscription = consumers.isEmpty();
             try {
-                startEachOrStopAll(pair, this::holderStopsTheQueue);
+                startEachOrUndo(pair);
             } catch (RuntimeException | Error e) {
                 // A non-critical failure has stopped both lanes, and nothing is registered (above). A critical error may
                 // have left one running - a QueueObserver throwing it for the unordered lane's acquisition escapes that
@@ -731,7 +732,7 @@ public final class PostgresqlMessageQueue implements MessageQueue {
                     consumers.add(orderedConsumer);
                     registered[0] = true;
                     if (firstSubscription) {
-                        markStartedUnlessHolderStopsTheQueue();
+                        markStartedUnlessHolderLetsNothingStart();
                     }
                 }
                 throw e;
@@ -762,7 +763,7 @@ public final class PostgresqlMessageQueue implements MessageQueue {
             consumers.add(orderedConsumer);
             registered[0] = true;
             if (firstSubscription) {
-                markStartedUnlessHolderStopsTheQueue();
+                markStartedUnlessHolderLetsNothingStart();
             }
         } finally {
             letGoOfLifecycle();
@@ -799,10 +800,12 @@ public final class PostgresqlMessageQueue implements MessageQueue {
             }
 
             /**
-             * Starts both lanes, or neither: a start of either lane that fails with anything but a critical error
-             * ({@link Exceptions#isCriticalError}) stops both and escapes as it was thrown, with any failure of those
-             * stops added to it as suppressed, so the subscription is left not started and a later {@code start()} runs
-             * again ({@link #startEachOrStopAll}). It used to start them one after the other and stop at the first throw:
+             * Starts each lane not yet running, and on a failure stops only the lanes this start started: a start of
+             * either lane that fails with anything but a critical error ({@link Exceptions#isCriticalError}) stops
+             * every lane this call started - both when neither was running - and escapes as it was thrown, with any
+             * failure of those stops added to it as suppressed ({@link #startEachOrUndo}). A lane that was running
+             * before this call is left running, as it was, so {@link #isStarted()} reads true only when one was; a
+             * later {@code start()} runs again. It used to start them one after the other and stop at the first throw:
              * a {@link QueueObserver} throwing for the unordered lane's acquisition left that lane running and the
              * ordered lane never started. A critical error escapes untouched, with nothing stopped; the queue's
              * {@code stop()} and {@code close()} still reach a lane it left running, as they reach every registered
@@ -827,7 +830,8 @@ public final class PostgresqlMessageQueue implements MessageQueue {
              * <p>
              * Called on the thread of a queue {@code stop()}, or of a {@code consume()} or start doing the stop it owes - by
              * a {@link QueueObserver} told of a release - this starts neither lane and leaves the queue not started, as the
-             * queue's {@code start()} does there: that stop is stopping every consumer.
+             * queue's {@code start()} does there: that stop is stopping every consumer. So it does on the thread of a
+             * {@code consume()} or start stopping the consumers its failed start started: that start is about to fail.
              * <p>
              * Throws {@link IllegalStateException}, starting nothing, once the subscription has been
              * {@link #unsubscribe() unsubscribed}: its lanes are no longer the queue's, and no stop of the queue would reach
@@ -844,9 +848,9 @@ public final class PostgresqlMessageQueue implements MessageQueue {
                         throw new IllegalStateException("The subscription of queue " + queueId + " under instance '" + consumerInstanceId
                                                                 + "' has been unsubscribed and cannot be started again; consume() anew");
                     }
-                    // The queue stays marked as it was, whatever this does: a non-critical failure has stopped both lanes,
-                    // and a lane a critical error left running is registered, which is all a stop() or close() needs.
-                    startEachOrStopAll(pair, PostgresqlMessageQueue.this::holderStopsTheQueue);
+                    // The queue stays marked as it was, whatever this does: a non-critical failure has stopped the lanes this
+                    // started, and a lane a critical error left running is registered, which is all a stop() or close() needs.
+                    startEachOrUndo(pair);
                 } finally {
                     letGoOfLifecycle();
                 }
@@ -1349,7 +1353,7 @@ public final class PostgresqlMessageQueue implements MessageQueue {
      * <p>
      * Starts every consumer or none. A consumer's start that fails with anything but a critical error
      * ({@link Exceptions#isCriticalError}) - a {@link QueueObserver} throwing for an acquisition, say, which escapes that
-     * consumer's start with the consumer running - stops every consumer of this queue and escapes as it was thrown, with
+     * consumer's start with the consumer running - stops every consumer this start started and escapes as it was thrown, with
      * any failure of those stops added to it as suppressed; the queue is then not started, so a later {@code start()}
      * runs again. It used to start them one after the other and stop at the first throw, which left the consumers
      * before it running, the ones after it never started, and the queue reporting itself started, so a second
@@ -1360,7 +1364,10 @@ public final class PostgresqlMessageQueue implements MessageQueue {
      * On a queue marked started, this does nothing. A {@link Subscription#start()}, and a {@link #consume} other than the
      * queue's first, start their own lanes and leave the queue marked as it was, so after a {@link #stop()} this still
      * starts every consumer that stop stopped; a consumer such a start has already started again stays running, its
-     * start doing nothing the second time.
+     * start doing nothing the second time. It stays running when this start fails too: a failure with anything but a
+     * critical error stops only the consumers this start started, and leaves the queue not started
+     * ({@link #startEachOrUndo}). It used to stop every consumer, the subscription started on its own and already
+     * consuming included, and nothing started it again.
      * <p>
      * A {@link #stop()} that gave up waiting for this start stops the queue without it. This start then starts none of
      * the consumers it has not begun yet, stops every consumer again once the one it is starting returns, and returns
@@ -1386,23 +1393,25 @@ public final class PostgresqlMessageQueue implements MessageQueue {
         holdLifecycle(Holder.STARTING, "start");
         try {
             lifecycleHook.afterLockTaken("start");
-            // Under handOver, and not while the holder leaves the queue not started, as consume() sets it
-            // (markStartedUnlessHolderStopsTheQueue). A stop that did not get the lock, moving this start to STOP_OWED, has
+            // Under handOver, and not while the holder lets nothing start, as consume() sets it
+            // (markStartedUnlessHolderLetsNothingStart). A stop that did not get the lock, moving this start to STOP_OWED, has
             // already marked the queue not started and may have returned; setting the flag after it made isStarted() read
             // true until letGoOfLifecycle, which does that stop's work, cleared it again. And a start called on the thread
-            // of a holder stopping every consumer (FINISHING_OWED_STOP, STOPPING) - by an observer told of a release - set
-            // it and started every consumer while that holder was still stopping them: the queue ended marked started,
-            // with the consumers before the observer's running and the ones after it stopped.
+            // of a holder stopping every consumer (FINISHING_OWED_STOP, STOPPING), or the ones its failed start started
+            // (UNDOING_A_START) - by an observer told of a release - set it and started every consumer while that holder
+            // was still stopping them: the queue ended marked started, with the consumers before the observer's running
+            // and the ones after it stopped.
             synchronized (handOver) {
-                if (holder.stopsTheQueue() || !started.compareAndSet(false, true)) {
+                if (holder.letsNothingStart() || !started.compareAndSet(false, true)) {
                     return;
                 }
             }
             try {
-                startEachOrStopAll(consumers, this::holderStopsTheQueue);
+                startEachOrUndo(consumers);
             } catch (RuntimeException | Error e) {
-                // A non-critical failure has stopped every consumer. A critical error - the start's, or a stop's while
-                // undoing it - may have left some running, so the queue stays started; a stop() reaches them either way.
+                // A non-critical failure has stopped every consumer this start started, and left running the ones already
+                // started before it (a Subscription.start(), a later consume()). A critical error - the start's, or a stop's
+                // while undoing it - may have left some running, so the queue stays started; a stop() reaches them either way.
                 if (!Exceptions.isCriticalError(e)) {
                     started.set(false);
                 }
@@ -1592,12 +1601,13 @@ public final class PostgresqlMessageQueue implements MessageQueue {
     /**
      * What the holder of {@link #lifecycleLock} is doing, and whether it owes a stop - one value, read under
      * {@link #handOver} and moved only by {@link #moveHolder}, along the edges below, so a {@link #stop()} that did not get
-     * the lock, a stop on the holder's own thread, the holder's starts ({@link #holderStopsTheQueue},
-     * {@link #markStartedUnlessHolderStopsTheQueue}) and its letting go ({@link #letGoOfLifecycle}) each decide from it.
+     * the lock, a stop on the holder's own thread, the holder's starts ({@link #holderLetsNothingStart},
+     * {@link #markStartedUnlessHolderLetsNothingStart}) and its letting go ({@link #letGoOfLifecycle}) each decide from it.
      * {@link #stopsWithoutLock} and {@link #beingStarted} are data beside it, not part of the decision.
      * <pre>
      *   NONE ----------------&gt; STARTING | STOPPING
-     *   STARTING ------------&gt; STOP_OWED | NONE
+     *   STARTING ------------&gt; UNDOING_A_START | STOP_OWED | NONE
+     *   UNDOING_A_START -----&gt; STARTING | STOP_OWED         (STOP_OWED: a stop arriving meanwhile)
      *   STOP_OWED -----------&gt; FINISHING_OWED_STOP | NONE   (NONE: a critical error escaping the holder)
      *   FINISHING_OWED_STOP -&gt; STOP_OWED | NONE             (STOP_OWED: a stop arriving meanwhile)
      *   STOPPING ------------&gt; NONE
@@ -1605,13 +1615,14 @@ public final class PostgresqlMessageQueue implements MessageQueue {
      * A stop that did not get the lock stops every consumer itself, counted in {@link #stopsWithoutLock}; the holder waits
      * for those stops, then stops every consumer again ({@link #FINISHING_OWED_STOP}), and is owed again by a stop arriving
      * meanwhile, so it repeats the stopping. The adapter's {@code ShardOwnedDurableQueueConsumer}, whose stop without the
-     * lock stops nothing, has the same five values without that last edge.
+     * lock stops nothing and which undoes no start of its own, has five of these values, without {@link #UNDOING_A_START}
+     * and without that last edge.
      * <p>
      * Not forward-only, as {@code ShardOwnedQueue}'s {@code Run.Phase} is: that phase belongs to one run, a fresh object
      * per start, while this queue has no per-start object to hang a phase on - this describes whoever holds the lock now,
      * and goes back to {@link #NONE} as each holder lets go. A reentrant hold (an observer starting the queue from inside a
-     * {@code consume()}) does not move it ({@link #markHeld}); inside a holder that leaves the queue not started
-     * ({@link #stopsTheQueue}), such a hold starts nothing and does not mark the queue started.
+     * {@code consume()}) does not move it ({@link #markHeld}); inside a holder that lets nothing start
+     * ({@link #letsNothingStart}), such a hold starts nothing and does not mark the queue started.
      */
     enum Holder {
         /**
@@ -1625,6 +1636,15 @@ public final class PostgresqlMessageQueue implements MessageQueue {
          * stop that did not get the lock, or one on this holder's thread, moves it to {@link #STOP_OWED}.
          */
         STARTING,
+        /**
+         * A holder of the {@link #STARTING} kind whose start failed, stopping the consumers it started
+         * ({@link #startEachOrUndo}), and back to {@code STARTING} once they are stopped. Nothing may start a consumer or
+         * mark the queue started meanwhile ({@link #letsNothingStart}): a start on the holder's own thread - from a
+         * {@link QueueObserver} told of the release of a unit the undo gives up - started every consumer, the ones being
+         * stopped included, and could mark the queue started for a start that then failed. A stop that did not get the
+         * lock, or one on this holder's thread, moves it to {@link #STOP_OWED}, as from {@code STARTING}.
+         */
+        UNDOING_A_START,
         /**
          * A holder of the {@link #STARTING} kind owes a stop: the queue is marked not started, and the holder starts none of
          * the consumers it has not begun, never marks the queue started, and once its starts have returned waits for the
@@ -1641,16 +1661,17 @@ public final class PostgresqlMessageQueue implements MessageQueue {
         STOPPING;
 
         /**
-         * Whether the holder is a {@code consume()}, a {@code start()} or a {@link Subscription#start()} - starting, owing
-         * a stop, or doing it - so a stop that does not take the lock is owed by it.
+         * Whether the holder is a {@code consume()}, a {@code start()} or a {@link Subscription#start()} - starting,
+         * undoing a failed start, owing a stop, or doing it - so a stop that does not take the lock is owed by it.
          */
         boolean isAStart() {
-            return this == STARTING || this == STOP_OWED || this == FINISHING_OWED_STOP;
+            return this == STARTING || this == UNDOING_A_START || this == STOP_OWED || this == FINISHING_OWED_STOP;
         }
 
         /**
          * Whether the diagram above has an edge from this holder to {@code target}: from {@link #NONE} to
-         * {@link #STARTING} and {@link #STOPPING}; from {@code STARTING} to {@link #STOP_OWED} and {@code NONE}; from
+         * {@link #STARTING} and {@link #STOPPING}; from {@code STARTING} to {@link #UNDOING_A_START}, {@link #STOP_OWED}
+         * and {@code NONE}; from {@code UNDOING_A_START} to {@code STARTING} and {@code STOP_OWED}; from
          * {@code STOP_OWED} to {@link #FINISHING_OWED_STOP} and {@code NONE}; from {@code FINISHING_OWED_STOP} to
          * {@code STOP_OWED} and {@code NONE}; from {@code STOPPING} to {@code NONE} alone. Staying where it is is not an
          * edge.
@@ -1658,7 +1679,8 @@ public final class PostgresqlMessageQueue implements MessageQueue {
         boolean canMoveTo(Holder target) {
             return switch (this) {
                 case NONE -> target == STARTING || target == STOPPING;
-                case STARTING -> target == STOP_OWED || target == NONE;
+                case STARTING -> target == UNDOING_A_START || target == STOP_OWED || target == NONE;
+                case UNDOING_A_START -> target == STARTING || target == STOP_OWED;
                 case STOP_OWED -> target == FINISHING_OWED_STOP || target == NONE;
                 case FINISHING_OWED_STOP -> target == STOP_OWED || target == NONE;
                 case STOPPING -> target == NONE;
@@ -1675,6 +1697,17 @@ public final class PostgresqlMessageQueue implements MessageQueue {
          */
         boolean stopsTheQueue() {
             return this == STOP_OWED || this == FINISHING_OWED_STOP || this == STOPPING;
+        }
+
+        /**
+         * Whether nothing may start a consumer or mark the queue started while this holder holds the lock: it leaves the
+         * queue not started ({@link #stopsTheQueue}), or is stopping the consumers a failed start of its own started
+         * ({@link #UNDOING_A_START}). A start on the holder's own thread - a {@link QueueObserver} told of an acquisition
+         * or a release calling {@code start()}, {@code consume()} or {@link Subscription#start()} - then starts nothing,
+         * and a {@code consume()} there registers its pair unstarted.
+         */
+        boolean letsNothingStart() {
+            return stopsTheQueue() || this == UNDOING_A_START;
         }
     }
 
@@ -1885,28 +1918,29 @@ public final class PostgresqlMessageQueue implements MessageQueue {
     }
 
     /**
-     * Whether the holder of {@link #lifecycleLock} leaves the queue not started when it lets go ({@link Holder#stopsTheQueue}):
-     * it owes a stop, does the stop it owed, or is a stop. Read under {@link #handOver}.
+     * Whether the holder of {@link #lifecycleLock} lets nothing start ({@link Holder#letsNothingStart}): it owes a stop,
+     * does the stop it owed, is a stop, or is stopping what its failed start started. Read under {@link #handOver}.
      */
-    private boolean holderStopsTheQueue() {
+    private boolean holderLetsNothingStart() {
         synchronized (handOver) {
-            return holder.stopsTheQueue();
+            return holder.letsNothingStart();
         }
     }
 
     /**
      * Mark the queue started, for the {@code consume()} of its first subscription holding {@link #lifecycleLock}, unless
-     * the holder leaves the queue not started ({@link Holder#stopsTheQueue}). A stop owed ({@link Holder#STOP_OWED}) has
+     * the holder lets nothing start ({@link Holder#letsNothingStart}). A stop owed ({@link Holder#STOP_OWED}) has
      * already marked the queue not started, and may have returned; {@link #letGoOfLifecycle} marks it not started again
      * only once it has waited for that stop's stopping, so marking it here made {@link #isStarted()} read true in between.
      * Called on the thread of a holder that is stopping every consumer ({@link Holder#FINISHING_OWED_STOP},
-     * {@link Holder#STOPPING}) - from a {@link QueueObserver} told of a release - marking it left the queue started once
-     * that holder had stopped every consumer. Under {@link #handOver}, where a stop that did not get the lock marks it, so
-     * such a stop arriving after this check still finds the flag set and clears it.
+     * {@link Holder#STOPPING}), or the ones its failed start started ({@link Holder#UNDOING_A_START}) - from a
+     * {@link QueueObserver} told of a release - marking it left the queue started once that holder had stopped them.
+     * Under {@link #handOver}, where a stop that did not get the lock marks it, so such a stop arriving after this check
+     * still finds the flag set and clears it.
      */
-    private void markStartedUnlessHolderStopsTheQueue() {
+    private void markStartedUnlessHolderLetsNothingStart() {
         synchronized (handOver) {
-            if (!holder.stopsTheQueue()) {
+            if (!holder.letsNothingStart()) {
                 started.set(true);
             }
         }
@@ -1956,36 +1990,63 @@ public final class PostgresqlMessageQueue implements MessageQueue {
     }
 
     /**
-     * Start every one of {@code consumers}, in order, or leave none of them started. A start that fails with anything
-     * but a critical error ({@link Exceptions#isCriticalError}) stops every one of them - those started before it, the
-     * one that failed, and those after it, for which a stop does nothing - each one even when an earlier one's stop
-     * throws, and then escapes as it was thrown, with every stop's failure added to it as suppressed, never thrown in
-     * its place ({@link Exceptions#forEachCollectingFailures}). A {@code RuntimeException} and a non-critical
-     * {@code Error} count alike: a {@link QueueObserver} that throws either for an acquisition escapes a consumer's
-     * start with that consumer running, and its fan-out observer is shared by every consumer of this queue. A start's
-     * critical error escapes untouched, with nothing stopped, as a consumer's own start leaves it; a stop's critical error
-     * ends the stopping at once and escapes, with the start's failure added to it as suppressed.
+     * Start every one of {@code consumers}, in order, or start none of them: a start that fails with anything but a
+     * critical error ({@link Exceptions#isCriticalError}) stops every consumer this call started - those it started
+     * before the failure, and the one that failed - each one even when an earlier one's stop throws, and then escapes as
+     * it was thrown, with every stop's failure added to it as suppressed, never thrown in its place
+     * ({@link Exceptions#forEachCollectingFailures}). A {@code RuntimeException} and a non-critical {@code Error} count
+     * alike: a {@link QueueObserver} that throws either for an acquisition escapes a consumer's start with that consumer
+     * running, and its fan-out observer is shared by every consumer of this queue. A start's critical error escapes
+     * untouched, with nothing stopped, as a consumer's own start leaves it; a stop's critical error ends the stopping at
+     * once and escapes, with the start's failure added to it as suppressed.
      * <p>
-     * Starts none of those after the moment {@code holderStops} reports that the holder of the lifecycle lock leaves the
-     * queue not started ({@link Holder#stopsTheQueue}). That holder is the caller - a {@code consume()}, a {@code start()}
-     * or a {@link Subscription#start()} - owing a stop ({@link Holder#STOP_OWED}) to a stop that did not get the lock
+     * A consumer already started when this reaches it - a subscription started on its own ({@link Subscription#start()},
+     * or a later {@code consume()}) before the queue's {@code start()} - is left running on such a failure, as are those
+     * after the failed one, which this has not reached: this call started none of them, and its failure is not theirs.
+     * It used to stop every one of {@code consumers}, so a queue {@code start()} failing on one subscription stopped
+     * another the caller had started and was consuming, which then stayed stopped, nothing restarting it.
+     * <p>
+     * While it stops them, the holder - the caller - reads {@link Holder#UNDOING_A_START}, so a start on this thread,
+     * from a {@link QueueObserver} told of the release of a unit one of those stops gives up, starts nothing and marks
+     * nothing ({@link Holder#letsNothingStart}). It read {@link Holder#STARTING}, and such a {@code start()} marked the
+     * queue started and started every consumer, those being stopped included, for a start that then failed. A stop
+     * arriving meanwhile moves the holder to {@link Holder#STOP_OWED} as during the starts, and the holder stays there.
+     * <p>
+     * Starts none of {@code consumers} after the moment the holder of the lifecycle lock lets nothing start
+     * ({@link #holderLetsNothingStart}). That holder is the caller - a {@code consume()}, a {@code start()} or a
+     * {@link Subscription#start()} - owing a stop ({@link Holder#STOP_OWED}) to a stop that did not get the lock
      * ({@link #stopWhileStarting}) or to one on the caller's own thread, from a {@link QueueObserver} told of an
      * acquisition ({@link #stopFromInsideTheHolder}): it stops every consumer again before it lets go of the lock
      * ({@link #letGoOfLifecycle}). Or, for a caller holding the lock reentrantly - called by an observer told of a
-     * release - a holder stopping every consumer ({@link Holder#FINISHING_OWED_STOP}, {@link Holder#STOPPING}): this then
-     * starts nothing at all.
+     * release - a holder stopping every consumer ({@link Holder#FINISHING_OWED_STOP}, {@link Holder#STOPPING}) or the
+     * ones its failed start started ({@link Holder#UNDOING_A_START}): this then starts nothing at all.
      */
-    private static void startEachOrStopAll(List<ShardOwnedQueue> consumers, BooleanSupplier holderStops) {
+    private void startEachOrUndo(List<ShardOwnedQueue> consumers) {
+        // Iterated as a snapshot (consumers is copy-on-write): a consume() an observer makes on this thread meanwhile starts
+        // and registers its own pair, which this did not start.
+        var startedHere = new ArrayList<ShardOwnedQueue>(consumers.size());
         try {
             for (var consumer : consumers) {
-                if (holderStops.getAsBoolean()) {
+                if (holderLetsNothingStart()) {
                     return;
+                }
+                if (!consumer.isStarted()) {
+                    // Before its start, which may leave it running when it throws (an observer failing for an acquisition).
+                    startedHere.add(consumer);
                 }
                 consumer.start();
             }
         } catch (RuntimeException | Error e) {
             Exceptions.rethrowIfCriticalError(e);
-            Exceptions.forEachCollectingFailures(consumers, ShardOwnedQueue::stop, e);
+            var undoing = moveHolder(Holder.UNDOING_A_START) == Holder.STARTING;
+            try {
+                Exceptions.forEachCollectingFailures(startedHere, ShardOwnedQueue::stop, e);
+            } finally {
+                if (undoing) {
+                    // Back to STARTING, unless a stop arriving meanwhile has moved it to STOP_OWED, which it then stays at.
+                    moveHolder(Holder.STARTING);
+                }
+            }
             throw e;
         }
     }
