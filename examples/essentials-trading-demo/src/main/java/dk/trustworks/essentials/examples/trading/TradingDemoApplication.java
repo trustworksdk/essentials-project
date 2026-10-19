@@ -20,7 +20,6 @@ import dk.trustworks.essentials.components.eventsourced.aggregates.api.Aggregate
 import dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks.ClosingBooksGenerationRepository;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.EventStoreUnitOfWork;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.EventStoreUnitOfWorkFactory;
-import dk.trustworks.essentials.examples.trading._demo_harness.DirectInstrumentPriceService;
 import dk.trustworks.essentials.examples.trading._demo_harness.QueueLoadGeneratorProperties;
 import dk.trustworks.essentials.examples.trading._demo_harness.TradingDashboardStreamService;
 import dk.trustworks.essentials.examples.trading._demo_harness.TradingDemoLoadGeneratorProperties;
@@ -35,7 +34,7 @@ import dk.trustworks.essentials.examples.trading.brokerage.aggregates.Trades;
 import dk.trustworks.essentials.examples.trading.brokerage.types.TradingAccountId;
 import dk.trustworks.essentials.examples.trading.brokerage.views.account_statement.AccountStatementQuery;
 import dk.trustworks.essentials.examples.trading.market_data.aggregates.Instruments;
-import dk.trustworks.essentials.examples.trading.market_data.views.latest_price.LatestPriceQuery;
+import dk.trustworks.essentials.examples.trading.market_data.types.MarketQuotes;
 import dk.trustworks.essentials.reactive.command.CommandBus;
 import io.micrometer.core.instrument.MeterRegistry;
 import dk.trustworks.essentials.shared.security.EssentialsAuthenticatedUser;
@@ -96,8 +95,6 @@ public class TradingDemoApplication {
                                                      CommandBus commandBus,
                                                      TradingAccountClosingBooksPolicy closingBooksPolicy,
                                                      AggregateLifecycleApi aggregateLifecycleApi,
-                                                     LatestPriceQuery latestPriceQuery,
-                                                     DirectInstrumentPriceService directInstrumentPriceService,
                                                      EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory,
                                                      TradingAccounts tradingAccounts,
                                                      Trades trades,
@@ -108,8 +105,6 @@ public class TradingDemoApplication {
                                            commandBus,
                                            closingBooksPolicy,
                                            aggregateLifecycleApi,
-                                           latestPriceQuery,
-                                           directInstrumentPriceService,
                                            unitOfWorkFactory,
                                            tradingAccounts,
                                            trades,
@@ -125,10 +120,9 @@ public class TradingDemoApplication {
                                                                    TradingAccountClosingBooksPolicy tradingAccountClosingBooksPolicy,
                                                                    ClosingBooksGenerationRepository<TradingAccountId> tradingAccountGenerationRepository,
                                                                    AccountStatementQuery accountStatementQuery,
-                                                                   LatestPriceQuery latestPriceQuery,
+                                                                   MarketQuotes marketQuotes,
                                                                    TradingAccounts tradingAccounts,
                                                                    EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory,
-                                                                   DirectInstrumentPriceService directInstrumentPriceService,
                                                                    ObjectProvider<MeterRegistry> meterRegistryProvider,
                                                                    ObjectProvider<TradingDashboardStreamService> tradingDashboardStreamServiceProvider) {
         var manager = new TradingLoadGeneratorManager(simulationProperties,
@@ -137,10 +131,9 @@ public class TradingDemoApplication {
                                                       tradingAccountClosingBooksPolicy,
                                                       tradingAccountGenerationRepository,
                                                       accountStatementQuery,
-                                                      latestPriceQuery,
+                                                      marketQuotes,
                                                       tradingAccounts,
                                                       unitOfWorkFactory,
-                                                      directInstrumentPriceService,
                                                       meterRegistryProvider.stream().findFirst());
         manager.addStatusListener(ignored -> {
             var streamService = tradingDashboardStreamServiceProvider.getIfAvailable();

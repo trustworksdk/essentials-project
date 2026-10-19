@@ -27,9 +27,7 @@ import java.util.UUID;
  * instrument it was placed against. It lives in {@code types/}, which together with {@code events/} is the only
  * importable surface of this context, so that import is legal and deliberate.
  *
- * <p>It is also the aggregate id of <em>both</em> aggregates in this context: {@code Instrument} (reference data) and
- * {@code InstrumentPrice} (the latest price). They are separate consistency boundaries and separate event streams;
- * sharing the id is what lets a price stream be found from an instrument without a lookup table.
+ * <p>It is also the aggregate id of {@code Instrument}, and the key of the latest quote in {@code views/market_quotes}.
  */
 public class InstrumentId extends CharSequenceType<InstrumentId> {
     public InstrumentId(String value) {

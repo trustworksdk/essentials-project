@@ -1,7 +1,7 @@
 # essentials-trading-demo
 
-Spring Boot demo for the PostgreSQL EventStore: snapshots, closing books, generation archival, and a
-price-path benchmark. Not part of the release.
+Spring Boot demo for the PostgreSQL EventStore: snapshots, closing books, generation archival, and an order flow
+against a stub exchange. Not part of the release.
 
 Packaged by **vertical slice**, following the same law as `postgresql-cqrs` — see that module's
 `CLAUDE.md` and the essentials plugin's `rules/slice-design.md`. `REFACTORING_PLAN.md` records the
@@ -16,8 +16,8 @@ mvn spring-boot:run -pl :essentials-trading-demo        # after `docker compose 
 
 | BC | Aggregates | Slices |
 |---|---|---|
-| `brokerage` | `TradingAccount`, `Trade`, `Settlement` | 19 command, 1 automation, 6 view |
-| `market_data` | `Instrument`, `InstrumentPrice` | 5 command, 1 automation, 2 view |
+| `brokerage` | `TradingAccount`, `Trade`, `Settlement` | 19 command, 1 automation, 5 view |
+| `market_data` | `Instrument` (+ in-memory `market_quotes`) | 3 command, 1 automation, 2 view |
 | `identity` | `User` (+ `user_credentials` table) | 3 command, 1 view |
 | `accounts` | `Account` (the new ledger, stream `Accounts`) | 14 command, 3 view |
 | `orders` | `Order` (stream `Orders`) | 5 command, 1 external system, 1 automation, 2 view |
@@ -54,18 +54,12 @@ lane. Do **not** convert to `Decider`s.
 - **`TradingAccountClosingBooksPolicy` holds one immutable `ClosingBooksSettings` behind a lock.** Use
   `update(...)` or `withTemporarySettings(...)` — never reintroduce per-field setters. Four independent
   mutators are what let the benchmark scenario silently revert an admin change.
-- **`InstrumentPrice.latestPrice()` is the only public accessor on any aggregate here.** Only
-  `market_data.views.latest_price` calls it, and only because the bootstrap's idempotency probe needs a
-  strongly-consistent answer. Everything else projects.
 - **Aggregate state fields are private**, including on the snapshotted `TradingAccount` —
   `EssentialsObjectMappers` sets `withFieldVisibility(ANY)` / `withGetterVisibility(NONE)`, so snapshots
   round-trip fine. The `protected` no-arg constructors are load-bearing: without them Jackson 3 would pick a
   public constructor as an implicit properties creator and half-populate a snapshot.
-- **`brokerage.trade_valuation` projects `market_data`'s price events** into its own table rather than
-  calling that context. Cross-BC `events/` import is legal; injecting its write side was the §R4 violation
-  this replaced.
 - **Two projections are eventually consistent** (`account_statement`, `trade_settlement_status`). Tests must
-  await them. `trade_valuation` likewise.
+  await them.
 - **`brokerage.settle_trade` drives the trade lifecycle by default** (`trading-demo.simulation.trade-lifecycle=automated`):
   the harness only places and executes trades, and the automation issues every settlement step from the previous
   step's event, so a trade's settlement is one causation tree in the admin console's *Event causation* page. `scripted`

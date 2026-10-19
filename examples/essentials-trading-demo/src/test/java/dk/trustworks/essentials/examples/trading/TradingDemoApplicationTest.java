@@ -25,7 +25,6 @@ import dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks.
 import dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks.LogicalAggregateId;
 import dk.trustworks.essentials.examples.trading._demo_harness.DashboardMetricSummaryView;
 import dk.trustworks.essentials.examples.trading._demo_harness.DashboardSummaryView;
-import dk.trustworks.essentials.examples.trading._demo_harness.PricePathScenarioResultView;
 import dk.trustworks.essentials.examples.trading._demo_harness.TradingAccountScenarioResultView;
 import dk.trustworks.essentials.examples.trading._demo_harness.TradingDemoSimulationProperties;
 import dk.trustworks.essentials.examples.trading._demo_harness.TradingLoadGeneratorStatusView;
@@ -63,16 +62,12 @@ import dk.trustworks.essentials.examples.trading.brokerage.views.closing_books_c
 import dk.trustworks.essentials.examples.trading.brokerage.views.trade_settlement_status.SettlementStatusView;
 import dk.trustworks.essentials.examples.trading.brokerage.views.trade_settlement_status.TradeSettlementStatus;
 import dk.trustworks.essentials.examples.trading.brokerage.views.trade_settlement_status.TradeSettlementStatusQuery;
-import dk.trustworks.essentials.examples.trading.brokerage.views.trade_valuation.TradeValuation;
 import dk.trustworks.essentials.examples.trading.market_data.types.InstrumentId;
-import dk.trustworks.essentials.examples.trading.market_data.types.MarketDataAggregateTypes;
+import dk.trustworks.essentials.examples.trading.accounts.aggregates.Accounts;
 import dk.trustworks.essentials.examples.trading.market_data.types.Symbol;
-import dk.trustworks.essentials.examples.trading.market_data.use_cases.initialize_price.InitializePrice;
 import dk.trustworks.essentials.examples.trading.market_data.use_cases.register_instrument.RegisterInstrument;
 import dk.trustworks.essentials.examples.trading.market_data.use_cases.rename_instrument.RenameInstrument;
-import dk.trustworks.essentials.examples.trading.market_data.use_cases.update_price.UpdatePrice;
 import dk.trustworks.essentials.examples.trading.market_data.views.instrument_details.InstrumentDetailsQuery;
-import dk.trustworks.essentials.examples.trading.market_data.views.latest_price.LatestPriceQuery;
 import dk.trustworks.essentials.reactive.command.CommandBus;
 import dk.trustworks.essentials.types.Amount;
 import org.junit.jupiter.api.BeforeEach;
@@ -113,8 +108,7 @@ import static org.awaitility.Awaitility.await;
  *   <li><b>Reads go through view slices, and two of them are eventually consistent.</b> Aggregate state fields are
  *       private now, so the previous "mutate, reload the aggregate, assert" shape is not available and would have
  *       been the wrong shape anyway. Everything projection-backed is therefore awaited rather than read once --
- *       {@code account_statement}, {@code trade_settlement_status} and {@code trade_valuation} all catch up
- *       asynchronously.</li>
+ *       {@code account_statement} and {@code trade_settlement_status} catch up asynchronously.</li>
  * </ul>
  */
 @Testcontainers
@@ -172,9 +166,6 @@ class TradingDemoApplicationTest {
     private TradeSettlementStatusQuery tradeSettlementStatusQuery;
 
     @Autowired
-    private LatestPriceQuery latestPriceQuery;
-
-    @Autowired
     private InstrumentDetailsQuery instrumentDetailsQuery;
 
     @Autowired
@@ -214,7 +205,7 @@ class TradingDemoApplicationTest {
         assertThat(lifecycleApi.findAllAggregateSnapshotPolicies("demo-admin"))
                 .describedAs("Every snapshot policy must reach the registry, not merely annotate its class")
                 .extracting(policy -> policy.aggregateType().toString())
-                .containsExactlyInAnyOrder("TradingAccounts", "InstrumentPrices", "Accounts");
+                .containsExactlyInAnyOrder("TradingAccounts", "Accounts");
         assertThat(lifecycleApi.findAllAggregateClosingBooksPolicies("demo-admin"))
                 .extracting(policy -> policy.aggregateType().toString())
                 .containsExactlyInAnyOrder("TradingAccounts", "Accounts");
@@ -233,7 +224,6 @@ class TradingDemoApplicationTest {
 
         commandBus.send(new RegisterInstrument(instrumentId, Symbol.of("ABC"), "Alpha Bravo"));
         commandBus.send(new RenameInstrument(instrumentId, "Alpha Bravo Updated"));
-        commandBus.send(new InitializePrice(instrumentId, Amount.of(BigDecimal.valueOf(480))));
 
         commandBus.send(new PlaceTrade(tradeId,
                                        accountId,
@@ -243,7 +233,6 @@ class TradingDemoApplicationTest {
                                        Amount.of(BigDecimal.valueOf(500))));
         commandBus.send(new ExecuteTrade(tradeId));
         commandBus.send(new RequestSettlement(tradeId, settlementId));
-        commandBus.send(new UpdatePrice(instrumentId, Amount.of(BigDecimal.valueOf(525))));
 
         commandBus.send(new CreateSettlement(settlementId, tradeId, accountId, Amount.of(BigDecimal.valueOf(500))));
         commandBus.send(new RequestClearing(settlementId));
@@ -257,10 +246,6 @@ class TradingDemoApplicationTest {
                                                  tradeId,
                                                  Amount.of(BigDecimal.valueOf(-500)),
                                                  Amount.of(BigDecimal.valueOf(42))));
-
-        // The price aggregate is the authoritative latest price and is strongly consistent, so this one is not awaited.
-        assertThat(latestPriceQuery.findLatestPrice(instrumentId))
-                .hasValueSatisfying(latestPrice -> assertThat(latestPrice.latestPrice().value()).isEqualByComparingTo("525"));
 
         await().atMost(PROJECTION_TIMEOUT).untilAsserted(() -> {
             var statement = accountStatement(accountId);
@@ -495,77 +480,15 @@ class TradingDemoApplicationTest {
         assertThat(dashboardResponse.getBody().closingBooks().zoneId()).isEqualTo("UTC");
     }
 
-    /**
-     * Regression: a trade projected <em>after</em> the price ticks must still be valued.
-     *
-     * <p>{@code TradeValuationProjection} subscribes to {@code Trades} and {@code InstrumentPrices} as two independent
-     * subscriptions, and {@code GlobalEventOrder} sequences within one aggregate type rather than across two — so
-     * either can be projected first. When the price won, {@code applyMarketPrice}'s {@code UPDATE} matched no rows and
-     * the trade's market price stayed {@code null} <b>permanently</b>: nothing replays a consumed tick. Continuous demo
-     * traffic masked it, because the next tick a second later repaired the row.
-     *
-     * <p>The first trade here exists only to prove the projection has consumed both price events. The second is the
-     * assertion that matters — it is placed with no tick after it, so before the fix it could never acquire a price.
-     */
     @Test
-    void a_trade_projected_after_its_instruments_price_ticks_is_still_valued() {
-        var accountId       = TradingAccountId.of("ACC-PRICE-FIRST-1");
-        var instrumentId    = InstrumentId.of("SAP");
-        var priceProbeTrade = TradeId.of("TRD-PRICE-FIRST-PROBE");
-        var lateTrade       = TradeId.of("TRD-PRICE-FIRST-LATE");
-
-        commandBus.send(new OpenTradingAccount(accountId, OwnerId.of("owner-price-first"), PeriodId.of("2026-03")));
-        registerInstrumentWithPriceIfAbsent(instrumentId, "SAP", "SAP SE", Amount.of(BigDecimal.valueOf(400)));
-        commandBus.send(new UpdatePrice(instrumentId, Amount.of(BigDecimal.valueOf(600))));
-
-        commandBus.send(new PlaceTrade(priceProbeTrade,
-                                       accountId,
-                                       instrumentId,
-                                       TradeSide.BUY,
-                                       Quantity.of(1),
-                                       Amount.of(BigDecimal.valueOf(500))));
-
-        // Once this holds, the projection has consumed both price events for SAP.
-        await().atMost(PROJECTION_TIMEOUT).untilAsserted(() -> {
-            var probe = operator().getForEntity("/api/admin/trades/{tradeId}",
-                                                  TradeValuation.class,
-                                                  priceProbeTrade.toString());
-            assertThat(probe.getStatusCode()).isEqualTo(HttpStatusCode.valueOf(200));
-            assertThat(probe.getBody()).isNotNull();
-            assertThat(probe.getBody().latestMarketPrice()).isNotNull();
-            assertThat(probe.getBody().latestMarketPrice().value()).isEqualByComparingTo("600");
-        });
-
-        // No price tick follows this trade. Its market price can only come from what the slice already recorded.
-        commandBus.send(new PlaceTrade(lateTrade,
-                                       accountId,
-                                       instrumentId,
-                                       TradeSide.BUY,
-                                       Quantity.of(2),
-                                       Amount.of(BigDecimal.valueOf(500))));
-
-        await().atMost(PROJECTION_TIMEOUT).untilAsserted(() -> {
-            var late = operator().getForEntity("/api/admin/trades/{tradeId}",
-                                                 TradeValuation.class,
-                                                 lateTrade.toString());
-            assertThat(late.getStatusCode()).isEqualTo(HttpStatusCode.valueOf(200));
-            assertThat(late.getBody()).isNotNull();
-            assertThat(late.getBody().latestMarketPrice()).isNotNull();
-            assertThat(late.getBody().latestMarketPrice().value()).isEqualByComparingTo("600");
-            assertThat(late.getBody().marketValue().value()).isEqualByComparingTo("1200");
-            assertThat(late.getBody().unrealizedPnl().value()).isEqualByComparingTo("200");
-        });
-    }
-
-    @Test
-    void admin_endpoints_expose_trade_valuation_and_settlement_lifecycle() {
+    void admin_endpoint_exposes_the_settlement_lifecycle() {
         var accountId    = TradingAccountId.of("ACC-ADMIN-TRADE-1");
-        var instrumentId = InstrumentId.of("NVDA");
+        var instrumentId = InstrumentId.of("INST-ADMIN-1");
         var tradeId      = TradeId.of("TRD-ADMIN-1");
         var settlementId = SettlementId.of("SET-ADMIN-1");
 
         commandBus.send(new OpenTradingAccount(accountId, OwnerId.of("owner-trade-admin"), PeriodId.of("2026-03")));
-        registerInstrumentWithPriceIfAbsent(instrumentId, "NVDA", "NVIDIA Corporation", Amount.of(BigDecimal.valueOf(500)));
+        commandBus.send(new RegisterInstrument(instrumentId, Symbol.of("ADMN"), "Admin Test Corp"));
         commandBus.send(new PlaceTrade(tradeId,
                                        accountId,
                                        instrumentId,
@@ -574,7 +497,6 @@ class TradingDemoApplicationTest {
                                        Amount.of(BigDecimal.valueOf(500))));
         commandBus.send(new ExecuteTrade(tradeId));
         commandBus.send(new RequestSettlement(tradeId, settlementId));
-        commandBus.send(new UpdatePrice(instrumentId, Amount.of(BigDecimal.valueOf(540))));
 
         commandBus.send(new CreateSettlement(settlementId, tradeId, accountId, Amount.of(BigDecimal.valueOf(1_000))));
         commandBus.send(new RequestClearing(settlementId));
@@ -585,22 +507,9 @@ class TradingDemoApplicationTest {
         commandBus.send(new MarkTradeSettled(tradeId));
 
         await().atMost(PROJECTION_TIMEOUT).untilAsserted(() -> {
-            var tradeResponse = operator().getForEntity("/api/admin/trades/{tradeId}",
-                                                          TradeValuation.class,
-                                                          tradeId.toString());
             var settlementResponse = operator().getForEntity("/api/admin/settlements/{settlementId}",
                                                                SettlementStatusView.class,
                                                                settlementId.toString());
-
-            assertThat(tradeResponse.getStatusCode()).isEqualTo(HttpStatusCode.valueOf(200));
-            assertThat(tradeResponse.getBody()).isNotNull();
-            assertThat((CharSequence) tradeResponse.getBody().tradeId()).isEqualTo(tradeId);
-            assertThat((CharSequence) tradeResponse.getBody().instrumentId()).isEqualTo(instrumentId);
-            assertThat(tradeResponse.getBody().latestMarketPrice()).isNotNull();
-            assertThat(tradeResponse.getBody().latestMarketPrice().value()).isEqualByComparingTo("540");
-            assertThat(tradeResponse.getBody().marketValue().value()).isEqualByComparingTo("1080");
-            assertThat(tradeResponse.getBody().unrealizedPnl().value()).isEqualByComparingTo("80");
-            assertThat(tradeResponse.getBody().settled()).isTrue();
 
             assertThat(settlementResponse.getStatusCode()).isEqualTo(HttpStatusCode.valueOf(200));
             assertThat(settlementResponse.getBody()).isNotNull();
@@ -622,7 +531,6 @@ class TradingDemoApplicationTest {
         assertThat(response.getBody().enabled()).isFalse();
         assertThat(response.getBody().started()).isFalse();
         assertThat(response.getBody().pendingSettlementCount()).isZero();
-        assertThat(response.getBody().priceStressRunning()).isFalse();
     }
 
     @Test
@@ -659,14 +567,13 @@ class TradingDemoApplicationTest {
             assertThat(summaryResponse.getBody().configuredAccountCount()).isEqualTo(3);
             assertThat(summaryResponse.getBody().accountsPresent()).isGreaterThanOrEqualTo(1);
             assertThat(summaryResponse.getBody().closingBooks().totalGenerations()).isGreaterThanOrEqualTo(1);
-            assertThat(summaryResponse.getBody().pricePathComparison().performances()).hasSizeGreaterThanOrEqualTo(2);
             assertThat(summaryResponse.getBody().snapshotStats().aggregateTypes()).contains(TradingAccounts.AGGREGATE_TYPE.toString(),
-                                                                                            MarketDataAggregateTypes.INSTRUMENT_PRICES.toString());
+                                                                                            Accounts.AGGREGATE_TYPE.toString());
             assertThat(summaryResponse.getBody().snapshotStats().saveCount()).isGreaterThanOrEqualTo(0);
             assertThat(summaryResponse.getBody().snapshotMetrics())
                     .as("snapshot metrics are reported per snapshotting aggregate type, not just for TradingAccounts")
                     .extracting(DashboardMetricSummaryView::aggregateType)
-                    .contains(MarketDataAggregateTypes.INSTRUMENT_PRICES.toString());
+                    .contains(Accounts.AGGREGATE_TYPE.toString());
         });
 
         var htmlResponse = operator().getForEntity("/admin", String.class);
@@ -679,56 +586,12 @@ class TradingDemoApplicationTest {
         assertThat(htmlResponse.getBody()).contains("/api/admin/dashboard/stream");
         assertThat(htmlResponse.getBody()).contains("Avg generations/account");
         assertThat(htmlResponse.getBody()).contains("snapshot saves");
-        assertThat(htmlResponse.getBody()).contains("Price Path Comparison");
-        assertThat(htmlResponse.getBody()).contains("aggregate-event-sourced");
-        assertThat(htmlResponse.getBody()).contains("direct-write");
-        assertThat(htmlResponse.getBody()).contains("Realistic Feed");
-        assertThat(htmlResponse.getBody()).contains("Fast Stress");
-        assertThat(htmlResponse.getBody()).contains("Max Throughput");
-        assertThat(htmlResponse.getBody()).contains("Run Price Path Comparison");
-    }
-
-    @Test
-    void async_price_stress_endpoint_starts_background_run() throws Exception {
-        seedLoadGeneratorFixtures("price-stress-owner-");
-
-        var startResponse = operator().exchange("/api/admin/load-generator/price-stress/start?count=5&intervalMs=1",
-                                                  HttpMethod.POST,
-                                                  null,
-                                                  TradingLoadGeneratorStatusView.class);
-
-        assertThat(startResponse.getStatusCode()).isEqualTo(HttpStatusCode.valueOf(200));
-        assertThat(startResponse.getBody()).isNotNull();
-        assertThat(startResponse.getBody().priceStressRequestedCount()).isEqualTo(5);
-        assertThat(startResponse.getBody().priceStressIntervalMillis()).isEqualTo(1);
-
-        TradingLoadGeneratorStatusView completedStatus = null;
-        for (int attempt = 0; attempt < 20; attempt++) {
-            Thread.sleep(25);
-            completedStatus = operator().getForEntity("/api/admin/load-generator",
-                                                        TradingLoadGeneratorStatusView.class).getBody();
-            if (completedStatus != null
-                && !completedStatus.priceStressRunning()
-                && completedStatus.priceStressCompletedCount() >= 5) {
-                break;
-            }
-        }
-
-        assertThat(completedStatus).isNotNull();
-        assertThat(completedStatus.priceStressRunning()).isFalse();
-        assertThat(completedStatus.priceStressCompletedCount()).isGreaterThanOrEqualTo(5);
-        assertThat(completedStatus.latestPrices()).isNotEmpty();
     }
 
     @Test
     void load_generator_burst_endpoints_generate_usage_on_demand() {
         seedLoadGeneratorFixtures("burst-owner-");
 
-        ResponseEntity<TradingLoadGeneratorStatusView> priceBurstResponse = operator().exchange(
-                "/api/admin/load-generator/burst/price-updates?count=3",
-                HttpMethod.POST,
-                null,
-                TradingLoadGeneratorStatusView.class);
         ResponseEntity<TradingLoadGeneratorStatusView> pendingTradeBurstResponse = operator().exchange(
                 "/api/admin/load-generator/burst/trades?count=2",
                 HttpMethod.POST,
@@ -744,11 +607,6 @@ class TradingDemoApplicationTest {
                 HttpMethod.POST,
                 null,
                 TradingLoadGeneratorStatusView.class);
-
-        assertThat(priceBurstResponse.getStatusCode()).isEqualTo(HttpStatusCode.valueOf(200));
-        assertThat(priceBurstResponse.getBody()).isNotNull();
-        assertThat(priceBurstResponse.getBody().generatedPriceUpdateCount()).isGreaterThanOrEqualTo(3);
-        assertThat((CharSequence) priceBurstResponse.getBody().latestPriceInstrumentId()).isNotNull();
 
         assertThat(pendingTradeBurstResponse.getStatusCode()).isEqualTo(HttpStatusCode.valueOf(200));
         assertThat(pendingTradeBurstResponse.getBody()).isNotNull();
@@ -766,31 +624,6 @@ class TradingDemoApplicationTest {
         assertThat(lifecycleBurstResponse.getBody()).isNotNull();
         assertThat(lifecycleBurstResponse.getBody().generatedTradeCount()).isGreaterThanOrEqualTo(3);
         assertThat(lifecycleBurstResponse.getBody().generatedSettlementCount()).isGreaterThanOrEqualTo(3);
-    }
-
-    @Test
-    void price_path_comparison_scenario_endpoint_compares_both_modes() {
-        seedLoadGeneratorFixtures("comparison-owner-");
-
-        var response = operator().exchange("/api/admin/load-generator/comparisons/price-path?count=5",
-                                             HttpMethod.POST,
-                                             null,
-                                             PricePathScenarioResultView.class);
-
-        assertThat(response.getStatusCode()).isEqualTo(HttpStatusCode.valueOf(200));
-        assertThat(response.getBody()).isNotNull();
-        assertThat(response.getBody().available()).isTrue();
-        assertThat(response.getBody().requestedCount()).isEqualTo(5);
-        assertThat(response.getBody().aggregateEventSourced()).isNotNull();
-        assertThat(response.getBody().directWrite()).isNotNull();
-        assertThat(response.getBody().aggregateEventSourced().completedCount()).isEqualTo(5);
-        assertThat(response.getBody().directWrite().completedCount()).isEqualTo(5);
-        assertThat(response.getBody().winnerMode()).isNotBlank();
-
-        var dashboardResponse = operator().getForEntity("/api/admin/dashboard", DashboardSummaryView.class);
-        assertThat(dashboardResponse.getBody()).isNotNull();
-        assertThat(dashboardResponse.getBody().latestPricePathScenario().available()).isTrue();
-        assertThat(dashboardResponse.getBody().latestPricePathScenario().requestedCount()).isEqualTo(5);
     }
 
     @Test
@@ -834,7 +667,6 @@ class TradingDemoApplicationTest {
         commandBus.send(new OpenTradingAccount(accountId, OwnerId.of("owner-projection"), PeriodId.of("2026-04")));
         commandBus.send(new DepositCash(accountId, Amount.of(BigDecimal.valueOf(5_000))));
         commandBus.send(new RegisterInstrument(instrumentId, Symbol.of("MSFT"), "Microsoft Corporation"));
-        commandBus.send(new InitializePrice(instrumentId, Amount.of(BigDecimal.valueOf(320))));
 
         commandBus.send(new PlaceTrade(tradeId,
                                        accountId,
@@ -919,10 +751,10 @@ class TradingDemoApplicationTest {
     }
 
     /**
-     * The load harness needs the three demo accounts and two demo instruments to exist before it can generate against
-     * them. It used to be spelled {@code service.tryLoad(...).orElseGet(...)}; the write side no longer exposes a
-     * load, so existence is probed through the generation ledger and the price aggregate -- both strongly consistent,
-     * unlike the statement projection.
+     * The load harness needs the three demo accounts to exist before it can generate against them. It used to be
+     * spelled {@code service.tryLoad(...).orElseGet(...)}; the write side no longer exposes a load, so existence is
+     * probed through the generation ledger, which is strongly consistent, unlike the statement projection. Prices
+     * come from the market-data feed, or the harness's seed prices, so no instrument has to be registered.
      */
     private void seedLoadGeneratorFixtures(String ownerIdPrefix) {
         for (int index = 1; index <= 3; index++) {
@@ -930,8 +762,6 @@ class TradingDemoApplicationTest {
                                 OwnerId.of(ownerIdPrefix + index),
                                 PeriodId.of("2026-03"));
         }
-        registerInstrumentWithPriceIfAbsent(InstrumentId.of("AAPL"), "AAPL", "Apple Inc.", Amount.of(BigDecimal.valueOf(500)));
-        registerInstrumentWithPriceIfAbsent(InstrumentId.of("MSFT"), "MSFT", "Microsoft Corporation", Amount.of(BigDecimal.valueOf(510)));
 
         // The harness answers 503 "Demo seed data is not available yet" until its own probe can see ACC-DEMO-001, and
         // that probe reads the eventually consistent account_statement projection - so opening the account is not
@@ -948,13 +778,4 @@ class TradingDemoApplicationTest {
         }
     }
 
-    private void registerInstrumentWithPriceIfAbsent(InstrumentId instrumentId,
-                                                     String symbol,
-                                                     String displayName,
-                                                     Amount initialPrice) {
-        if (latestPriceQuery.findLatestPrice(instrumentId).isEmpty()) {
-            commandBus.send(new RegisterInstrument(instrumentId, Symbol.of(symbol), displayName));
-            commandBus.send(new InitializePrice(instrumentId, initialPrice));
-        }
-    }
 }

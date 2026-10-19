@@ -12,7 +12,6 @@ What lives here is the machinery that makes the demo demonstrate something:
 | `TradingLoadGeneratorManager` | Generates continuous runtime traffic, plus on-demand bursts and two benchmark scenarios |
 | `TradingLoadGeneratorController` | The harness's own admin API |
 | `TradingDashboard*` | The lightweight status screen and its SSE stream |
-| `DirectInstrumentPriceService` | A deliberately **non**-event-sourced latest-price table, written with raw JDBC, whose only purpose is to be benchmarked against the `market_data` aggregate path |
 | `QueueLoadGenerator` | Drives the **shard-owned queue engine** on both lanes at once — sustained trickle plus on-demand spikes — and checks per-key ordering as messages arrive |
 | `OrderFlowLoadGenerator` | Phase 3: simulated customers placing and cancelling orders against the stub exchange; placement vs completion throughput and end-to-end latency |
 | `QueueLoadGeneratorController` | `/api/admin/queue-load` — status, start/stop, `POST /spike?size=N`, `POST /faults?retries=N&poison=M&failures=K`, `POST /faults/blocked-key?behind=N` |
@@ -44,8 +43,7 @@ Being outside the boundary check is not permission to reach into the contexts:
 `Trades`, `Settlements` and `Instruments`, and may call their `findX(…)` methods. It must be **strongly
 consistent**: the brokerage projections are eventually consistent, so on a restart against a populated database
 a projection-backed probe could answer "absent" while the data is there, and the runner would seed a second time
-on top of existing data. The price half of the probe uses `LatestPriceQuery`, which reads the price aggregate and
-is already strongly consistent.
+on top of existing data.
 
 The probe reads *existence*, never a field, and it runs once at startup.
 
@@ -69,15 +67,9 @@ Two of those reads are eventually consistent and knowingly so: the dashboard's a
 generator's seed-data check both come from `brokerage.account_statement`. The dashboard can therefore show
 fewer accounts than are configured for a moment after bootstrap.
 
-## `DirectInstrumentPriceService` is here on purpose
-
-It is a second write path for a concept `market_data` already owns, which would be a sole-writer
-defect if it were domain code. It is not: it exists so the dashboard can show what event sourcing
-costs against a plain upsert, and keeping it in the harness is what guarantees no domain path can
-read it by accident. The authoritative latest price is always the `InstrumentPrice` aggregate.
-
-See `../../REFACTORING_PLAN.md` § Open questions for the argument that it belongs in `market_data`
-instead.
+The brokerage trade lifecycle's execution price comes from `market_data`'s published `MarketQuotes` seam (the best
+ask), falling back to the instrument's seed price (`TradingSimulationIds.seedPrice`) when the feed has no fresh quote.
+The synthetic feed's default instruments are the seed instruments at those same prices.
 
 ## The shard-owned queue exercise
 
@@ -186,6 +178,9 @@ DefaultCommandQueue | Inbox:TradeSettlementProjection | Inbox:TradeValuationProj
 InstrumentDetailsProjection:queue | TradingAccountStatementProjection:queue | trading-events
 ```
 
+(That list is from before phase 3. `Inbox:TradeValuationProjection` went with `brokerage.trade_valuation` and the
+`InstrumentPrice` aggregate (D19); the order core added its own processors' inboxes and `Orders:ExchangeReports`.)
+
 What this caught that the engine's own tests and the synthetic generator could not:
 
 - **`ViewEventProcessor` called `queuedMessage.getId()` in log arguments.** Arguments are evaluated
@@ -201,11 +196,12 @@ The demo also had to turn `enable-queue-statistics` back off — it was explicit
 installs a trigger on the `durable_queues` table, which only `PostgresqlDurableQueues` creates. Not
 a gap in the adapter: the setting is off by default and is going away in the next major.
 
-### Measured, one instance, 4 unordered shards and 64 ordered units per queue
+### Measured, one instance, 4 unordered shards and 64 ordered units per queue (before phase 3)
 
-Trade bursts stop contributing at `maxGeneratedTrades` (500), so the spike lever is price updates —
-also the heavier message, since each one updates every trade on its instrument (~250 rows). Eight
-concurrent producers × 5 000:
+This was measured with the price path that phase 3 removed: trade bursts stop contributing at
+`maxGeneratedTrades` (500), so the spike lever was price updates — also the heavier message, since each one
+updated every trade on its instrument (~250 rows) in `trade_valuation`. That lever is gone; the order-flow scenario
+below is the load to measure the Inbox path with now. Eight concurrent producers × 5 000:
 
 | | |
 |---|---|
@@ -217,7 +213,7 @@ concurrent producers × 5 000:
 | fence | 1 on all 12 lanes throughout — no ownership churn under load |
 
 The shape is the finding: lag plateaus rather than growing without bound while producers run, and the
-backlog only appears once *producers* are made concurrent. A single synchronous burst endpoint cannot
+backlog only appeared once *producers* were made concurrent. A single synchronous burst endpoint could not
 outrun the projections — 4 000 price updates in 6s never took the Inbox past a depth of 8. That the
 fence never moved is what the instance-liveness redesign was for; a lease-expiry design would have
 churned ownership exactly here, under load, while the pool was contended.

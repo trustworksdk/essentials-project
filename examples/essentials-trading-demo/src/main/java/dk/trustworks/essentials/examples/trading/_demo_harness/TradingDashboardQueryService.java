@@ -25,8 +25,8 @@ import dk.trustworks.essentials.examples.trading.brokerage.types.TradeId;
 import dk.trustworks.essentials.examples.trading.brokerage.types.TradingAccountId;
 import dk.trustworks.essentials.examples.trading.brokerage.views.account_statement.AccountStatement;
 import dk.trustworks.essentials.examples.trading.brokerage.views.account_statement.AccountStatementQuery;
-import dk.trustworks.essentials.examples.trading.market_data.aggregates.InstrumentPrice;
-import dk.trustworks.essentials.examples.trading.market_data.types.MarketDataAggregateTypes;
+import dk.trustworks.essentials.examples.trading.accounts.aggregates.Account;
+import dk.trustworks.essentials.examples.trading.accounts.aggregates.Accounts;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import org.springframework.stereotype.Service;
@@ -68,18 +68,16 @@ public class TradingDashboardQueryService {
     private static final String                  DEMO_ADMIN_PRINCIPAL = "demo-admin";
     /**
      * The snapshot timers are tagged per aggregate type, so the dashboard has to name every snapshotting aggregate it
-     * wants counted. Reporting only {@code TradingAccounts} meant a price-stress run -- the workload the
-     * {@code InstrumentPrices} aggregate exists to demonstrate -- could never move any number on the Snapshots tab.
+     * wants counted: {@code TradingAccounts} and the ledger's {@code Accounts}.
      * <p>
-     * Each context is named through the surface it publishes: {@code brokerage} exposes its stream name on the
-     * repository wrapper, {@code market_data} on {@link MarketDataAggregateTypes}. The {@code aggregate_impl_type} tag
+     * Each context is named through its repository wrapper's {@code AGGREGATE_TYPE}. The {@code aggregate_impl_type} tag
      * is derived from the class rather than written out as a string literal -- the literal silently stopped matching
      * the moment the class moved package, which is exactly what the slice refactor did to it. That is also the only
      * reason this harness names two BC-private aggregate classes: it reads {@code getName()} off them and nothing else.
      */
     private static final List<SnapshotAggregate> SNAPSHOT_AGGREGATES  = List.of(
             new SnapshotAggregate(TradingAccounts.AGGREGATE_TYPE.toString(), TradingAccount.class.getName()),
-            new SnapshotAggregate(MarketDataAggregateTypes.INSTRUMENT_PRICES.toString(), InstrumentPrice.class.getName())
+            new SnapshotAggregate(Accounts.AGGREGATE_TYPE.toString(), Account.class.getName())
     );
     private static final List<String>            SNAPSHOT_METRIC_NAMES = List.of(
             "essentials.aggregate_snapshot.load_snapshot",
@@ -141,8 +139,6 @@ public class TradingDashboardQueryService {
                                         accountSummaries,
                                         closingBooksStats,
                                         tradingLoadGeneratorManager.status(),
-                                        pricePathComparison(),
-                                        tradingLoadGeneratorManager.latestPricePathScenarioResult(),
                                         tradingLoadGeneratorManager.latestTradingAccountScenarioResult(),
                                         snapshotStats(snapshotMetricSummaries),
                                         snapshotMetricSummaries,
@@ -210,25 +206,6 @@ public class TradingDashboardQueryService {
                                                                                            generation.streamAggregateId(),
                                                                                            false))
                                     .orElseGet(List::of);
-    }
-
-    private PricePathComparisonView pricePathComparison() {
-        var performances = tradingLoadGeneratorManager.pricePathPerformanceSnapshots().stream()
-                                                      .map(snapshot -> {
-                                                          var totalMillis = snapshot.totalNanos() / 1_000_000d;
-                                                          var averageMillis = snapshot.operationCount() == 0 ? 0 : totalMillis / snapshot.operationCount();
-                                                          var maxMillis = snapshot.maxNanos() / 1_000_000d;
-                                                          return new PricePathPerformanceView(snapshot.mode().name().toLowerCase().replace('_', '-'),
-                                                                                              snapshot.operationCount(),
-                                                                                              totalMillis,
-                                                                                              averageMillis,
-                                                                                              maxMillis,
-                                                                                              snapshot.description());
-                                                      })
-                                                      .toList();
-        return new PricePathComparisonView(tradingLoadGeneratorManager.status().currentPriceStressMode(),
-                                           "High-frequency market prices are intentionally shown as a contrast case. The aggregate path is heavier but preserves a full event history, while the direct-write path behaves more like a latest-price market data store.",
-                                           performances);
     }
 
     private List<DashboardMetricSummaryView> snapshotMetrics() {

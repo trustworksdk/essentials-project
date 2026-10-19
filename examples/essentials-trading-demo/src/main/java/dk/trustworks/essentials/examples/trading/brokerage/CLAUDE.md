@@ -11,7 +11,7 @@ command type, their one API file, their handler and their test.
 
 ## Slices
 
-19 command slices and 6 view slices. **No automations** — nothing in this demo reacts to an event by issuing a
+19 command slices and 5 view slices. **No automations** — nothing in this demo reacts to an event by issuing a
 command; the trade → settlement → account chain is driven synchronously by the demo harness. See
 `REFACTORING_PLAN.md` for why that was left alone.
 
@@ -20,11 +20,10 @@ command; the trade → settlement → account chain is driven synchronously by t
 | Account commands | `open_trading_account`, `deposit_cash`, `reserve_funds`, `release_funds`, `apply_trade_settlement`, `close_books`, `close_books_and_open_next_period`, `archive_generation`, `update_closing_books_settings` |
 | Trade commands | `place_trade`, `execute_trade`, `request_settlement`, `mark_trade_settled` |
 | Settlement commands | `create_settlement`, `request_clearing`, `confirm_clearing`, `mark_settlement_settled`, `reconcile_settlement`, `close_settlement` |
-| Views | `account_statement` (2 queries), `trade_settlement_status` (2), `trade_valuation`, `account_generation_events`, `account_generation_archives`, `closing_books_configuration` |
+| Views | `account_statement` (2 queries), `trade_settlement_status` (2), `account_generation_events`, `account_generation_archives`, `closing_books_configuration` |
 
-`trade_valuation` projects `market_data`'s `PriceInitialized`/`PriceUpdated` into its own table so a trade can be
-valued at the current market price. Projecting a foreign context's events is the law's answer to a cross-context
-read; injecting that context's write side was the §R4 violation it replaced.
+`trade_valuation` (a trade valued at the latest `InstrumentPrice`) was deleted with that aggregate in phase 3 (D19).
+`GET /api/admin/trades/{tradeId}` went with it.
 
 ## Why three aggregates, one context
 

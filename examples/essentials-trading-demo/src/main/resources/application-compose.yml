@@ -132,5 +132,4 @@ trading-demo:
   load:
     enabled: true
     trade-interval: 2s
-    price-update-interval: 1s
     max-generated-trades: 500

@@ -55,9 +55,10 @@ public class MarketQuotesProperties {
     public static class Synthetic {
         private boolean                 enabled          = true;
         /**
-         * Instrument id to starting mid price, in {@code currency}.
+         * Instrument id to starting mid price, in {@code currency}. By default {@code ACME}, the order tests' instrument,
+         * and the harness's seed instruments at the prices the bootstrap has always used for them.
          */
-        private Map<String, BigDecimal> instruments      = new LinkedHashMap<>(Map.of("ACME", new BigDecimal("100.00")));
+        private Map<String, BigDecimal> instruments      = defaultInstruments();
         private String                  currency         = "USD";
         private Duration                tickInterval     = Duration.ofSeconds(1);
         /**
@@ -69,6 +70,16 @@ public class MarketQuotesProperties {
          * Half the bid/ask spread, in basis points of the mid.
          */
         private int                     halfSpreadBps    = 5;
+
+        private static Map<String, BigDecimal> defaultInstruments() {
+            var instruments = new LinkedHashMap<String, BigDecimal>();
+            instruments.put("ACME", new BigDecimal("100.00"));
+            var seeds = List.of("AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "JPM", "SAP", "NOVO-B");
+            for (var index = 0; index < seeds.size(); index++) {
+                instruments.put(seeds.get(index), BigDecimal.valueOf(475 + index * 12L).setScale(2));
+            }
+            return instruments;
+        }
 
         public boolean isEnabled() {
             return enabled;

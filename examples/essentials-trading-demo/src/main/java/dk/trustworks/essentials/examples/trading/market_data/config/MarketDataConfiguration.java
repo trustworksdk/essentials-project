@@ -18,8 +18,6 @@ package dk.trustworks.essentials.examples.trading.market_data.config;
 
 import dk.trustworks.essentials.components.eventsourced.aggregates.EssentialsAggregateDeclarations;
 import dk.trustworks.essentials.examples.trading.market_data.aggregates.Instrument;
-import dk.trustworks.essentials.examples.trading.market_data.aggregates.InstrumentPrice;
-import dk.trustworks.essentials.examples.trading.market_data.aggregates.InstrumentPrices;
 import dk.trustworks.essentials.examples.trading.market_data.aggregates.Instruments;
 import dk.trustworks.essentials.examples.trading.market_data.use_cases.risk_approve_instrument.RiskApprovalProperties;
 import dk.trustworks.essentials.examples.trading.market_data.views.market_quotes.MarketQuotesProperties;
@@ -30,32 +28,22 @@ import org.springframework.context.annotation.Configuration;
 /**
  * Spring wiring for the {@code market_data} bounded context.
  *
- * <p>There is only one bean: both aggregates' repositories are built by their own wrappers
- * ({@code Instruments}, {@code InstrumentPrices}), the way the house template's {@code Accounts} does.
- *
- * <p>{@link RiskApprovalProperties} is registered here rather than on the application class, because it belongs to a
- * slice of this context — the same split as {@code brokerage}'s closing-books properties.
+ * <p>{@link RiskApprovalProperties} and {@link MarketQuotesProperties} are registered here rather than on the
+ * application class, because they belong to slices of this context — the same split as {@code brokerage}'s
+ * closing-books properties.
  */
 @Configuration
 @EnableConfigurationProperties({RiskApprovalProperties.class, MarketQuotesProperties.class})
 public class MarketDataConfiguration {
 
     /**
-     * Declares this context's aggregates, which is what carries {@link InstrumentPrice}'s declared snapshot policy into
-     * the registry the admin console reads.
-     * <p>
-     * Same reason as the brokerage context's equivalent: the framework registers these annotations from a bean
-     * post-processor, and an aggregate root is not a Spring bean, so without a declaration the annotation is inert and
-     * nothing says so. Each context declares its own aggregates; the declarations from every context are merged.
-     * <p>
-     * Note that declaring only publishes the policy. What causes snapshots to actually be written and read is
-     * {@code InstrumentPrices} building its repository through the {@code AggregateSnapshotRepositoryProvider} — the two
-     * are separate wiring steps, and declaring without doing that leaves the policy inert.
+     * Declares this context's aggregate, so the admin console's aggregate registry lists it. The framework registers
+     * policy annotations from a bean post-processor, and an aggregate root is not a Spring bean, so without a
+     * declaration nothing would; the declarations from every context are merged.
      */
     @Bean
     public EssentialsAggregateDeclarations marketDataAggregates() {
         return EssentialsAggregateDeclarations.builder()
-                                            .declare(InstrumentPrices.AGGREGATE_TYPE, InstrumentPrice.class)
                                             .declare(Instruments.AGGREGATE_TYPE, Instrument.class)
                                             .build();
     }

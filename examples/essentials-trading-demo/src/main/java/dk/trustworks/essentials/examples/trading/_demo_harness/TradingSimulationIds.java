@@ -18,6 +18,9 @@ package dk.trustworks.essentials.examples.trading._demo_harness;
 
 import dk.trustworks.essentials.examples.trading.market_data.types.InstrumentId;
 
+import dk.trustworks.essentials.types.Amount;
+
+import java.math.BigDecimal;
 import java.util.List;
 
 /**
@@ -46,6 +49,20 @@ final class TradingSimulationIds {
     static List<InstrumentSeed> seeds(int instrumentCount) {
         var safeCount = Math.max(1, Math.min(instrumentCount, INSTRUMENT_SEEDS.size()));
         return INSTRUMENT_SEEDS.subList(0, safeCount);
+    }
+
+    /**
+     * The price an instrument trades at when the market-data feed has no fresh quote for it: 475 for the first seed,
+     * 12 more for each one after, as the bootstrap always seeded them. The synthetic feed's default instruments start
+     * at the same prices.
+     */
+    static Amount seedPrice(InstrumentId instrumentId) {
+        for (var index = 0; index < INSTRUMENT_SEEDS.size(); index++) {
+            if (INSTRUMENT_SEEDS.get(index).instrumentId().equals(instrumentId)) {
+                return Amount.of(BigDecimal.valueOf(475 + index * 12L));
+            }
+        }
+        return Amount.of(BigDecimal.valueOf(500));
     }
 
     static List<InstrumentId> instrumentIds(int instrumentCount) {

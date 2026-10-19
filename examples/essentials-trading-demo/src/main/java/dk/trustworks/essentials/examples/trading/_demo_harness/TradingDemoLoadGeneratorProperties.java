@@ -27,9 +27,7 @@ import java.time.Duration;
 public class TradingDemoLoadGeneratorProperties {
     private boolean enabled = false;
     private Duration tradeInterval = Duration.ofSeconds(2);
-    private Duration priceUpdateInterval = Duration.ofSeconds(1);
     private int maxGeneratedTrades = 500;
-    private BigDecimalRange priceJitter = new BigDecimalRange(3, 9);
 
     public boolean isEnabled() {
         return enabled;
@@ -47,56 +45,11 @@ public class TradingDemoLoadGeneratorProperties {
         this.tradeInterval = tradeInterval;
     }
 
-    public Duration getPriceUpdateInterval() {
-        return priceUpdateInterval;
-    }
-
-    public void setPriceUpdateInterval(Duration priceUpdateInterval) {
-        this.priceUpdateInterval = priceUpdateInterval;
-    }
-
     public int getMaxGeneratedTrades() {
         return maxGeneratedTrades;
     }
 
     public void setMaxGeneratedTrades(int maxGeneratedTrades) {
         this.maxGeneratedTrades = maxGeneratedTrades;
-    }
-
-    public BigDecimalRange getPriceJitter() {
-        return priceJitter;
-    }
-
-    public void setPriceJitter(BigDecimalRange priceJitter) {
-        this.priceJitter = priceJitter;
-    }
-
-    public static class BigDecimalRange {
-        private int min = 3;
-        private int max = 9;
-
-        public BigDecimalRange() {
-        }
-
-        public BigDecimalRange(int min, int max) {
-            this.min = min;
-            this.max = max;
-        }
-
-        public int getMin() {
-            return min;
-        }
-
-        public void setMin(int min) {
-            this.min = min;
-        }
-
-        public int getMax() {
-            return max;
-        }
-
-        public void setMax(int max) {
-            this.max = max;
-        }
     }
 }

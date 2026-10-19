@@ -67,32 +67,6 @@ public class TradingLoadGeneratorController {
         return executeBurst(() -> loadGeneratorManager.settlePendingTradeBurst(count));
     }
 
-    @PostMapping("/burst/price-updates")
-    public TradingLoadGeneratorStatusView generatePriceUpdateBurst(@RequestParam(defaultValue = "100") int count) {
-        return executeBurst(() -> loadGeneratorManager.generatePriceUpdateBurst(count));
-    }
-
-    @PostMapping("/price-stress/start")
-    public TradingLoadGeneratorStatusView startPriceStress(@RequestParam(defaultValue = "500") int count,
-                                                           @RequestParam(defaultValue = "100") long intervalMs,
-                                                           @RequestParam(defaultValue = "aggregate-event-sourced") String mode) {
-        return executeBurst(() -> loadGeneratorManager.startAsyncPriceStress(count, intervalMs, parsePriceStressMode(mode)));
-    }
-
-    @PostMapping("/price-stress/stop")
-    public TradingLoadGeneratorStatusView stopPriceStress() {
-        return loadGeneratorManager.stopAsyncPriceStress();
-    }
-
-    @PostMapping("/comparisons/price-path")
-    public PricePathScenarioResultView runPricePathComparison(@RequestParam(defaultValue = "100") int count) {
-        try {
-            return loadGeneratorManager.runPricePathComparisonScenario(count);
-        } catch (IllegalArgumentException | IllegalStateException e) {
-            throw new ResponseStatusException(BAD_REQUEST, e.getMessage(), e);
-        }
-    }
-
     @PostMapping("/comparisons/trading-account")
     public TradingAccountScenarioResultView runTradingAccountComparison(@RequestParam(defaultValue = "90") int count,
                                                                         @RequestParam(defaultValue = "25") int readPasses,
@@ -115,9 +89,5 @@ public class TradingLoadGeneratorController {
     @FunctionalInterface
     private interface BurstOperation {
         TradingLoadGeneratorStatusView execute();
-    }
-
-    private PriceStressMode parsePriceStressMode(String mode) {
-        return PriceStressMode.valueOf(mode.trim().replace('-', '_').toUpperCase());
     }
 }

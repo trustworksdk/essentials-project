@@ -96,11 +96,7 @@ trading-demo:
   load:
     enabled: false
     trade-interval: 2s
-    price-update-interval: 1s
     max-generated-trades: 500
-    price-jitter:
-      min: 3
-      max: 9
 
 essentials:
   # The shard-owned queue engine is off by default in its starter; the demo always runs it, since

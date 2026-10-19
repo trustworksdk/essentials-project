@@ -37,9 +37,8 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 /**
  * Projects {@code InstrumentEvent} into this slice's own read model.
  * <p>
- * Unlike {@code views/latest_price}, this one projects rather than reading the aggregate: nothing needs an
- * instrument's reference data <em>strongly</em> consistently, and the aggregate exposes no accessors — which is the
- * normal arrangement, and why the price slice's exception is documented so loudly.
+ * It projects rather than reading the aggregate: nothing needs an instrument's reference data <em>strongly</em>
+ * consistently, and the aggregate exposes no accessors.
  */
 @Service
 public class InstrumentDetailsProjection extends ViewEventProcessor {

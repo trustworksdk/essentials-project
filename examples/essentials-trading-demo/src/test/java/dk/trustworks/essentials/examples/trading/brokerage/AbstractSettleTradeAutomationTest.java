@@ -28,7 +28,6 @@ import dk.trustworks.essentials.examples.trading.brokerage.use_cases.settle_trad
 import dk.trustworks.essentials.examples.trading.brokerage.views.account_statement.AccountStatementQuery;
 import dk.trustworks.essentials.examples.trading.brokerage.views.trade_settlement_status.TradeSettlementStatusQuery;
 import dk.trustworks.essentials.examples.trading.market_data.types.*;
-import dk.trustworks.essentials.examples.trading.market_data.use_cases.initialize_price.InitializePrice;
 import dk.trustworks.essentials.examples.trading.market_data.use_cases.register_instrument.RegisterInstrument;
 import dk.trustworks.essentials.reactive.command.CommandBus;
 import dk.trustworks.essentials.types.Amount;
@@ -87,7 +86,6 @@ abstract class AbstractSettleTradeAutomationTest {
         commandBus.send(new OpenTradingAccount(accountId, OwnerId.of("owner-settle"), PeriodId.of("2026-03")));
         commandBus.send(new DepositCash(accountId, Amount.of(BigDecimal.valueOf(1_500))));
         commandBus.send(new RegisterInstrument(instrumentId, Symbol.of("SETL"), "Settle Corp"));
-        commandBus.send(new InitializePrice(instrumentId, Amount.of(BigDecimal.valueOf(500))));
 
         commandBus.send(new PlaceTrade(tradeId, accountId, instrumentId, TradeSide.BUY, Quantity.ONE, Amount.of(BigDecimal.valueOf(500))));
         commandBus.send(new ExecuteTrade(tradeId));

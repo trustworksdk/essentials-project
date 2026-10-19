@@ -39,9 +39,9 @@ Packaged by **vertical slice**, not by layer. Two bounded contexts under
 | Package | What it holds |
 |---|---|
 | `brokerage/` | `TradingAccount`, `Trade`, `Settlement` — 19 command slices, 6 view slices |
-| `market_data/` | `Instrument`, `InstrumentPrice` — 5 command slices, 2 view slices |
+| `market_data/` | `Instrument` — 3 command slices, 1 automation, 2 view slices (one is the in-memory `market_quotes`) |
 | `config/` | app-level wiring only: web MVC, error handling |
-| `_demo_harness/` | deliberately **not** a slice — bootstrap runner, load generator, dashboard, benchmark price store |
+| `_demo_harness/` | deliberately **not** a slice — bootstrap runner, load generators, dashboard |
 
 Both contexts are on the **aggregate write style** (§R5 of the slice-design law): `AggregateRoot` reached
 through a `StatefulAggregateRepository` wrapper. That is a sanctioned lane — nothing here is a `Decider`
@@ -209,7 +209,6 @@ still show the previous state, and an account that exists but is not yet project
 - `GET /api/admin/projections/account-statements` — `account_statement`, all of them
 - `GET /api/admin/settlements/{settlementId}` — `trade_settlement_status`, one settlement's lifecycle
 - `GET /api/admin/projections/trade-settlements` — `trade_settlement_status`, the combined trade/settlement read model
-- `GET /api/admin/trades/{tradeId}` — `trade_valuation`, priced as of the last *projected* price event, not as of now
 
 Read straight off the event store and the archive registry, so **strongly consistent**:
 
@@ -223,16 +222,14 @@ Read straight off the event store and the archive registry, so **strongly consis
 - `POST /api/admin/instruments` — `register_instrument`, body `RegisterInstrument`
 - `POST /api/admin/instruments/{instrumentId}/name?displayName=…` — `rename_instrument`
 - `POST /api/admin/instruments/{instrumentId}/suspension?reason=…` — `suspend_instrument`
-- `POST /api/admin/instrument-prices` — `initialize_price`, body `InitializePrice`
-- `POST /api/admin/instrument-prices/{instrumentId}?price=…` — `update_price`
 
 ### `market_data` — views
 
 - `GET /api/admin/instruments` — `instrument_details`, all instruments, **eventually consistent** (projection-backed)
 - `GET /api/admin/instruments/{instrumentId}` — `instrument_details`, likewise
-- `GET /api/admin/instrument-prices/{instrumentId}` — `latest_price`, **strongly consistent**: it is the one
-  read in the module that goes to the aggregate, because the bootstrap's idempotency probe needs an answer
-  that cannot lag
+- `GET /api/market-data/quotes` and `GET /api/market-data/quotes/{instrumentId}` — `market_quotes`, this instance's
+  latest quote per instrument from the market-data feed (synthetic until the exchange-simulator's stream exists);
+  customers and operators
 
 ## What The Simulator Does
 
@@ -245,7 +242,6 @@ It currently:
 - opens one or more demo trading accounts like `ACC-DEMO-001`
 - deposits cash, reserves and releases funds, and applies a few settled trades
 - creates and completes settlement lifecycles for those trades
-- initializes market prices per instrument and updates them while processing demo trades
 - rolls one account's books through the policy and one through an explicit command, leaving the third alone
   (see [What Bootstrap Leaves Behind](#what-bootstrap-leaves-behind))
 
@@ -378,7 +374,6 @@ The demo now also has an opt-in runtime load generator that can continue creatin
 
 When enabled it will:
 
-- generate periodic price updates for the seeded demo instruments
 - generate periodic trade lifecycles
 - generate matching settlement lifecycles
 - apply settled trade effects back to the seeded trading accounts
@@ -398,55 +393,23 @@ Burst endpoints:
   creates pending trades plus pending settlements, but does not complete settlement yet
 - `POST /api/admin/load-generator/burst/settlements?count=100`
   settles pending generated trades and closes their settlements
-- `POST /api/admin/load-generator/burst/price-updates?count=500`
-  pushes a burst of market price updates
 - `POST /api/admin/load-generator/burst/trade-lifecycles?count=100`
   runs the full create-and-settle path in one call
-- `POST /api/admin/load-generator/price-stress/start?count=500&intervalMs=100&mode=aggregate-event-sourced`
-  starts an asynchronous high-frequency price stress run and returns immediately; `mode` also accepts
-  `direct-write`
-- `POST /api/admin/load-generator/price-stress/stop`
-  stops the current asynchronous price stress run
-- `POST /api/admin/load-generator/comparisons/price-path?count=100`
-  runs the same number of price updates through `aggregate-event-sourced` and `direct-write` back-to-back and stores the latest comparison result on `/admin`
 - `POST /api/admin/load-generator/comparisons/trading-account?count=90&readPasses=25&eventThreshold=20`
   runs the same TradingAccount mutation and repeated-read workload twice, once with `manual-only` and once with `event-count`, and stores the latest comparison result on `/admin`
 
-Two caveats when reading those two comparisons:
+A caveat when reading that comparison:
 
-- **The aggregate price path is measured marginally heavier than before.** It now sends `UpdatePrice` on the
-  command bus, which puts command dispatch, handler lookup and the bus's `UnitOfWork` interceptor inside the
-  timed window, where the old code called a transactional service method directly. The direct-write path is
-  unchanged and the transaction count per step is the same, so the comparison is now slightly biased
-  *against* event sourcing.
 - **The trading-account scenario's read pass still loads the aggregate on purpose.** That is the one place in
   the harness that does — see `_demo_harness/CLAUDE.md` § Exception 2. The scenario exists to measure how
   expensive rehydration is under two rollover policies; routing it through the `account_statement` projection
   would time a single-row `SELECT` and report zero for every snapshot delta.
 
-Dashboard presets:
-
-- `Realistic Feed`
-  500 updates at 100 ms, useful for a live-ticker style demo
-- `Fast Stress`
-  500 updates at 10 ms, useful for a quicker pressure run
-- `Max Throughput`
-  1000 updates at 0 ms, useful for seeing the no-delay limit of the current aggregate path
-
-Price stress mode selector:
-
-- `aggregate-event-sourced`
-  uses the current `InstrumentPrice` aggregate path, which is intentionally heavier and better for illustrating the cost of event sourcing on very frequent market data
-- `direct-write`
-  uses a direct latest-price upsert table, which is closer to how a lightweight market-data path would normally be modeled
-
-The dashboard includes a `Price Path Comparison` panel that shows operation counts and latency per mode so it is easier to see why the aggregate path feels slower.
-
 The `Trading Accounts` panel now also shows the latest `TradingAccount` comparison result, which is useful for seeing how event-count rollover changes generation growth and snapshot reuse compared to a no-rollover baseline.
 
 Manual bursts are coordinated with the live generator, so a large burst will temporarily block the periodic generator instead of interleaving writes into the same demo streams.
 
-The dashboard also exposes a live SSE feed at `GET /api/admin/dashboard/stream`, which the `/admin` page uses to update KPI cards and the latest price ticker without waiting for full-page refreshes.
+The dashboard also exposes a live SSE feed at `GET /api/admin/dashboard/stream`, which the `/admin` page uses to update KPI cards without waiting for full-page refreshes.
 
 ## Closed-Generation Archival
 
@@ -498,10 +461,7 @@ Important properties:
 
 - `trading-demo.load.enabled`
 - `trading-demo.load.trade-interval`
-- `trading-demo.load.price-update-interval`
 - `trading-demo.load.max-generated-trades`
-- `trading-demo.load.price-jitter.min`
-- `trading-demo.load.price-jitter.max`
 
 Defaults:
 
@@ -521,11 +481,10 @@ Suggested starting point:
 - use the burst controls and live generator controls there
 - watch account generations, pending settlements, and selected snapshot metrics update together
 
-Functional checks — all three are projection-backed, so give them a moment to catch up after a burst:
+Functional checks — both are projection-backed, so give them a moment to catch up after a burst:
 
 - use `GET /api/admin/trading-accounts/{accountId}` to confirm that `TradingAccount` rolls across generations
 - use `GET /api/admin/settlements/{settlementId}` to confirm that `Settlement` reaches its explicit closed lifecycle
-- use `GET /api/admin/trades/{tradeId}` to inspect price-driven valuation after trade bursts and price-update bursts
 
 For a strongly-consistent look at the same account, read its raw stream instead:
 `GET /api/admin/trading-accounts/{accountId}/generations/{generation}/events`.
@@ -534,7 +493,6 @@ Useful traffic patterns:
 
 - `POST /api/admin/load-generator/burst/trades?count=100`
 - `POST /api/admin/load-generator/burst/settlements?count=100`
-- `POST /api/admin/load-generator/burst/price-updates?count=1000`
 - `POST /api/admin/load-generator/burst/trade-lifecycles?count=100`
 
 Snapshot-related metrics to inspect through `/actuator/metrics`:
@@ -583,8 +541,8 @@ Recommended concrete test recipe from a clean database:
    - `TradingAccounts` snapshot saves
    - `TradingAccounts` snapshot loads
    - total generations and average generations/account
-6. Run a controlled price workload:
-   - `POST /api/admin/load-generator/burst/price-updates?count=500`
+6. Run a second controlled trade workload:
+   - `POST /api/admin/load-generator/burst/trade-lifecycles?count=500`
 7. Refresh `/admin` again and compare:
    - whether snapshot loads continue to rise
    - whether generation stats remain stable or grow

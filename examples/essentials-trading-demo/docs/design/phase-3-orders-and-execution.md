@@ -252,6 +252,10 @@ Where it deviates from the sections above:
 - **The order-flow load scenario exists** (§8), against the stub exchange: `_demo_harness/OrderFlowLoadGenerator`.
   First measurement, one instance: placement 3 174 orders/s, completion 109 orders/s, capped by the two
   `EventProcessor` hops' per-event forward (EF-2 doc §5, "Field evidence").
+- **`InstrumentPrice` is removed** (§7, D19): the aggregate, `initialize_price`, `update_price`, `latest_price`,
+  `brokerage.trade_valuation` (which projected its events) and the harness's price-path benchmark. The brokerage
+  harness prices its trades from `MarketQuotes`, with the seed prices as a fallback; the order-flow scenario is the
+  load lever for the Inbox and queue measurements now.
 - **Not built yet:** DAY expiry, average fill price, `EXCHANGE_UNAVAILABLE` after a retry budget,
   `UnknownExchangeOrder`.
 

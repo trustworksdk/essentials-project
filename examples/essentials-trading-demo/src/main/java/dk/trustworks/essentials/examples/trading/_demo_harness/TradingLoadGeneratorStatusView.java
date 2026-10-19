@@ -18,9 +18,7 @@ package dk.trustworks.essentials.examples.trading._demo_harness;
 
 import dk.trustworks.essentials.examples.trading.brokerage.types.SettlementId;
 import dk.trustworks.essentials.examples.trading.brokerage.types.TradeId;
-import dk.trustworks.essentials.examples.trading.market_data.types.InstrumentId;
 
-import java.util.List;
 
 /**
  * Read-model for the runtime load generator.
@@ -29,15 +27,7 @@ public record TradingLoadGeneratorStatusView(boolean enabled,
                                              boolean started,
                                              long generatedTradeCount,
                                              long generatedSettlementCount,
-                                             long generatedPriceUpdateCount,
                                              int pendingSettlementCount,
                                              TradeId latestTradeId,
-                                             SettlementId latestSettlementId,
-                                             InstrumentId latestPriceInstrumentId,
-                                             String currentPriceStressMode,
-                                             boolean priceStressRunning,
-                                             long priceStressRequestedCount,
-                                             long priceStressCompletedCount,
-                                             long priceStressIntervalMillis,
-                                             List<InstrumentPriceTickerView> latestPrices) {
+                                             SettlementId latestSettlementId) {
 }

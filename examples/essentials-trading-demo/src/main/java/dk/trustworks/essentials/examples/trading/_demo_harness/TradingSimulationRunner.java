@@ -50,11 +50,8 @@ import dk.trustworks.essentials.examples.trading.brokerage.use_cases.request_set
 import dk.trustworks.essentials.examples.trading.brokerage.use_cases.reserve_funds.ReserveFunds;
 import dk.trustworks.essentials.examples.trading.market_data.aggregates.Instruments;
 import dk.trustworks.essentials.examples.trading.market_data.types.Symbol;
-import dk.trustworks.essentials.examples.trading.market_data.use_cases.initialize_price.InitializePrice;
 import dk.trustworks.essentials.examples.trading.market_data.use_cases.register_instrument.RegisterInstrument;
 import dk.trustworks.essentials.examples.trading.market_data.use_cases.rename_instrument.RenameInstrument;
-import dk.trustworks.essentials.examples.trading.market_data.use_cases.update_price.UpdatePrice;
-import dk.trustworks.essentials.examples.trading.market_data.views.latest_price.LatestPriceQuery;
 import dk.trustworks.essentials.reactive.command.CommandBus;
 import dk.trustworks.essentials.types.Amount;
 import org.slf4j.Logger;
@@ -122,8 +119,6 @@ public class TradingSimulationRunner implements ApplicationRunner {
     private final CommandBus                                          commandBus;
     private final TradingAccountClosingBooksPolicy                    closingBooksPolicy;
     private final AggregateLifecycleApi                               aggregateLifecycleApi;
-    private final LatestPriceQuery                                    latestPriceQuery;
-    private final DirectInstrumentPriceService                        directInstrumentPriceService;
     private final EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory;
     private final TradingAccounts                                     tradingAccounts;
     private final Trades                                              trades;
@@ -136,25 +131,20 @@ public class TradingSimulationRunner implements ApplicationRunner {
                                    CommandBus commandBus,
                                    TradingAccountClosingBooksPolicy closingBooksPolicy,
                                    AggregateLifecycleApi aggregateLifecycleApi,
-                                   LatestPriceQuery latestPriceQuery,
-                                   DirectInstrumentPriceService directInstrumentPriceService,
                                    EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory,
                                    TradingAccounts tradingAccounts,
                                    Trades trades,
                                    Settlements settlements,
                                    Instruments instruments,
                                    TradeSettlementStatusQuery tradeSettlementStatusQuery) {
-        this(properties, commandBus, closingBooksPolicy, aggregateLifecycleApi, latestPriceQuery,
-             directInstrumentPriceService, unitOfWorkFactory, tradingAccounts, trades, settlements, instruments,
-             tradeSettlementStatusQuery, Clock.systemUTC());
+        this(properties, commandBus, closingBooksPolicy, aggregateLifecycleApi, unitOfWorkFactory, tradingAccounts, trades,
+             settlements, instruments, tradeSettlementStatusQuery, Clock.systemUTC());
     }
 
     public TradingSimulationRunner(TradingDemoSimulationProperties properties,
                                    CommandBus commandBus,
                                    TradingAccountClosingBooksPolicy closingBooksPolicy,
                                    AggregateLifecycleApi aggregateLifecycleApi,
-                                   LatestPriceQuery latestPriceQuery,
-                                   DirectInstrumentPriceService directInstrumentPriceService,
                                    EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory,
                                    TradingAccounts tradingAccounts,
                                    Trades trades,
@@ -166,8 +156,6 @@ public class TradingSimulationRunner implements ApplicationRunner {
         this.commandBus = requireNonNull(commandBus, "No commandBus provided");
         this.closingBooksPolicy = requireNonNull(closingBooksPolicy, "No closingBooksPolicy provided");
         this.aggregateLifecycleApi = requireNonNull(aggregateLifecycleApi, "No aggregateLifecycleApi provided");
-        this.latestPriceQuery = requireNonNull(latestPriceQuery, "No latestPriceQuery provided");
-        this.directInstrumentPriceService = requireNonNull(directInstrumentPriceService, "No directInstrumentPriceService provided");
         this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory provided");
         this.tradingAccounts = requireNonNull(tradingAccounts, "No tradingAccounts provided");
         this.trades = requireNonNull(trades, "No trades provided");
@@ -191,7 +179,7 @@ public class TradingSimulationRunner implements ApplicationRunner {
             return;
         }
         if (seedState == SeedState.LEGACY_OR_PARTIAL) {
-            log.warn("Trading demo simulation detected existing but incomplete demo data. This usually means the local database was initialized by an older demo version before trades, prices, or the newer settlement ids were added.");
+            log.warn("Trading demo simulation detected existing but incomplete demo data. This usually means the local database was initialized by an older demo version before trades or the newer settlement ids were added.");
             log.warn("For a clean local run, remove the local demo database/volume and start the app again so the simulator can reseed the current dataset.");
             log.warn("Expected current demo ids include account '{}', trade '{}', and settlement '{}'.",
                      firstDemoAccountId(),
@@ -217,13 +205,10 @@ public class TradingSimulationRunner implements ApplicationRunner {
         for (int instrumentIndex = 0; instrumentIndex < properties.getInstrumentCount(); instrumentIndex++) {
             var seed         = instrumentSeeds.get(instrumentIndex % instrumentSeeds.size());
             var instrumentId = seed.instrumentId();
-            var initialPrice = Amount.of(BigDecimal.valueOf(475 + (instrumentIndex * 12L)));
             commandBus.send(new RegisterInstrument(instrumentId,
                                                    Symbol.of(seed.symbol()),
                                                    seed.displayName()));
             commandBus.send(new RenameInstrument(instrumentId, seed.displayName() + " (Demo)"));
-            directInstrumentPriceService.initializePrice(instrumentId, initialPrice);
-            commandBus.send(new InitializePrice(instrumentId, initialPrice));
         }
 
         log.info("Trading demo simulation seeded {} instruments using realistic ticker symbols such as {} and {}",
@@ -251,7 +236,6 @@ public class TradingSimulationRunner implements ApplicationRunner {
                 var instrumentId   = instrumentSeed.instrumentId();
                 var tradeId        = TradeId.of("TRD-%03d-%03d".formatted(accountIndex + 1, settlementIndex + 1));
                 var settlementId   = SettlementId.forTrade(tradeId);
-                var updatedPrice   = TRADE_GROSS_AMOUNT.add(Amount.of(BigDecimal.valueOf(15 + settlementIndex)));
 
                 commandBus.send(new PlaceTrade(tradeId,
                                                accountId,
@@ -263,13 +247,9 @@ public class TradingSimulationRunner implements ApplicationRunner {
                 if (properties.isTradeLifecycleAutomated()) {
                     // brokerage.settle_trade takes it from TradeExecuted; the account waits for it below
                     automatedTradeIds.add(tradeId);
-                    directInstrumentPriceService.updatePrice(instrumentId, updatedPrice);
-                    commandBus.send(new UpdatePrice(instrumentId, updatedPrice));
                     continue;
                 }
                 commandBus.send(new RequestSettlement(tradeId, settlementId));
-                directInstrumentPriceService.updatePrice(instrumentId, updatedPrice);
-                commandBus.send(new UpdatePrice(instrumentId, updatedPrice));
 
                 commandBus.send(new CreateSettlement(settlementId, tradeId, accountId, TRADE_GROSS_AMOUNT));
                 commandBus.send(new RequestClearing(settlementId));
@@ -438,15 +418,11 @@ public class TradingSimulationRunner implements ApplicationRunner {
      * It has to be strongly consistent. The brokerage read models are projected asynchronously, so a
      * projection-backed probe could answer "absent" on a restart against a populated database, and this runner would
      * then seed a second time on top of existing data. The four repository wrappers are therefore consulted directly,
-     * through their {@code findX} methods and inside one read-only unit of work. {@code LatestPriceQuery} is already
-     * strongly consistent — it reads the price aggregate — so the price half goes through the view slice.
+     * through their {@code findX} methods and inside one read-only unit of work.
      */
     private SeedState seedDataState() {
         var firstSeedInstrument = TradingSimulationIds.INSTRUMENT_SEEDS.get(0);
         var firstInstrumentId   = firstSeedInstrument.instrumentId();
-
-        var hasDirectPrice = directInstrumentPriceService.findLatestPrice(firstInstrumentId).isPresent();
-        var hasPrice       = latestPriceQuery.findLatestPrice(firstInstrumentId).isPresent();
 
         var probe = unitOfWorkFactory.withUnitOfWork(uow -> new AggregateProbe(
                 instruments.findInstrument(firstInstrumentId).isPresent(),
@@ -454,10 +430,10 @@ public class TradingSimulationRunner implements ApplicationRunner {
                 trades.findTrade(firstDemoTradeId()).isPresent(),
                 settlements.findSettlement(firstDemoSettlementId()).isPresent()));
 
-        if (probe.hasInstrument() && hasDirectPrice && hasPrice && probe.hasAccount() && probe.hasTrade() && probe.hasSettlement()) {
+        if (probe.hasInstrument() && probe.hasAccount() && probe.hasTrade() && probe.hasSettlement()) {
             return SeedState.COMPLETE;
         }
-        if (probe.hasInstrument() || hasDirectPrice || hasPrice || probe.hasAccount() || probe.hasTrade() || probe.hasSettlement()) {
+        if (probe.hasInstrument() || probe.hasAccount() || probe.hasTrade() || probe.hasSettlement()) {
             return SeedState.LEGACY_OR_PARTIAL;
         }
         return SeedState.NONE;
@@ -473,7 +449,6 @@ public class TradingSimulationRunner implements ApplicationRunner {
         log.info("  trade ids: {}", demoTradeIds());
         log.info("  settlement ids: {}", demoSettlementIds());
         log.info("  inspect current account state at /api/admin/trading-accounts/{}", firstDemoAccountId());
-        log.info("  inspect trade valuation at /api/admin/trades/{}", firstDemoTradeId());
         log.info("  inspect settlement lifecycle at /api/admin/settlements/{}", firstDemoSettlementId());
     }
 

@@ -192,18 +192,6 @@
             min-height: 1.2em;
             color: var(--accent);
         }
-        .ticker-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
-            gap: 10px;
-            margin-top: 12px;
-        }
-        .ticker {
-            padding: 10px 12px;
-            border-radius: 14px;
-            background: rgba(255,255,255,0.55);
-            border: 1px solid var(--border);
-        }
         .summary-card {
             margin-top: 12px;
             padding: 14px 16px;
@@ -255,12 +243,6 @@
             color: var(--ink);
             margin-bottom: 4px;
         }
-        .ticker .symbol {
-            display: block;
-            font-size: 0.8rem;
-            color: var(--muted);
-            margin-bottom: 4px;
-        }
         select, input {
             font: inherit;
         }
@@ -294,7 +276,6 @@
         <button class="tab" role="tab" data-tab="dashboard" aria-selected="true">Dashboard</button>
         <button class="tab" role="tab" data-tab="snapshots" aria-selected="false">Snapshots</button>
         <button class="tab" role="tab" data-tab="closing-books" aria-selected="false">Closing Books</button>
-        <button class="tab" role="tab" data-tab="price-stress" aria-selected="false">Price Stress</button>
     </nav>
 
     <section class="panel">
@@ -363,91 +344,6 @@
                 sourced from <code>/api/admin/dashboard</code> and streamed from
                 <code>/api/admin/dashboard/stream</code>.
             </p>
-        </div>
-    </section>
-    </div>
-
-    <!-- ── Price Stress ──────────────────────────────────────────────────────────────── -->
-    <div class="tab-panel" data-tab-panel="price-stress" hidden>
-    <section class="stack">
-        <p class="muted tab-intro">
-            Contrasts two ways of writing prices: through the event-sourced aggregate, and straight into a
-            latest-price table. A deliberate contrast case — the aggregate path is heavier but keeps the full
-            event history.
-        </p>
-        <div class="section-title">Price Stress</div>
-        <div class="actions five-up">
-            <div class="panel compact">
-                <label for="priceStressMode"><strong>Price Stress Mode</strong></label>
-                <select id="priceStressMode" class="control-field">
-                    <option value="aggregate-event-sourced">aggregate-event-sourced</option>
-                    <option value="direct-write">direct-write</option>
-                </select>
-                <div class="button-note">Choose whether price stress uses the event-sourced aggregate path or a direct-write latest-price table.</div>
-            </div>
-            <div class="panel compact">
-                <button class="accent" data-endpoint="/api/admin/load-generator/price-stress/start?count=500&intervalMs=100">Realistic Feed</button>
-                <div class="button-note">500 updates at 100 ms. Good for live ticker behavior.</div>
-            </div>
-            <div class="panel compact">
-                <button class="accent" data-endpoint="/api/admin/load-generator/price-stress/start?count=500&intervalMs=10">Fast Stress</button>
-                <div class="button-note">500 updates at 10 ms. Good for a quicker stress run.</div>
-            </div>
-            <div class="panel compact">
-                <button class="accent" data-endpoint="/api/admin/load-generator/price-stress/start?count=1000&intervalMs=0">Max Throughput</button>
-                <div class="button-note">1000 updates with no intentional delay.</div>
-            </div>
-            <div class="panel compact">
-                <button class="secondary" id="stopPriceStress">Stop Price Stress</button>
-                <div class="button-note">Stops the async price stress run.</div>
-            </div>
-        </div>
-        <div class="actions">
-            <div class="panel compact">
-                <button class="secondary" data-endpoint="/api/admin/load-generator/comparisons/price-path?count=100">Run Price Path Comparison</button>
-                <div class="button-note">Runs the same 100 price updates through both paths and records the latest comparison result.</div>
-            </div>
-        </div>
-    </section>
-
-    <section class="grid two-up" style="margin-top: 14px;">
-        <div class="panel">
-            <h2>Live Price Stress</h2>
-            <p class="muted" id="priceStressSummary">No active price stress run.</p>
-            <div class="inline-stats">
-                <div class="inline-stat">
-                    <span class="label">Current Mode</span>
-                    <strong id="priceStressModeLabel">aggregate-event-sourced</strong>
-                </div>
-                <div class="inline-stat">
-                    <span class="label">Requested</span>
-                    <strong id="priceStressRequested">0</strong>
-                </div>
-                <div class="inline-stat">
-                    <span class="label">Completed</span>
-                    <strong id="priceStressCompleted">0</strong>
-                </div>
-            </div>
-            <div class="ticker-grid" id="priceTickers"></div>
-        </div>
-        <div class="panel">
-            <h2>Price Path Comparison</h2>
-            <p class="muted" id="pricePathNote"></p>
-            <div class="summary-card">
-                <strong id="priceScenarioWinner">No comparison run yet</strong>
-                <p class="muted" id="priceScenarioSummary"></p>
-            </div>
-            <table class="table" style="margin-top: 12px;">
-                <thead>
-                <tr>
-                    <th>Mode</th>
-                    <th>Ops</th>
-                    <th>Avg ms</th>
-                    <th>Max ms</th>
-                </tr>
-                </thead>
-                <tbody id="pricePathBody"></tbody>
-            </table>
         </div>
     </section>
     </div>
@@ -576,10 +472,6 @@
         setBusy(true);
         statusLine.textContent = `Running ${endpoint} ...`;
         try {
-            if (endpoint.includes("/price-stress/start")) {
-                const selectedMode = encodeURIComponent(document.getElementById("priceStressMode").value);
-                endpoint = `${endpoint}&mode=${selectedMode}`;
-            }
             const response = await fetch(endpoint, body === undefined
                 ? { method: "POST" }
                 : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -610,7 +502,6 @@
             ["Max generation", summary.closingBooks.maxGeneration],
             ["Generated trades", summary.loadGenerator.generatedTradeCount],
             ["Generated settlements", summary.loadGenerator.generatedSettlementCount],
-            ["Price updates", summary.loadGenerator.generatedPriceUpdateCount],
             ["Pending settlements", summary.loadGenerator.pendingSettlementCount]
         ];
         document.getElementById("kpis").innerHTML = items.map(([label, value]) => `
@@ -665,50 +556,7 @@
         `).join("");
     }
 
-    function renderPriceStress(summary) {
-        const load = summary.loadGenerator;
-        document.getElementById("priceStressMode").value = load.currentPriceStressMode || "aggregate-event-sourced";
-        document.getElementById("priceStressModeLabel").textContent = load.currentPriceStressMode || "aggregate-event-sourced";
-        document.getElementById("priceStressRequested").textContent = load.priceStressRequestedCount ?? 0;
-        document.getElementById("priceStressCompleted").textContent = load.priceStressCompletedCount ?? 0;
-        const runningText = load.priceStressRunning
-            ? `Running ${load.priceStressCompletedCount}/${load.priceStressRequestedCount} updates at ${load.priceStressIntervalMillis} ms using ${load.currentPriceStressMode}`
-            : load.priceStressRequestedCount > 0
-                ? `Last run completed ${load.priceStressCompletedCount}/${load.priceStressRequestedCount} updates at ${load.priceStressIntervalMillis} ms using ${load.currentPriceStressMode}`
-                : "No active price stress run.";
-        document.getElementById("priceStressSummary").textContent = runningText;
-        document.getElementById("priceTickers").innerHTML = (load.latestPrices || []).map(price => `
-            <div class="ticker">
-                <span class="symbol">${price.instrumentId}</span>
-                <strong>${price.latestPrice}</strong>
-            </div>
-        `).join("");
-    }
-
-    function renderPricePathComparison(summary) {
-        const comparison = summary.pricePathComparison;
-        document.getElementById("pricePathNote").textContent = comparison.note;
-        document.getElementById("pricePathBody").innerHTML = (comparison.performances || []).map(performance => `
-            <tr>
-                <td>${performance.mode}</td>
-                <td>${performance.operationCount}</td>
-                <td>${performance.averageMillis.toFixed(2)}</td>
-                <td>${performance.maxMillis.toFixed(2)}</td>
-            </tr>
-        `).join("");
-        const scenario = summary.latestPricePathScenario;
-        document.getElementById("priceScenarioWinner").textContent = !scenario || !scenario.available
-            ? "No comparison run yet"
-            : `${scenario.winnerMode} won the latest ${scenario.requestedCount}-update scenario`;
-        document.getElementById("priceScenarioSummary").textContent = !scenario || !scenario.available
-            ? "Run the explicit comparison scenario to record a side-by-side result."
-            : `Aggregate elapsed ${scenario.aggregateEventSourced.elapsedMillis.toFixed(2)} ms vs direct-write ${scenario.directWrite.elapsedMillis.toFixed(2)} ms. Difference: ${scenario.elapsedDifferenceMillis.toFixed(2)} ms.`;
-    }
-
     function renderLinks(summary) {
-        const tradeLinks = summary.sampleTradeIds
-            .map(id => `<div><a href="/api/admin/trades/${id}">${id}</a></div>`)
-            .join("");
         const settlementLinks = summary.sampleSettlementIds
             .map(id => `<div><a href="/api/admin/settlements/${id}">${id}</a></div>`)
             .join("");
@@ -716,7 +564,6 @@
             <div><strong>Projections</strong></div>
             <div><a href="/api/admin/projections/account-statements">Account statements</a></div>
             <div><a href="/api/admin/projections/trade-settlements">Trade settlements</a></div>
-            <div style="margin-top: 10px;"><strong>Trades</strong></div>${tradeLinks}
             <div style="margin-top: 10px;"><strong>Settlements</strong></div>${settlementLinks}
         `;
     }
@@ -747,8 +594,6 @@
         renderKpis(summary);
         renderAccounts(summary);
         renderMetrics(summary);
-        renderPriceStress(summary);
-        renderPricePathComparison(summary);
         renderLinks(summary);
         renderSummaryText(summary);
     }
@@ -775,7 +620,6 @@
 
     document.getElementById("startGenerator").addEventListener("click", () => postAndRefresh("/api/admin/load-generator/start"));
     document.getElementById("stopGenerator").addEventListener("click", () => postAndRefresh("/api/admin/load-generator/stop"));
-    document.getElementById("stopPriceStress").addEventListener("click", () => postAndRefresh("/api/admin/load-generator/price-stress/stop"));
     // One request per click, carrying only the fields that click owns; a null field means "leave unchanged".
     // This used to be up to three sequential POSTs against three endpoints, which is what let a benchmark
     // scenario's restore-on-finish silently overwrite a change made while it was running.
@@ -807,8 +651,6 @@
         renderKpis(summary);
         renderAccounts(summary);
         renderMetrics(summary);
-        renderPriceStress(summary);
-        renderPricePathComparison(summary);
         renderLinks(summary);
         renderSummaryText(summary);
     });
