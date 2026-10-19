@@ -152,6 +152,20 @@ public final class PostgresqlMessageQueue implements MessageQueue {
      */
     private       int                           stopsWithoutLock;
     /**
+     * Whether the start running {@link #startEachOrUndo} on the thread holding {@link #lifecycleLock} is the queue's
+     * {@link #start()}, rather than a {@code consume()} or a {@link Subscription#start()}: each of the three sets it around
+     * its own {@code startEachOrUndo} - {@code true} for the queue's {@code start()}, {@code false} for the other two - and
+     * restores the value it found once that returns, so with starts nested on that thread (a {@link QueueObserver} told of
+     * an acquisition calling one) it names the innermost. That is the start whose failure moved the holder to
+     * {@link Holder#UNDOING_A_START}: a start called inside that undo starts nothing, so none can fail deeper. Written and read only on the
+     * thread holding the lock - by a {@code start()} an observer told of a release makes there, which tells the undo of a
+     * failed queue {@code start()}, marked started until it fails, from that of a {@code consume()} or
+     * {@link Subscription#start()}, which leaves a started queue started. It was set once, by a queue {@code start()}
+     * taking the lock first, so a queue {@code start()} failing inside a {@code consume()} or {@code Subscription.start()}
+     * was taken for theirs, and a {@code consume()} failing inside a queue {@code start()} for the queue's.
+     */
+    private       boolean                       queueStartRunsTheStarts;
+    /**
      * Subscriptions whose {@link Subscription#unsubscribe()} found {@link #lifecycleLock} held, past
      * {@link ShardOwnedQueue#SHUTDOWN_BUDGET} or on the holder's own thread: the holder - a {@link #start()} going over
      * {@link #consumers} - may still reach their lanes, which it starts no more from the moment that unsubscribe retired
@@ -746,14 +760,17 @@ public final class PostgresqlMessageQueue implements MessageQueue {
         // included. The starts below then stop at the first one not yet begun, the pair is still
         // registered, and letGoOfLifecycle stops every consumer again and leaves the queue not
         // started - as if the stop had come right after this consume(). Called on the thread of a
-        // stop, or of a holder doing the stop it owes or stopping what its failed start started (an
-        // observer told of a release), this starts neither lane: it registers the pair and leaves the
-        // queue not started, for a later start().
+        // stop, or of a holder owing a stop, doing the stop it owes or stopping what its failed start
+        // started (an observer told of a release, or of an acquisition after it stopped the queue),
+        // this starts neither lane: it registers the pair, leaves the queue not started, for a later
+        // start(), and says so at WARN - the Subscription it returns reads isStarted() false and
+        // nothing else would tell the caller.
         var pair = List.of(unorderedConsumer, orderedConsumer);
         attempt.lanes = pair;
         holdLifecycle(Holder.STARTING, "consume");
         try {
             lifecycleHook.afterLockTaken("consume");
+            var startsNothingInside = outerHolderThatLetsNothingStart();
             synchronized (handOver) {
                 beingStarted.addAll(pair);
             }
@@ -762,6 +779,8 @@ public final class PostgresqlMessageQueue implements MessageQueue {
             // QueueObserver told of this pair's first acquisition can call consume() on this thread, and that pair is
             // registered by the time this one is.
             var firstSubscription = consumers.isEmpty();
+            var queueStartRanTheStarts = queueStartRunsTheStarts;
+            queueStartRunsTheStarts = false;
             try {
                 startEachOrUndo(pair);
             } catch (RuntimeException | Error e) {
@@ -778,6 +797,9 @@ public final class PostgresqlMessageQueue implements MessageQueue {
                     }
                 }
                 throw e;
+            } finally {
+                // Back to the outer start's, when an observer made this consume() inside one (queueStartRunsTheStarts).
+                queueStartRunsTheStarts = queueStartRanTheStarts;
             }
             // A competing consumer is legal and occasionally wanted, but the common reason for a
             // second consume() is the belief that one call serves the ordered lane and another the
@@ -806,6 +828,13 @@ public final class PostgresqlMessageQueue implements MessageQueue {
             attempt.registered = true;
             if (firstSubscription) {
                 markStartedUnlessHolderLetsNothingStart();
+            }
+            if (startsNothingInside != null) {
+                log.warn("Instance {} registered a subscription of queue {} under instance id '{}' WITHOUT starting it: consume() was "
+                                 + "called on the thread of {} - by a QueueObserver, from inside that call - where nothing starts. "
+                                 + "The subscription consumes nothing until the queue's start(), or its own start(), is called "
+                                 + "once that call has returned",
+                         instanceId, queueId, consumerInstanceId, startsNothingInside.describeAsAnOuterHolder());
             }
         } finally {
             // This pair only, and only once it is registered (consumers has it from here, for a stop to reach) or its
@@ -877,10 +906,12 @@ public final class PostgresqlMessageQueue implements MessageQueue {
              * {@code stop()} or {@code close()} of the queue, finding it not started, stopped nothing, so the lanes leased,
              * heartbeated and dispatched until the process exited.
              * <p>
-             * Called on the thread of a queue {@code stop()}, or of a {@code consume()} or start doing the stop it owes - by
-             * a {@link QueueObserver} told of a release - this starts neither lane and leaves the queue not started, as the
-             * queue's {@code start()} does there: that stop is stopping every consumer. So it does on the thread of a
-             * {@code consume()} or start stopping the consumers its failed start started: that start is about to fail.
+             * Called on the thread of a queue {@code stop()}, or of a {@code consume()} or start owing a stop or doing the
+             * stop it owes - by a {@link QueueObserver} told of a release, or of an acquisition after it stopped the queue -
+             * this starts neither lane, leaves the queue not started, as the queue's {@code start()} does there, and logs a
+             * WARN saying so: that stop is stopping every consumer. So it does on the thread of a {@code consume()} or start
+             * stopping the consumers its failed start started: that start is about to fail. It logs that WARN with a lane,
+             * or both, running too: the outer call may be about to stop them.
              * <p>
              * Throws {@link IllegalStateException}, starting nothing, once the subscription has been
              * {@link #unsubscribe() unsubscribed}: its lanes are no longer the queue's, and no stop of the queue would reach
@@ -899,9 +930,28 @@ public final class PostgresqlMessageQueue implements MessageQueue {
                         throw new IllegalStateException("The subscription of queue " + queueId + " under instance '" + consumerInstanceId
                                                                 + "' has been unsubscribed and cannot be started again; consume() anew");
                     }
+                    var startsNothingInside = outerHolderThatLetsNothingStart();
+                    if (startsNothingInside != null) {
+                        // startEachOrUndo would start nothing either. Said at WARN whatever the lanes are doing, as nothing
+                        // else tells the caller: a lane running now may be one the outer call is about to stop (a stop, an
+                        // owed stop, a queue start()'s undo), which a start from another thread would start again once that
+                        // call had let go of the lock.
+                        log.warn("Instance {} started neither lane of the subscription of queue {} under instance id '{}': its "
+                                         + "start() was called on the thread of {} - by a QueueObserver, from inside that call - where "
+                                         + "nothing starts. Call it again once that call has returned",
+                                 instanceId, queueId, consumerInstanceId, startsNothingInside.describeAsAnOuterHolder());
+                        return;
+                    }
                     // The queue stays marked as it was, whatever this does: a non-critical failure has stopped the lanes this
                     // started, and a lane a critical error left running is registered, which is all a stop() or close() needs.
-                    startEachOrUndo(pair);
+                    var queueStartRanTheStarts = queueStartRunsTheStarts;
+                    queueStartRunsTheStarts = false;
+                    try {
+                        startEachOrUndo(pair);
+                    } finally {
+                        // Back to the outer start's, when an observer made this start inside one (queueStartRunsTheStarts).
+                        queueStartRunsTheStarts = queueStartRanTheStarts;
+                    }
                 } finally {
                     letGoOfLifecycle();
                 }
@@ -1470,11 +1520,16 @@ public final class PostgresqlMessageQueue implements MessageQueue {
      * the consumers it has not begun yet, stops every consumer again once the one it is starting returns, and returns
      * with the queue not started.
      * <p>
-     * Called on the thread of a {@code stop()}, or of a {@code consume()} or start doing the stop it owes - by a
-     * {@link QueueObserver} told of a release, say - this does nothing: that stop is stopping every consumer and leaves
-     * the queue not started. It used to mark the queue started and start every consumer while that stop was still
-     * stopping them, which left the queue marked started, the consumers before the observer's running and the ones after
-     * it stopped.
+     * Called on the thread of a {@code stop()}, or of a {@code consume()} or start owing a stop or doing the stop it owes
+     * - by a {@link QueueObserver} told of a release, say - this does nothing but log a WARN saying so: that stop is
+     * stopping every consumer and leaves the queue not started. So it does on the thread of a {@code consume()} or start
+     * stopping the consumers its failed start started ({@link #startEachOrUndo}). It used to mark the queue started and
+     * start every consumer while that stop was still stopping them, which left the queue marked started, the consumers
+     * before the observer's running and the ones after it stopped. One case returns there with no WARN: a queue marked
+     * started, on the thread of a {@code consume()} or {@link Subscription#start()} undoing its failed start, which leaves
+     * a started queue started - this returns at once, as from any thread. On the thread of a {@code start()} undoing its
+     * own failed start the queue reads started too, marked by that start, but that start unmarks it as it fails, so this
+     * logs a WARN saying so.
      * <p>
      * Called while an earlier {@link #consume} or {@code start()} is still starting its consumers - after such a stop
      * returned, say - this waits for it, as {@code consume()} does: as long as that start's statements take, which
@@ -1498,11 +1553,47 @@ public final class PostgresqlMessageQueue implements MessageQueue {
             // (UNDOING_A_START) - by an observer told of a release - set it and started every consumer while that holder
             // was still stopping them: the queue ended marked started, with the consumers before the observer's running
             // and the ones after it stopped.
+            //
+            // On the thread of a holder that lets nothing start, this starts nothing and says so at WARN, as nothing else
+            // tells the caller, with one exception: a queue marked started inside the undo of a consume() or a
+            // Subscription.start(), which leaves it started - returned at once, as from any thread. Every other such holder
+            // has marked the queue not started (a stop, an owed stop), but a start() undoing its own failed start marked it
+            // started itself and unmarks it as that failure escapes: that queue ends not started, so it is warned about.
+            Holder  startsNothingInside;
+            boolean insideAFailingQueueStart = false;
             synchronized (handOver) {
-                if (holder.letsNothingStart() || !started.compareAndSet(false, true)) {
-                    return;
+                startsNothingInside = outerHolderThatLetsNothingStart();
+                if (startsNothingInside == null) {
+                    if (holder.letsNothingStart() || !started.compareAndSet(false, true)) {
+                        return;
+                    }
+                } else if (started.get()) {
+                    if (startsNothingInside != Holder.UNDOING_A_START || !queueStartRunsTheStarts) {
+                        return;
+                    }
+                    insideAFailingQueueStart = true;
                 }
             }
+            if (insideAFailingQueueStart) {
+                log.warn("Instance {} did not start queue {}: start() was called on the thread of a start() of the queue stopping the "
+                                 + "consumers its failed start started - by a QueueObserver, from inside that call - where nothing "
+                                 + "starts. The queue reads started until that start() fails, which marks it not started unless it "
+                                 + "fails with a critical error. Call it again once that call has returned",
+                         instanceId, queueId);
+                return;
+            }
+            if (startsNothingInside != null) {
+                log.warn("Instance {} did not start queue {}: start() was called on the thread of {} - by a QueueObserver, from "
+                                 + "inside that call - where nothing starts, and the queue stays not started. Call it again once "
+                                 + "that call has returned",
+                         instanceId, queueId, startsNothingInside.describeAsAnOuterHolder());
+                return;
+            }
+            // Set for this start's own starts, and put back after them: an observer's call on this thread nests this start
+            // inside a consume() or Subscription.start(), or a consume() or Subscription.start() inside it, and a start()
+            // called inside an undo must read the call undoing its start (queueStartRunsTheStarts).
+            var queueStartRanTheStarts = queueStartRunsTheStarts;
+            queueStartRunsTheStarts = true;
             try {
                 startEachOrUndo(consumers);
             } catch (RuntimeException | Error e) {
@@ -1513,6 +1604,8 @@ public final class PostgresqlMessageQueue implements MessageQueue {
                     started.set(false);
                 }
                 throw e;
+            } finally {
+                queueStartRunsTheStarts = queueStartRanTheStarts;
             }
         } finally {
             letGoOfLifecycle();
@@ -1801,10 +1894,29 @@ public final class PostgresqlMessageQueue implements MessageQueue {
          * queue not started ({@link #stopsTheQueue}), or is stopping the consumers a failed start of its own started
          * ({@link #UNDOING_A_START}). A start on the holder's own thread - a {@link QueueObserver} told of an acquisition
          * or a release calling {@code start()}, {@code consume()} or {@link Subscription#start()} - then starts nothing,
-         * and a {@code consume()} there registers its pair unstarted.
+         * and a {@code consume()} there registers its pair unstarted; each logs a WARN saying so, but for a queue
+         * {@code start()} on a queue a {@code consume()} or {@link Subscription#start()} undoing its failed start leaves
+         * marked started ({@link #outerHolderThatLetsNothingStart}).
          */
         boolean letsNothingStart() {
             return stopsTheQueue() || this == UNDOING_A_START;
+        }
+
+        /**
+         * This holder, as the WARN of a start made on its thread that it lets nothing start names it
+         * ({@link #outerHolderThatLetsNothingStart}): what holds the lock, and why nothing starts there.
+         */
+        String describeAsAnOuterHolder() {
+            return switch (this) {
+                case STOPPING -> "a stop() of the queue, stopping every consumer";
+                case STOP_OWED -> "a consume() or start() of the queue, or a start() of one of its subscriptions, owing a stop: it "
+                                  + "stops every consumer before it returns";
+                case FINISHING_OWED_STOP -> "a consume() or start() of the queue, or a start() of one of its subscriptions, doing a "
+                                            + "stop it owed: stopping every consumer";
+                case UNDOING_A_START -> "a consume() or start() of the queue, or a start() of one of its subscriptions, stopping "
+                                        + "the consumers its failed start started";
+                case NONE, STARTING -> "a holder of the queue's lifecycle lock (" + this + ")";
+            };
         }
     }
 
@@ -2027,6 +2139,29 @@ public final class PostgresqlMessageQueue implements MessageQueue {
     private boolean holderLetsNothingStart() {
         synchronized (handOver) {
             return holder.letsNothingStart();
+        }
+    }
+
+    /**
+     * For a {@code consume()}, a {@code start()} or a {@link Subscription#start()} that has just taken
+     * {@link #lifecycleLock}: the holder, when this call holds the lock reentrantly - made on the holder's own thread, by
+     * a {@link QueueObserver} told of an acquisition or a release - and that holder lets nothing start
+     * ({@link Holder#letsNothingStart}); else {@code null}. Such a call starts nothing, and its caller - the observer -
+     * has no other way to learn it, so the call logs a WARN, bar one case: a queue {@code start()} finding the queue
+     * marked started inside the undo of a {@code consume()} or {@link Subscription#start()}, which leaves it started
+     * ({@link #queueStartRunsTheStarts}). A release
+     * that a lane's own failed start tells, before it escapes to {@link #startEachOrUndo}, comes while the holder is still
+     * {@link Holder#STARTING}: a call made from it gets {@code null} and starts as from an acquisition. The holder cannot
+     * move to a holder that lets a start through before this call returns: only its own thread, which is in this call,
+     * moves it back. A call that is itself the holder is not asked about - a stop on another thread that gave up waiting
+     * for it says so itself.
+     */
+    private Holder outerHolderThatLetsNothingStart() {
+        if (lifecycleLock.getHoldCount() < 2) {
+            return null;
+        }
+        synchronized (handOver) {
+            return holder.letsNothingStart() ? holder : null;
         }
     }
 

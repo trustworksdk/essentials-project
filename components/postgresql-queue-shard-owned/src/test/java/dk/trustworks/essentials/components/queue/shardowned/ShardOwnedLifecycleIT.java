@@ -2431,6 +2431,470 @@ class ShardOwnedLifecycleIT {
     }
 
     /**
+     * A {@code consume()}, a {@code Subscription.start()} or a {@code MessageQueue.start()} called by an observer on the
+     * thread of a holder stopping every consumer starts nothing and logs one WARN saying so, naming the queue, the
+     * subscription's instance id where there is one, and what holds the lock. The holder is a {@code consume()} doing the
+     * stop it owes, after an observer stopped the queue on its first acquisition, told of a release ({@code owed-stop});
+     * that {@code consume()} still owing the stop, told of its next acquisition ({@code owing-a-stop}); or a plain
+     * {@code stop()} told of a release ({@code stop}). The {@code consume()} still returns a subscription, registered and
+     * not started, which the queue's {@code start()} starts once the stop has returned. Nothing said so: that subscription
+     * read {@code isStarted()} false, with no exception and no log line, and the observer's author could not tell it from
+     * one that runs.
+     * <p>
+     * A {@code Subscription.start()} of a second subscription with both lanes running, called there
+     * ({@code running-subscription}), warns too: the stop reaches that subscription after the observer's call and stops
+     * it, so it ends stopped, which a start from any other thread, waiting for the stop, would not have left it. It used to
+     * return with no WARN, as though it would have started nothing from any thread.
+     */
+    @ParameterizedTest
+    @CsvSource({"owed-stop, consume", "owing-a-stop, consume", "stop, consume", "stop, subscription", "stop, running-subscription", "owed-stop, queue",
+                "owing-a-stop, queue", "stop, queue"})
+    void a_start_called_by_an_observer_while_the_queue_is_being_stopped_starts_nothing_and_says_so(String stoppedBy, String calledBy) throws Exception {
+        var instanceId     = "spi-" + calledBy + "-on-release-" + stoppedBy;
+        var stopOnAcquire  = new AtomicBoolean(!"stop".equals(stoppedBy));
+        // The call is made from the next acquisition after the observer's stop(), on the same thread, for owing-a-stop:
+        // the unordered lane's start goes on telling the units it adopted.
+        var callAcquiring  = "owing-a-stop".equals(stoppedBy);
+        var stoppingThread = new AtomicReference<Thread>();
+        var callPending    = new AtomicBoolean();
+        var callReturned   = new AtomicBoolean();
+        var startedByCall  = new AtomicReference<Boolean>();
+        var subscription   = new AtomicReference<Subscription>();
+        var nested         = new AtomicReference<Subscription>();
+        // running-subscription: a second subscription, registered after the first, so the stop reaches it after the first's releases.
+        var other          = new AtomicReference<Subscription>();
+        var otherRunning   = new AtomicReference<Boolean>();
+        var logged         = new ListAppender<ILoggingEvent>();
+        var queueLogger    = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(PostgresqlMessageQueue.class);
+        logged.start();
+        queueLogger.addAppender(logged);
+        try (var queue = new PostgresqlMessageQueue(dataSource, QUEUE_ID, SHARD_COUNT, instanceId)) {
+            queue.addObserver(new QueueObserver() {
+                @Override
+                public void shardOwnershipChanged(int shard, boolean acquired) {
+                    if (acquired && stopOnAcquire.compareAndSet(true, false)) {
+                        stoppingThread.set(Thread.currentThread());
+                        callPending.set(true);
+                        queue.stop();
+                    } else if (acquired == callAcquiring && Thread.currentThread().equals(stoppingThread.get()) && callPending.compareAndSet(true, false)) {
+                        switch (calledBy) {
+                            case "consume" -> {
+                                nested.set(consumeUnchecked(queue));
+                                startedByCall.set(nested.get().isStarted());
+                            }
+                            // Its ordered lane is still running here, stopped after this release: whether the start
+                            // started anything shows once the stop has returned.
+                            case "subscription" -> subscription.get().start();
+                            case "running-subscription" -> {
+                                otherRunning.set(other.get().isStarted());
+                                other.get().start();
+                            }
+                            default -> {
+                                queue.start();
+                                startedByCall.set(queue.isStarted());
+                            }
+                        }
+                        callReturned.set(true);
+                    }
+                }
+            });
+            try {
+                subscription.set(consumeUnchecked(queue));
+                if ("stop".equals(stoppedBy)) {
+                    Awaitility.await().atMost(Duration.ofSeconds(20))
+                              .alias("premise: both lanes hold units before the queue is stopped")
+                              .until(() -> subscription.get().unorderedShardsHeld() > 0 && subscription.get().orderedUnitsHeld() > 0);
+                    if ("running-subscription".equals(calledBy)) {
+                        other.set(consumeUnchecked(queue));
+                    }
+                    stoppingThread.set(Thread.currentThread());
+                    callPending.set(true);
+                    queue.stop();
+                }
+
+                assertThat(callReturned).as("premise: the observer's %s was called inside the %s, told of %s, and returned", calledBy, stoppedBy,
+                                            callAcquiring ? "an acquisition" : "a release")
+                                        .isTrue();
+                if ("consume".equals(calledBy) || "queue".equals(calledBy)) {
+                    assertThat(startedByCall.get()).as("the observer's %s started nothing", calledBy).isFalse();
+                }
+                assertThat(queue.isStarted()).as("the queue ends not started").isFalse();
+                assertThat(subscription.get().isStarted()).as("neither lane of the subscription is started").isFalse();
+                if ("consume".equals(calledBy)) {
+                    assertThat(nested.get().isStarted()).as("the observer's consume() returned a subscription it did not start").isFalse();
+                }
+                if ("running-subscription".equals(calledBy)) {
+                    assertThat(otherRunning.get()).as("premise: the second subscription was running when the observer started it").isTrue();
+                    assertThat(other.get().isStarted()).as("the stop reached the second subscription after the observer's start() and stopped it").isFalse();
+                }
+                var holderNamed = switch (stoppedBy) {
+                    case "stop" -> "a stop() of the queue";
+                    case "owing-a-stop" -> "owing a stop";
+                    default -> "doing a stop it owed";
+                };
+                var warned = switch (calledBy) {
+                    case "consume" -> "registered a subscription of queue " + QUEUE_ID + " under instance id '" + instanceId + "-1' WITHOUT starting it";
+                    case "subscription" -> "started neither lane of the subscription of queue " + QUEUE_ID + " under instance id '" + instanceId + "'";
+                    case "running-subscription" -> "started neither lane of the subscription of queue " + QUEUE_ID + " under instance id '" + instanceId + "-1'";
+                    default -> "did not start queue " + QUEUE_ID + ":";
+                };
+                assertThat(logged.list).filteredOn(event -> event.getFormattedMessage().contains(warned))
+                                       .as("the %s that started nothing is logged once, at WARN, naming %s", calledBy, holderNamed)
+                                       .singleElement()
+                                       .satisfies(event -> {
+                                           assertThat(event.getLevel()).isEqualTo(ch.qos.logback.classic.Level.WARN);
+                                           assertThat(event.getFormattedMessage()).contains(holderNamed).contains("by a QueueObserver");
+                                       });
+
+                queue.start();
+
+                assertThat(queue.isStarted()).as("a start after the stop starts the queue again").isTrue();
+                assertThat(subscription.get().isStarted()).as("it starts the subscription again").isTrue();
+                if ("consume".equals(calledBy)) {
+                    assertThat(nested.get().isStarted()).as("it starts the subscription the observer's consume() registered").isTrue();
+                }
+                if ("running-subscription".equals(calledBy)) {
+                    assertThat(other.get().isStarted()).as("it starts the second subscription again").isTrue();
+                }
+            } finally {
+                // What the queue's stop did not reach, so a failure leaves nothing leasing into the next test.
+                if (nested.get() != null) {
+                    nested.get().unsubscribe();
+                }
+                if (other.get() != null) {
+                    other.get().unsubscribe();
+                }
+                if (subscription.get() != null) {
+                    subscription.get().stop();
+                }
+                queueLogger.detachAppender(logged);
+            }
+        }
+    }
+
+    /**
+     * A {@code consume()} on a queue marked started, failing because the observer throws for its unordered lane's first
+     * acquisition, stops that lane and tells the observer of each release on its own thread, where nothing starts. A
+     * {@code MessageQueue.start()} called there returns at once with no WARN, as from any thread: the queue is marked
+     * started and stays so, as a failed {@code consume()} leaves it. A WARN saying the queue stayed not started, while
+     * {@code isStarted()} read true, was a false alarm. (Inside a failed queue {@code start()} it warns: see
+     * {@link #a_start_called_by_an_observer_while_a_failed_message_queue_start_is_undone_starts_nothing_and_says_so}.) A {@code consume()} there, or a {@code Subscription.start()} of a stopped subscription, starts nothing and
+     * logs one WARN naming the undo; what it left unstarted starts once the failed {@code consume()} has returned.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"queue", "consume", "subscription"})
+    void a_start_called_by_an_observer_while_a_failed_consume_on_a_started_queue_is_undone_warns_only_when_it_starts_nothing(String calledBy) throws Exception {
+        var instanceId    = "spi-" + calledBy + "-inside-consume-undo";
+        var failOnAcquire = new AtomicBoolean();
+        var undoingThread = new AtomicReference<Thread>();
+        var callPending   = new AtomicBoolean();
+        var callReturned  = new AtomicBoolean();
+        var startedByCall = new AtomicReference<Boolean>();
+        var first         = new AtomicReference<Subscription>();
+        var nested        = new AtomicReference<Subscription>();
+        var logged        = new ListAppender<ILoggingEvent>();
+        var queueLogger   = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(PostgresqlMessageQueue.class);
+        logged.start();
+        queueLogger.addAppender(logged);
+        try (var queue = new PostgresqlMessageQueue(dataSource, QUEUE_ID, SHARD_COUNT, instanceId)) {
+            queue.addObserver(new QueueObserver() {
+                @Override
+                public void shardOwnershipChanged(int shard, boolean acquired) {
+                    if (acquired && failOnAcquire.compareAndSet(true, false)) {
+                        undoingThread.set(Thread.currentThread());
+                        callPending.set(true);
+                        throw new IllegalStateException("simulated observer failure acquiring unit " + shard);
+                    } else if (!acquired && Thread.currentThread().equals(undoingThread.get()) && callPending.compareAndSet(true, false)) {
+                        switch (calledBy) {
+                            case "consume" -> {
+                                nested.set(consumeUnchecked(queue));
+                                startedByCall.set(nested.get().isStarted());
+                            }
+                            case "subscription" -> {
+                                first.get().start();
+                                startedByCall.set(first.get().isStarted());
+                            }
+                            default -> {
+                                queue.start();
+                                startedByCall.set(queue.isStarted());
+                            }
+                        }
+                        callReturned.set(true);
+                    }
+                }
+            });
+            try {
+                first.set(consumeUnchecked(queue));
+                Awaitility.await().atMost(Duration.ofSeconds(20))
+                          .alias("premise: both lanes hold units before the subscription is stopped")
+                          .until(() -> first.get().unorderedShardsHeld() > 0 && first.get().orderedUnitsHeld() > 0);
+                // Its units are released, for the failing consume() to adopt on its own thread; the queue stays marked started.
+                first.get().stop();
+                assertThat(queue.isStarted()).as("premise: the queue is marked started").isTrue();
+                assertThat(first.get().isStarted()).as("premise: the first subscription is stopped").isFalse();
+                failOnAcquire.set(true);
+
+                var thrown = catchThrowable(() -> consumeUnchecked(queue));
+
+                assertThat(thrown).as("premise: the observer's failure escaped the consume()")
+                                  .isInstanceOf(IllegalStateException.class)
+                                  .hasMessageStartingWith("simulated observer failure acquiring");
+                assertThat(callReturned).as("premise: the observer's %s was called while the failed consume() stopped its lane, and returned", calledBy)
+                                        .isTrue();
+                assertThat(queue.isStarted()).as("the queue stays marked started").isTrue();
+                if ("queue".equals(calledBy)) {
+                    assertThat(startedByCall.get()).as("the observer's start() found the queue marked started").isTrue();
+                    assertThat(logged.list).as("a start() of a queue already marked started says nothing")
+                                           .noneMatch(event -> event.getFormattedMessage().contains("did not start queue"));
+                    return;
+                }
+                assertThat(startedByCall.get()).as("the observer's %s started nothing", calledBy).isFalse();
+                var warned = "consume".equals(calledBy)
+                             ? "WITHOUT starting it"
+                             : "started neither lane of the subscription of queue " + QUEUE_ID + " under instance id '" + instanceId + "'";
+                assertThat(logged.list).filteredOn(event -> event.getFormattedMessage().contains(warned))
+                                       .as("the %s that started nothing is logged once, at WARN, naming the undo", calledBy)
+                                       .singleElement()
+                                       .satisfies(event -> {
+                                           assertThat(event.getLevel()).isEqualTo(ch.qos.logback.classic.Level.WARN);
+                                           assertThat(event.getFormattedMessage()).contains("stopping the consumers its failed start started")
+                                                                                  .contains("by a QueueObserver");
+                                       });
+
+                var unstarted = "consume".equals(calledBy) ? nested.get() : first.get();
+                unstarted.start();
+
+                assertThat(unstarted.isStarted()).as("a start once the failed consume() has returned starts it").isTrue();
+            } finally {
+                failOnAcquire.set(false);
+                // Beside the queue's close(), which stops both, so a failure leaves nothing leasing into the next test.
+                if (nested.get() != null) {
+                    nested.get().unsubscribe();
+                }
+                if (first.get() != null) {
+                    first.get().stop();
+                }
+                queueLogger.detachAppender(logged);
+            }
+        }
+    }
+
+    /**
+     * A {@code MessageQueue.start()} after a {@code stop()}, failing because the observer throws for the unordered lane's
+     * first acquisition, has marked the queue started; it stops that lane and tells the observer of each release on its
+     * own thread, where nothing starts, and only then marks the queue not started as the failure escapes. A
+     * {@code MessageQueue.start()} called there finds the queue marked started, starts nothing, and logs one WARN naming
+     * the failing start: the queue ends not started. It used to return at once with no WARN, as on a queue a failed
+     * {@code consume()} leaves started, though here a start from another thread, waiting for the lock, would have started
+     * the queue once the failed start had unmarked it. A {@code Subscription.start()} there starts neither lane and logs
+     * one WARN naming the undo. Either is started once the failed start has returned.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"queue", "subscription"})
+    void a_start_called_by_an_observer_while_a_failed_message_queue_start_is_undone_starts_nothing_and_says_so(String calledBy) throws Exception {
+        var instanceId    = "spi-" + calledBy + "-inside-queue-start-undo";
+        var failOnAcquire = new AtomicBoolean();
+        var undoingThread = new AtomicReference<Thread>();
+        var callPending   = new AtomicBoolean();
+        var callReturned  = new AtomicBoolean();
+        var markedAtCall  = new AtomicReference<Boolean>();
+        var startedByCall = new AtomicReference<Boolean>();
+        var subscription  = new AtomicReference<Subscription>();
+        var logged        = new ListAppender<ILoggingEvent>();
+        var queueLogger   = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(PostgresqlMessageQueue.class);
+        logged.start();
+        queueLogger.addAppender(logged);
+        try (var queue = new PostgresqlMessageQueue(dataSource, QUEUE_ID, SHARD_COUNT, instanceId)) {
+            queue.addObserver(new QueueObserver() {
+                @Override
+                public void shardOwnershipChanged(int shard, boolean acquired) {
+                    if (acquired && failOnAcquire.compareAndSet(true, false)) {
+                        undoingThread.set(Thread.currentThread());
+                        callPending.set(true);
+                        throw new IllegalStateException("simulated observer failure acquiring unit " + shard);
+                    } else if (!acquired && Thread.currentThread().equals(undoingThread.get()) && callPending.compareAndSet(true, false)) {
+                        markedAtCall.set(queue.isStarted());
+                        if ("subscription".equals(calledBy)) {
+                            subscription.get().start();
+                            startedByCall.set(subscription.get().isStarted());
+                        } else {
+                            queue.start();
+                        }
+                        callReturned.set(true);
+                    }
+                }
+            });
+            try {
+                subscription.set(consumeUnchecked(queue));
+                Awaitility.await().atMost(Duration.ofSeconds(20))
+                          .alias("premise: both lanes hold units before the queue is stopped")
+                          .until(() -> subscription.get().unorderedShardsHeld() > 0 && subscription.get().orderedUnitsHeld() > 0);
+                // Its units are released, for the failing start() to adopt again on its own thread.
+                queue.stop();
+                assertThat(queue.isStarted()).as("premise: the queue is not started").isFalse();
+                assertThat(subscription.get().isStarted()).as("premise: the subscription is stopped").isFalse();
+                failOnAcquire.set(true);
+
+                var thrown = catchThrowable(queue::start);
+
+                assertThat(thrown).as("premise: the observer's failure escaped the queue's start()")
+                                  .isInstanceOf(IllegalStateException.class)
+                                  .hasMessageStartingWith("simulated observer failure acquiring");
+                assertThat(callReturned).as("premise: the observer's %s was called while the failed start() stopped its lane, and returned", calledBy)
+                                        .isTrue();
+                assertThat(markedAtCall.get()).as("premise: the queue read started at the call, marked by the failing start()").isTrue();
+                assertThat(queue.isStarted()).as("the queue ends not started").isFalse();
+                assertThat(subscription.get().isStarted()).as("neither lane of the subscription is started").isFalse();
+                var warned = "subscription".equals(calledBy)
+                             ? "started neither lane of the subscription of queue " + QUEUE_ID + " under instance id '" + instanceId + "'"
+                             : "did not start queue " + QUEUE_ID + ":";
+                var holderNamed = "subscription".equals(calledBy)
+                                  ? "stopping the consumers its failed start started"
+                                  : "a start() of the queue stopping the consumers its failed start started";
+                if ("subscription".equals(calledBy)) {
+                    assertThat(startedByCall.get()).as("the observer's Subscription.start() started neither lane").isFalse();
+                }
+                assertThat(logged.list).filteredOn(event -> event.getFormattedMessage().contains(warned))
+                                       .as("the %s that started nothing is logged once, at WARN, naming the failing start", calledBy)
+                                       .singleElement()
+                                       .satisfies(event -> {
+                                           assertThat(event.getLevel()).isEqualTo(ch.qos.logback.classic.Level.WARN);
+                                           assertThat(event.getFormattedMessage()).contains(holderNamed).contains("by a QueueObserver");
+                                       });
+
+                queue.start();
+
+                assertThat(queue.isStarted()).as("a start once the failed start() has returned starts the queue").isTrue();
+                assertThat(subscription.get().isStarted()).as("it starts the subscription again").isTrue();
+            } finally {
+                failOnAcquire.set(false);
+                // Beside the queue's close(), which stops it, so a failure leaves nothing leasing into the next test.
+                if (subscription.get() != null) {
+                    subscription.get().stop();
+                }
+                queueLogger.detachAppender(logged);
+            }
+        }
+    }
+
+    /**
+     * A start that fails inside another start on the same thread - an observer told of the outer call's first acquisition
+     * makes it, and the observer throws for the first acquisition the inner one tells - is undone by the INNER call, and a
+     * {@code MessageQueue.start()} the observer calls from that undo's first release is judged by the inner call:
+     * <ul>
+     *     <li>{@code consume} and {@code subscription}: the outer call is a {@code consume()}, or a
+     *         {@code Subscription.start()} of the second of two subscriptions, on a queue a {@code stop()} left not
+     *         started, and the inner call is the queue's {@code start()}. It marked the queue started and unmarks it as it
+     *         fails, so the {@code start()} from its undo starts nothing, logs one WARN naming a failing {@code start()} of
+     *         the queue, and the queue ends not started. It returned with no WARN, the queue still ending not started:
+     *         whether a queue {@code start()} was undoing was read from the call that took the lifecycle lock first, here
+     *         the {@code consume()} or {@code Subscription.start()}.</li>
+     *     <li>{@code queue}: the outer call is the queue's {@code start()} after a {@code stop()}, and the inner call a
+     *         {@code consume()}. Its undo leaves the queue as it found it, marked started, so the {@code start()} from it
+     *         returns at once with no WARN; the outer start, the observer swallowing the inner failure, starts the queue.
+     *         It logged the WARN about a failing queue {@code start()}, though the queue ended started.</li>
+     * </ul>
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"consume", "subscription", "queue"})
+    void a_message_queue_start_called_from_the_undo_of_a_start_failing_inside_another_start_is_judged_by_the_failing_start(String outerCall)
+            throws Exception {
+        var instanceId     = "spi-nested-undo-in-" + outerCall;
+        var phase          = new AtomicReference<String>("idle");
+        var outerThread    = new AtomicReference<Thread>();
+        var innerFailure   = new AtomicReference<Throwable>();
+        var markedAtCall   = new AtomicReference<Boolean>();
+        var callReturned   = new AtomicBoolean();
+        var subscriptions  = new CopyOnWriteArrayList<Subscription>();
+        var logged         = new ListAppender<ILoggingEvent>();
+        var queueLogger    = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(PostgresqlMessageQueue.class);
+        logged.start();
+        queueLogger.addAppender(logged);
+        try (var queue = new PostgresqlMessageQueue(dataSource, QUEUE_ID, SHARD_COUNT, instanceId)) {
+            queue.addObserver(new QueueObserver() {
+                @Override
+                public void shardOwnershipChanged(int shard, boolean acquired) {
+                    if (!Thread.currentThread().equals(outerThread.get())) {
+                        return;
+                    }
+                    if (acquired && phase.compareAndSet("armed", "inner")) {
+                        // The outer call's first acquisition: the inner call, whose failure the observer swallows.
+                        try {
+                            if ("queue".equals(outerCall)) {
+                                subscriptions.add(consumeUnchecked(queue));
+                            } else {
+                                queue.start();
+                            }
+                        } catch (RuntimeException e) {
+                            innerFailure.set(e);
+                        }
+                    } else if (acquired && phase.compareAndSet("inner", "failing")) {
+                        throw new IllegalStateException("simulated observer failure acquiring unit " + shard);
+                    } else if (!acquired && phase.compareAndSet("failing", "called")) {
+                        markedAtCall.set(queue.isStarted());
+                        queue.start();
+                        callReturned.set(true);
+                    }
+                }
+            });
+            try {
+                subscriptions.add(consumeUnchecked(queue));
+                Awaitility.await().atMost(Duration.ofSeconds(20))
+                          .alias("premise: both lanes hold units before the queue is stopped")
+                          .until(() -> subscriptions.getFirst().unorderedShardsHeld() > 0 && subscriptions.getFirst().orderedUnitsHeld() > 0);
+                if ("subscription".equals(outerCall)) {
+                    // Registered after the first, so a queue start() goes over the first's lanes before this one's.
+                    subscriptions.add(consumeUnchecked(queue));
+                }
+                queue.stop();
+                assertThat(queue.isStarted()).as("premise: the queue is not started").isFalse();
+                outerThread.set(Thread.currentThread());
+                phase.set("armed");
+
+                // The queue start() going over the registered subscriptions inside a consume() or a Subscription.start()
+                // fails on the first's lanes, before reaching the second's, which the Subscription.start() is starting.
+                switch (outerCall) {
+                    case "consume" -> subscriptions.add(consumeUnchecked(queue));
+                    case "subscription" -> subscriptions.get(1).start();
+                    default -> queue.start();
+                }
+
+                assertThat(innerFailure.get()).as("premise: the inner call failed on the observer's failure")
+                                              .isInstanceOf(IllegalStateException.class)
+                                              .hasMessageStartingWith("simulated observer failure acquiring");
+                assertThat(callReturned).as("premise: the observer's start() was called from the inner call's undo, and returned").isTrue();
+                assertThat(markedAtCall.get()).as("premise: the queue read started at the call").isTrue();
+                if ("queue".equals(outerCall)) {
+                    assertThat(logged.list).as("a start() inside the undo of a consume() on a queue marked started says nothing")
+                                           .noneMatch(event -> event.getFormattedMessage().contains("did not start queue"));
+                    assertThat(queue.isStarted()).as("the outer start() started the queue").isTrue();
+                    return;
+                }
+                assertThat(logged.list).filteredOn(event -> event.getFormattedMessage().contains("did not start queue " + QUEUE_ID + ":"))
+                                       .as("the start() from the undo of the failing queue start() is logged once, at WARN, naming it")
+                                       .singleElement()
+                                       .satisfies(event -> {
+                                           assertThat(event.getLevel()).isEqualTo(ch.qos.logback.classic.Level.WARN);
+                                           assertThat(event.getFormattedMessage()).contains("a start() of the queue stopping the consumers its failed start started")
+                                                                                  .contains("by a QueueObserver");
+                                       });
+                assertThat(queue.isStarted()).as("the queue ends not started, as the WARN says").isFalse();
+
+                queue.start();
+
+                assertThat(queue.isStarted()).as("a start once the outer call has returned starts the queue").isTrue();
+            } finally {
+                phase.set("idle");
+                // Beside the queue's close(), which stops them, so a failure leaves nothing leasing into the next test.
+                for (var subscription : subscriptions) {
+                    subscription.unsubscribe();
+                }
+                queueLogger.detachAppender(logged);
+            }
+        }
+    }
+
+    /**
      * A {@code Subscription.start()} after the queue's {@code stop()} leaves the queue not started, and the queue's
      * {@code close()} still stops both lanes again: no lease or membership row names the instance afterwards. The queue's
      * {@code close()} (its {@code stop()}) used to stop consumers only when the queue was marked started, so after such a

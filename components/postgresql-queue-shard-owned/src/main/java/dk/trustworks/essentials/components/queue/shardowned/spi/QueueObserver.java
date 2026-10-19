@@ -35,6 +35,47 @@ package dk.trustworks.essentials.components.queue.shardowned.spi;
  * engine calls these on its own threads and does not catch what they throw — an observer that fails
  * is a bug in the observer, and swallowing it would hide the bug while corrupting the measurement it
  * was installed to produce. The exception is {@link #takeoverStalled}, which says why.
+ *
+ * <h2>Calling the queue back from {@link #shardOwnershipChanged}</h2>
+ * A {@code MessageQueue.consume()}, {@code start()} or {@link Subscription#start()} tells its acquisitions, and the
+ * releases it causes itself, and a {@code MessageQueue.stop()} its releases, on its caller's thread while it holds the
+ * queue's lifecycle lock. A call into the same queue from such a callback runs on that thread, inside that call, and
+ * what it gets depends on whether that call still lets anything start. It does not while it stops consumers: a
+ * {@code stop()}; a {@code consume()} or start owing a stop - the observer called {@code stop()}, or a stop on another
+ * thread gave up waiting for it - or doing the stop it owes; and a {@code consume()} or start whose start failed, while it
+ * stops the lanes it had started. A call made from the releases those tell, or from an acquisition told once a stop is
+ * owed, is made <i>where nothing starts</i>. A lane whose own start fails after adopting units tells their releases
+ * before that failure reaches the {@code consume()} or start, which is still starting then: a call from one of those
+ * releases is not made where nothing starts, and gets what a call from an acquisition gets. {@code PostgresqlMessageQueue}
+ * gives these outcomes:
+ * <ul>
+ *     <li>{@code stop()}: from an acquisition, or from any release a {@code consume()} or start tells, marks the queue
+ *         not started and returns; that {@code consume()} or start starts no further consumer and stops every one before
+ *         it returns. From a release a {@code stop()} tells, nothing more happens: that stop is stopping every
+ *         consumer.</li>
+ *     <li>{@link Subscription#start()}: starts as from any thread. Where nothing starts, it starts neither lane and logs
+ *         a WARN saying so, whatever its lanes are doing: one running then may be stopped by the outer call before it
+ *         returns.</li>
+ *     <li>{@code start()}: starts as from any thread. Where nothing starts, it starts nothing and logs a WARN saying so,
+ *         bar one case: a queue already marked started, while a {@code consume()} or {@link Subscription#start()} stops
+ *         the lanes its failed start had started, returns at once with no WARN - that call leaves the queue started. While
+ *         a queue {@code start()} stops the lanes its own failed start had started, the queue reads started, marked by
+ *         that start, which marks it not started as it fails, bar a critical error; a {@code start()} there logs the
+ *         WARN.</li>
+ *     <li>{@code consume()}: a further, competing subscription under an instance id of its own, started on this thread -
+ *         registered before the subscription an outer {@code consume()} is starting. Where nothing starts, it registers
+ *         the subscription <b>without starting it</b> and logs a WARN: the returned {@code Subscription} reads
+ *         {@code isStarted()} false and consumes nothing until the queue's {@code start()}, or its own, is called once the
+ *         outer call has returned.</li>
+ *     <li>{@link Subscription#unsubscribe()}: ends the subscription as from any thread, except that taking its lanes out
+ *         of the queue is left to the call holding the lock, which does it before it returns and starts neither lane
+ *         meanwhile; the unsubscribe stops both lanes on this thread.</li>
+ *     <li>{@link Subscription#stop()}: stops that subscription's lanes, without the queue's lock, as from any thread.</li>
+ * </ul>
+ * Releases told by {@link Subscription#stop()} or {@link Subscription#unsubscribe()}, or by a {@code stop()} that gave up
+ * waiting for a start still running, are told without the queue's lifecycle lock, and a heartbeat's acquisitions and
+ * releases - a rebalance, a unit found taken - on the heartbeat's thread, outside any of those calls: a call from there
+ * takes the queue's lifecycle lock as one from any other thread does.
  * <p>
  * No Micrometer dependency here, deliberately: this module stays free of a metrics framework, and a
  * Micrometer binding is a thin adapter a consumer declares itself. The project treats third-party
@@ -92,7 +133,9 @@ public interface QueueObserver {
      * <p>
      * A start tells its acquisitions on its own thread. A {@code MessageQueue.stop()} called from here then marks the queue
      * not started and returns, and the {@code consume()} or start it was called from does the stopping before it returns:
-     * it starts no further consumer and stops every one.
+     * it starts no further consumer and stops every one. What each other call into the queue does from here - a
+     * {@code consume()} from a release a stop tells registers a subscription it does not start - is listed in the class
+     * javadoc.
      */
     default void shardOwnershipChanged(int shard, boolean acquired) {
     }
