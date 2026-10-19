@@ -1,0 +1,30 @@
+schemaVersion: "1.1"
+slice: market_data.market_quotes
+kind: view
+bc: market_data
+owner: market-data-team
+status: live
+summary: "The latest quote per instrument from the exchange's market-data feed, in memory; answers what a marketable order trades at now."
+generator: essentials
+language: java
+
+serves: [MarketQuotes, GetMarketQuote]
+provides: [MarketQuotes]
+endpoints:
+  - { method: GET, path: "/api/market-data/quotes", auth: customer }
+  - { method: GET, path: "/api/market-data/quotes/{instrumentId}", auth: customer }
+reads:
+  - { name: MarketQuote }
+invariants:
+  - id: INV-MQ-1
+    text: "A stale quote is shown as stale and never answers the MarketQuotes seam"
+    enforcedBy: LatestMarketQuotes
+  - id: INV-MQ-2
+    text: "An older mdSequence never replaces a newer quote"
+    enforcedBy: LatestMarketQuotes
+forbidden:
+  - cross-slice-internal:market_data
+tests:
+  unit: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/market_data/views/market_quotes/LatestMarketQuotesTest.java" }
+  integration: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/orders/OrdersIT.java" }
+  contract: { present: false }

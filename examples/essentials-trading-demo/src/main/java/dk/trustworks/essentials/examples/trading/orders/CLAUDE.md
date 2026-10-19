@@ -34,13 +34,17 @@ No snapshots, no closing books: an order is short-lived.
   redelivered until the exchange order id is known; a closed order is let go.
 - **Ownership is checked against `orders`' own projection of `AccountOpened`** (`views/account_owners`), eventually
   consistent: an account opened a moment ago answers `404` until it is projected.
-- **Market orders are refused** until market data exists (the hold needs the best ask, Q-5).
+- **A market buy holds quantity x best ask x (1 + `trading-demo.orders.market-order-collar`, 0.05)**, rounded up to the
+  cent (Q-5), from `market_data`'s `MarketQuotes` seam. No fresh quote → `422`, never a guess. A fill above the hold
+  is still booked.
 
 ## Stub exchange
 
-`trading-demo.orders.stub-exchange.*`: `fill-mode` (`IMMEDIATE` fills the whole order at its limit price; `NEVER`),
-`resting-instruments` (accepted, never filled, cancellable), `rejected-instruments` (refused at submission), `zone-id`
-(trade date; settlement T+1). Per-instance memory: a restart forgets resting orders.
+`trading-demo.orders.stub-exchange.*`: `fill-mode` (`IMMEDIATE` matches on arrival; `NEVER`), `resting-instruments`
+(accepted, never filled, cancellable), `rejected-instruments` (refused at submission), `zone-id` (trade date;
+settlement T+1). Matching, once, on arrival, against `MarketQuotes`: market fills whole at ask/bid, or with no quote
+is cancelled `MARKET_REMAINDER`; a marketable limit fills at the quote, an unmarketable one rests forever; an unquoted
+limit fills at its limit. Per-instance memory: a restart forgets resting orders.
 
 ## Slices
 
@@ -56,5 +60,5 @@ No snapshots, no closing books: an order is short-lived.
 
 ## Not built yet
 
-DAY expiry at end of day, average fill price, market orders, the exchange-simulator adapter (webhooks, synchronous
+DAY expiry at end of day, average fill price, the exchange-simulator adapter (webhooks, synchronous
 executions in the submit answer, `EXCHANGE_UNAVAILABLE` after a retry budget), the `UnknownExchangeOrder` operator case.

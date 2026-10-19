@@ -42,7 +42,8 @@ import static org.awaitility.Awaitility.await;
 
 /**
  * The order core against the stub exchange, over HTTP as the seeded customer Alice: an order takes its hold with it,
- * fills are booked on the account and what is left of the hold is released when the order closes. {@code RESTING}
+ * fills are booked on the account and what is left of the hold is released when the order closes. The stub fills at
+ * the synthetic feed's quote for {@code ACME}, which is held still. {@code RESTING}
  * orders are accepted and never fill, for the cancel path and the buying-power race.
  */
 @Testcontainers
@@ -51,7 +52,11 @@ import static org.awaitility.Awaitility.await;
         "trading-demo.load.enabled=false",
         "trading-demo.queue-load.enabled=false",
         "trading-demo.orders.stub-exchange.resting-instruments=RESTING",
-        "trading-demo.orders.stub-exchange.rejected-instruments=HALTED"
+        "trading-demo.orders.stub-exchange.rejected-instruments=HALTED",
+        // ACME quoted still at bid 99.95 / ask 100.05, so fill prices are exact
+        "trading-demo.market-data.synthetic.instruments.ACME=100.00",
+        "trading-demo.market-data.synthetic.volatility=0",
+        "trading-demo.market-data.synthetic.tick-interval=200ms"
 }, webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @AutoConfigureTestRestTemplate
 @DirtiesContext // close while this class's container is still up; a cached context outlives it and stalls the next context switch
@@ -133,7 +138,7 @@ class OrdersIT {
     }
 
     @Test
-    void a_limit_buy_is_filled_by_the_exchange_and_booked_on_the_account() {
+    void a_limit_buy_fills_at_the_ask_and_the_rest_of_its_hold_comes_back() {
         openFundedAccount("ACC-ORD-FILL", "10000");
 
         var placed = placeOrder(alice(), "ACC-ORD-FILL", "ORD-FILL-1", "ACME", "BUY", 10, "101");
@@ -141,6 +146,7 @@ class OrdersIT {
         // The same orderId again places nothing
         assertThat(placeOrder(alice(), "ACC-ORD-FILL", "ORD-FILL-1", "ACME", "BUY", 10, "101").getStatusCode()).isEqualTo(HttpStatus.CREATED);
 
+        // Held 10 x 101 = 1010; filled 10 @ 100.05 = 1000.50; the remaining 9.50 released
         await().atMost(TIMEOUT).untilAsserted(() -> {
             var order = projectedOrder("ACC-ORD-FILL", "ORD-FILL-1");
             assertThat(order.status()).isEqualTo(OrderStatus.FILLED);
@@ -148,12 +154,38 @@ class OrdersIT {
             assertThat((Object) order.exchangeOrderId()).isNotNull();
 
             var account = overview("ACC-ORD-FILL");
-            assertMoney(account.pendingCashOut(), "1010");
+            assertMoney(account.pendingCashOut(), "1000.50");
             assertMoney(account.held(), "0");
-            assertMoney(account.buyingPower(), "8990");
+            assertMoney(account.buyingPower(), "8999.50");
         });
         assertThat(alice().exchange("/api/accounts/ACC-ORD-FILL/orders", HttpMethod.GET, null, new ParameterizedTypeReference<List<OrderView>>() {})
                           .getBody()).hasSize(1);
+    }
+
+    @Test
+    void a_market_buy_holds_the_ask_plus_the_collar_and_fills_at_the_ask() {
+        openFundedAccount("ACC-ORD-MARKET", "1950");
+        await().atMost(TIMEOUT).until(() -> alice().getForEntity("/api/market-data/quotes/ACME", String.class).getStatusCode() == HttpStatus.OK);
+
+        // 19 at the ask would cost 1900.95, which 1950 covers; but the hold is 19 x 100.05 x 1.05 = 1996.00, which it does not
+        var tooBig = alice().postForEntity("/api/accounts/ACC-ORD-MARKET/orders", market("ORD-MARKET-0", "ACC-ORD-MARKET", "ACME", "BUY", 19), String.class);
+        assertThat(tooBig.getStatusCode().value()).as("%s", tooBig.getBody()).isEqualTo(422);
+
+        // 10 holds 1050.53 (1050.525 rounded up), and fills at 100.05
+        var placed = alice().postForEntity("/api/accounts/ACC-ORD-MARKET/orders", market("ORD-MARKET-1", "ACC-ORD-MARKET", "ACME", "BUY", 10), String.class);
+        assertThat(placed.getStatusCode()).as("%s", placed.getBody()).isEqualTo(HttpStatus.CREATED);
+
+        await().atMost(TIMEOUT).untilAsserted(() -> {
+            assertThat(projectedOrder("ACC-ORD-MARKET", "ORD-MARKET-1").status()).isEqualTo(OrderStatus.FILLED);
+            var account = overview("ACC-ORD-MARKET");
+            assertMoney(account.pendingCashOut(), "1000.50");
+            assertMoney(account.held(), "0");
+            assertMoney(account.buyingPower(), "949.50");
+        });
+    }
+
+    private static Map<String, Object> market(String orderId, String accountId, String instrument, String side, long quantity) {
+        return Map.of("orderId", orderId, "accountId", accountId, "instrumentId", instrument, "side", side, "type", "MARKET", "quantity", quantity);
     }
 
     @Test
@@ -186,11 +218,9 @@ class OrdersIT {
 
         assertThat(placeOrder(alice(), "ACC-ORD-REFUSED", "ORD-REFUSED-1", "ACME", "BUY", 10, "100").getStatusCode().value()).isEqualTo(422);
         assertThat(placeOrder(alice(), "ACC-ORD-REFUSED", "ORD-REFUSED-2", "ACME", "SELL", 1, "100").getStatusCode().value()).isEqualTo(422);
-        var market = alice().postForEntity("/api/accounts/ACC-ORD-REFUSED/orders",
-                                           Map.of("orderId", "ORD-REFUSED-3", "accountId", "ACC-ORD-REFUSED", "instrumentId", "ACME", "side", "BUY",
-                                                  "type", "MARKET", "quantity", 1),
-                                           String.class);
-        assertThat(market.getStatusCode().value()).isEqualTo(422);
+        // A market order on an instrument with no current quote cannot be sized
+        var unquoted = alice().postForEntity("/api/accounts/ACC-ORD-REFUSED/orders", market("ORD-REFUSED-3", "ACC-ORD-REFUSED", "UNQUOTED", "BUY", 1), String.class);
+        assertThat(unquoted.getStatusCode().value()).isEqualTo(422);
         // Somebody else's account is not found
         assertThat(placeOrder(bob(), "ACC-ORD-REFUSED", "ORD-REFUSED-4", "ACME", "BUY", 1, "1").getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
 

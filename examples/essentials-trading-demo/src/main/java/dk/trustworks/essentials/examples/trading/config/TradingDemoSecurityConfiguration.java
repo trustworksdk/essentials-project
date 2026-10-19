@@ -53,7 +53,7 @@ public class TradingDemoSecurityConfiguration {
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http.authorizeHttpRequests(requests -> requests
                     .requestMatchers("/actuator/health", "/actuator/health/**", "/webhooks/**", "/login", "/error").permitAll()
-                    .requestMatchers("/api/accounts/**").hasAnyRole(Role.CUSTOMER.name(), Role.OPERATOR.name())
+                    .requestMatchers("/api/accounts/**", "/api/market-data/**").hasAnyRole(Role.CUSTOMER.name(), Role.OPERATOR.name())
                     .anyRequest().hasRole(Role.OPERATOR.name()))
             .formLogin(withDefaults())
             .httpBasic(withDefaults())

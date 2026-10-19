@@ -4,7 +4,7 @@ kind: command
 bc: orders
 owner: orders-team
 status: live
-summary: "Place a limit order for an account; its hold (buy) or share reservation (sell) is taken in the same unit of work."
+summary: "Place a limit or market order for an account; its hold (buy) or share reservation (sell) is taken in the same unit of work."
 generator: essentials
 language: java
 
@@ -13,6 +13,8 @@ emits: [OrderPlaced]
 sends: [HoldFunds, ReserveShares]
 writes:
   - { name: Order }
+reads:
+  - { name: MarketQuote, via: MarketQuotes }
 endpoints:
   - { method: POST, path: "/api/accounts/{accountId}/orders", auth: customer }
 invariants:
@@ -26,7 +28,7 @@ invariants:
     text: "A repeated orderId places nothing"
     enforcedBy: PlaceOrderHandler
   - id: INV-PO-4
-    text: "Market orders are refused until market data exists"
+    text: "A market buy holds quantity x best ask x (1 + collar), and is refused without a fresh quote"
     enforcedBy: PlaceOrderHandler
 forbidden:
   - cross-slice-internal:orders

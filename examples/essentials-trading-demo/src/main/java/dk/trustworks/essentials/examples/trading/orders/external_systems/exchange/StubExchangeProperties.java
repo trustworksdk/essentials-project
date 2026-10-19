@@ -28,7 +28,7 @@ import java.util.List;
 public class StubExchangeProperties {
     public enum FillMode {
         /**
-         * Accept and fill the whole order at its limit price straight away.
+         * Match on arrival against the current quote (see {@code StubExchangeGateway}); unmarketable limit orders rest.
          */
         IMMEDIATE,
         /**

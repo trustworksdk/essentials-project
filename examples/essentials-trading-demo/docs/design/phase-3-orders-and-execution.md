@@ -244,6 +244,11 @@ Where it deviates from the sections above:
   and the webhook events in the same inbox.
 - **A late fill on a terminal order does not change its status** (Q-3). It is recorded and booked as a fact; the
   order stays `REJECTED` (or `CANCELLED`). The operator case for it is not built yet.
-- **Not built yet:** DAY expiry, average fill price, market orders (refused with `422`), `EXCHANGE_UNAVAILABLE` after a
-  retry budget, `UnknownExchangeOrder`.
+- **Market data before the stream exists** (§7). `market_data/views/market_quotes` keeps the latest quote per
+  instrument in memory, fed by a synthetic random walk standing in for SR-13; the real consumer replaces the feed, not
+  the view. `orders` reads it through a published read seam, `market_data/types/MarketQuotes` (`bestAsk`/`bestBid`,
+  fresh quotes only). Market buys hold quantity × ask × 1.05 (Q-5); no fresh quote is `422`. The stub exchange
+  matches on arrival against the same quotes.
+- **Not built yet:** DAY expiry, average fill price, `EXCHANGE_UNAVAILABLE` after a retry budget,
+  `UnknownExchangeOrder`.
 

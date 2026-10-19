@@ -75,6 +75,9 @@ public class Order extends AggregateRoot<OrderId, OrderEvent, Order> {
         if (type == OrderType.LIMIT && (limitPrice == null || limitPrice.signum() <= 0)) {
             throw new OrderRuleViolation("A limit order needs a positive limit price");
         }
+        if (type == OrderType.MARKET && limitPrice != null) {
+            throw new OrderRuleViolation("A market order takes no limit price");
+        }
         apply(new OrderPlaced(orderId, accountId, instrumentId, side, type, quantity, limitPrice, timeInForce, holdAmount));
     }
 

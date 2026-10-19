@@ -22,6 +22,7 @@ import dk.trustworks.essentials.examples.trading.market_data.aggregates.Instrume
 import dk.trustworks.essentials.examples.trading.market_data.aggregates.InstrumentPrices;
 import dk.trustworks.essentials.examples.trading.market_data.aggregates.Instruments;
 import dk.trustworks.essentials.examples.trading.market_data.use_cases.risk_approve_instrument.RiskApprovalProperties;
+import dk.trustworks.essentials.examples.trading.market_data.views.market_quotes.MarketQuotesProperties;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -36,7 +37,7 @@ import org.springframework.context.annotation.Configuration;
  * slice of this context — the same split as {@code brokerage}'s closing-books properties.
  */
 @Configuration
-@EnableConfigurationProperties(RiskApprovalProperties.class)
+@EnableConfigurationProperties({RiskApprovalProperties.class, MarketQuotesProperties.class})
 public class MarketDataConfiguration {
 
     /**

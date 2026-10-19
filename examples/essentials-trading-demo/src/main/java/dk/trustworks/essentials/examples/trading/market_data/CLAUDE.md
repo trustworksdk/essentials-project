@@ -24,6 +24,19 @@ everything else: their command type, their one API file, their handler and their
 | `use_cases/risk_approve_instrument` | automation | Runs a newly registered instrument through an external risk assessment and records the answer. The demo's `UnitOfWorkMode.NONE` example |
 | `views/latest_price` | view | Serves the current price of one instrument. Aggregate-backed, strongly consistent |
 | `views/instrument_details` | view | Lists instruments and serves one by id, from a projection. Includes risk status |
+| `views/market_quotes` | view | Latest quote per instrument from the exchange's market-data feed, in memory. Implements the `MarketQuotes` seam |
+
+## `views/market_quotes` — the market as the exchange's feed reports it (D14, D19)
+
+- **Not event-sourced and not persisted.** A quote is a high-rate feed, not a decision. Each instance subscribes to
+  the feed itself and keeps the latest quote per instrument in memory; nothing is shared between instances.
+- **`types/MarketQuotes` is a published read seam** (`rules/slice-design.md`, § The published read seam): `orders`
+  sizes a market buy's hold on `bestAsk`, and the stub exchange prices its fills on it. It answers only from a fresh
+  quote — stale (`trading-demo.market-data.stale-after`, 10s) is empty, so a hold is never sized on a vanished price.
+- **The feed is `SyntheticMarketQuoteFeed` until the exchange-simulator's stream (SR-12/SR-13) exists**: a random walk
+  per configured instrument (`trading-demo.market-data.synthetic.*`; `volatility: 0` holds quotes still, for tests).
+  The real consumer implements `MarketQuoteFeed` in this slice and resynchronises from the snapshot on a gap.
+- `InstrumentPrice` below is the old exercise and goes later in phase 3 (D19); nothing new may read it.
 
 ## Two aggregates, one id
 
