@@ -379,9 +379,34 @@ each instance pinned to its own two cores with `taskset` and `-XX:ActiveProcesso
   (end depths ranged 4 000–234 000). Part of the round-to-round spread (single instance 3 481–5 774) is that. A clean
   rerun purges the inbox between runs; profiling the instances (JFR) is the next step for the scale-out question.
 
-**Conclusion so far.** Batching the forward is proven and is the part of EF-2 worth building. Scaling the *handling*
-across instances is not demonstrated: on this box it adds nothing, for a reason not yet found. EF-2's value case should
-rest on the batched reader, with multi-instance handling an open question rather than a promise.
+**Follow-up: purged inbox, uniform workload, forward timing** (2026-10-19, same partitioned box):
+
+1. *Clean start.* Purging the inbox before each run removed the inherited backlog but not the result: one instance
+   ~5 300 handled/s (median of 4), two ~4 170.
+2. *Key skew, ruled out.* The replayed backlog was skewed (top 10 of 15 000 keys hold 14.7 % of 690 000 events, the
+   biggest 10 394), which caps a strictly ordered workload at (hot keys ÷ per-message latency). A uniform stretch was
+   generated (50 000 cycles over 1 000 accounts, no hot accounts: 202 000 events) and replayed alone
+   (`trading-demo.ef2.from-global-order`), timing first to last handled message: one instance 4 327 / 4 342 / 5 239/s,
+   two 4 115 / 4 213 / 4 083/s. Still flat, now with tight runs and an even unit split. (Generating it on one instance
+   ran at 2 196 commands/s against 1 365 for the hot workload on two — skew does cost the *command* side.)
+3. *Not consumer concurrency.* One instance with 16 or 32 consumers: 4 942 / 4 863/s; two with 16 each: 4 623/s.
+4. *The forwarder is the cap.* With forward timing captured: one instance forwarded the 202 000 events in 46.2 s
+   (4 370/s) and finished handling 10 s later; two instances took **91.3 s to forward (2 213/s)** and finished handling
+   the same moment. The single reader bounds the end-to-end rate, and **it slows down when another instance consumes the
+   same queue** (also seen in the window runs: 6 100–7 100/s alone, 4 500–5 200 with two). Unverified candidates:
+   insert/acknowledge contention on the ordered table's index, and PostgreSQL serialising the commits of transactions
+   that `NOTIFY` (the engine notifies the shard on every enqueue).
+5. JFR during the window runs: the instances were mostly *not* executing Java (≈ 6–13 execution samples/s against the
+   ~200/s two busy cores give), and the non-forwarding instance's top frames were the pump polling — the system waits
+   on round trips rather than computing.
+6. Absolute rates drifted across the session (single-instance 4 300–5 200 → 3 581 after dozens of runs, `VACUUM` or
+   not): compare only runs from the same batch.
+
+**Conclusion so far.** Batching the forward is proven and is the part of EF-2 worth building. Multi-instance handling
+cannot be judged yet, because the single forwarder is slower than the handling and is itself slowed by consumption on
+other instances. The next measurement is the forwarder's enqueue under concurrent consumption (statement latency,
+lock and notify waits); its answer decides whether the shard-owned engine's enqueue path needs work before EF-2's
+scale-out claim can be tested at all.
 
 **Decision rule.** Build (a1) if M4 forwards at least 3× M1 and M4 with two instances cuts catch-up materially below
 M5. If M1 already runs well above 800/s, the handler is the cost. Then (a0) plus parallel consumers may be enough, and

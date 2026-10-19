@@ -50,7 +50,9 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * <p>
  * Per-key order holds: one reader enqueues in subscription order, in sequential transactions, and an aggregate's
  * events cannot commit out of {@code EventOrder}. The subscriber id carries {@code run-token}, so each measurement
- * reads the existing backlog from the start. Off unless {@code trading-demo.ef2.batched-forwarder=true}; batch size
+ * reads the existing backlog from {@code trading-demo.ef2.from-global-order} (default the start) - set it to replay one
+ * chosen stretch, such as a ledger run with no hot accounts, whose key spread decides what partitioning can achieve
+ * (a strictly ordered hot key is serial whatever the instance count). Off unless {@code trading-demo.ef2.batched-forwarder=true}; batch size
  * from {@code trading-demo.ef2.batch-size}.
  */
 @Component
@@ -76,7 +78,7 @@ public class BatchedAccountsForwarder implements DisposableBean {
      * @param consumers  inbox consumers per instance
      * @param runToken   part of the subscriber id; a new token reads the stream from the beginning
      */
-    public record Settings(int batchSize, int consumers, String runToken) {
+    public record Settings(int batchSize, int consumers, String runToken, long fromGlobalOrder) {
     }
 
     public BatchedAccountsForwarder(EventStoreSubscriptionManager subscriptionManager,
@@ -85,12 +87,13 @@ public class BatchedAccountsForwarder implements DisposableBean {
                                     NoOpProcessorStats stats,
                                     @Value("${trading-demo.ef2.batch-size:100}") int batchSize,
                                     @Value("${trading-demo.ef2.consumers:8}") int consumers,
-                                    @Value("${trading-demo.ef2.run-token:m4}") String runToken) {
+                                    @Value("${trading-demo.ef2.run-token:m4}") String runToken,
+                                    @Value("${trading-demo.ef2.from-global-order:1}") long fromGlobalOrder) {
         this.subscriptionManager = requireNonNull(subscriptionManager, "No subscriptionManager provided");
         this.inboxes = requireNonNull(inboxes, "No inboxes provided");
         this.fencedLockManager = requireNonNull(fencedLockManager, "No fencedLockManager provided");
         this.stats = requireNonNull(stats, "No stats provided");
-        this.settings = new Settings(batchSize, consumers, runToken);
+        this.settings = new Settings(batchSize, consumers, runToken, fromGlobalOrder);
     }
 
     @EventListener(ApplicationReadyEvent.class)
@@ -110,7 +113,7 @@ public class BatchedAccountsForwarder implements DisposableBean {
                 log.info("EF-2 M4: reading Accounts as '{}' in batches of {}", subscriberId, settings.batchSize());
                 subscription = subscriptionManager.batchSubscribeToAggregateEventsAsynchronously(subscriberId,
                                                                                                  AccountsAggregateTypes.ACCOUNTS,
-                                                                                                 GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER,
+                                                                                                 GlobalEventOrder.of(settings.fromGlobalOrder()),
                                                                                                  Optional.empty(),
                                                                                                  settings.batchSize(),
                                                                                                  Duration.ofMillis(100),
