@@ -136,7 +136,7 @@ class SingleRowQueriesTest {
         }
 
         private interface Answer {
-            Object answer(String method, Object[] args);
+            Object answer(String method, Object... args);
         }
 
         // This test class's own loader, not the thread's context loader: a proxy class must be defined in a loader that
