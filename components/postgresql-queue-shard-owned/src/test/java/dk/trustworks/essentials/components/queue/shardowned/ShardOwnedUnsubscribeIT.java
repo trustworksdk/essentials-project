@@ -150,6 +150,71 @@ class ShardOwnedUnsubscribeIT {
     }
 
     /**
+     * Closed by try-with-resources and consumed anew: {@link Subscription#close()} ends the subscription as
+     * {@link Subscription#unsubscribe()} does, so the next {@code consume()} is not a COMPETING consumer and takes the
+     * caller's instance id again. {@code close()} used to only stop it, leaving it registered: the next {@code consume()}
+     * warned of a COMPETING consumer and registered under {@code <id>-1}.
+     */
+    @Test
+    void a_subscription_closed_and_consumed_anew_leaves_only_the_new_one_registered_under_the_callers_instance_id() throws Exception {
+        try (var queue = newQueue(PostgresqlMessageQueue.LifecycleHook.NONE)) {
+            Subscription closed;
+            try (var subscription = queue.consume((messageId, key, payload, payloadType) -> { }, ConsumerOptions.defaults())) {
+                awaitBothLanesHoldUnits(subscription);
+                closed = subscription;
+            }
+            assertThat(closed.isStarted()).as("the closed subscription's lanes are stopped").isFalse();
+            assertThat(queue.registeredConsumers()).as("the closed subscription's lanes left the queue").isEmpty();
+
+            var live = queue.consume((messageId, key, payload, payloadType) -> { }, ConsumerOptions.defaults());
+
+            assertThat(competingWarnings()).as("no closed subscription is left for the new one to compete with").isEmpty();
+            assertThat(queue.registeredConsumers()).as("the live subscription's two lanes, and no others").hasSize(2);
+            awaitBothLanesHoldUnits(live);
+            assertThat(registeredInstances()).as("the live subscription took the caller's instance id again, not a new suffix")
+                                             .containsExactly(INSTANCE_ID);
+            assertThatThrownBy(closed::start).as("a closed subscription cannot be started again")
+                                             .isInstanceOf(IllegalStateException.class)
+                                             .hasMessageContaining("unsubscribed");
+        }
+    }
+
+    /**
+     * Closed, then the queue stopped and started: the queue's {@code start()} starts the subscription still registered and
+     * not the closed one, so only the live handler is delivered to. {@link Subscription#close()} used to only stop the
+     * subscription, which stayed registered, and the queue's {@code start()} after its {@code stop()} started it again,
+     * delivering to a handler its caller had closed.
+     */
+    @Test
+    void a_queue_start_after_its_stop_does_not_start_a_closed_subscription() throws Exception {
+        var closedHandler = ConcurrentHashMap.<String>newKeySet();
+        var delivered     = ConcurrentHashMap.<String>newKeySet();
+        try (var queue = newQueue(PostgresqlMessageQueue.LifecycleHook.NONE)) {
+            var closed = queue.consume((messageId, key, payload, payloadType) -> closedHandler.add(body(payload)), ConsumerOptions.defaults());
+            awaitBothLanesHoldUnits(closed);
+            var live = queue.consume((messageId, key, payload, payloadType) -> delivered.add(body(payload)), ConsumerOptions.defaults());
+
+            closed.close();
+            assertThat(queue.registeredConsumers()).as("the live subscription's two lanes, and no others").hasSize(2);
+
+            queue.stop();
+            queue.start();
+
+            assertThat(closed.isStarted()).as("the queue's start() did not start the closed subscription").isFalse();
+            assertThat(live.isStarted()).as("the queue's start() started the live subscription").isTrue();
+            awaitBothLanesHoldUnits(live);
+
+            var batch = new ArrayList<Message>();
+            for (var index = 0; index < MESSAGES; index++) {
+                batch.add(Message.of(("m-" + index).getBytes(StandardCharsets.UTF_8), 1));
+            }
+            queue.enqueue(batch);
+            Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> assertThat(delivered).hasSize(MESSAGES));
+            assertThat(closedHandler).as("no message reached the handler of the closed subscription").isEmpty();
+        }
+    }
+
+    /**
      * An unsubscribe that does not get the queue's lifecycle lock - a {@code start()} of the queue holds it past the 2 s
      * budget - returns within that budget and leaves taking the lanes out to that start. That start goes over the
      * registered consumers, the unsubscribed subscription's lanes still among them, and starts neither of those lanes: it

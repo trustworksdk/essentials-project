@@ -517,9 +517,10 @@ public class QueueLoadGenerator {
     }
 
     /**
-     * Unsubscribed, not closed: {@link #start()} consumes anew, and a closed subscription stays registered with the
-     * queue, so every stop and start from the admin API left one more behind - the next {@code consume()} warned of a
-     * competing consumer under a new instance id suffix.
+     * Unsubscribed, not merely stopped: {@link #start()} consumes anew, and a stopped subscription stays registered with
+     * the queue, so every stop and start from the admin API left one more behind - the next {@code consume()} warned of a
+     * competing consumer under a new instance id suffix. ({@link Subscription#close()} would do as well: it calls
+     * {@link Subscription#unsubscribe()}.)
      */
     private static void unsubscribeQuietly(Subscription subscription) {
         if (subscription != null) {

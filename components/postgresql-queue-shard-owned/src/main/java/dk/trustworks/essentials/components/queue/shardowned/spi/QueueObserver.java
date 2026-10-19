@@ -67,9 +67,10 @@ package dk.trustworks.essentials.components.queue.shardowned.spi;
  *         the subscription <b>without starting it</b> and logs a WARN: the returned {@code Subscription} reads
  *         {@code isStarted()} false and consumes nothing until the queue's {@code start()}, or its own, is called once the
  *         outer call has returned.</li>
- *     <li>{@link Subscription#unsubscribe()}: ends the subscription as from any thread, except that taking its lanes out
- *         of the queue is left to the call holding the lock, which does it before it returns and starts neither lane
- *         meanwhile; the unsubscribe stops both lanes on this thread.</li>
+ *     <li>{@link Subscription#unsubscribe()}, and {@link Subscription#close()}, which calls it: ends the subscription as
+ *         from any thread, except that taking its lanes out of the queue is left to the call holding the lock, which
+ *         does it before it returns and starts neither lane meanwhile; the unsubscribe stops both lanes on this
+ *         thread.</li>
  *     <li>{@link Subscription#stop()}: stops that subscription's lanes, without the queue's lock, as from any thread.</li>
  * </ul>
  * Releases told by {@link Subscription#stop()} or {@link Subscription#unsubscribe()}, or by a {@code stop()} that gave up

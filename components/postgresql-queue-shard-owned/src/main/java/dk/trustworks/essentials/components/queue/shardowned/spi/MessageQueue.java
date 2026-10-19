@@ -130,12 +130,12 @@ public interface MessageQueue extends Lifecycle, AutoCloseable {
      * dead-letters according to {@code policy}, and acknowledges on the handler's behalf.
      * <p>
      * Each call is a subscription of its own, registered with the queue until it is
-     * {@link Subscription#unsubscribe() unsubscribed}: stopped, it stays registered, and the queue's
-     * {@code start()} starts it again. A second subscription registered in one process is a competing
-     * consumer under an instance id of its own.
+     * {@link Subscription#unsubscribe() unsubscribed} or {@link Subscription#close() closed}: stopped, it
+     * stays registered, and the queue's {@code start()} starts it again. A second subscription registered
+     * in one process is a competing consumer under an instance id of its own.
      *
-     * @return a handle that stops consumption; closing it releases the leases, unsubscribing it also
-     * takes it out of the queue
+     * @return a handle on the subscription; stopping it releases the leases and keeps it registered,
+     * unsubscribing or closing it also takes it out of the queue
      */
     Subscription consume(MessageHandler handler, ConsumerOptions options) throws SQLException;
 

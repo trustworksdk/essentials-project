@@ -11,8 +11,8 @@ plumbing that no user sees go in §7 at most, as one line._
 
 **So far:** no public API removed, but three changes can break code written against 0.60.0 (§1): two additions that
 can stop a processor subclass or `CommandHandler` implementation of your own compiling, and one runtime break for
-direct callers of `ShardOwnedStorage`'s 0.60.0 takeover-charge methods, which now throw. Twenty-two framework changes
-with a behaviour change (§1.1, §1.1.13–§1.1.22 in the durable queues and units of work), additive features (§2), bug
+direct callers of `ShardOwnedStorage`'s 0.60.0 takeover-charge methods, which now throw. Twenty-three framework changes
+with a behaviour change (§1.1, §1.1.13–§1.1.23 in the durable queues and units of work), additive features (§2), bug
 fixes (§3), plugin releases `0.60.0-6` and `0.60.0-7`, and example and tooling updates. Beyond those three, the only
 migration step is for `essentials.schema.mode=validate` deployments: re-run `emit` and apply the script before the
 first start (§1). Supported PostgreSQL is now 15+ (§1). The persisted
@@ -547,6 +547,22 @@ that is draining. It is inserted like any other row and waits in the table for t
 instance once the stop has released the lease, or this one when it is started again. Nothing is lost; the stopping
 instance just no longer delivers it. (`1f31c123`)
 
+#### 1.1.23 Shard-owned engine: `Subscription.close()` ends the subscription
+
+`Subscription.close()` now calls `Subscription.unsubscribe()`; in 0.60.0 it called `stop()`. `close()` is what
+try-with-resources and Spring's inferred destroy method for an `AutoCloseable` bean call when the subscription is let
+go of, so it now ends it for good: both lanes stop and leave their `PostgresqlMessageQueue`, the queue's `start()`
+no longer starts them, the subscription's own `start()` throws `IllegalStateException`, and the next `consume()` is
+not counted as competing with it. Before, a closed subscription stayed registered: the queue's `start()` after its
+`stop()` started it again, running a handler its caller had let go of, and the next `consume()` logged the
+COMPETING consumer WARN and registered under a new instance id suffix (`<id>-1`).
+
+What changes for you: if you closed a subscription and relied on the queue's `start()`, or the subscription's own
+`start()`, to bring it back, it no longer comes back. Call `Subscription.stop()` instead to pause a subscription you
+mean to start again; `stop()` still keeps it registered. A `Subscription` implementation of your own that does not
+override `unsubscribe()` is unaffected: the default `unsubscribe()` only stops, as `close()` did; one that overrides
+it now has `close()` call that override, unless it overrides `close()` too. (`<!-- fix:U-040 -->`)
+
 ---
 
 ## 2. New features
@@ -736,8 +752,9 @@ instance just no longer delivers it. (`1f31c123`)
   `messageScheduledFor` and `queuePollingReturnedNoMessages(Instant)` (§3). (`6777b8b9`)
 - **Shard-owned engine: `Subscription.unsubscribe()`.** Ends a subscription for good: stops both lanes and takes
   them out of their `PostgresqlMessageQueue`, so the queue's `start()` no longer starts them and the next `consume()`
-  is not a competing consumer. `stop()` and `close()` keep a subscription registered, as before. A `default` method
-  that stops, so an implementation of your own still compiles (§3). (`f8b32d37e`)
+  is not a competing consumer. `stop()` keeps a subscription registered, as before; `close()` now calls
+  `unsubscribe()` (§1.1.23). A `default` method that stops, so an implementation of your own still compiles
+  (§3). (`f8b32d37e`)
 - **Shard-owned engine: `spi.RedeliveryRequested(delay)`.** A handler throws it to ask for redelivery after `delay`
   without it counting as an attempt, being reported as a failure or leading to a dead letter (§1.1.18).
   (`a4f541e4`, `f9fdd99b`)

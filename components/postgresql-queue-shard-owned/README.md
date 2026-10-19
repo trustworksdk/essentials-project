@@ -196,12 +196,15 @@ Re-registering a name with a *different* shard count is refused rather than acce
 | `consume(handler, options)` | Registers a consumer and starts it. Returns a `Subscription`. A `consume()` made while no subscription is registered also starts the queue; any other, like `Subscription.start()`, starts its own consumer only and leaves the queue as it is, so after a `stop()` the queue's `start()` still restarts the others |
 | `start()` | Starts the consumers of every subscription still registered — after a `stop()`, the ones it stopped, including a subscription stopped on its own with `Subscription.stop()`. It does this only while `isStarted()` reads false; on a queue marked started it returns at once. An unsubscribed subscription is no longer registered and is never started again. A queue that has never consumed has nothing to start |
 | `stop()` | Stops every registered consumer, whether `isStarted()` reads true or not: dispatches nothing new, **waits up to `shedGrace` for handlers already running** and acknowledges them, then **releases the shard leases** so a successor picks them up immediately rather than waiting the lease out. An ordered unit with a key still in a handler after the grace is kept instead, until this instance's liveness lapses, so no successor starts that key while it runs; a `start()` meanwhile leaves that unit alone until the handler has returned, and a heartbeat takes it after that (no key of the unit is delivered until then). They stay registered, so `start()` brings them back. **If a `consume()`/`start()` is still doing its database work, `stop()` does not wait for it past about 4 s** (2 s on a `ShardOwnedQueue`; on an interrupted thread not at all): it returns with `isStarted()` false and logs a WARN, and that start releases the leases and deregisters the instance only once its statements return, which nothing bounds but the driver's `socketTimeout`. Closing the `DataSource` before that start returns makes the release fail — the case a Spring shutdown is most likely to hit, since it closes the pool once `stop()` has returned. Under a partition, or after a failed release, the units stay unserved as after a crash: a successor takes them only once this instance's membership row is older than `leaseTtl`. Set `socketTimeout` on the pool ([Prerequisites](#prerequisites)) |
-| `close()` | `stop()` |
+| `close()` | The queue's `stop()`: its subscriptions stay registered. Not to be confused with `Subscription.close()`, which ends one subscription as `Subscription.unsubscribe()` does |
 | `isStarted()` | Whether the queue is marked started — by `start()` or by a `consume()` made while no subscription is registered — not whether anything runs. After a `stop()`, a `Subscription.start()` or a later `consume()` runs that subscription's consumers while `isStarted()` reads false |
 
-**`Subscription.stop()` keeps a subscription registered; `Subscription.unsubscribe()` ends it.** A
-subscription stopped with `Subscription.stop()` stays with its queue, so the queue's next `start()`
-after a `stop()` starts it again. `unsubscribe()` stops both lanes and takes them out of the queue: no
+**`Subscription.stop()` keeps a subscription registered; `Subscription.unsubscribe()` and
+`Subscription.close()` end it.** A subscription stopped with `Subscription.stop()` stays with its
+queue, so the queue's next `start()` after a `stop()` starts it again. `Subscription.close()` is
+`unsubscribe()` — what try-with-resources, and Spring destroying a `Subscription` bean, call — so a
+closed subscription is ended, not paused (in 0.60.0 `close()` only stopped it; call `stop()` to pause
+one you mean to start again). `unsubscribe()` stops both lanes and takes them out of the queue: no
 `start()` starts them again, the subscription's own `start()` throws, and its instance id is free for
 the next `consume()`, which is not counted as competing with the unsubscribed subscription (it still is
 with any other subscription of the queue, and logs the competing-consumer WARN for it). A caller that
@@ -254,10 +257,10 @@ Stopping a subscription does not end it. `Subscription.stop()` keeps it register
 `start()` after a `stop()` starts it again: a caller that stops one subscription and consumes anew
 leaves the stopped one behind, gets the competing-consumer WARN under a new instance id suffix, and
 has the abandoned handler restarted by the next queue `stop()`/`start()`. Call
-`Subscription.unsubscribe()` on the old subscription first: it stops both lanes and removes them from
-the queue, so the next `consume()` is not counted as competing with it, and its instance id is free
-again (unless the stop kept an ordered unit or gave up waiting for its hand-back to the database — see
-[Lifecycle](#lifecycle)).
+`Subscription.unsubscribe()` (or `close()`, which calls it) on the old subscription first: it stops
+both lanes and removes them from the queue, so the next `consume()` is not counted as competing with
+it, and its instance id is free again (unless the stop kept an ordered unit or gave up waiting for its
+hand-back to the database — see [Lifecycle](#lifecycle)).
 
 ### What a handler is given
 
@@ -1015,8 +1018,9 @@ that owns the queue.
   are per `(queue, shard)`, so `u-0-1` exists in every queue. Every admin operation therefore takes the
   queue name too, and there is no `getQueueNameFor(messageId)` — the question has no answer.
 - **A second `consume()` is a second competing consumer**, not the second lane. One `consume()` serves
-  both. Replacing a subscription therefore means `Subscription.unsubscribe()` on the old one first:
-  `Subscription.stop()` keeps it registered, and the queue's `start()` after a `stop()` runs it again.
+  both. Replacing a subscription therefore means `Subscription.unsubscribe()` or `close()` on the old
+  one first: `Subscription.stop()` keeps it registered, and the queue's `start()` after a `stop()` runs
+  it again.
 - **`payloadType` is yours, not the engine's.** An `int` you define, stored and handed back. Never
   compared, indexed or interpreted, and there is no registry mapping it to a type name — keeping two
   services' mappings in step is your job.

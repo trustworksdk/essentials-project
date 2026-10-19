@@ -963,8 +963,8 @@ public final class PostgresqlMessageQueue implements MessageQueue {
             /**
              * Stops this subscription's two lanes only, without the queue's lifecycle lock, and leaves the queue marked as
              * it was: a {@code stop()} of the queue still stops them, each lane's stop doing nothing the second time. The
-             * subscription stays registered with the queue, whose {@code start()} starts it again; {@link #unsubscribe()}
-             * ends it.
+             * subscription stays registered with the queue, whose {@code start()} starts it again; {@link #unsubscribe()},
+             * and {@link #close()}, which calls it, end it.
              */
             @Override
             public void stop() {
