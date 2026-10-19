@@ -388,26 +388,16 @@ class ShardOwnedDurableQueueConsumer implements DurableQueueConsumer {
      * Short, because the lock may meanwhile have passed to a start subscribing, which the stop must leave stopping the
      * subscription to rather than wait for; a lock let go of meanwhile is taken without waiting out the rest.
      */
-    private static final long HAND_OVER_WAIT_MILLIS = 10;
+    private static final Duration HAND_OVER_WAIT = Duration.ofMillis(10);
 
     /**
-     * Wait up to {@link #HAND_OVER_WAIT_MILLIS} for {@link #lifecycleLock}, parked rather than spinning. An interrupt
-     * pending on entry is cleared for the wait, so it does not cut the wait short. An interrupt arriving during the wait
-     * does: the timed {@code tryLock} throws, the wait ends without the lock ({@code false}) and the caller reads
-     * {@link #holder} again. Either way the flag is set again afterwards, so the stop leaves it set as it found or got it.
+     * Wait up to {@link #HAND_OVER_WAIT} for {@link #lifecycleLock}, parked rather than spinning, through
+     * {@link Locks#tryLockDeferringPendingInterrupt}: an interrupt pending on entry does not cut the wait short, one
+     * arriving during it ends the wait without the lock ({@code false}) and the caller reads {@link #holder} again. Either
+     * way the flag is set again afterwards, so the stop leaves it set as it found or got it.
      */
     private boolean tryLockAfterAHandOver() {
-        var interrupted = Thread.interrupted();
-        try {
-            return lifecycleLock.tryLock(HAND_OVER_WAIT_MILLIS, TimeUnit.MILLISECONDS);
-        } catch (InterruptedException e) {
-            interrupted = true;
-            return false;
-        } finally {
-            if (interrupted) {
-                Thread.currentThread().interrupt();
-            }
-        }
+        return Locks.tryLockDeferringPendingInterrupt(lifecycleLock, HAND_OVER_WAIT);
     }
 
     /**

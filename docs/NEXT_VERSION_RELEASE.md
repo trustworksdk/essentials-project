@@ -572,6 +572,13 @@ instance just no longer delivers it. (`1f31c123`)
   returned `true` the wait is `lock.lock()` itself, so on a fair lock the waiter keeps its place in the queue instead of
   giving it up to later waiters every `warnAfter`; until then each `warnAfter` is a timed `tryLock`, which does give
   it up. (`6978e1b38`)
+- **`Locks.tryLockDeferringPendingInterrupt(lock, wait)`** (`shared`, same class) waits up to `wait` for a `Lock` and
+  returns whether it took it. An interrupt pending when it is called neither cuts the wait short nor makes a free lock
+  look taken, as it does for a plain timed `tryLock`, which throws at once. An interrupt arriving during the wait ends
+  it without the lock, for a lock whose timed `tryLock` can be interrupted, as every `java.util.concurrent.locks`
+  lock's can (the `Lock` interface does not promise it). Either way the interrupt is set on the thread again before it returns. The stop of
+  `PostgresqlMessageQueue` and of the adapter's `ShardOwnedDurableQueueConsumer` take their lifecycle lock through it,
+  10 ms at a time, in place of two private copies. (<!-- fix:U-017 -->)
 
 - **Schema descriptions:** `SchemaChange.describedAs(String)`, `description()` and `describeObject()`,
   `SchemaChangeSet.describe()`/`describeObjects()`, and `PostgresqlEmitSchemaApplier.exitTriggered()`/

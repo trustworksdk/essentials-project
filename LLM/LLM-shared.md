@@ -888,6 +888,26 @@ try {
 - Fair locks: until `warn` has returned `true` the wait is a timed `tryLock` per `warnAfter`, and each one that runs out gives up the thread's place in a fair lock's queue. Once `warn` has returned `true` the wait is `lock.lock()` itself and keeps its place.
 - An exception from `warn` escapes, the lock not taken, the interrupt set again.
 
+```java
+// API
+static boolean tryLockDeferringPendingInterrupt(Lock lock, Duration wait)
+
+// Usage: take the lock a few milliseconds at a time, looking at who holds it between tries
+while (!Locks.tryLockDeferringPendingInterrupt(lifecycleLock, Duration.ofMillis(10))) {
+    // read the holder again; maybe hand the work to it and return
+}
+try {
+    // ...
+} finally {
+    lifecycleLock.unlock();
+}
+```
+
+- A timed `tryLock` of up to `wait` (zero: one try, honouring a fair lock's queue); `true` = the lock is held, the caller unlocks it.
+- An interrupt pending on entry is cleared for the wait: it does not cut the wait short, and a free lock is taken (a plain timed `tryLock` throws at once on a pending interrupt, free lock or not).
+- An interrupt arriving during the wait ends it — for a lock whose timed `tryLock` can be interrupted, as every `java.util.concurrent.locks` lock's (and `StampedLock`'s views') can; the `Lock` interface does not promise it: `false`, the lock not taken.
+- Either way the interrupt is set on the thread again before it returns. `wait` must not be negative; one too long to count in nanoseconds waits `Long.MAX_VALUE` ns.
+
 ---
 
 ## Messages

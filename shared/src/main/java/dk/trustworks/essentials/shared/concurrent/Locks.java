@@ -24,7 +24,8 @@ import java.util.function.BooleanSupplier;
 import static dk.trustworks.essentials.shared.FailFast.*;
 
 /**
- * Helpers for taking a {@link Lock}.
+ * Helpers for taking a {@link Lock} while keeping a pending interrupt for later: {@link #lockWarningOnce} waits as long
+ * as it takes, {@link #tryLockDeferringPendingInterrupt} a bounded time.
  */
 public final class Locks {
     private Locks() {
@@ -86,6 +87,46 @@ public final class Locks {
                 }
                 deadline = System.nanoTime() + budgetNanos;
             }
+        } finally {
+            if (interrupted) {
+                Thread.currentThread().interrupt();
+            }
+        }
+    }
+
+    /**
+     * Wait up to {@code wait} for {@code lock} - a timed {@link Lock#tryLock(long, TimeUnit)}, parked rather than
+     * spinning - for a caller that must not block on the lock for long, and must not be kept from it by an interrupt it
+     * already had: one that, say, takes the lock a few milliseconds at a time and between tries reads who holds it.
+     * <p>
+     * An interrupt pending on entry is cleared for the wait, so it does not cut the wait short, nor make a free lock
+     * look taken (a timed {@code tryLock} throws at once on a pending interrupt, free lock or not). An interrupt arriving
+     * during the wait ends it, for a lock whose timed {@code tryLock} can be interrupted - as every {@code
+     * java.util.concurrent.locks} lock's (and {@link java.util.concurrent.locks.StampedLock}'s views') can, but the
+     * {@link Lock} interface does not promise that: the wait returns {@code false}, the lock not taken. A lock that does
+     * not support interrupting its acquisition waits on as its {@code tryLock} does. Either way the interrupt flag is set
+     * again before this returns, so the caller leaves it as it found or got it.
+     * <p>
+     * A {@code wait} of zero tries once without waiting - but, unlike {@link Lock#tryLock()}, honouring a fair lock's
+     * queue, as the timed {@code tryLock} of the {@code java.util.concurrent.locks} locks does. A {@code wait} too long to
+     * count in nanoseconds (about 292 years) waits {@link Long#MAX_VALUE} nanoseconds.
+     *
+     * @param lock the lock to take
+     * @param wait how long to wait for it; must not be negative
+     * @return {@code true} if the lock was taken (the caller unlocks it), {@code false} if {@code wait} ran out or - for
+     * a lock whose timed {@code tryLock} can be interrupted - an interrupt arrived during it
+     */
+    public static boolean tryLockDeferringPendingInterrupt(Lock lock, Duration wait) {
+        requireNonNull(lock, "No lock provided");
+        requireNonNull(wait, "No wait provided");
+        requireFalse(wait.isNegative(), "wait must not be negative");
+        var interrupted = Thread.interrupted();
+        try {
+            // TimeUnit.convert(Duration) saturates at Long.MAX_VALUE where Duration.toNanos() would throw.
+            return lock.tryLock(TimeUnit.NANOSECONDS.convert(wait), TimeUnit.NANOSECONDS);
+        } catch (InterruptedException e) {
+            interrupted = true;
+            return false;
         } finally {
             if (interrupted) {
                 Thread.currentThread().interrupt();

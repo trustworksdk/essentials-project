@@ -244,4 +244,107 @@ class LocksTest {
         assertThatThrownBy(() -> Locks.lockWarningOnce(lock, Duration.ofSeconds(-1), () -> true)).isInstanceOf(IllegalArgumentException.class);
         assertThat(lock.isLocked()).isFalse();
     }
+
+    @Test
+    void try_lock_takes_a_free_lock() {
+        assertThat(Locks.tryLockDeferringPendingInterrupt(lock, Duration.ofMillis(10))).isTrue();
+        try {
+            assertThat(lock.isHeldByCurrentThread()).isTrue();
+            assertThat(Thread.currentThread().isInterrupted()).isFalse();
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    @Test
+    void try_lock_with_an_interrupt_pending_takes_a_free_lock_and_sets_the_interrupt_again() throws Exception {
+        var result = waiters.submit(() -> {
+            // A plain timed tryLock throws at once on a pending interrupt, free lock or not.
+            Thread.currentThread().interrupt();
+            var taken = Locks.tryLockDeferringPendingInterrupt(lock, Duration.ofMillis(10));
+            try {
+                return new boolean[]{taken, lock.isHeldByCurrentThread(), Thread.currentThread().isInterrupted()};
+            } finally {
+                if (taken) {
+                    lock.unlock();
+                }
+            }
+        });
+
+        assertThat(result.get(5, TimeUnit.SECONDS)).containsExactly(true, true, true);
+    }
+
+    @Test
+    void try_lock_with_an_interrupt_pending_waits_for_the_lock_and_sets_the_interrupt_again() throws Exception {
+        lock.lock();
+        var waiter = new AtomicReference<Thread>();
+        var result = waiters.submit(() -> {
+            waiter.set(Thread.currentThread());
+            Thread.currentThread().interrupt();
+            var taken = Locks.tryLockDeferringPendingInterrupt(lock, Duration.ofSeconds(30));
+            try {
+                return new boolean[]{taken, lock.isHeldByCurrentThread(), Thread.currentThread().isInterrupted()};
+            } finally {
+                if (taken) {
+                    lock.unlock();
+                }
+            }
+        });
+        await().atMost(Duration.ofSeconds(5)).until(() -> waiter.get() != null && lock.hasQueuedThread(waiter.get()));
+        // Still waiting - the interrupt pending on entry did not cut the wait short.
+        Thread.sleep(200);
+        assertThat(result.isDone()).isFalse();
+
+        lock.unlock();
+        assertThat(result.get(5, TimeUnit.SECONDS)).containsExactly(true, true, true);
+    }
+
+    @Test
+    void try_lock_ends_the_wait_without_the_lock_on_an_interrupt_during_it_and_sets_the_interrupt_again() throws Exception {
+        lock.lock();
+        var waiter = new AtomicReference<Thread>();
+        var result = waiters.submit(() -> {
+            waiter.set(Thread.currentThread());
+            var taken = Locks.tryLockDeferringPendingInterrupt(lock, Duration.ofSeconds(30));
+            return new boolean[]{taken, lock.isHeldByCurrentThread(), Thread.currentThread().isInterrupted()};
+        });
+        await().atMost(Duration.ofSeconds(5)).until(() -> waiter.get() != null && lock.hasQueuedThread(waiter.get()));
+
+        waiter.get().interrupt();
+        // Well inside the 30 s wait: the interrupt ended it.
+        assertThat(result.get(5, TimeUnit.SECONDS)).containsExactly(false, false, true);
+        lock.unlock();
+    }
+
+    @Test
+    void try_lock_returns_false_once_the_wait_runs_out() throws Exception {
+        lock.lock();
+        var result = waiters.submit(() -> {
+            var started = System.nanoTime();
+            var taken   = Locks.tryLockDeferringPendingInterrupt(lock, Duration.ofMillis(100));
+            return new Object[]{taken, Thread.currentThread().isInterrupted(), Duration.ofNanos(System.nanoTime() - started).toMillis() >= 100};
+        });
+
+        assertThat(result.get(5, TimeUnit.SECONDS)).containsExactly(false, false, true);
+        lock.unlock();
+    }
+
+    @Test
+    void try_lock_takes_a_free_lock_with_a_wait_too_long_to_count_in_nanoseconds() {
+        // Duration.toNanos() throws ArithmeticException beyond ~292 years; the wait saturates instead.
+        assertThat(Locks.tryLockDeferringPendingInterrupt(lock, Duration.ofSeconds(Long.MAX_VALUE))).isTrue();
+        try {
+            assertThat(lock.isHeldByCurrentThread()).isTrue();
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    @Test
+    void try_lock_rejects_a_missing_lock_or_a_missing_or_negative_wait() {
+        assertThatThrownBy(() -> Locks.tryLockDeferringPendingInterrupt(null, Duration.ofMillis(10))).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> Locks.tryLockDeferringPendingInterrupt(lock, null)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> Locks.tryLockDeferringPendingInterrupt(lock, Duration.ofMillis(-1))).isInstanceOf(IllegalArgumentException.class);
+        assertThat(lock.isLocked()).isFalse();
+    }
 }
