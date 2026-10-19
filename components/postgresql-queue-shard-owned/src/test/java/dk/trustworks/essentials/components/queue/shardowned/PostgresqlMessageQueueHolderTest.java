@@ -202,6 +202,9 @@ class PostgresqlMessageQueueHolderTest {
         return queue;
     }
 
+    // DataSource's own loader, not the thread's context loader: a proxy class must be defined in a loader that sees
+    // its interface, which the context loader need not.
+    @SuppressWarnings("PMD.UseProperClassLoader")
     private static PostgresqlMessageQueue queue() {
         // Nothing here touches the database: the holder is moved directly.
         var noDatabase = (DataSource) Proxy.newProxyInstance(DataSource.class.getClassLoader(), new Class<?>[]{DataSource.class},
