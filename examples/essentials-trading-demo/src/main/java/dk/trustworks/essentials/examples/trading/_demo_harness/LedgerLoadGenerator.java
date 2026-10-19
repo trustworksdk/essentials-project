@@ -93,11 +93,13 @@ public class LedgerLoadGenerator implements DisposableBean {
      * @param hotSharePercent the share of all cycles that go to the {@code hotAccounts} first accounts
      * @param threads         DIRECT: sending threads. ORDERED: unused — the inbox's consumers are fixed at startup
      *                        ({@code trading-demo.ledger-load.inbox-consumers})
+     * @param producers       ORDERED: enqueueing threads. Accounts are partitioned across them by index, so every
+     *                        account's commands still come from exactly one producer, numbered in commit order
      */
-    public record Settings(Mode mode, int accounts, int cycles, int hotAccounts, int hotSharePercent, int threads) {
+    public record Settings(Mode mode, int accounts, int cycles, int hotAccounts, int hotSharePercent, int threads, int producers) {
         public Settings {
             requireNonNull(mode, "No mode provided");
-            if (accounts < 1 || cycles < 1 || threads < 1 || hotAccounts < 0 || hotAccounts > accounts || hotSharePercent < 0 || hotSharePercent > 100) {
+            if (accounts < 1 || cycles < 1 || threads < 1 || producers < 1 || hotAccounts < 0 || hotAccounts > accounts || hotSharePercent < 0 || hotSharePercent > 100) {
                 throw new IllegalArgumentException("Invalid settings: " + accounts + " accounts, " + cycles + " cycles, " + hotAccounts + " hot at "
                                                    + hotSharePercent + "%, " + threads + " threads");
             }
@@ -252,6 +254,7 @@ public class LedgerLoadGenerator implements DisposableBean {
         final List<AccountId>          accountIds     = new ArrayList<>();
         final List<List<Object>>       cycles         = new ArrayList<>();
         final List<AccountId>          cycleAccounts  = new ArrayList<>();
+        final List<Integer>            cycleAccountIndexes = new ArrayList<>();
         final ConcurrentLinkedQueue<Long> latenciesNanos = new ConcurrentLinkedQueue<>();
         final AtomicLong handled   = new AtomicLong();
         final AtomicLong conflicts = new AtomicLong();
@@ -287,6 +290,7 @@ public class LedgerLoadGenerator implements DisposableBean {
                 var holdId    = HoldId.of(runId + "-H-" + c);
                 var execution = ExecutionId.of(runId + "-X-" + c);
                 cycleAccounts.add(accountId);
+                cycleAccountIndexes.add(index);
                 cycles.add(List.of(new HoldFunds(accountId, holdId, HoldPurpose.ORDER, HOLD),
                                    new BookTrade(accountId, execution, INSTRUMENT, TradeSide.BUY, Quantity.of(10), PRICE, today, today.plusDays(1), holdId, null),
                                    new ReleaseHold(accountId, holdId),
@@ -296,18 +300,47 @@ public class LedgerLoadGenerator implements DisposableBean {
         }
 
         /**
-         * One producer thread, so each account's key order is numbered in the order it is committed — the rule the
-         * shard-owned engine's ordered lane depends on (see this package's {@code CLAUDE.md}).
+         * {@code producers} threads, each owning the accounts whose index falls in its partition. Every account's key
+         * order is therefore numbered by one thread in the order it commits — the rule the shard-owned engine's
+         * ordered lane depends on (see this package's {@code CLAUDE.md}) — while partitions enqueue in parallel.
          */
         void driveOrdered() throws InterruptedException {
-            var target  = inbox();
+            var target     = inbox();
+            var producers  = Math.min(settings.producers(), settings.accounts());
+            var partitions = new ArrayList<List<Integer>>();
+            for (var p = 0; p < producers; p++) {
+                partitions.add(new ArrayList<>());
+            }
+            for (var c = 0; c < cycles.size(); c++) {
+                partitions.get(cycleAccountIndexes.get(c) % producers).add(c);
+            }
+            var pool    = Executors.newFixedThreadPool(producers, Thread.ofPlatform().name("ledger-load-producer-", 0).factory());
             var started = System.nanoTime();
-            var order   = new HashMap<AccountId, Long>();
-            for (var from = 0; from < cycles.size(); from += ENQUEUE_BATCH / 4) {
-                var to = Math.min(cycles.size(), from + ENQUEUE_BATCH / 4);
+            try {
+                var done = new ArrayList<Future<?>>();
+                for (var partition : partitions) {
+                    done.add(pool.submit(() -> enqueue(target, partition)));
+                }
+                for (var future : done) {
+                    future.get();
+                }
+            } catch (ExecutionException e) {
+                throw new IllegalStateException("Enqueueing failed", e.getCause());
+            } finally {
+                pool.shutdownNow();
+            }
+            enqueueMs = millisSince(started);
+            awaitHandled(started);
+        }
+
+        private void enqueue(Inbox target, List<Integer> cycleIndexes) {
+            var order = new HashMap<AccountId, Long>();
+            for (var from = 0; from < cycleIndexes.size(); from += ENQUEUE_BATCH / 4) {
+                var to        = Math.min(cycleIndexes.size(), from + ENQUEUE_BATCH / 4);
                 var batchFrom = from;
                 unitOfWorkFactory.usingUnitOfWork(() -> {
-                    for (var c = batchFrom; c < to; c++) {
+                    for (var i = batchFrom; i < to; i++) {
+                        var c         = cycleIndexes.get(i);
                         var accountId = cycleAccounts.get(c);
                         for (var command : cycles.get(c)) {
                             var next = order.merge(accountId, 1L, Long::sum) - 1;
@@ -316,8 +349,6 @@ public class LedgerLoadGenerator implements DisposableBean {
                     }
                 });
             }
-            enqueueMs = millisSince(started);
-            awaitHandled(started);
         }
 
         void driveDirect() throws InterruptedException {

@@ -26,7 +26,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 /**
  * {@code /api/admin/ledger-load}: start a run and read its result. Operator only, like every harness endpoint.
  * <pre>
- * POST /api/admin/ledger-load/start?mode=ORDERED&amp;accounts=1000&amp;cycles=20000&amp;hotAccounts=10&amp;hotSharePercent=50&amp;threads=8
+ * POST /api/admin/ledger-load/start?mode=ORDERED&amp;accounts=1000&amp;cycles=20000&amp;hotAccounts=10&amp;hotSharePercent=50&amp;threads=8&amp;producers=4
  * GET  /api/admin/ledger-load
  * </pre>
  */
@@ -45,8 +45,9 @@ public class LedgerLoadController {
                                       @RequestParam(defaultValue = "20000") int cycles,
                                       @RequestParam(defaultValue = "10") int hotAccounts,
                                       @RequestParam(defaultValue = "50") int hotSharePercent,
-                                      @RequestParam(defaultValue = "8") int threads) {
-        return generator.start(new LedgerLoadGenerator.Settings(mode, accounts, cycles, hotAccounts, hotSharePercent, threads));
+                                      @RequestParam(defaultValue = "8") int threads,
+                                      @RequestParam(defaultValue = "4") int producers) {
+        return generator.start(new LedgerLoadGenerator.Settings(mode, accounts, cycles, hotAccounts, hotSharePercent, threads, producers));
     }
 
     @GetMapping

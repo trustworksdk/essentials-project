@@ -61,7 +61,7 @@ class LedgerLoadGeneratorIT {
 
     @Test
     void both_modes_handle_every_command_and_only_the_direct_one_can_conflict() throws Exception {
-        generator.start(new LedgerLoadGenerator.Settings(LedgerLoadGenerator.Mode.ORDERED, 10, 200, 2, 80, 4));
+        generator.start(new LedgerLoadGenerator.Settings(LedgerLoadGenerator.Mode.ORDERED, 10, 200, 2, 80, 4, 3));
         var ordered = generator.awaitResult(Duration.ofMinutes(3));
 
         assertThat(ordered.state()).as(String.valueOf(ordered)).isEqualTo("DONE");
@@ -70,7 +70,7 @@ class LedgerLoadGeneratorIT {
         assertThat(ordered.conflicts()).isZero();
         assertThat(ordered.viewCatchUpMs()).isGreaterThanOrEqualTo(0);
 
-        generator.start(new LedgerLoadGenerator.Settings(LedgerLoadGenerator.Mode.DIRECT, 10, 200, 2, 80, 8));
+        generator.start(new LedgerLoadGenerator.Settings(LedgerLoadGenerator.Mode.DIRECT, 10, 200, 2, 80, 8, 1));
         var direct = generator.awaitResult(Duration.ofMinutes(3));
 
         // Racing cycles on two hot accounts: conflicts are expected, and a command can exhaust its retries. That is the
