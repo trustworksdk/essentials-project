@@ -1588,17 +1588,27 @@ public final class PostgresqlMessageQueue implements MessageQueue {
      * ({@link Holder#canMoveTo}), else leave it where it is. Under {@link #handOver}, which this takes; a caller that reads
      * the holder and moves it as one step holds it already. Every move of the holder goes through here, so the rule lives
      * once, as {@link ShardOwnedQueue}'s {@code Run.advanceTo} keeps it for a run's phase.
-     *
-     * @return the holder before this call, so the caller can tell whether it moved it and from where
+     * <p>
+     * A move to where the holder stands is no move, and says nothing: a second stop that did not get the lock, or a second
+     * on the holder's own thread, asks for the {@link Holder#STOP_OWED} the first left. Any other move off the diagram is
+     * a bug in this queue's lifecycle - the caller goes on as though the holder had moved, so a stop it owed may never be
+     * done - and is logged at ERROR, naming the queue, both holders and, through the stack trace, the caller; the holder
+     * stays where it is, as {@code Run.advanceTo} leaves a phase. A caller whose move may rightly not apply (the end of an
+     * undo after a stop arrived, {@link #startEachOrUndo}) reads the holder first and asks only for a move it can make.
      */
-    Holder moveHolder(Holder target) {
+    void moveHolder(Holder target) {
         requireNonNull(target, "No target holder provided");
         synchronized (handOver) {
             var previous = holder;
             if (previous.canMoveTo(target)) {
                 holder = target;
+            } else if (previous != target) {
+                log.error("Instance {}: the holder of the lifecycle lock of queue {} was asked to move from {} to {}, which Holder's "
+                                  + "diagram has no edge for, and stays at {}. This is a bug in the queue's lifecycle: the caller "
+                                  + "goes on as though the holder had moved, and a stop it owes may never be done",
+                          instanceId, queueId, previous, target, previous,
+                          new IllegalStateException("Holder of queue " + queueId + " asked to move from " + previous + " to " + target));
             }
-            return previous;
         }
     }
 
@@ -2052,13 +2062,25 @@ public final class PostgresqlMessageQueue implements MessageQueue {
             }
         } catch (RuntimeException | Error e) {
             Exceptions.rethrowIfCriticalError(e);
-            var undoing = moveHolder(Holder.UNDOING_A_START) == Holder.STARTING;
+            boolean undoing;
+            synchronized (handOver) {
+                // Only from STARTING: a holder a stop has already reached (STOP_OWED, on this thread or another, during the
+                // starts) stops every consumer once its starts return, which is the undo and more.
+                undoing = holder == Holder.STARTING;
+                if (undoing) {
+                    moveHolder(Holder.UNDOING_A_START);
+                }
+            }
             try {
                 Exceptions.forEachCollectingFailures(startedHere, ShardOwnedQueue::stop, e);
             } finally {
                 if (undoing) {
-                    // Back to STARTING, unless a stop arriving meanwhile has moved it to STOP_OWED, which it then stays at.
-                    moveHolder(Holder.STARTING);
+                    synchronized (handOver) {
+                        // Back to STARTING, unless a stop arriving meanwhile has moved it to STOP_OWED, which it then stays at.
+                        if (holder == Holder.UNDOING_A_START) {
+                            moveHolder(Holder.STARTING);
+                        }
+                    }
                 }
             }
             throw e;

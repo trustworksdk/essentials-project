@@ -16,10 +16,14 @@
 
 package dk.trustworks.essentials.components.queue.shardowned;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import dk.trustworks.essentials.components.queue.shardowned.PostgresqlMessageQueue.Holder;
-import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.*;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.slf4j.LoggerFactory;
 
 import javax.sql.DataSource;
 import java.lang.reflect.Proxy;
@@ -30,11 +34,29 @@ import static org.assertj.core.api.Assertions.*;
 
 /**
  * The queue's lifecycle {@link Holder} moves only along the edges of the diagram in {@code Holder}'s javadoc, and the
- * rule lives once, in {@link PostgresqlMessageQueue#moveHolder}: any other move leaves the holder where it stands. A
- * stop arriving while the holder does the stop it owed is owed again - this queue's stop without the lock stops every
- * consumer itself, and the holder stops them all again after it - where the adapter's consumer owes nothing further.
+ * rule lives once, in {@link PostgresqlMessageQueue#moveHolder}: any other move leaves the holder where it stands, and is
+ * logged at ERROR, as the bug in the queue's lifecycle it is; a move to where the holder stands is no move and says
+ * nothing. A stop arriving while the holder does the stop it owed is owed again - this queue's stop without the lock
+ * stops every consumer itself, and the holder stops them all again after it - where the adapter's consumer owes nothing
+ * further.
  */
 class PostgresqlMessageQueueHolderTest {
+
+    private ListAppender<ILoggingEvent>   logged;
+    private ch.qos.logback.classic.Logger queueLogger;
+
+    @BeforeEach
+    void captureLog() {
+        logged = new ListAppender<>();
+        logged.start();
+        queueLogger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(PostgresqlMessageQueue.class);
+        queueLogger.addAppender(logged);
+    }
+
+    @AfterEach
+    void releaseLog() {
+        queueLogger.detachAppender(logged);
+    }
 
     private static final Map<Holder, Set<Holder>> EDGES = Map.of(
             NONE, EnumSet.of(STARTING, STOPPING),
@@ -57,17 +79,56 @@ class PostgresqlMessageQueueHolderTest {
 
     @ParameterizedTest
     @EnumSource(Holder.class)
-    void the_holder_moves_only_along_the_diagrams_edges_and_reports_where_it_was(Holder start) {
+    void the_holder_moves_only_along_the_diagrams_edges_and_any_other_move_is_logged_at_error(Holder start) {
         for (var target : Holder.values()) {
             var queue = queueHeldBy(start);
+            logged.list.clear();
 
-            var was = queue.moveHolder(target);
+            queue.moveHolder(target);
 
-            assertThat(was).isEqualTo(start);
+            var onTheDiagram = EDGES.get(start).contains(target);
             assertThat(queue.holder()).as("%s asked for %s", start, target)
-                                      .isEqualTo(EDGES.get(start).contains(target) ? target : start);
-            assertThat(start.canMoveTo(target)).as("%s.canMoveTo(%s)", start, target).isEqualTo(EDGES.get(start).contains(target));
+                                      .isEqualTo(onTheDiagram ? target : start);
+            assertThat(start.canMoveTo(target)).as("%s.canMoveTo(%s)", start, target).isEqualTo(onTheDiagram);
+            if (onTheDiagram || target == start) {
+                assertThat(logged.list).as("%s asked for %s", start, target).isEmpty();
+            } else {
+                assertThat(logged.list).as("%s asked for %s", start, target).singleElement().satisfies(event -> {
+                    assertThat(event.getLevel()).isEqualTo(Level.ERROR);
+                    assertThat(event.getFormattedMessage()).contains("holder-test", "from " + start + " to " + target);
+                    assertThat(event.getThrowableProxy()).as("the stack naming the caller").isNotNull();
+                });
+            }
         }
+    }
+
+    @Test
+    void an_off_diagram_move_from_a_start_to_a_stop_is_logged_at_error() {
+        var queue = queueHeldBy(STARTING);
+        logged.list.clear();
+
+        queue.moveHolder(STOPPING);
+
+        assertThat(queue.holder()).isEqualTo(STARTING);
+        assertThat(logged.list).singleElement().satisfies(event -> {
+            assertThat(event.getLevel()).isEqualTo(Level.ERROR);
+            assertThat(event.getFormattedMessage()).contains("from STARTING to STOPPING");
+        });
+    }
+
+    /**
+     * A second stop that does not get the lock, or a second on the holder's own thread, asks for the {@link Holder#STOP_OWED}
+     * the first left: no move, and nothing wrong.
+     */
+    @Test
+    void a_second_owed_stop_is_no_move_and_logs_nothing() {
+        var queue = queueHeldBy(STOP_OWED);
+        logged.list.clear();
+
+        queue.moveHolder(STOP_OWED);
+
+        assertThat(queue.holder()).isEqualTo(STOP_OWED);
+        assertThat(logged.list).isEmpty();
     }
 
     @Test
@@ -92,7 +153,9 @@ class PostgresqlMessageQueueHolderTest {
 
     /**
      * A stop arriving while a failed start stops what it started is owed, as during the starts, and the end of that undo
-     * does not take it back: there is no edge from {@link Holder#STOP_OWED} to {@link Holder#STARTING}.
+     * does not take it back: there is no edge from {@link Holder#STOP_OWED} to {@link Holder#STARTING}, so the end of the
+     * undo moves the holder back only from {@link Holder#UNDOING_A_START} ({@code startEachOrUndo}), and a move asked for
+     * regardless is the bug it is logged as.
      */
     @Test
     void a_stop_arriving_while_a_failed_start_is_undone_stays_owed_once_the_undo_ends() {
@@ -102,6 +165,7 @@ class PostgresqlMessageQueueHolderTest {
         queue.moveHolder(STARTING);
 
         assertThat(queue.holder()).isEqualTo(STOP_OWED);
+        assertThat(logged.list).singleElement().satisfies(event -> assertThat(event.getFormattedMessage()).contains("from STOP_OWED to STARTING"));
     }
 
     /**
