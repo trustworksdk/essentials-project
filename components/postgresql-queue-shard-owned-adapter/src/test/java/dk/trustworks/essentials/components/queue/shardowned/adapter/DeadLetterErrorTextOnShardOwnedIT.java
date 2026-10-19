@@ -52,7 +52,7 @@ class DeadLetterErrorTextOnShardOwnedIT {
 
     private HikariDataSource        dataSource;
     private JdbiUnitOfWorkFactory   unitOfWorkFactory;
-    private TestMessageQueues       queues;
+    private RegisteredMessageQueues queues;
     private ShardOwnedDurableQueues durableQueues;
 
     @BeforeEach
@@ -68,7 +68,7 @@ class DeadLetterErrorTextOnShardOwnedIT {
         ShardOwnedSchema.recreate(dataSource);
         ShardOwnedSchema.registerQueue(dataSource, engineName(QUEUE), 2);
 
-        queues = new TestMessageQueues(dataSource);
+        queues = new RegisteredMessageQueues(dataSource);
         durableQueues = ShardOwnedDurableQueues.builder()
                                                .setQueues(queues)
                                                .setJsonSerializer(EssentialsObjectMappers.createJSONSerializer())
@@ -129,13 +129,13 @@ class DeadLetterErrorTextOnShardOwnedIT {
         return dk.trustworks.essentials.components.queue.shardowned.spi.QueueName.of(queueName.toString());
     }
 
-    private static final class TestMessageQueues
+    private static final class RegisteredMessageQueues
             implements dk.trustworks.essentials.components.queue.shardowned.spi.MessageQueues, AutoCloseable {
         private final javax.sql.DataSource dataSource;
         private final Map<dk.trustworks.essentials.components.queue.shardowned.spi.QueueName,
                 dk.trustworks.essentials.components.queue.shardowned.PostgresqlMessageQueue> built = new LinkedHashMap<>();
 
-        TestMessageQueues(javax.sql.DataSource dataSource) {
+        RegisteredMessageQueues(javax.sql.DataSource dataSource) {
             this.dataSource = dataSource;
         }
 

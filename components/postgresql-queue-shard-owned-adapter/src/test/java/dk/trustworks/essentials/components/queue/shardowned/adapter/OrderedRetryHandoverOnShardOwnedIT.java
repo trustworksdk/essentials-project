@@ -69,7 +69,7 @@ class OrderedRetryHandoverOnShardOwnedIT {
      * One application instance: its own pool, unit of work factory, engine queues and {@code DurableQueues}.
      */
     private record Instance(String id, HikariDataSource dataSource, JdbiUnitOfWorkFactory unitOfWorkFactory,
-                            TestMessageQueues queues, ShardOwnedDurableQueues durableQueues) {
+                            RegisteredMessageQueues queues, ShardOwnedDurableQueues durableQueues) {
         void close() {
             try {
                 durableQueues.stop();
@@ -106,7 +106,7 @@ class OrderedRetryHandoverOnShardOwnedIT {
     private Instance instance(String id) {
         var dataSource        = dataSource();
         var unitOfWorkFactory = new JdbiUnitOfWorkFactory(Jdbi.create(dataSource));
-        var queues            = new TestMessageQueues(dataSource, id);
+        var queues            = new RegisteredMessageQueues(dataSource, id);
         var durableQueues = ShardOwnedDurableQueues.builder()
                                                    .setQueues(queues)
                                                    .setJsonSerializer(EssentialsObjectMappers.createJSONSerializer())
@@ -230,13 +230,13 @@ class OrderedRetryHandoverOnShardOwnedIT {
     /**
      * Builds each queue with a one-second lease, so a crashed instance's units are takeable in about a second.
      */
-    private static final class TestMessageQueues
+    private static final class RegisteredMessageQueues
             implements dk.trustworks.essentials.components.queue.shardowned.spi.MessageQueues, AutoCloseable {
         private final javax.sql.DataSource dataSource;
         private final String               instanceId;
         private final Map<dk.trustworks.essentials.components.queue.shardowned.spi.QueueName, PostgresqlMessageQueue> built = new LinkedHashMap<>();
 
-        TestMessageQueues(javax.sql.DataSource dataSource, String instanceId) {
+        RegisteredMessageQueues(javax.sql.DataSource dataSource, String instanceId) {
             this.dataSource = dataSource;
             this.instanceId = instanceId;
         }

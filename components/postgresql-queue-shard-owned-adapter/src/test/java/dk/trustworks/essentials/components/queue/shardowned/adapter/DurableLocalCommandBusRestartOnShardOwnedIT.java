@@ -62,7 +62,7 @@ class DurableLocalCommandBusRestartOnShardOwnedIT {
     static PostgreSQLContainer postgres = new PostgreSQLContainer("postgres:17.5-bookworm");
 
     private HikariDataSource              dataSource;
-    private TestMessageQueues             queues;
+    private RegisteredMessageQueues       queues;
     private ShardOwnedDurableQueues       durableQueues;
     private DurableLocalCommandBus        commandBus;
     private ListAppender<ILoggingEvent>   logged;
@@ -86,7 +86,7 @@ class DurableLocalCommandBusRestartOnShardOwnedIT {
         engineLogger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(PostgresqlMessageQueue.class);
         engineLogger.addAppender(logged);
 
-        queues = new TestMessageQueues(dataSource);
+        queues = new RegisteredMessageQueues(dataSource);
         durableQueues = ShardOwnedDurableQueues.builder()
                                                .setQueues(queues)
                                                .setJsonSerializer(EssentialsObjectMappers.createJSONSerializer())
@@ -194,12 +194,12 @@ class DurableLocalCommandBusRestartOnShardOwnedIT {
     record PlaceOrder(String orderId) {
     }
 
-    private static final class TestMessageQueues
+    private static final class RegisteredMessageQueues
             implements dk.trustworks.essentials.components.queue.shardowned.spi.MessageQueues, AutoCloseable {
         private final javax.sql.DataSource dataSource;
         private final Map<dk.trustworks.essentials.components.queue.shardowned.spi.QueueName, PostgresqlMessageQueue> built = new LinkedHashMap<>();
 
-        TestMessageQueues(javax.sql.DataSource dataSource) {
+        RegisteredMessageQueues(javax.sql.DataSource dataSource) {
             this.dataSource = dataSource;
         }
 

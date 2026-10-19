@@ -69,7 +69,7 @@ class EnqueueTransactionBoundaryOnShardOwnedIT {
     private HikariDataSource                            dataSource;
     private TransactionTemplate                         transactionTemplate;
     private SpringTransactionAwareJdbiUnitOfWorkFactory unitOfWorkFactory;
-    private TestMessageQueues                           queues;
+    private RegisteredMessageQueues                     queues;
     private ShardOwnedDurableQueues                     durableQueues;
     private PostgresqlFencedLockManager                 lockManager;
 
@@ -91,7 +91,7 @@ class EnqueueTransactionBoundaryOnShardOwnedIT {
         ShardOwnedSchema.registerQueue(dataSource, engineName(OUTBOX_QUEUE), 4);
         ShardOwnedSchema.registerQueue(dataSource, engineName(PLAIN_QUEUE), 4);
 
-        queues = new TestMessageQueues(dataSource);
+        queues = new RegisteredMessageQueues(dataSource);
         durableQueues = ShardOwnedDurableQueues.builder()
                                                .setQueues(queues)
                                                .setJsonSerializer(EssentialsObjectMappers.createJSONSerializer())
@@ -307,13 +307,13 @@ class EnqueueTransactionBoundaryOnShardOwnedIT {
     record OrderPlaced(String id, int amount) {
     }
 
-    private static final class TestMessageQueues
+    private static final class RegisteredMessageQueues
             implements dk.trustworks.essentials.components.queue.shardowned.spi.MessageQueues, AutoCloseable {
         private final javax.sql.DataSource dataSource;
         private final Map<dk.trustworks.essentials.components.queue.shardowned.spi.QueueName,
                 dk.trustworks.essentials.components.queue.shardowned.PostgresqlMessageQueue> built = new LinkedHashMap<>();
 
-        TestMessageQueues(javax.sql.DataSource dataSource) {
+        RegisteredMessageQueues(javax.sql.DataSource dataSource) {
             this.dataSource = dataSource;
         }
 
