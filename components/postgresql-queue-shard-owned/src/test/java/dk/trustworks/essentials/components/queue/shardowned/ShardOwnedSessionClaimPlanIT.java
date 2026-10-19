@@ -23,6 +23,7 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
 
 import java.sql.*;
 
+import static dk.trustworks.essentials.components.queue.shardowned.SingleRowQueries.firstRow;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assumptions.assumeThat;
 
@@ -129,10 +130,7 @@ class ShardOwnedSessionClaimPlanIT {
                 }
                 statement.setInt(index, 32);
                 try (var resultSet = statement.executeQuery()) {
-                    if (!resultSet.next()) {
-                        throw new IllegalStateException("EXPLAIN ANALYZE of the claim returned no plan row");
-                    }
-                    return resultSet.getString(1);
+                    return firstRow(resultSet, "EXPLAIN ANALYZE of the claim").getString(1);
                 }
             } finally {
                 connection.rollback();

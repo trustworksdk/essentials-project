@@ -22,6 +22,7 @@ import org.junit.jupiter.api.*;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
+import static dk.trustworks.essentials.components.queue.shardowned.SingleRowQueries.queryForInt;
 import static org.assertj.core.api.Assertions.*;
 
 /**
@@ -206,14 +207,7 @@ class ShardOwnedWatermarkPrerequisiteIT {
     }
 
     private int countOf(String sql) throws Exception {
-        try (var connection = superuser.getConnection();
-             var statement = connection.createStatement();
-             var resultSet = statement.executeQuery(sql)) {
-            if (!resultSet.next()) {
-                throw new IllegalStateException("Counting with \"" + sql + "\" returned no row");
-            }
-            return resultSet.getInt(1);
-        }
+        return queryForInt(superuser, "Counting with \"" + sql + "\"", sql);
     }
 
     private HikariDataSource pool(String user, String password) {

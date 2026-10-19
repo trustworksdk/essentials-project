@@ -18,6 +18,8 @@ package dk.trustworks.essentials.components.queue.shardowned;
 
 import javax.sql.DataSource;
 
+import static dk.trustworks.essentials.components.queue.shardowned.SingleRowQueries.queryForLong;
+
 /**
  * Makes the database refuse every release of a lease row on one lane, the way a database error would, and counts each
  * refusal per queue and unit - for the tests of what the engine does when a release fails.
@@ -84,14 +86,8 @@ final class LeaseReleaseRefusals {
      * turned on.
      */
     static long releasesRefused(DataSource dataSource, short queueId, int unit) throws Exception {
-        try (var connection = dataSource.getConnection(); var statement = connection.createStatement();
-             var resultSet = statement.executeQuery("SELECT CASE WHEN is_called THEN last_value ELSE 0 END FROM lease_release_refusals_q"
-                                                            + queueId + "_" + unit)) {
-            if (!resultSet.next()) {
-                throw new IllegalStateException("Reading the refusal counter of queue " + queueId + " unit " + unit + " returned no row");
-            }
-            return resultSet.getLong(1);
-        }
+        return queryForLong(dataSource, "Reading the refusal counter of queue " + queueId + " unit " + unit,
+                            "SELECT CASE WHEN is_called THEN last_value ELSE 0 END FROM lease_release_refusals_q" + queueId + "_" + unit);
     }
 
     /**

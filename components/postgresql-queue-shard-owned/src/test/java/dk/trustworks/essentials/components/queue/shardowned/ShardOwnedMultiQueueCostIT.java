@@ -27,6 +27,7 @@ import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 
+import static dk.trustworks.essentials.components.queue.shardowned.SingleRowQueries.queryForLong;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -131,15 +132,8 @@ class ShardOwnedMultiQueueCostIT {
 
     /** Transactions committed against this database — a fair proxy for queries, since every read runs autocommit. */
     private long transactions() throws Exception {
-        try (var connection = dataSource.getConnection();
-             var statement = connection.prepareStatement(
-                     "SELECT xact_commit + xact_rollback FROM pg_stat_database WHERE datname = current_database()");
-             var resultSet = statement.executeQuery()) {
-            if (!resultSet.next()) {
-                throw new IllegalStateException("Reading the transaction count of the current database from pg_stat_database returned no row");
-            }
-            return resultSet.getLong(1);
-        }
+        return queryForLong(dataSource, "Reading the transaction count of the current database from pg_stat_database",
+                            "SELECT xact_commit + xact_rollback FROM pg_stat_database WHERE datname = current_database()");
     }
 
     private static ShardOwnerSettings settings() {

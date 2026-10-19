@@ -33,6 +33,7 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import static dk.trustworks.essentials.components.queue.shardowned.SingleRowQueries.queryForLong;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -537,14 +538,7 @@ class ShardOwnedTakeoverAttemptsIT {
     }
 
     private long countOccupiedShards() throws Exception {
-        try (var connection = dataSource.getConnection();
-             var statement = connection.createStatement();
-             var resultSet = statement.executeQuery("SELECT count(DISTINCT shard) FROM " + ShardOwnedSchema.UNORDERED_TABLE)) {
-            if (!resultSet.next()) {
-                throw new IllegalStateException("Counting the occupied shards returned no row");
-            }
-            return resultSet.getLong(1);
-        }
+        return queryForLong(dataSource, "Counting the occupied shards", "SELECT count(DISTINCT shard) FROM " + ShardOwnedSchema.UNORDERED_TABLE);
     }
 
     private void enqueueBacklog(int messages) throws Exception {

@@ -30,6 +30,7 @@ import java.util.*;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 
+import static dk.trustworks.essentials.components.queue.shardowned.SingleRowQueries.queryForInt;
 import static org.assertj.core.api.Assertions.*;
 
 /**
@@ -417,17 +418,9 @@ class ShardOwnedDatabaseFailureIT {
      * Terminate every backend except this test's own connection.
      */
     private int terminateOtherBackends() throws Exception {
-        try (var connection = dataSource.getConnection();
-             var statement = connection.prepareStatement(
-                     "SELECT count(pg_terminate_backend(pid)) FROM pg_stat_activity"
-                     + " WHERE datname = current_database() AND pid <> pg_backend_pid()")) {
-            try (var resultSet = statement.executeQuery()) {
-                if (!resultSet.next()) {
-                    throw new IllegalStateException("Terminating the other backends returned no row");
-                }
-                return resultSet.getInt(1);
-            }
-        }
+        return queryForInt(dataSource, "Terminating the other backends",
+                           "SELECT count(pg_terminate_backend(pid)) FROM pg_stat_activity"
+                           + " WHERE datname = current_database() AND pid <> pg_backend_pid()");
     }
 
     private static void docker(String command) throws Exception {

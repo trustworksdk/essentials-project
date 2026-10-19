@@ -34,6 +34,7 @@ import java.util.*;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.*;
 
+import static dk.trustworks.essentials.components.queue.shardowned.SingleRowQueries.*;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -429,28 +430,13 @@ class ShardOwnedRebalanceIT {
      * How many unordered lease releases the trigger has refused.
      */
     private long releaseAttempts() throws Exception {
-        try (var connection = dataSource.getConnection();
-             var statement = connection.createStatement();
-             var resultSet = statement.executeQuery("SELECT CASE WHEN is_called THEN last_value ELSE 0 END FROM release_attempts")) {
-            if (!resultSet.next()) {
-                throw new IllegalStateException("Reading the release_attempts sequence returned no row");
-            }
-            return resultSet.getLong(1);
-        }
+        return queryForLong(dataSource, "Reading the release_attempts sequence",
+                            "SELECT CASE WHEN is_called THEN last_value ELSE 0 END FROM release_attempts");
     }
 
     private int unitsLeasedTo(String instanceId) throws Exception {
-        try (var connection = dataSource.getConnection();
-             var statement = connection.prepareStatement("SELECT count(*) FROM " + ShardOwnedSchema.LEASE_TABLE
-                                                                 + " WHERE queue_id = ? AND lane = 'unordered' AND owner = ?")) {
-            statement.setShort(1, QUEUE_ID);
-            statement.setString(2, instanceId);
-            try (var resultSet = statement.executeQuery()) {
-                if (!resultSet.next()) {
-                    throw new IllegalStateException("Counting the unordered lease rows held by " + instanceId + " returned no row");
-                }
-                return resultSet.getInt(1);
-            }
-        }
+        return queryForInt(dataSource, "Counting the unordered lease rows held by " + instanceId,
+                           "SELECT count(*) FROM " + ShardOwnedSchema.LEASE_TABLE + " WHERE queue_id = ? AND lane = 'unordered' AND owner = ?",
+                           QUEUE_ID, instanceId);
     }
 }

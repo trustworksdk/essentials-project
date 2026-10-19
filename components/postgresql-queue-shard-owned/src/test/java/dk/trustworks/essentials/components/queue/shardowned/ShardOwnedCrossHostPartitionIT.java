@@ -34,6 +34,7 @@ import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.CopyOnWriteArrayList;
 
+import static dk.trustworks.essentials.components.queue.shardowned.SingleRowQueries.queryForInt;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -268,17 +269,8 @@ class ShardOwnedCrossHostPartitionIT {
     }
 
     private int shardsHeldBy(String instanceId) throws Exception {
-        try (var connection = dataSource.getConnection();
-             var statement = connection.prepareStatement(
-                     "SELECT count(*) FROM shard_queue_lease WHERE lane = 'unordered' AND owner = ?")) {
-            statement.setString(1, instanceId);
-            try (var resultSet = statement.executeQuery()) {
-                if (!resultSet.next()) {
-                    throw new IllegalStateException("Counting the unordered lease rows held by " + instanceId + " returned no row");
-                }
-                return resultSet.getInt(1);
-            }
-        }
+        return queryForInt(dataSource, "Counting the unordered lease rows held by " + instanceId,
+                           "SELECT count(*) FROM shard_queue_lease WHERE lane = 'unordered' AND owner = ?", instanceId);
     }
 
     private static long millisSince(long startNanos) {

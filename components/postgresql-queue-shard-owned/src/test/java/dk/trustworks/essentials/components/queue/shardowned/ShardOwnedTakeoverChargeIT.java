@@ -24,6 +24,7 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
 import java.sql.SQLException;
 
 import static dk.trustworks.essentials.components.queue.shardowned.ShardOwnedSchema.*;
+import static dk.trustworks.essentials.components.queue.shardowned.SingleRowQueries.queryForRow;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -277,18 +278,12 @@ class ShardOwnedTakeoverChargeIT {
     }
 
     private Long lease(String table, long seq) throws SQLException {
-        try (var connection = dataSource.getConnection();
-             var statement = connection.prepareStatement("SELECT lease FROM " + table + " WHERE queue_id = ? AND shard = ? AND seq = ?")) {
-            statement.setShort(1, QUEUE_ID);
-            statement.setInt(2, SHARD);
-            statement.setLong(3, seq);
-            try (var resultSet = statement.executeQuery()) {
-                if (!resultSet.next()) {
-                    throw new IllegalStateException("No row in " + table + " for queue " + QUEUE_ID + " shard " + SHARD + " seq " + seq);
-                }
-                var lease = resultSet.getLong(1);
-                return resultSet.wasNull() ? null : lease;
-            }
-        }
+        return queryForRow(dataSource, "Reading the lease of the " + table + " row of queue " + QUEUE_ID + " shard " + SHARD + " seq " + seq,
+                           "SELECT lease FROM " + table + " WHERE queue_id = ? AND shard = ? AND seq = ?",
+                           row -> {
+                               var lease = row.getLong(1);
+                               return row.wasNull() ? null : lease;
+                           },
+                           QUEUE_ID, SHARD, seq);
     }
 }

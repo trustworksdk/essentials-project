@@ -33,6 +33,7 @@ import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 
+import static dk.trustworks.essentials.components.queue.shardowned.SingleRowQueries.queryForLong;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -388,14 +389,7 @@ class ShardOwnedMultiProcessIT {
     }
 
     private long observedCount() throws SQLException {
-        try (var connection = dataSource.getConnection();
-             var statement = connection.createStatement();
-             var resultSet = statement.executeQuery("SELECT count(*) FROM shard_queue_observed")) {
-            if (!resultSet.next()) {
-                throw new IllegalStateException("Counting the shard_queue_observed rows returned no row");
-            }
-            return resultSet.getLong(1);
-        }
+        return queryForLong(dataSource, "Counting the shard_queue_observed rows", "SELECT count(*) FROM shard_queue_observed");
     }
 
     private Set<Long> distinctObservedValues() throws SQLException {

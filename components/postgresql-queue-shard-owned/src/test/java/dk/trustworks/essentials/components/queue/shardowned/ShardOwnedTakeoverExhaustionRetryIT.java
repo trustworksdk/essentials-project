@@ -33,6 +33,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.*;
 
 import static dk.trustworks.essentials.components.queue.shardowned.ShardOwnedSchema.*;
+import static dk.trustworks.essentials.components.queue.shardowned.SingleRowQueries.*;
 import static org.assertj.core.api.Assertions.*;
 import static org.awaitility.Awaitility.await;
 
@@ -714,18 +715,10 @@ class ShardOwnedTakeoverExhaustionRetryIT {
      * @return how many were signalled
      */
     private int terminateBackends(String applicationName) throws SQLException {
-        try (var connection = dataSource.getConnection();
-             var statement = connection.prepareStatement(
-                     "SELECT count(pg_terminate_backend(pid)) FROM pg_stat_activity"
-                             + " WHERE datname = current_database() AND application_name = ? AND pid <> pg_backend_pid()")) {
-            statement.setString(1, applicationName);
-            try (var resultSet = statement.executeQuery()) {
-                if (!resultSet.next()) {
-                    throw new IllegalStateException("Terminating the backends of " + applicationName + " returned no row");
-                }
-                return resultSet.getInt(1);
-            }
-        }
+        return queryForInt(dataSource, "Terminating the backends of " + applicationName,
+                           "SELECT count(pg_terminate_backend(pid)) FROM pg_stat_activity"
+                           + " WHERE datname = current_database() AND application_name = ? AND pid <> pg_backend_pid()",
+                           applicationName);
     }
 
     private ShardOwnerMetrics metrics() {
@@ -771,15 +764,8 @@ class ShardOwnedTakeoverExhaustionRetryIT {
     }
 
     private long deadLetterInsertRefusals() throws SQLException {
-        try (var connection = dataSource.getConnection();
-             var statement = connection.createStatement();
-             var result = statement.executeQuery(
-                     "SELECT CASE WHEN is_called THEN last_value ELSE 0 END FROM dead_letter_insert_refusals")) {
-            if (!result.next()) {
-                throw new IllegalStateException("Reading the dead_letter_insert_refusals sequence returned no row");
-            }
-            return result.getLong(1);
-        }
+        return queryForLong(dataSource, "Reading the dead_letter_insert_refusals sequence",
+                            "SELECT CASE WHEN is_called THEN last_value ELSE 0 END FROM dead_letter_insert_refusals");
     }
 
     private void insertOrdered(String key, long keyOrder, long seq, int attempts) throws SQLException {

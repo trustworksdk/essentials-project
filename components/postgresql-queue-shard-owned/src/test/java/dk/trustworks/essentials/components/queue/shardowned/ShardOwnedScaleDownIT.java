@@ -26,6 +26,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.concurrent.ConcurrentHashMap;
 
+import static dk.trustworks.essentials.components.queue.shardowned.SingleRowQueries.queryForInt;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -157,31 +158,14 @@ class ShardOwnedScaleDownIT {
     }
 
     private int liveInstances() throws Exception {
-        try (var connection = dataSource.getConnection();
-             var statement = connection.prepareStatement(
-                     "SELECT count(*) FROM " + ShardOwnedSchema.INSTANCE_TABLE
-                     + " WHERE queue_id = ? AND last_seen > now() - interval '3 seconds'")) {
-            statement.setShort(1, QUEUE_ID);
-            try (var resultSet = statement.executeQuery()) {
-                if (!resultSet.next()) {
-                    throw new IllegalStateException("Counting the live instance rows of queue " + QUEUE_ID + " returned no row");
-                }
-                return resultSet.getInt(1);
-            }
-        }
+        return queryForInt(dataSource, "Counting the live instance rows of queue " + QUEUE_ID,
+                           "SELECT count(*) FROM " + ShardOwnedSchema.INSTANCE_TABLE
+                           + " WHERE queue_id = ? AND last_seen > now() - interval '3 seconds'",
+                           QUEUE_ID);
     }
 
     private int totalInstanceRows() throws Exception {
-        try (var connection = dataSource.getConnection();
-             var statement = connection.prepareStatement(
-                     "SELECT count(*) FROM " + ShardOwnedSchema.INSTANCE_TABLE + " WHERE queue_id = ?")) {
-            statement.setShort(1, QUEUE_ID);
-            try (var resultSet = statement.executeQuery()) {
-                if (!resultSet.next()) {
-                    throw new IllegalStateException("Counting the instance rows of queue " + QUEUE_ID + " returned no row");
-                }
-                return resultSet.getInt(1);
-            }
-        }
+        return queryForInt(dataSource, "Counting the instance rows of queue " + QUEUE_ID,
+                           "SELECT count(*) FROM " + ShardOwnedSchema.INSTANCE_TABLE + " WHERE queue_id = ?", QUEUE_ID);
     }
 }

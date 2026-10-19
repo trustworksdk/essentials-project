@@ -28,6 +28,7 @@ import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
+import static dk.trustworks.essentials.components.queue.shardowned.SingleRowQueries.queryForInt;
 import static org.assertj.core.api.Assertions.*;
 
 /**
@@ -552,17 +553,8 @@ class ShardOwnedAdminSurfaceIT {
     }
 
     private int distinctShardsUsed(short queueId) throws Exception {
-        try (var connection = dataSource.getConnection();
-             var statement = connection.prepareStatement(
-                     "SELECT count(DISTINCT shard) FROM " + ShardOwnedSchema.UNORDERED_TABLE
-                     + " WHERE queue_id = ?")) {
-            statement.setShort(1, queueId);
-            try (var resultSet = statement.executeQuery()) {
-                if (!resultSet.next()) {
-                    throw new IllegalStateException("Counting the occupied shards of queue " + queueId + " returned no row");
-                }
-                return resultSet.getInt(1);
-            }
-        }
+        return queryForInt(dataSource, "Counting the occupied shards of queue " + queueId,
+                           "SELECT count(DISTINCT shard) FROM " + ShardOwnedSchema.UNORDERED_TABLE + " WHERE queue_id = ?",
+                           queueId);
     }
 }

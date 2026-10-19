@@ -28,6 +28,7 @@ import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
 
+import static dk.trustworks.essentials.components.queue.shardowned.SingleRowQueries.queryForInt;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -151,14 +152,8 @@ class ShardOwnedWatermarkXidWindowIT {
     }
 
     private boolean writerIsPausedInTrigger() throws Exception {
-        try (var connection = dataSource.getConnection();
-             var statement = connection.prepareStatement("SELECT count(*) FROM pg_stat_activity WHERE wait_event = 'PgSleep'");
-             var resultSet = statement.executeQuery()) {
-            if (!resultSet.next()) {
-                throw new IllegalStateException("Counting the backends sleeping in pg_sleep returned no row");
-            }
-            return resultSet.getInt(1) == 1;
-        }
+        return queryForInt(dataSource, "Counting the backends sleeping in pg_sleep",
+                           "SELECT count(*) FROM pg_stat_activity WHERE wait_event = 'PgSleep'") == 1;
     }
 
     private static String keyInUnit(int unit, int units) {

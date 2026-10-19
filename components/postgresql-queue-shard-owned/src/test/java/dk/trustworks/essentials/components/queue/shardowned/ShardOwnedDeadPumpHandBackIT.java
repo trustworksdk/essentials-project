@@ -35,6 +35,7 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
 
+import static dk.trustworks.essentials.components.queue.shardowned.SingleRowQueries.*;
 import static org.assertj.core.api.Assertions.*;
 
 /**
@@ -1201,19 +1202,9 @@ class ShardOwnedDeadPumpHandBackIT {
     }
 
     private long fenceOf(short queueId, String lane, int shard) throws Exception {
-        try (var connection = dataSource.getConnection();
-             var statement = connection.prepareStatement("SELECT fence FROM " + ShardOwnedSchema.LEASE_TABLE
-                                                                 + " WHERE queue_id = ? AND lane = ? AND shard = ?")) {
-            statement.setShort(1, queueId);
-            statement.setString(2, lane);
-            statement.setInt(3, shard);
-            try (var resultSet = statement.executeQuery()) {
-                if (!resultSet.next()) {
-                    throw new IllegalStateException("No lease row for queue " + queueId + " " + lane + " unit " + shard);
-                }
-                return resultSet.getLong(1);
-            }
-        }
+        return queryForLong(dataSource, "Reading the fence of the lease row of queue " + queueId + " " + lane + " unit " + shard,
+                            "SELECT fence FROM " + ShardOwnedSchema.LEASE_TABLE + " WHERE queue_id = ? AND lane = ? AND shard = ?",
+                            queueId, lane, shard);
     }
 
     private String ownerOf(String lane, int shard) throws Exception {
@@ -1221,19 +1212,9 @@ class ShardOwnedDeadPumpHandBackIT {
     }
 
     private String ownerOf(short queueId, String lane, int shard) throws Exception {
-        try (var connection = dataSource.getConnection();
-             var statement = connection.prepareStatement("SELECT owner FROM " + ShardOwnedSchema.LEASE_TABLE
-                                                                 + " WHERE queue_id = ? AND lane = ? AND shard = ?")) {
-            statement.setShort(1, queueId);
-            statement.setString(2, lane);
-            statement.setInt(3, shard);
-            try (var resultSet = statement.executeQuery()) {
-                if (!resultSet.next()) {
-                    throw new IllegalStateException("No lease row for queue " + queueId + " " + lane + " unit " + shard);
-                }
-                return resultSet.getString(1);
-            }
-        }
+        return queryForString(dataSource, "Reading the owner of the lease row of queue " + queueId + " " + lane + " unit " + shard,
+                              "SELECT owner FROM " + ShardOwnedSchema.LEASE_TABLE + " WHERE queue_id = ? AND lane = ? AND shard = ?",
+                              queueId, lane, shard);
     }
 
     /**
@@ -1261,18 +1242,9 @@ class ShardOwnedDeadPumpHandBackIT {
      * The rows {@code instanceId} has in {@link ShardOwnedSchema#INSTANCE_TABLE} for {@link #QUEUE_ID}: its cluster membership.
      */
     private int membershipRows(String instanceId) throws Exception {
-        try (var connection = dataSource.getConnection();
-             var statement = connection.prepareStatement("SELECT count(*) FROM " + ShardOwnedSchema.INSTANCE_TABLE
-                                                                 + " WHERE queue_id = ? AND instance_id = ?")) {
-            statement.setShort(1, QUEUE_ID);
-            statement.setString(2, instanceId);
-            try (var resultSet = statement.executeQuery()) {
-                if (!resultSet.next()) {
-                    throw new IllegalStateException("Counting the instance rows of " + instanceId + " returned no row");
-                }
-                return resultSet.getInt(1);
-            }
-        }
+        return queryForInt(dataSource, "Counting the instance rows of " + instanceId,
+                           "SELECT count(*) FROM " + ShardOwnedSchema.INSTANCE_TABLE + " WHERE queue_id = ? AND instance_id = ?",
+                           QUEUE_ID, instanceId);
     }
 
     /**
@@ -1293,19 +1265,9 @@ class ShardOwnedDeadPumpHandBackIT {
     }
 
     private int unitsOwnedBy(String lane, String instanceId) throws Exception {
-        try (var connection = dataSource.getConnection();
-             var statement = connection.prepareStatement("SELECT count(*) FROM " + ShardOwnedSchema.LEASE_TABLE
-                                                                 + " WHERE queue_id = ? AND lane = ? AND owner = ?")) {
-            statement.setShort(1, QUEUE_ID);
-            statement.setString(2, lane);
-            statement.setString(3, instanceId);
-            try (var resultSet = statement.executeQuery()) {
-                if (!resultSet.next()) {
-                    throw new IllegalStateException("Counting the " + lane + " lease rows held by " + instanceId + " returned no row");
-                }
-                return resultSet.getInt(1);
-            }
-        }
+        return queryForInt(dataSource, "Counting the " + lane + " lease rows held by " + instanceId,
+                           "SELECT count(*) FROM " + ShardOwnedSchema.LEASE_TABLE + " WHERE queue_id = ? AND lane = ? AND owner = ?",
+                           QUEUE_ID, lane, instanceId);
     }
 
     /**

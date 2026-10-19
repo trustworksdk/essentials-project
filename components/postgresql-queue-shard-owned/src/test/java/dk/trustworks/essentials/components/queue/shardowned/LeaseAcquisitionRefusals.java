@@ -18,6 +18,8 @@ package dk.trustworks.essentials.components.queue.shardowned;
 
 import javax.sql.DataSource;
 
+import static dk.trustworks.essentials.components.queue.shardowned.SingleRowQueries.queryForLong;
+
 /**
  * Makes the database refuse every acquisition of one unit's lease row by one instance, the way a database error would,
  * and counts each refusal - for the tests of what a heartbeat tick's acquire loop does when an acquire statement fails
@@ -60,12 +62,7 @@ final class LeaseAcquisitionRefusals {
      * How many acquisitions {@link #failLeaseAcquisitionsOf} has refused since it was last turned on.
      */
     static long acquisitionsRefused(DataSource dataSource) throws Exception {
-        try (var connection = dataSource.getConnection(); var statement = connection.createStatement();
-             var resultSet = statement.executeQuery("SELECT CASE WHEN is_called THEN last_value ELSE 0 END FROM lease_acquisition_refusals")) {
-            if (!resultSet.next()) {
-                throw new IllegalStateException("Reading the lease_acquisition_refusals sequence returned no row");
-            }
-            return resultSet.getLong(1);
-        }
+        return queryForLong(dataSource, "Reading the lease_acquisition_refusals sequence",
+                            "SELECT CASE WHEN is_called THEN last_value ELSE 0 END FROM lease_acquisition_refusals");
     }
 }
