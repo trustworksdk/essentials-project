@@ -264,3 +264,29 @@ What it shows:
 
 Next measurements: parallel producers partitioned by account (keeping per-key commit order), 50 000+ cycles, and the
 views under a key-partitioned processor if EF-2 is built.
+
+### Parallel producers, 2026-10-19 — and an ordering defect they exposed
+
+Two instances, `GlobalCompetingConsumers`, 1 000 accounts, 5 000 cycles, one sample each:
+
+| Producers | Hot share | Enqueue | Drain | Commands/s | View catch-up |
+|---|---|---|---|---|---|
+| 1 | 50 % | 18.2 s | 19.8 s | 1 010 | 17.0 s |
+| 4 | 50 % | 5.3 s | 14.9 s | 1 339 | 29.6 s |
+| 8 | 50 % | 3.7 s | 13.1 s | 1 531 | 23.4 s |
+| 8 | 0 % | 3.4 s | 15.0 s | 1 333 | 17.7 s |
+| 8 | 10 % | 2.2 s | 12.1 s | 1 654 | 19.2 s |
+
+- **Producers are no longer the ceiling; the consumer side is, and not because of hot keys** (0 % hot drains no
+  faster). The Hikari pool is not saturated (pending ≈ 0). 20 000 messages over 16 consumers in ~9 s is ~7 ms per
+  message against ~2.5 ms in the handler: ~4 ms per message is spent outside it (inbox unit of work, ack, dispatch).
+  An inference from one run, not a profile.
+- **Ordering defect.** Every run with more than one producer (4 or 8) logged `OrderedShardOwner` warnings — "key 'X' is
+  being delivered key_order 52 after 103 was already delivered" — 4 to 147 per run, on both instances; the runs with
+  one producer logged none. Each key has exactly one producer, which numbers and commits its batches strictly in
+  sequence, so the producer side cannot be the cause: the engine delivered a long-committed row late, or redelivered
+  it. **It changed the outcome**: in the 50 000-cycle run (200 000 commands, run `LL-mvezwz95`) account
+  `LL-mvezwz95-653` got `ReleaseHold` and `SettleTrade` for hold `LL-mvezwz95-H-30415` before its `HoldFunds` and
+  `BookTrade`; both were no-ops (an unknown reference is ignored by design), so the hold was never released and the
+  trade never settled — 201 998 of 202 000 events, with an empty queue and no dead letters. Not yet reproduced in the
+  engine's own tests.
