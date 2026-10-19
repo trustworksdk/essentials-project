@@ -272,7 +272,7 @@ public class QueueLoadGenerator {
             scheduler.shutdownNow();
             scheduler = null;
         }
-        closeQuietly(subscription);
+        unsubscribeQuietly(subscription);
         subscription = null;
         log.info("Queue load generator stopped");
     }
@@ -521,7 +521,7 @@ public class QueueLoadGenerator {
      * queue, so every stop and start from the admin API left one more behind - the next {@code consume()} warned of a
      * competing consumer under a new instance id suffix.
      */
-    private static void closeQuietly(Subscription subscription) {
+    private static void unsubscribeQuietly(Subscription subscription) {
         if (subscription != null) {
             try {
                 subscription.unsubscribe();
