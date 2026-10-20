@@ -524,18 +524,6 @@ RUN if [ "${INSTALL_PLAYWRIGHT}" = "true" ]; then \
     fi
 
 # -----------------------------------------------------------------------------
-# Plugin Marketplace Seed Directory
-# Private Marketplaces can be cloned on the host by local-init.sh (initializeCommand)
-# and LIVE bind-mounted into the container at /opt/claude-seed/marketplaces at
-# runtime (see devcontainer.json "mounts"). They are intentionally NOT COPYed
-# into the image: a baked COPY only refreshes on rebuild, so a plain container
-# start would keep serving stale plugin versions. The bind-mount means every
-# START picks up whatever initializeCommand just pulled. No git credentials
-# enter the image. We create the mount point so the bind target exists.
-# -----------------------------------------------------------------------------
-RUN mkdir -p /opt/claude-seed/marketplaces
-
-# -----------------------------------------------------------------------------
 # Directory Structure & Permissions
 # -----------------------------------------------------------------------------
 # Create base directories (always needed)

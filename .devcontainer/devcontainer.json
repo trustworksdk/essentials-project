@@ -245,11 +245,10 @@
         // Note: autoMode.environment (trusted infrastructure) must go in
         // .claude/settings.local.json (gitignored), NOT .claude/settings.json.
         "CLAUDE_DEFAULT_MODE_AUTO": "true",
-        // Plugin marketplace seed directory — populated at runtime by a live
-        // bind-mount of .devcontainer/.plugin-marketplace (see mounts below).
-        // initializeCommand refreshes the host clone on every start, so the
-        // seed is always current without a rebuild. No runtime auth needed.
-        "CLAUDE_CODE_PLUGIN_SEED_DIR": "/opt/claude-seed",
+        // No CLAUDE_CODE_PLUGIN_SEED_DIR: the plugin marketplace clone is loaded
+        // in place from /workspace/.devcontainer/.plugin-marketplace (registered
+        // in .claude/settings.local.json by scripts/local-init.sh). A seed would
+        // be a second copy, and one that overrides that registration.
         // Claude Code authentication — long-lived OAuth token, propagated from the host.
         // Generate once on the host with `claude setup-token`, export it in your shell,
         // then rebuild the container. If unset, falls back to interactive login inside
@@ -316,20 +315,16 @@
         "source=devcontainer-headroom-${devcontainerId},target=/home/vscode/.headroom,type=volume",
         // NOTE: graphify's output (graphify-out/) lives in-repo (gitignored) — no named volume needed.
 
-        // Plugin marketplace seed — LIVE bind-mount of the host clone that a custom
-        // local-init.sh (initializeCommand) can refresh on every start.
-        // Bind-mounting (instead of a Dockerfile COPY) means every container
-        // START picks up the latest plugin versions — no rebuild required.
-        // The host directory is populated on the host with host git credentials,
-        // so no credentials enter the container. readonly: the container only reads it.
-        "source=${localWorkspaceFolder}/.devcontainer/.plugin-marketplace,target=/opt/claude-seed/marketplaces,type=bind,readonly",
         // .devcontainer/ is READ-ONLY inside the container. The workspace mount is
         // writable, and this directory holds what runs outside the container's
         // control: initializeCommand runs scripts/local-init.sh ON THE HOST at every
         // start, devcontainer.json decides mounts and runArgs, and
-        // .plugin-marketplace/ is the clone behind the read-only seed above (a
-        // write through /workspace reached /opt/claude-seed). Edit these files on
-        // the host. Keep the target in step with workspaceMount's target.
+        // .plugin-marketplace/ is the plugin marketplace clone Claude Code loads
+        // in place. local-init.sh refreshes it on the host with host git
+        // credentials before every start, so every START — not just a rebuild —
+        // serves the latest plugin versions and no credentials enter the
+        // container. Edit these files on the host. Keep the target in step with
+        // workspaceMount's target (and local-init.sh's CONTAINER_WORKSPACE).
         "source=${localWorkspaceFolder}/.devcontainer,target=/workspace/.devcontainer,type=bind,readonly",
 
         // JetBrains caches
@@ -443,14 +438,12 @@
     // ==========================================================================
     // Runs on the HOST before every container start. Clones/updates the plugin
     // marketplace repo using the developer's local git credentials — credentials
-    // never enter the container. The clone is live bind-mounted to
-    // /opt/claude-seed/marketplaces (see mounts), so every START — not just a
-    // rebuild — picks up the latest plugin versions.
-    // local-init.sh is gitignored (internal): when it's absent the
-    // container still starts — it just runs without a pre-seeded marketplace.
-    // The mkdir -p is required regardless: the bind mount above fails the
-    // container create with "bind source path does not exist" if the
-    // directory is missing, so an empty directory is created as a fallback.
+    // never enter the container. The clone sits in .devcontainer/.plugin-marketplace,
+    // which the container sees read-only under /workspace/.devcontainer (see
+    // mounts), so every START — not just a rebuild — picks up the latest plugin
+    // versions. local-init.sh is gitignored (internal): when it's absent the
+    // container still starts — it just runs without the marketplace. The
+    // mkdir -p keeps an empty .plugin-marketplace/ in place either way.
     "initializeCommand": "mkdir -p .devcontainer/.plugin-marketplace; if [ -f .devcontainer/scripts/local-init.sh ]; then bash .devcontainer/scripts/local-init.sh; else echo 'ℹ️  .devcontainer/scripts/local-init.sh not present — skipping plugin marketplace seed (container still starts).'; fi",
     "onCreateCommand": "echo '✅ DevContainer created successfully!'",
     "postCreateCommand": "if [ -f /workspace/.devcontainer/scripts/post-create.sh ]; then bash /workspace/.devcontainer/scripts/post-create.sh; else echo '⚠️ post-create.sh not found, skipping...'; fi",
