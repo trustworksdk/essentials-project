@@ -214,7 +214,8 @@ is free only once both have passed: when the stop kept an ordered unit, because 
 its handler past `shedGrace`, the id stays out of use until that handler has returned and the unit has
 been handed back (its acknowledgement flushed, its lease released; a `consume()` retries a hand-back that
 failed before it picks an id), or until that handler has been running longer than the queue's
-`stuckHandlerTimeout`, as until then that unit's lease
+`stuckHandlerTimeout`, or until the unit is released on request (`MessageQueue.releaseKeptOrderedUnit`,
+`POST .../ordered-units/{unit}/release-kept`), as until then that unit's lease
 names the id and a subscription under it would take the unit at once; and when the stop gave up waiting for its lanes' hand-back to the database (releasing the
 leases and deregistering the id, which the stop stops waiting for after 2 s when the database does
 not answer, and at once on an interrupted thread), the id stays out of use until that hand-back has
@@ -842,6 +843,22 @@ takes. Once a kept key has been in its handler longer than `leaseTtl`, the engin
 the queue, the unit, the key(s), how long they have run and the bound, at most once a minute per unit,
 and one more WARN when it stops waiting.
 
+**Releasing a kept unit before the bound.** For a handler known to be hung, an operator need not wait
+for `stuckHandlerTimeout`: `MessageQueue.releaseKeptOrderedUnit(unit)` - in the admin API
+`ShardOwnedQueuesApi.releaseKeptOrderedUnit`, `POST /shard-owned-queues/{queueName}/ordered-units/{unit}/release-kept`,
+`QUEUE_WRITER` - flushes the kept unit's acknowledgements under the fence it was kept under and releases
+its lease row, so any instance below its fair share takes it under a new fence. **It accepts the cost
+the wait exists to avoid**: whoever takes the unit delivers the messages still in a handler again,
+possibly while those handlers still run them. It touches only a unit a stop kept whose lease row still
+names the stopping instance; every other unit is left alone. Kept units live in the memory of the
+process whose stop kept them, so call the instance whose WARN named the unit - any other answers with
+an empty list. Each entry says what was done: `RELEASED` (with the keys that were in a handler and how
+long the longest had been there), `ALREADY_TAKEN` (the row had been taken under a newer fence
+meanwhile; nothing released) or `BUSY` (the stop that kept it is still flushing it, or another
+hand-back or release of it is running; nothing done, ask again). A release with a key in its handler is logged as a WARN naming
+the unit and the keys. Once released, the unit no longer keeps an unsubscribed subscription's instance
+id out of use, and a later stop does not stay registered for it.
+
 The same bound covers the two other waits for an ordered unit's handler. A fair-share shed waits for
 the keys in its handlers before it releases the unit, and otherwise keeps it and retries every
 heartbeat; the unit of a pump a critical error ended is handed back only once no key is in a handler.
@@ -854,7 +871,8 @@ charges no attempt, but it delivers each of those messages again, possibly besid
 
 `keptUnitsInHandler()` (also in `snapshot()`) counts the kept units whose key is in its handler now:
 normally zero, so alert on it staying above zero. A unit taken over at the bound still counts while
-its stuck handler runs on, and so does a unit a shed or a dead pump's hand-back released at the bound.
+its stuck handler runs on, and so does a unit a shed or a dead pump's hand-back released at the bound,
+and so does a unit released on request while its handler runs on.
 Like the counters below, it is readable only through `ShardOwnedQueue.metrics()`; through
 `MessageQueue` the WARN is the signal.
 
@@ -935,6 +953,7 @@ api.retryMessage(principal, orders, id, Duration.ZERO);
 api.markAsDeadLetterMessage(principal, orders, id, "parked by hand");
 api.resurrectDeadLetterMessage(principal, orders, id);
 api.resurrectDeadLettersForKey(principal, orders, "account-7");   // the whole key, in key_order
+api.releaseKeptOrderedUnit(principal, orders, 17);   // a unit a stop kept behind a hung handler - see stuckHandlerTimeout
 api.deleteMessage(principal, orders, id);
 api.purgeQueue(principal, orders);
 ```
@@ -949,7 +968,7 @@ use, so it can be pasted into psql.
 |---|---|
 | all reads | `QUEUE_READER` |
 | seeing message payloads in those reads | `QUEUE_PAYLOAD_READER`, **additionally** |
-| delete, retry, mark-as-dead-letter, resurrect, purge | `QUEUE_WRITER` |
+| delete, retry, mark-as-dead-letter, resurrect, release a kept ordered unit, purge | `QUEUE_WRITER` |
 
 A reader without the payload role still gets the message, with `payload` **null** — null, not empty,
 because an empty payload is a legal message. Non-UTF-8 payloads come back as hex, matching the
@@ -972,6 +991,7 @@ and an `EssentialsSecurityProvider` are on the classpath. Under the admin API ba
 | `POST` | `/shard-owned-queues/{queueName}/messages/{messageId}/retry` |
 | `POST` | `/shard-owned-queues/{queueName}/messages/{messageId}/mark-as-dead-letter` |
 | `POST` | `/shard-owned-queues/{queueName}/messages/{messageId}/resurrect` |
+| `POST` | `/shard-owned-queues/{queueName}/ordered-units/{unit}/release-kept` |
 
 ## The Low-Level Engine
 

@@ -845,6 +845,273 @@ class ShardOwnedUnsubscribeIT {
         }
     }
 
+    /**
+     * {@link #a_queue_restarted_while_a_key_is_in_the_handler_its_stop_kept_an_ordered_unit_for_leaves_that_unit_alone},
+     * with the operator releasing the kept unit through {@link MessageQueue#releaseKeptOrderedUnit} while its handler is
+     * still held, long before {@code stuckHandlerTimeout}: the release reports what it released, the restarted queue takes
+     * the unit under a newer fence and delivers the key's message again beside the handler still running - the trade the
+     * operator asked for - and a unit no stop kept, asked for, is left exactly as it was. A later stop while that handler
+     * still runs deregisters the instance: nothing waits for the released unit's handler any more, so the stop does not
+     * stay registered for it. Before the operation existed nothing an operator could call freed the unit before the
+     * handler returned, the instance's liveness lapsed, or the bound fired.
+     */
+    @Test
+    void a_kept_unit_released_on_request_while_its_key_is_in_the_handler_is_taken_under_a_newer_fence_and_no_other_unit_is_touched() throws Exception {
+        // A heartbeat every second; the bound stays at its 15-minute default, far beyond the test.
+        var leaseTtl = Duration.ofSeconds(3);
+        var entries  = new AtomicInteger();
+        var entered  = new CountDownLatch(1);
+        var release  = new CountDownLatch(1);
+        try (var queue = newQueue(PostgresqlMessageQueue.LifecycleHook.NONE, settingsWith(Duration.ofMillis(300), leaseTtl))) {
+            try {
+                var subscription = queue.consume((messageId, key, payload, payloadType) -> {
+                    // The first delivery of the key holds its handler; a later one returns at once.
+                    if (key != null && entries.incrementAndGet() == 1) {
+                        entered.countDown();
+                        awaitQuietly(release, Duration.ofSeconds(60));
+                    }
+                }, ConsumerOptions.defaults());
+                var metrics = queue.registeredConsumers().getFirst().metrics();
+                queue.enqueue(Message.ordered("in-handler".getBytes(StandardCharsets.UTF_8), 1, "ACC-1", 0));
+                assertThat(entered.await(20, TimeUnit.SECONDS)).as("premise: the key is in its handler").isTrue();
+                var unitOfTheKey = ShardOwnedSchema.unitForKey("ACC-1", ShardOwnedSchema.ORDERED_UNITS);
+                assertThat(queue.releaseKeptOrderedUnit(unitOfTheKey)).as("nothing is kept while the queue runs").isEmpty();
+
+                queue.stop();
+                var kept = keptOrderedFence(INSTANCE_ID);
+                assertThat(kept.shard()).as("premise: the stop kept the unit of the key in its handler").isEqualTo(unitOfTheKey);
+                queue.start();
+                Awaitility.await().atMost(Duration.ofSeconds(10))
+                          .untilAsserted(() -> assertThat(subscription.orderedUnitsHeld()).as("premise: the restart leaves the kept unit alone")
+                                                                                          .isEqualTo(ShardOwnedSchema.ORDERED_UNITS - 1));
+
+                var notKept      = (kept.shard() + 1) % ShardOwnedSchema.ORDERED_UNITS;
+                var notKeptFence = fenceOf(notKept);
+                assertThat(queue.releaseKeptOrderedUnit(notKept)).as("a unit no stop kept is not released").isEmpty();
+                assertThat(ownerOf(notKept)).as("and keeps its owner").isEqualTo(INSTANCE_ID);
+                assertThat(fenceOf(notKept)).as("and its fence").isEqualTo(notKeptFence);
+
+                var releases = queue.releaseKeptOrderedUnit(kept.shard());
+                assertThat(releases).as("the release says what it released").singleElement().satisfies(released -> {
+                    assertThat(released.unit()).isEqualTo(kept.shard());
+                    assertThat(released.instanceId()).isEqualTo(INSTANCE_ID);
+                    assertThat(released.outcome()).isEqualTo(KeptUnitRelease.Outcome.RELEASED);
+                    assertThat(released.keysInHandler()).containsExactly("ACC-1");
+                    assertThat(released.longestInHandler()).isPositive();
+                });
+                assertThat(laneWarnings()).as("one WARN names the unit, its key and what the release costs")
+                                          .filteredOn(warning -> warning.contains("released ordered unit " + kept.shard() + " on queue " + QUEUE_ID + " on request"))
+                                          .singleElement()
+                                          .satisfies(warning -> assertThat(warning).contains("[ACC-1]", "delivers the messages in those handlers again"));
+                Awaitility.await().atMost(Duration.ofSeconds(10))
+                          .untilAsserted(() -> {
+                              assertThat(fenceOf(kept.shard())).as("taken under a newer fence").isGreaterThan(kept.fence());
+                              assertThat(subscription.orderedUnitsHeld()).as("every ordered unit").isEqualTo(ShardOwnedSchema.ORDERED_UNITS);
+                              assertThat(entries).as("the key's message delivered again while the first handler runs").hasValue(2);
+                          });
+                assertThat(metrics.keptUnitsInHandler()).as("the first handler still runs, and is still counted").isEqualTo(1);
+                assertThat(queue.releaseKeptOrderedUnit(kept.shard())).as("released once: the unit is no longer kept").isEmpty();
+                assertThat(fenceOf(notKept)).as("the unit no stop kept is untouched").isEqualTo(notKeptFence);
+
+                // A later stop while the released unit's first handler still runs: nothing waits for that handler, so the
+                // stop deregisters the instance rather than staying registered for the unit an earlier stop kept.
+                queue.stop();
+                assertThat(metrics.keptUnitsInHandler()).as("premise: the first handler still runs").isEqualTo(1);
+                Awaitility.await().atMost(Duration.ofSeconds(5))
+                          .untilAsserted(() -> assertThat(registeredInstances()).as("the later stop deregistered the instance").isEmpty());
+                assertThat(laneInfos()).as("it does not stay registered for the released unit")
+                                   .noneMatch(info -> info.contains("stays registered on queue " + QUEUE_ID + ": an earlier stop kept"));
+
+                release.countDown();
+                Awaitility.await().atMost(Duration.ofSeconds(5))
+                          .untilAsserted(() -> assertThat(metrics.keptUnitsInHandler()).as("the first handler has returned").isZero());
+                Awaitility.await().atMost(Duration.ofSeconds(5))
+                          .untilAsserted(() -> assertThat(orderedMessagesLeft()).as("the new owner acknowledged the message").isZero());
+            } finally {
+                release.countDown();
+            }
+        }
+    }
+
+    /**
+     * A unit a stop kept, whose lease row someone else has taken under a newer fence meanwhile - another instance once this
+     * one's liveness lapsed, made here by writing the row directly - is not released when asked: the fenced release finds
+     * the row no longer this instance's, says so ({@link KeptUnitRelease.Outcome#ALREADY_TAKEN}, naming the key in its
+     * handler), and leaves that owner's row and fence as they were. Asked again, nothing is kept any more.
+     */
+    @Test
+    void a_kept_unit_whose_row_was_taken_meanwhile_is_reported_already_taken_and_its_new_owner_is_left_alone() throws Exception {
+        var leaseTtl = Duration.ofSeconds(3);
+        var entered  = new CountDownLatch(1);
+        var release  = new CountDownLatch(1);
+        try (var queue = newQueue(PostgresqlMessageQueue.LifecycleHook.NONE, settingsWith(Duration.ofMillis(300), leaseTtl))) {
+            try {
+                queue.consume((messageId, key, payload, payloadType) -> {
+                    if (key != null) {
+                        entered.countDown();
+                        awaitQuietly(release, Duration.ofSeconds(60));
+                    }
+                }, ConsumerOptions.defaults());
+                queue.enqueue(Message.ordered("in-handler".getBytes(StandardCharsets.UTF_8), 1, "ACC-1", 0));
+                assertThat(entered.await(20, TimeUnit.SECONDS)).as("premise: the key is in its handler").isTrue();
+
+                // Stopped, and not started again: no acquirer of this queue races the row written below.
+                queue.stop();
+                var kept = keptOrderedFence(INSTANCE_ID);
+                takeOrderedUnit(kept.shard(), "other", kept.fence() + 1);
+
+                var releases = Awaitility.await().atMost(Duration.ofSeconds(5))
+                                         .until(() -> queue.releaseKeptOrderedUnit(kept.shard()),
+                                                answer -> answer.stream().noneMatch(entry -> entry.outcome() == KeptUnitRelease.Outcome.BUSY));
+                assertThat(releases).as("the release says the unit was taken meanwhile").singleElement().satisfies(answer -> {
+                    assertThat(answer.unit()).isEqualTo(kept.shard());
+                    assertThat(answer.instanceId()).isEqualTo(INSTANCE_ID);
+                    assertThat(answer.outcome()).isEqualTo(KeptUnitRelease.Outcome.ALREADY_TAKEN);
+                    assertThat(answer.keysInHandler()).containsExactly("ACC-1");
+                });
+                assertThat(ownerOf(kept.shard())).as("the new owner keeps the row").isEqualTo("other");
+                assertThat(fenceOf(kept.shard())).as("under its fence").isEqualTo(kept.fence() + 1);
+                assertThat(laneWarnings()).as("no release is reported")
+                                          .noneMatch(warning -> warning.contains("released ordered unit " + kept.shard() + " on queue " + QUEUE_ID));
+                assertThat(queue.releaseKeptOrderedUnit(kept.shard())).as("asked again: the unit is no longer kept").isEmpty();
+                assertThat(ownerOf(kept.shard())).isEqualTo("other");
+                assertThat(fenceOf(kept.shard())).isEqualTo(kept.fence() + 1);
+            } finally {
+                release.countDown();
+            }
+        }
+    }
+
+    /**
+     * {@link #a_queue_restarted_while_a_key_outlasts_the_stuck_handler_timeout_in_the_handler_its_stop_kept_takes_the_unit_over},
+     * with the message delivered again hanging too, and the queue stopped once more: the queue now lists two kept entries
+     * for the unit - the first stop's, whose row the restart took over and which still reads as holding it until a fenced
+     * write of it is refused, ahead of the second stop's, which holds the row. A release on request reports the entry that
+     * held the row, {@link KeptUnitRelease.Outcome#RELEASED}, and releases it. It stopped at the first entry, answered
+     * {@link KeptUnitRelease.Outcome#ALREADY_TAKEN} - "nothing released" - and left the unit kept by the second stop.
+     */
+    @Test
+    void a_unit_kept_again_after_a_takeover_past_the_stuck_handler_timeout_is_released_from_the_stop_that_holds_its_row() throws Exception {
+        // A heartbeat every second; the takeover once the first handler has been there 3 s.
+        var leaseTtl            = Duration.ofSeconds(3);
+        var stuckHandlerTimeout = Duration.ofSeconds(3);
+        var entries             = new AtomicInteger();
+        var entered             = new CountDownLatch(1);
+        var release             = new CountDownLatch(1);
+        var settings            = settingsWith(Duration.ofMillis(300), leaseTtl).withStuckHandlerTimeout(stuckHandlerTimeout);
+        try (var queue = newQueue(PostgresqlMessageQueue.LifecycleHook.NONE, settings)) {
+            try {
+                queue.consume((messageId, key, payload, payloadType) -> {
+                    // Every delivery of the key holds its handler: the first, and the one the takeover delivers again.
+                    if (key != null) {
+                        entries.incrementAndGet();
+                        entered.countDown();
+                        awaitQuietly(release, Duration.ofSeconds(60));
+                    }
+                }, ConsumerOptions.defaults());
+                queue.enqueue(Message.ordered("in-handler".getBytes(StandardCharsets.UTF_8), 1, "ACC-1", 0));
+                assertThat(entered.await(20, TimeUnit.SECONDS)).as("premise: the key is in its handler").isTrue();
+
+                queue.stop();
+                var keptFirst = keptOrderedFence(INSTANCE_ID);
+                queue.start();
+                Awaitility.await().atMost(Duration.ofSeconds(15))
+                          .untilAsserted(() -> {
+                              assertThat(fenceOf(keptFirst.shard())).as("premise: taken over past the bound").isGreaterThan(keptFirst.fence());
+                              assertThat(entries).as("premise: the key's message delivered again, and held too").hasValue(2);
+                          });
+
+                queue.stop();
+                var keptAgain = keptOrderedFence(INSTANCE_ID);
+                assertThat(keptAgain.shard()).as("premise: the second stop kept the same unit").isEqualTo(keptFirst.shard());
+                assertThat(keptAgain.fence()).as("premise: under the takeover's newer fence").isGreaterThan(keptFirst.fence());
+
+                var releases = Awaitility.await().atMost(Duration.ofSeconds(5))
+                                         .until(() -> queue.releaseKeptOrderedUnit(keptAgain.shard()),
+                                                answer -> answer.stream().noneMatch(entry -> entry.outcome() == KeptUnitRelease.Outcome.BUSY));
+                assertThat(releases).as("the entry that held the row is released").singleElement().satisfies(answer -> {
+                    assertThat(answer.outcome()).isEqualTo(KeptUnitRelease.Outcome.RELEASED);
+                    assertThat(answer.keysInHandler()).containsExactly("ACC-1");
+                });
+                assertThat(ownerOf(keptAgain.shard())).as("the row is released").isNull();
+                assertThat(fenceOf(keptAgain.shard())).as("a release does not bump the fence").isEqualTo(keptAgain.fence());
+                assertThat(queue.releaseKeptOrderedUnit(keptAgain.shard())).as("asked again: the unit is no longer kept").isEmpty();
+            } finally {
+                release.countDown();
+            }
+        }
+    }
+
+    /**
+     * {@link #a_subscription_whose_stop_kept_an_ordered_unit_keeps_its_instance_id_out_of_use_while_the_key_is_in_its_handler},
+     * with the operator releasing the kept unit through {@link MessageQueue#releaseKeptOrderedUnit} while its handler is
+     * still held: the queue asks the unsubscribed subscription's lanes too, as it still keeps their instance id out of
+     * use, and once the unit is released nothing waits for that handler any more - the next {@code consume()} registers
+     * under the caller's own instance id again and takes the unit under a newer fence. A release that left the unit
+     * waiting for its handler would keep the id out of use until the handler returned.
+     */
+    @Test
+    void a_kept_unit_released_on_request_frees_the_instance_id_its_unsubscribed_subscription_kept_out_of_use() throws Exception {
+        // Far beyond the test, so the unsubscribed instance's membership row cannot age out and let another id take the unit.
+        var leaseTtl       = Duration.ofSeconds(20);
+        var entered        = new CountDownLatch(1);
+        var release        = new CountDownLatch(1);
+        var deliveredAgain = ConcurrentHashMap.<String>newKeySet();
+        MessageHandler recording = (messageId, key, payload, payloadType) -> {
+            if (key != null) {
+                deliveredAgain.add(key);
+            }
+        };
+        try (var queue = newQueue(PostgresqlMessageQueue.LifecycleHook.NONE, settingsWith(Duration.ofMillis(300), leaseTtl))) {
+            try {
+                var first = queue.consume((messageId, key, payload, payloadType) -> {
+                    if (key != null) {
+                        entered.countDown();
+                        awaitQuietly(release, Duration.ofSeconds(60));
+                    }
+                }, ConsumerOptions.defaults());
+                var firstLanes = queue.registeredConsumers();
+                queue.enqueue(Message.ordered("in-handler".getBytes(StandardCharsets.UTF_8), 1, "ACC-1", 0));
+                assertThat(entered.await(20, TimeUnit.SECONDS)).as("premise: the key is in its handler").isTrue();
+
+                first.unsubscribe();
+                var unsubscribedAt = System.nanoTime();
+                var kept           = keptOrderedFence(INSTANCE_ID);
+                var second         = queue.consume(recording, ConsumerOptions.defaults());
+                assertThat(registeredInstances()).as("premise: the kept unit keeps the instance id out of use")
+                                                 .containsExactly(INSTANCE_ID, INSTANCE_ID + "-1");
+                second.unsubscribe();
+
+                assertThat(queue.releaseKeptOrderedUnit(kept.shard())).as("the unsubscribed subscription's lane releases the unit it kept")
+                                                                      .singleElement()
+                                                                      .satisfies(released -> {
+                                                                          assertThat(released.outcome()).isEqualTo(KeptUnitRelease.Outcome.RELEASED);
+                                                                          assertThat(released.instanceId()).isEqualTo(INSTANCE_ID);
+                                                                          assertThat(released.keysInHandler()).containsExactly("ACC-1");
+                                                                      });
+                assertThat(firstLanes.getFirst().metrics().keptUnitsInHandler()).as("premise: the first handler still runs").isEqualTo(1);
+
+                var third = queue.consume(recording, ConsumerOptions.defaults());
+                assertThat(third.isStarted()).isTrue();
+                assertThat(registeredInstances()).as("released, the unit no longer keeps the caller's own instance id out of use")
+                                                 .containsExactly(INSTANCE_ID);
+                Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+                    assertThat(orderedUnitsOwnedBy(INSTANCE_ID)).as("the caller's own id takes every unit").isEqualTo(ShardOwnedSchema.ORDERED_UNITS);
+                    assertThat(fenceOf(kept.shard())).as("the released unit taken under a newer fence").isGreaterThan(kept.fence());
+                    assertThat(deliveredAgain).as("the key's message delivered again while the first handler runs").containsExactly("ACC-1");
+                });
+                assertThat(Duration.ofNanos(System.nanoTime() - unsubscribedAt)).as("premise: all of that within the lease TTL, so no TTL freed the unit")
+                                                                               .isLessThan(leaseTtl);
+
+                release.countDown();
+                Awaitility.await().atMost(Duration.ofSeconds(5))
+                          .untilAsserted(() -> assertThat(orderedMessagesLeft()).as("the new owner acknowledged the message").isZero());
+            } finally {
+                release.countDown();
+            }
+        }
+    }
+
     private record UnitFence(int shard, long fence) {
     }
 
@@ -857,6 +1124,21 @@ class ShardOwnedUnsubscribeIT {
             try (var resultSet = statement.executeQuery()) {
                 return resultSet.next() ? resultSet.getString(1) : null;
             }
+        }
+    }
+
+    /**
+     * Point an ordered unit's lease row at {@code owner} under {@code fence}, as an instance taking it would.
+     */
+    private void takeOrderedUnit(int orderedUnit, String owner, long fence) throws SQLException {
+        try (var connection = dataSource.getConnection();
+             var statement = connection.prepareStatement("UPDATE " + ShardOwnedSchema.LEASE_TABLE
+                                                                 + " SET owner = ?, fence = ? WHERE queue_id = ? AND lane = 'ordered' AND shard = ?")) {
+            statement.setString(1, owner);
+            statement.setLong(2, fence);
+            statement.setShort(3, QUEUE_ID);
+            statement.setInt(4, orderedUnit);
+            assertThat(statement.executeUpdate()).as("premise: the unit's lease row was taken").isEqualTo(1);
         }
     }
 
@@ -1193,6 +1475,16 @@ class ShardOwnedUnsubscribeIT {
                           .filter(event -> event.getLevel() == INFO)
                           .map(ILoggingEvent::getFormattedMessage)
                           .toList();
+    }
+
+    private List<String> laneInfos() {
+        // The appender adds under its own monitor (AppenderBase.doAppend), from the stops' and the heartbeat's threads.
+        synchronized (laneLogged) {
+            return laneLogged.list.stream()
+                                  .filter(event -> event.getLevel() == INFO)
+                                  .map(ILoggingEvent::getFormattedMessage)
+                                  .toList();
+        }
     }
 
     /**

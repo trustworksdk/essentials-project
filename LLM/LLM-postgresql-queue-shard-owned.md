@@ -108,7 +108,8 @@ WARN for it). Two cases delay the id, either one enough, and when both apply it 
 have passed: when the stop kept an ordered unit, because a key was still in its handler past
 `shedGrace`, the id stays out of use until that handler has returned and the unit has been handed back
 (a `consume()` retries a hand-back that failed before it picks an id), or until that handler has been
-running longer than the queue's `stuckHandlerTimeout` (default 15 min, below),
+running longer than the queue's `stuckHandlerTimeout` (default 15 min, below), or until the unit is
+released on request (`MessageQueue.releaseKeptOrderedUnit`, `POST .../ordered-units/{unit}/release-kept`, below),
 as until then that unit's lease names the id and a subscription under it would take the unit at once and
 could start the key beside the running handler; and when the stop gave up waiting for its lanes' hand-back to the database (releasing the
 leases and deregistering the id), the id stays out of use until that hand-back has returned, as it may
@@ -134,7 +135,19 @@ handler that never returns leaves the unit unserved, and the id out of use, unti
 it above the longest time a handler of the queue really takes, as `messageHandlingTimeout` is set for
 `postgresql-queue`. Once a kept key has been in its handler longer than `leaseTtl` the engine WARNs, naming
 the queue, the unit, the key(s) and how long they have run, at most once a minute per unit; it WARNs once
-more when it stops waiting. `ShardOwnerMetrics.keptUnitsInHandler` counts such units (below). The same
+more when it stops waiting. `ShardOwnerMetrics.keptUnitsInHandler` counts such units (below).
+**To release a kept unit before the bound** - a handler known to be hung - call
+`MessageQueue.releaseKeptOrderedUnit(unit)` (admin API: `ShardOwnedQueuesApi.releaseKeptOrderedUnit`,
+`POST /shard-owned-queues/{queueName}/ordered-units/{unit}/release-kept`, `QUEUE_WRITER`) on the instance
+whose WARN named the unit: kept units live in that process's memory, and any other instance answers with
+an empty list. It flushes the unit's acknowledgements under the fence it was kept under and releases its
+lease row, so any instance below its fair share takes it under a new fence - and **delivers the messages
+still in a handler again, possibly beside those handlers** (the cost the wait exists to avoid; no attempt
+charged, the row was released). Only a unit a stop kept whose row still names the stopping instance is
+touched. Each entry reports `RELEASED` (with the keys in a handler), `ALREADY_TAKEN` (taken under a newer
+fence meanwhile, nothing released) or `BUSY` (the stop is still flushing it or another hand-back or release
+of it runs; ask again).
+Once released the unit no longer keeps an unsubscribed subscription's id out of use. The same
 bound covers a fair-share shed of an ordered unit and the hand-back of a unit whose pump died, which wait
 for the keys in their handlers: past it each releases the unit with every key still in a handler — the one
 past the bound and any other still running — with one WARN, and the next owner delivers each of those
@@ -570,9 +583,11 @@ Five more `ShardOwnerMetrics` cover a shard that is leased but delivers nothing 
 - **`keptUnitsInHandler()`** (a method, read live; also `snapshot()`'s `keptUnitsInHandler`) counts ordered
   units a `stop()` kept because a key was still in its handler, while that key is in its handler. Normally
   zero. While above zero the unit is unserved - no run of the queue takes it, and no other instance while
-  this one is live - until the handler returns or outlasts `stuckHandlerTimeout`; a unit taken over at the
+  this one is live - until the handler returns or outlasts `stuckHandlerTimeout`, or the unit is released on
+  request (`MessageQueue.releaseKeptOrderedUnit`); a unit taken over at the
   bound still counts while its stuck handler runs on, and so does a unit a fair-share shed or a dead pump's
-  hand-back released at the bound with a key still in a handler. Alert on it staying above zero. Logged at WARN once
+  hand-back released at the bound with a key still in a handler, and so does a unit released on request while
+  its handler runs on. Alert on it staying above zero. Logged at WARN once
   the handler has run longer than `leaseTtl`, at most once a minute per unit, from logger
   `dk.trustworks.essentials.components.queue.shardowned.ShardOwnedQueue`.
 
@@ -597,6 +612,7 @@ api.retryMessage(principal, orders, id, Duration.ZERO);
 api.markAsDeadLetterMessage(principal, orders, id, "parked by hand");
 api.resurrectDeadLetterMessage(principal, orders, id);
 api.resurrectDeadLettersForKey(principal, orders, "account-7");   // the whole key, in key_order
+api.releaseKeptOrderedUnit(principal, orders, 17);   // a unit a stop kept behind a hung handler; ask the instance that kept it
 api.deleteMessage(principal, orders, id);
 api.purgeQueue(principal, orders);
 ```
@@ -611,7 +627,7 @@ tables use, so it can be pasted into psql.
 |---|---|
 | all reads | `QUEUE_READER` |
 | seeing message payloads in those reads | `QUEUE_PAYLOAD_READER`, **additionally** |
-| delete, retry, mark-as-dead-letter, resurrect, purge | `QUEUE_WRITER` |
+| delete, retry, mark-as-dead-letter, resurrect, release a kept ordered unit, purge | `QUEUE_WRITER` |
 
 A reader without the payload role still gets the message with `payload` **null** — null, not empty,
 because an empty payload is a legal message. Non-UTF-8 payloads come back as hex, matching the
@@ -635,6 +651,7 @@ Endpoints live under the admin API base path (default `/api/essentials/admin/v1`
 | `POST` | `/shard-owned-queues/{queueName}/messages/{messageId}/retry` |
 | `POST` | `/shard-owned-queues/{queueName}/messages/{messageId}/mark-as-dead-letter` |
 | `POST` | `/shard-owned-queues/{queueName}/messages/{messageId}/resurrect` |
+| `POST` | `/shard-owned-queues/{queueName}/ordered-units/{unit}/release-kept` |
 
 These endpoints **are** in the generated OpenAPI contract: `EssentialsAdminApiSpec` carries the
 `shard-owned-queues` paths and `ShardOwnedQueuesController` sits in `spring-boot-starter-admin-api`

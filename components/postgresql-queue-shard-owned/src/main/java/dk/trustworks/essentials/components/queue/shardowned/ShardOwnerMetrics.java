@@ -396,11 +396,13 @@ public final class ShardOwnerMetrics {
      * zero; above zero for as long as such a handler runs. While one does, no run of that queue takes the unit and a
      * {@code PostgresqlMessageQueue} keeps the subscription's instance id out of use - until the handler has run longer
      * than {@code stuckHandlerTimeout} ({@link ShardOwnerSettings}), after which a run of that queue - the one running then,
-     * or the next - or a subscription registering under the instance id takes the unit over, and the id is free again. A unit taken over that way still counts here while its old handler runs on, since that handler
+     * or the next - or a subscription registering under the instance id takes the unit over, and the id is free again; or
+     * until the unit is released on request ({@code MessageQueue.releaseKeptOrderedUnit}), after which an instance below its
+     * fair share may take it under a new fence, and the id is free again. A unit taken over that way still counts here while its old handler runs on, since that handler
      * still holds a thread and may still be running the key beside its new owner. So does an ordered unit a fair-share shed,
      * or the hand-back from a dead pump, released with a key still in a handler because that key had been there longer than
      * {@code stuckHandlerTimeout} - each such release logged at WARN, naming the unit, its keys and how long - for as long
-     * as that handler runs on. Alert on it staying above zero, next to
+     * as that handler runs on, and so does a unit released on request while its handler runs on. Alert on it staying above zero, next to
      * {@link #shardsAwaitingTakeover}: {@code QueueHealth.unownedShards()} cannot see such a unit while this instance is
      * live, as its lease row names it. A WARN names each unit, its keys and how long they have run, once its handler has
      * run longer than {@code leaseTtl}, and then at most once a minute per unit, from each heartbeat or start of the

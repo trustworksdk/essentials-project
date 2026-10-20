@@ -145,6 +145,17 @@ public class ShardOwnedQueuesController {
                                                                                                key));
     }
 
+    /**
+     * Release an ordered unit a stop kept behind a handler still running, accepting that the key may then be in two
+     * handlers at once. Answered by the instance that receives the request, from its own memory: an empty list means it
+     * kept no such unit - ask the instance named in the WARN that reported the unit kept.
+     */
+    @PostMapping("/shard-owned-queues/{queueName}/ordered-units/{unit}/release-kept")
+    public List<ApiShardOwnedKeptUnitRelease> releaseKeptOrderedUnit(@PathVariable String queueName,
+                                                                      @PathVariable int unit) {
+        return shardOwnedQueuesApi.releaseKeptOrderedUnit(principal(), QueueName.of(queueName), unit);
+    }
+
     @DeleteMapping("/shard-owned-queues/{queueName}/messages")
     public ShardOwnedPurgeResult purgeQueue(@PathVariable String queueName) {
         return new ShardOwnedPurgeResult(shardOwnedQueuesApi.purgeQueue(principal(), QueueName.of(queueName)));

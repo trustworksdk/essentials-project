@@ -1801,6 +1801,67 @@ paths:
       x-required-roles:
       - essentials_queue_writer
       - essentials_admin
+  /shard-owned-queues/{queueName}/ordered-units/{unit}/release-kept:
+    post:
+      tags:
+      - shard-owned-queues
+      summary: "Release an ordered unit a stop kept because a key of it was still\
+        \ in its handler, without waiting for that handler any longer. Whoever takes\
+        \ the unit next delivers the messages still in a handler again, possibly while\
+        \ those handlers still run them. Answered by the instance receiving the request,\
+        \ from its own memory: an empty list means it kept no such unit with its lease\
+        \ row still held."
+      operationId: shardOwnedReleaseKeptOrderedUnit
+      parameters:
+      - name: queueName
+        in: path
+        description: The queue name.
+        required: true
+        schema:
+          type: string
+      - name: unit
+        in: path
+        description: "The ordered unit, as the WARN reporting it kept names it."
+        required: true
+        schema:
+          type: integer
+          format: int32
+      responses:
+        "200":
+          description: 200 — The matching items.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ApiShardOwnedKeptUnitRelease"
+        "400":
+          description: "Malformed or out-of-range parameter, or invalid request body."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller lacks one of the required roles.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      x-required-roles:
+      - essentials_queue_writer
+      - essentials_admin
   /shard-owned-queues/{queueName}/messages:
     delete:
       tags:
@@ -3867,6 +3928,28 @@ components:
           type: string
           description: The exception type and message. Null when the run succeeded.
           nullable: true
+    ApiShardOwnedKeptUnitRelease:
+      required:
+      - longestInHandlerMillis
+      - unit
+      type: object
+      properties:
+        queueName:
+          $ref: "#/components/schemas/QueueName"
+        unit:
+          type: integer
+          format: int32
+        instanceId:
+          type: string
+        outcome:
+          type: string
+        keysInHandler:
+          type: array
+          items:
+            type: string
+        longestInHandlerMillis:
+          type: integer
+          format: int64
     ApiShardOwnedMessage:
       required:
       - attempts

@@ -1041,7 +1041,8 @@ public final class PostgresqlMessageQueue implements MessageQueue {
      * use on the database ({@link #heldIndexes}): only once every ordered unit a lane's stop kept has been handed back,
      * which the lane does once the key it was kept for has left its handler
      * ({@link ShardOwnedQueue#keptOrderedUnitAwaited()}) - or its key has been in its handler longer than the queue's
-     * {@code stuckHandlerTimeout} - and no lane's hand-back is still running
+     * {@code stuckHandlerTimeout}, or the unit has been released on request ({@link #releaseKeptOrderedUnit}) - and no
+     * lane's hand-back is still running
      * ({@link ShardOwnedQueue#handBackStillRunning()}), which {@link #reserveSubscriptionIndex} asks the lanes each time,
      * once it has had them retry a hand-back of such a unit that failed and review their kept units. Reviewed here first
      * too ({@link ShardOwnedQueue#reviewStuckKeptUnits()}), so a unit whose key is past that bound, once the stop that kept
@@ -1068,7 +1069,8 @@ public final class PostgresqlMessageQueue implements MessageQueue {
         if (keptUnitNotHandedBack && handBackStillRunning) {
             until = "until the handler of the key it kept an ordered unit for has returned and the unit has been handed back, which "
                     + "each consume() of the queue retries should it fail, or that key has been in its handler longer than "
-                    + "stuckHandlerTimeout (" + settings.stuckHandlerTimeout() + "), and the hand-back of its lanes to the database has finished";
+                    + "stuckHandlerTimeout (" + settings.stuckHandlerTimeout() + "), or the unit has been released on request "
+                    + "(releaseKeptOrderedUnit), and the hand-back of its lanes to the database has finished";
             because = "it kept an ordered unit whose key was still in a handler, and the unit's lease names that id, so a "
                       + "subscription registering under it would take the unit at once and could start the key beside that handler, or, once it "
                       + "has returned, charge an attempt and deliver the handled message again; "
@@ -1076,7 +1078,8 @@ public final class PostgresqlMessageQueue implements MessageQueue {
         } else if (keptUnitNotHandedBack) {
             until = "until the handler of the key it kept an ordered unit for has returned and the unit has been handed back, which "
                     + "each consume() of the queue retries should it fail, or that key has been in its handler longer than "
-                    + "stuckHandlerTimeout (" + settings.stuckHandlerTimeout() + ")";
+                    + "stuckHandlerTimeout (" + settings.stuckHandlerTimeout() + "), or the unit has been released on request "
+                    + "(releaseKeptOrderedUnit)";
             because = "it kept an ordered unit whose key was still in a handler, and the unit's lease names that id, so a "
                       + "subscription registering under it would take the unit at once and could start the key beside that handler, or, once it "
                       + "has returned, charge an attempt and deliver the handled message again";
@@ -1492,6 +1495,53 @@ public final class PostgresqlMessageQueue implements MessageQueue {
                              + "restored key_order", queueId, restored, key);
         }
         return restored;
+    }
+
+    /**
+     * {@inheritDoc}
+     * <p>
+     * Asks the lanes of every subscription registered now ({@link #consumers}) and of every unsubscribed one whose
+     * instance id is still held because a lane of it kept a unit ({@link #heldIndexes}); each releases only a unit its
+     * own stop kept ({@code ShardOwnedQueue.releaseKeptOrderedUnit}). An unsubscribed subscription whose index this
+     * queue has given back already is not asked: each unit it kept was handed back, released, or given up on past
+     * {@code stuckHandlerTimeout} - and one given up on is taken over by the next subscription registering under its
+     * instance id, or by another instance once that id's liveness lapses. A held index freed by the release is given back
+     * by the next {@code consume()} ({@link #reserveSubscriptionIndex}).
+     * <p>
+     * A lane whose release fails with a {@link SQLException} - its unit then left kept - does not hide what the other lanes
+     * released: every lane is asked, and the failure is thrown only when no lane answered {@link KeptUnitRelease.Outcome#RELEASED}
+     * (the other failures added to it as suppressed). Otherwise each failure is logged at WARN and the entries are returned.
+     */
+    @Override
+    public List<KeptUnitRelease> releaseKeptOrderedUnit(int unit) throws SQLException {
+        var units = orderedUnits();
+        requireTrue(unit >= 0 && unit < units, "unit must be from 0 to " + (units - 1) + ", the queue's ordered units, but was " + unit);
+        var lanes = new LinkedHashSet<ShardOwnedQueue>(consumers);
+        synchronized (handOver) {
+            heldIndexes.values().forEach(held -> lanes.addAll(held.lanes()));
+        }
+        var releases = new ArrayList<KeptUnitRelease>();
+        var failures = new ArrayList<SQLException>();
+        for (var lane : lanes) {
+            try {
+                lane.releaseKeptOrderedUnit(unit).ifPresent(releases::add);
+            } catch (SQLException e) {
+                failures.add(e);
+            }
+        }
+        if (failures.isEmpty()) {
+            return releases;
+        }
+        if (releases.stream().noneMatch(release -> release.outcome() == KeptUnitRelease.Outcome.RELEASED)) {
+            var first = failures.getFirst();
+            failures.stream().skip(1).forEach(first::addSuppressed);
+            throw first;
+        }
+        for (var failure : failures) {
+            log.warn("Queue {} released ordered unit {} on request in one subscription, but releasing it in another failed; that "
+                             + "one's unit is left kept, for a later hand-back or request", queueId, unit, failure);
+        }
+        return releases;
     }
 
     @Override

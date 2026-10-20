@@ -816,6 +816,19 @@ release, is bounded the same way (§2). (`<!-- fix:U-013 -->`)
   for removal; a record pattern over the 0.60.0 components no longer compiles (§1). And `ShardOwnerMetrics.keptUnitsInHandler()` (also in `snapshot()`): the ordered units a stop kept
   whose key is still in its handler, normally zero, and the units a shed or a dead pump's hand-back released at the
   bound while their stuck handler runs on. (`7af80bc49`, `<!-- fix:U-013 -->`)
+- **Shard-owned engine: release an ordered unit a stop kept, before `stuckHandlerTimeout`.**
+  `MessageQueue.releaseKeptOrderedUnit(unit)`, in the admin API `ShardOwnedQueuesApi.releaseKeptOrderedUnit` and
+  `POST /shard-owned-queues/{queueName}/ordered-units/{unit}/release-kept` (role `QUEUE_WRITER`). For a handler known to
+  be hung: a stop keeps an ordered unit whose key is still in its handler, and until now nothing an operator could call
+  freed it before the handler returned, the instance's liveness lapsed or the bound fired. The call flushes the unit's
+  acknowledgements and releases its lease row, so any instance below its fair share takes it under a new fence - and
+  **delivers the messages still in a handler again, possibly while those handlers still run them**, the reordering and
+  duplicate delivery the wait exists to prevent. It touches only a unit a stop kept whose row still names the stopping
+  instance, and answers from that process's memory: call the instance whose WARN named the unit; any other answers
+  with an empty list. Each entry says `RELEASED` (with the keys that were in a handler), `ALREADY_TAKEN` or `BUSY` (ask
+  again). A `default` method on both `MessageQueue` and `ShardOwnedQueuesApi` that releases nothing, so an
+  implementation of your own of either still compiles. The admin console's Shard-owned queues page offers it as
+  **Release kept unit**, acting on the instance that takes the request and showing its answer. (`<!-- fix:U-014 -->`)
 - **Shard-owned engine: `spi.RedeliveryRequested(delay)`.** A handler throws it to ask for redelivery after `delay`
   without it counting as an attempt, being reported as a failure or leading to a dead letter (§1.1.18).
   (`a4f541e4`, `f9fdd99b`)

@@ -66,6 +66,8 @@ class AdminApiEndpointsTest {
     private final PostgresqlQueryStatisticsApi queryStatisticsApi = mock(PostgresqlQueryStatisticsApi.class);
     private final SchedulerApi                 schedulerApi       = mock(SchedulerApi.class);
     private final EventStoreApi                eventStoreApi      = mock(EventStoreApi.class);
+    private final dk.trustworks.essentials.components.queue.shardowned.api.ShardOwnedQueuesApi shardOwnedQueuesApi =
+            mock(dk.trustworks.essentials.components.queue.shardowned.api.ShardOwnedQueuesApi.class);
 
     private final TestAuthenticatedUser authenticatedUser = new TestAuthenticatedUser();
 
@@ -82,7 +84,8 @@ class AdminApiEndpointsTest {
                                                  new AggregateArchiveController(aggregateArchiveApi, principalResolver),
                                                  new PostgresqlQueryStatisticsController(queryStatisticsApi, principalResolver),
                                                  new SchedulerController(schedulerApi, principalResolver),
-                                                 new EventStoreController(eventStoreApi, principalResolver))
+                                                 new EventStoreController(eventStoreApi, principalResolver),
+                                                 new ShardOwnedQueuesController(shardOwnedQueuesApi, principalResolver))
                                  .setControllerAdvice(new AdminApiExceptionHandler())
                                  .setMessageConverters(new JacksonJsonHttpMessageConverter(jsonMapper))
                                  .addPlaceholderValue(AdminApiPaths.BASE_PATH_PROPERTY, BASE)
@@ -213,6 +216,48 @@ class AdminApiEndpointsTest {
             mockMvc.perform(post(BASE + "/event-store/subscriptions/OrderProjection/aggregate-types/Orders/resume"))
                    .andExpect(status().isForbidden())
                    .andExpect(jsonPath("$.status").value(403));
+        }
+
+        @Test
+        void releasing_a_kept_ordered_unit_reports_what_was_released() throws Exception {
+            var orders = dk.trustworks.essentials.components.queue.shardowned.spi.QueueName.of("orders");
+            when(shardOwnedQueuesApi.releaseKeptOrderedUnit(any(), eq(orders), eq(7)))
+                    .thenReturn(List.of(new dk.trustworks.essentials.components.queue.shardowned.api.ApiShardOwnedKeptUnitRelease(
+                            orders, 7, "node-1", "RELEASED", List.of("ACC-1"), 90_000L)));
+
+            mockMvc.perform(post(BASE + "/shard-owned-queues/orders/ordered-units/7/release-kept"))
+                   .andExpect(status().isOk())
+                   .andExpect(jsonPath("$[0].unit").value(7))
+                   .andExpect(jsonPath("$[0].instanceId").value("node-1"))
+                   .andExpect(jsonPath("$[0].outcome").value("RELEASED"))
+                   .andExpect(jsonPath("$[0].keysInHandler[0]").value("ACC-1"))
+                   .andExpect(jsonPath("$[0].longestInHandlerMillis").value(90_000));
+        }
+
+        @Test
+        void releasing_an_ordered_unit_the_answering_instance_did_not_keep_is_a_normal_empty_answer() throws Exception {
+            when(shardOwnedQueuesApi.releaseKeptOrderedUnit(any(), any(), anyInt())).thenReturn(List.of());
+
+            mockMvc.perform(post(BASE + "/shard-owned-queues/orders/ordered-units/7/release-kept"))
+                   .andExpect(status().isOk())
+                   .andExpect(jsonPath("$").isEmpty());
+        }
+
+        @Test
+        void releasing_a_kept_ordered_unit_without_the_queue_writer_role_is_forbidden() throws Exception {
+            when(shardOwnedQueuesApi.releaseKeptOrderedUnit(any(), any(), anyInt()))
+                    .thenThrow(new EssentialsSecurityException("Unauthorized access required role is missing"));
+
+            mockMvc.perform(post(BASE + "/shard-owned-queues/orders/ordered-units/7/release-kept"))
+                   .andExpect(status().isForbidden())
+                   .andExpect(jsonPath("$.status").value(403));
+        }
+
+        @Test
+        void releasing_an_ordered_unit_that_is_not_a_number_is_a_bad_request() throws Exception {
+            mockMvc.perform(post(BASE + "/shard-owned-queues/orders/ordered-units/seven/release-kept"))
+                   .andExpect(status().isBadRequest());
+            verifyNoInteractions(shardOwnedQueuesApi);
         }
 
         @Test

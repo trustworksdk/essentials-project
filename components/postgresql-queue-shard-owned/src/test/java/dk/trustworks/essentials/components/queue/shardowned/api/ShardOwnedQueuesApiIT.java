@@ -129,6 +129,7 @@ class ShardOwnedQueuesApiIT {
         assertThat(api.deleteMessage(writer(), QueueName.of("never-registered"),
                                      new MessageId(MessageId.Lane.UNORDERED, 0, 1L))).isFalse();
         assertThat(api.purgeQueue(writer(), QueueName.of("never-registered"))).isZero();
+        assertThat(api.releaseKeptOrderedUnit(writer(), QueueName.of("never-registered"), 0)).isEmpty();
     }
 
     // ------------------------------------------------------------ redaction
@@ -239,6 +240,22 @@ class ShardOwnedQueuesApiIT {
         assertThat(status.deadLetteredDepth()).isZero();
     }
 
+    /**
+     * The release itself, of a unit a stop kept behind a handler still running, is pinned against a real consumer by
+     * {@code ShardOwnedUnsubscribeIT}; here, what the API adds: a unit no stop of this process kept is a normal empty
+     * answer, not an error, and a unit outside the queue's ordered units is the caller's mistake.
+     */
+    @Test
+    void releasing_an_ordered_unit_no_stop_kept_releases_nothing_and_a_unit_out_of_range_is_refused() {
+        assertThat(api.releaseKeptOrderedUnit(writer(), ORDERS, 0))
+                .describedAs("nothing consumes the queue here, so nothing is kept")
+                .isEmpty();
+        assertThatThrownBy(() -> api.releaseKeptOrderedUnit(writer(), ORDERS, -1))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> api.releaseKeptOrderedUnit(writer(), ORDERS, ShardOwnedSchema.ORDERED_UNITS))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
     @Test
     void a_dead_letter_page_is_capped_rather_than_served_at_whatever_was_asked_for() throws Exception {
         assertThat(DefaultShardOwnedQueuesApi.MAX_PAGE_SIZE).isEqualTo(1_000);
@@ -279,6 +296,7 @@ class ShardOwnedQueuesApiIT {
         assertThatThrownBy(() -> api.markAsDeadLetterMessage(reader(), ORDERS, id, "no")).isInstanceOf(EssentialsSecurityException.class);
         assertThatThrownBy(() -> api.resurrectDeadLetterMessage(reader(), ORDERS, id)).isInstanceOf(EssentialsSecurityException.class);
         assertThatThrownBy(() -> api.purgeQueue(reader(), ORDERS)).isInstanceOf(EssentialsSecurityException.class);
+        assertThatThrownBy(() -> api.releaseKeptOrderedUnit(reader(), ORDERS, 0)).isInstanceOf(EssentialsSecurityException.class);
     }
 
     /**

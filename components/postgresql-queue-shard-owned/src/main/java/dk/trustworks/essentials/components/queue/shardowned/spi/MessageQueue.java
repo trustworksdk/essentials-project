@@ -305,6 +305,34 @@ public interface MessageQueue extends Lifecycle, AutoCloseable {
     int resurrectKey(String key) throws SQLException;
 
     /**
+     * Release ordered unit {@code unit} now, if a stop of a subscription of this queue in <b>this process</b> kept it -
+     * accepting that a key of it may be in two handlers at once.
+     * <p>
+     * A stop keeps an ordered unit, its lease row still naming the subscription's instance id, when a key of it is still
+     * in its handler {@code shedGrace} after the stop began: a successor taking the unit then could start that key while
+     * it still runs here. The unit is released once that handler returns; until then nothing serves the unit's other
+     * keys, and nothing takes the unit before the instance's liveness lapses or the handler has been there longer than
+     * the queue's {@code stuckHandlerTimeout}. This is the operator's way out before then, for a handler known to be hung:
+     * the unit's acknowledgements are flushed under the fence it was kept under and its lease row released, so any
+     * instance below its fair share may take it under a new fence. <b>Whoever takes it delivers the messages still in a
+     * handler again, possibly while those handlers still run them</b> - the reordering and duplicate delivery the wait
+     * exists to prevent. A unit whose handler has returned meanwhile is simply handed back, as it would have been.
+     * <p>
+     * Only a unit a stop kept and whose lease row still names the subscription's instance id under that fence is
+     * touched; every other unit, this process's included, is left alone. Kept units live in the memory of the process
+     * whose stop kept them, so ask the process named in the WARN that reported the unit kept: anywhere else this
+     * returns nothing. Each subscription registered with this queue is asked, and each unsubscribed one whose instance id
+     * this queue still keeps out of use because of a unit it kept.
+     *
+     * @param unit the ordered unit, as the stop's WARN names it; from {@code 0} to the queue's ordered unit count, exclusive
+     * @return what was done, one entry per subscription that had kept the unit; empty when none had - the default, for an
+     * implementation that keeps no units
+     */
+    default List<KeptUnitRelease> releaseKeptOrderedUnit(int unit) throws SQLException {
+        return List.of();
+    }
+
+    /**
      * Remove everything, both lanes and dead letters. Administrative, not a delivery operation.
      *
      * @return the number of messages removed

@@ -42,8 +42,9 @@ class KeptUnitPhaseTest {
     private static final Map<Phase, Set<Phase>> EDGES = Map.of(
             STOP_FLUSHING, EnumSet.of(AWAITING_HAND_BACK),
             AWAITING_HAND_BACK, EnumSet.of(HANDING_BACK, GIVEN_UP),
-            HANDING_BACK, EnumSet.of(HANDED_BACK, AWAITING_HAND_BACK, GIVEN_UP, TAKEOVER_ASKED),
+            HANDING_BACK, EnumSet.of(HANDED_BACK, FORCE_RELEASED, AWAITING_HAND_BACK, GIVEN_UP, TAKEOVER_ASKED),
             HANDED_BACK, EnumSet.noneOf(Phase.class),
+            FORCE_RELEASED, EnumSet.noneOf(Phase.class),
             GIVEN_UP, EnumSet.of(TAKEOVER_ASKED, HANDING_BACK),
             TAKEOVER_ASKED, EnumSet.of(HANDING_BACK));
 
@@ -146,6 +147,37 @@ class KeptUnitPhaseTest {
         assertThat(givenUp.isGivenUp()).isTrue();
     }
 
+    /**
+     * A release on request ({@code ShardOwnedQueue.releaseKeptOrderedUnit}) ends where nothing waits for the handler any
+     * more while a key is still in it - so neither a later stop nor a {@code PostgresqlMessageQueue} holding an ended
+     * subscription's instance id waits for it - as an ordinary hand-back when none is, and back where it was claimed from
+     * when the release left the row held.
+     */
+    @Test
+    void a_release_on_request_ends_force_released_while_a_key_is_in_its_handler_and_handed_back_when_none_is() {
+        for (var claimedFrom : List.of(AWAITING_HAND_BACK, GIVEN_UP, TAKEOVER_ASKED)) {
+            var inHandler = unitAt(claimedFrom, owner(1));
+            assertThat(inHandler.claimHandBack()).isEqualTo(claimedFrom);
+            inHandler.endForcedRelease(claimedFrom, false);
+            assertThat(inHandler.phase()).as("claimed from %s, a key in its handler", claimedFrom).isEqualTo(FORCE_RELEASED);
+            assertThat(inHandler.nothingWaitsForHandler()).isTrue();
+            assertThat(inHandler.isGivenUp()).as("released, not given up on").isFalse();
+            assertThat(inHandler.claimHandBack()).as("nothing left to hand back").isNull();
+
+            var returned = unitAt(claimedFrom, owner(0));
+            assertThat(returned.claimHandBack()).isEqualTo(claimedFrom);
+            returned.endForcedRelease(claimedFrom, false);
+            assertThat(returned.phase()).as("claimed from %s, no key in its handler", claimedFrom).isEqualTo(HANDED_BACK);
+
+            var failed = unitAt(claimedFrom, owner(1));
+            assertThat(failed.claimHandBack()).isEqualTo(claimedFrom);
+            failed.endForcedRelease(claimedFrom, true);
+            assertThat(failed.phase()).as("claimed from %s, row still held", claimedFrom).isEqualTo(claimedFrom);
+        }
+        assertThat(EnumSet.allOf(Phase.class)).filteredOn(Phase::nothingWaitsForHandler)
+                                              .containsExactlyInAnyOrder(GIVEN_UP, TAKEOVER_ASKED, FORCE_RELEASED);
+    }
+
     @Test
     void the_diagram_names_every_phase() {
         assertThat(EDGES.keySet()).containsExactlyInAnyOrder(Phase.values());
@@ -155,12 +187,20 @@ class KeptUnitPhaseTest {
      * A kept unit standing at {@code phase}, reached along the diagram's edges only.
      */
     private static KeptUnit unitAt(Phase phase) {
-        var unit = new KeptUnit(owner());
+        return unitAt(phase, owner());
+    }
+
+    /**
+     * A kept unit of {@code owner} standing at {@code phase}, reached along the diagram's edges only.
+     */
+    private static KeptUnit unitAt(Phase phase, LeasedOwner owner) {
+        var unit = new KeptUnit(owner);
         var path = switch (phase) {
             case STOP_FLUSHING -> List.<Phase>of();
             case AWAITING_HAND_BACK -> List.of(AWAITING_HAND_BACK);
             case HANDING_BACK -> List.of(AWAITING_HAND_BACK, HANDING_BACK);
             case HANDED_BACK -> List.of(AWAITING_HAND_BACK, HANDING_BACK, HANDED_BACK);
+            case FORCE_RELEASED -> List.of(AWAITING_HAND_BACK, HANDING_BACK, FORCE_RELEASED);
             case GIVEN_UP -> List.of(AWAITING_HAND_BACK, GIVEN_UP);
             case TAKEOVER_ASKED -> List.of(AWAITING_HAND_BACK, GIVEN_UP, TAKEOVER_ASKED);
         };
@@ -180,6 +220,20 @@ class KeptUnitPhaseTest {
     private static LeasedOwner owner() {
         return (LeasedOwner) Proxy.newProxyInstance(LeasedOwner.class.getClassLoader(), new Class<?>[]{LeasedOwner.class},
                                                     (proxy, method, args) -> {
+                                                        throw new UnsupportedOperationException(method.getName());
+                                                    });
+    }
+
+    /**
+     * An owner that answers only how many of its keys are in a handler: what ending a release on request asks.
+     */
+    @SuppressWarnings("PMD.UseProperClassLoader")
+    private static LeasedOwner owner(int inFlight) {
+        return (LeasedOwner) Proxy.newProxyInstance(LeasedOwner.class.getClassLoader(), new Class<?>[]{LeasedOwner.class},
+                                                    (proxy, method, args) -> {
+                                                        if ("inFlight".equals(method.getName())) {
+                                                            return inFlight;
+                                                        }
                                                         throw new UnsupportedOperationException(method.getName());
                                                     });
     }

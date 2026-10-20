@@ -108,6 +108,8 @@ function loadingRows(count, widths) {
  */
 function errorState(err, requiredRole) {
     const map = {
+        400: { cls: 'state-403', icon: '▲', title: 'Not accepted',
+               detail: 'The request was refused as malformed or out of range. Check the value entered.' },
         401: { cls: 'state-401', icon: '▲', title: 'Not signed in',
                detail: 'The request was not authenticated. Sign in to the host application, then reload.' },
         403: { cls: 'state-403', icon: '▲', title: 'Not permitted',
@@ -1043,6 +1045,33 @@ const actions = {
            <p>If the handler is still broken the first message fails its way back and the key stops again.</p>`,
         run: () => api(`/shard-owned-queues/${encodeURIComponent(shardOwnedState.queue)}/ordered-keys/${encodeURIComponent(key)}/resurrect`, { method: 'POST' })
     }),
+    /* Kept units live in the memory of the process whose stop kept them, so this acts on whichever instance takes the
+       request, and an empty answer is normal elsewhere. The answer is shown on the page (shardOwnedState.lastRelease). */
+    shardReleaseKept: (name, data) => ({
+        title: 'Release a kept ordered unit?', danger: true, confirmLabel: 'Release unit',
+        body: `<p>Releases an ordered unit of <code class="mono">${esc(name)}</code> that a stop kept because a key of it
+           was still in its handler, without waiting for that handler any longer: the way out of a handler known to be
+           hung before the queue's <code>stuckHandlerTimeout</code> ends the wait. Only a unit a stop kept and whose
+           lease row still names the stopping instance is touched; every other unit is left alone.</p>
+           <p><strong>Accepts reordering and duplicate delivery for its keys:</strong> whoever takes the unit next
+           delivers the messages still in a handler again, possibly while those handlers still run them.</p>
+           <p><strong>Acts on the instance serving this console only</strong> - the one that takes this request, which
+           behind a load balancer is not necessarily the one that rendered this page. A kept unit lives in the memory
+           of the process whose stop kept it, so use the console of the instance named in the WARN that reported the
+           unit kept; any other releases nothing.</p>
+           <label for="keptUnit">Ordered unit, as that WARN names it</label>
+           <input type="number" id="keptUnit" min="0" ${data.units ? `max="${esc(Number(data.units) - 1)}"` : ''} step="1"
+                  autocomplete="off">`,
+        run: async () => {
+            const raw = document.getElementById('keptUnit')?.value ?? '';
+            const unit = Number(raw);
+            if (raw.trim() === '' || !Number.isInteger(unit) || unit < 0) {
+                throw { status: 400, message: 'Enter the ordered unit as a whole number, as the WARN that reported it kept names it.' };
+            }
+            const results = await api(`/shard-owned-queues/${encodeURIComponent(name)}/ordered-units/${encodeURIComponent(unit)}/release-kept`, { method: 'POST' });
+            shardOwnedState.lastRelease = { queue: name, unit, results: results ?? [] };
+        }
+    }),
     shardDelete: (id) => ({
         title: 'Delete message?', danger: true, confirmLabel: 'Delete message',
         body: `<p>Permanently removes <code class="mono">${esc(id)}</code>. The payload is not recoverable
@@ -1480,7 +1509,27 @@ views.aggregateLookup = async () => {
    There is no "browse queued messages" list. The engine reads per shard from a cursor and offers
    no listing of live messages, only dead letters and lookup by id — so the view offers exactly
    that rather than a page that would have to invent an order. */
-let shardOwnedState = { queue: null };
+/* lastRelease: the answer to the last "Release kept unit", shown above the cards until the next one. Kept across
+   re-renders: the action re-renders the view as soon as the call returns. */
+let shardOwnedState = { queue: null, lastRelease: null };
+
+const keptReleaseOutcome = {
+    RELEASED: () => badge('warning', 'Released'),
+    ALREADY_TAKEN: () => badge('neutral', 'Already taken - nothing released'),
+    BUSY: () => badge('neutral', 'Busy - nothing done, ask again')
+};
+
+const keptReleaseNotice = (release) => `<div class="notice">
+      <strong>Release of kept ordered unit ${num(release.unit)}, answered by the instance that took the request:</strong>
+      ${release.results.length
+        ? release.results.map((r) => `<br>${(keptReleaseOutcome[r.outcome] ?? (() => badge('neutral', r.outcome)))()}
+            lease row of instance <span class="mono">${esc(r.instanceId)}</span>${r.keysInHandler.length
+                ? `; key(s) in a handler when asked: <span class="mono">${r.keysInHandler.map(esc).join(', ')}</span>,
+                   the longest there for ${millis(r.longestInHandlerMillis)}`
+                : ''}`).join('')
+        : `that instance kept no such unit with its lease row still held, so nothing was released. A kept unit lives in
+           the memory of the process whose stop kept it: use the console of the instance named in the WARN that
+           reported it.`}</div>`;
 
 const laneBar = (owned, total) => {
     const pct = total > 0 ? Math.round((owned / total) * 100) : 0;
@@ -1558,8 +1607,13 @@ views.shardOwnedQueues = async () => {
       </label>
       <label><input type="text" id="shardMessageLookup" placeholder="Find by message id (u-3-1042)" size="28"></label>
       <div class="spacer"></div>
+      <button class="btn btn-sm" data-act="shardReleaseKept" data-name="${esc(q)}" data-units="${status ? status.orderedUnits : ''}"
+              title="Release an ordered unit a stop kept behind a hung handler, on the instance serving this console"
+              ${CAN.writeQueues ? '' : 'disabled'}>Release kept unit</button>
       <button class="btn btn-sm btn-danger" data-act="shardPurge" data-name="${esc(q)}" ${CAN.writeQueues ? '' : 'disabled'}>Purge queue</button>
     </div>
+
+    ${shardOwnedState.lastRelease && shardOwnedState.lastRelease.queue === q ? keptReleaseNotice(shardOwnedState.lastRelease) : ''}
 
     <div class="kpi-row">
       ${tile('Unowned units', status ? num(status.unownedShards) : nil(),

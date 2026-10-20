@@ -48,7 +48,7 @@ import java.util.*;
  *     <tr><th>Operation</th><th>Role (or {@code ESSENTIALS_ADMIN})</th></tr>
  *     <tr><td>reads</td><td>{@code QUEUE_READER}</td></tr>
  *     <tr><td>message payloads</td><td>{@code QUEUE_PAYLOAD_READER}, additionally</td></tr>
- *     <tr><td>delete, retry, dead-letter, resurrect, purge</td><td>{@code QUEUE_WRITER}</td></tr>
+ *     <tr><td>delete, retry, dead-letter, resurrect, release a kept unit, purge</td><td>{@code QUEUE_WRITER}</td></tr>
  * </table>
  * A reader without {@code QUEUE_PAYLOAD_READER} still gets the message — its id, key, attempt count,
  * timestamps and last error — with {@code payload} null. That is the shape most administration needs,
@@ -164,6 +164,28 @@ public interface ShardOwnedQueuesApi {
      * @return how many messages were put back; zero if the key has no dead letters
      */
     int resurrectDeadLettersForKey(Object principal, QueueName queueName, String key);
+
+    /**
+     * Release an ordered unit a stop kept because a key of it was still in its handler, without waiting for that handler
+     * any longer: the way out of a handler known to be hung before the queue's {@code stuckHandlerTimeout} ends the wait
+     * (see {@link MessageQueue#releaseKeptOrderedUnit}).
+     * <p>
+     * <b>Accepts reordering and duplicate delivery for that key</b>: whoever takes the unit next delivers the messages
+     * still in a handler again, possibly while those handlers still run them. Only a unit a stop kept and whose lease row
+     * still names the stopping instance is touched; every other unit is left alone. Kept units live in the memory of the
+     * process whose stop kept them, so call the instance named in the WARN that reported the unit kept - any other
+     * answers with an empty list.
+     * <p>
+     * A default method, so an implementation of this interface written before it existed still compiles: the default
+     * releases nothing and answers with an empty list. {@link DefaultShardOwnedQueuesApi} implements it.
+     *
+     * @param unit the ordered unit, as that WARN names it
+     * @return what was done, one entry per subscription of the queue in the answering instance that had kept the unit;
+     * empty when none had, or no queue is registered under that name
+     */
+    default List<ApiShardOwnedKeptUnitRelease> releaseKeptOrderedUnit(Object principal, QueueName queueName, int unit) {
+        return List.of();
+    }
 
     /**
      * Delete everything in a queue: both lanes and its dead letters.

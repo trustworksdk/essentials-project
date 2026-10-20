@@ -83,6 +83,7 @@ final class EssentialsAdminApiSpec {
             ApiShardOwnedMessage.class,
             ApiShardOwnedQueueStatus.class,
             ApiShardOwnedQueueStatistics.class,
+            ApiShardOwnedKeptUnitRelease.class,
             ApiQueueStatistics.class,
             ApiSubscription.class,
             ApiSubscriptionStatistics.class,
@@ -473,6 +474,18 @@ final class EssentialsAdminApiSpec {
          .pathParam("queueName", new StringSchema(), "The queue name.")
          .pathParam("key", new StringSchema(), "The ordering key.")
          .responseRef("ShardOwnedResurrectKeyResult", "How many messages were put back.");
+
+        b.operation(ShardOwnedQueuesApi.class, "releaseKeptOrderedUnit")
+         .operationId("shardOwnedReleaseKeptOrderedUnit")
+         .tag("shard-owned-queues").post("/shard-owned-queues/{queueName}/ordered-units/{unit}/release-kept")
+         .summary("Release an ordered unit a stop kept because a key of it was still in its handler, without waiting for "
+                  + "that handler any longer. Whoever takes the unit next delivers the messages still in a handler again, "
+                  + "possibly while those handlers still run them. Answered by the instance receiving the request, from its "
+                  + "own memory: an empty list means it kept no such unit with its lease row still held.")
+         .roles(QUEUE_W, ADMIN)
+         .pathParam("queueName", new StringSchema(), "The queue name.")
+         .pathParam("unit", new IntegerSchema(), "The ordered unit, as the WARN reporting it kept names it.")
+         .responseArray("ApiShardOwnedKeptUnitRelease");
 
         b.operation(ShardOwnedQueuesApi.class, "purgeQueue")
          .operationId("shardOwnedPurgeQueue")
