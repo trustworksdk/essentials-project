@@ -49,6 +49,11 @@ public class ExclusiveAsynchronousSubscription extends AbstractEventStoreSubscri
 
     private SubscriptionResumePoint resumePoint;
     private volatile PersistedEventSubscriber subscription;
+    /**
+     * The lock this instance acquired, while it holds it. {@link #request(long)} asks it, in memory, whether it is still
+     * held - see there
+     */
+    private volatile FencedLock acquiredLock;
 
     private volatile boolean active;
     /**
@@ -122,6 +127,7 @@ public class ExclusiveAsynchronousSubscription extends AbstractEventStoreSubscri
                 subscriberId,
                 aggregateType);
         active = true;
+        acquiredLock = fencedLock;
         eventStoreSubscriptionObserver.lockAcquired(fencedLock, ExclusiveAsynchronousSubscription.this);
 
 
@@ -227,6 +233,7 @@ public class ExclusiveAsynchronousSubscription extends AbstractEventStoreSubscri
     private void unsubscribeOnLockReleased(FencedLock fencedLock) {
         // The subscription moves to the node that acquires the lock - it resumes at the held resume point there
         autoResumer.subscriptionStopped();
+        acquiredLock = null;
         if (!active) {
             return;
         }
@@ -281,6 +288,17 @@ public class ExclusiveAsynchronousSubscription extends AbstractEventStoreSubscri
 
     }
 
+    /**
+     * Asks the subscriber for {@code n} more events, if this instance still holds the subscription's lock.
+     * <p>
+     * Whether it does is answered in memory, by the {@link FencedLock} this instance acquired: the lock manager marks it
+     * released ({@code markAsReleased}) as soon as it learns the lock is lost, before it calls {@link #onLockReleased}.
+     * Asking the lock manager instead ({@link FencedLockManager#isLockedByThisLockManagerInstance(LockName)}) looked
+     * the lock up in the database, in a unit of work of its own - and the subscriber requests after every event it
+     * handles, so every exclusive subscription paid a transaction per event for it (EF-2,
+     * {@code docs/key-partitioned-event-processing.md} §5). The database answer was no safer: the lock can be lost the
+     * moment after either check, and fencing is the lock token's job, not this guard's.
+     */
     @Override
     public void request(long n) {
         if (!started) {
@@ -290,7 +308,8 @@ public class ExclusiveAsynchronousSubscription extends AbstractEventStoreSubscri
                     n);
             return;
         }
-        if (!fencedLockManager.isLockedByThisLockManagerInstance(lockName)) {
+        var lock = acquiredLock;
+        if (lock == null || !lock.isLockedByThisLockManagerInstance()) {
             log.warn("[{}-{}] Cannot request {} event(s) as the subscriber hasn't acquired the lock",
                     subscriberId,
                     aggregateType,

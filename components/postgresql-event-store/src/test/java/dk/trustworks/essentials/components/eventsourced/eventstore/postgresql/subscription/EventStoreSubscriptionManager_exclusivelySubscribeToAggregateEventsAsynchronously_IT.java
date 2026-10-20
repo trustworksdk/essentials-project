@@ -36,6 +36,7 @@ import dk.trustworks.essentials.components.foundation.transaction.UnitOfWork;
 import dk.trustworks.essentials.components.foundation.types.*;
 import dk.trustworks.essentials.shared.measurement.LogThresholds;
 import org.jdbi.v3.core.Jdbi;
+import org.jdbi.v3.core.statement.*;
 import org.jdbi.v3.postgres.PostgresPlugin;
 import org.junit.jupiter.api.*;
 import org.testcontainers.postgresql.PostgreSQLContainer;
@@ -482,6 +483,55 @@ class EventStoreSubscriptionManager_exclusivelySubscribeToAggregateEventsAsynchr
         assertThat(ordersSubscriptionResumePoint).isPresent();
         assertThat(ordersSubscriptionResumePoint.get().getResumeFromAndIncluding()).isEqualTo(lastEventOrder.globalEventOrder().increment()); // // When the subscriber is stopped we store the next global event order
         System.out.println("********** test_with_resubscription Completed ***********");
+    }
+
+    /**
+     * The subscriber asks for more events after every event it handles. Whether this instance still holds the lock is
+     * answered by the lock it acquired, in memory - it used to be a lock lookup in the database, in a transaction of its
+     * own, for every event (EF-2, {@code docs/key-partitioned-event-processing.md} §5).
+     */
+    @Test
+    void delivering_events_does_not_look_the_lock_up_in_the_database_per_event() {
+        var lockLookups = new AtomicInteger();
+        jdbi.setSqlLogger(new SqlLogger() {
+            @Override
+            public void logAfterExecution(StatementContext context) {
+                var sql = context.getRenderedSql();
+                if (sql != null && sql.toUpperCase().startsWith("SELECT") && sql.contains("fenced_locks")) {
+                    lockLookups.incrementAndGet();
+                }
+            }
+        });
+        eventStoreSubscriptionManagerNode1 = EventStoreSubscriptionManager.createFor(eventStore,
+                                                                                     50,
+                                                                                     Duration.ofMillis(100),
+                                                                                     PostgresqlFencedLockManager.builder()
+                                                                                                                .setJdbi(jdbi)
+                                                                                                                .setUnitOfWorkFactory(unitOfWorkFactory)
+                                                                                                                .setLockManagerInstanceId("Node1")
+                                                                                                                .setLockTimeOut(Duration.ofSeconds(3))
+                                                                                                                .setLockConfirmationInterval(Duration.ofSeconds(1))
+                                                                                                                .build(),
+                                                                                     Duration.ofSeconds(1),
+                                                                                     new PostgresqlDurableSubscriptionRepository(jdbi, eventStore));
+        eventStoreSubscriptionManagerNode1.start();
+        var orderEventsReceived = new ConcurrentLinkedDeque<PersistedEvent>();
+        var ordersSubscription  = createOrderSubscription(orderEventsReceived);
+        Awaitility.waitAtMost(Duration.ofSeconds(10)).until(ordersSubscription::isActive);
+
+        var numberOfEvents = 300;
+        var lookupsBefore  = lockLookups.get();
+        unitOfWorkFactory.usingUnitOfWork(() -> {
+            for (var i = 0; i < numberOfEvents; i++) {
+                var orderId = OrderId.random();
+                eventStore.appendToStream(ORDERS, orderId, List.of(new OrderEvent.OrderAdded(orderId, CustomerId.random(), i)));
+            }
+        });
+        Awaitility.waitAtMost(Duration.ofSeconds(30))
+                  .untilAsserted(() -> assertThat(orderEventsReceived).hasSize(numberOfEvents));
+
+        // At most the odd lock confirmation or resume-point lookup - never one per event
+        assertThat(lockLookups.get() - lookupsBefore).as("fenced_locks lookups while delivering %d events", numberOfEvents).isLessThan(10);
     }
 
     private EventStoreSubscription createOrderSubscription(ConcurrentLinkedDeque<PersistedEvent> orderEventsReceived) {
