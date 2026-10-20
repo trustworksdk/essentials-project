@@ -708,7 +708,8 @@ public final class ShardOwnedStorage {
      * ({@link #ownerIsGoneClause()}), so once it is gone any instance takes a unit naming the instance at once. The
      * engine deletes it from the stop of a {@code ShardOwnedQueue} that kept no ordered unit - one whose key was still in
      * its handler past {@code shedGrace}, which must stay away from other instances until the instance's liveness lapses,
-     * a lease TTL after its last heartbeat. The two lanes of one {@code PostgresqlMessageQueue} subscription share an
+     * a lease TTL after its last heartbeat - and has not started again by the time the stop's hand-back, which may outlast
+     * the stop, gets there. The two lanes of one {@code PostgresqlMessageQueue} subscription share an
      * instance id, and so this row; there a lane's stop leaves it to the other lane while that one is still running or
      * has kept an ordered unit, so the lane stopping last deletes it when neither lane's stop kept an ordered unit, and
      * nobody does when either kept one ({@code ShardOwnedQueue}'s {@code shareMembershipWith}). The pair knows that in memory, exactly, where the database does not: a lease row of

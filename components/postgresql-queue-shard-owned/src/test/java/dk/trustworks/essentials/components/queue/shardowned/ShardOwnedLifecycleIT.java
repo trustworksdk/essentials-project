@@ -1947,6 +1947,147 @@ class ShardOwnedLifecycleIT {
         }
     }
 
+    /**
+     * A {@code start()} after a {@code stop()} that gave up waiting for its hand-back to the database keeps the membership
+     * row it registers, though that hand-back gets through after it. A test transaction holds unit 0's lease row, so the
+     * stop's release - and the deregistration after it - waits past the 2 s budget, as behind a database that does not
+     * answer; the restart registers the instance, then waits behind the same row to lease unit 0. The abandoned hand-back
+     * used to delete the restarted run's membership row once its release got through, and other instances then read the
+     * instance's units as ownerless until its next heartbeat. A queue built on its own: no other lane of a subscription
+     * was asked, and nothing else stood between the late hand-back and the row.
+     */
+    @Test
+    void a_restart_keeps_its_membership_row_when_the_hand_back_of_the_stop_before_it_gets_through_late() throws Exception {
+        var instanceId = "restart-after-late-hand-back";
+        // A heartbeat every 20 s: none writes the membership row again while the test runs.
+        var settings = settingsWith(Duration.ofMillis(300), Duration.ofSeconds(60));
+        var queue    = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, instanceId);
+        try (var locking = dataSource.getConnection()) {
+            startConsuming(queue, "unordered", settings);
+            Awaitility.await().atMost(Duration.ofSeconds(10)).until(() -> unorderedShardsOwnedBy(instanceId) == SHARD_COUNT);
+
+            locking.setAutoCommit(false);
+            CompletableFuture<Void> restarting;
+            try {
+                assertThat(lockLeaseRowOf(locking, "unordered", 0)).as("premise: the test holds unit 0's lease row").isTrue();
+                var registeredBefore = lastSeenMicrosOf(instanceId);
+                queue.stop();
+                assertThat(queue.handBackStillRunning()).as("premise: the stop gave up waiting for its hand-back").isTrue();
+                assertThat(instanceRegistered(instanceId)).as("premise: the hand-back has not deregistered the instance yet").isTrue();
+
+                restarting = CompletableFuture.runAsync(queue::start);
+                Awaitility.await().atMost(Duration.ofSeconds(10)).until(() -> lastSeenMicrosOf(instanceId) > registeredBefore);
+                assertThat(restarting).as("premise: the restart registered the instance and waits behind the held row").isNotDone();
+                assertThat(queue.handBackStillRunning()).as("premise: the hand-back is still waiting to release unit 0").isTrue();
+            } finally {
+                locking.rollback();
+            }
+            restarting.get(20, TimeUnit.SECONDS);
+            Awaitility.await().atMost(Duration.ofSeconds(20)).until(() -> !queue.handBackStillRunning());
+
+            assertThat(queue.isStarted()).as("premise: the restart started the queue").isTrue();
+            assertThat(unorderedShardsOwnedBy(instanceId)).as("premise: the restart leased every shard").isEqualTo(SHARD_COUNT);
+            assertThat(instanceRegistered(instanceId)).as("the late hand-back left the restarted run's membership row").isTrue();
+        } finally {
+            queue.stop();
+        }
+    }
+
+    /**
+     * A {@code start()} made while the hand-back of the {@code stop()} before it is deleting the instance's membership row -
+     * the deletion under way when the start began, here behind a row lock a test transaction holds on the row - waits for
+     * that deletion before it registers the instance, at most the 2 s budget, and then says once that it goes on without
+     * it. Registering at once, it could write the row before that deletion removed it. Once the lock is released the
+     * deletion goes first and the restart's registration writes the row again.
+     */
+    @Test
+    void a_restart_while_the_stop_before_it_is_deleting_the_membership_row_waits_for_that_deletion_and_says_so() throws Exception {
+        var instanceId  = "restart-during-deregistration";
+        var settings    = settingsWith(Duration.ofMillis(300), Duration.ofSeconds(60));
+        var logged      = new ListAppender<ILoggingEvent>();
+        var queueLogger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(ShardOwnedQueue.class);
+        logged.start();
+        queueLogger.addAppender(logged);
+        var queue = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, instanceId);
+        try (var locking = dataSource.getConnection()) {
+            startConsuming(queue, "unordered", settings);
+            Awaitility.await().atMost(Duration.ofSeconds(10)).until(() -> unorderedShardsOwnedBy(instanceId) == SHARD_COUNT);
+
+            locking.setAutoCommit(false);
+            CompletableFuture<Void> restarting;
+            try {
+                assertThat(lockMembershipRowOf(locking, instanceId)).as("premise: the test holds the instance's membership row").isTrue();
+                queue.stop();
+                assertThat(queue.handBackStillRunning()).as("premise: the stop gave up waiting for its hand-back").isTrue();
+                assertThat(unorderedShardsOwnedBy(instanceId)).as("premise: the hand-back released the shards and is deleting the row")
+                                                             .isZero();
+
+                restarting = CompletableFuture.runAsync(queue::start);
+                Awaitility.await().atMost(Duration.ofSeconds(10)).until(() -> !waitingForTheDeregistration(logged).isEmpty());
+                assertThat(waitingForTheDeregistration(logged).getFirst()).as("the WARN names the instance and the queue")
+                                                                          .contains("Instance " + instanceId)
+                                                                          .contains("queue " + QUEUE_ID);
+                assertThat(restarting).as("premise: the restart's registration waits behind the held row").isNotDone();
+            } finally {
+                locking.rollback();
+            }
+            restarting.get(20, TimeUnit.SECONDS);
+            Awaitility.await().atMost(Duration.ofSeconds(20)).until(() -> !queue.handBackStillRunning());
+
+            assertThat(waitingForTheDeregistration(logged)).as("one WARN").hasSize(1);
+            assertThat(queue.isStarted()).as("premise: the restart started the queue").isTrue();
+            assertThat(instanceRegistered(instanceId)).as("the restarted run is registered once the held row is released").isTrue();
+        } finally {
+            queue.stop();
+            queueLogger.detachAppender(logged);
+        }
+    }
+
+    private static List<String> waitingForTheDeregistration(ListAppender<ILoggingEvent> logged) {
+        return List.copyOf(logged.list).stream()
+                   .map(ILoggingEvent::getFormattedMessage)
+                   .filter(message -> message.contains("to finish deleting the instance's membership row"))
+                   .toList();
+    }
+
+    private static ShardOwnerSettings settingsWith(Duration shedGrace, Duration leaseTtl) {
+        var defaults = ShardOwnerSettings.defaults();
+        return new ShardOwnerSettings(defaults.readBatchSize(), defaults.ackBatchSize(), Duration.ofMillis(1), Duration.ofMillis(2),
+                                      Duration.ofMillis(300), Duration.ofMillis(100), 1_000, 8,
+                                      Duration.ofMillis(50), Duration.ofSeconds(30), 2, shedGrace, leaseTtl, Duration.ofSeconds(60),
+                                      ShardOwnerSettings.DEFAULT_STUCK_HANDLER_TIMEOUT);
+    }
+
+    private boolean lockLeaseRowOf(Connection connection, String lane, int unit) throws SQLException {
+        try (var statement = connection.prepareStatement("SELECT 1 FROM " + ShardOwnedSchema.LEASE_TABLE
+                                                                 + " WHERE queue_id = ? AND lane = ? AND shard = ? FOR UPDATE")) {
+            statement.setShort(1, QUEUE_ID);
+            statement.setString(2, lane);
+            statement.setInt(3, unit);
+            try (var resultSet = statement.executeQuery()) {
+                return resultSet.next();
+            }
+        }
+    }
+
+    private boolean lockMembershipRowOf(Connection connection, String instanceId) throws SQLException {
+        try (var statement = connection.prepareStatement("SELECT 1 FROM " + ShardOwnedSchema.INSTANCE_TABLE
+                                                                 + " WHERE queue_id = ? AND instance_id = ? FOR UPDATE")) {
+            statement.setShort(1, QUEUE_ID);
+            statement.setString(2, instanceId);
+            try (var resultSet = statement.executeQuery()) {
+                return resultSet.next();
+            }
+        }
+    }
+
+    private long lastSeenMicrosOf(String instanceId) throws Exception {
+        return queryForLong(dataSource, "Reading when " + instanceId + " last registered",
+                            "SELECT (extract(epoch FROM last_seen) * 1000000)::bigint FROM " + ShardOwnedSchema.INSTANCE_TABLE
+                                    + " WHERE queue_id = ? AND instance_id = ?",
+                            QUEUE_ID, instanceId);
+    }
+
     private static List<String> waitingToStart(ListAppender<ILoggingEvent> logged) {
         return List.copyOf(logged.list).stream()
                    .map(ILoggingEvent::getFormattedMessage)

@@ -208,9 +208,26 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      */
     private final    AtomicInteger            handBacksRunning = new AtomicInteger();
     /**
+     * How many of this queue's own hand-backs ({@link #handBackWithinBudget}) are deciding whether to delete this
+     * instance's membership row, or deleting it: counted up before a hand-back reads {@link #runNeedsMembership} for that
+     * decision, and down once it has left the row or its deletion has returned or thrown, when
+     * {@link #deregistrationFinished} is notified. {@link #start()} writes {@code runNeedsMembership} before it reads this,
+     * so of a start and a hand-back at once, either the hand-back reads the start's need and leaves the row, or the start
+     * sees the deletion under way and waits for it, up to {@link #SHUTDOWN_BUDGET}, before it registers the instance
+     * ({@link #awaitDeregistrationsRunning}); a deletion still running then is not waited for further. The other lane of
+     * the subscription ({@link #membershipSharedWith}) counts its hand-backs' deletions of the row on its own counter, not
+     * on this one.
+     */
+    private final    AtomicInteger            deregistrationsRunning = new AtomicInteger();
+    /**
+     * Notified each time {@link #deregistrationsRunning} is counted down, for {@link #awaitDeregistrationsRunning}.
+     */
+    private final    Object                   deregistrationFinished = new Object();
+    /**
      * The other lane of the {@link PostgresqlMessageQueue} subscription this queue is a lane of, which shares its instance
      * id and so its membership row ({@link #shareMembershipWith}); {@code null} for a queue built on its own, whose stop
-     * deletes the row whenever it keeps no ordered unit.
+     * deletes the row whenever it keeps no ordered unit and the queue has not started again by the time its hand-back
+     * gets there.
      */
     private volatile ShardOwnedQueue          membershipSharedWith;
     /**
@@ -219,7 +236,9 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * ends, or by an earlier one whose key is still in its handler ({@link #keptOrderedOwners}) - once it has decided
      * that, after draining. A run a stop has taken out still needs the row until then - while its owners drain,
      * and while a start still running ends it for a stop that gave up waiting ({@link #endRunOfStart}). An abrupt stop
-     * leaves it set, as it leaves the units leased: it stands in for a crash, whose membership row ages out.
+     * leaves it set, as it leaves the units leased: it stands in for a crash, whose membership row ages out. Read by the
+     * stop of the other lane of the subscription, and by the hand-back of an earlier stop of this queue, which may finish
+     * after a later start has set it ({@link #handBackWithinBudget}).
      * <p>
      * A queue-wide field a run writes, exempt from the rule against those for the reason {@link #keptOrderedOwners}
      * is: written under {@link #lifecycleLock} as a run starts and as it ends, never by a heartbeat tick, and at most one
@@ -466,6 +485,13 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * <p>
      * On a queue {@link #retire() retired}, this starts no run: a queue not started stays so, and one still running until
      * the {@link #stop()} that follows {@code retire()} is left as it is.
+     * <p>
+     * The hand-back to the database of an earlier {@link #stop()} may still be running, on a thread that stop gave up
+     * waiting for after {@link #SHUTDOWN_BUDGET} ({@link #handBackStillRunning()}). Finishing after this start has
+     * registered the instance, it leaves the membership row to this run; only a deletion of the row it had already
+     * decided on when this start began is still under way, and this start waits for that before it registers, up to
+     * {@link #SHUTDOWN_BUDGET}; if it has not finished by then, this logs one WARN and goes on
+     * ({@link #awaitDeregistrationsRunning}).
      */
     @Override
     public void start() {
@@ -484,11 +510,15 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             if (!currentRun.compareAndSet(null, run)) {
                 return;
             }
-            // Before this start registers the instance: a stop of the other lane of the subscription reading it from then
-            // on leaves the membership row to this one (handBackWithinBudget).
+            // Before this start registers the instance: the hand-back of an earlier stop of this queue, or a stop of the
+            // other lane of the subscription, reading it from then on leaves the membership row to this run
+            // (handBackWithinBudget). A deletion by this queue's own hand-back that read it before is waited for, up to
+            // SHUTDOWN_BUDGET, below, and not further if it is still running then; the other lane's is not waited for
+            // (awaitDeregistrationsRunning).
             runNeedsMembership = true;
             startHoldsLifecycleLock = true;
             try {
+                awaitDeregistrationsRunning();
                 startRun(run);
             } finally {
                 startHoldsLifecycleLock = false;
@@ -530,6 +560,51 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             }
             return true;
         });
+    }
+
+    /**
+     * Wait, up to {@link #SHUTDOWN_BUDGET}, for every deletion of this instance's membership row that this queue's own
+     * hand-backs have decided on and not finished ({@link #deregistrationsRunning}), so that it lands before
+     * {@link #start()} registers the instance rather than after. Called by {@code start()} once it has written its run's
+     * need for the row ({@link #runNeedsMembership}): a hand-back reading that need from then on leaves the row alone
+     * ({@link #handBackWithinBudget}), so only one that read it before is waited for. A deletion by the other lane of the
+     * subscription already under way is not waited for here: that lane's own start registers the row again, or waits for
+     * it. Past the budget this logs one WARN and returns, as the deletion may hang as long as a statement does: landing
+     * late, it removes the row this start registers, and other instances read this instance's units as ownerless until
+     * its next heartbeat writes the row again. An interrupt does not end the wait; it is set on the thread again once this
+     * returns.
+     */
+    private void awaitDeregistrationsRunning() {
+        if (deregistrationsRunning.get() == 0) {
+            return;
+        }
+        var deadline    = System.nanoTime() + SHUTDOWN_BUDGET.toNanos();
+        var interrupted = false;
+        try {
+            synchronized (deregistrationFinished) {
+                while (deregistrationsRunning.get() > 0) {
+                    var left = deadline - System.nanoTime();
+                    if (left <= 0) {
+                        log.warn("Instance {} has waited {} for an earlier stop of queue {} to finish deleting the instance's "
+                                         + "membership row, and starts without it: should that deletion land after this start has "
+                                         + "registered the instance, other instances read this instance's units as ownerless until its "
+                                         + "next heartbeat writes the row again (one every {} ms)",
+                                 instanceId, SHUTDOWN_BUDGET, queueId, heartbeatIntervalMillis());
+                        return;
+                    }
+                    try {
+                        TimeUnit.NANOSECONDS.timedWait(deregistrationFinished, left);
+                    } catch (InterruptedException e) {
+                        // Waited on regardless, towards the same deadline; the flag is set again on the way out.
+                        interrupted = true;
+                    }
+                }
+            }
+        } finally {
+            if (interrupted) {
+                Thread.currentThread().interrupt();
+            }
+        }
     }
 
     /**
@@ -1176,6 +1251,14 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
     }
 
     /**
+     * How often the heartbeat of a run ticks ({@link #startHeartbeat}): a third of {@code leaseTtl}, and no more often
+     * than every 200 ms.
+     */
+    private long heartbeatIntervalMillis() {
+        return Math.max(200L, leaseTtlMillis / 3);
+    }
+
+    /**
      * Renew the leases this instance holds, at a third of their lifetime.
      * <p>
      * A third rather than a half so that a single missed renewal — a GC pause, a slow query, a blip
@@ -1184,7 +1267,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * because by then it may have dispatched work its successor is also dispatching.
      */
     private void startHeartbeat(Run run) {
-        var interval = Math.max(200L, leaseTtlMillis / 3);
+        var interval = heartbeatIntervalMillis();
         // Every tick works on this run, the one it was scheduled for, and on no other: a tick still running when the run has
         // ended - cancelling does not stop it - reaches only the ended run's owners.
         run.heartbeat = runtime.scheduleHeartbeat(() -> {
@@ -2538,7 +2621,10 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * deregistering the instance id - is still running on the thread a stop gave up waiting for after
      * {@link #SHUTDOWN_BUDGET} ({@link #withinShutdownBudget}). Until it is done, that thread may still delete the
      * membership row of this queue's instance id ({@link ShardOwnedStorage#deregisterInstance(String)}), however
-     * long after the stop returned: a queue registering under the same id meanwhile can lose its row to it, and other
+     * long after the stop returned. A later {@link #start()} of this queue does not lose its row to it - the hand-back
+     * leaves the row to a run started since - unless that deletion was already under way when the start began and
+     * outlasts the start's {@link #SHUTDOWN_BUDGET} wait ({@link #awaitDeregistrationsRunning}); then the row is gone
+     * until the run's next heartbeat. Another queue registering under the same id meanwhile can, and other
      * instances then read its units as ownerless. {@link PostgresqlMessageQueue} asks this before it lets the next
      * {@code consume()} register under an ended subscription's instance id. Like {@link #keptOrderedUnitNotHandedBack()},
      * asked right after a {@code stop()} that gave up waiting for a start still running, it does not yet count the
@@ -2565,7 +2651,8 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * when its stop has finished: a stop may hand its work to a start still running, and its hand-back to the database
      * may outlast its {@link #SHUTDOWN_BUDGET} on a thread the stop no longer waits for.
      * <p>
-     * A queue never paired deletes the row whenever its stop keeps no ordered unit, as before.
+     * A queue never paired deletes the row whenever its stop keeps no ordered unit, as before. Paired or not, a stop
+     * leaves the row to a run of the same queue started since ({@link #handBackWithinBudget}).
      *
      * @param otherLane the subscription's other lane, registering under the same instance id on the same queue
      */
@@ -2583,8 +2670,9 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * when it kept one, until a later run ends keeping nothing, with no key an earlier stop kept a unit for still in its
      * handler ({@link #keptOrderedOwners}). A stop that gave up waiting for a start still running
      * ({@link #lifecycleLock}) leaves it true until that start has ended the run; an abrupt stop leaves it true, as it
-     * leaves the units leased. Read by the stop of the other lane of the subscription ({@link #shareMembershipWith})
-     * before it deletes the row.
+     * leaves the units leased. Read by the stop of the other lane of the subscription ({@link #shareMembershipWith}),
+     * and by the hand-back of each stop of this queue, before it deletes the row: a hand-back reading it after a later
+     * start of this queue reads that start's need.
      */
     boolean needsMembership() {
         return runNeedsMembership;
@@ -2706,10 +2794,10 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
 
     /**
      * End a run that has been taken out of {@link #currentRun}: drain, end and release its owners, hand back the runtime,
-     * and - when {@code deregister} - delete this instance's membership row, unless an ordered unit is kept or the other
-     * lane of the subscription still needs the row ({@link #handBackWithinBudget}). What {@link #stop()} does once it has taken
-     * its run out, and what a start does for a run a stop took out while it was starting, or that its own failure ended
-     * ({@link #endRunOfStart}). Under {@link #lifecycleLock}.
+     * and - when {@code deregister} - delete this instance's membership row, unless an ordered unit is kept, this queue has
+     * started again by then, or the other lane of the subscription still needs the row ({@link #handBackWithinBudget}).
+     * What {@link #stop()} does once it has taken its run out, and what a start does for a run a stop took out while it
+     * was starting, or that its own failure ended ({@link #endRunOfStart}). Under {@link #lifecycleLock}.
      */
     private void endRun(Run run, boolean deregister) {
         // The run's `owners` is read under its monitor, which every adoption into it takes (adoptIntoRun), and the run is
@@ -2846,11 +2934,15 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * the rows of {@code toRelease}, hand back the units an earlier stop kept whose handler has returned since
      * ({@code returnedEarlier}, {@link #handBackKeptUnit}), and deregister this instance
      * ({@link ShardOwnedStorage#deregisterInstance(String)}) when {@code deregister}, no ordered unit is {@code kept} by
-     * this run nor still {@code keptEarlier} by an earlier one with its key in a handler, and the other lane of the
-     * {@code PostgresqlMessageQueue} subscription, which shares the membership row ({@link #shareMembershipWith}), no
-     * longer needs it ({@link #needsMembership()}). When it does, that lane's own stop deletes the row later, or leaves it
-     * to age out if it keeps an ordered unit.
+     * this run nor still {@code keptEarlier} by an earlier one with its key in a handler, no run of this queue started
+     * since needs the row ({@link #needsMembership()}), and the other lane of the {@code PostgresqlMessageQueue}
+     * subscription, which shares the membership row ({@link #shareMembershipWith}), no longer needs it either. When that
+     * lane does, its own stop deletes the row later, or leaves it to age out if it keeps an ordered unit; when a later run
+     * of this queue does, its own stop.
      */
+    // PMD.CloseResource: otherLane is the subscription's other lane, owned and closed by PostgresqlMessageQueue; this only
+    // asks it whether it still needs the membership row, and must never close it.
+    @SuppressWarnings("PMD.CloseResource")
     private void handBackWithinBudget(List<LeasedOwner> serving, List<LeasedOwner> toRelease, List<LeasedOwner> kept,
                                       List<LeasedOwner> keptEarlier, List<KeptUnit> returnedEarlier, List<KeptUnit> keptNow,
                                       boolean deregister) {
@@ -2909,23 +3001,48 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         // first. Not from the database: a lease row of the other lane naming the instance may equally be a unit whose
         // release failed, which nobody serves, and keeping the row for it only held the other instances at a stale fair
         // share until the row aged out.
-        var otherLane = membershipSharedWith;
-        if (otherLane != null && otherLane.needsMembership()) {
-            log.debug("Instance {} leaves its membership row on queue {} to the {} lane of the same subscription, which still "
-                              + "needs it: it is running, its stop is still draining, or that stop kept an ordered unit",
-                      instanceId, queueId, otherLane.activeLane);
-            return;
-        }
-        // Stop counting towards everyone else's fair share. Releasing the leases without this
-        // frees the shards and simultaneously forbids any survivor from taking them, for the
-        // whole staleness window — which makes a graceful scale-in worse for the cluster than a
-        // crash.
+        //
+        // Counted before this queue's own need is read below, as start() writes that need before it reads this count:
+        // of a start and this hand-back at once, either this reads the start's need and leaves the row, or the start
+        // waits for this deletion, up to SHUTDOWN_BUDGET, before it registers the instance (awaitDeregistrationsRunning);
+        // a deletion still running then is not waited for further.
+        deregistrationsRunning.incrementAndGet();
         try {
-            storage.deregisterInstance(instanceId);
-        } catch (SQLException e) {
-            log.warn("Instance {} could not deregister on stop; it will age out of the membership "
-                             + "table instead, and survivors will be held at a stale fair share until it does",
-                     instanceId, e);
+            // This queue's own need first: the stop that ended this run set it false before this thread began, and only a
+            // later run sets it again - its start, or its stop keeping an ordered unit. The stop gives up waiting for this
+            // thread after SHUTDOWN_BUDGET, so this can run after the queue has started again under the same instance id
+            // and registered it; deleted then, the row the new run needs is gone, and other instances read its units as
+            // ownerless until its next heartbeat.
+            if (needsMembership()) {
+                log.debug("Instance {} leaves its membership row on queue {} to a run of this queue started since the stop "
+                                  + "whose hand-back this is, which needs it: it is running, its stop is still draining, or that "
+                                  + "stop kept an ordered unit",
+                          instanceId, queueId);
+                return;
+            }
+            var otherLane = membershipSharedWith;
+            if (otherLane != null && otherLane.needsMembership()) {
+                log.debug("Instance {} leaves its membership row on queue {} to the {} lane of the same subscription, which still "
+                                  + "needs it: it is running, its stop is still draining, or that stop kept an ordered unit",
+                          instanceId, queueId, otherLane.activeLane);
+                return;
+            }
+            // Stop counting towards everyone else's fair share. Releasing the leases without this
+            // frees the shards and simultaneously forbids any survivor from taking them, for the
+            // whole staleness window — which makes a graceful scale-in worse for the cluster than a
+            // crash.
+            try {
+                storage.deregisterInstance(instanceId);
+            } catch (SQLException e) {
+                log.warn("Instance {} could not deregister on stop; it will age out of the membership "
+                                 + "table instead, and survivors will be held at a stale fair share until it does",
+                         instanceId, e);
+            }
+        } finally {
+            deregistrationsRunning.decrementAndGet();
+            synchronized (deregistrationFinished) {
+                deregistrationFinished.notifyAll();
+            }
         }
     }
 
