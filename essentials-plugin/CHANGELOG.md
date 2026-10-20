@@ -159,16 +159,17 @@ targets, with a `-N` suffix for plugin-only releases.
   timeout a probe of the other statement runs under; handlers that hold a connection. Shard-owned: attempt counts
   survive a change of owner, a requested redelivery is not an attempt, and a WARN names
   `essentials.shard-owned-queue.instance-id` when two live processes share an id; `Subscription.unsubscribe()` ends a
-  subscription, where `stop()` and `close()` keep it registered for the queue's `start()`, so consuming anew needs an
-  unsubscribe first; the queue's `isStarted()` reads whether the queue is marked started, not whether a subscription
-  runs, so a manager that stops only what reports itself started (`DefaultLifecycleManager`) skips a partly started
-  queue; a stop that finds an ordered key still in its handler past `shedGrace` keeps that unit, and the
-  subscription's instance id, until the lease TTL runs out; and a new Gotcha lists what a `QueueObserver` calling
-  the queue back from `shardOwnershipChanged` gets - a `consume()` from a release a stop tells, or from one a failed
-  start tells while it stops the lanes it had started, returns a subscription registered but not started, now with a
-  WARN; a `Subscription.start()` there starts neither lane and WARNs, even with both lanes running, and a queue
-  `start()` starts nothing and WARNs, bar one case: finding the queue marked started while a failed `consume()` or
-  `Subscription.start()` stops its lanes, it returns at once, as that call leaves the queue started.
+  subscription, and so does `close()` now, which calls it, where `stop()` keeps it registered for the queue's
+  `start()`, so consuming anew needs an unsubscribe or a close first; the queue's `isStarted()` reads whether the
+  queue is marked started, not whether a subscription runs, so a manager that stops only what reports itself started
+  (`DefaultLifecycleManager`) skips a partly started queue; a stop that finds an ordered key still in its handler past
+  `shedGrace` keeps that unit, and the subscription's instance id, until the lease TTL runs out; and a new Gotcha
+  lists what a `QueueObserver` calling the queue back from `shardOwnershipChanged` gets - a `consume()` from a release
+  a stop tells, or from one a failed start tells while it stops the lanes it had started, returns a subscription
+  registered but not started, now with a WARN; a `Subscription.start()` there starts neither lane and WARNs, even with
+  both lanes running, and a queue `start()` starts nothing and WARNs, bar one case: finding the queue marked started
+  while a failed `consume()` or `Subscription.start()` stops its lanes, it returns at once, as that call leaves the
+  queue started.
   MongoDB (`LLM-springdata-mongo-queue.md`): due-time polling, and the backoff defaults stated correctly (50% of the
   polling interval per empty poll, capped at 20× the polling interval).
 - **Docs: supported PostgreSQL is 15+.** `LLM.md` states the floor (the majors the PostgreSQL community still patches)
