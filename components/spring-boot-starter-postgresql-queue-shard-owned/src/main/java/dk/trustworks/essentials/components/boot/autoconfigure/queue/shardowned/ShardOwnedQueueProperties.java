@@ -23,6 +23,8 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import java.time.Duration;
 import java.util.*;
 
+import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
+
 /**
  * Configuration for the shard-owned queue engine, under {@code essentials.shard-owned-queue}.
  * <p>
@@ -204,6 +206,12 @@ public class ShardOwnedQueueProperties {
      * queue the {@code DurableQueues} adapter uses, the framework's name, such as {@code Inbox:orders}; a name with
      * characters relaxed binding would drop, such as {@code :}, goes in brackets:
      * {@code stuck-handler-timeouts.[Inbox:orders]: 2h}.
+     * <p>
+     * A key must equal the queue's name exactly, case included; a key matching no queue is not an error, and the queue it
+     * meant takes {@code stuck-handler-timeout}. A map key bound from an environment variable arrives in lower case, so an
+     * environment variable cannot set this for a queue whose name has an upper-case letter: set it in a properties or YAML
+     * file, where brackets keep the name as written. Each queue built with its own bound logs it at INFO, and once the
+     * application is ready one WARN names every key no queue had been built under by then.
      */
     private Map<String, Duration> stuckHandlerTimeouts = new LinkedHashMap<>();
 
@@ -297,12 +305,17 @@ public class ShardOwnedQueueProperties {
         this.stuckHandlerTimeout = stuckHandlerTimeout;
     }
 
+    /**
+     * Read-only. Binding still works: Spring Boot merges into the map a getter returns and, when that one refuses, binds a
+     * new map through the setter.
+     */
     public Map<String, Duration> getStuckHandlerTimeouts() {
-        return stuckHandlerTimeouts;
+        return Collections.unmodifiableMap(stuckHandlerTimeouts);
     }
 
+    /** Copied, so the caller's map changing afterwards does not change these properties. */
     public void setStuckHandlerTimeouts(Map<String, Duration> stuckHandlerTimeouts) {
-        this.stuckHandlerTimeouts = stuckHandlerTimeouts;
+        this.stuckHandlerTimeouts = new LinkedHashMap<>(requireNonNull(stuckHandlerTimeouts, "No stuckHandlerTimeouts provided"));
     }
 
     public Duration getWatermarkCap() {

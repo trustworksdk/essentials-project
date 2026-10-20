@@ -596,7 +596,10 @@ What to do: **a queue whose ordered handlers legitimately run longer than 15 min
 a handler still running when its queue is stopped and restarted is started a second time beside itself. Per queue:
 `essentials.shard-owned-queue.stuck-handler-timeouts.<queue-name>: 2h` in the Spring Boot starter (a name with a `:`,
 such as an `Inbox:<name>` queue, in brackets: `"[Inbox:orders]": 2h`), or `settings.withStuckHandlerTimeout(...)`
-passed to that queue's `PostgresqlMessageQueue.builder().setSettings(...)`. For every queue:
+passed to that queue's `PostgresqlMessageQueue.builder().setSettings(...)`. A per-queue name must equal the queue's
+name exactly, case included, and a map key bound from an environment variable arrives in lower case; the starter logs
+each queue it builds with its own bound at INFO, and once the application is ready one WARN names every per-queue name
+no queue had been built under by then, since that queue runs on the shared bound. (`<!-- fix:U-017 -->`) For every queue:
 `essentials.shard-owned-queue.stuck-handler-timeout`, or `ShardOwnerSettings.builder().setStuckHandlerTimeout(...)`.
 There is no off switch; a value longer than the process will run makes the wait unbounded.
 

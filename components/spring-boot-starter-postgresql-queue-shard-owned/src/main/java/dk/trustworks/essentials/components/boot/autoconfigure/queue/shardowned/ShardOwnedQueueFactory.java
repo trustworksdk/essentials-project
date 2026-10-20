@@ -20,12 +20,15 @@ import dk.trustworks.essentials.components.boot.autoconfigure.queue.shardowned.S
 import dk.trustworks.essentials.components.queue.shardowned.*;
 import dk.trustworks.essentials.components.queue.shardowned.spi.*;
 import org.slf4j.*;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.ApplicationListener;
 
 import javax.sql.DataSource;
 import java.sql.SQLException;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
@@ -41,7 +44,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * rather than left to their leases — a rolling restart hands over immediately instead of leaving
  * every shard dark for the lease TTL.
  */
-public class ShardOwnedQueueFactory implements MessageQueues, AutoCloseable {
+public class ShardOwnedQueueFactory implements MessageQueues, AutoCloseable, ApplicationListener<ApplicationReadyEvent> {
     private static final Logger log = LoggerFactory.getLogger(ShardOwnedQueueFactory.class);
 
     private final DataSource         dataSource;
@@ -63,10 +66,14 @@ public class ShardOwnedQueueFactory implements MessageQueues, AutoCloseable {
 
     private final Map<QueueName, PostgresqlMessageQueue> queues = new ConcurrentHashMap<>();
     /**
-     * The queues given their own {@code stuckHandlerTimeout}, by name ({@link #setStuckHandlerTimeouts}); every other
-     * queue takes the one in {@link #settings}.
+     * The settings of the queues given their own {@code stuckHandlerTimeout}, by name ({@link #setStuckHandlerTimeouts}):
+     * {@link #settings} with that one value replaced. Every other queue takes {@link #settings}.
      */
-    private final Map<QueueName, Duration>               stuckHandlerTimeouts = new ConcurrentHashMap<>();
+    private final Map<QueueName, ShardOwnerSettings>     ownSettings          = new ConcurrentHashMap<>();
+    /** The names in {@link #ownSettings} this factory has built a queue under. */
+    private final Set<QueueName>                         ownSettingsBuilt     = ConcurrentHashMap.newKeySet();
+    /** Set once {@link #onApplicationEvent} has reported the names in {@link #ownSettings} no queue was built under. */
+    private final AtomicBoolean                          ownSettingsReported  = new AtomicBoolean();
 
     public ShardOwnedQueueFactory(DataSource dataSource,
                                   ShardRuntime runtime,
@@ -94,6 +101,10 @@ public class ShardOwnedQueueFactory implements MessageQueues, AutoCloseable {
      * shared: what {@code essentials.shard-owned-queue.stuck-handler-timeouts} configures. Call it before the first
      * {@link #queue} of a queue named here: a queue already built keeps the settings it was built with. A name absent here
      * takes the {@code stuckHandlerTimeout} of the settings this factory was given.
+     * <p>
+     * A name matches a queue only when it equals the queue's name exactly, case included. Building a queue under a name
+     * given here logs that queue's bound at INFO; once the application is ready, one WARN names every name given here that
+     * no queue had been built under by then ({@link #onApplicationEvent}).
      *
      * @param perQueue queue name to its bound; each bound positive
      * @return this factory
@@ -101,9 +112,9 @@ public class ShardOwnedQueueFactory implements MessageQueues, AutoCloseable {
     public ShardOwnedQueueFactory setStuckHandlerTimeouts(Map<String, Duration> perQueue) {
         requireNonNull(perQueue, "No perQueue provided");
         perQueue.forEach((name, timeout) -> {
-            // Checked here, so a wrong value fails the context rather than the first queue() of that name.
-            settings.withStuckHandlerTimeout(requireNonNull(timeout, "No stuckHandlerTimeout provided for queue '" + name + "'"));
-            stuckHandlerTimeouts.put(QueueName.of(name), timeout);
+            // Built here, so a wrong value fails the context rather than the first queue() of that name.
+            ownSettings.put(QueueName.of(name),
+                            settings.withStuckHandlerTimeout(requireNonNull(timeout, "No stuckHandlerTimeout provided for queue '" + name + "'")));
         });
         return this;
     }
@@ -113,8 +124,34 @@ public class ShardOwnedQueueFactory implements MessageQueues, AutoCloseable {
      * {@code stuckHandlerTimeout} when {@link #setStuckHandlerTimeouts} named it.
      */
     ShardOwnerSettings settingsFor(QueueName queueName) {
-        var own = stuckHandlerTimeouts.get(queueName);
-        return own == null ? settings : settings.withStuckHandlerTimeout(own);
+        return ownSettings.getOrDefault(queueName, settings);
+    }
+
+    /**
+     * The names {@link #setStuckHandlerTimeouts} was given that this factory has not built a queue under, in name order.
+     */
+    List<QueueName> stuckHandlerTimeoutsNoQueueIsBuiltUnder() {
+        return ownSettings.keySet().stream()
+                          .filter(name -> !ownSettingsBuilt.contains(name))
+                          .sorted()
+                          .toList();
+    }
+
+    /**
+     * Once the application is ready, WARNs - once - naming every name {@link #setStuckHandlerTimeouts} was given that no
+     * queue had been built under by then: a typo, or other casing (an environment variable's map key arrives in lower
+     * case), leaves the queue it meant on the shared {@code stuckHandlerTimeout}, and nothing else would show it. A queue
+     * built later under such a name still takes its own bound.
+     */
+    @Override
+    public void onApplicationEvent(ApplicationReadyEvent event) {
+        var notBuilt = stuckHandlerTimeoutsNoQueueIsBuiltUnder();
+        if (!notBuilt.isEmpty() && ownSettingsReported.compareAndSet(false, true)) {
+            log.warn("essentials.shard-owned-queue.stuck-handler-timeouts names {} that no queue had been built under by the time the " +
+                     "application was ready: {}. A name must equal the queue's name exactly, case included; a queue built under another " +
+                     "name takes the shared stuckHandlerTimeout {}. A queue built later under one of these names still takes its own.",
+                     notBuilt.size() == 1 ? "1 name" : notBuilt.size() + " names", notBuilt, settings.stuckHandlerTimeout());
+        }
     }
 
     /**
@@ -127,17 +164,25 @@ public class ShardOwnedQueueFactory implements MessageQueues, AutoCloseable {
     public MessageQueue queue(QueueName queueName) {
         requireNonNull(queueName, "No queueName provided");
         return queues.computeIfAbsent(queueName, name -> {
+            var queueSettings = settingsFor(name);
             var queue = PostgresqlMessageQueue.builder()
                                               .setDataSource(dataSource)
                                               .setQueueName(name)
                                               .setInstanceId(instanceId)
-                                              .setSettings(settingsFor(name))
+                                              .setSettings(queueSettings)
                                               // The process's one runtime. Without it every queue's
                                               // consumers borrowed a second, shared runtime, and the
                                               // bean's pumps and listener held their connections for
                                               // nothing.
                                               .setRuntime(runtime)
                                               .build();
+            // After build(), which can throw (a name not registered): only a queue actually built counts as built.
+            if (ownSettings.containsKey(name)) {
+                ownSettingsBuilt.add(name);
+                // So an operator can see the override took: its absence is the only sign of a name that did not match.
+                log.info("Queue '{}' built with its own stuckHandlerTimeout {} (essentials.shard-owned-queue.stuck-handler-timeouts); " +
+                         "every other setting is shared", name, queueSettings.stuckHandlerTimeout());
+            }
             // Before anything consumes: both are read when a subscription starts, so one attached
             // afterwards would silently see nothing.
             interceptors.forEach(queue::addInterceptor);

@@ -27,7 +27,11 @@ import dk.trustworks.essentials.components.queue.shardowned.adapter.ShardOwnedDu
 import dk.trustworks.essentials.components.queue.shardowned.spi.*;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.*;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.boot.test.system.*;
 import org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
@@ -158,10 +162,76 @@ class ShardOwnedQueueAutoConfigurationIT {
 
     @Test
     void a_stuck_handler_timeout_that_is_not_positive_fails_the_context() {
+        // Per queue: refused when the factory is given the map, not at the first queue() of that name.
         runner().withPropertyValues("essentials.shard-owned-queue.stuck-handler-timeouts.reports=0s")
-                .run(context -> assertThat(context).hasFailed());
+                .run(context -> assertThat(context).getFailure()
+                                                   .hasMessageContaining("shardOwnedQueueFactory")
+                                                   .rootCause().hasMessageContaining("stuckHandlerTimeout must be positive"));
         runner().withPropertyValues("essentials.shard-owned-queue.stuck-handler-timeout=0s")
                 .run(context -> assertThat(context).hasFailed());
+    }
+
+    /**
+     * A per-queue key that no queue is built under - a typo, other casing - leaves that queue on the shared bound. The
+     * factory logs the bound of each queue it builds with its own, and WARNs once, when the application is ready, naming
+     * every key no queue had been built under by then.
+     */
+    @Test
+    @ExtendWith(OutputCaptureExtension.class)
+    void a_per_queue_stuck_handler_timeout_no_queue_is_built_under_is_warned_about(CapturedOutput output) {
+        runner().withPropertyValues("essentials.shard-owned-queue.queues.reports=2",
+                                    "essentials.shard-owned-queue.stuck-handler-timeouts.reports=3h",
+                                    "essentials.shard-owned-queue.stuck-handler-timeouts.reprots=2h")
+                .withBean(ReportsQueueUser.class)
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(output).contains("Queue 'reports' built with its own stuckHandlerTimeout PT3H");
+                    assertThat(unmatchedWarnings(output)).as("nothing is reported before the application is ready").isEmpty();
+
+                    var ready = new ApplicationReadyEvent(new SpringApplication(), new String[0], context.getSourceApplicationContext(), Duration.ZERO);
+                    context.publishEvent(ready);
+                    context.publishEvent(ready);
+
+                    assertThat(unmatchedWarnings(output)).as("once").singleElement().asString()
+                                                         .contains("[reprots]")
+                                                         .doesNotContain("reports");
+                });
+    }
+
+    /**
+     * A queue() that fails - its name is not registered - has built nothing: no INFO line says it was, and the WARN at
+     * ready still names the key.
+     */
+    @Test
+    @ExtendWith(OutputCaptureExtension.class)
+    void a_per_queue_stuck_handler_timeout_whose_queue_fails_to_build_is_still_warned_about(CapturedOutput output) {
+        runner().withPropertyValues("essentials.shard-owned-queue.stuck-handler-timeouts.unlisted=2h")
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    var factory = context.getBean(ShardOwnedQueueFactory.class);
+
+                    org.assertj.core.api.Assertions.assertThatThrownBy(() -> factory.queue("unlisted"))
+                                                   .isInstanceOf(IllegalStateException.class)
+                                                   .hasMessageContaining("is not registered");
+                    assertThat(output).doesNotContain("Queue 'unlisted' built");
+
+                    context.publishEvent(new ApplicationReadyEvent(new SpringApplication(), new String[0], context.getSourceApplicationContext(), Duration.ZERO));
+
+                    assertThat(unmatchedWarnings(output)).singleElement().asString().contains("[unlisted]");
+                });
+    }
+
+    private static List<String> unmatchedWarnings(CapturedOutput output) {
+        return output.getAll().lines()
+                     .filter(line -> line.contains("WARN") && line.contains("stuck-handler-timeouts"))
+                     .toList();
+    }
+
+    /** Builds the {@code reports} queue while the context starts, as a component that consumes it would. */
+    static class ReportsQueueUser {
+        ReportsQueueUser(ShardOwnedQueueFactory factory) {
+            factory.queue("reports");
+        }
     }
 
     @Test
