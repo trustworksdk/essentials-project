@@ -413,8 +413,13 @@ class ShardOwnedUnsubscribeIT {
                 release.countDown();
                 second.unsubscribe();
                 Awaitility.await().atMost(Duration.ofSeconds(5))
-                          .untilAsserted(() -> assertThat(firstLanes).as("premise: the key has left the handler its unit was kept for")
-                                                                     .noneMatch(ShardOwnedQueue::keptOrderedUnitStillInHandler));
+                          .untilAsserted(() -> assertThat(firstLanes).as("premise: the key has left the handler its unit was kept for, and the unit is handed back")
+                                                                     .noneMatch(ShardOwnedQueue::keptOrderedUnitNotHandedBack));
+                // No lane of the unsubscribed subscription runs, and none ever will: the kept unit is handed back all the same,
+                // its acknowledgement flushed, rather than left for whoever takes it next to charge and deliver again.
+                Awaitility.await().atMost(Duration.ofSeconds(5))
+                          .untilAsserted(() -> assertThat(orderedMessagesLeft()).as("the handled message was acknowledged as the unit was handed back")
+                                                                                .isZero());
 
                 var third = consumeUnchecked(queue);
                 assertThat(third.isStarted()).isTrue();
@@ -435,12 +440,94 @@ class ShardOwnedUnsubscribeIT {
     }
 
     /**
+     * {@link #a_subscription_whose_stop_kept_an_ordered_unit_keeps_its_instance_id_out_of_use_while_the_key_is_in_its_handler}
+     * with the database refusing to release the kept unit's lease row once its handler has returned: the hand-back as the
+     * key leaves the handler fails, and the unsubscribed subscription's lanes never run again, so no heartbeat retries it.
+     * The instance id stays out of use all the same - its row still names the id, and a pair registering under it would
+     * take the unit back as from a crashed owner, charging an attempt and delivering again the message the handler had
+     * handled - so a {@code consume()} meanwhile registers under the next id. A {@code consume()} once the database lets
+     * the release through hands the unit back before it picks an id, and registers under the caller's own. The id used to
+     * be freed once a hand-back had failed, and the next {@code consume()} took the unit back unclean.
+     */
+    @Test
+    void a_subscription_whose_kept_unit_could_not_be_handed_back_keeps_its_instance_id_out_of_use_until_a_consume_hands_it_back() throws Exception {
+        // Far beyond the test, so the unsubscribed instance's membership row cannot age out and let another id take the unit.
+        var leaseTtl       = Duration.ofSeconds(20);
+        var entered        = new CountDownLatch(1);
+        var release        = new CountDownLatch(1);
+        var deliveredAgain = ConcurrentHashMap.<String>newKeySet();
+        MessageHandler recording = (messageId, key, payload, payloadType) -> {
+            if (key != null) {
+                deliveredAgain.add(key);
+            }
+        };
+        try (var queue = newQueue(PostgresqlMessageQueue.LifecycleHook.NONE, settingsWith(Duration.ofMillis(300), leaseTtl))) {
+            try {
+                var first = queue.consume((messageId, key, payload, payloadType) -> {
+                    if (key != null) {
+                        entered.countDown();
+                        awaitQuietly(release);
+                    }
+                }, ConsumerOptions.defaults());
+                var firstLanes = queue.registeredConsumers();
+                queue.enqueue(Message.ordered("in-handler".getBytes(StandardCharsets.UTF_8), 1, "ACC-1", 0));
+                assertThat(entered.await(20, TimeUnit.SECONDS)).as("premise: the key is in its handler").isTrue();
+
+                first.unsubscribe();
+                var unsubscribedAt = System.nanoTime();
+                var kept           = keptOrderedFence(INSTANCE_ID);
+                LeaseReleaseRefusals.failLeaseReleasesOf(dataSource, new short[]{QUEUE_ID}, "ordered", kept.shard(), true);
+                try {
+                    release.countDown();
+                    Awaitility.await().atMost(Duration.ofSeconds(5))
+                              .untilAsserted(() -> assertThat(laneWarnings()).as("premise: the hand-back as the key left its handler failed")
+                                                                             .anyMatch(warning -> warning.contains("could not hand back ordered unit")));
+                    assertThat(LeaseReleaseRefusals.releasesRefused(dataSource, QUEUE_ID, kept.shard()))
+                            .as("premise: refused by the database, as the injection meant").isPositive();
+                    assertThat(firstLanes).as("a failed hand-back is not a hand-back").anyMatch(ShardOwnedQueue::keptOrderedUnitNotHandedBack);
+
+                    var second = queue.consume(recording, ConsumerOptions.defaults());
+                    assertThat(second.isStarted()).isTrue();
+                    assertThat(registeredInstances()).as("the instance id is still out of use: the new subscription registered under the next one")
+                                                     .containsExactly(INSTANCE_ID, INSTANCE_ID + "-1");
+                    Awaitility.await().during(Duration.ofSeconds(1)).atMost(Duration.ofSeconds(3))
+                              .untilAsserted(() -> assertThat(fenceOf(kept.shard())).as("nobody took the unit not handed back")
+                                                                                    .isEqualTo(kept.fence()));
+                    second.unsubscribe();
+                } finally {
+                    LeaseReleaseRefusals.failLeaseReleasesOf(dataSource, new short[]{QUEUE_ID}, "ordered", kept.shard(), false);
+                }
+
+                var third = queue.consume(recording, ConsumerOptions.defaults());
+                assertThat(third.isStarted()).isTrue();
+                assertThat(registeredInstances()).as("the consume() handed the unit back before it picked an instance id, and took the caller's own")
+                                                 .containsExactly(INSTANCE_ID);
+                assertThat(firstLanes).noneMatch(ShardOwnedQueue::keptOrderedUnitNotHandedBack);
+                Awaitility.await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
+                    assertThat(orderedUnitsOwnedBy(INSTANCE_ID)).as("the caller's own id takes every unit").isEqualTo(ShardOwnedSchema.ORDERED_UNITS);
+                    assertThat(fenceOf(kept.shard())).as("the handed-back unit taken under a newer fence").isGreaterThan(kept.fence());
+                });
+                Awaitility.await().during(Duration.ofSeconds(1)).atMost(Duration.ofSeconds(3)).untilAsserted(() -> {
+                    assertThat(deliveredAgain).as("the message the kept handler handled is not delivered again").isEmpty();
+                    assertThat(orderedMessagesLeft()).as("its acknowledgement was flushed").isZero();
+                });
+                assertThat(Duration.ofNanos(System.nanoTime() - unsubscribedAt)).as("premise: all of that within the lease TTL, so no TTL freed the id")
+                                                                               .isLessThan(leaseTtl);
+            } finally {
+                release.countDown();
+            }
+        }
+    }
+
+    /**
      * A {@code stop()} of the queue whose ordered lane kept a unit - a key still in its handler past {@code shedGrace} -
      * and the queue's {@code start()} while that handler still runs: the restarted ordered lane registers under the same
      * instance id and takes every other unit, but leaves the kept one alone until the handler has returned, so the key is
-     * not delivered again beside it; a heartbeat then takes the unit, under a newer fence. The restart used to take the
-     * kept unit at once ({@code acquireLeaseGrant} accepts a row naming its own owner) and deliver the key's message a
-     * second time while the first handler still ran it.
+     * not delivered again beside it. Once it has returned the unit is handed back - its acknowledgement flushed, its lease
+     * row released - and a heartbeat takes it, under a newer fence, charging nothing and delivering nothing again. The
+     * restart used to take the kept unit at once ({@code acquireLeaseGrant} accepts a row naming its own owner) and deliver
+     * the key's message a second time while the first handler still ran it; and, once the handler had returned, it took the
+     * unit back with the row still naming the instance, as an unclean takeover, and delivered the handled message again.
      */
     @Test
     void a_queue_restarted_while_a_key_is_in_the_handler_its_stop_kept_an_ordered_unit_for_leaves_that_unit_alone() throws Exception {
@@ -466,7 +553,8 @@ class ShardOwnedUnsubscribeIT {
     /**
      * A stop and restart of what {@code stopAndThenRestart} names, with an ordered handler holding key ACC-1 past
      * {@code shedGrace}: the stop keeps that key's unit, and the restart - well inside the lease TTL, so nothing has lapsed
-     * - must leave it alone until the handler has returned, then take it under a newer fence.
+     * - must leave it alone until the handler has returned, then take it under a newer fence once it has been handed back,
+     * with the handled message neither delivered again nor left unacknowledged.
      *
      * @param stopAndThenRestart stops the queue or the subscription, and returns what restarts it
      */
@@ -494,7 +582,7 @@ class ShardOwnedUnsubscribeIT {
                 assertThat(orderedUnitsOwnedBy(INSTANCE_ID)).as("premise: the stop kept the unit whose key is still in its handler")
                                                            .isEqualTo(1);
                 assertThat(lanes).as("premise: a lane knows the key is still in the handler of the unit it kept")
-                                 .anyMatch(ShardOwnedQueue::keptOrderedUnitStillInHandler);
+                                 .anyMatch(ShardOwnedQueue::keptOrderedUnitNotHandedBack);
                 var kept = keptOrderedFence(INSTANCE_ID);
 
                 restart.run();
@@ -515,6 +603,12 @@ class ShardOwnedUnsubscribeIT {
                               assertThat(fenceOf(kept.shard())).as("taken once the handler has returned, under a newer fence")
                                                                .isGreaterThan(kept.fence());
                               assertThat(subscription.orderedUnitsHeld()).as("every ordered unit").isEqualTo(ShardOwnedSchema.ORDERED_UNITS);
+                          });
+                // Handed back cleanly before it was taken again, so the new owner charged no attempt and redelivered nothing.
+                Awaitility.await().during(Duration.ofSeconds(1)).atMost(Duration.ofSeconds(5))
+                          .untilAsserted(() -> {
+                              assertThat(entries).as("the message the kept handler handled is not delivered again").hasValue(1);
+                              assertThat(orderedMessagesLeft()).as("its acknowledgement was flushed as the unit was handed back").isZero();
                           });
             } finally {
                 release.countDown();
@@ -779,6 +873,11 @@ class ShardOwnedUnsubscribeIT {
         return new ShardOwnerSettings(defaults.readBatchSize(), defaults.ackBatchSize(), Duration.ofMillis(1), Duration.ofMillis(2),
                                       Duration.ofMillis(300), Duration.ofMillis(100), 1_000, 8,
                                       Duration.ofMillis(50), Duration.ofSeconds(30), 2, shedGrace, leaseTtl, Duration.ofSeconds(60));
+    }
+
+    private int orderedMessagesLeft() throws SQLException {
+        return queryForInt(dataSource, "Counting the ordered messages left in queue " + QUEUE_ID,
+                           "SELECT count(*) FROM " + ShardOwnedSchema.ORDERED_TABLE + " WHERE queue_id = ?", QUEUE_ID);
     }
 
     private int orderedUnitsOwnedBy(String instanceId) throws SQLException {

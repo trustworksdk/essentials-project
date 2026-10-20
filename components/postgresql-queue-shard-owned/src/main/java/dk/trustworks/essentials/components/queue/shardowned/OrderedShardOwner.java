@@ -325,6 +325,12 @@ final class OrderedShardOwner implements BatchReadableOwner {
      */
     private boolean exhaustionPending;
 
+    /**
+     * What to run once no key is in a handler ({@link #whenNoKeyInHandler}); {@code null} unless this owner's queue kept
+     * it on stop.
+     */
+    private volatile Runnable whenNoKeyInHandler;
+
     OrderedShardOwner(ShardOwnedStorage storage,
                       int shard,
                       long fence,
@@ -798,13 +804,35 @@ final class OrderedShardOwner implements BatchReadableOwner {
             onFailure(key, keyOrder, row, e);
         } finally {
             LeaseOverrun.check(metrics, settings, "ordered", shard, startedNanos);
+            boolean noKeyInHandler;
             synchronized (stateLock) {
                 keysInFlight.remove(key);
+                noKeyInHandler = keysInFlight.isEmpty();
             }
             activeKeys.decrementAndGet();
             dispatch.release();
             // Capacity may have freed up, and the pump may be parked on its backstop.
             wakeup.signal();
+            if (noKeyInHandler) {
+                var action = whenNoKeyInHandler;
+                if (action != null) {
+                    action.run();
+                }
+            }
+        }
+    }
+
+    /**
+     * Run {@code action} once no key of this owner is in a handler: at once when none is, and otherwise on the handler
+     * thread of the last key to leave, after it has left ({@link #inFlight()} reads 0 by then). Set by
+     * {@code ShardOwnedQueue} on an owner its stop kept, because a key was still in a handler past {@code shedGrace}, to
+     * hand the unit back once that key has returned, whether or not the queue runs by then. A later key leaving runs it
+     * again, so it must be safe to run more than once, and run concurrently; it must not throw.
+     */
+    void whenNoKeyInHandler(Runnable action) {
+        whenNoKeyInHandler = requireNonNull(action, "No action provided");
+        if (inFlight() == 0) {
+            action.run();
         }
     }
 

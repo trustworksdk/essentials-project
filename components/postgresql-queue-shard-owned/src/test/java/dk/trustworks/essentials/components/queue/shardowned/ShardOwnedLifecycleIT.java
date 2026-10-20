@@ -282,12 +282,15 @@ class ShardOwnedLifecycleIT {
     /**
      * An ordered handler that outlasts the grace. Releasing its unit would let a successor start the
      * same key while it still runs here, so the unit is kept - and the instance stays registered - until
-     * this instance's liveness lapses, as far as any other instance is concerned.
+     * the handler has returned or, as far as any other instance is concerned, this instance's liveness lapses.
      * <p>
      * This queue restarted meanwhile, under the same instance id, leaves the kept unit alone while the key is in its
-     * handler, and a heartbeat takes it once the handler has returned, under a NEW fence, so the old incarnation's writes
-     * are refused rather than accepted alongside the new owner's. The restart used to take the kept unit at once
-     * ({@code acquireLeaseGrant} accepts a row naming its own owner) and deliver the key again beside the handler.
+     * handler. Once the handler has returned the unit is handed back - the kept owner's acknowledgement flushed under the
+     * fence it was kept under, its lease row released - and a heartbeat takes it under a NEW fence, so the old
+     * incarnation's writes are refused rather than accepted alongside the new owner's. The restart used to take the kept
+     * unit at once ({@code acquireLeaseGrant} accepts a row naming its own owner) and deliver the key again beside the
+     * handler; and, once the handler had returned, it took the unit back with the row still naming this instance, as an
+     * unclean takeover: an attempt charged and the message the handler had handled delivered again.
      */
     @Test
     void an_ordered_unit_whose_key_outlasts_the_grace_is_kept_rather_than_handed_on() throws Exception {
@@ -317,7 +320,7 @@ class ShardOwnedLifecycleIT {
 
                 assertThat(orderedUnitsOwnedBy("drain-ordered")).as("the busy unit is kept, the idle ones handed back").isEqualTo(1);
                 assertThat(instanceRegistered("drain-ordered")).as("kept units need the instance to age out, not deregister").isTrue();
-                assertThat(queue.keptOrderedUnitStillInHandler()).as("premise: the key is still in the handler of the kept unit").isTrue();
+                assertThat(queue.keptOrderedUnitNotHandedBack()).as("premise: the key is still in the handler of the kept unit").isTrue();
 
                 // Restarted under the same instance id, while the old handler still runs, past several heartbeats (one a
                 // third of the 1 s lease TTL): every unit but the kept one is taken, and the kept one is left alone.
@@ -336,7 +339,7 @@ class ShardOwnedLifecycleIT {
                 queue.stop();
                 assertThat(instanceRegistered("drain-ordered")).as("the earlier stop's kept unit keeps the instance registered").isTrue();
                 assertThat(orderedUnitsOwnedBy("drain-ordered")).as("only the kept unit names the instance").isEqualTo(1);
-                assertThat(queue.keptOrderedUnitStillInHandler()).as("the queue still knows the key is in the handler").isTrue();
+                assertThat(queue.keptOrderedUnitNotHandedBack()).as("the queue still knows the key is in the handler").isTrue();
                 queue.start();
                 Awaitility.await().during(Duration.ofMillis(700)).atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
                     assertThat(fenceOf("ordered", keptFence.shard())).as("the kept unit is still left alone").isEqualTo(keptFence.fence());
@@ -345,10 +348,93 @@ class ShardOwnedLifecycleIT {
 
                 release.countDown();
                 Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
-                    assertThat(queue.keptOrderedUnitStillInHandler()).isFalse();
+                    assertThat(queue.keptOrderedUnitNotHandedBack()).isFalse();
                     assertThat(fenceOf("ordered", keptFence.shard())).as("taken once the handler has returned, under a new fence")
                                                                      .isGreaterThan(keptFence.fence());
                     assertThat(queue.shardsHeld()).as("every unit").isEqualTo(ShardOwnedSchema.ORDERED_UNITS);
+                });
+                // Handed back cleanly before it was taken again: the kept owner's acknowledgement flushed under its fence and
+                // its row released, so the new owner found the unit released, charged nothing and redelivered nothing.
+                Awaitility.await().during(Duration.ofSeconds(1)).atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
+                    assertThat(entries).as("the message the kept handler handled is not delivered again").hasValue(1);
+                    assertThat(queue.orderedRemaining()).as("its acknowledgement was flushed as the unit was handed back").isZero();
+                });
+            } finally {
+                release.countDown();
+                queue.stop();
+            }
+        } finally {
+            release.countDown();
+        }
+    }
+
+    /**
+     * {@link #an_ordered_unit_whose_key_outlasts_the_grace_is_kept_rather_than_handed_on} with the database refusing to
+     * release the kept unit's lease row once its handler has returned: the hand-back as the key leaves the handler fails,
+     * and so does every heartbeat's retry while the refusal lasts. The restarted queue leaves the unit alone all that time
+     * - its row still names this instance, so taking it would read as a takeover from an owner that never let go of it -
+     * and the queue goes on reporting it not handed back. Once the database lets the release through, a heartbeat hands
+     * the unit back and it is taken under a newer fence, the handled message not delivered again. Pins the acquire loops
+     * skipping a kept unit by its lease row rather than by whether a key of it is in a handler: the hand-back as the key
+     * leaves the handler releases the row within milliseconds, so only a hand-back that fails tells the two apart.
+     */
+    @Test
+    void a_unit_a_stop_kept_whose_hand_back_fails_is_left_alone_until_a_heartbeat_hands_it_back() throws Exception {
+        var entries    = new AtomicInteger();
+        var entered    = new CountDownLatch(1);
+        var release    = new CountDownLatch(1);
+        var settings   = settingsWithShedGrace(Duration.ofMillis(300));
+        var instanceId = "kept-hand-back-refused";
+        try (var runtime = new ShardRuntime(dataSource, settings)) {
+            var queue = ShardOwnedQueue.builder().setDataSource(dataSource).setQueueId(QUEUE_ID).setShardCount(SHARD_COUNT)
+                                       .setInstanceId(instanceId).setRuntime(runtime).build();
+            try {
+                queue.startConsumingOrdered((messageId, key, payload, payloadType) -> {
+                    // The first delivery of the key holds its handler; a later one returns at once.
+                    if (entries.incrementAndGet() == 1) {
+                        entered.countDown();
+                        awaitQuietly(release);
+                    }
+                }, settings, SHARD_COUNT);
+                queue.enqueueOrdered(List.of(new ShardOwnedStorage.OrderedPayload("ACC-1", 0, "0".getBytes(StandardCharsets.UTF_8), 1)));
+                assertThat(entered.await(20, TimeUnit.SECONDS)).isTrue();
+
+                queue.stop();
+                assertThat(orderedUnitsOwnedBy(instanceId)).as("premise: the busy unit is kept").isEqualTo(1);
+                var keptFence = keptOrderedFence(instanceId);
+                queue.start();
+                Awaitility.await().atMost(Duration.ofSeconds(5))
+                          .untilAsserted(() -> assertThat(queue.shardsHeld()).as("premise: the restart takes every unit but the kept one")
+                                                                             .isEqualTo(ShardOwnedSchema.ORDERED_UNITS - 1));
+
+                LeaseReleaseRefusals.failLeaseReleasesOf(dataSource, new short[]{QUEUE_ID}, "ordered", keptFence.shard(), true);
+                try {
+                    release.countDown();
+                    // The hand-back as the key left its handler, then at least one heartbeat's retry (one a third of the
+                    // 1 s lease TTL): the injection worked, and the retry runs.
+                    Awaitility.await().atMost(Duration.ofSeconds(5))
+                              .untilAsserted(() -> assertThat(LeaseReleaseRefusals.releasesRefused(dataSource, QUEUE_ID, keptFence.shard()))
+                                      .as("premise: the kept unit's release was refused, and retried").isGreaterThanOrEqualTo(2));
+                    Awaitility.await().during(Duration.ofMillis(1_500)).atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
+                        assertThat(fenceOf("ordered", keptFence.shard())).as("the unit not handed back is not taken, its handler returned")
+                                                                         .isEqualTo(keptFence.fence());
+                        assertThat(queue.shardsHeld()).as("every unit but the kept one").isEqualTo(ShardOwnedSchema.ORDERED_UNITS - 1);
+                        assertThat(queue.keptOrderedUnitNotHandedBack()).as("a failed hand-back is not a hand-back").isTrue();
+                        assertThat(entries).hasValue(1);
+                    });
+                } finally {
+                    LeaseReleaseRefusals.failLeaseReleasesOf(dataSource, new short[]{QUEUE_ID}, "ordered", keptFence.shard(), false);
+                }
+
+                Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+                    assertThat(queue.keptOrderedUnitNotHandedBack()).as("a heartbeat handed the unit back").isFalse();
+                    assertThat(fenceOf("ordered", keptFence.shard())).as("taken once handed back, under a new fence")
+                                                                     .isGreaterThan(keptFence.fence());
+                    assertThat(queue.shardsHeld()).as("every unit").isEqualTo(ShardOwnedSchema.ORDERED_UNITS);
+                });
+                Awaitility.await().during(Duration.ofSeconds(1)).atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
+                    assertThat(entries).as("the message the kept handler handled is not delivered again").hasValue(1);
+                    assertThat(queue.orderedRemaining()).as("its acknowledgement was flushed").isZero();
                 });
             } finally {
                 release.countDown();
@@ -361,9 +447,10 @@ class ShardOwnedLifecycleIT {
 
     /**
      * Every unit {@code stop()} gives up is reported released, the one it keeps included. An ordered unit with a key still
-     * in a handler after the grace keeps its lease row until this instance's liveness lapses, but the stopped queue lists
-     * it no more, so nothing would report it later: it used to be left reported acquired for good, and the observer's -
-     * and the Micrometer counter's - acquired count ran one ahead of its released count after every such stop.
+     * in a handler after the grace keeps its lease row until that handler has returned and the unit is handed back, or this
+     * instance's liveness lapses, but the stopped queue lists it no more, so nothing would report it later: it used to be
+     * left reported acquired for good, and the observer's - and the Micrometer counter's - acquired count ran one ahead of
+     * its released count after every such stop.
      */
     @Test
     void an_ordered_unit_kept_by_stop_is_reported_released() throws Exception {
@@ -392,6 +479,75 @@ class ShardOwnedLifecycleIT {
             } finally {
                 release.countDown();
                 queue.stop();
+            }
+        }
+    }
+
+    /**
+     * A unit a stop kept, on a cluster of two. The queue, restarted while the key was still in its handler and while the
+     * other instance was down, took every unit but the kept one, then shed back to its fair share once the other instance
+     * came back. Its acquire loop, holding that share, never reached the kept unit again once the handler had returned,
+     * and no other instance could take a unit whose lease row named a live instance: every key routed to it stalled for as
+     * long as both ran. The kept unit is now handed back once its handler has returned - its acknowledgement flushed under
+     * the fence it was kept under, its lease row released - so the instance below its fair share takes it, finds it
+     * released, and neither charges an attempt nor delivers the handled message again.
+     */
+    @Test
+    void a_unit_a_stop_kept_is_handed_back_once_its_handler_returns_though_the_restarted_queue_holds_its_fair_share() throws Exception {
+        var entries   = new AtomicInteger();
+        var entered   = new CountDownLatch(1);
+        var release   = new CountDownLatch(1);
+        var settings  = settingsWithShedGrace(Duration.ofMillis(300));
+        var fairShare = ShardOwnedSchema.ORDERED_UNITS / 2;
+        // Both instances' handler: the first delivery of the key holds it; a later one, on either instance, returns at once.
+        OrderedPayloadHandler handler = (messageId, key, payload, payloadType) -> {
+            if (entries.incrementAndGet() == 1) {
+                entered.countDown();
+                awaitQuietly(release);
+            }
+        };
+        try (var runtime = new ShardRuntime(dataSource, settings)) {
+            var restarted = ShardOwnedQueue.builder().setDataSource(dataSource).setQueueId(QUEUE_ID).setShardCount(SHARD_COUNT)
+                                           .setInstanceId("kept-restarted").setRuntime(runtime).build();
+            var other = ShardOwnedQueue.builder().setDataSource(dataSource).setQueueId(QUEUE_ID).setShardCount(SHARD_COUNT)
+                                       .setInstanceId("kept-other").setRuntime(runtime).build();
+            try {
+                restarted.startConsumingOrdered(handler, settings, SHARD_COUNT);
+                restarted.enqueueOrdered(List.of(new ShardOwnedStorage.OrderedPayload("ACC-1", 0, "0".getBytes(StandardCharsets.UTF_8), 1)));
+                assertThat(entered.await(20, TimeUnit.SECONDS)).isTrue();
+
+                restarted.stop();
+                var kept = keptOrderedFence("kept-restarted");
+                assertThat(kept.shard()).as("premise: the stop kept the unit of the key in its handler")
+                                        .isEqualTo(ShardOwnedSchema.unitForKey("ACC-1", ShardOwnedSchema.ORDERED_UNITS));
+                restarted.start();
+                assertThat(restarted.shardsHeld()).as("premise: restarted alone, it takes every unit but the kept one")
+                                                  .isEqualTo(ShardOwnedSchema.ORDERED_UNITS - 1);
+
+                other.startConsumingOrdered(handler, settings, SHARD_COUNT);
+                Awaitility.await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
+                    assertThat(restarted.shardsHeld()).as("premise: the restarted queue shed back to its fair share").isEqualTo(fairShare);
+                    assertThat(other.shardsHeld()).as("premise: the other instance holds every free unit").isEqualTo(fairShare - 1);
+                });
+                assertThat(ownerOf("ordered", kept.shard())).as("premise: the kept unit still names the restarted queue's instance")
+                                                            .isEqualTo("kept-restarted");
+                assertThat(fenceOf("ordered", kept.shard())).as("premise: under the fence it was kept under").isEqualTo(kept.fence());
+
+                release.countDown();
+                Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+                    assertThat(ownerOf("ordered", kept.shard())).as("the instance below its fair share takes the unit once its handler has returned")
+                                                                .isEqualTo("kept-other");
+                    assertThat(other.shardsHeld()).isEqualTo(fairShare);
+                });
+                Awaitility.await().during(Duration.ofSeconds(1)).atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
+                    assertThat(entries).as("the message the kept handler handled is not delivered again").hasValue(1);
+                    assertThat(restarted.orderedRemaining()).as("its acknowledgement was flushed as the unit was handed back").isZero();
+                });
+                assertThat(restarted.shardsHeld()).as("the restarted queue still holds its fair share").isEqualTo(fairShare);
+            } finally {
+                release.countDown();
+                other.stop();
+                restarted.stop();
             }
         }
     }

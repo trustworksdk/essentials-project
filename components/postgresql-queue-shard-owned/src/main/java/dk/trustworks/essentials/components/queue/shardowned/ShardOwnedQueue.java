@@ -170,22 +170,32 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
     private          boolean                  borrowedShared;
     /**
      * The ordered owners ended runs of this queue kept, because a key was still in their handler {@code shedGrace} after
-     * the stop began, whose key may still be there: the owners the last run to end kept, and those an earlier run kept
-     * whose handler had not returned when it ended. Each one's lease row still names this instance id, under the fence
-     * of the run that kept it. While its key is in its handler ({@code inFlight() > 0}), no later run of this queue
-     * acquires its unit ({@link #keptUnitsStillInHandler()}): {@link ShardOwnedStorage#acquireLeaseGrant} accepts a row
-     * naming its own owner, so a restart would take the unit at once and could start that key beside the handler. Once
-     * it has returned, the unit is acquired as any other, under a newer fence. Replaced by {@link #endRun} alone, with
-     * the owners still in a handler then and those the run it ends keeps.
+     * the stop began, and that may not have been handed back yet: the owners the last run to end kept, and those an
+     * earlier run kept whose lease row still named this instance when it ended. Each one's lease row names this instance
+     * id, under the fence of the run that kept it, until the owner is handed back ({@link #handBackKeptUnit}). That waits
+     * until no key of the owner is in a handler, flushes its acknowledgements under that fence - still valid, as releasing
+     * does not bump it - and releases its row, so whoever takes the unit next finds it released: it charges no attempt
+     * and delivers again nothing the handler acknowledged. It runs as the last key leaves its handler, whether or not the
+     * queue runs by then ({@link OrderedShardOwner#whenNoKeyInHandler}), and is retried by every heartbeat tick, by a
+     * start, by the stop of a later run, and by {@link PostgresqlMessageQueue} before it lets a {@code consume()} register
+     * under the instance id ({@link #handBackKeptUnits()}), until it has released the row. Until then no run of this queue
+     * acquires the unit ({@link #keptUnitsNotHandedBack()}), and the acquire loops count it towards their limit as a row
+     * this instance holds: {@link ShardOwnedStorage#acquireLeaseGrant} accepts a row naming its own owner, so a restart would
+     * take the unit at once, start that key beside the handler while it runs, and after it treat the unit as taken over
+     * from an owner that never let go of it. Replaced by {@link #endRun} alone, with the owners not handed back then and
+     * those the run it ends keeps.
      * <p>
      * A queue-wide field a run writes, which the rule that everything a run owns lives on its {@link Run} otherwise
      * forbids. Exempt because it is not state of a run in progress but what the runs that ended left behind: written
      * once per run, as {@link #endRun} ends it under {@link #lifecycleLock}, never by a heartbeat tick, and read by the
-     * acquire loops of the run after it. Read after a {@code stop()} has returned, which does not always mean after the
-     * run has ended: a stop that gave up waiting for a start still running returns before that start ends the run
-     * ({@link #endRunOfStart}) and writes this, so a read then does not see what that run keeps.
+     * acquire loops of the run after it. A heartbeat tick, a start, a key leaving its handler and a {@code consume()} of
+     * the {@link PostgresqlMessageQueue} hand its owners back,
+     * which moves each owner's own lease row state ({@link LeasedOwner#holdsLeaseRow()}) and nothing in this list. Read
+     * after a {@code stop()} has returned, which does not always mean after the run has ended: a stop that gave up waiting
+     * for a start still running returns before that start ends the run ({@link #endRunOfStart}) and writes this, so a read
+     * then does not see what that run keeps.
      */
-    private volatile List<LeasedOwner>        keptOrderedOwners   = List.of();
+    private volatile List<KeptUnit>           keptOrderedOwners   = List.of();
     /**
      * How many hand-backs of an ended run - {@link #handBackWithinBudget} on its budget thread
      * ({@link #withinShutdownBudget}) - are still running ({@link #handBackStillRunning()}): counted up by {@link #endRun}
@@ -836,25 +846,30 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      */
     private List<LeasedUnit> leaseAtStart(Run run, String lane, int units, int maxShards) throws SQLException {
         var leased = new ArrayList<LeasedUnit>();
+        // First, pumps or none: a unit an earlier stop kept whose handler has returned since, and that is not handed back
+        // yet, is handed back now, so this start - or another instance - finds it released.
+        handBackKeptUnits();
         if (!runtime.hasLivePump()) {
             log.warn("Instance {} acquires no {} unit on queue {}: every pump of its ShardRuntime has died, so nothing would "
                              + "serve them. They stay free for other instances; restart the ShardRuntime to serve them here",
                      instanceId, lane, queueId);
             return leased;
         }
-        // A unit an earlier stop of this queue kept, whose key is still in its handler: its row names this instance, so
-        // acquireLeaseGrant would take it at once and the new owner could start that key beside the handler.
-        var stillInHandler = "ordered".equals(lane) ? keptUnitsStillInHandler() : Set.<Integer>of();
-        if (!stillInHandler.isEmpty()) {
+        // A unit an earlier stop of this queue kept, not handed back yet: its row names this instance, so acquireLeaseGrant
+        // would take it at once, and the new owner could start that key beside the handler, or redeliver what it handled.
+        // Counted towards maxShards, as a row this instance holds.
+        var notHandedBack = "ordered".equals(lane) ? keptUnitsNotHandedBack() : Set.<Integer>of();
+        if (!notHandedBack.isEmpty()) {
             log.info("Instance {} leaves ordered unit(s) [{}] on queue {} unacquired for now: a stop of this queue kept them "
-                             + "because a key was still in a handler, which has not returned. A heartbeat of this run takes "
-                             + "them once it has, so the key is not started beside it",
-                     instanceId, summarise(stillInHandler), queueId);
+                             + "because a key was still in a handler, and they have not been handed back. Each is handed back "
+                             + "once its handler has returned - its acknowledgements flushed, its lease released - and is then "
+                             + "free for this instance or another to take, so the key is not started beside its handler",
+                     instanceId, summarise(notHandedBack), queueId);
         }
         try {
             // Checked per unit too, as in rebalance: what is placed after the last live pump died is ended on arrival.
-            for (var shard = 0; shard < units && leased.size() < maxShards && runtime.hasLivePump() && currentRun.get() == run; shard++) {
-                if (stillInHandler.contains(shard)) {
+            for (var shard = 0; shard < units && leased.size() + notHandedBack.size() < maxShards && runtime.hasLivePump() && currentRun.get() == run; shard++) {
+                if (notHandedBack.contains(shard)) {
                     continue;
                 }
                 var grant = storage.acquireLeaseGrant(lane, shard, instanceId, leaseTtlMillis);
@@ -1245,6 +1260,10 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                                  + "stopped; retried on the next heartbeat", instanceId, unreleasedAcquisitions.size(), activeLane,
                          summarise(unreleasedAcquisitions.keySet()), queueId, e);
             }
+            // BEFORE the rebalance, as the hand-backs around it: a unit an earlier stop kept whose handler has returned, and
+            // whose hand-back as its last key left the handler did not run or failed, is free for an acquire loop - this
+            // instance's or another's - once it is handed back. Each unit's failure is its own, and logged there.
+            handBackKeptUnits();
             // BEFORE the rebalance, so a unit handed back here is free for its acquire loop to take again on a live pump, and
             // so its removeIf, which drops owners whose lease has ended, never drops one whose lease is still to be released.
             try {
@@ -1725,18 +1744,24 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                                    .filter(LeasedOwner::holdsLeaseRow)
                                    .map(LeasedOwner::shard)
                                    .collect(java.util.stream.Collectors.toSet());
-        // A unit an earlier stop of this queue kept stays unacquired while its key is in its handler, as at start-up
-        // (leaseAtStart); asked on every tick, so the first tick after the handler has returned takes it.
-        var stillInHandler = keptUnitsStillInHandler();
-        if (!stillInHandler.isEmpty()) {
-            log.debug("Instance {} leaves ordered unit(s) [{}] on queue {} unacquired: a stop of this queue kept them, and a key "
-                              + "is still in their handler", instanceId, summarise(stillInHandler), queueId);
+        // A unit an earlier stop of this queue kept stays unacquired until it has been handed back, as at start-up
+        // (leaseAtStart); asked on every tick, so the first tick after the hand-back may take it. Its row names this
+        // instance until then, so it counts towards this loop's limit as the run's own rows do, and the loop takes one free
+        // unit fewer for it. The shed above does not count it: a run already over its share - through leaseAtStart while
+        // the other instances were down - sheds down to its share of its own units and holds the kept row on top of them
+        // until the hand-back.
+        var notHandedBack = keptUnitsNotHandedBack();
+        if (!notHandedBack.isEmpty()) {
+            log.debug("Instance {} leaves ordered unit(s) [{}] on queue {} unacquired: a stop of this queue kept them, and they "
+                              + "have not been handed back", instanceId, summarise(notHandedBack), queueId);
         }
+        var rowsHeld = new HashSet<>(heldShards);
+        rowsHeld.addAll(notHandedBack);
         var acquired   = new ArrayList<Integer>();
         Throwable loopFailure = null;
         try {
-            for (var shard = 0; shard < orderedUnits() && heldShards.size() < limit; shard++) {
-                if (heldShards.contains(shard) || stillInHandler.contains(shard)) {
+            for (var shard = 0; shard < orderedUnits() && rowsHeld.size() < limit; shard++) {
+                if (rowsHeld.contains(shard)) {
                     continue;
                 }
                 var grant = storage.acquireLeaseGrant("ordered", shard, instanceId, leaseTtlMillis);
@@ -1759,6 +1784,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                     break;
                 }
                 heldShards.add(shard);
+                rowsHeld.add(shard);
                 acquired.add(shard);
                 log.debug("Instance {} acquired ordered unit {} under fence {}", instanceId, shard, fence);
             }
@@ -2194,37 +2220,136 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
 
     /**
      * Whether an ordered unit a {@link #stop()} of this queue kept - or a start that ended its own run ({@link #endRun})
-     * - still has its key in a handler: kept because the key was still there {@code shedGrace} after the stop began, its
-     * lease row still names this instance id, and the instance stays registered. Another instance id cannot take the unit
-     * until the instance's liveness lapses, a lease TTL after its last heartbeat. This queue's own later runs do not take
-     * it while the key is in its handler ({@link #keptUnitsStillInHandler()}), and take it as any other unit once it has
-     * returned. A queue that is not this one but registers under the same instance id - a new {@link PostgresqlMessageQueue}
-     * subscription given the id, another {@code ShardOwnedQueue} built with it - knows nothing of it, and would take the
-     * unit at once ({@link ShardOwnedStorage#acquireLeaseGrant} accepts a row naming its own owner) and could start that
-     * key beside the handler still running here. {@link PostgresqlMessageQueue} asks this before it lets the next
-     * {@code consume()} register under an ended subscription's instance id.
+     * - has not been handed back yet: kept because a key was still in its handler {@code shedGrace} after the stop
+     * began, its lease row still names this instance id, and the instance stays registered while the key is there. True
+     * while the key is in its handler, and after that until the unit has been handed back ({@link #handBackKeptUnit}) -
+     * its acknowledgements flushed, its lease row released - or found taken by another instance. A hand-back that fails
+     * leaves it true, as the row still names this instance; {@link #handBackKeptUnits()} retries it. Until it is handed back,
+     * another instance id can take the unit only once the instance's liveness lapses, a lease TTL after its last
+     * heartbeat. This queue's own later runs do not take it before then ({@link #keptUnitsNotHandedBack()}), and take it
+     * as any other unit once it is released. A queue that is not this one but registers under the same
+     * instance id - a new {@link PostgresqlMessageQueue} subscription given the id, another {@code ShardOwnedQueue} built
+     * with it - knows nothing of it, and would take the unit at once ({@link ShardOwnedStorage#acquireLeaseGrant} accepts
+     * a row naming its own owner): while the key is in its handler it could start that key beside it, and after that it
+     * would read the unit as taken over from an owner that never let go of it, charge an attempt and deliver again what
+     * the handler acknowledged. {@link PostgresqlMessageQueue} asks this before it lets the next {@code consume()} register
+     * under an ended subscription's instance id, once it has had {@link #handBackKeptUnits()} retry a hand-back that has
+     * not run or has failed.
      * <p>
-     * Asked of the owners themselves, so false from the moment the last such handler returns, whether or not this queue
-     * runs again. A {@link #stopAbruptly()} keeps no unit, as it releases nothing. Asked right after a {@code stop()} that
-     * gave up waiting for a start still running, it does not yet see what that start's run keeps: that start ends its
-     * run, and records what it kept, only once its statements return.
+     * Asked of the owners themselves, so false from the moment the unit is handed back, whether or not this queue runs
+     * again: the hand-back runs as the last key leaves its handler ({@link OrderedShardOwner#whenNoKeyInHandler}). A
+     * {@link #stopAbruptly()} keeps no unit, as it releases nothing. Asked right after a {@code stop()} that gave up
+     * waiting for a start still running, it does not yet see what that start's run keeps: that start ends its run, and
+     * records what it kept, only once its statements return.
      */
-    boolean keptOrderedUnitStillInHandler() {
-        return keptOrderedOwners.stream().anyMatch(owner -> owner.inFlight() > 0);
+    boolean keptOrderedUnitNotHandedBack() {
+        return keptOrderedOwners.stream().anyMatch(KeptUnit::notHandedBack);
     }
 
     /**
-     * The ordered units whose kept owner ({@link #keptOrderedOwners}) still has a key in its handler: the units no run of
-     * this queue acquires until it has returned.
+     * The ordered units whose kept owner ({@link #keptOrderedOwners}) still holds its lease row: the units no run of this
+     * queue acquires until they have been handed back, and that its acquire loops count as rows this instance holds. A
+     * unit whose hand-back failed included: every heartbeat tick retries it ({@link #handBackKeptUnits()}).
      */
-    private Set<Integer> keptUnitsStillInHandler() {
+    private Set<Integer> keptUnitsNotHandedBack() {
         var units = new TreeSet<Integer>();
-        for (var owner : keptOrderedOwners) {
-            if (owner.inFlight() > 0) {
-                units.add(owner.shard());
+        for (var kept : keptOrderedOwners) {
+            if (kept.owner().holdsLeaseRow()) {
+                units.add(kept.owner().shard());
             }
         }
         return units;
+    }
+
+    /**
+     * Hand back every kept unit ({@link #keptOrderedOwners}) no key of which is in a handler and whose lease row still
+     * names this instance ({@link #handBackKeptUnit}), on the caller's thread. Called by every heartbeat tick, before its
+     * rebalance, by a start before it leases anything, and by {@link PostgresqlMessageQueue} for the lanes of an ended
+     * subscription whose instance id it holds ({@link #keptOrderedUnitNotHandedBack()}), before it asks whether a
+     * {@code consume()} may register under that id: those lanes never run again, so nothing else retries a hand-back that
+     * failed as the key left its handler. Each unit's failure is its own and logged; nothing is thrown, but a critical
+     * error.
+     */
+    void handBackKeptUnits() {
+        for (var kept : keptOrderedOwners) {
+            handBackKeptUnit(kept);
+        }
+    }
+
+    /**
+     * Hand back the ordered unit {@code kept}, on a thread of its own, once no key of its owner is in a handler: what the
+     * kept owner's last key leaving its handler runs ({@link OrderedShardOwner#whenNoKeyInHandler}), so the unit is handed
+     * back whether or not this queue runs by then - an unsubscribed {@link PostgresqlMessageQueue} subscription's lanes
+     * never run again. Not on the handler's thread: that thread belongs to the runtime's handler executor, and the
+     * hand-back waits for the database.
+     */
+    private void handBackKeptUnitOnItsOwnThread(KeptUnit kept) {
+        try {
+            if (kept.owner().inFlight() > 0 || !kept.owner().holdsLeaseRow()) {
+                return;
+            }
+            var thread = new Thread(() -> handBackKeptUnit(kept), "shard-queue-kept-unit-" + queueId + "-" + kept.owner().shard());
+            thread.setDaemon(true);
+            thread.start();
+        } catch (RuntimeException | Error e) {
+            Exceptions.rethrowIfCriticalError(e);
+            log.warn("Instance {} could not start handing back ordered unit {} on queue {}, kept by a stop while a key was in "
+                             + "its handler; a heartbeat or start of this queue retries it if the queue runs again, as does the next "
+                             + "consume() of a PostgresqlMessageQueue that would register under this instance id",
+                     instanceId, kept.owner().shard(), queueId, e);
+        }
+    }
+
+    /**
+     * Hand back the ordered unit {@code kept}, which a stop of this queue kept because a key was still in its handler: when
+     * no key of its owner is in a handler, its lease row still names this instance, and no other hand-back of it is
+     * running, flush the owner's acknowledgements under the fence it was kept under and release its row
+     * ({@link #releaseLeaseRows}). Both are fenced: the fence is still valid, as releasing does not bump it, and a unit
+     * another instance has taken meanwhile - once this one's liveness lapsed - is left alone: a refused flush moves the
+     * owner to {@code RELEASED} itself ({@link LeasedOwner.LeaseRow}), and nothing is released then.
+     * <p>
+     * Whoever takes the unit next finds it released ({@link ShardOwnedStorage.LeaseGrant#previousOwnerReleased()}): it
+     * charges no attempt for a takeover and delivers again nothing the kept handler acknowledged. Taken back with the row
+     * still naming this instance, as a run of this queue used to, the unit read as taken over from an owner that never let
+     * go of it: an attempt charged on the key's rows, and the message the handler had just handled delivered again.
+     * <p>
+     * Not counted as a release ({@link #countRelease}): the stop that kept the unit counted it, as the unit left its run.
+     * A failure is logged and leaves the row as it is; {@link #handBackKeptUnits()} retries it, and a later run's stop.
+     */
+    private void handBackKeptUnit(KeptUnit kept) {
+        var owner = kept.owner();
+        if (owner.inFlight() > 0 || !owner.holdsLeaseRow() || !kept.claimHandBack()) {
+            return;
+        }
+        try {
+            // Asked again under the claim: another hand-back may have released the row since.
+            if (owner.inFlight() > 0 || !owner.holdsLeaseRow()) {
+                return;
+            }
+            try (var connection = storage.connection()) {
+                owner.flushOnStop(connection);
+            }
+            if (owner.holdsLeaseRow()) {
+                releaseLeaseRows(List.of(owner));
+                log.info("Instance {} handed back ordered unit {} on queue {}, which a stop kept while a key was in its handler: "
+                                 + "the handler has returned, its acknowledgements are flushed and its lease released - unless "
+                                 + "another instance had taken the unit meanwhile - so any instance below its fair share may take it",
+                         instanceId, owner.shard(), queueId);
+            } else {
+                log.info("Instance {} found ordered unit {} on queue {}, which a stop kept while a key was in its handler, taken "
+                                 + "by another instance once the handler had returned; nothing left to hand back",
+                         instanceId, owner.shard(), queueId);
+            }
+        } catch (SQLException | RuntimeException | Error e) {
+            Exceptions.rethrowIfCriticalError(e);
+            log.warn("Instance {} could not hand back ordered unit {} on queue {}, which a stop kept while a key was in its handler "
+                             + "that has returned since. Its lease still names this instance; a heartbeat or start of this queue "
+                             + "retries the hand-back if the queue runs again, as does the next consume() of a PostgresqlMessageQueue "
+                             + "that would register under this instance id, and another instance can take the unit once this "
+                             + "one's liveness lapses", instanceId, owner.shard(), queueId, e);
+        } finally {
+            kept.endHandBack();
+        }
     }
 
     /**
@@ -2234,7 +2359,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * membership row of this queue's instance id ({@link ShardOwnedStorage#deregisterInstance(String)}), however
      * long after the stop returned: a queue registering under the same id meanwhile can lose its row to it, and other
      * instances then read its units as ownerless. {@link PostgresqlMessageQueue} asks this before it lets the next
-     * {@code consume()} register under an ended subscription's instance id. Like {@link #keptOrderedUnitStillInHandler()},
+     * {@code consume()} register under an ended subscription's instance id. Like {@link #keptOrderedUnitNotHandedBack()},
      * asked right after a {@code stop()} that gave up waiting for a start still running, it does not yet count the
      * hand-back that start does once its statements return.
      */
@@ -2251,7 +2376,8 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * that lane's stop. So the row is deleted by the lane stopping last when neither lane's stop kept an ordered unit.
      * When either kept one, because a key was still in its handler past {@code shedGrace}, nobody deletes it - the lane
      * that kept the unit still needs it, so the other lane's later stop leaves it too - and it ages out a lease TTL after
-     * the last heartbeat, when the kept unit becomes takeable.
+     * the last heartbeat. The kept unit is handed back as soon as its handler has returned ({@link #keptOrderedOwners}),
+     * and becomes takeable then, or once the membership row has aged out, whichever comes first.
      * Without this, the unordered lane, which {@code PostgresqlMessageQueue} stops first, deleted the row while the
      * ordered lane still served its units, or went on to keep one, and another instance could take that unit at once and
      * start its key beside the handler still running it. The lanes, not the subscription, because each lane alone knows
@@ -2451,32 +2577,48 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         // its row (ENDED_ROW_HELD) until releaseHeldLeases below has released it: a heartbeat tick
         // still running counts it as this instance's, so its acquire loop cannot take the unit again.
         held.forEach(this::endOnStop);
-        // An ordered unit with a key still in a handler is NOT handed back: a successor taking it now
+        // An ordered unit with a key still in a handler is NOT released now: a successor taking it now
         // could start that key while it runs here, which is reordering. Another instance can take it once this
         // instance's liveness lapses - a lease TTL - which is also why the instance must stay
-        // registered. A later run of this queue leaves it alone until the handler has returned (keptOrderedOwners), and
-        // its acquire loop may take it after that. An unordered one is released regardless; at-least-once covers its
-        // redelivery.
-        var kept = stillInHandler.stream().filter(owner -> "ordered".equals(owner.lane())).toList();
-        // Units an earlier stop kept whose key is still in its handler: this run did not take them (keptUnitsStillInHandler),
-        // and their rows still name this instance, so they keep it registered as this run's own kept units do.
-        var keptEarlier = keptOrderedOwners.stream().filter(owner -> owner.inFlight() > 0).toList();
-        var stillKept   = new ArrayList<LeasedOwner>(keptEarlier);
-        stillKept.addAll(kept);
+        // registered. It is handed back once the handler has returned - its acknowledgements flushed, its row released
+        // (handBackKeptUnit) - and a later run of this queue leaves it alone until then (keptOrderedOwners). An unordered
+        // one is released regardless; at-least-once covers its redelivery.
+        var kept    = stillInHandler.stream().filter(owner -> "ordered".equals(owner.lane())).toList();
+        var keptNow = kept.stream().map(KeptUnit::new).toList();
+        // Units an earlier stop kept and that are not handed back yet, in two kinds, each owner's in-flight count read
+        // once, so none falls between them. Those whose key is still in its handler: this run did not take them
+        // (keptUnitsNotHandedBack), and their rows still name this instance, so they keep it registered as this run's own
+        // kept units do. Those whose handler has returned since and whose hand-back did not run or failed: handed back on
+        // the budget thread below, as this run's own rows are released there, and listed still, so a later tick or start
+        // retries a hand-back that fails there.
+        var keptEarlier     = new ArrayList<KeptUnit>();
+        var returnedEarlier = new ArrayList<KeptUnit>();
+        for (var earlier : keptOrderedOwners) {
+            if (earlier.owner().inFlight() > 0) {
+                keptEarlier.add(earlier);
+            } else if (earlier.owner().holdsLeaseRow()) {
+                returnedEarlier.add(earlier);
+            }
+        }
+        var stillKept = new ArrayList<KeptUnit>(keptEarlier);
+        stillKept.addAll(returnedEarlier);
+        stillKept.addAll(keptNow);
         keptOrderedOwners = List.copyOf(stillKept);
-        // This run's own need for the membership row ends here, unless a unit is kept: written before the hand-back reads
-        // the other lane's (handBackWithinBudget), so of two lanes ending at once at least one reads the other's as ended.
-        runNeedsMembership = !stillKept.isEmpty();
+        // This run's own need for the membership row ends here, unless a unit is kept with its key still in a handler:
+        // written before the hand-back reads the other lane's (handBackWithinBudget), so of two lanes ending at once at
+        // least one reads the other's as ended.
+        runNeedsMembership = !keptEarlier.isEmpty() || !kept.isEmpty();
         var toRelease = held.stream().filter(owner -> !kept.contains(owner)).toList();
-        // Nothing against the database for a run with no lease row to hand back and no deregistration owed: a start that
-        // failed before it adopted anything.
-        if (!held.isEmpty() || deregister) {
+        var keptEarlierOwners = keptEarlier.stream().map(KeptUnit::owner).toList();
+        // Nothing against the database for a run with no lease row to hand back, no earlier kept unit to hand back and no
+        // deregistration owed: a start that failed before it adopted anything.
+        if (!held.isEmpty() || !returnedEarlier.isEmpty() || deregister) {
             // Counted until the work is done, not until the budget runs out: past it the stop goes on without the thread,
             // which may still deregister the instance id (handBackStillRunning).
             handBacksRunning.incrementAndGet();
             withinShutdownBudget(() -> {
                 try {
-                    handBackWithinBudget(serving, toRelease, kept, keptEarlier, deregister);
+                    handBackWithinBudget(serving, toRelease, kept, keptEarlierOwners, returnedEarlier, keptNow, deregister);
                 } finally {
                     handBacksRunning.decrementAndGet();
                 }
@@ -2497,8 +2639,8 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         // Every owner this run listed leaves the queue here, so each one whose release nobody has counted yet is counted
         // now: a unit the budget thread released (releaseHeldLeases counts nothing), an ordered unit kept because a key was
         // still in its handler, a unit whose release failed or ran out of the budget, and one found taken that no rebalance
-        // has dropped yet. This instance holds none of them any more, as far as the queue knows - a kept unit's row lapses
-        // with the instance's liveness - and nothing would report them later. A release still running on a heartbeat tick
+        // has dropped yet. This instance holds none of them any more, as far as the queue knows - a kept unit's row names it
+        // until the unit is handed back (or the instance's liveness lapses) - and nothing would report them later. A release still running on a heartbeat tick
         // counts nothing for an owner counted here (countRelease), and nothing here for one it counted first.
         var givenUp = new ArrayList<Integer>();
         for (var owner : ending) {
@@ -2514,27 +2656,45 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
 
     /**
      * The database half of {@link #endRun}, on the budget thread ({@link #withinShutdownBudget}): flush what the serving
-     * owners still hold, release the rows of {@code toRelease}, and deregister this instance
+     * owners still hold, have each unit this run keeps ({@code keptNow}) handed back once its key leaves its handler, release
+     * the rows of {@code toRelease}, hand back the units an earlier stop kept whose handler has returned since
+     * ({@code returnedEarlier}, {@link #handBackKeptUnit}), and deregister this instance
      * ({@link ShardOwnedStorage#deregisterInstance(String)}) when {@code deregister}, no ordered unit is {@code kept} by
-     * this run nor still {@code keptEarlier} by an earlier one, and the other lane of the {@code PostgresqlMessageQueue}
-     * subscription, which shares the membership row ({@link #shareMembershipWith}), no longer needs it
-     * ({@link #needsMembership()}). When it does, that lane's own stop deletes the row later, or leaves it to age out if
-     * it keeps an ordered unit.
+     * this run nor still {@code keptEarlier} by an earlier one with its key in a handler, and the other lane of the
+     * {@code PostgresqlMessageQueue} subscription, which shares the membership row ({@link #shareMembershipWith}), no
+     * longer needs it ({@link #needsMembership()}). When it does, that lane's own stop deletes the row later, or leaves it
+     * to age out if it keeps an ordered unit.
      */
     private void handBackWithinBudget(List<LeasedOwner> serving, List<LeasedOwner> toRelease, List<LeasedOwner> kept,
-                                      List<LeasedOwner> keptEarlier, boolean deregister) {
-        // What the pumps would have flushed had they gone on serving these owners. Valid still:
-        // releasing a lease does not bump its fence, and the leases go only after this. Nothing to
-        // do for a runtime this queue closed itself - its pumps flushed on the way out. Not for an
-        // owner whose pump died: its state is not trusted (handBackUnitsOnDeadPumps).
-        flushAcknowledgements(serving);
+                                      List<LeasedOwner> keptEarlier, List<KeptUnit> returnedEarlier, List<KeptUnit> keptNow,
+                                      boolean deregister) {
+        try {
+            // What the pumps would have flushed had they gone on serving these owners. Valid still:
+            // releasing a lease does not bump its fence, and the leases go only after this. Nothing to
+            // do for a runtime this queue closed itself - its pumps flushed on the way out. Not for an
+            // owner whose pump died: its state is not trusted (handBackUnitsOnDeadPumps).
+            flushAcknowledgements(serving);
+        } finally {
+            // Each unit this run keeps is handed back as its last key leaves the handler, on a thread of its own, whether
+            // or not this queue runs by then - at once when the key has left already. Asked only once this thread has
+            // flushed the kept owners above, also when it outlasts the budget: asked before, a hand-back could flush and
+            // release one of them while this flush still ran, and this flush, refused, counted a lease lost.
+            for (var unit : keptNow) {
+                if (unit.owner() instanceof OrderedShardOwner ordered) {
+                    ordered.whenNoKeyInHandler(() -> handBackKeptUnitOnItsOwnThread(unit));
+                }
+            }
+        }
         releaseHeldLeases(toRelease);
+        // Before the deregistration below, as this run's own rows are released before it. One whose hand-back fails here
+        // does not keep the instance registered, as a release that fails above does not.
+        returnedEarlier.forEach(this::handBackKeptUnit);
         if (!kept.isEmpty()) {
             log.warn("Instance {} is keeping {} ordered unit(s) [{}] on queue {}: a key was still in a handler "
-                             + "{} after stop began. They become available to another instance when this one's "
-                             + "liveness lapses ({} ms), and to a restart of this queue once those handlers have returned, "
-                             + "so no successor starts a key that may still be running here. "
-                             + "Raise shedGrace if handlers routinely outlast it",
+                             + "{} after stop began. Each is handed back - its acknowledgements flushed, its lease released - "
+                             + "once its handler has returned, whether or not this queue runs again; until then another "
+                             + "instance can take it only once this one's liveness lapses ({} ms), so no successor starts a "
+                             + "key that may still be running here. Raise shedGrace if handlers routinely outlast it",
                      instanceId, kept.size(), summarise(kept.stream().map(LeasedOwner::shard).toList()), queueId,
                      Duration.ofNanos(activeSettings.shedGraceNanos()), leaseTtlMillis);
             return;
@@ -2546,7 +2706,8 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         // beside the handler an earlier stop kept the unit for.
         if (!keptEarlier.isEmpty()) {
             log.info("Instance {} stays registered on queue {}: an earlier stop kept {} ordered unit(s) [{}] whose key is still "
-                             + "in a handler, and their leases name this instance until its liveness lapses ({} ms)",
+                             + "in a handler, and their leases name this instance until each is handed back once its handler has "
+                             + "returned, or this instance's liveness lapses ({} ms)",
                      instanceId, queueId, keptEarlier.size(), summarise(keptEarlier.stream().map(LeasedOwner::shard).toList()),
                      leaseTtlMillis);
             return;
@@ -2596,7 +2757,9 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * unit kept because a key was still in its handler, or a release that fails or runs out of the shutdown budget - the
      * owner stays {@code HELD} on its pump: on a shared runtime's,
      * as a runtime this queue created has stopped its pumps already ({@link #releaseRuntime}). Nothing in this queue
-     * moves it on: the lease check that would find the unit taken runs on the heartbeat this stop cancelled. It
+     * moves it on but the hand-back of a kept unit once its handler has returned ({@link #handBackKeptUnit}), whose release
+     * moves it to {@code RELEASED}: the lease check that would find the unit taken runs on the heartbeat this stop
+     * cancelled. It
      * dispatches nothing once the liveness gate ({@link #deliveryPermitted}) pauses delivery, four fifths of a lease TTL
      * after the last heartbeat, and it moves to {@code RELEASED} if one of its own fenced writes is refused after a
      * successor has taken the unit.
@@ -2804,6 +2967,42 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * A unit leased at start-up, with how its previous owner left it
      */
     private record LeasedUnit(int shard, ShardOwnedStorage.LeaseGrant grant) {
+    }
+
+    /**
+     * An ordered owner a stop kept ({@link #keptOrderedOwners}), with what its hand-back ({@link #handBackKeptUnit}) needs
+     * beside it: the claim that lets one hand-back of it run at a time - a key leaving its handler, a heartbeat tick, a
+     * start, a stop's budget thread and a {@code consume()} of the {@link PostgresqlMessageQueue} may all try at once.
+     */
+    private static final class KeptUnit {
+        private final LeasedOwner   owner;
+        private final AtomicBoolean handingBack = new AtomicBoolean();
+
+        private KeptUnit(LeasedOwner owner) {
+            this.owner = requireNonNull(owner, "No owner provided");
+        }
+
+        private LeasedOwner owner() {
+            return owner;
+        }
+
+        /**
+         * Whether a key of the owner is in a handler, or its lease row still names this instance:
+         * {@link #keptOrderedUnitNotHandedBack()}. From the moment its last key leaves the handler until a hand-back has
+         * released the row, this is true, so nothing reads the unit as handed back before it is - nor after a hand-back
+         * that failed, which a retry may still complete.
+         */
+        private boolean notHandedBack() {
+            return owner.inFlight() > 0 || owner.holdsLeaseRow();
+        }
+
+        private boolean claimHandBack() {
+            return handingBack.compareAndSet(false, true);
+        }
+
+        private void endHandBack() {
+            handingBack.set(false);
+        }
     }
 
     /**

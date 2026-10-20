@@ -106,19 +106,25 @@ the next `consume()`, which is not counted as competing with the
 unsubscribed subscription (it still is with any other subscription of the queue, and logs the COMPETING
 WARN for it). Two cases delay the id, either one enough, and when both apply it is free only once both
 have passed: when the stop kept an ordered unit, because a key was still in its handler past
-`shedGrace`, the id stays out of use until that handler has returned, as that unit's lease names the id
-and a subscription under it would take the unit at once and could start the key beside the running
-handler; and when the stop gave up waiting for its lanes' hand-back to the database (releasing the
+`shedGrace`, the id stays out of use until that handler has returned and the unit has been handed back
+(a `consume()` retries a hand-back that failed before it picks an id),
+as until then that unit's lease names the id and a subscription under it would take the unit at once and
+could start the key beside the running handler; and when the stop gave up waiting for its lanes' hand-back to the database (releasing the
 leases and deregistering the id), the id stays out of use until that hand-back has returned, as it may
 still delete the id's membership row. A `consume()` before then registers under another instance id,
 the lowest one free (`<id>-1` when the unsubscribed subscription held `<id>` and no other is registered
-or held back), with no COMPETING WARN unless another subscription is registered. Nothing heartbeats an
-unsubscribed id, so another instance can take its kept unit once the id's membership row has aged out
-(`leaseTtl`). A subscription or queue restarted instead (`Subscription.start()`, the queue's `start()`)
-stays registered under the id and heartbeats it, so no other instance takes the kept unit; the restart
-itself leaves that unit alone until the handler has returned, and a heartbeat may take it after that.
-Until then no key of that unit is delivered, so a handler that never returns leaves the unit unserved
-for as long as the restarted instance runs. Stopping
+or held back), with no COMPETING WARN unless another subscription is registered. Once the handler has
+returned, the engine hands the kept unit back, whether or not anything runs under the id again: it flushes
+the handled message's acknowledgement and releases the unit's lease, so whichever instance takes the unit
+next charges no attempt and does not deliver that message again. A hand-back that fails (a database
+error) is retried by the heartbeat, start or stop of the subscription's lanes if they run again, and,
+for an unsubscribed subscription, by the next `consume()`.
+Nothing heartbeats an unsubscribed id, so until the unit is handed back another instance can take it once
+the id's membership row has aged out (`leaseTtl`). A subscription or queue restarted instead (`Subscription.start()`, the queue's
+`start()`) stays registered under the id and heartbeats it, so no other instance takes the kept unit
+before it is handed back; the restart itself leaves that unit alone until then, and it or another
+instance below its fair share takes it after that. Until then no key of that unit is delivered, so a
+handler that never returns leaves the unit unserved for as long as the restarted instance runs. Stopping
 instead left one stopped subscription behind per round — a COMPETING WARN with a new `-N` instance id
 suffix each time, and a queue `stop()`/`start()` restarting every abandoned handler. `ShardOwnedDurableQueues`
 unsubscribes on every consumer stop and cancel, so a `DurableLocalCommandBus` restart or an `Inbox`
@@ -315,7 +321,7 @@ Almost never. The table is the whole answer:
 |---|---|---|
 | **Rolling redeploy** | no | nothing |
 | **Scale up** | no | nothing — new pods register and take a share within a heartbeat |
-| **Scale down / pod evicted** | no | nothing — a graceful stop drains in-flight handlers (up to `shedGrace`), releases its shards and deregisters immediately. An ordered unit whose key outlasts the grace is kept until this instance's liveness lapses (`leaseTtl`) instead, and the instance stays registered until then |
+| **Scale down / pod evicted** | no | nothing — a graceful stop drains in-flight handlers (up to `shedGrace`), releases its shards and deregisters immediately. An ordered unit whose key outlasts the grace is kept instead, and the instance stays registered: the unit is handed back (acknowledged, released) once that handler returns, and before then another instance can take it only once this instance's liveness lapses (`leaseTtl`) |
 | **Crash** | no | nothing — shards move when the lease expires (`leaseTtl`, 30 s default) |
 | **Grow an unordered queue** | yes | `growShardCount(...)`. That is all |
 | **Grow an ordered queue** | n/a | nothing to grow — the routing space is fixed |
@@ -353,7 +359,7 @@ accessor.
 **Autoscaling specifics.** Membership is a row per instance, refreshed every `leaseTtl / 3` and
 counted live within `leaseTtl`. A gracefully stopped instance deregisters immediately, so scaling in
 frees its shards and lets survivors take them at once — unless it kept an ordered unit because a key
-outlasted `shedGrace`: its row then ages out with `leaseTtl`, and that unit becomes takeable with it. An instance that *crashes* is counted live
+outlasted `shedGrace`: its row then ages out with `leaseTtl`, and that unit becomes takeable once its handler has returned (the instance hands it back then) or the row has aged out, whichever is first. An instance that *crashes* is counted live
 until its row goes stale, which is the same window its leases take to expire — that is the designed
 failover time, not an extra cost. Rows for departed instances are pruned by the heartbeat.
 
