@@ -103,19 +103,36 @@ class OrderedRetryHandoverOnShardOwnedIT {
         return new HikariDataSource(config);
     }
 
+    /**
+     * Builds and starts an instance. It joins {@link #instances} before it starts, so {@link #tearDown()} closes it
+     * also when {@code start()} throws; a failure before that closes what was already built here.
+     */
     private Instance instance(String id) {
-        var dataSource        = dataSource();
-        var unitOfWorkFactory = new JdbiUnitOfWorkFactory(Jdbi.create(dataSource));
-        var queues            = new RegisteredMessageQueues(dataSource, id);
-        var durableQueues = ShardOwnedDurableQueues.builder()
-                                                   .setQueues(queues)
-                                                   .setJsonSerializer(EssentialsObjectMappers.createJSONSerializer())
-                                                   .setUnitOfWorkFactory(unitOfWorkFactory)
-                                                   .setDataSource(dataSource)
-                                                   .build();
-        durableQueues.start();
-        var instance = new Instance(id, dataSource, unitOfWorkFactory, queues, durableQueues);
+        var dataSource = dataSource();
+        // PMD.CloseResource: queues is handed to the Instance, whose close() closes it; until the Instance exists,
+        // the catch below does
+        @SuppressWarnings("PMD.CloseResource")
+        var queues = new RegisteredMessageQueues(dataSource, id);
+        Instance instance;
+        try {
+            var unitOfWorkFactory = new JdbiUnitOfWorkFactory(Jdbi.create(dataSource));
+            var durableQueues = ShardOwnedDurableQueues.builder()
+                                                       .setQueues(queues)
+                                                       .setJsonSerializer(EssentialsObjectMappers.createJSONSerializer())
+                                                       .setUnitOfWorkFactory(unitOfWorkFactory)
+                                                       .setDataSource(dataSource)
+                                                       .build();
+            instance = new Instance(id, dataSource, unitOfWorkFactory, queues, durableQueues);
+        } catch (RuntimeException | Error e) {
+            try {
+                queues.close();
+            } finally {
+                dataSource.close();
+            }
+            throw e;
+        }
         instances.add(instance);
+        instance.durableQueues().start();
         return instance;
     }
 
