@@ -27,9 +27,12 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.su
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
 import dk.trustworks.essentials.components.foundation.messaging.*;
 import dk.trustworks.essentials.components.foundation.messaging.eip.store_and_forward.Inboxes;
-import dk.trustworks.essentials.components.foundation.messaging.queue.QueueName;
+import dk.trustworks.essentials.components.foundation.json.EssentialsObjectMappers;
+import dk.trustworks.essentials.components.foundation.messaging.queue.*;
+import dk.trustworks.essentials.components.foundation.postgresql.*;
 import dk.trustworks.essentials.components.foundation.reactive.command.*;
 import dk.trustworks.essentials.components.queue.postgresql.PostgresqlDurableQueues;
+import dk.trustworks.essentials.reactive.LocalEventBus;
 import com.zaxxer.hikari.*;
 import org.jdbi.v3.core.Jdbi;
 import org.jdbi.v3.postgres.PostgresPlugin;
@@ -55,7 +58,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * {@code OrderLedgerProcessor} do; in {@code all_five} it handles every event, the control that shows what reading,
  * forwarding and handling cost when nothing can be skipped. Two times per run, both from {@code start()}: <b>forward</b>
  * until every event with a handler is in the inbox (handled, or still queued) — the reader's rate, which EF-2 is about —
- * and <b>drain</b> until every one of them was handled, which adds the single inbox consumer.
+ * and <b>drain</b> until every one of them was handled, which adds the single inbox consumer. {@code view_all_five} is
+ * a {@link ViewEventProcessor} handling all five on the reader's thread, so its forward and drain are one number: the
+ * reader's rate is what a projection gets end to end.
  * <p>
  * Each repeat uses its own aggregate type and processor name, so its event table, resume point and inbox queue are
  * fresh. {@code mvn verify -pl components/postgresql-event-store -Dbenchmark.run=true -Dit.test=EventProcessorForwardBenchmarkIT}
@@ -81,7 +86,9 @@ class EventProcessorForwardBenchmarkIT {
     private PostgresqlDurableQueues                                                 durableQueues;
     private DurableLocalCommandBus                                                  commandBus;
     private EventProcessorDependencies                                              dependencies;
+    private ViewEventProcessorDependencies                                          viewDependencies;
     private HikariDataSource                                                        dataSource;
+    private MultiTableChangeListener<TableChangeNotification>                       changeListener;
 
     @BeforeEach
     void setup() {
@@ -125,9 +132,15 @@ class EventProcessorForwardBenchmarkIT {
                                                                      .setEventStorePollingInterval(Duration.ofMillis(200))
                                                                      .build();
         eventStoreSubscriptionManager.start();
+        // Wired as the Spring Boot starter does (postgresql-queue's SpringWiredDurableQueues), since that is what users run
+        changeListener = new MultiTableChangeListener<>(jdbi, Duration.ofMillis(50), EssentialsObjectMappers.createJSONSerializer(), new LocalEventBus("benchmark-change-listener"), true);
+        changeListener.start();
         durableQueues = PostgresqlDurableQueues.builder()
                                                .setJsonSerializer(jsonSerializer)
                                                .setUnitOfWorkFactory(unitOfWorkFactory)
+                                               .setMultiTableChangeListener(changeListener)
+                                               .setCentralizedMessageFetcherPollingInterval(Duration.ofMillis(20))
+                                               .setCentralizedQueuePollingOptimizerFactory(queueName -> new CentralizedQueuePollingOptimizer(queueName, 20, 2_000, 1.5, 0.1))
                                                .build();
         durableQueues.start();
         commandBus = DurableLocalCommandBus.builder()
@@ -136,6 +149,7 @@ class EventProcessorForwardBenchmarkIT {
                                            .build();
         commandBus.start();
         dependencies = new EventProcessorDependencies(eventStoreSubscriptionManager, new Inboxes.DurableQueueBasedInboxes(durableQueues, fencedLockManager), commandBus, List.of());
+        viewDependencies = new ViewEventProcessorDependencies(eventStoreSubscriptionManager, fencedLockManager, durableQueues, commandBus, List.of());
     }
 
     @AfterEach
@@ -152,6 +166,9 @@ class EventProcessorForwardBenchmarkIT {
         if (durableQueues != null) {
             durableQueues.stop();
         }
+        if (changeListener != null) {
+            changeListener.stop();
+        }
         if (dataSource != null) {
             dataSource.close();
         }
@@ -159,16 +176,34 @@ class EventProcessorForwardBenchmarkIT {
 
     @Test
     void two_of_five() {
-        measure("two_of_five", TwoOfFiveProcessor::new, 2);
+        measure("two_of_five", aggregateType -> new TwoOfFiveProcessor(dependencies, aggregateType), 2);
     }
 
     @Test
     void all_five() {
-        measure("all_five", AllFiveProcessor::new, 5);
+        measure("all_five", aggregateType -> new AllFiveProcessor(dependencies, aggregateType), 5);
+    }
+
+    @Test
+    void view_all_five() {
+        measure("view_all_five", aggregateType -> new AllFiveViewProcessor(viewDependencies, aggregateType), 5);
+    }
+
+    private interface BenchProcessor {
+        AtomicInteger handled();
+
+        /**
+         * @return the inbox the reader forwards to, or null when the reader handles the events itself
+         */
+        QueueName inboxQueueName();
+
+        void start();
+
+        void stop();
     }
 
     private interface ProcessorFactory {
-        CountingProcessor create(EventProcessorDependencies dependencies, AggregateType aggregateType);
+        BenchProcessor create(AggregateType aggregateType);
     }
 
     private void measure(String shape, ProcessorFactory factory, int handledPerOrder) {
@@ -178,15 +213,16 @@ class EventProcessorForwardBenchmarkIT {
             eventStore.addAggregateEventStreamConfiguration(aggregateType, AggregateIdSerializer.serializerFor(EventProcessorIT.OrderId.class));
             seed(aggregateType);
 
-            var processor = factory.create(dependencies, aggregateType);
+            var processor = factory.create(aggregateType);
             var expected  = ORDERS * handledPerOrder;
             var started   = System.nanoTime();
             processor.start();
             try {
                 Duration forwarded = null;
-                while (processor.handled.get() < expected) {
-                    assertThat(Duration.ofNanos(System.nanoTime() - started)).as("%s handled %d of %d", shape, processor.handled.get(), expected).isLessThan(TIME_OUT);
-                    if (forwarded == null && processor.handled.get() + durableQueues.getTotalMessagesQueuedFor(processor.inboxQueueName()) >= expected) {
+                while (processor.handled().get() < expected) {
+                    assertThat(Duration.ofNanos(System.nanoTime() - started)).as("%s handled %d of %d", shape, processor.handled().get(), expected).isLessThan(TIME_OUT);
+                    if (forwarded == null && processor.inboxQueueName() != null &&
+                            processor.handled().get() + durableQueues.getTotalMessagesQueuedFor(processor.inboxQueueName()) >= expected) {
                         forwarded = Duration.ofNanos(System.nanoTime() - started);
                     }
                     sleep();
@@ -245,7 +281,7 @@ class EventProcessorForwardBenchmarkIT {
     public record BenchClosed(EventProcessorIT.OrderId orderId) {
     }
 
-    abstract static class CountingProcessor extends EventProcessor {
+    abstract static class CountingProcessor extends EventProcessor implements BenchProcessor {
         final         AtomicInteger handled = new AtomicInteger();
         private final AggregateType aggregateType;
 
@@ -259,7 +295,13 @@ class EventProcessorForwardBenchmarkIT {
             return "Bench" + aggregateType;
         }
 
-        QueueName inboxQueueName() {
+        @Override
+        public AtomicInteger handled() {
+            return handled;
+        }
+
+        @Override
+        public QueueName inboxQueueName() {
             return getInbox().name().asQueueName();
         }
 
@@ -288,6 +330,61 @@ class EventProcessorForwardBenchmarkIT {
     static class AllFiveProcessor extends CountingProcessor {
         AllFiveProcessor(EventProcessorDependencies dependencies, AggregateType aggregateType) {
             super(dependencies, aggregateType);
+        }
+
+        @MessageHandler
+        void on(BenchPlaced e) {
+            handled.incrementAndGet();
+        }
+
+        @MessageHandler
+        void on(BenchSubmitted e) {
+            handled.incrementAndGet();
+        }
+
+        @MessageHandler
+        void on(BenchAccepted e) {
+            handled.incrementAndGet();
+        }
+
+        @MessageHandler
+        void on(BenchFilled e) {
+            handled.incrementAndGet();
+        }
+
+        @MessageHandler
+        void on(BenchClosed e) {
+            handled.incrementAndGet();
+        }
+    }
+
+    static class AllFiveViewProcessor extends ViewEventProcessor implements BenchProcessor {
+        private final AtomicInteger handled = new AtomicInteger();
+        private final AggregateType aggregateType;
+
+        AllFiveViewProcessor(ViewEventProcessorDependencies dependencies, AggregateType aggregateType) {
+            super(dependencies);
+            this.aggregateType = aggregateType;
+        }
+
+        @Override
+        public String getProcessorName() {
+            return "BenchView" + aggregateType;
+        }
+
+        @Override
+        protected List<AggregateType> reactsToEventsRelatedToAggregateTypes() {
+            return List.of(aggregateType);
+        }
+
+        @Override
+        public AtomicInteger handled() {
+            return handled;
+        }
+
+        @Override
+        public QueueName inboxQueueName() {
+            return null;
         }
 
         @MessageHandler
