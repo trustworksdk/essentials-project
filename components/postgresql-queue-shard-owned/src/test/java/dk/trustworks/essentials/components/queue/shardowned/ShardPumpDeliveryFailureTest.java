@@ -636,9 +636,9 @@ class ShardPumpDeliveryFailureTest {
      * attentive in the same pass.
      */
     private static class BatchStubOwner extends StubOwner implements BatchReadableOwner {
-        final AtomicInteger                  batchesApplied = new AtomicInteger();
+        final AtomicInteger  batchesApplied = new AtomicInteger();
         /** The cursor read's row limit of every batch applied, in order. */
-        final ConcurrentLinkedQueue<Integer> cursorLimits   = new ConcurrentLinkedQueue<>();
+        final Queue<Integer> cursorLimits   = new ConcurrentLinkedQueue<>();
 
         BatchStubOwner(short queueId, int shard, ShardOwnerMetrics metrics) {
             super(queueId, shard, metrics, () -> new IllegalStateException("never thrown"), 0);
