@@ -1002,8 +1002,12 @@ public final class PostgresqlMessageQueue implements MessageQueue {
      * is the only retry of a hand-back that failed as the key left its handler. The index stays held until one succeeds,
      * or finds the unit taken by another instance once the old instance's liveness lapsed: given back after a failed
      * hand-back, the next {@code consume()} took the unit as from a crashed owner, charging an attempt and delivering
-     * again the message the handler had handled. Outside {@link #handOver}, which is held for a few reads and writes
-     * only: a hand-back waits for the database.
+     * again the message the handler had handled. Then each reviews its kept units ({@link ShardOwnedQueue#reviewStuckKeptUnits()}),
+     * giving up, for good and with a WARN, one whose key has been in its handler longer than the queue's
+     * {@code stuckHandlerTimeout}, once the stop that kept it has flushed it ({@code ShardOwnedQueue.KeptUnit.Phase.STOP_FLUSHING}),
+     * so {@link HeldIndex#isDue()} below need only read. Both outside {@link #handOver}, which
+     * is held for a few reads and writes only: a hand-back waits for the database, and a review takes each kept owner's
+     * lock and logs.
      */
     private int reserveSubscriptionIndex() {
         List<HeldIndex> stillHeld;
@@ -1011,7 +1015,10 @@ public final class PostgresqlMessageQueue implements MessageQueue {
             stillHeld = List.copyOf(heldIndexes.values());
         }
         for (var index : stillHeld) {
-            index.lanes().forEach(ShardOwnedQueue::handBackKeptUnits);
+            for (var lane : index.lanes()) {
+                lane.handBackKeptUnits();
+                lane.reviewStuckKeptUnits();
+            }
         }
         synchronized (handOver) {
             var held = heldIndexes.entrySet().iterator();
@@ -1036,11 +1043,14 @@ public final class PostgresqlMessageQueue implements MessageQueue {
      * ({@link ShardOwnedQueue#keptOrderedUnitAwaited()}) - or its key has been in its handler longer than the queue's
      * {@code stuckHandlerTimeout} - and no lane's hand-back is still running
      * ({@link ShardOwnedQueue#handBackStillRunning()}), which {@link #reserveSubscriptionIndex} asks the lanes each time,
-     * once it has had them retry a hand-back of such a unit that failed.
+     * once it has had them retry a hand-back of such a unit that failed and review their kept units. Reviewed here first
+     * too ({@link ShardOwnedQueue#reviewStuckKeptUnits()}), so a unit whose key is past that bound, once the stop that kept
+     * it has flushed it, already does not hold the index.
      *
      * @param ended what ended, for the log: {@code "an unsubscribed subscription"} or {@code "a failed consume()"}
      */
     private void releaseSubscriptionIndex(int index, List<ShardOwnedQueue> lanes, String ended) {
+        lanes.forEach(ShardOwnedQueue::reviewStuckKeptUnits);
         var keptUnitNotHandedBack = lanes.stream().anyMatch(ShardOwnedQueue::keptOrderedUnitAwaited);
         var handBackStillRunning  = lanes.stream().anyMatch(ShardOwnedQueue::handBackStillRunning);
         if (!keptUnitNotHandedBack && !handBackStillRunning) {
@@ -1082,6 +1092,9 @@ public final class PostgresqlMessageQueue implements MessageQueue {
     /**
      * An index in {@link #heldIndexes}: free again once every ordered unit a stop of its {@code lanes} kept has been
      * handed back, and no hand-back of theirs is still running - both asked of the lanes, which alone know.
+     * {@link #isDue()} only reads, under {@link #handOver}: the review that gives a unit up past the queue's
+     * {@code stuckHandlerTimeout} runs before, outside it ({@link #reserveSubscriptionIndex}). Reading, it still takes each
+     * kept owner's lock briefly, to read the owner's in-flight count.
      */
     private record HeldIndex(List<ShardOwnedQueue> lanes) {
         private boolean isDue() {

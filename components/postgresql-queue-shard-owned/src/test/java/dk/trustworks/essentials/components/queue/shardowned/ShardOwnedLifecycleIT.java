@@ -446,6 +446,162 @@ class ShardOwnedLifecycleIT {
     }
 
     /**
+     * A unit a stop kept whose handler returns while the stop's budget thread, which the stop gave up waiting for, is still
+     * flushing the acknowledgements of the owners the stop ended - the kept one among them - and the queue restarted
+     * meanwhile. The restart's hand-back of kept units used to flush and release the kept owner beside that flush: the
+     * restart then took the unit under a new fence, and the budget thread's flush of the same acknowledgement was refused,
+     * counted in {@code fencedOutAcks} and logged as a lost lease. Nothing hands a kept unit back before the stop's flush
+     * has passed it; then the unit is handed back, the handled message's acknowledgement flushed once, by the stop.
+     */
+    @Test
+    void a_unit_a_stop_kept_is_not_handed_back_while_the_stop_is_still_flushing_it() throws Exception {
+        var entries    = new AtomicInteger();
+        var entered    = new CountDownLatch(1);
+        var release    = new CountDownLatch(1);
+        var settings   = settingsWithShedGrace(Duration.ofMillis(300));
+        var instanceId = "kept-while-the-stop-flushes";
+        var holding    = new StopFlushHoldingDataSource(dataSource);
+        try (var runtime = new ShardRuntime(dataSource, settings)) {
+            var queue = ShardOwnedQueue.builder().setDataSource(holding).setQueueId(QUEUE_ID).setShardCount(SHARD_COUNT)
+                                       .setInstanceId(instanceId).setRuntime(runtime).build();
+            try {
+                queue.startConsumingOrdered((messageId, key, payload, payloadType) -> {
+                    // The first delivery of the key holds its handler; a later one returns at once.
+                    if (entries.incrementAndGet() == 1) {
+                        entered.countDown();
+                        awaitQuietly(release);
+                    }
+                }, settings, SHARD_COUNT);
+                queue.enqueueOrdered(List.of(new ShardOwnedStorage.OrderedPayload("ACC-1", 0, "0".getBytes(StandardCharsets.UTF_8), 1)));
+                assertThat(entered.await(20, TimeUnit.SECONDS)).isTrue();
+
+                holding.holdConnections();
+                queue.stop();
+                assertThat(queue.handBackStillRunning()).as("premise: the stop gave up waiting for its budget thread").isTrue();
+                assertThat(queue.metrics().keptUnitsInHandler()).as("premise: the busy unit is kept").isEqualTo(1);
+                // The budget thread has released nothing yet, so every unit's row still names the instance: the kept one is
+                // the key's.
+                var keptUnit = ShardOwnedSchema.unitForKey("ACC-1", ShardOwnedSchema.ORDERED_UNITS);
+                var kept     = new UnitFence(keptUnit, fenceOf("ordered", keptUnit));
+
+                // The kept handler returns: its acknowledgement waits in the kept owner, which no pump serves any more.
+                release.countDown();
+                Awaitility.await().atMost(Duration.ofSeconds(5))
+                          .untilAsserted(() -> assertThat(queue.metrics().keptUnitsInHandler()).as("premise: the kept handler has returned").isZero());
+                // The budget thread gets its connection and flushes the owners the stop ended, the kept one with that
+                // acknowledgement: held as it deletes the handled message.
+                holding.letConnect();
+                assertThat(holding.awaitAcknowledgementHeld(Duration.ofSeconds(10)))
+                        .as("premise: the stop's budget thread is flushing the kept owner's acknowledgement").isTrue();
+
+                queue.start();
+                assertThat(queue.shardsHeld()).as("the restart leaves the kept unit alone while the stop is still flushing it")
+                                              .isEqualTo(ShardOwnedSchema.ORDERED_UNITS - 1);
+                Awaitility.await().during(Duration.ofMillis(1_000)).atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
+                    assertThat(ownerOf("ordered", kept.shard())).as("the kept unit is not handed back while the stop is still flushing it")
+                                                                .isEqualTo(instanceId);
+                    assertThat(fenceOf("ordered", kept.shard())).as("nor taken").isEqualTo(kept.fence());
+                });
+
+                holding.letAcknowledge();
+                Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+                    assertThat(queue.handBackStillRunning()).as("premise: the stop's budget thread has finished").isFalse();
+                    assertThat(queue.keptOrderedUnitNotHandedBack()).as("handed back once the stop's flush has passed it").isFalse();
+                    assertThat(fenceOf("ordered", kept.shard())).as("then taken, under a new fence").isGreaterThan(kept.fence());
+                    assertThat(queue.shardsHeld()).as("every unit").isEqualTo(ShardOwnedSchema.ORDERED_UNITS);
+                });
+                assertThat(queue.metrics().fencedOutAcks.sum()).as("the stop's flush of the kept owner was not refused").isZero();
+                Awaitility.await().during(Duration.ofSeconds(1)).atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
+                    assertThat(entries).as("the message the kept handler handled is not delivered again").hasValue(1);
+                    assertThat(queue.orderedRemaining()).as("its acknowledgement was flushed").isZero();
+                });
+            } finally {
+                release.countDown();
+                holding.letConnect();
+                holding.letAcknowledge();
+                queue.stop();
+            }
+        }
+    }
+
+    /**
+     * The same kept unit, its handler returned and the budget thread of the stop that kept it still flushing it, when the
+     * restarted queue is stopped again. That later stop keeps nothing of its own, and the kept unit is no key in a
+     * handler, but its lease row still names this instance and no hand-back may release it until the earlier flush has
+     * passed: the later stop leaves the instance registered, as for a kept key still in its handler. Deleted, the
+     * membership row made the unit read as ownerless while the earlier stop still flushed it - another instance could take
+     * it at once, and that flush was then refused.
+     */
+    @Test
+    void a_later_stop_leaves_the_instance_registered_while_an_earlier_stop_is_still_flushing_a_unit_it_kept() throws Exception {
+        var entries    = new AtomicInteger();
+        var entered    = new CountDownLatch(1);
+        var release    = new CountDownLatch(1);
+        var settings   = settingsWithShedGrace(Duration.ofMillis(300));
+        var instanceId = "kept-while-an-earlier-stop-flushes";
+        var holding    = new StopFlushHoldingDataSource(dataSource);
+        try (var runtime = new ShardRuntime(dataSource, settings)) {
+            var queue = ShardOwnedQueue.builder().setDataSource(holding).setQueueId(QUEUE_ID).setShardCount(SHARD_COUNT)
+                                       .setInstanceId(instanceId).setRuntime(runtime).build();
+            try {
+                queue.startConsumingOrdered((messageId, key, payload, payloadType) -> {
+                    // The first delivery of the key holds its handler; a later one returns at once.
+                    if (entries.incrementAndGet() == 1) {
+                        entered.countDown();
+                        awaitQuietly(release);
+                    }
+                }, settings, SHARD_COUNT);
+                queue.enqueueOrdered(List.of(new ShardOwnedStorage.OrderedPayload("ACC-1", 0, "0".getBytes(StandardCharsets.UTF_8), 1)));
+                assertThat(entered.await(20, TimeUnit.SECONDS)).isTrue();
+
+                holding.holdConnections();
+                queue.stop();
+                assertThat(queue.handBackStillRunning()).as("premise: the stop gave up waiting for its budget thread").isTrue();
+                assertThat(queue.metrics().keptUnitsInHandler()).as("premise: the busy unit is kept").isEqualTo(1);
+                var keptUnit = ShardOwnedSchema.unitForKey("ACC-1", ShardOwnedSchema.ORDERED_UNITS);
+                var kept     = new UnitFence(keptUnit, fenceOf("ordered", keptUnit));
+
+                release.countDown();
+                Awaitility.await().atMost(Duration.ofSeconds(5))
+                          .untilAsserted(() -> assertThat(queue.metrics().keptUnitsInHandler()).as("premise: the kept handler has returned").isZero());
+                holding.letConnect();
+                assertThat(holding.awaitAcknowledgementHeld(Duration.ofSeconds(10)))
+                        .as("premise: the stop's budget thread is flushing the kept owner's acknowledgement").isTrue();
+
+                queue.start();
+                assertThat(queue.shardsHeld()).as("premise: the restart leaves the kept unit alone")
+                                              .isEqualTo(ShardOwnedSchema.ORDERED_UNITS - 1);
+                // The later stop: its own budget thread goes through, and finishes, while the earlier one is still held.
+                queue.stop();
+                assertThat(queue.shardsHeld()).as("premise: the later stop has ended its run").isZero();
+                Awaitility.await().atMost(Duration.ofSeconds(10))
+                          .untilAsserted(() -> assertThat(orderedUnitsOwnedBy(instanceId))
+                                  .as("premise: the later stop has released the units of its own run").isEqualTo(1));
+                Awaitility.await().during(Duration.ofMillis(1_000)).atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
+                    assertThat(instanceRegistered(instanceId)).as("the later stop leaves the instance registered").isTrue();
+                    assertThat(ownerOf("ordered", kept.shard())).as("the kept unit's row still names the instance").isEqualTo(instanceId);
+                    assertThat(fenceOf("ordered", kept.shard())).as("under the fence it was kept under").isEqualTo(kept.fence());
+                });
+
+                holding.letAcknowledge();
+                Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+                    assertThat(queue.handBackStillRunning()).as("premise: the earlier stop's budget thread has finished").isFalse();
+                    assertThat(queue.keptOrderedUnitNotHandedBack()).as("handed back once that stop's flush has passed it").isFalse();
+                    assertThat(ownerOf("ordered", kept.shard())).as("released").isNull();
+                });
+                assertThat(queue.metrics().fencedOutAcks.sum()).as("the earlier stop's flush of the kept owner was not refused").isZero();
+                assertThat(entries).as("the message the kept handler handled is not delivered again").hasValue(1);
+                assertThat(queue.orderedRemaining()).as("its acknowledgement was flushed").isZero();
+            } finally {
+                release.countDown();
+                holding.letConnect();
+                holding.letAcknowledge();
+                queue.stop();
+            }
+        }
+    }
+
+    /**
      * Every unit {@code stop()} gives up is reported released, the one it keeps included. An ordered unit with a key still
      * in a handler after the grace keeps its lease row until that handler has returned and the unit is handed back, or this
      * instance's liveness lapses, but the stopped queue lists it no more, so nothing would report it later: it used to be
@@ -3882,6 +4038,137 @@ class ShardOwnedLifecycleIT {
         public Connection getConnection(String username, String password) throws SQLException {
             refuseIfTold();
             return delegate.getConnection(username, password);
+        }
+
+        @Override
+        public PrintWriter getLogWriter() throws SQLException {
+            return delegate.getLogWriter();
+        }
+
+        @Override
+        public void setLogWriter(PrintWriter out) throws SQLException {
+            delegate.setLogWriter(out);
+        }
+
+        @Override
+        public void setLoginTimeout(int seconds) throws SQLException {
+            delegate.setLoginTimeout(seconds);
+        }
+
+        @Override
+        public int getLoginTimeout() throws SQLException {
+            return delegate.getLoginTimeout();
+        }
+
+        @Override
+        public java.util.logging.Logger getParentLogger() throws SQLFeatureNotSupportedException {
+            return delegate.getParentLogger();
+        }
+
+        @Override
+        public <T> T unwrap(Class<T> iface) throws SQLException {
+            return delegate.unwrap(iface);
+        }
+
+        @Override
+        public boolean isWrapperFor(Class<?> iface) throws SQLException {
+            return delegate.isWrapperFor(iface);
+        }
+    }
+
+    /**
+     * A {@link DataSource} that holds the budget thread of a {@code ShardOwnedQueue} stop (named {@code shard-queue-stop-*})
+     * at two points while told to: as it asks for a connection ({@link #holdConnections}), and, on that connection, as it
+     * prepares a delete from the ordered lane - an owner's acknowledgement flush, its batch already taken - until
+     * {@link #letAcknowledge}. Only the first budget thread that asks for a connection once told to hold is held, so a later
+     * stop's budget thread goes through. Every other thread, and the held one once let through, get the delegate's
+     * connections as they are.
+     */
+    private static final class StopFlushHoldingDataSource implements DataSource {
+        private final DataSource              delegate;
+        private final CountDownLatch          connecting      = new CountDownLatch(1);
+        private final CountDownLatch          acknowledging   = new CountDownLatch(1);
+        private final CountDownLatch          acknowledgeHeld = new CountDownLatch(1);
+        private final AtomicBoolean           holdConnections = new AtomicBoolean();
+        private final AtomicReference<Thread> heldThread      = new AtomicReference<>();
+
+        StopFlushHoldingDataSource(DataSource delegate) {
+            this.delegate = delegate;
+        }
+
+        /**
+         * Hold a stop's budget thread as it asks for a connection, until {@link #letConnect}.
+         */
+        void holdConnections() {
+            holdConnections.set(true);
+        }
+
+        void letConnect() {
+            holdConnections.set(false);
+            connecting.countDown();
+        }
+
+        void letAcknowledge() {
+            acknowledging.countDown();
+        }
+
+        /**
+         * Whether a stop's budget thread has reached an ordered acknowledgement, and is held there, within {@code timeout}.
+         */
+        boolean awaitAcknowledgementHeld(Duration timeout) throws InterruptedException {
+            return acknowledgeHeld.await(timeout.toMillis(), TimeUnit.MILLISECONDS);
+        }
+
+        /**
+         * Whether this is the budget thread held here: the first one to ask for a connection once told to hold.
+         */
+        private boolean onTheHeldBudgetThread() {
+            var current = Thread.currentThread();
+            if (!current.getName().startsWith("shard-queue-stop-")) {
+                return false;
+            }
+            if (holdConnections.get()) {
+                heldThread.compareAndSet(null, current);
+            }
+            return heldThread.get() == current;
+        }
+
+        // Connection's own loader, not the thread's context loader: a proxy class must be defined in a loader that sees
+        // its interface, which the context loader need not.
+        @SuppressWarnings("PMD.UseProperClassLoader")
+        private Connection holding(Connection connection) {
+            if (!onTheHeldBudgetThread()) {
+                return connection;
+            }
+            return (Connection) java.lang.reflect.Proxy.newProxyInstance(
+                    Connection.class.getClassLoader(), new Class<?>[]{Connection.class}, (proxy, method, args) -> {
+                        if ("prepareStatement".equals(method.getName()) && args != null && args[0] instanceof String sql
+                                && sql.startsWith("DELETE FROM " + ShardOwnedSchema.ORDERED_TABLE)) {
+                            acknowledgeHeld.countDown();
+                            awaitQuietly(acknowledging);
+                        }
+                        try {
+                            return method.invoke(connection, args);
+                        } catch (java.lang.reflect.InvocationTargetException e) {
+                            throw e.getCause();
+                        }
+                    });
+        }
+
+        @Override
+        public Connection getConnection() throws SQLException {
+            if (holdConnections.get() && onTheHeldBudgetThread()) {
+                awaitQuietly(connecting);
+            }
+            return holding(delegate.getConnection());
+        }
+
+        @Override
+        public Connection getConnection(String username, String password) throws SQLException {
+            if (holdConnections.get() && onTheHeldBudgetThread()) {
+                awaitQuietly(connecting);
+            }
+            return holding(delegate.getConnection(username, password));
         }
 
         @Override
