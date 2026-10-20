@@ -92,16 +92,23 @@ public final class ShardRuntime implements Lifecycle, AutoCloseable {
     static synchronized ShardRuntime acquireShared(DataSource dataSource, ShardOwnerSettings settings) {
         var existing = SHARED.get(dataSource);
         if (existing != null) {
-            // The first borrower's settings are the ones in force, because the pumps, the listener
-            // and the handler budget were sized from them and are already running. Saying so is the
-            // point: a second queue asking for four pump threads and silently getting two is the
-            // kind of thing that is only discovered while reading a heap dump.
-            if (!existing.runtime().settings.equals(settings)) {
-                log.warn("A shared ShardRuntime for this DataSource already exists and was built with "
-                                 + "different settings; the settings passed here are ignored. Construct the "
-                                 + "ShardRuntime yourself and pass it to every ShardOwnedQueue if the process "
-                                 + "needs a specific configuration. In force: {}. Ignored: {}",
-                         existing.runtime().settings, settings);
+            // The first borrower's runtime-scoped values are the ones in force, because the pumps were
+            // started from them and are already running. Saying so is the point: a second queue asking
+            // for four pump threads and silently getting two is the kind of thing that is only
+            // discovered while reading a heap dump. Only those values are compared: the rest of a
+            // borrower's settings (stuckHandlerTimeout, the documented way to bound one queue's
+            // handlers, among them) are its own queue's, and warning that they were ignored would be
+            // false.
+            var inForce   = existing.runtime().settings.runtimeScoped();
+            var requested = settings.runtimeScoped();
+            if (!inForce.equals(requested)) {
+                log.warn("A shared ShardRuntime for this DataSource already exists and was built with a different "
+                                 + "pumpThreads, readBatchSize, pollBackstop or maxSweepInterval; its pumps keep the values "
+                                 + "they were built with, so the values passed here do not apply to them. The queue's other "
+                                 + "settings are its own and apply as passed. Construct the ShardRuntime yourself and pass it "
+                                 + "to every ShardOwnedQueue if the process needs a specific runtime configuration. "
+                                 + "In force: {}. Passed here: {}",
+                         inForce, requested);
             }
             SHARED.put(dataSource, new Shared(existing.runtime(), existing.borrowers() + 1));
             return existing.runtime();
