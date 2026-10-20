@@ -89,4 +89,4 @@ echo "        Remove individually if desired: claude plugin uninstall <name>@cla
 echo "        And set ENABLE_LSP_TOOL=0 (or remove it) in devcontainer.json containerEnv."
 
 echo "Uninstall complete. Named volumes (e.g. headroom store) are preserved —"
-echo "drop them with: docker volume rm devcontainer-headroom-<devcontainerId>"
+echo "drop them with: docker volume rm essentials-project-headroom"

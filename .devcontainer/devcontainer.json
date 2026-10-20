@@ -291,28 +291,35 @@
     // ==========================================================================
     // Volume Mounts for Caching
     // Named volumes persist across container rebuilds.
-    // ${devcontainerId} scopes volumes per devcontainer instance.
+    // Volume names are FIXED (essentials-project-*), not ${devcontainerId}-scoped:
+    // VS Code and IntelliJ compute different devcontainerIds for the same folder
+    // (VS Code hashes its devcontainer.local_folder/config_file labels, IntelliJ
+    // uses its own com.intellij.devcontainer.id), so ${devcontainerId} gave each
+    // IDE its own Maven repo, Claude config, Docker image store and so on. Fixed
+    // names let either IDE pick up where the other left off. The fixed --name in
+    // runArgs is what keeps the two containers from running at the same time
+    // against these shared volumes.
     // ==========================================================================
     "mounts": [
         // Java/Maven
-        "source=devcontainer-maven-repo-${devcontainerId},target=/home/vscode/.m2/repository,type=volume",
-        "source=devcontainer-java-userprefs-${devcontainerId},target=/home/vscode/.java/.userPrefs,type=volume",
+        "source=essentials-project-maven-repo,target=/home/vscode/.m2/repository,type=volume",
+        "source=essentials-project-java-userprefs,target=/home/vscode/.java/.userPrefs,type=volume",
         // Node.js/NPM
-        "source=devcontainer-npm-cache-${devcontainerId},target=/home/vscode/.npm,type=volume",
+        "source=essentials-project-npm-cache,target=/home/vscode/.npm,type=volume",
         // Python/UV/pip
-        "source=devcontainer-uv-cache-v2-${devcontainerId},target=/home/vscode/.uv-cache,type=volume",
-        "source=devcontainer-pip-cache-${devcontainerId},target=/home/vscode/.cache/pip,type=volume",
+        "source=essentials-project-uv-cache-v2,target=/home/vscode/.uv-cache,type=volume",
+        "source=essentials-project-pip-cache,target=/home/vscode/.cache/pip,type=volume",
         // Playwright browser binaries (~100 MB) — downloaded once, kept across rebuilds.
-        "source=devcontainer-playwright-cache-${devcontainerId},target=/home/vscode/.cache/ms-playwright,type=volume",
+        "source=essentials-project-playwright-cache,target=/home/vscode/.cache/ms-playwright,type=volume",
 
         // Claude Code config and cache (named volumes — NOT bind-mounted to avoid host-path conflicts)
-        "source=devcontainer-claude-config-${devcontainerId},target=/home/vscode/.claude,type=volume",
-        "source=devcontainer-claude-cache-${devcontainerId},target=/home/vscode/.cache/claude-code,type=volume",
+        "source=essentials-project-claude-config,target=/home/vscode/.claude,type=volume",
+        "source=essentials-project-claude-cache,target=/home/vscode/.cache/claude-code,type=volume",
 
         // headroom workspace/CCR store (only used when INSTALL_HEADROOM=true) —
         // memory DB, reversible-compression originals, savings ledger, logs.
         // Persists across rebuilds (HEADROOM_WORKSPACE_DIR=~/.headroom).
-        "source=devcontainer-headroom-${devcontainerId},target=/home/vscode/.headroom,type=volume",
+        "source=essentials-project-headroom,target=/home/vscode/.headroom,type=volume",
         // NOTE: graphify's output (graphify-out/) lives in-repo (gitignored) — no named volume needed.
 
         // .devcontainer/ is READ-ONLY inside the container. The workspace mount is
@@ -328,16 +335,27 @@
         "source=${localWorkspaceFolder}/.devcontainer,target=/workspace/.devcontainer,type=bind,readonly",
 
         // JetBrains caches
-        "source=devcontainer-jetbrains-remote-${devcontainerId},target=/home/vscode/.cache/JetBrains/RemoteDev,type=volume",
-        "source=devcontainer-jetbrains-config-${devcontainerId},target=/home/vscode/.config/JetBrains,type=volume",
-        "source=devcontainer-jetbrains-cache-${devcontainerId},target=/home/vscode/.cache/JetBrains,type=volume",
-        "source=devcontainer-jetbrains-share-${devcontainerId},target=/home/vscode/.local/share/JetBrains,type=volume"
+        "source=essentials-project-jetbrains-remote,target=/home/vscode/.cache/JetBrains/RemoteDev,type=volume",
+        "source=essentials-project-jetbrains-config,target=/home/vscode/.config/JetBrains,type=volume",
+        "source=essentials-project-jetbrains-cache,target=/home/vscode/.cache/JetBrains,type=volume",
+        "source=essentials-project-jetbrains-share,target=/home/vscode/.local/share/JetBrains,type=volume",
+
+        // Docker-in-Docker image store (Testcontainers images). Overrides the
+        // docker-in-docker feature's own dind-var-lib-docker-${devcontainerId}
+        // mount: the devcontainers CLI keeps one mount per target, and
+        // devcontainer.json's wins over a feature's. Never let two running
+        // containers share it: two dockerd on one /var/lib/docker corrupt it.
+        "source=essentials-project-dind-var-lib-docker,target=/var/lib/docker,type=volume"
     ],
 
     // ==========================================================================
     // Resource Limits & Security
     // ==========================================================================
     "runArgs": [
+        // Fixed name on purpose: VS Code and IntelliJ share the fixed-name volumes
+        // in "mounts", and the name clash stops both IDEs' containers running at
+        // once. Switching IDE: docker rm -f essentials-project-devcontainer first
+        // (named volumes survive a docker rm).
         "--name", "essentials-project-devcontainer",
         "--cpus=8",
         "--memory=16g",
