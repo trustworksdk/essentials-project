@@ -24,6 +24,9 @@ tsconfig.json
 types.d.ts
 vite.generated.ts
 
+# Python bytecode, written next to any script that gets imported (scripts/, essentials-plugin/scripts/)
+__pycache__/
+
 /.m2/
 
 # Claude
