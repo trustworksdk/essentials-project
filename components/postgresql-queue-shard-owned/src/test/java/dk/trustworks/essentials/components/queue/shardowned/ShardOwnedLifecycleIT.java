@@ -2989,7 +2989,8 @@ class ShardOwnedLifecycleIT {
                                        .singleElement()
                                        .satisfies(event -> {
                                            assertThat(event.getLevel()).isEqualTo(ch.qos.logback.classic.Level.WARN);
-                                           assertThat(event.getFormattedMessage()).contains("stopping the consumers its failed start started")
+                                           assertThat(event.getFormattedMessage()).contains("a consume() of the queue, or a start() of one of its "
+                                                                                            + "subscriptions, stopping the consumers its failed start started")
                                                                                   .contains("by a QueueObserver");
                                        });
 
@@ -3080,9 +3081,8 @@ class ShardOwnedLifecycleIT {
                 var warned = "subscription".equals(calledBy)
                              ? "started neither lane of the subscription of queue " + QUEUE_ID + " under instance id '" + instanceId + "'"
                              : "did not start queue " + QUEUE_ID + ":";
-                var holderNamed = "subscription".equals(calledBy)
-                                  ? "stopping the consumers its failed start started"
-                                  : "a start() of the queue stopping the consumers its failed start started";
+                // Both WARNs name the queue start() whose failure is undone, the Subscription.start()'s through the undoing holder.
+                var holderNamed = "a start() of the queue stopping the consumers its failed start started";
                 if ("subscription".equals(calledBy)) {
                     assertThat(startedByCall.get()).as("the observer's Subscription.start() started neither lane").isFalse();
                 }

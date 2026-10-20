@@ -522,9 +522,10 @@ class ShardOwnedDurableQueueConsumer implements DurableQueueConsumer {
      * Not forward-only, as {@code ShardOwnedQueue}'s {@code Run.Phase} is: this describes whoever holds the lock now, and
      * goes back to {@link #NONE} as each holder lets go, where a {@code Run.Phase} belongs to one run.
      * <p>
-     * {@code PostgresqlMessageQueue}'s lifecycle holder has these five values, and a sixth, {@code UNDOING_A_START},
-     * for a failed start of its own stopping the consumers it started, which this consumer leaves to the queue's
-     * {@code consume()}. Nor are the edges the same, because its stop does more without the lock. A
+     * {@code PostgresqlMessageQueue}'s lifecycle holder has these five values, and two more, {@code UNDOING_A_QUEUE_START}
+     * and {@code UNDOING_A_SUBSCRIPTION_START}, for a failed start of its own stopping the consumers it started (the
+     * first for its {@code start()}, the second for a {@code consume()} or a subscription's {@code start()}), which this
+     * consumer leaves to the queue's {@code consume()}. Nor are the edges the same, because its stop does more without the lock. A
      * {@code PostgresqlMessageQueue.stop()} that did not get the lock stops every consumer itself, counted in its
      * {@code stopsWithoutLock}, and the holder waits for it and then stops every consumer again; so a stop arriving
      * while the holder does that ({@code FINISHING_OWED_STOP}) is owed again ({@code STOP_OWED}), and the holder
