@@ -9,7 +9,7 @@ generator: essentials
 language: java
 
 handles: [RecordCancellation]
-emits: [OrderCancelled, OrderClosed]
+emits: [OrderExpired, OrderCancelled, OrderClosed]
 writes:
   - { name: Order }
 endpoints: []

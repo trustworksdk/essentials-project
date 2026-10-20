@@ -256,6 +256,27 @@ Where it deviates from the sections above:
   `brokerage.trade_valuation` (which projected its events) and the harness's price-path benchmark. The brokerage
   harness prices its trades from `MarketQuotes`, with the seed prices as a fallback; the order-flow scenario is the
   load lever for the Inbox and queue measurements now.
-- **Not built yet:** DAY expiry, average fill price, `EXCHANGE_UNAVAILABLE` after a retry budget,
-  `UnknownExchangeOrder`.
+- **Average fill price** (§2): every `OrderFilled` carries the quantity-weighted average of the order's fills so far
+  (scale 6, half-even), recomputed from the running notional rather than from the previous average, so rounding never
+  accumulates. The `orders` view shows it.
+- **DAY expiry before SR-17** (§2). `OrderExpiryRequested` asks the exchange to cancel; the exchange's cancellation then
+  closes the order `EXPIRED` (`OrderExpired`), not `CANCELLED`, and a fill before it still wins (`FILLED`). It is the
+  existing cancel path, so a `PENDING` order waits for its exchange id the same way. `GTC` orders, closed ones and one
+  whose cancellation is already on its way are left alone. Until the adapter receives `BusinessDayClosed` (SR-26), an
+  operator endpoint stands in for it (`POST /api/admin/orders/business-day-closed`), and it queues one `ExpireOrder` per
+  open `DAY` order in the `Orders:ExchangeReports` inbox. Two stopgap gaps, both gone with SR-17: the open orders are
+  read from the eventually consistent `orders` view, so one placed a moment before the close may survive the day; and
+  one placed after the exchange's cutoff but before the signal is expired with the day that just closed.
+- **`EXCHANGE_UNAVAILABLE`** (§4). The gateway signals an unreachable exchange with `ExchangeUnavailableException`. The
+  router retries within the one delivery of `OrderPlaced` — no connection held, `UnitOfWorkMode.NONE` — with a doubling
+  backoff (`trading-demo.orders.exchange-submission.*`: 4 attempts, 0.25 + 0.5 + 1 s), then rejects the order
+  `EXCHANGE_UNAVAILABLE` and its hold is released. In the handler, not through the processor's redelivery, because a
+  handler cannot see its delivery count. The whole budget must stay well inside the 30 s message-handling timeout.
+- **`UnknownExchangeOrder`** (§4) is an aggregate of its own (stream `UnknownExchangeOrders`, id = the `clientOrderId`
+  the exchange named), not an event on `Orders`: an `Orders` stream with no `OrderPlaced` would make a later
+  `PlaceOrder` with that id look like a repeat. A fill for an unknown order is recorded once per `executionId`
+  (`UnknownExchangeOrderFilled`) instead of being retried 50 times into a dead letter, and listed for operators at
+  `GET /api/admin/orders/unknown-exchange-fills`. Nothing is booked. Other reports for an unknown order (acceptance,
+  cancellation) carry no money and still go the inbox's redelivery and dead-letter route.
+- **Not built yet:** the operator case for a late fill on a closed order (Q-3: it is booked, but nothing flags it).
 

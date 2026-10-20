@@ -29,6 +29,8 @@ public interface ExchangeGateway {
     /**
      * Idempotent per {@code orderId} (the exchange's {@code clientOrderId}, D8): a resubmission after a redelivery answers
      * as the first submission did.
+     *
+     * @throws ExchangeUnavailableException the exchange could not be reached; resubmitting is safe
      */
     SubmissionResult submit(OrderSubmission submission);
 

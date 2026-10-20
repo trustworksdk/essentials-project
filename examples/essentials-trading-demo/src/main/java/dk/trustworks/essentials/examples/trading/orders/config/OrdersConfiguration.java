@@ -18,19 +18,20 @@ package dk.trustworks.essentials.examples.trading.orders.config;
 
 import dk.trustworks.essentials.components.eventsourced.aggregates.EssentialsAggregateDeclarations;
 import dk.trustworks.essentials.examples.trading.orders.aggregates.*;
-import dk.trustworks.essentials.examples.trading.orders.external_systems.exchange.StubExchangeProperties;
+import dk.trustworks.essentials.examples.trading.orders.external_systems.exchange.*;
 import dk.trustworks.essentials.examples.trading.orders.use_cases.place_order.PlaceOrderProperties;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.*;
 
 @Configuration
-@EnableConfigurationProperties({StubExchangeProperties.class, PlaceOrderProperties.class})
+@EnableConfigurationProperties({StubExchangeProperties.class, ExchangeSubmissionProperties.class, PlaceOrderProperties.class})
 public class OrdersConfiguration {
 
     @Bean
     public EssentialsAggregateDeclarations ordersAggregates() {
         return EssentialsAggregateDeclarations.builder()
                                               .declare(Orders.AGGREGATE_TYPE, Order.class)
+                                              .declare(UnknownExchangeOrders.AGGREGATE_TYPE, UnknownExchangeOrder.class)
                                               .build();
     }
 }

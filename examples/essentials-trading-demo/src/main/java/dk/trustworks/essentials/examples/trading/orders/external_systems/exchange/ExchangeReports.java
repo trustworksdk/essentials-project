@@ -33,7 +33,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 /**
  * Where everything the exchange reports about an order arrives: the submission's answer, the acceptance, fills and
  * cancellations, already translated to {@code orders}' own commands ({@code RecordExchangeAnswer}, {@code RecordFill},
- * {@code RecordCancellation}).
+ * {@code RecordCancellation}) — and the end of the business day, as one {@code ExpireOrder} per open {@code DAY} order.
  * <p>
  * They go through one {@link Inbox}, not straight to the command bus, so that the caller — a gateway callback, a
  * webhook receiver, a submission handler running with no unit of work — never has to deal with the order's stream

@@ -32,12 +32,13 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 public class OrdersQuery {
     private static final String SELECT = """
             SELECT order_id, account_id, instrument_id, side, type, quantity, limit_price, currency, time_in_force, status,
-                   filled_quantity, exchange_order_id, reason, placed_at, updated_at
+                   filled_quantity, average_fill_price, exchange_order_id, reason, placed_at, updated_at
             FROM projection_orders
             """;
 
     private static final RowMapper<OrderView> ROW = (rs, rowNum) -> {
-        var limit = rs.getBigDecimal("limit_price");
+        var limit        = rs.getBigDecimal("limit_price");
+        var averagePrice = rs.getBigDecimal("average_fill_price");
         return new OrderView(OrderId.of(rs.getString("order_id")),
                              AccountId.of(rs.getString("account_id")),
                              InstrumentId.of(rs.getString("instrument_id")),
@@ -48,6 +49,7 @@ public class OrdersQuery {
                              TimeInForce.valueOf(rs.getString("time_in_force")),
                              OrderStatus.valueOf(rs.getString("status")),
                              Quantity.of(rs.getLong("filled_quantity")),
+                             averagePrice == null ? null : Money.of(averagePrice, CurrencyCode.of(rs.getString("currency"))),
                              rs.getString("exchange_order_id") == null ? null : ExchangeOrderId.of(rs.getString("exchange_order_id")),
                              rs.getString("reason"),
                              rs.getObject("placed_at", OffsetDateTime.class),
@@ -63,6 +65,19 @@ public class OrdersQuery {
     public List<OrderView> ordersOf(AccountId accountId) {
         requireNonNull(accountId, "No accountId provided");
         return jdbcTemplate.query(SELECT + " WHERE account_id = ? ORDER BY placed_at DESC, order_id", ROW, accountId.toString());
+    }
+
+    /**
+     * The {@code DAY} orders still live at the exchange, for the end-of-day expiry. Eventually consistent: an order
+     * placed a moment ago may be missing.
+     */
+    public List<OrderId> openDayOrders() {
+        return jdbcTemplate.queryForList("SELECT order_id FROM projection_orders WHERE time_in_force = ? AND status IN (?, ?, ?) ORDER BY order_id",
+                                         String.class,
+                                         TimeInForce.DAY.name(), OrderStatus.PENDING.name(), OrderStatus.OPEN.name(), OrderStatus.PARTIALLY_FILLED.name())
+                           .stream()
+                           .map(OrderId::of)
+                           .toList();
     }
 
     public Optional<OrderView> findOrder(AccountId accountId, OrderId orderId) {

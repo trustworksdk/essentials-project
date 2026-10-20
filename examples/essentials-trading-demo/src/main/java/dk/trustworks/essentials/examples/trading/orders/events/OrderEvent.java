@@ -22,7 +22,8 @@ import dk.trustworks.essentials.examples.trading.orders.types.OrderId;
  * The closed set of events an {@code Order} emits (design {@code phase-3-orders-and-execution.md} §2).
  */
 public sealed interface OrderEvent permits OrderPlaced, OrderSubmitted, OrderRejected, OrderAccepted, OrderFilled,
-                                           OrderCancelRequested, OrderCancelled, OrderClosed {
+                                           OrderCancelRequested, OrderCancelled, OrderExpiryRequested, OrderExpired,
+                                           OrderClosed {
 
     OrderId orderId();
 }

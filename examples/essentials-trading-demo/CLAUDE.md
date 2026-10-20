@@ -20,7 +20,7 @@ mvn spring-boot:run -pl :essentials-trading-demo        # after `docker compose 
 | `market_data` | `Instrument` (+ in-memory `market_quotes`) | 3 command, 1 automation, 2 view |
 | `identity` | `User` (+ `user_credentials` table) | 3 command, 1 view |
 | `accounts` | `Account` (the new ledger, stream `Accounts`) | 14 command, 3 view |
-| `orders` | `Order` (stream `Orders`) | 5 command, 1 external system, 1 automation, 2 view |
+| `orders` | `Order` (stream `Orders`), `UnknownExchangeOrder` (operator cases) | 6 command, 1 external system, 1 automation, 3 view |
 
 `brokerage` is **frozen** (expansion design Q-1): `accounts` replaces its account, and phase 4 deletes it once
 `orders` and `settlement` replace its last users. Do not extend it.

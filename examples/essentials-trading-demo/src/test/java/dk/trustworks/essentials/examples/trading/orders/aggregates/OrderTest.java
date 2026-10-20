@@ -23,6 +23,7 @@ import dk.trustworks.essentials.examples.trading.orders.types.*;
 import dk.trustworks.essentials.types.*;
 import org.junit.jupiter.api.Test;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 
 import static org.assertj.core.api.Assertions.*;
@@ -46,7 +47,11 @@ class OrderTest {
     }
 
     private static void fill(Order order, String executionId, long quantity) {
-        order.recordFill(ExecutionId.of(executionId), Quantity.of(quantity), usd("100.50"), TRADE_DATE, SETTLES_ON);
+        fill(order, executionId, quantity, "100.50");
+    }
+
+    private static void fill(Order order, String executionId, long quantity, String price) {
+        order.recordFill(ExecutionId.of(executionId), Quantity.of(quantity), usd(price), TRADE_DATE, SETTLES_ON);
     }
 
     @Test
@@ -108,6 +113,79 @@ class OrderTest {
         assertThat(events).extracting(e -> e.getClass().getSimpleName())
                           .containsExactly("OrderPlaced", "OrderRejected", "OrderClosed", "OrderFilled");
         assertThatThrownBy(() -> order.requestCancel(ACCOUNT)).hasMessageContaining("REJECTED");
+    }
+
+    @Test
+    void every_fill_carries_the_quantity_weighted_average_price_of_the_fills_so_far() {
+        var order = placeBuy(10);
+        fill(order, "EX-1", 4, "100.50");
+        fill(order, "EX-2", 3, "101.00");
+        fill(order, "EX-2", 3, "101.00"); // redelivered: does not count twice
+        fill(order, "EX-3", 3, "100.00");
+
+        var fills = order.getUncommittedChanges().events.stream().filter(OrderFilled.class::isInstance).map(OrderFilled.class::cast).toList();
+        assertThat(fills).extracting(f -> f.averagePrice().getAmount().value())
+                         .usingElementComparator(BigDecimal::compareTo)
+                         // 402 / 4; (402 + 303) / 7 = 100.714285714...; (705 + 300) / 10
+                         .containsExactly(new BigDecimal("100.50"), new BigDecimal("100.714286"), new BigDecimal("100.50"));
+        assertThat((Object) fills.getLast().averagePrice().getCurrency()).isEqualTo(CurrencyCode.USD);
+    }
+
+    @Test
+    void a_day_order_expires_when_the_exchange_confirms_the_end_of_day_cancellation_and_keeps_what_was_filled() {
+        var order = placeBuy(10);
+        order.markAccepted();
+        fill(order, "EX-1", 3);
+        order.expire(TRADE_DATE);
+        order.expire(TRADE_DATE);        // repeated: nothing
+        order.requestCancel(ACCOUNT);    // already on its way off the market: nothing
+        order.markCancelled("REQUESTED");
+
+        var events = order.getUncommittedChanges().events;
+        assertThat(events).extracting(e -> e.getClass().getSimpleName())
+                          .containsExactly("OrderPlaced", "OrderAccepted", "OrderFilled", "OrderExpiryRequested", "OrderExpired", "OrderClosed");
+        assertThat(((OrderExpired) events.get(4)).businessDate()).isEqualTo(TRADE_DATE);
+        var closed = (OrderClosed) events.getLast();
+        assertThat(closed.finalStatus()).isEqualTo(OrderStatus.EXPIRED);
+        assertThat(closed.filledQuantity()).isEqualTo(Quantity.of(3));
+    }
+
+    @Test
+    void a_day_order_that_fills_before_the_exchange_cancels_it_is_filled_not_expired() {
+        var order = placeBuy(10);
+        order.markAccepted();
+        order.expire(TRADE_DATE);
+        fill(order, "EX-1", 10);
+        order.markCancelled("REQUESTED"); // too late: nothing
+
+        var events = order.getUncommittedChanges().events;
+        assertThat(events).extracting(e -> e.getClass().getSimpleName())
+                          .containsExactly("OrderPlaced", "OrderAccepted", "OrderExpiryRequested", "OrderFilled", "OrderClosed");
+        assertThat(((OrderClosed) events.getLast()).finalStatus()).isEqualTo(OrderStatus.FILLED);
+    }
+
+    @Test
+    void only_an_open_day_order_expires() {
+        var gtc = new Order(ORDER, ACCOUNT, InstrumentId.of("ACME"), TradeSide.BUY, OrderType.LIMIT, Quantity.of(10), usd("101"),
+                            TimeInForce.GTC, usd("1010"));
+        gtc.markAccepted();
+        gtc.expire(TRADE_DATE);
+
+        var cancelling = placeBuy(10);
+        cancelling.requestCancel(ACCOUNT);
+        cancelling.expire(TRADE_DATE);
+        cancelling.markCancelled("REQUESTED"); // the customer's cancel, not an expiry
+
+        var filled = placeBuy(10);
+        fill(filled, "EX-1", 10);
+        filled.expire(TRADE_DATE);
+
+        assertThat(gtc.getUncommittedChanges().events).extracting(e -> e.getClass().getSimpleName())
+                                                      .containsExactly("OrderPlaced", "OrderAccepted");
+        assertThat(cancelling.getUncommittedChanges().events).extracting(e -> e.getClass().getSimpleName())
+                                                             .containsExactly("OrderPlaced", "OrderCancelRequested", "OrderCancelled", "OrderClosed");
+        assertThat(filled.getUncommittedChanges().events).extracting(e -> e.getClass().getSimpleName())
+                                                         .containsExactly("OrderPlaced", "OrderAccepted", "OrderFilled", "OrderClosed");
     }
 
     @Test

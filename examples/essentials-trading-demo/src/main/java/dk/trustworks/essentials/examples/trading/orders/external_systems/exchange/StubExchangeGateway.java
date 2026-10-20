@@ -55,6 +55,9 @@ public class StubExchangeGateway implements ExchangeGateway {
     @Override
     public SubmissionResult submit(OrderSubmission submission) {
         requireNonNull(submission, "No submission provided");
+        if (listed(properties.getUnreachableInstruments(), submission)) {
+            throw new ExchangeUnavailableException("Stub exchange unreachable for " + submission.instrumentId());
+        }
         var known = taken.get(submission.orderId());
         if (known != null) {
             return known;

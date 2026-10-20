@@ -19,7 +19,11 @@ package dk.trustworks.essentials.examples.trading.orders.types;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 
 public final class OrdersAggregateTypes {
-    public static final AggregateType ORDERS = AggregateType.of("Orders");
+    public static final AggregateType ORDERS                  = AggregateType.of("Orders");
+    /**
+     * Reports from the exchange about orders the brokerage does not know: operator cases, see {@code UnknownExchangeOrder}.
+     */
+    public static final AggregateType UNKNOWN_EXCHANGE_ORDERS = AggregateType.of("UnknownExchangeOrders");
 
     private OrdersAggregateTypes() {
     }

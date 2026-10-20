@@ -21,34 +21,48 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.pr
 import dk.trustworks.essentials.components.foundation.messaging.*;
 import dk.trustworks.essentials.examples.trading.orders.aggregates.Orders;
 import dk.trustworks.essentials.examples.trading.orders.events.*;
+import dk.trustworks.essentials.examples.trading.orders.types.OrderId;
 import dk.trustworks.essentials.examples.trading.orders.use_cases.record_exchange_answer.RecordExchangeAnswer;
 import org.slf4j.*;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
 import java.util.List;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * Sends placed orders and cancel requests to the exchange. Both handlers are {@link UnitOfWorkMode#NONE}: the exchange
- * call blocks with no database connection held (the shape of {@code market_data.risk_approve_instrument}), and the
- * answer is queued in {@link ExchangeReports} in a short unit of work of its own.
+ * Sends placed orders, cancel requests and end-of-day expiries to the exchange. The handlers are
+ * {@link UnitOfWorkMode#NONE}: the exchange call blocks with no database connection held (the shape of
+ * {@code market_data.risk_approve_instrument}), and the answer is queued in {@link ExchangeReports} in a short unit of
+ * work of its own.
  * <p>
  * A redelivered {@link OrderPlaced} submits again; the gateway answers a known {@code orderId} as it did the first time.
+ * An unreachable exchange is retried with a doubling backoff ({@link ExchangeSubmissionProperties}); when the attempts
+ * run out the order is rejected {@value #EXCHANGE_UNAVAILABLE} and its hold released. Should the exchange have taken it
+ * after all, its fills still arrive and are booked as facts (design Q-3).
  */
 @Service
 public class ExchangeOrderRouter extends EventProcessor {
+    public static final String EXCHANGE_UNAVAILABLE = "EXCHANGE_UNAVAILABLE";
+
     private static final Logger log = LoggerFactory.getLogger(ExchangeOrderRouter.class);
 
-    private final ExchangeGateway gateway;
-    private final ExchangeReports reports;
-    private final Orders          orders;
+    private final ExchangeGateway              gateway;
+    private final ExchangeReports              reports;
+    private final Orders                       orders;
+    private final ExchangeSubmissionProperties submission;
 
-    public ExchangeOrderRouter(EventProcessorDependencies dependencies, ExchangeGateway gateway, ExchangeReports reports, Orders orders) {
+    public ExchangeOrderRouter(EventProcessorDependencies dependencies,
+                               ExchangeGateway gateway,
+                               ExchangeReports reports,
+                               Orders orders,
+                               ExchangeSubmissionProperties submission) {
         super(dependencies);
         this.gateway = requireNonNull(gateway, "No gateway provided");
         this.reports = requireNonNull(reports, "No reports provided");
         this.orders = requireNonNull(orders, "No orders provided");
+        this.submission = requireNonNull(submission, "No submission provided");
     }
 
     @Override
@@ -63,7 +77,7 @@ public class ExchangeOrderRouter extends EventProcessor {
 
     @MessageHandler(unitOfWork = UnitOfWorkMode.NONE)
     void on(OrderPlaced e) {
-        var result = gateway.submit(OrderSubmission.of(e));
+        var result = submit(OrderSubmission.of(e));
         if (result.isRejected()) {
             log.debug("Exchange rejected order '{}': {}", e.orderId(), result.rejectReason());
             reports.received(RecordExchangeAnswer.rejected(e.orderId(), result.rejectReason()));
@@ -78,13 +92,56 @@ public class ExchangeOrderRouter extends EventProcessor {
      */
     @MessageHandler(unitOfWork = UnitOfWorkMode.NONE)
     void on(OrderCancelRequested e) {
-        var state = withUnitOfWork(() -> orders.exchangeStateOf(e.orderId()))
-                .orElseThrow(() -> new IllegalStateException("Order '" + e.orderId() + "' not found"));
+        cancelAtExchange(e.orderId());
+    }
+
+    /**
+     * The brokerage's end-of-day expiry of a {@code DAY} order is a cancel at the exchange; the order expires when the
+     * exchange confirms it.
+     */
+    @MessageHandler(unitOfWork = UnitOfWorkMode.NONE)
+    void on(OrderExpiryRequested e) {
+        cancelAtExchange(e.orderId());
+    }
+
+    private void cancelAtExchange(OrderId orderId) {
+        var state = withUnitOfWork(() -> orders.exchangeStateOf(orderId))
+                .orElseThrow(() -> new IllegalStateException("Order '" + orderId + "' not found"));
         if (state.status().isTerminal()) {
             return;
         }
         var exchangeOrderId = state.exchangeOrderId()
-                                   .orElseThrow(() -> new IllegalStateException("Order '" + e.orderId() + "' has no exchange id yet; cancel retried"));
-        gateway.cancel(e.orderId(), exchangeOrderId);
+                                   .orElseThrow(() -> new IllegalStateException("Order '" + orderId + "' has no exchange id yet; cancel retried"));
+        gateway.cancel(orderId, exchangeOrderId);
+    }
+
+    /**
+     * Retries an unreachable exchange within this one delivery, then gives up with a rejection. Anything else the
+     * gateway throws is left to the processor's redelivery.
+     */
+    private SubmissionResult submit(OrderSubmission order) {
+        var backoff = submission.getInitialBackoff();
+        for (var attempt = 1; ; attempt++) {
+            try {
+                return gateway.submit(order);
+            } catch (ExchangeUnavailableException e) {
+                if (attempt >= submission.getAttempts()) {
+                    log.warn("Exchange unavailable for order '{}' after {} attempt(s); rejecting it {}: {}", order.orderId(), attempt, EXCHANGE_UNAVAILABLE, e.getMessage());
+                    return SubmissionResult.rejected(EXCHANGE_UNAVAILABLE);
+                }
+                log.debug("Exchange unavailable for order '{}' (attempt {}), retrying in {}: {}", order.orderId(), attempt, backoff, e.getMessage());
+                sleep(backoff);
+                backoff = backoff.multipliedBy(2);
+            }
+        }
+    }
+
+    private static void sleep(Duration duration) {
+        try {
+            Thread.sleep(duration);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Interrupted while waiting to resubmit to the exchange", e);
+        }
     }
 }

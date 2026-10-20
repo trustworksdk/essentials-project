@@ -16,26 +16,39 @@
 
 package dk.trustworks.essentials.examples.trading.orders.use_cases.record_fill;
 
-import dk.trustworks.essentials.examples.trading.orders.aggregates.Orders;
+import dk.trustworks.essentials.examples.trading.orders.aggregates.*;
 import dk.trustworks.essentials.reactive.command.*;
+import org.slf4j.*;
 import org.springframework.stereotype.Service;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
  * Records an execution. Idempotent per {@code executionId}; a fill that arrives before the acceptance implies it.
+ * <p>
+ * A fill for an order the brokerage does not know is not retried — it will never become known — but recorded as an
+ * {@link UnknownExchangeOrder} operator case, once per {@code executionId}.
  */
 @Service
 public class RecordFillHandler extends AnnotatedCommandHandler {
-    private final Orders orders;
+    private static final Logger log = LoggerFactory.getLogger(RecordFillHandler.class);
 
-    public RecordFillHandler(Orders orders) {
+    private final Orders                orders;
+    private final UnknownExchangeOrders unknownExchangeOrders;
+
+    public RecordFillHandler(Orders orders, UnknownExchangeOrders unknownExchangeOrders) {
         this.orders = requireNonNull(orders, "No orders provided");
+        this.unknownExchangeOrders = requireNonNull(unknownExchangeOrders, "No unknownExchangeOrders provided");
     }
 
     @CmdHandler
     public void handle(RecordFill cmd) {
         requireNonNull(cmd, "No cmd provided");
-        orders.getOrder(cmd.orderId()).recordFill(cmd.executionId(), cmd.quantity(), cmd.price(), cmd.tradeDate(), cmd.settlementDate());
+        orders.findOrder(cmd.orderId())
+              .ifPresentOrElse(order -> order.recordFill(cmd.executionId(), cmd.quantity(), cmd.price(), cmd.tradeDate(), cmd.settlementDate()),
+                               () -> {
+                                   log.warn("Exchange reported execution '{}' for unknown order '{}': recorded as an operator case", cmd.executionId(), cmd.orderId());
+                                   unknownExchangeOrders.recordFill(cmd.orderId(), cmd.executionId(), cmd.quantity(), cmd.price(), cmd.tradeDate(), cmd.settlementDate());
+                               });
     }
 }

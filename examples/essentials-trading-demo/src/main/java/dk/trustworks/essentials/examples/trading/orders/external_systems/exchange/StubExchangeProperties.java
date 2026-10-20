@@ -37,21 +37,26 @@ public class StubExchangeProperties {
         NEVER
     }
 
-    private FillMode     fillMode            = FillMode.IMMEDIATE;
+    private FillMode     fillMode               = FillMode.IMMEDIATE;
     /**
      * Instruments whose orders rest unfilled whatever the {@code fillMode}, so open orders and the cancel path can be shown
      * next to filled ones.
      */
-    private List<String> restingInstruments  = List.of();
+    private List<String> restingInstruments     = List.of();
     /**
      * Instruments the stub refuses, so the rejection path can be shown without a random outcome.
      */
-    private List<String> rejectedInstruments = List.of();
+    private List<String> rejectedInstruments    = List.of();
+    /**
+     * Instruments whose submissions fail as if the exchange could not be reached, so the retry budget and the
+     * {@code EXCHANGE_UNAVAILABLE} rejection can be shown.
+     */
+    private List<String> unreachableInstruments = List.of();
     /**
      * The trade date is today in this zone; settlement is one business day later (T+1). The real exchange sends both
      * (SR-29).
      */
-    private ZoneId       zoneId              = ZoneId.of("America/New_York");
+    private ZoneId       zoneId                 = ZoneId.of("America/New_York");
 
     public FillMode getFillMode() {
         return fillMode;
@@ -75,6 +80,14 @@ public class StubExchangeProperties {
 
     public void setRejectedInstruments(List<String> rejectedInstruments) {
         this.rejectedInstruments = rejectedInstruments;
+    }
+
+    public List<String> getUnreachableInstruments() {
+        return unreachableInstruments;
+    }
+
+    public void setUnreachableInstruments(List<String> unreachableInstruments) {
+        this.unreachableInstruments = unreachableInstruments;
     }
 
     public ZoneId getZoneId() {

@@ -1,0 +1,30 @@
+schemaVersion: "1.1"
+slice: orders.unknown_exchange_orders
+kind: view
+bc: orders
+owner: orders-team
+status: live
+summary: "Operator cases: fills the exchange reported for orders the brokerage does not know, which nobody booked."
+generator: essentials
+language: java
+
+serves: [UnknownExchangeFills]
+endpoints:
+  - { method: GET, path: "/api/admin/orders/unknown-exchange-fills", auth: operator }
+reads:
+  - { name: UnknownExchangeFill }
+projections:
+  - name: UnknownExchangeOrdersProjection
+    from: [UnknownExchangeOrderFilled]
+    consistency: eventual
+    store: postgresql
+invariants:
+  - id: INV-UEO-1
+    text: "Every unknown fill is listed once, however often the exchange reports it (one row per executionId)"
+    enforcedBy: UnknownExchangeOrdersProjection
+forbidden:
+  - cross-slice-internal:orders
+tests:
+  unit: { present: false }
+  integration: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/orders/OrdersIT.java" }
+  contract: { present: false }

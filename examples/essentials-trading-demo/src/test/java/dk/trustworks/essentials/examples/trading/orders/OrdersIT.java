@@ -16,9 +16,13 @@
 
 package dk.trustworks.essentials.examples.trading.orders;
 
+import dk.trustworks.essentials.examples.trading.accounts.types.*;
 import dk.trustworks.essentials.examples.trading.accounts.views.account_overview.AccountOverview;
-import dk.trustworks.essentials.examples.trading.orders.types.OrderStatus;
+import dk.trustworks.essentials.examples.trading.orders.external_systems.exchange.ExchangeReports;
+import dk.trustworks.essentials.examples.trading.orders.types.*;
+import dk.trustworks.essentials.examples.trading.orders.use_cases.record_fill.RecordFill;
 import dk.trustworks.essentials.examples.trading.orders.views.orders.OrderView;
+import dk.trustworks.essentials.examples.trading.orders.views.unknown_exchange_orders.UnknownExchangeFill;
 import dk.trustworks.essentials.types.Money;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -33,7 +37,7 @@ import org.testcontainers.junit.jupiter.*;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 
 import java.math.BigDecimal;
-import java.time.Duration;
+import java.time.*;
 import java.util.*;
 import java.util.concurrent.*;
 
@@ -44,7 +48,8 @@ import static org.awaitility.Awaitility.await;
  * The order core against the stub exchange, over HTTP as the seeded customer Alice: an order takes its hold with it,
  * fills are booked on the account and what is left of the hold is released when the order closes. The stub fills at
  * the synthetic feed's quote for {@code ACME}, which is held still. {@code RESTING}
- * orders are accepted and never fill, for the cancel path and the buying-power race.
+ * orders are accepted and never fill, for the cancel and expiry paths and the buying-power race; {@code HALTED} orders
+ * are refused by the exchange, and {@code DOWN} orders never reach it.
  */
 @Testcontainers
 @SpringBootTest(properties = {
@@ -53,6 +58,8 @@ import static org.awaitility.Awaitility.await;
         "trading-demo.queue-load.enabled=false",
         "trading-demo.orders.stub-exchange.resting-instruments=RESTING",
         "trading-demo.orders.stub-exchange.rejected-instruments=HALTED",
+        "trading-demo.orders.stub-exchange.unreachable-instruments=DOWN",
+        "trading-demo.orders.exchange-submission.initial-backoff=10ms",
         // ACME quoted still at bid 99.95 / ask 100.05, so fill prices are exact
         "trading-demo.market-data.synthetic.instruments.ACME=100.00",
         "trading-demo.market-data.synthetic.volatility=0",
@@ -79,6 +86,8 @@ class OrdersIT {
 
     @Autowired
     private TestRestTemplate restTemplate;
+    @Autowired
+    private ExchangeReports  exchangeReports;
 
     private TestRestTemplate operator() {
         return restTemplate.withBasicAuth("operator@demo.local", "operator-demo-password");
@@ -152,6 +161,7 @@ class OrdersIT {
             assertThat(order.status()).isEqualTo(OrderStatus.FILLED);
             assertThat(order.filledQuantity().value()).isEqualTo(10L);
             assertThat((Object) order.exchangeOrderId()).isNotNull();
+            assertMoney(order.averageFillPrice(), "100.05");
 
             var account = overview("ACC-ORD-FILL");
             assertMoney(account.pendingCashOut(), "1000.50");
@@ -239,6 +249,78 @@ class OrdersIT {
             assertThat(order.reason()).isEqualTo("INSTRUMENT_NOT_TRADABLE");
             assertMoney(overview("ACC-ORD-REJECT").held(), "0");
         });
+    }
+
+    @Test
+    void an_order_the_exchange_cannot_be_reached_for_is_rejected_after_the_retry_budget_and_gives_its_hold_back() {
+        openFundedAccount("ACC-ORD-DOWN", "1000");
+
+        assertThat(placeOrder(alice(), "ACC-ORD-DOWN", "ORD-DOWN-1", "DOWN", "BUY", 5, "100").getStatusCode()).isEqualTo(HttpStatus.CREATED);
+        await().atMost(TIMEOUT).untilAsserted(() -> {
+            var order = projectedOrder("ACC-ORD-DOWN", "ORD-DOWN-1");
+            assertThat(order.status()).isEqualTo(OrderStatus.REJECTED);
+            assertThat(order.reason()).isEqualTo("EXCHANGE_UNAVAILABLE");
+            assertThat((Object) order.exchangeOrderId()).isNull();
+            var account = overview("ACC-ORD-DOWN");
+            assertMoney(account.held(), "0");
+            assertMoney(account.buyingPower(), "1000");
+        });
+    }
+
+    /**
+     * Until the exchange expires its own DAY orders (SR-17), the end of the business day makes the brokerage cancel every
+     * open DAY order at the exchange; a GTC order stays.
+     */
+    @Test
+    void the_end_of_the_business_day_expires_open_day_orders_and_gives_their_hold_back() {
+        openFundedAccount("ACC-ORD-EXPIRY", "5000");
+
+        assertThat(placeOrder(alice(), "ACC-ORD-EXPIRY", "ORD-EXPIRY-DAY", "RESTING", "BUY", 10, "100").getStatusCode()).isEqualTo(HttpStatus.CREATED);
+        var gtc = alice().postForEntity("/api/accounts/ACC-ORD-EXPIRY/orders",
+                                        Map.of("orderId", "ORD-EXPIRY-GTC", "accountId", "ACC-ORD-EXPIRY", "instrumentId", "RESTING", "side", "BUY", "type", "LIMIT",
+                                               "quantity", 5, "limitPrice", usd("100"), "timeInForce", "GTC"),
+                                        String.class);
+        assertThat(gtc.getStatusCode()).as("%s", gtc.getBody()).isEqualTo(HttpStatus.CREATED);
+        await().atMost(TIMEOUT).untilAsserted(() -> {
+            assertThat(projectedOrder("ACC-ORD-EXPIRY", "ORD-EXPIRY-DAY").status()).isEqualTo(OrderStatus.OPEN);
+            assertThat(projectedOrder("ACC-ORD-EXPIRY", "ORD-EXPIRY-GTC").status()).isEqualTo(OrderStatus.OPEN);
+            assertMoney(overview("ACC-ORD-EXPIRY").held(), "1500");
+        });
+
+        var closed = operator().postForEntity("/api/admin/orders/business-day-closed", Map.of("businessDate", "2030-01-07"), String.class);
+        assertThat(closed.getStatusCode()).as("%s", closed.getBody()).isEqualTo(HttpStatus.ACCEPTED);
+
+        await().atMost(TIMEOUT).untilAsserted(() -> {
+            var expired = projectedOrder("ACC-ORD-EXPIRY", "ORD-EXPIRY-DAY");
+            assertThat(expired.status()).isEqualTo(OrderStatus.EXPIRED);
+            assertThat(expired.reason()).isEqualTo("END_OF_DAY 2030-01-07");
+            assertMoney(overview("ACC-ORD-EXPIRY").held(), "500");
+        });
+        assertThat(projectedOrder("ACC-ORD-EXPIRY", "ORD-EXPIRY-GTC").status()).isEqualTo(OrderStatus.OPEN);
+        // Customers cannot end the day
+        assertThat(alice().postForEntity("/api/admin/orders/business-day-closed", Map.of("businessDate", "2030-01-07"), String.class).getStatusCode())
+                .isEqualTo(HttpStatus.FORBIDDEN);
+    }
+
+    @Test
+    void a_fill_for_an_order_the_brokerage_does_not_know_becomes_an_operator_case_once() {
+        var fill = new RecordFill(OrderId.of("ORD-NOBODY-1"), ExecutionId.of("EXE-NOBODY-1"), Quantity.of(7), Money.of("42.10", "USD"),
+                                  LocalDate.of(2030, 1, 7), LocalDate.of(2030, 1, 8));
+        exchangeReports.received(fill);
+        exchangeReports.received(fill); // the exchange's copy of the same execution
+
+        await().atMost(TIMEOUT).untilAsserted(() -> {
+            var cases = operator().exchange("/api/admin/orders/unknown-exchange-fills", HttpMethod.GET, null,
+                                            new ParameterizedTypeReference<List<UnknownExchangeFill>>() {}).getBody();
+            assertThat(cases).filteredOn(c -> c.orderId().equals(OrderId.of("ORD-NOBODY-1")))
+                             .singleElement()
+                             .satisfies(c -> {
+                                 assertThat((Object) c.executionId()).isEqualTo(ExecutionId.of("EXE-NOBODY-1"));
+                                 assertThat(c.quantity()).isEqualTo(Quantity.of(7));
+                                 assertMoney(c.price(), "42.10");
+                             });
+        });
+        assertThat(alice().getForEntity("/api/admin/orders/unknown-exchange-fills", String.class).getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
     }
 
     /**

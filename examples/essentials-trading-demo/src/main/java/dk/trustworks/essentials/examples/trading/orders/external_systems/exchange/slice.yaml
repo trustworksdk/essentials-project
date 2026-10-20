@@ -8,9 +8,12 @@ summary: "Sends orders and cancel requests to the exchange and records what it r
 generator: essentials
 language: java
 
-reactsTo: [OrderPlaced, OrderCancelRequested]
-sends: [RecordExchangeAnswer, RecordFill, RecordCancellation]
-endpoints: []
+reactsTo: [OrderPlaced, OrderCancelRequested, OrderExpiryRequested]
+sends: [RecordExchangeAnswer, RecordFill, RecordCancellation, ExpireOrder]
+reads:
+  - { name: OpenDayOrders, via: OrdersQuery }
+endpoints:
+  - { method: POST, path: "/api/admin/orders/business-day-closed", auth: operator }
 invariants:
   - id: INV-EX-1
     text: "The exchange is called with no UnitOfWork active, so no database connection is held for the duration of the call"
@@ -21,6 +24,9 @@ invariants:
   - id: INV-EX-3
     text: "A resubmitted order is answered as it was the first time (idempotent per orderId)"
     enforcedBy: StubExchangeGateway
+  - id: INV-EX-4
+    text: "An unreachable exchange is retried within the retry budget, then the order is rejected EXCHANGE_UNAVAILABLE and its hold released"
+    enforcedBy: ExchangeOrderRouter
 forbidden:
   - cross-slice-internal:orders
 tests:

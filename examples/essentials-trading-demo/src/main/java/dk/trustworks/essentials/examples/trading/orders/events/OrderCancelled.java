@@ -21,8 +21,8 @@ import dk.trustworks.essentials.examples.trading.orders.types.OrderId;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * The exchange cancelled the order's remainder: {@code REQUESTED}, {@code MARKET_REMAINDER}, or the brokerage's own
- * end-of-day expiry of a DAY order.
+ * The exchange cancelled the order's remainder: {@code REQUESTED} or {@code MARKET_REMAINDER}. A cancellation the
+ * brokerage asked for at the end of a {@code DAY} order's business day is {@link OrderExpired} instead.
  */
 public record OrderCancelled(OrderId orderId, String reason) implements OrderEvent {
     public OrderCancelled {

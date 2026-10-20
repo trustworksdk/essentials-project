@@ -27,7 +27,8 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
  * One execution of the order. Carries everything the account's booking needs ({@code TradeBooked}), so the booking
- * automation never reads the order back. {@code filledQuantity} is the order's running total after this fill.
+ * automation never reads the order back. {@code filledQuantity} is the order's running total after this fill, and
+ * {@code averagePrice} the quantity-weighted average price of all its fills so far.
  */
 public record OrderFilled(OrderId orderId,
                           AccountId accountId,
@@ -38,7 +39,8 @@ public record OrderFilled(OrderId orderId,
                           Money price,
                           LocalDate tradeDate,
                           LocalDate settlementDate,
-                          Quantity filledQuantity) implements OrderEvent {
+                          Quantity filledQuantity,
+                          Money averagePrice) implements OrderEvent {
     public OrderFilled {
         requireNonNull(orderId, "No orderId provided");
         requireNonNull(accountId, "No accountId provided");
@@ -50,5 +52,6 @@ public record OrderFilled(OrderId orderId,
         requireNonNull(tradeDate, "No tradeDate provided");
         requireNonNull(settlementDate, "No settlementDate provided");
         requireNonNull(filledQuantity, "No filledQuantity provided");
+        requireNonNull(averagePrice, "No averagePrice provided");
     }
 }

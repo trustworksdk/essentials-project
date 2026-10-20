@@ -9,14 +9,18 @@ generator: essentials
 language: java
 
 handles: [RecordFill]
-emits: [OrderAccepted, OrderFilled, OrderClosed]
+emits: [OrderAccepted, OrderFilled, OrderClosed, UnknownExchangeOrderFilled]
 writes:
   - { name: Order }
+  - { name: UnknownExchangeOrder }
 endpoints: []
 invariants:
   - id: INV-RF-1
     text: "An execution is recorded once per executionId, also after a cancel request"
     enforcedBy: Order
+  - id: INV-RF-2
+    text: "A fill for an order the brokerage does not know is recorded once as an UnknownExchangeOrder operator case, never retried"
+    enforcedBy: RecordFillHandler
 forbidden:
   - cross-slice-internal:orders
 tests:

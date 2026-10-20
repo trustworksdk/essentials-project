@@ -53,6 +53,7 @@ public class OrdersProjection extends ViewEventProcessor {
                                               time_in_force VARCHAR NOT NULL,
                                               status VARCHAR NOT NULL,
                                               filled_quantity BIGINT NOT NULL,
+                                              average_fill_price NUMERIC(24, 6),
                                               exchange_order_id VARCHAR,
                                               reason VARCHAR,
                                               last_event_order BIGINT NOT NULL,
@@ -60,6 +61,8 @@ public class OrdersProjection extends ViewEventProcessor {
                                               updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
                                           )
                                           """);
+        // Added after the table first shipped; a demo database from before keeps working
+        this.jdbcTemplate.execute("ALTER TABLE projection_orders ADD COLUMN IF NOT EXISTS average_fill_price NUMERIC(24, 6)");
         this.jdbcTemplate.execute("CREATE INDEX IF NOT EXISTS projection_orders_account ON projection_orders (account_id, placed_at)");
     }
 
@@ -111,7 +114,8 @@ public class OrdersProjection extends ViewEventProcessor {
 
     @MessageHandler
     void handle(OrderFilled e, OrderedMessage message) {
-        update(e, message, "filled_quantity = ?", e.filledQuantity().value());
+        update(e, message, "filled_quantity = ?, average_fill_price = ?, currency = ?",
+               e.filledQuantity().value(), e.averagePrice().getAmount().value(), e.averagePrice().getCurrency().toString());
     }
 
     @MessageHandler
@@ -122,6 +126,16 @@ public class OrdersProjection extends ViewEventProcessor {
     @MessageHandler
     void handle(OrderCancelled e, OrderedMessage message) {
         update(e, message, "status = ?, reason = ?", OrderStatus.CANCELLED.name(), e.reason());
+    }
+
+    @MessageHandler
+    void handle(OrderExpiryRequested e, OrderedMessage message) {
+        update(e, message, "status = ?", OrderStatus.CANCEL_PENDING.name());
+    }
+
+    @MessageHandler
+    void handle(OrderExpired e, OrderedMessage message) {
+        update(e, message, "status = ?, reason = ?", OrderStatus.EXPIRED.name(), "END_OF_DAY " + e.businessDate());
     }
 
     /**

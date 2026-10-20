@@ -88,7 +88,8 @@ Each phase ends with a load scenario and before/after measurements. Performance 
 6. **Realistic load.** User-session load model, market-open burst, multiple instances, benchmarks against `main`.
 7. **Customer UI.** Portfolio, order ticket, funding.
 
-Later: fees and commission, multi-currency and FX, margin, corporate actions, DAY-order expiry (cancel at the close),
+Later: fees and commission, multi-currency and FX, margin, corporate actions, the exchange expiring its own DAY orders (SR-17; until then the
+brokerage cancels them at the close, built in phase 3),
 customer notifications, and **corrections of executed trades** — the exchange-simulator emitting a price or quantity
 correction for an execution (it already has `SettlementCorrected`), and the ledger rebooking it: reverse and rebook, or
 a correcting delta event, and what that does to average cost and realized P&L when the position has moved since.

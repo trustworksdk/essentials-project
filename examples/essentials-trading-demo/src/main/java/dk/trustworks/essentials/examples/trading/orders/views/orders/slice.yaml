@@ -8,7 +8,7 @@ summary: "An account's orders and where each stands."
 generator: essentials
 language: java
 
-serves: [AccountOrders, GetOrder]
+serves: [AccountOrders, GetOrder, OpenDayOrders]
 endpoints:
   - { method: GET, path: "/api/accounts/{accountId}/orders", auth: customer }
   - { method: GET, path: "/api/accounts/{accountId}/orders/{orderId}", auth: customer }
@@ -16,7 +16,7 @@ reads:
   - { name: OrderView }
 projections:
   - name: OrdersProjection
-    from: [OrderPlaced, OrderSubmitted, OrderAccepted, OrderRejected, OrderFilled, OrderCancelRequested, OrderCancelled, OrderClosed]
+    from: [OrderPlaced, OrderSubmitted, OrderAccepted, OrderRejected, OrderFilled, OrderCancelRequested, OrderCancelled, OrderExpiryRequested, OrderExpired, OrderClosed]
     consistency: eventual
     store: postgresql
 invariants:

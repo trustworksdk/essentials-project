@@ -23,6 +23,9 @@ import dk.trustworks.essentials.types.Money;
 
 import java.time.OffsetDateTime;
 
+/**
+ * {@code averageFillPrice} is null until the first fill.
+ */
 public record OrderView(OrderId orderId,
                         AccountId accountId,
                         InstrumentId instrumentId,
@@ -33,6 +36,7 @@ public record OrderView(OrderId orderId,
                         TimeInForce timeInForce,
                         OrderStatus status,
                         Quantity filledQuantity,
+                        Money averageFillPrice,
                         ExchangeOrderId exchangeOrderId,
                         String reason,
                         OffsetDateTime placedAt,
