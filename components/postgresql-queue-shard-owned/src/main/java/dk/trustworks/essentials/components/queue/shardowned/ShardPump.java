@@ -279,7 +279,8 @@ final class ShardPump implements Runnable {
      * ({@code beginDraining()}): its handlers run on the runtime's shared executor and may still be running, and handing a
      * unit over with a key in a handler lets the successor start that key beside it, which is reordering. Its queue's
      * heartbeat then hands the leases back to the cluster
-     * ({@code ShardOwnedQueue.handBackUnitsOnDeadPumps}), an ordered one only once no key is in a handler. Other instances
+     * ({@code ShardOwnedQueue.handBackUnitsOnDeadPumps}), an ordered one only once no key is in a handler, or once one has
+     * been there longer than {@code stuckHandlerTimeout}, when its handler counts as stuck. Other instances
      * take them under a bumped fence, or this one does, on a live pump ({@link ShardRuntime#pumpFor}). The acknowledgements
      * still pending on them are not flushed - the owners' state is not trusted after a critical error on the thread that
      * kept it - so those messages are redelivered by the next owner (at-least-once).
@@ -326,7 +327,8 @@ final class ShardPump implements Runnable {
                     try {
                         log.error("{} died while its runtime is still running, and nothing restarts it. The {} shard(s) it served are "
                                           + "handed back to the cluster by their queues' next heartbeat (an ordered unit once no key is in "
-                                          + "a handler; keys still there after shedGrace are named at WARN), for another instance or a live "
+                                          + "a handler, or once one has been there longer than stuckHandlerTimeout; keys still there "
+                                          + "after shedGrace are named at WARN), for another instance or a live "
                                           + "pump here to take over; acknowledgements pending on "
                                           + "them are not flushed, so those messages are redelivered. Shards acquired from now on go to the "
                                           + "runtime's live pumps; with none left this instance acquires nothing. Restart the ShardRuntime "

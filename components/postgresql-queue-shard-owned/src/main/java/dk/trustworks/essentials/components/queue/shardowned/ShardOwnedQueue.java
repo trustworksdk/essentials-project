@@ -201,6 +201,20 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      */
     private volatile List<KeptUnit>           keptOrderedOwners   = List.of();
     /**
+     * The ordered owners whose unit this queue released with a key still in a handler, because that handler had run longer
+     * than {@code stuckHandlerTimeout}: by a shed ({@link #shedOrAcquireOrderedShards}) or by the hand-back from a dead
+     * pump ({@link #handBackUnitsOnDeadPumps}). Kept only so {@link #keptUnitsInHandler()} counts them while that handler
+     * runs on, as it counts a kept unit given up on. An owner with no key left in a handler is dropped
+     * ({@link #pruneReleasedPastStuckHandler()}) by every heartbeat tick, every stop ({@link #endRun}), every add and every
+     * read of that gauge: nothing in production may read the gauge, and an owner kept here keeps what it had buffered.
+     * <p>
+     * A queue-wide field a heartbeat tick writes, which the rule that everything a run owns lives on its {@link Run}
+     * otherwise forbids. Exempt because it holds no state of a run: its owners have left their run and released their
+     * lease rows, nothing decides anything from it, and a stuck handler runs on whichever run of this queue is current,
+     * or none - so a stop drops only the owners whose handlers have returned, and keeps the others.
+     */
+    private final    Set<LeasedOwner>         releasedPastStuckHandler = ConcurrentHashMap.newKeySet();
+    /**
      * How many hand-backs of an ended run - {@link #handBackWithinBudget} on its budget thread
      * ({@link #withinShutdownBudget}) - are still running ({@link #handBackStillRunning()}): counted up by {@link #endRun}
      * before it starts the thread, and down by that thread once its work has returned or thrown. Not by the stop, which
@@ -1371,6 +1385,9 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                 log.warn("Instance {} could not review the ordered units a stop of queue {} kept; retried on the next heartbeat",
                          instanceId, queueId, e);
             }
+            // Not only when the gauge is read: nothing in production may ever read it, and an owner kept here holds what it
+            // had buffered.
+            pruneReleasedPastStuckHandler();
             // BEFORE the rebalance, so a unit handed back here is free for its acquire loop to take again on a live pump, and
             // so its removeIf, which drops owners whose lease has ended, never drops one whose lease is still to be released.
             try {
@@ -1428,9 +1445,14 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * released at once - whatever is still in one of its handlers is redelivered by the next owner, as on any fair-share
      * release. An ordered unit waits until no key is in a handler (its handlers run on the shared executor, not on the
      * pump), because a successor would otherwise start that key beside it; it is retried on every heartbeat until then.
-     * Nothing bounds that wait, so a handler that never returns keeps the unit leased and unserved until the runtime is
-     * restarted. Each tick's wait is logged at DEBUG, and once it outlasts {@code shedGrace} a WARN names the unit's keys
-     * still in a handler, once per unit ({@link OrderedShardOwner#stuckOnDeadPump()}), as an abandoned ordered shed does.
+     * Each tick's wait is logged at DEBUG, and once it outlasts {@code shedGrace} a WARN names the unit's keys still in a
+     * handler, once per unit ({@link OrderedShardOwner#stuckOnDeadPump()}), as an abandoned ordered shed does. The wait is
+     * bounded by {@code stuckHandlerTimeout} ({@link ShardOwnerSettings}): once the key handed to its handler first has
+     * been there longer ({@link OrderedShardOwner#keysInHandler()}), the handler counts as stuck and the unit is handed back
+     * with every key still in a handler - that one and any other still running - with one WARN naming the keys and the wait
+     * ({@link #releasedPastStuckHandler}). Whoever takes the unit next delivers each of those messages again, possibly
+     * beside its handler. Unbounded, a handler
+     * that never returned kept the unit leased and unserved until the runtime was restarted.
      * <p>
      * With no live pump left in the runtime this instance acquires nothing, so the units are released for other instances
      * only, and stay unowned if none runs; the WARN reporting the hand-back says which of the two it is.
@@ -1446,6 +1468,9 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         }
         var ready   = new ArrayList<LeasedOwner>();
         var waiting = new ArrayList<Integer>();
+        // The ordered units handed back with a key still in a handler past stuckHandlerTimeout, each with its keys.
+        var stuck   = new LinkedHashMap<LeasedOwner, OrderedShardOwner.KeysInHandler>();
+        var bound   = activeSettings.stuckHandlerTimeout();
         for (var owner : run.owners) {
             // The runtime says which pump, the owner where its row stands. Normally ENDED_ROW_HELD, which the death moved it
             // to; HELD if ending it threw (ShardPump.endOnDeadPump), its row held all the same. Not RELEASED: a unit found
@@ -1454,18 +1479,28 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                 continue;
             }
             if ("ordered".equals(owner.lane()) && owner.inFlight() > 0) {
-                waiting.add(owner.shard());
                 if (owner instanceof OrderedShardOwner ordered) {
-                    // Past shedGrace, one WARN per unit naming its keys, as an abandoned shed does: nothing bounds this
-                    // wait, and the pump's ERROR cannot say which key to look at. Every tick's DEBUG below covers the rest.
+                    // Past stuckHandlerTimeout the handler counts as stuck, and the hand-back stops waiting for it: kept, the
+                    // unit stayed leased and unserved for as long as the handler hung - until a restart if it never returned.
+                    var inHandler = ordered.keysInHandler();
+                    if (inHandler.isPresent() && inHandler.get().longest().compareTo(bound) >= 0) {
+                        stuck.put(owner, inHandler.get());
+                        ready.add(owner);
+                        continue;
+                    }
+                    // Past shedGrace, one WARN per unit naming its keys, as an abandoned shed does: the pump's ERROR cannot
+                    // say which key to look at. Every tick's DEBUG below covers the rest.
                     ordered.stuckOnDeadPump().ifPresent(
-                            stuck -> log.warn("Instance {} has waited {} ms to hand back ordered unit {} on queue {} from its dead pump: "
-                                                      + "{} key(s) still in a handler {}. A unit is not handed back while one of its "
-                                                      + "keys is in a handler, so it stays leased and unserved until the handler "
-                                                      + "returns or the runtime is restarted. Logged once per unit",
-                                              instanceId, stuck.waited().toMillis(), owner.shard(), queueId, stuck.keys().size(),
-                                              stuck.describeKeys()));
+                            keys -> log.warn("Instance {} has waited {} ms to hand back ordered unit {} on queue {} from its dead pump: "
+                                                     + "{} key(s) still in a handler {}. A unit is not handed back while one of its "
+                                                     + "keys is in a handler, so it stays leased and unserved until the handler "
+                                                     + "returns, or until a key has been in its handler longer than "
+                                                     + "stuckHandlerTimeout ({}), when it is handed back with every key still in a handler. "
+                                                     + "Logged once per unit",
+                                             instanceId, keys.waited().toMillis(), owner.shard(), queueId, keys.keys().size(),
+                                             keys.describeKeys(), bound));
                 }
+                waiting.add(owner.shard());
             } else {
                 ready.add(owner);
             }
@@ -1498,6 +1533,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                 released.add(owner.shard());
             }
         }
+        stuck.forEach((owner, inHandler) -> releasedPastStuckHandler(owner, inHandler, "from its dead pump"));
         // Who takes them over depends on whether this instance has a live pump left: with none it acquires nothing (rebalance
         // and acquireFreeOrderedShards are guarded on hasLivePump), so promising a live pump here would be false.
         if (shardRuntime.hasLivePump()) {
@@ -1767,6 +1803,11 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * ({@link OrderedShardOwner#beginShedding()}) and releases each only once it reports quiesced.
      * That takes at least one further heartbeat tick, so ordered rebalancing converges more slowly
      * than unordered rebalancing. It is the price of the guarantee, not a defect.
+     * <p>
+     * Bounded by {@code stuckHandlerTimeout} ({@link ShardOwnerSettings}): a shed whose grace runs out with a key in its
+     * handler longer than that completes without it ({@link OrderedShardOwner#shedPastStuckHandler()}), and the unit is
+     * released with the handler still running, with one WARN ({@link #releasedPastStuckHandler}). Unbounded, a hung handler
+     * kept the unit here, the cluster unbalanced and the unit's other keys unserved, until a restart.
      */
     private void shedOrAcquireOrderedShards(Run run, int fairShare, ShardRuntime shardRuntime) throws SQLException {
         // Release the drained ones first, so a shard this instance has finished with is free before
@@ -1789,6 +1830,13 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                     if (countRelease(run, ordered)) {
                         counted.add(ordered.shard());
                     }
+                    // A shed completed past stuckHandlerTimeout did not drain: a key was still in its handler. Said at WARN,
+                    // per unit, rather than in the summary below.
+                    var stuck = ordered.shedPastStuckHandler();
+                    if (stuck.isPresent()) {
+                        releasedPastStuckHandler(ordered, stuck.get(), "in a fair-share shed");
+                        continue;
+                    }
                     drained.add(ordered.shard());
                     log.debug("Instance {} released ordered unit {} after draining", instanceId, ordered.shard());
                 }
@@ -1807,7 +1855,8 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         }
 
         // leaseHeld (HELD), as on the unordered lane: only an owner that serves its unit is asked to shed. One whose pump died
-        // (ENDED_ROW_HELD) drains until no key is in its handlers and is released by handBackUnitsOnDeadPumps.
+        // (ENDED_ROW_HELD) drains until no key is in its handlers, or one has been there longer than stuckHandlerTimeout, and
+        // is released by handBackUnitsOnDeadPumps.
         var held = run.owners.stream().filter(LeasedOwner::leaseHeld).toList();
         if (held.size() > fairShare) {
             var asked = new ArrayList<Integer>();
@@ -1824,7 +1873,8 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             // report the same shed every heartbeat until it completes.
             if (!asked.isEmpty()) {
                 log.info("Instance {} is draining {} ordered unit(s) [{}] on queue {} before releasing them "
-                                 + "— fair share is {} of {}; a key in flight is finished, never handed over mid-key",
+                                 + "— fair share is {} of {}; a key in flight is finished first, unless its handler has run longer "
+                                 + "than stuckHandlerTimeout",
                          instanceId, asked.size(), summarise(asked), queueId, fairShare, orderedUnits());
             }
             return;
@@ -2452,7 +2502,9 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
     /**
      * How many ordered units a stop of this queue kept still have a key in a handler ({@link #keptOrderedOwners}): what
      * this queue adds to {@link ShardOwnerMetrics#keptUnitsInHandler()}. A unit given up on and taken over
-     * ({@link #reviewStuckKeptUnits()}) counts too while its old handler runs on.
+     * ({@link #reviewStuckKeptUnits()}) counts too while its old handler runs on, and so does one a shed or a dead pump's
+     * hand-back released with a key still in a handler past {@code stuckHandlerTimeout} ({@link #releasedPastStuckHandler}),
+     * dropped from that set here once its handler has returned, as by {@link #pruneReleasedPastStuckHandler()}.
      */
     private int keptUnitsInHandler() {
         var count = 0;
@@ -2461,7 +2513,52 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                 count++;
             }
         }
+        for (var released : releasedPastStuckHandler) {
+            if (released.inFlight() > 0) {
+                count++;
+            } else {
+                releasedPastStuckHandler.remove(released);
+            }
+        }
         return count;
+    }
+
+    /**
+     * Drop from {@link #releasedPastStuckHandler} every owner with no key left in a handler. Run by every heartbeat tick,
+     * by every {@link #endRun} (a stop) and before each add, besides each read of {@link #keptUnitsInHandler()}: nothing
+     * in production may read that gauge, and an owner left in the set keeps what it had buffered.
+     */
+    private void pruneReleasedPastStuckHandler() {
+        releasedPastStuckHandler.removeIf(released -> released.inFlight() == 0);
+    }
+
+    /**
+     * How many owners {@link #releasedPastStuckHandler} holds, read without pruning it - unlike
+     * {@link #keptUnitsInHandler()} - so a test can see whether something other than a read of the gauge pruned it.
+     */
+    int releasedPastStuckHandlerSize() {
+        return releasedPastStuckHandler.size();
+    }
+
+    /**
+     * WARN that {@code owner}'s unit was released with keys still in a handler, the longest there longer than
+     * {@code stuckHandlerTimeout}, and have {@link #keptUnitsInHandler()} count it while one is: by a shed, or by the
+     * hand-back from a dead pump ({@code from}). Called once the release has run, so the row named this instance under
+     * the owner's fence until then; the release does not bump the fence, but whoever takes the unit next does.
+     */
+    private void releasedPastStuckHandler(LeasedOwner owner, OrderedShardOwner.KeysInHandler inHandler, String from) {
+        pruneReleasedPastStuckHandler();
+        if (owner.inFlight() > 0) {
+            releasedPastStuckHandler.add(owner);
+        }
+        log.warn("Instance {} released ordered unit {} on queue {} {} with {} key(s) {} still in a handler, the longest there {} ms, "
+                         + "longer than stuckHandlerTimeout ({}), so those handlers were not waited for. Whoever "
+                         + "takes the unit next does so under a new fence and delivers the messages in those handlers again, "
+                         + "possibly while those handlers still run them; nothing they do is acknowledged under the "
+                         + "old fence. Counted in ShardOwnerMetrics.keptUnitsInHandler while one runs. Raise stuckHandlerTimeout if handlers of this "
+                         + "queue legitimately run this long",
+                 instanceId, owner.shard(), queueId, from, inHandler.keys().size(), inHandler.describeKeys(),
+                 inHandler.longest().toMillis(), activeSettings.stuckHandlerTimeout());
     }
 
     /**
@@ -2891,6 +2988,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         // than stuckHandlerTimeout, which nothing waits for (reviewStuckKeptUnits) - a run of this queue may have taken
         // the unit over already, and another instance may once this one deregisters.
         reviewStuckKeptUnits();
+        pruneReleasedPastStuckHandler();
         var keptEarlier     = new ArrayList<KeptUnit>();
         var givenUpEarlier  = new ArrayList<KeptUnit>();
         var flushingEarlier = new ArrayList<KeptUnit>();

@@ -81,18 +81,34 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  *                         is set for the classic {@code DurableQueues}. Must be positive. There is no off switch: a
  *                         value longer than the process will run gives the behaviour from before this setting existed.
  *                         <p>
- *                         Applied to one wait today: an ordered unit a stop kept because a key was still in its handler
- *                         {@code shedGrace} after the stop began. Without the bound, a later run of the same queue, and
- *                         a {@code PostgresqlMessageQueue} {@code consume()} wanting that subscription's instance id,
- *                         wait for that handler to return for as long as it runs, so a handler that never returns
- *                         leaves the unit unserved, and the instance id out of use, until the process restarts.
- *                         Once the key has been in its handler longer than this, they stop waiting: the next run
- *                         takes the unit over under a new fence, as from an owner that did not let go of it. The
- *                         handler's acknowledgement is then refused, its message delivered again with an attempt
- *                         charged, and that key may run in two handlers at once - the hung one and the new one - which
- *                         is the at-least-once the bound trades the stuck unit for. A kept unit is reported at WARN
- *                         once its handler has run longer than {@code leaseTtl}, at most once a minute per unit, and
- *                         counted in {@code ShardOwnerMetrics.keptUnitsInHandler()}
+ *                         Applied to the three waits for an ordered unit's handler, each of which, unbounded, lasted
+ *                         as long as the handler ran - until the process restarted for one that never returned:
+ *                         <ul>
+ *                           <li>An ordered unit a stop kept because a key was still in its handler {@code shedGrace}
+ *                           after the stop began. A later run of the same queue, and a {@code PostgresqlMessageQueue}
+ *                           {@code consume()} wanting that subscription's instance id, wait for that handler to return,
+ *                           leaving the unit unserved and the instance id out of use. Once the key has been in its
+ *                           handler longer than this, they stop waiting: the next run takes the unit over under a new
+ *                           fence, as from an owner that did not let go of it - the handler's acknowledgement refused,
+ *                           its message delivered again with an attempt charged. Reported at WARN once its handler has
+ *                           run longer than {@code leaseTtl}, at most once a minute per unit, and once more when the
+ *                           queue stops waiting.</li>
+ *                           <li>A fair-share shed of an ordered unit, which waits for the keys in its handlers before it
+ *                           releases the unit, and otherwise keeps it and retries on the next heartbeat - leaving the
+ *                           cluster unbalanced and the unit's other keys unserved. Once {@code shedGrace} has run out
+ *                           with a key in its handler longer than this, the shed releases the unit with every key still
+ *                           in a handler - that one and any other still running.</li>
+ *                           <li>The hand-back of an ordered unit whose pump died, which waits for the keys in its
+ *                           handlers - the unit leased to this instance and unserved meanwhile. Once a key has been in
+ *                           its handler longer than this, the unit is handed back with every key still in a handler -
+ *                           that one and any other still running.</li>
+ *                         </ul>
+ *                         Each time the queue stops waiting it logs one WARN naming the queue, the unit, the keys and
+ *                         how long the longest has been in its handler. The unit's next owner delivers the message of
+ *                         each key still in a handler again, possibly beside its handler, so each of those keys may run
+ *                         in two handlers at once - which is the at-least-once the bound trades the stuck unit for. A kept unit with a key in its
+ *                         handler, and a unit the queue stopped waiting for in any of the three while that handler runs
+ *                         on, is counted in {@code ShardOwnerMetrics.keptUnitsInHandler()}
  */
 public record ShardOwnerSettings(int readBatchSize,
                                  int ackBatchSize,

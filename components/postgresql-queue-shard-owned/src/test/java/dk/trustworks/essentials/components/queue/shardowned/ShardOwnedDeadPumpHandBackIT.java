@@ -152,9 +152,10 @@ class ShardOwnedDeadPumpHandBackIT {
      * runtime's shared executor, not on the pump, so one may outlive it. The unit is kept until that handler returns, and
      * handed back then; the dead pump's other units are handed back at once.
      * <p>
-     * Nothing bounds that wait, so once it outlasts {@code shedGrace} the queue names the key holding it up in one WARN, as an
-     * abandoned shed does - not on every heartbeat it goes on waiting. It used to log the wait at DEBUG alone, so the pump's
-     * ERROR and a {@code shardsOnDeadPumps} that never fell were all an operator had, with nothing naming the key.
+     * Once that wait outlasts {@code shedGrace} the queue names the key holding it up in one WARN, as an abandoned shed does
+     * - not on every heartbeat it goes on waiting. It used to log the wait at DEBUG alone, so the pump's ERROR and a
+     * {@code shardsOnDeadPumps} that never fell were all an operator had, with nothing naming the key. The wait is bounded
+     * by {@code stuckHandlerTimeout}, at its 15 minute default here (the next test).
      */
     @Test
     void an_ordered_unit_on_a_dead_pump_is_handed_back_only_once_no_key_is_in_its_handler() throws Exception {
@@ -203,7 +204,8 @@ class ShardOwnedDeadPumpHandBackIT {
                 assertThat(stuckWarnings).as("the wait past shedGrace is named once, not on every heartbeat").hasSize(1);
                 assertThat(stuckWarnings.getFirst().getArgumentArray()[2]).as("the unit").isEqualTo(unit);
                 assertThat(stuckWarnings.getFirst().getFormattedMessage()).contains("1 key(s) still in a handler [HOLD]")
-                                                                          .contains("stays leased and unserved until the handler returns or the runtime is restarted");
+                                                                          .contains("stays leased and unserved until the handler returns, or until a "
+                                                                                    + "key has been in its handler longer than stuckHandlerTimeout (PT15M)");
                 assertThat(warnings(logged, "whose pump had died")).as("the idle units were handed back with a live pump left")
                                                            .isNotEmpty()
                                                            .allMatch(event -> event.getFormattedMessage().contains("or a live pump here, takes them over"));
@@ -218,6 +220,71 @@ class ShardOwnedDeadPumpHandBackIT {
                 queue.enqueueOrdered(List.of(new ShardOwnedStorage.OrderedPayload("HOLD", 1, "HOLD-1".getBytes(StandardCharsets.UTF_8), 1)));
                 Awaitility.await().atMost(Duration.ofSeconds(20)).untilAsserted(
                         () -> assertThat(delivered).as("the key is served again on a live pump").contains("HOLD-1"));
+            } finally {
+                release.countDown();
+                queue.stop();
+            }
+        } finally {
+            releaseQueueLog(logged);
+        }
+    }
+
+    /**
+     * The wait for a dead pump's ordered unit is bounded by {@code stuckHandlerTimeout}: once the key has been in its handler
+     * longer, the handler counts as stuck and the unit is handed back with it still running, named in one WARN and counted
+     * in {@code keptUnitsInHandler} while the handler runs on. A live pump here takes the unit again under a new fence,
+     * charging no attempt (the row was released), and delivers the stuck key's message again beside the hung handler -
+     * the at-least-once the bound trades the stuck unit for. Unbounded, a handler that never returned kept the unit
+     * leased and unserved until the runtime was restarted.
+     */
+    @Test
+    void an_ordered_unit_on_a_dead_pump_is_handed_back_once_its_key_has_been_in_its_handler_past_the_stuck_handler_timeout() throws Exception {
+        var settings  = settings(2, Duration.ofMillis(300), Duration.ofSeconds(1), Duration.ofSeconds(3));
+        var entered   = new CountDownLatch(1);
+        var release   = new CountDownLatch(1);
+        var entries   = new AtomicInteger();
+        var heldUnit  = new CompletableFuture<Integer>();
+        var logged    = captureQueueLog();
+        try (var runtime = new ShardRuntime(dataSource, settings)) {
+            var queue = queue(runtime, "dead-pump-stuck");
+            try {
+                queue.startConsumingOrdered((messageId, key, payload, payloadType) -> {
+                    if ("HOLD".equals(key) && entries.incrementAndGet() == 1) {
+                        heldUnit.complete(messageId.shard());
+                        entered.countDown();
+                        awaitQuietly(release);
+                    }
+                }, settings, SHARD_COUNT);
+                queue.enqueueOrdered(List.of(new ShardOwnedStorage.OrderedPayload("HOLD", 0, "HOLD-0".getBytes(StandardCharsets.UTF_8), 1)));
+                assertThat(entered.await(20, TimeUnit.SECONDS)).as("premise: the key is in its handler").isTrue();
+                var unit        = heldUnit.get();
+                var doomed      = runtime.pumpFor(QUEUE_ID, "ordered", unit);
+                var fenceBefore = fenceOf("ordered", unit);
+
+                kill(doomed);
+
+                Awaitility.await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
+                    assertThat(fenceOf("ordered", unit)).as("handed back past the bound and taken again").isGreaterThan(fenceBefore);
+                    assertThat(entries.get()).as("the stuck key's message delivered again beside the hung handler").isEqualTo(2);
+                });
+                assertThat(release.getCount()).as("premise: the first handler is still held").isEqualTo(1);
+                assertThat(runtime.pumpFor(QUEUE_ID, "ordered", unit).isDead()).as("taken again on a live pump").isFalse();
+                assertThat(queue.metrics().shardsOnDeadPumps.get()).isZero();
+                assertThat(queue.metrics().keptUnitsInHandler()).as("counted while the stuck handler runs on").isEqualTo(1);
+                assertThat(queue.metrics().takeoverAttemptBumps.sum()).as("released, not taken over: no attempt charged").isZero();
+                var stuckWarnings = warnings(logged, "so those handlers were not waited for");
+                assertThat(stuckWarnings).as("one WARN for the hand-back").hasSize(1);
+                assertThat(stuckWarnings.getFirst().getArgumentArray()[1]).as("the unit").isEqualTo(unit);
+                assertThat(stuckWarnings.getFirst().getFormattedMessage()).contains("on queue " + QUEUE_ID + " from its dead pump")
+                                                                          .contains("1 key(s) [HOLD] still in a handler")
+                                                                          .contains("stuckHandlerTimeout (PT3S)");
+
+                release.countDown();
+                // Before any read of the gauge, which prunes the set too: only the heartbeat's prune can empty it here.
+                Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(
+                        () -> assertThat(queue.releasedPastStuckHandlerSize()).as("pruned by the heartbeat once the handler returned").isZero());
+                Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(
+                        () -> assertThat(queue.metrics().keptUnitsInHandler()).as("no longer once the handler returned").isZero());
             } finally {
                 release.countDown();
                 queue.stop();
@@ -1080,11 +1147,15 @@ class ShardOwnedDeadPumpHandBackIT {
     }
 
     private static ShardOwnerSettings settings(int pumpThreads, Duration shedGrace, Duration leaseTtl) {
+        return settings(pumpThreads, shedGrace, leaseTtl, ShardOwnerSettings.DEFAULT_STUCK_HANDLER_TIMEOUT);
+    }
+
+    private static ShardOwnerSettings settings(int pumpThreads, Duration shedGrace, Duration leaseTtl, Duration stuckHandlerTimeout) {
         var d = ShardOwnerSettings.defaults();
         return new ShardOwnerSettings(d.readBatchSize(), d.ackBatchSize(), d.ackFlushInterval(), d.chaseDelay(), d.holeExpiry(),
                                       d.sweepInterval(), d.maxHolesPerChase(), d.keyConcurrency(), d.pollBackstop(),
                                       d.maxSweepInterval(), pumpThreads, shedGrace, leaseTtl, d.watermarkCap(),
-                                      ShardOwnerSettings.DEFAULT_STUCK_HANDLER_TIMEOUT);
+                                      stuckHandlerTimeout);
     }
 
     /**

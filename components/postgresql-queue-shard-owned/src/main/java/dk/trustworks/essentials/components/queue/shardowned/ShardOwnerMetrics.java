@@ -232,8 +232,9 @@ public final class ShardOwnerMetrics {
      * runtime stops. A pump dies only on a critical error ({@code VirtualMachineError}, {@code LinkageError}): everything
      * else it reconnects from ({@link #pumpLoopFailures}). Nothing restarts it, so it ends the owners on it, and the
      * heartbeat hands their leases back to the cluster - an unordered shard on the next tick, an ordered unit once no key
-     * is in one of its handlers, which a handler that never returns can hold off indefinitely (once that wait outlasts
-     * {@code shedGrace}, a WARN names the unit and its keys still in a handler, once per unit). Another instance, or a live
+     * is in one of its handlers, or once a key has been in its handler longer than {@code stuckHandlerTimeout}, when the
+     * unit is released with every key still in a handler (once the wait outlasts {@code shedGrace}, a WARN names the unit
+     * and its keys still in a handler, once per unit). Another instance, or a live
      * pump here, then takes the shard over under a new fence; what was handled and not acknowledged is redelivered. So
      * this is normally above zero for one heartbeat after a death; alert on it staying there, next to
      * {@link #shardsAwaitingTakeover}. {@code QueueHealth.unownedShards()} cannot see these shards while they are counted,
@@ -285,13 +286,15 @@ public final class ShardOwnerMetrics {
      */
     public final LongAdder     shedsStarted                     = new LongAdder();
     /**
-     * Sheds that quiesced and released, so another instance could take the shard.
+     * Sheds that ended ready for the release, so another instance could take the shard: quiesced, or with a key still in
+     * a handler once that key had been there longer than {@code stuckHandlerTimeout} ({@link ShardOwnerSettings}).
      */
     public final LongAdder     shedsCompleted                   = new LongAdder();
     /**
      * Sheds abandoned because a key was still in a handler when the grace ran out. The shard stays
-     * here: unbalanced beats reordered. A non-zero count means handlers run longer than
-     * {@link ShardOwnerSettings#shedGrace}, not that anything is broken.
+     * here: unbalanced beats reordered - until a key has been in its handler longer than
+     * {@code stuckHandlerTimeout}, when a shed releases it ({@link #shedsCompleted}). A non-zero count means
+     * handlers run longer than {@link ShardOwnerSettings#shedGrace}, not that anything is broken.
      */
     public final LongAdder     shedsAbandoned                   = new LongAdder();
     public final LongAdder     retriesScheduled                 = new LongAdder();
@@ -394,7 +397,10 @@ public final class ShardOwnerMetrics {
      * {@code PostgresqlMessageQueue} keeps the subscription's instance id out of use - until the handler has run longer
      * than {@code stuckHandlerTimeout} ({@link ShardOwnerSettings}), after which a run of that queue - the one running then,
      * or the next - or a subscription registering under the instance id takes the unit over, and the id is free again. A unit taken over that way still counts here while its old handler runs on, since that handler
-     * still holds a thread and may still be running the key beside its new owner. Alert on it staying above zero, next to
+     * still holds a thread and may still be running the key beside its new owner. So does an ordered unit a fair-share shed,
+     * or the hand-back from a dead pump, released with a key still in a handler because that key had been there longer than
+     * {@code stuckHandlerTimeout} - each such release logged at WARN, naming the unit, its keys and how long - for as long
+     * as that handler runs on. Alert on it staying above zero, next to
      * {@link #shardsAwaitingTakeover}: {@code QueueHealth.unownedShards()} cannot see such a unit while this instance is
      * live, as its lease row names it. A WARN names each unit, its keys and how long they have run, once its handler has
      * run longer than {@code leaseTtl}, and then at most once a minute per unit, from each heartbeat or start of the

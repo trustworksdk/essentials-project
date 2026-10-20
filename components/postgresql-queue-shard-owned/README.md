@@ -355,7 +355,12 @@ Three things that look like they should reorder, and how far each one holds:
   under the still valid fence, then releases. A shed that outlasts `shedGrace` is **abandoned and the
   shard kept**: staying unbalanced is a performance cost, releasing mid-key would be an ordering bug.
   `ShardOwnedOrderedRebalanceIT` and `ShardOwnedMultiProcessIT` assert that no key is ever in two
-  handlers while units move between instances. A key waiting out a retry backoff is not in flight and
+  handlers while units move between instances. The one exception is a handler the queue counts as
+  stuck: once a key has been in its handler longer than `stuckHandlerTimeout` (15 minutes by default),
+  the shed releases the unit with every key still in a handler — the one past the bound and any other
+  still running — and the next owner delivers each of those messages again, possibly beside its
+  handler, so those keys may run in two handlers at once (see [Engine-level metrics worth watching](#engine-level-metrics-worth-watching)); the hand-back of a dead pump's
+  unit does the same. A key waiting out a retry backoff is not in flight and
   the drain does not wait for it: the new owner takes the block over instead (previous bullet).
 
 Note that the exact watermark does *not* remove the first row of the table. It governs the cursor, so
@@ -563,8 +568,8 @@ every queue once with a user that has them.
 | `maxHolesPerChase` | 1 000 | **Unordered lane only.** Holes resolved per chase query | Rarely |
 | `watermarkCap` | 60 s | **Ordered lane only.** How long one long-running *write* transaction may pin the lane before the cursor is forced past it — which can skip that transaction's messages | Leave it. An escape hatch, not a tuning knob; if it fires, fix the long transaction |
 | `leaseTtl` | 30 s | How long a shard stays unserved if its owner dies without releasing. The heartbeat renews at a third of it | Lower for faster failover, but not below your worst stop-the-world pause, and **well above your slowest handler** — a handler longer than the lease is what lets a liveness lapse put a key in two handlers at once (`handlersOutlastingLease`) |
-| `shedGrace` | 5 s | How long an ordered shard waits to drain before abandoning a hand-over, and how long `stop()` waits for handlers in flight | Raise if handlers are slow and rebalancing stalls, or if `stop()` keeps ordered units |
-| `stuckHandlerTimeout` | 15 min | How long a message may be in its handler before the queue treats the handler as stuck and stops waiting for it. Applied to one wait: an ordered unit a `stop()` kept because a key was still in its handler | **Behaviour change in 0.60.1**: in 0.60.0 a restart took the kept unit back at once; now it waits for the handler up to this bound, then takes the unit over. Set it above the longest time a handler of the queue really takes, as `messageHandlingTimeout` is set for `postgresql-queue`; per queue with `settings.withStuckHandlerTimeout(...)` on that queue's builder, or `essentials.shard-owned-queue.stuck-handler-timeouts.<queue>` in the starter. Must be positive; there is no off switch |
+| `shedGrace` | 5 s | How long an ordered shard waits to drain before abandoning a hand-over (retried every heartbeat; once a key has been in its handler longer than `stuckHandlerTimeout`, the hand-over goes ahead with every key still in a handler), and how long `stop()` waits for handlers in flight | Raise if handlers are slow and rebalancing stalls, or if `stop()` keeps ordered units |
+| `stuckHandlerTimeout` | 15 min | How long a message may be in its handler before the queue treats the handler as stuck and stops waiting for it. Applied to the three waits for an ordered unit's handler: a unit a `stop()` kept because a key was still in its handler, a fair-share shed, and the hand-back of a unit whose pump died | **Behaviour change in 0.60.1**: in 0.60.0 a restart took the kept unit back at once; now it waits for the handler up to this bound, then takes the unit over. A fair-share shed, which waited for the handler however long it ran, now releases the unit past this bound, the handler still running; the dead-pump hand-back, new in 0.60.1, does the same. Set it above the longest time a handler of the queue really takes, as `messageHandlingTimeout` is set for `postgresql-queue`; per queue with `settings.withStuckHandlerTimeout(...)` on that queue's builder, or `essentials.shard-owned-queue.stuck-handler-timeouts.<queue>` in the starter. Must be positive; there is no off switch |
 
 `watermarkCap` and `holeExpiry` answer the same question for different lanes, and are deliberately
 separate settings with an order of magnitude between them. The ordered lane resolves a gap *exactly*
@@ -830,15 +835,28 @@ queue) is that bound: once the key has been in its handler longer, the restarted
 `consume()`) stops waiting and takes the unit over under a new fence. The stuck handler's
 acknowledgement is refused and its message delivered again with an attempt charged - one attempt per
 takeover of a kept unit; a message that hangs again in the owner that took it over is not bounded by
-this, as the bound covers only units a stop kept - and **that key may run in two handlers at once**,
-the stuck one and the new one. That is the at-least-once trade the bound makes; set it
-above the longest time a handler of the queue really takes. Once a kept key has been in its handler
-longer than `leaseTtl`, the engine logs a WARN naming the queue, the unit, the key(s), how long they
-have run and the bound, at most once a minute per unit, and one more WARN when it stops waiting.
+this while that owner serves the unit, as the bound covers only a queue waiting for a unit's handler -
+and **that key may run in two handlers at once**, the stuck one and the new one. That is the
+at-least-once trade the bound makes; set it above the longest time a handler of the queue really
+takes. Once a kept key has been in its handler longer than `leaseTtl`, the engine logs a WARN naming
+the queue, the unit, the key(s), how long they have run and the bound, at most once a minute per unit,
+and one more WARN when it stops waiting.
+
+The same bound covers the two other waits for an ordered unit's handler. A fair-share shed waits for
+the keys in its handlers before it releases the unit, and otherwise keeps it and retries every
+heartbeat; the unit of a pump a critical error ended is handed back only once no key is in a handler.
+Without a bound, a hung handler kept the cluster unbalanced and the unit's other keys unserved (the
+shed), or the unit leased and unserved (the dead pump), until a restart. Once a key has been in its
+handler longer than `stuckHandlerTimeout`, either one releases the unit with every key still in a
+handler — the one past the bound and any other still running — and logs one WARN naming the queue,
+the unit, the key(s) and how long the longest has been there. The row is released, so the next owner
+charges no attempt, but it delivers each of those messages again, possibly beside its handler.
+
 `keptUnitsInHandler()` (also in `snapshot()`) counts the kept units whose key is in its handler now:
 normally zero, so alert on it staying above zero. A unit taken over at the bound still counts while
-its stuck handler runs on. Like the counters below, it is readable only through
-`ShardOwnedQueue.metrics()`; through `MessageQueue` the WARN is the signal.
+its stuck handler runs on, and so does a unit a shed or a dead pump's hand-back released at the bound.
+Like the counters below, it is readable only through `ShardOwnedQueue.metrics()`; through
+`MessageQueue` the WARN is the signal.
 
 **`ShardOwnerMetrics.pumpFailures`, `batchedReadFailures`, `pumpLoopFailures` and `shardsOnDeadPumps`.**
 Each covers a shard that is leased but delivers nothing for a reason other than a stalled takeover, which
@@ -850,7 +868,8 @@ failed per-queue batched reads; the shards then read for themselves, and when th
 the pump reconnects 200 ms later, but while it persists it can deliver nothing for every shard it serves.
 `shardsOnDeadPumps` counts shards on a pump thread a critical error (`VirtualMachineError`, `LinkageError`)
 ended, until their leases are handed back: nothing restarts the pump, so the queue's next heartbeat releases
-them (an ordered unit once no key is in a handler) and another instance, or a live pump here, takes them over,
+them (an ordered unit once no key is in a handler, or once one has been there longer than
+`stuckHandlerTimeout` - see above) and another instance, or a live pump here, takes them over,
 redelivering what was not acknowledged. Alert on it staying above zero. With no live pump left the instance
 acquires nothing, and its shards stay unowned until the `ShardRuntime` restarts. The log carries at most one
 ERROR a minute per subscription for `pumpFailures` (naming one shard), at most one WARN a minute per

@@ -179,14 +179,19 @@ public class ShardOwnedQueueProperties {
      * {@code essentials.durable-queues.message-handling-timeout} is set for the classic durable queues. Must be positive.
      * Applies to every queue but those named in {@code stuck-handler-timeouts}.
      * <p>
-     * Applied to one wait: an ordered unit a stop kept because a key was still in its handler {@code shed-grace} after the
-     * stop began. Without the bound, a restart of that queue - and a new subscription wanting the old one's instance id -
-     * waits for that handler for as long as it runs, so a handler that never returns leaves the unit unserved until the
-     * process restarts. Past the bound the queue takes the unit over under a new fence: the stuck handler's
-     * acknowledgement is refused and its message delivered again, so that key may run in two handlers at once.
+     * Applied to the three waits for an ordered unit's handler, each of which, unbounded, lasted as long as the handler ran
+     * - until the process restarted for one that never returned. An ordered unit a stop kept because a key was still in its
+     * handler {@code shed-grace} after the stop began: a restart of that queue - and a new subscription wanting the old
+     * one's instance id - waits for that handler, and past the bound takes the unit over under a new fence, the stuck
+     * handler's acknowledgement refused. A fair-share shed of an ordered unit, and the hand-back of an ordered unit whose
+     * pump died, which wait for the keys in their handlers: past the bound each releases the unit with every key still in a
+     * handler - the one past the bound and any other still running. Each time the queue stops waiting it logs one WARN;
+     * the unit's next owner delivers the message of each key still in a handler again, possibly beside its handler, so
+     * those keys may run in two handlers at once.
      * <p>
      * <b>A behaviour change from 0.60.0,</b> where a restart took the kept unit back at once: it now waits for the handler
-     * up to this bound, then takes the unit over. A queue whose handlers legitimately run longer than 15 minutes must
+     * up to this bound, then takes the unit over; a fair-share shed, which waited however long the handler ran, now
+     * releases the unit past this bound, and so does the dead-pump hand-back, new in 0.60.1. A queue whose handlers legitimately run longer than 15 minutes must
      * raise it, for that queue in {@code stuck-handler-timeouts} or for all here.
      */
     // Literal, not ShardOwnerSettings.DEFAULT_STUCK_HANDLER_TIMEOUT, so the configuration metadata carries the default:

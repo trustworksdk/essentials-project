@@ -579,7 +579,7 @@ mean to start again; `stop()` still keeps it registered. A `Subscription` implem
 override `unsubscribe()` is unaffected: the default `unsubscribe()` only stops, as `close()` did; one that overrides
 it now has `close()` call that override, unless it overrides `close()` too. (`214786d65`)
 
-#### 1.1.24 Shard-owned engine: a restart waits up to 15 minutes for the handler of an ordered unit its stop kept
+#### 1.1.24 Shard-owned engine: a restart waits up to 15 minutes for the handler of an ordered unit its stop kept, and a fair-share shed no longer waits longer
 
 When a `stop()` keeps an ordered unit, because a key was still in its handler `shedGrace` after the stop began, 0.60.0
 let a restart of the same queue, and a `PostgresqlMessageQueue` `consume()` registering under the stopped
@@ -602,8 +602,18 @@ There is no off switch; a value longer than the process will run makes the wait 
 
 The wait is not silent: once a kept key has been in its handler longer than `leaseTtl`, the queue logs a
 WARN naming the queue, the unit, the key(s), how long they have run and the bound, at most once a minute per unit, and
-one more WARN when it stops waiting; `ShardOwnerMetrics.keptUnitsInHandler()` counts such units (§2). A shed or a
-dead pump's hand-back waiting for an ordered handler is not bounded by this yet. (`7af80bc49`)
+one more WARN when it stops waiting; `ShardOwnerMetrics.keptUnitsInHandler()` counts such units (§2). (`7af80bc49`)
+
+The same bound now ends a wait for an ordered handler which 0.60.0 left unbounded: a fair-share shed of an ordered
+unit, which waits for the keys in its handlers and otherwise keeps the unit and retries on the next heartbeat. A
+handler that never returned left the cluster unbalanced and the unit's other keys undelivered until the process
+restarted. Once a key has been in its handler longer than `stuckHandlerTimeout`, the shed releases the unit with every
+key still in a handler - that one and any other still running - and logs one WARN naming the queue, the unit, the
+key(s) and how long the longest has been in its handler. The next owner delivers each of those messages again, possibly
+beside its handler - no attempt charged, as the lease was released - so **those keys, too, may run in two handlers at
+once**, and `keptUnitsInHandler()` counts the unit while a handler of it runs on. The same advice applies: raise the
+bound for a queue whose ordered handlers legitimately run longer. The hand-back of a dead pump's unit, new in this
+release, is bounded the same way (§2). (`<!-- fix:U-013 -->`)
 
 ---
 
@@ -804,7 +814,8 @@ dead pump's hand-back waiting for an ordered handler is not bounded by this yet.
   which starts from `defaults()` so a caller sets only what differs, and `withStuckHandlerTimeout(Duration)` for one
   queue's own bound. The 0.60.0 constructor without the new setting still works, with the default, and is deprecated
   for removal; a record pattern over the 0.60.0 components no longer compiles (§1). And `ShardOwnerMetrics.keptUnitsInHandler()` (also in `snapshot()`): the ordered units a stop kept
-  whose key is still in its handler, normally zero. (`7af80bc49`)
+  whose key is still in its handler, normally zero, and the units a shed or a dead pump's hand-back released at the
+  bound while their stuck handler runs on. (`7af80bc49`, `<!-- fix:U-013 -->`)
 - **Shard-owned engine: `spi.RedeliveryRequested(delay)`.** A handler throws it to ask for redelivery after `delay`
   without it counting as an attempt, being reported as a failure or leading to a dead letter (§1.1.18).
   (`a4f541e4`, `f9fdd99b`)
@@ -826,11 +837,14 @@ dead pump's hand-back waiting for an ordered handler is not bounded by this yet.
   ended on something thrown outside the per-shard guards and were reconnected from, and `shardsOnDeadPumps`, the
   shards that sit on a pump thread a critical error (`VirtualMachineError`, `LinkageError`) ended and whose leases
   this instance has not handed back yet. A dead pump's shards are handed back to the cluster rather than kept: the
-  queue's next heartbeat releases their leases (an ordered unit once no key is in one of its handlers, so no successor
-  starts a key beside it), and another instance, or a live pump in this one, takes them over under a new fence. An
-  ordered unit waits for its handler without a limit; once the wait outlasts `shedGrace` one WARN per unit names the
-  keys still in a handler, as an abandoned shed does, since the unit stays leased and unserved until the handler
-  returns or the runtime is restarted. A
+  queue's next heartbeat releases their leases (an ordered unit once no key is in one of its handlers, or once one has
+  been there longer than `stuckHandlerTimeout`), and another instance, or a live pump in this one, takes them over under a new fence. An
+  ordered unit waits for its handler up to `stuckHandlerTimeout` (§1.1.24); once the wait outlasts `shedGrace` one WARN
+  per unit names the keys still in a handler, as an abandoned shed does, since the unit stays leased and unserved
+  meanwhile. Once a key has been in its handler longer than `stuckHandlerTimeout`, the unit is released with every key
+  still in a handler - that one and any other still running - with one WARN, and the next owner delivers each of those
+  messages again, possibly beside its handler; `keptUnitsInHandler()` counts the unit while a handler of it runs on.
+  (`<!-- fix:U-013 -->`) A
   release that fails is retried on every heartbeat, and until it succeeds the unit still counts towards the instance's
   fair share, so the instance takes no free shard in its place. From the death on, `ShardOwnedQueue.shardsHeld()` no
   longer counts such a unit, on either lane; `shardsOnDeadPumps` does. What

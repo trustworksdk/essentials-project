@@ -58,10 +58,14 @@ class ShardOwnedOrderedRebalanceIT {
     }
 
     private static ShardOwnerSettings fast(Duration shedGrace, Duration leaseTtl) {
+        return fast(shedGrace, leaseTtl, ShardOwnerSettings.DEFAULT_STUCK_HANDLER_TIMEOUT);
+    }
+
+    private static ShardOwnerSettings fast(Duration shedGrace, Duration leaseTtl, Duration stuckHandlerTimeout) {
         return new ShardOwnerSettings(500, 200, Duration.ofMillis(1), Duration.ofMillis(2),
                                       Duration.ofMillis(300), Duration.ofMillis(100), 1_000, 8,
                                       Duration.ofMillis(50), Duration.ofSeconds(30), 2, shedGrace, leaseTtl, Duration.ofSeconds(60),
-                                      ShardOwnerSettings.DEFAULT_STUCK_HANDLER_TIMEOUT);
+                                      stuckHandlerTimeout);
     }
 
     @Container
@@ -311,6 +315,122 @@ class ShardOwnedOrderedRebalanceIT {
             first.close();
             second.close();
         }
+    }
+
+    /**
+     * The abandoned shed is bounded by {@code stuckHandlerTimeout}: once the grace runs out with a key in its handler longer
+     * than that, the handler counts as stuck and the shed releases the unit with it still running. The joining instance
+     * takes the unit under a new fence, charging no attempt (the row was released), and delivers the stuck key's message
+     * again beside the hung handler - the at-least-once the bound trades the stuck unit for - and the release is named in
+     * one WARN and counted in {@code keptUnitsInHandler} while the handler runs on. Unbounded, a hung handler kept the
+     * unit on the incumbent, the cluster unbalanced and the unit's other keys unserved, until a restart.
+     * <p>
+     * The stuck key routes to the last unit the incumbent adopted, so it is among those its shed asks to drain.
+     */
+    @Test
+    void a_shed_held_up_by_a_handler_past_the_stuck_handler_timeout_releases_the_unit_with_the_handler_still_running() throws Exception {
+        var stuckUnit = ShardOwnedSchema.ORDERED_UNITS - 1;
+        var stuckKey  = keyOnUnit(stuckUnit);
+        var entered   = new CountDownLatch(1);
+        var release   = new CountDownLatch(1);
+        var entries   = new java.util.concurrent.atomic.AtomicInteger();
+        var logged    = ShardOwnedRebalanceIT.captureQueueLog();
+        var settings  = fast(Duration.ofMillis(500), Duration.ofMillis(1000), Duration.ofSeconds(3));
+
+        var first  = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "ord-stuck-a");
+        var second = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "ord-stuck-b");
+        try {
+            first.startConsumingOrdered((messageId, key, payload, payloadType) -> {
+                if (stuckKey.equals(key) && entries.incrementAndGet() == 1) {
+                    entered.countDown();
+                    try {
+                        release.await(60, TimeUnit.SECONDS);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
+            }, settings, SHARD_COUNT);
+            Awaitility.await().atMost(Duration.ofSeconds(10))
+                      .untilAsserted(() -> assertThat(first.shardsHeld()).isEqualTo(ShardOwnedSchema.ORDERED_UNITS));
+            first.enqueueOrdered(List.of(new ShardOwnedStorage.OrderedPayload(stuckKey, 0, "stuck".getBytes(StandardCharsets.UTF_8), 1)));
+            assertThat(entered.await(15, TimeUnit.SECONDS)).as("premise: the key is in its handler").isTrue();
+            var fenceBefore = fenceOf(stuckUnit);
+
+            second.startConsumingOrdered((messageId, key, payload, payloadType) -> {
+                if (stuckKey.equals(key)) {
+                    entries.incrementAndGet();
+                }
+            }, settings, SHARD_COUNT);
+
+            Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> {
+                assertThat(ownerOf(stuckUnit)).as("the unit moved to the joining instance").isEqualTo("ord-stuck-b");
+                assertThat(fenceOf(stuckUnit)).as("taken under a new fence").isGreaterThan(fenceBefore);
+                assertThat(entries.get()).as("the stuck key's message delivered again beside the hung handler").isEqualTo(2);
+            });
+            assertThat(release.getCount()).as("premise: the first handler is still held").isEqualTo(1);
+            assertThat(first.metrics().keptUnitsInHandler()).as("counted while the stuck handler runs on").isEqualTo(1);
+            assertThat(second.metrics().takeoverAttemptBumps.sum()).as("released, not taken over: no attempt charged").isZero();
+            var stuckWarnings = queueWarnings(logged, "so those handlers were not waited for");
+            assertThat(stuckWarnings).as("one WARN for the release").hasSize(1);
+            assertThat(stuckWarnings.getFirst().getArgumentArray()[1]).as("the unit").isEqualTo(stuckUnit);
+            assertThat(stuckWarnings.getFirst().getFormattedMessage()).contains("on queue " + QUEUE_ID + " in a fair-share shed")
+                                                                      .contains("1 key(s) [" + stuckKey + "] still in a handler")
+                                                                      .contains("stuckHandlerTimeout (PT3S)");
+            Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> {
+                assertThat(first.shardsHeld()).isEqualTo(ShardOwnedSchema.ORDERED_UNITS / 2);
+                assertThat(second.shardsHeld()).isEqualTo(ShardOwnedSchema.ORDERED_UNITS / 2);
+            });
+
+            release.countDown();
+            // Before any read of the gauge, which prunes the set too: only the heartbeat's prune can empty it here.
+            Awaitility.await().atMost(Duration.ofSeconds(10))
+                      .untilAsserted(() -> assertThat(first.releasedPastStuckHandlerSize()).as("pruned by the heartbeat once the handler returned").isZero());
+            Awaitility.await().atMost(Duration.ofSeconds(10))
+                      .untilAsserted(() -> assertThat(first.metrics().keptUnitsInHandler()).as("no longer once the handler returned").isZero());
+        } finally {
+            release.countDown();
+            ShardOwnedRebalanceIT.releaseQueueLog(logged);
+            first.close();
+            second.close();
+        }
+    }
+
+    /**
+     * A key the ordered lane routes to {@code unit}.
+     */
+    private static String keyOnUnit(int unit) {
+        for (var index = 0; ; index++) {
+            var key = "STUCK-" + index;
+            if (ShardOwnedSchema.unitForKey(key, ShardOwnedSchema.ORDERED_UNITS) == unit) {
+                return key;
+            }
+        }
+    }
+
+    private long fenceOf(int unit) throws Exception {
+        return SingleRowQueries.queryForLong(dataSource, "Reading the fence of ordered unit " + unit,
+                                             "SELECT fence FROM " + ShardOwnedSchema.LEASE_TABLE + " WHERE queue_id = ? AND lane = 'ordered' AND shard = ?",
+                                             QUEUE_ID, unit);
+    }
+
+    private String ownerOf(int unit) throws Exception {
+        return SingleRowQueries.queryForString(dataSource, "Reading the owner of ordered unit " + unit,
+                                               "SELECT owner FROM " + ShardOwnedSchema.LEASE_TABLE + " WHERE queue_id = ? AND lane = 'ordered' AND shard = ?",
+                                               QUEUE_ID, unit);
+    }
+
+    /**
+     * The WARNs {@link ShardOwnedQueue} logged so far whose message pattern contains {@code containing}.
+     */
+    private static List<ILoggingEvent> queueWarnings(ListAppender<ILoggingEvent> logged, String containing) {
+        List<ILoggingEvent> events;
+        synchronized (logged) { // the monitor AppenderBase appends under; the heartbeat is still logging
+            events = new ArrayList<>(logged.list);
+        }
+        return events.stream()
+                     .filter(event -> event.getLevel() == Level.WARN)
+                     .filter(event -> event.getMessage().contains(containing))
+                     .toList();
     }
 
     /**

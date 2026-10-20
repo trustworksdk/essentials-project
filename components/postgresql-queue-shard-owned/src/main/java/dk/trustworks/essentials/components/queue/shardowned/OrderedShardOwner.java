@@ -273,9 +273,18 @@ final class OrderedShardOwner implements BatchReadableOwner {
      */
     private final    AtomicBoolean                      shedding     = new AtomicBoolean();
     /**
-     * Set once the shard has quiesced and its acknowledgements are flushed — safe to release.
+     * Set once the shard has quiesced and its acknowledgements are flushed — safe to release. Or once its shed has been
+     * completed with a key still in a handler longer than {@code stuckHandlerTimeout} ({@link #shedPastStuckHandler}),
+     * its acknowledgements flushed all the same.
      */
     private final    AtomicBoolean                      shedComplete = new AtomicBoolean();
+    /**
+     * The keys still in a handler when this owner's shed was completed without them, because the longest had been in its
+     * handler longer than {@code stuckHandlerTimeout} ({@link #advanceShed}); {@code null} for a shed that quiesced, and
+     * while none has completed. Written by the pump before it sets {@link #shedComplete}, read by the queue's heartbeat
+     * after it has read that set, to say in its WARN what the release left running.
+     */
+    private volatile KeysInHandler                      shedPastStuckHandler;
     /**
      * Set by {@link #beginDraining()}. Unlike {@link #shedding}, never cleared: the owner is going away
      * whether or not its keys finish in time.
@@ -1257,7 +1266,8 @@ final class OrderedShardOwner implements BatchReadableOwner {
      * has in flight — two messages of one key running at once, which is reordering, and reordering is
      * the one thing an ordered queue sells. So the shed quiesces first: no new key is dispatched, the
      * ones in flight are allowed to finish, their acknowledgements are flushed under a fence this
-     * owner still holds, and only then is the shard let go.
+     * owner still holds, and only then is the shard let go. With one exception: a key whose handler has
+     * run longer than {@code stuckHandlerTimeout} is not waited for ({@link #advanceShed}).
      */
     /**
      * @return true if THIS call started the shed, false if one was already under way. The caller
@@ -1274,8 +1284,12 @@ final class OrderedShardOwner implements BatchReadableOwner {
     }
 
     /**
-     * Drive one step of a shed. Returns true when the owner should stop, which happens either because
-     * the shard quiesced (and is now ready to be released) or because the grace ran out.
+     * Drive one step of a shed. Returns true when the shard is ready to be released: it quiesced, or, once the grace ran
+     * out, the key handed to its handler first had been there longer than {@code stuckHandlerTimeout}
+     * ({@link ShardOwnerSettings}), which counts that handler as stuck: the shed is then completed with the keys still in
+     * their handlers ({@link #shedPastStuckHandler()}), its acknowledgements flushed as on a quiesced shed, and the queue
+     * releases the unit. Otherwise, when the grace runs out the shed is abandoned and the shard kept, and the queue retries
+     * it on its next heartbeat.
      */
     private boolean advanceShed(Connection connection) throws SQLException {
         int inFlight;
@@ -1298,6 +1312,25 @@ final class OrderedShardOwner implements BatchReadableOwner {
             return true;
         }
         if (System.nanoTime() >= shedDeadlineNanos) {
+            // Past stuckHandlerTimeout the handler counts as stuck, and the shed stops waiting for it: kept here, the unit
+            // stayed unbalanced, and its other keys unserved, for as long as the handler hung - until a restart if it never
+            // returned. Asked only once the grace has run out, so a key that is merely slow has had the grace to finish.
+            // Released with every key still in a handler - the stuck one and any other still running - so the next owner
+            // delivers each of those messages again, possibly beside its handler: the at-least-once the bound trades the
+            // stuck unit for.
+            var inHandler = keysInHandler();
+            if (inHandler.isPresent() && inHandler.get().longest().compareTo(settings.stuckHandlerTimeout()) >= 0) {
+                // Flushed while the fence is still valid, as for a quiesced shed: what finished is not delivered again.
+                flushAcks(connection);
+                shedPastStuckHandler = inHandler.get();
+                shedComplete.set(true);
+                metrics.shedsCompleted.increment();
+                // The queue's heartbeat releases the unit and WARNs, naming the queue as this owner cannot.
+                log.debug("Ordered unit {}: shed completed with {} key(s) still in a handler {}, the longest there {} ms, past "
+                                  + "stuckHandlerTimeout ({})", shard, inHandler.get().keys().size(), inHandler.get().describeKeys(),
+                          inHandler.get().longest().toMillis(), settings.stuckHandlerTimeout());
+                return true;
+            }
             // A handler outlasted the grace. Keep the shard rather than release it mid-key: staying
             // unbalanced is a performance cost, releasing here would be an ordering bug.
             shedding.set(false);
@@ -1312,8 +1345,10 @@ final class OrderedShardOwner implements BatchReadableOwner {
             }
             if (notReportedYet) {
                 log.warn("Ordered shard {}: shed abandoned with {} key(s) still in a handler {} — keeping the shard. "
-                                 + "The shed is retried every heartbeat; this is logged again only if another key holds it up",
-                         shard, stuckKeys.size(), describeKeys(stuckKeys));
+                                 + "The shed is retried every heartbeat, and once a key has been in its handler longer than "
+                                 + "stuckHandlerTimeout ({}) a retry releases the shard with every key still in a handler; this is logged "
+                                 + "again only if another key holds it up",
+                         shard, stuckKeys.size(), describeKeys(stuckKeys), settings.stuckHandlerTimeout());
             } else {
                 log.debug("Ordered shard {}: shed abandoned again with {} key(s) still in a handler {}",
                           shard, stuckKeys.size(), describeKeys(stuckKeys));
@@ -1353,9 +1388,10 @@ final class OrderedShardOwner implements BatchReadableOwner {
      * <p>
      * Asked by {@code ShardOwnedQueue.handBackUnitsOnDeadPumps} on every heartbeat that finds this owner on a dead pump
      * with a key still in a handler. The unit is not handed back while one is - a successor would start that key beside it
-     * - so a handler that never returns keeps it leased and unserved until the runtime is restarted. This is the same
-     * failure an abandoned shed reports ({@link #advanceShed}), and it gets the same treatment: past the grace, one WARN
-     * naming the keys. The wait is timed from when this owner began draining ({@link #drainingSinceNanos}): the dying
+     * - so a hung handler keeps it leased and unserved until it returns, or until the key handed to its handler first has
+     * been there longer than {@code stuckHandlerTimeout}, when the queue hands the unit back anyway ({@link #keysInHandler()}).
+     * This is the same failure an abandoned shed reports ({@link #advanceShed}), and it gets the same treatment: past the
+     * grace, one WARN naming the keys. The wait is timed from when this owner began draining ({@link #drainingSinceNanos}): the dying
      * pump ends it with {@link #beginDraining()}, so on a dead pump that is the death (for an owner added to the pump
      * after it died, the add, which ends it). The WARN therefore comes {@code shedGrace} after the pump's death ERROR,
      * and its wait matches the time since that ERROR. An owner that never began draining is timed from the first
@@ -1406,9 +1442,10 @@ final class OrderedShardOwner implements BatchReadableOwner {
 
     /**
      * The keys in a handler now, and how long the one handed to its handler first has been there: timed from when this
-     * owner handed the message to the handler executor, so a handler still waiting for a thread counts too. Asked by
-     * {@code ShardOwnedQueue} of an owner its stop kept, to tell when that handler has outlasted
-     * {@code stuckHandlerTimeout} and to name the keys in its WARN.
+     * owner handed the message to the handler executor, so a handler still waiting for a thread counts too. Asked, to tell
+     * when that handler has outlasted {@code stuckHandlerTimeout} and to name the keys in a WARN, by {@code ShardOwnedQueue}
+     * of an owner its stop kept and of one on a dead pump, and by this owner's shed once its grace has run out
+     * ({@link #advanceShed}).
      *
      * @return empty when no key is in a handler
      */
@@ -1439,10 +1476,23 @@ final class OrderedShardOwner implements BatchReadableOwner {
     }
 
     /**
-     * True once the shard has quiesced and its acknowledgements are flushed.
+     * True once the shed is ready for the release: the shard has quiesced, or its shed was completed with a key still in a
+     * handler longer than {@code stuckHandlerTimeout} ({@link #shedPastStuckHandler()}); either way its acknowledgements
+     * are flushed.
      */
     public boolean shedComplete() {
         return shedComplete.get();
+    }
+
+    /**
+     * The keys still in a handler when this owner's shed was completed without them, because the longest had been there
+     * longer than {@code stuckHandlerTimeout}, and how long it had been there then. Asked by the queue as it releases a
+     * unit whose shed is complete ({@link #shedComplete()}), to WARN about what the release leaves running.
+     *
+     * @return empty for a shed that quiesced, and while no shed has completed
+     */
+    Optional<KeysInHandler> shedPastStuckHandler() {
+        return Optional.ofNullable(shedPastStuckHandler);
     }
 
     public boolean shedding() {
