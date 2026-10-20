@@ -56,16 +56,10 @@ public class Orders {
     }
 
     /**
-     * For the exchange translation slice, which needs the exchange's id to cancel an order there and must not chase an
-     * order that is already closed. Strongly consistent, unlike the {@code orders} view.
+     * For the exchange translation slice, which must not chase an order that is already closed. Strongly consistent,
+     * unlike the {@code orders} view.
      */
-    public Optional<ExchangeState> exchangeStateOf(OrderId orderId) {
-        return findOrder(orderId).map(order -> new ExchangeState(Optional.ofNullable(order.exchangeOrderId()), order.status()));
-    }
-
-    /**
-     * @param exchangeOrderId empty until the exchange answered the submission
-     */
-    public record ExchangeState(Optional<ExchangeOrderId> exchangeOrderId, OrderStatus status) {
+    public Optional<OrderStatus> statusOf(OrderId orderId) {
+        return findOrder(orderId).map(Order::status);
     }
 }

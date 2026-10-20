@@ -73,7 +73,7 @@ public class StubExchangeGateway implements ExchangeGateway {
     }
 
     @Override
-    public void cancel(OrderId orderId, ExchangeOrderId exchangeOrderId) {
+    public void cancel(OrderId orderId) {
         requireNonNull(orderId, "No orderId provided");
         // Only a resting order is left to cancel; a filled one is simply not cancelled, as at the real exchange
         if (resting.containsKey(orderId)) {

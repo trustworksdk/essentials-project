@@ -87,8 +87,9 @@ public class ExchangeOrderRouter extends EventProcessor {
     }
 
     /**
-     * Cancelling at the exchange needs the exchange's id, which the order learns when the submission's answer is
-     * recorded. Until then the request is redelivered; an order that closed meanwhile (rejected, filled) is let go.
+     * Cancels at the exchange by our order id, so a cancel requested right after the order was placed does not wait for
+     * the submission's answer to be recorded. This inbox delivers one order's events in order, so the order was submitted
+     * before its cancel request arrives here. An order that closed meanwhile (rejected, filled) is let go.
      */
     @MessageHandler(unitOfWork = UnitOfWorkMode.NONE)
     void on(OrderCancelRequested e) {
@@ -105,14 +106,12 @@ public class ExchangeOrderRouter extends EventProcessor {
     }
 
     private void cancelAtExchange(OrderId orderId) {
-        var state = withUnitOfWork(() -> orders.exchangeStateOf(orderId))
+        var status = withUnitOfWork(() -> orders.statusOf(orderId))
                 .orElseThrow(() -> new IllegalStateException("Order '" + orderId + "' not found"));
-        if (state.status().isTerminal()) {
+        if (status.isTerminal()) {
             return;
         }
-        var exchangeOrderId = state.exchangeOrderId()
-                                   .orElseThrow(() -> new IllegalStateException("Order '" + orderId + "' has no exchange id yet; cancel retried"));
-        gateway.cancel(orderId, exchangeOrderId);
+        gateway.cancel(orderId);
     }
 
     /**

@@ -275,12 +275,8 @@ public class Order extends AggregateRoot<OrderId, OrderEvent, Order> {
     }
 
     /**
-     * Package-private, for {@link Orders#exchangeStateOf}.
+     * Package-private, for {@link Orders#statusOf}.
      */
-    ExchangeOrderId exchangeOrderId() {
-        return exchangeOrderId;
-    }
-
     OrderStatus status() {
         return status;
     }

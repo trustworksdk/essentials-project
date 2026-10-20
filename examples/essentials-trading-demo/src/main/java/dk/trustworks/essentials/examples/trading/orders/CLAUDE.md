@@ -32,8 +32,11 @@ books: an order is short-lived.
   for one order collide on its stream; the inbox redelivers the loser. The future webhook receiver must feed the same
   inbox (through `integration/ExternalEventIntake`).
 - **`ExchangeOrderRouter`'s handlers are `UnitOfWorkMode.NONE`**: the exchange call holds no connection. Reading the
-  order there needs an explicit `withUnitOfWork`. A cancel request before the exchange answered the submission is
-  redelivered until the exchange order id is known; a closed order is let go.
+  order there needs an explicit `withUnitOfWork`. **Cancel by our `OrderId`, never wait for the exchange's id**
+  (`ExchangeGateway.cancel(OrderId)`): that id is recorded only once the answer has gone through the reports inbox, and
+  a cancel that waited for it by redelivery was dead-lettered after 20 attempts under load, leaving the order
+  `CANCEL_PENDING` and its hold never released. The router's inbox is ordered per order, so the order was submitted
+  before its cancel arrives. A closed order is let go.
 - **Ownership is checked against `orders`' own projection of `AccountOpened`** (`views/account_owners`), eventually
   consistent: an account opened a moment ago answers `404` until it is projected.
 - **A fill for an unknown order is an operator case, not a retry.** `record_fill` records it on an

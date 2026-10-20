@@ -396,6 +396,24 @@ Both are ISO dates (`format: date`), never null on these events.
 - for a sample of executions, `tradeDate` and `intendedSettlementDate` are equal on `TradeExecuted`, the fill
   events, `SettlementPending` and the clearing statement line.
 
+### SR-30 — Cancel by client order id (SHOULD) [phase 3]
+
+`DELETE /api/orders/{id}` takes the exchange's order id only. A member cancels by its own id on a real exchange: FIX
+`OrderCancelRequest` names the order by `OrigClOrdID`. The trading demo cancels by `clientOrderId` for a reason that
+only shows under load: the exchange's id reaches the order through the same report pipeline as everything else, and a
+cancel requested a moment after placing the order would otherwise have to wait for it (it did, by redelivery, and was
+dead-lettered when the wait outlasted the retries).
+
+- A cancel addressed by `clientOrderId` within the participant, e.g. `DELETE /api/orders?clientOrderId=…`, with the
+  same responses and the same `OrderCancelled` as a cancel by id.
+- An unknown `clientOrderId` answers `404`, as an unknown id does.
+
+Without it the demo's adapter resolves the id by resubmitting the order, which the simulator answers idempotently
+(`200`, `duplicate: true`, with the existing order) - a workaround, and only while the order's terms are at hand.
+
+**Accept when** an order submitted with `clientOrderId` `C` is cancelled by `C`, and a second cancel by `C` answers as
+a second cancel by id does.
+
 ---
 
 ## Summary by demo phase
@@ -405,7 +423,7 @@ Both are ISO dates (`format: date`), never null on these events.
 | 0 Foundation | SR-1, SR-3, SR-5, SR-28 (MUST); SR-19 (SHOULD) |
 | 1 Identity and account core | SR-24, SR-25, SR-26 (MUST) |
 | 2 Funding | SR-21 (MUST); SR-22, SR-27 (SHOULD) |
-| 3 Orders and execution | SR-2, SR-6–SR-10, SR-12, SR-13, SR-29 (MUST); SR-16, SR-17 (SHOULD) |
+| 3 Orders and execution | SR-2, SR-6–SR-10, SR-12, SR-13, SR-29 (MUST); SR-16, SR-17, SR-30 (SHOULD) |
 | 4 Settlement | SR-14 (MUST) |
 | 5 Reconciliation | SR-11 (SHOULD) |
 | 6 Realistic load | SR-4, SR-15, SR-20, SR-23 (SHOULD) |

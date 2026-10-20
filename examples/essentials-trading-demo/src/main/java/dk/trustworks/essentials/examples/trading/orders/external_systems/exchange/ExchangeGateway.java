@@ -35,8 +35,15 @@ public interface ExchangeGateway {
     SubmissionResult submit(OrderSubmission submission);
 
     /**
-     * Asks the exchange to cancel what is left of an order. The cancellation itself is reported through
-     * {@link ExchangeReports}; an order that already filled is simply not cancelled.
+     * Asks the exchange to cancel what is left of an order, named by our {@code orderId} - the exchange's
+     * {@code clientOrderId}, as a FIX {@code OrderCancelRequest} names it by {@code OrigClOrdID}. The cancellation itself
+     * is reported through {@link ExchangeReports}; an order that already filled is simply not cancelled.
+     * <p>
+     * Not by the exchange's own order id: that is recorded on the order only once the submission's answer has gone
+     * through {@link ExchangeReports}, and a cancel requested a moment after placing the order would have to wait for it.
+     * An adapter for an exchange that cancels only by its own id resolves it itself - by the cancel-by-client-order-id
+     * of SR-30 where the exchange has it, else by resubmitting the order, which the exchange answers idempotently, with
+     * its id.
      */
-    void cancel(OrderId orderId, ExchangeOrderId exchangeOrderId);
+    void cancel(OrderId orderId);
 }

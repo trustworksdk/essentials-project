@@ -247,6 +247,12 @@ Where it deviates from the sections above:
   `OrderFilled`, and operators see it at `GET /api/admin/orders/late-fills`. Its hold or reservation is already
   released, so a buy is booked against cash and a sell may exceed the shares the account had free — which is why it
   needs a person. A fill beyond the order's quantity on a `FILLED` order is the same case.
+- **Cancel by our order id** (§4). The router cancels at the exchange by `OrderId` (= `clientOrderId`), not by the
+  exchange's id. It used to wait for that id by redelivery; the id arrives through the reports inbox, and in the
+  order-flow load test a cancel placed a moment after its order outlasted the 20 redeliveries and was dead-lettered,
+  leaving the order `CANCEL_PENDING` and its hold held (16 of 1 000 cancels in one run). The router's inbox is ordered
+  per order, so the order is submitted before its cancel arrives. The simulator cancels by its own id only; SR-30 asks
+  for cancel by client order id, and until then the adapter resolves the id by idempotent resubmission.
 - **Market data before the stream exists** (§7). `market_data/views/market_quotes` keeps the latest quote per
   instrument in memory, fed by a synthetic random walk standing in for SR-13; the real consumer replaces the feed, not
   the view. `orders` reads it through a published read seam, `market_data/types/MarketQuotes` (`bestAsk`/`bestBid`,
@@ -264,7 +270,7 @@ Where it deviates from the sections above:
   accumulates. The `orders` view shows it.
 - **DAY expiry before SR-17** (§2). `OrderExpiryRequested` asks the exchange to cancel; the exchange's cancellation then
   closes the order `EXPIRED` (`OrderExpired`), not `CANCELLED`, and a fill before it still wins (`FILLED`). It is the
-  existing cancel path, so a `PENDING` order waits for its exchange id the same way. `GTC` orders, closed ones and one
+  existing cancel path. `GTC` orders, closed ones and one
   whose cancellation is already on its way are left alone. Until the adapter receives `BusinessDayClosed` (SR-26), an
   operator endpoint stands in for it (`POST /api/admin/orders/business-day-closed`), and it queues one `ExpireOrder` per
   open `DAY` order in the `Orders:ExchangeReports` inbox. Two stopgap gaps, both gone with SR-17: the open orders are
