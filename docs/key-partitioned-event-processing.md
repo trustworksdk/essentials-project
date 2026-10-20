@@ -456,6 +456,38 @@ forward, not handling, the cap on a realistic chain, and it supports building th
 processor-side filter that does not forward events it has no handler for would cut this workload's forwards by more
 than half on its own; it is a candidate to add to §4.
 
+**Correction and isolated measurement** (2026-10-20, `EventProcessorForwardBenchmarkIT`, opt-in, in
+`postgresql-event-store`). Two claims above do not hold up:
+
+- *"Each processor forwards every `Orders` event."* It does not: `EventProcessor.forwardEventToInbox` already forwards
+  only events it has a handler for. What an unhandled event still costs is the subscriber's per-event unit of work,
+  which is read-only and measured at ~0.07 ms. Skipping it before the unit of work is not worth building.
+- *"The forward is the cap."* In isolation it is not. The benchmark drains 20 000 events (4 000 orders x 5) through an
+  `EventProcessor` handling two of five types: the reader forwards ~4 300 events/s, about 860 orders/s per processor,
+  eight times the demo's completion rate. End to end the processor is bound by its **single inbox consumer**, not by the
+  reader.
+
+The reader does carry one per-event cost worth knowing: `PersistedEventSubscriber` requests one event after each it
+handles, and every request schedules its own poll, so a polling subscription runs a query per event. Requesting in
+half-batches makes the forward 1.5-2.75x faster (2 916 -> 4 317 and 4 284 -> 11 784 events/s, medians of 9) but leaves
+the `EventProcessor` drain and a `ViewEventProcessor`'s end-to-end rate unchanged within noise. It is parked on branch
+`ef-2/batched-demand` until the consumer side is parallel and the reader becomes the limit, or until (a1) supersedes it.
+
+**Profiled** (2026-10-20, one instance, `compose` profile on a fresh database, full JIT, 200 x 50 orders, 32 at once):
+completion **75 orders/s**, with the JVM at ~120 % and PostgreSQL at ~130 % of eight cores. The order flow is not CPU-
+bound but **latency-bound**: every stage is one thread making serial round trips. In order of what they cost per
+event or message:
+
+| Where | What | Evidence |
+|---|---|---|
+| `ExclusiveAsynchronousSubscription.request` | Every request asks `FencedLockManager.isLockedByThisLockManagerInstance`, a lock lookup in its own transaction, and the subscriber requests once per event | 100 000 `SELECT * FROM fenced_locks` for 10 000 orders; reader stacks parked in `lookupLockInDB` |
+| `ViewEventProcessor.handlePersistedEvent` | `hasOrderedMessageQueuedForKey`, payload deserialization, `SAVEPOINT` and `RELEASE` for every event, also those with no handler | 217 604 of each; `LateFillsProjection` (one handled type, none occurring) lagged 15-18k events |
+| Jdbi `Handle` | `Connection.getTransactionIsolation()` per transaction, a round trip in pgjdbc | 739 559 `SHOW TRANSACTION ISOLATION LEVEL` for 672 087 `BEGIN` |
+| `Inbox:ExchangeOrderRouter`, `Inbox:OrderLedgerProcessor` | One consumer each (`SingleGlobalConsumer`, parallelism 1) | Router inbox to 6 300 while placing; ledger inbox to 4 900 afterwards, draining ~170/s |
+
+The first two are small, local fixes in `postgresql-event-store`. The last one is what EF-2 itself is about. A C1-only
+JVM (`spring-boot:run`'s default `optimizedLaunch`) made no difference.
+
 Two hazards to watch during M3/M4. Kill the reader's instance with `kill -9` mid-run to see the PK collision in §3.5,
 or show that it does not happen. And compare per-key order against the exact `EventOrder` sequence, not `isSorted()`
 (the trap recorded in adapter `CLAUDE.md`, first gotcha).
