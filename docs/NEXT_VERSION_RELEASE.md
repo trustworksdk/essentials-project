@@ -9,13 +9,15 @@ _Add an entry in the same commit as the change. Cite the commit or PR. Write it 
 changes for them, and what they must do, if anything. Purely internal refactors, test-only changes and CI
 plumbing that no user sees go in §7 at most, as one line._
 
-**So far:** no public API removed, but four changes can break code written against 0.60.0 (§1): two additions that
+**So far:** no public API removed, but five changes can break code written against 0.60.0 (§1): two additions that
 can stop a processor subclass or `CommandHandler` implementation of your own compiling, a new `ShardOwnerSettings`
 record component that stops a record pattern over that record compiling (its 0.60.0 constructor still works,
-deprecated), and one runtime break for direct callers of `ShardOwnedStorage`'s 0.60.0 takeover-charge methods, which
-now throw. Twenty-four framework changes
+deprecated), and two runtime breaks: direct callers of `ShardOwnedStorage`'s 0.60.0 takeover-charge methods, which
+now throw, and `Subscription.close()` on the shard-owned engine, which now unsubscribes: a `PostgresqlMessageQueue`
+subscription closed to pause it is silently left stopped by the queue's `start()`, with no exception and nothing
+logged, and its own `start()` throws `IllegalStateException` (§1.1.23). Twenty-four framework changes
 with a behaviour change (§1.1, §1.1.13–§1.1.24 in the durable queues and units of work), additive features (§2), bug
-fixes (§3), plugin releases `0.60.0-6` and `0.60.0-7`, and example and tooling updates. Beyond those four, the only
+fixes (§3), plugin releases `0.60.0-6` and `0.60.0-7`, and example and tooling updates. Beyond those five, the only
 migration step is for `essentials.schema.mode=validate` deployments: re-run `emit` and apply the script before the
 first start (§1). Supported PostgreSQL is now 15+ (§1). The persisted
 format changes for one shape only, back to what 0.50 wrote: a type with a public `is`-getter (§1.1.2).
@@ -60,6 +62,13 @@ Use the overloads taking `(connection, shard, inFlightBound, ackBatchSize, owner
 engine calls to delete an instance's membership row; whether the row may go is decided by the stopping consumer, which
 for a `PostgresqlMessageQueue` subscription leaves it to the subscription's other lane while that lane still needs it
 (§3).
+
+`Subscription.close()`, on the shard-owned engine, now calls `unsubscribe()`; in 0.60.0 it called `stop()` (§1.1.23).
+Code that closed a `PostgresqlMessageQueue` subscription to pause it and started it again now breaks at runtime, in
+one of two ways. The queue's `start()` silently leaves the closed subscription stopped: it throws nothing and logs
+nothing, because that subscription is no longer registered with the queue. The subscription's own `start()` throws
+`IllegalStateException`. Pause a subscription you mean to start again with `Subscription.stop()`, which still keeps it
+registered.
 
 **Supported PostgreSQL is now 15+.** Essentials supports the PostgreSQL majors the PostgreSQL community still
 patches, which today means 15 and later (14 reaches end of life on 2026-11-12). Before this release the module docs
