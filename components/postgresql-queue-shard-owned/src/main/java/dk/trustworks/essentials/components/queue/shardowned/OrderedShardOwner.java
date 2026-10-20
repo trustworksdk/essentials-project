@@ -1113,6 +1113,9 @@ final class OrderedShardOwner implements BatchReadableOwner {
      *                       the limit it was issued with (it may have stopped short of the backlog, so no candidate
      *                       moves the watermark past it), or {@link #READ_NOT_CAPPED} when it returned fewer
      */
+    // cappedCandidateCounted names one entry of watermarkCandidates, so it is compared by identity: WatermarkCandidate
+    // is a record, and equals() would also match a different candidate holding the same values.
+    @SuppressWarnings("PMD.CompareObjectsWithEquals")
     private void advanceWatermark(Connection connection, long readReachedSeq) throws SQLException {
         if (watermarkCandidates.isEmpty() && maxSeen <= safeCursor) {
             // Fully caught up: nothing to retire and nothing worth recording. This is the idle poll,
