@@ -24,7 +24,8 @@ books: an order is short-lived.
   a rejection is still recorded (and booked), a repeated `executionId` adds nothing. Only the customer's own commands
   (`PlaceOrder`, `CancelOrder`) are checked.
 - **`OrderClosed` is emitted exactly once**, together with the event that made the order terminal, and is the release
-  trigger. A terminal status never changes afterwards; a late fill on a closed order is booked but does not reopen it.
+  trigger. A terminal status never changes afterwards; a late fill on a closed order is booked but does not reopen it,
+  and is flagged `OrderFilledAfterClose` (operator case, Q-3; also an over-fill on a `FILLED` order).
 - **Booking and release are one processor** (`automations/apply_order_to_account`). It delivers one order's events in
   order, so a release cannot overtake that order's bookings. Splitting it into two processors would break that.
 - **Every exchange report goes through the `Orders:ExchangeReports` inbox**, never straight to the command bus. Reports
@@ -73,8 +74,9 @@ limit fills at its limit. Per-instance memory: a restart forgets resting orders.
 | `orders` | view | customer (own accounts) and operator |
 | `account_owners` | view | order entry's ownership check |
 | `unknown_exchange_orders` | view | operator (`GET /api/admin/orders/unknown-exchange-fills`) |
+| `late_fills` | view | operator (`GET /api/admin/orders/late-fills`) |
 
 ## Not built yet
 
 The exchange-simulator adapter (webhooks, synchronous executions in the submit answer, `BusinessDayClosed` in place of
-the operator endpoint), the operator case for a late fill on a closed order (Q-3).
+the operator endpoint).

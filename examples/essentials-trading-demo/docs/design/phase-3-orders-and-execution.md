@@ -243,7 +243,10 @@ Where it deviates from the sections above:
   there too, rather than writing the order itself. The adapter will put the synchronous executions of the `201` (Q-2)
   and the webhook events in the same inbox.
 - **A late fill on a terminal order does not change its status** (Q-3). It is recorded and booked as a fact; the
-  order stays `REJECTED` (or `CANCELLED`). The operator case for it is not built yet.
+  order stays `REJECTED` (or `CANCELLED`, `EXPIRED`). The order flags it with `OrderFilledAfterClose` next to the
+  `OrderFilled`, and operators see it at `GET /api/admin/orders/late-fills`. Its hold or reservation is already
+  released, so a buy is booked against cash and a sell may exceed the shares the account had free — which is why it
+  needs a person. A fill beyond the order's quantity on a `FILLED` order is the same case.
 - **Market data before the stream exists** (§7). `market_data/views/market_quotes` keeps the latest quote per
   instrument in memory, fed by a synthetic random walk standing in for SR-13; the real consumer replaces the feed, not
   the view. `orders` reads it through a published read seam, `market_data/types/MarketQuotes` (`bestAsk`/`bestBid`,
@@ -278,5 +281,4 @@ Where it deviates from the sections above:
   (`UnknownExchangeOrderFilled`) instead of being retried 50 times into a dead letter, and listed for operators at
   `GET /api/admin/orders/unknown-exchange-fills`. Nothing is booked. Other reports for an unknown order (acceptance,
   cancellation) carry no money and still go the inbox's redelivery and dead-letter route.
-- **Not built yet:** the operator case for a late fill on a closed order (Q-3: it is booked, but nothing flags it).
 

@@ -9,7 +9,7 @@ generator: essentials
 language: java
 
 handles: [RecordFill]
-emits: [OrderAccepted, OrderFilled, OrderClosed, UnknownExchangeOrderFilled]
+emits: [OrderAccepted, OrderFilled, OrderClosed, OrderFilledAfterClose, UnknownExchangeOrderFilled]
 writes:
   - { name: Order }
   - { name: UnknownExchangeOrder }
@@ -21,6 +21,9 @@ invariants:
   - id: INV-RF-2
     text: "A fill for an order the brokerage does not know is recorded once as an UnknownExchangeOrder operator case, never retried"
     enforcedBy: RecordFillHandler
+  - id: INV-RF-3
+    text: "A fill on a closed order is recorded and booked, flagged OrderFilledAfterClose, and never changes the order's status"
+    enforcedBy: Order
 forbidden:
   - cross-slice-internal:orders
 tests:

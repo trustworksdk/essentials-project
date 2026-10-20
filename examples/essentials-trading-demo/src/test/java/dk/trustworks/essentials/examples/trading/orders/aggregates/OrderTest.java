@@ -104,15 +104,31 @@ class OrderTest {
     }
 
     @Test
-    void a_fill_after_a_rejection_is_recorded_but_the_order_stays_rejected_and_closes_only_once() {
+    void a_fill_after_a_rejection_is_recorded_and_flagged_but_the_order_stays_rejected_and_closes_only_once() {
         var order = placeBuy(10);
         order.reject("EXCHANGE_UNAVAILABLE");
         fill(order, "EX-1", 10);
+        fill(order, "EX-1", 10); // redelivered: nothing, not flagged twice
 
         var events = order.getUncommittedChanges().events;
         assertThat(events).extracting(e -> e.getClass().getSimpleName())
-                          .containsExactly("OrderPlaced", "OrderRejected", "OrderClosed", "OrderFilled");
+                          .containsExactly("OrderPlaced", "OrderRejected", "OrderClosed", "OrderFilled", "OrderFilledAfterClose");
+        var flagged = (OrderFilledAfterClose) events.getLast();
+        assertThat(flagged.closedAs()).isEqualTo(OrderStatus.REJECTED);
+        assertThat(flagged.quantity()).isEqualTo(Quantity.of(10));
         assertThatThrownBy(() -> order.requestCancel(ACCOUNT)).hasMessageContaining("REJECTED");
+    }
+
+    @Test
+    void a_fill_beyond_the_order_quantity_is_flagged_and_the_completing_fill_is_not() {
+        var order = placeBuy(10);
+        fill(order, "EX-1", 10);
+        fill(order, "EX-2", 2);
+
+        var events = order.getUncommittedChanges().events;
+        assertThat(events).extracting(e -> e.getClass().getSimpleName())
+                          .containsExactly("OrderPlaced", "OrderAccepted", "OrderFilled", "OrderClosed", "OrderFilled", "OrderFilledAfterClose");
+        assertThat(((OrderFilledAfterClose) events.getLast()).closedAs()).isEqualTo(OrderStatus.FILLED);
     }
 
     @Test

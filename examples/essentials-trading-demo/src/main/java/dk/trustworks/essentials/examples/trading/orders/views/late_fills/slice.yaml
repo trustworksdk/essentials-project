@@ -1,0 +1,30 @@
+schemaVersion: "1.1"
+slice: orders.late_fills
+kind: view
+bc: orders
+owner: orders-team
+status: live
+summary: "Operator cases: fills the exchange reported for orders that were already closed, booked without their hold or reservation."
+generator: essentials
+language: java
+
+serves: [LateFills]
+endpoints:
+  - { method: GET, path: "/api/admin/orders/late-fills", auth: operator }
+reads:
+  - { name: LateFill }
+projections:
+  - name: LateFillsProjection
+    from: [OrderFilledAfterClose]
+    consistency: eventual
+    store: postgresql
+invariants:
+  - id: INV-LF-1
+    text: "Every late fill is listed once, however often the exchange reports it (one row per executionId)"
+    enforcedBy: LateFillsProjection
+forbidden:
+  - cross-slice-internal:orders
+tests:
+  unit: { present: false }
+  integration: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/orders/OrdersIT.java" }
+  contract: { present: false }

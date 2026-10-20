@@ -119,7 +119,8 @@ public class Order extends AggregateRoot<OrderId, OrderEvent, Order> {
     }
 
     /**
-     * A fact from the exchange: never refused, never applied twice. Implies acceptance when it arrives first.
+     * A fact from the exchange: never refused, never applied twice. Implies acceptance when it arrives first. A fill on
+     * an order that is already closed is recorded too, and flagged with {@link OrderFilledAfterClose} (Q-3).
      */
     public void recordFill(ExecutionId executionId, Quantity fillQuantity, Money price, LocalDate tradeDate, LocalDate settlementDate) {
         requireNonNull(executionId, "No executionId provided");
@@ -136,7 +137,12 @@ public class Order extends AggregateRoot<OrderId, OrderEvent, Order> {
         }
         var averagePrice = Money.of(notional.getAmount().value().divide(BigDecimal.valueOf(total.value()), AVERAGE_PRICE_SCALE, RoundingMode.HALF_EVEN),
                                     notional.getCurrency());
+        var closedAs = status.isTerminal() ? status : null;
         apply(new OrderFilled(aggregateId(), accountId, instrumentId, side, executionId, fillQuantity, price, tradeDate, settlementDate, total, averagePrice));
+        if (closedAs != null) {
+            apply(new OrderFilledAfterClose(aggregateId(), accountId, instrumentId, side, executionId, fillQuantity, price, closedAs));
+            return;
+        }
         if (status == OrderStatus.FILLED) {
             close();
         }

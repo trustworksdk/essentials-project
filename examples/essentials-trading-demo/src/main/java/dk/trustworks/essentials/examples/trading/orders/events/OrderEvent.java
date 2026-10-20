@@ -23,7 +23,7 @@ import dk.trustworks.essentials.examples.trading.orders.types.OrderId;
  */
 public sealed interface OrderEvent permits OrderPlaced, OrderSubmitted, OrderRejected, OrderAccepted, OrderFilled,
                                            OrderCancelRequested, OrderCancelled, OrderExpiryRequested, OrderExpired,
-                                           OrderClosed {
+                                           OrderClosed, OrderFilledAfterClose {
 
     OrderId orderId();
 }

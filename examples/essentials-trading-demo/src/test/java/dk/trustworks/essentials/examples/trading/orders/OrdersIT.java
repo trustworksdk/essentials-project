@@ -21,6 +21,7 @@ import dk.trustworks.essentials.examples.trading.accounts.views.account_overview
 import dk.trustworks.essentials.examples.trading.orders.external_systems.exchange.ExchangeReports;
 import dk.trustworks.essentials.examples.trading.orders.types.*;
 import dk.trustworks.essentials.examples.trading.orders.use_cases.record_fill.RecordFill;
+import dk.trustworks.essentials.examples.trading.orders.views.late_fills.LateFill;
 import dk.trustworks.essentials.examples.trading.orders.views.orders.OrderView;
 import dk.trustworks.essentials.examples.trading.orders.views.unknown_exchange_orders.UnknownExchangeFill;
 import dk.trustworks.essentials.types.Money;
@@ -300,6 +301,45 @@ class OrdersIT {
         // Customers cannot end the day
         assertThat(alice().postForEntity("/api/admin/orders/business-day-closed", Map.of("businessDate", "2030-01-07"), String.class).getStatusCode())
                 .isEqualTo(HttpStatus.FORBIDDEN);
+    }
+
+    /**
+     * Q-3: the brokerage gave up on an order the exchange did take. Its fill is a fact — booked, from cash, since the
+     * hold is gone — but the order stays rejected and an operator is told.
+     */
+    @Test
+    void a_fill_on_a_rejected_order_is_booked_and_becomes_an_operator_case() {
+        openFundedAccount("ACC-ORD-LATE", "1000");
+
+        assertThat(placeOrder(alice(), "ACC-ORD-LATE", "ORD-LATE-1", "DOWN", "BUY", 5, "100").getStatusCode()).isEqualTo(HttpStatus.CREATED);
+        await().atMost(TIMEOUT).untilAsserted(() -> {
+            assertThat(projectedOrder("ACC-ORD-LATE", "ORD-LATE-1").status()).isEqualTo(OrderStatus.REJECTED);
+            assertMoney(overview("ACC-ORD-LATE").held(), "0");
+        });
+
+        var fill = new RecordFill(OrderId.of("ORD-LATE-1"), ExecutionId.of("EXE-LATE-1"), Quantity.of(5), Money.of("99.00", "USD"),
+                                  LocalDate.of(2030, 1, 7), LocalDate.of(2030, 1, 8));
+        exchangeReports.received(fill);
+        exchangeReports.received(fill);
+
+        await().atMost(TIMEOUT).untilAsserted(() -> {
+            var cases = operator().exchange("/api/admin/orders/late-fills", HttpMethod.GET, null,
+                                            new ParameterizedTypeReference<List<LateFill>>() {}).getBody();
+            assertThat(cases).filteredOn(c -> c.orderId().equals(OrderId.of("ORD-LATE-1")))
+                             .singleElement()
+                             .satisfies(c -> {
+                                 assertThat(c.closedAs()).isEqualTo(OrderStatus.REJECTED);
+                                 assertThat((Object) c.accountId()).isEqualTo(AccountId.of("ACC-ORD-LATE"));
+                                 assertThat(c.quantity()).isEqualTo(Quantity.of(5));
+                             });
+            var order = projectedOrder("ACC-ORD-LATE", "ORD-LATE-1");
+            assertThat(order.status()).isEqualTo(OrderStatus.REJECTED);
+            assertThat(order.filledQuantity().value()).isEqualTo(5L);
+            var account = overview("ACC-ORD-LATE");
+            assertMoney(account.pendingCashOut(), "495.00");
+            assertMoney(account.buyingPower(), "505.00");
+        });
+        assertThat(alice().getForEntity("/api/admin/orders/late-fills", String.class).getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
     }
 
     @Test
