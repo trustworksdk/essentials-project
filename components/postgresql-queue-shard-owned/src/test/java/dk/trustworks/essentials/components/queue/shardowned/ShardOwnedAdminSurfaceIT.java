@@ -468,15 +468,7 @@ class ShardOwnedAdminSurfaceIT {
 
     /** Heartbeat at a third of the lease, so growth is observed in seconds rather than in ten. */
     private static ShardOwnerSettings fastHeartbeat() {
-        var defaults = ShardOwnerSettings.defaults();
-        return new ShardOwnerSettings(defaults.readBatchSize(), defaults.ackBatchSize(),
-                                      defaults.ackFlushInterval(), defaults.chaseDelay(),
-                                      defaults.holeExpiry(), defaults.sweepInterval(),
-                                      defaults.maxHolesPerChase(), defaults.keyConcurrency(),
-                                      defaults.pollBackstop(), defaults.maxSweepInterval(),
-                                      defaults.pumpThreads(), defaults.shedGrace(),
-                                      Duration.ofSeconds(3), Duration.ofSeconds(60),
-                                      ShardOwnerSettings.DEFAULT_STUCK_HANDLER_TIMEOUT);
+        return ShardOwnerSettings.builder().setLeaseTtl(Duration.ofSeconds(3)).build();
     }
 
     /**

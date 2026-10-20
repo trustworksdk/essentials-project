@@ -93,11 +93,13 @@ class ShardOwnedOrderedRetryHandoverIT {
      * that a shed never has to be abandoned.
      */
     private static ShardOwnerSettings settings() {
-        return new ShardOwnerSettings(500, 200, Duration.ofMillis(1), Duration.ofMillis(2),
-                                      Duration.ofMillis(300), Duration.ofMillis(100), 1_000, 8,
-                                      Duration.ofMillis(50), Duration.ofMillis(200), 2, Duration.ofSeconds(5),
-                                      Duration.ofMillis(1000), Duration.ofSeconds(60),
-                                      ShardOwnerSettings.DEFAULT_STUCK_HANDLER_TIMEOUT);
+        return ShardOwnerSettings.builder()
+                                 .setHoleExpiry(Duration.ofMillis(300))
+                                 .setSweepInterval(Duration.ofMillis(100))
+                                 .setPollBackstop(Duration.ofMillis(50))
+                                 .setMaxSweepInterval(Duration.ofMillis(200))
+                                 .setLeaseTtl(Duration.ofMillis(1000))
+                                 .build();
     }
 
     private static RedeliveryPolicy policy() {

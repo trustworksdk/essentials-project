@@ -814,11 +814,12 @@ release, is bounded the same way (§2). (`<!-- fix:U-013 -->`)
   `ShardOwnerSettings.DEFAULT_STUCK_HANDLER_TIMEOUT`), the bound on how long a queue waits for a handler before it
   treats it as stuck (§1.1.24); in the Spring Boot starter `essentials.shard-owned-queue.stuck-handler-timeout`, and
   per queue `essentials.shard-owned-queue.stuck-handler-timeouts.<queue-name>`. With it `ShardOwnerSettings.builder()`,
-  which starts from `defaults()` so a caller sets only what differs, and `withStuckHandlerTimeout(Duration)` for one
+  which starts from `defaults()` so a caller sets only what differs, `settings.toBuilder()`, which starts from
+  existing settings (`settings.toBuilder().setLeaseTtl(...).build()`), and `withStuckHandlerTimeout(Duration)` for one
   queue's own bound. The 0.60.0 constructor without the new setting still works, with the default, and is deprecated
   for removal; a record pattern over the 0.60.0 components no longer compiles (§1). And `ShardOwnerMetrics.keptUnitsInHandler()` (also in `snapshot()`): the ordered units a stop kept
   whose key is still in its handler, normally zero, and the units a shed or a dead pump's hand-back released at the
-  bound while their stuck handler runs on. (`7af80bc49`, `<!-- fix:U-013 -->`)
+  bound while their stuck handler runs on. (`7af80bc49`, `<!-- fix:U-013 -->`, `<!-- fix:U-018 -->`)
 - **Shard-owned engine: release an ordered unit a stop kept, before `stuckHandlerTimeout`.**
   `MessageQueue.releaseKeptOrderedUnit(unit)`, in the admin API `ShardOwnedQueuesApi.releaseKeptOrderedUnit` and
   `POST /shard-owned-queues/{queueName}/ordered-units/{unit}/release-kept` (role `QUEUE_WRITER`). For a handler known to

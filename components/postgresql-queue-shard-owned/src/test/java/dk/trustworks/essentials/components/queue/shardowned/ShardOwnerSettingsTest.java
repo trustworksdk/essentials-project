@@ -59,6 +59,31 @@ class ShardOwnerSettingsTest {
         assertThat(shared.stuckHandlerTimeout()).as("the shared settings are left as they were").isEqualTo(Duration.ofMinutes(15));
     }
 
+    /**
+     * Every component differs from {@link ShardOwnerSettings#defaults()}, so a builder that dropped one back to its
+     * default would not round-trip. A setting added to the record either stops this call compiling or, through the
+     * deprecated constructor that keeps the old arity, takes its default and fails the premise check below; either way it
+     * has to be given a non-default value here.
+     */
+    @Test
+    void to_builder_starts_from_the_settings_it_is_called_on() {
+        var settings = new ShardOwnerSettings(7, 11, Duration.ofMillis(13), Duration.ofMillis(17), Duration.ofSeconds(19),
+                                              Duration.ofMillis(23), 29, 31, Duration.ofMillis(37), Duration.ofSeconds(41), 43,
+                                              Duration.ofSeconds(47), Duration.ofSeconds(53), Duration.ofSeconds(59),
+                                              Duration.ofMinutes(61));
+        var defaults = ShardOwnerSettings.defaults();
+        assertThat(settings.getClass().getRecordComponents()).allSatisfy(component -> assertThat(component.getAccessor().invoke(settings))
+                .as("premise: %s differs from its default", component.getName())
+                .isNotEqualTo(component.getAccessor().invoke(defaults)));
+
+        assertThat(settings.toBuilder().build()).isEqualTo(settings);
+
+        var changed = settings.toBuilder().setLeaseTtl(Duration.ofSeconds(3)).build();
+        assertThat(changed.leaseTtl()).isEqualTo(Duration.ofSeconds(3));
+        assertThat(changed.toBuilder().setLeaseTtl(settings.leaseTtl()).build()).as("every other setting kept").isEqualTo(settings);
+        assertThat(settings.leaseTtl()).as("the settings it was called on are left as they were").isEqualTo(Duration.ofSeconds(53));
+    }
+
     @Test
     void the_stuck_handler_timeout_must_be_positive() {
         var defaults = ShardOwnerSettings.defaults();

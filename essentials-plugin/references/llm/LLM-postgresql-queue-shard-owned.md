@@ -228,6 +228,19 @@ Full detail and the failure modes: [docs/durable-queue-shard-owned.md](https://g
 
 ### `ShardOwnerSettings` — per engine, usually one instance for the process
 
+Build it with `ShardOwnerSettings.builder()`, which starts from `defaults()`, so only the settings that differ are
+named; `settings.toBuilder()` starts from existing settings instead (both new in 0.60.1). Prefer either to the
+canonical constructor, which takes every setting in a row and gains a parameter whenever a setting is added, as it did
+for `stuckHandlerTimeout`.
+
+```java
+var settings = ShardOwnerSettings.builder()
+                                 .setLeaseTtl(Duration.ofSeconds(10))
+                                 .setStuckHandlerTimeout(Duration.ofHours(1))
+                                 .build();
+var slowShedding = settings.toBuilder().setShedGrace(Duration.ofSeconds(30)).build();   // every other setting as in `settings`
+```
+
 | Setting | Default | What it costs | When to change |
 |---|---|---|---|
 | `pumpThreads` | 2 | **Held connections = `pumpThreads + 1`.** Also the pump thread count | Raise only if the pumps are the bottleneck; each one costs a permanent connection |

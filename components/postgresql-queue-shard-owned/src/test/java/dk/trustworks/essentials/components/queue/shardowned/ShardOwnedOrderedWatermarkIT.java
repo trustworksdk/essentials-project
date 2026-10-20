@@ -59,21 +59,12 @@ class ShardOwnedOrderedWatermarkIT {
      * failure read as a slow success. {@code watermarkCap} is 30 s, comfortably longer than the test,
      * so the watermark has to be right rather than rescued by its own escape hatch.
      */
-    private static final ShardOwnerSettings HOSTILE = new ShardOwnerSettings(500,
-                                                                             200,
-                                                                             Duration.ofMillis(1),
-                                                                             Duration.ofMillis(2),
-                                                                             Duration.ofMillis(200),   // holeExpiry
-                                                                             Duration.ofSeconds(20),   // sweepInterval
-                                                                             1_000,
-                                                                             8,
-                                                                             Duration.ofMillis(500),
-                                                                             Duration.ofSeconds(20),   // maxSweepInterval
-                                                                             2,
-                                                                             Duration.ofSeconds(5),
-                                                                             Duration.ofSeconds(30),
-                                                                             Duration.ofSeconds(30),
-                                                                             ShardOwnerSettings.DEFAULT_STUCK_HANDLER_TIMEOUT);  // watermarkCap
+    private static final ShardOwnerSettings HOSTILE = ShardOwnerSettings.builder()
+                                                                        .setHoleExpiry(Duration.ofMillis(200))
+                                                                        .setSweepInterval(Duration.ofSeconds(20))
+                                                                        .setMaxSweepInterval(Duration.ofSeconds(20))
+                                                                        .setWatermarkCap(Duration.ofSeconds(30))
+                                                                        .build();
 
     @Container
     static PostgreSQLContainer postgres = LabPostgres.create();
@@ -674,10 +665,15 @@ class ShardOwnedOrderedWatermarkIT {
 
     /** {@link #byHand(int)} with the given {@code watermarkCap}, for a test that wants the cap to fire. */
     private static ShardOwnerSettings byHand(int readBatchSize, Duration watermarkCap) {
-        return new ShardOwnerSettings(readBatchSize, 1_000, Duration.ofDays(36_500), Duration.ofMillis(2), Duration.ofMillis(200),
-                                      Duration.ofSeconds(20), 1_000, 8, Duration.ofMillis(500), Duration.ofSeconds(20), 2,
-                                      Duration.ofSeconds(5), Duration.ofSeconds(30), watermarkCap,
-                                      ShardOwnerSettings.DEFAULT_STUCK_HANDLER_TIMEOUT);
+        return ShardOwnerSettings.builder()
+                                 .setReadBatchSize(readBatchSize)
+                                 .setAckBatchSize(1_000)
+                                 .setAckFlushInterval(Duration.ofDays(36_500))
+                                 .setHoleExpiry(Duration.ofMillis(200))
+                                 .setSweepInterval(Duration.ofSeconds(20))
+                                 .setMaxSweepInterval(Duration.ofSeconds(20))
+                                 .setWatermarkCap(watermarkCap)
+                                 .build();
     }
 
     /**

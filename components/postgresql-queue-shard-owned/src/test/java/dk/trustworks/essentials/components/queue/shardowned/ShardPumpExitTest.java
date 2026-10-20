@@ -1173,11 +1173,7 @@ class ShardPumpExitTest {
     }
 
     private static ShardOwnerSettings pumps(int pumpThreads) {
-        var d = ShardOwnerSettings.defaults();
-        return new ShardOwnerSettings(d.readBatchSize(), d.ackBatchSize(), d.ackFlushInterval(), d.chaseDelay(), d.holeExpiry(),
-                                      d.sweepInterval(), d.maxHolesPerChase(), d.keyConcurrency(), d.pollBackstop(),
-                                      d.maxSweepInterval(), pumpThreads, d.shedGrace(), d.leaseTtl(), d.watermarkCap(),
-                                      ShardOwnerSettings.DEFAULT_STUCK_HANDLER_TIMEOUT);
+        return ShardOwnerSettings.builder().setPumpThreads(pumpThreads).build();
     }
 
     private static ShardPump pump(AtomicBoolean running) {

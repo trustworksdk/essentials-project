@@ -137,13 +137,7 @@ class ShardOwnedMultiQueueCostIT {
     }
 
     private static ShardOwnerSettings settings() {
-        var defaults = ShardOwnerSettings.defaults();
-        return new ShardOwnerSettings(defaults.readBatchSize(), defaults.ackBatchSize(), defaults.ackFlushInterval(),
-                                      defaults.chaseDelay(), defaults.holeExpiry(), defaults.sweepInterval(),
-                                      defaults.maxHolesPerChase(),
-                                      defaults.keyConcurrency(), defaults.pollBackstop(), Duration.ofSeconds(30), PUMP_THREADS,
-                                      defaults.shedGrace(), Duration.ofMillis(30000), Duration.ofSeconds(60),
-                                      ShardOwnerSettings.DEFAULT_STUCK_HANDLER_TIMEOUT);
+        return ShardOwnerSettings.builder().setPumpThreads(PUMP_THREADS).build();
     }
 
     private static int liveThreads() {

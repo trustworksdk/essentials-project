@@ -256,12 +256,7 @@ class ShardOwnedTakeoverExhaustionRetryIT {
         var otherWakeup       = new ShardWakeup(pump.wakeup());
         var defaults          = ShardOwnerSettings.defaults();
         // One row per read, so draining the backlog takes one pump pass per row
-        var onePerRead        = new ShardOwnerSettings(1, defaults.ackBatchSize(), defaults.ackFlushInterval(), defaults.chaseDelay(),
-                                                       defaults.holeExpiry(), defaults.sweepInterval(), defaults.maxHolesPerChase(),
-                                                       defaults.keyConcurrency(), defaults.pollBackstop(), defaults.maxSweepInterval(),
-                                                       defaults.pumpThreads(), defaults.shedGrace(), defaults.leaseTtl(),
-                                                       defaults.watermarkCap(),
-                                                       ShardOwnerSettings.DEFAULT_STUCK_HANDLER_TIMEOUT);
+        var onePerRead        = ShardOwnerSettings.builder().setReadBatchSize(1).build();
         var failing = new ShardOwner(storage, SHARD, storage.acquireLease("unordered", SHARD, OWNER, 60_000).orElseThrow(),
                                      defaults, (id, payload, type) -> { }, failingMetrics,
                                      RedeliveryPolicy.fixed(Duration.ofSeconds(1), MAX_ATTEMPTS), new ShardWakeup(pump.wakeup()), OWNER,

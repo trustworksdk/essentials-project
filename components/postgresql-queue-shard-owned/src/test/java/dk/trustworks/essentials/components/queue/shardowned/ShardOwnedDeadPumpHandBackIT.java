@@ -1151,11 +1151,12 @@ class ShardOwnedDeadPumpHandBackIT {
     }
 
     private static ShardOwnerSettings settings(int pumpThreads, Duration shedGrace, Duration leaseTtl, Duration stuckHandlerTimeout) {
-        var d = ShardOwnerSettings.defaults();
-        return new ShardOwnerSettings(d.readBatchSize(), d.ackBatchSize(), d.ackFlushInterval(), d.chaseDelay(), d.holeExpiry(),
-                                      d.sweepInterval(), d.maxHolesPerChase(), d.keyConcurrency(), d.pollBackstop(),
-                                      d.maxSweepInterval(), pumpThreads, shedGrace, leaseTtl, d.watermarkCap(),
-                                      stuckHandlerTimeout);
+        return ShardOwnerSettings.builder()
+                                 .setPumpThreads(pumpThreads)
+                                 .setShedGrace(shedGrace)
+                                 .setLeaseTtl(leaseTtl)
+                                 .setStuckHandlerTimeout(stuckHandlerTimeout)
+                                 .build();
     }
 
     /**

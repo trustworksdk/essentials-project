@@ -84,11 +84,7 @@ class OrderedShardOwnerDeadPumpWaitTest {
     }
 
     private static OrderedShardOwner owner() {
-        var d = ShardOwnerSettings.defaults();
-        var settings = new ShardOwnerSettings(d.readBatchSize(), d.ackBatchSize(), d.ackFlushInterval(), d.chaseDelay(), d.holeExpiry(),
-                                              d.sweepInterval(), d.maxHolesPerChase(), d.keyConcurrency(), d.pollBackstop(),
-                                              d.maxSweepInterval(), d.pumpThreads(), SHED_GRACE, d.leaseTtl(), d.watermarkCap(),
-                                              ShardOwnerSettings.DEFAULT_STUCK_HANDLER_TIMEOUT);
+        var settings = ShardOwnerSettings.builder().setShedGrace(SHED_GRACE).build();
         // Nothing here touches the database: stuckOnDeadPump and beginDraining are in-memory.
         var noDatabase = (DataSource) Proxy.newProxyInstance(DataSource.class.getClassLoader(), new Class<?>[]{DataSource.class},
                                                              (proxy, method, args) -> {

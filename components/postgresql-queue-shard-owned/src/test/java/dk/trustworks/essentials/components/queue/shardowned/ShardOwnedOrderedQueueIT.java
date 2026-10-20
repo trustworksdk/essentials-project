@@ -203,10 +203,12 @@ class ShardOwnedOrderedQueueIT {
         // Lease lifetime is leaseTtl = 1s, renewed on a 333ms heartbeat, so the idle period below
         // spans several renewals. It used to read "holeExpiry x 3 = 900ms" — that derivation was the
         // defect `an_ordered_lease_lasts_leaseTtl_not_a_multiple_of_holeExpiry` now guards.
-        var shortLease = new ShardOwnerSettings(500, 200, Duration.ofMillis(1), Duration.ofMillis(2),
-                                                Duration.ofMillis(300), Duration.ofMillis(100),
-                                                1_000, 8, Duration.ofMillis(50), Duration.ofSeconds(30), 2, Duration.ofSeconds(5), Duration.ofMillis(1000), Duration.ofSeconds(60),
-                                                ShardOwnerSettings.DEFAULT_STUCK_HANDLER_TIMEOUT);
+        var shortLease = ShardOwnerSettings.builder()
+                                           .setHoleExpiry(Duration.ofMillis(300))
+                                           .setSweepInterval(Duration.ofMillis(100))
+                                           .setPollBackstop(Duration.ofMillis(50))
+                                           .setLeaseTtl(Duration.ofMillis(1000))
+                                           .build();
 
         try (var queue = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "instance-1")) {
             queue.startConsumingOrdered((messageId, key, payload, payloadType) -> received.add(Long.parseLong(
@@ -304,13 +306,12 @@ class ShardOwnedOrderedQueueIT {
     @Test
     void an_ordered_lease_lasts_leaseTtl_not_a_multiple_of_holeExpiry() throws Exception {
         var received = Collections.synchronizedList(new ArrayList<Long>());
-        var settings = new ShardOwnerSettings(500, 200, Duration.ofMillis(1), Duration.ofMillis(2),
-                                              Duration.ofMillis(200),   // holeExpiry: x3 is 600ms
-                                              Duration.ofMillis(100), 1_000, 8, Duration.ofMillis(50),
-                                              Duration.ofSeconds(30), 2, Duration.ofSeconds(5),
-                                              Duration.ofSeconds(30),   // leaseTtl: renewal is 10s away
-                                              Duration.ofSeconds(60),
-                                              ShardOwnerSettings.DEFAULT_STUCK_HANDLER_TIMEOUT);
+        var settings = ShardOwnerSettings.builder()
+                                         .setHoleExpiry(Duration.ofMillis(200)) // x3 is 600ms
+                                         .setSweepInterval(Duration.ofMillis(100))
+                                         .setPollBackstop(Duration.ofMillis(50))
+                                         .setLeaseTtl(Duration.ofSeconds(30)) // renewal is 10s away
+                                         .build();
 
         try (var queue = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "instance-1")) {
             queue.startConsumingOrdered((messageId, key, payload, payloadType) -> received.add(Long.parseLong(

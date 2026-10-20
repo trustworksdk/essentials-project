@@ -165,9 +165,21 @@ public record ShardOwnerSettings(int readBatchSize,
 
     /**
      * A builder starting from {@link #defaults()}: set only the settings that differ.
+     *
+     * @see #toBuilder()
      */
     public static ShardOwnerSettingsBuilder builder() {
         return new ShardOwnerSettingsBuilder();
+    }
+
+    /**
+     * A builder starting from these settings: set only the settings that differ from them. These settings are left as
+     * they are.
+     *
+     * @see #builder()
+     */
+    public ShardOwnerSettingsBuilder toBuilder() {
+        return new ShardOwnerSettingsBuilder(this);
     }
 
     public static ShardOwnerSettings defaults() {
@@ -191,11 +203,14 @@ public record ShardOwnerSettings(int readBatchSize,
     /**
      * These settings with another {@code stuckHandlerTimeout}: how one queue is given its own bound while every other
      * setting stays shared, as the Spring starter does for {@code essentials.shard-owned-queue.stuck-handler-timeouts}.
+     * <p>
+     * The same as {@code toBuilder().setStuckHandlerTimeout(stuckHandlerTimeout).build()}. It is kept as a method of its
+     * own because {@code stuckHandlerTimeout} is the one setting the Spring starter gives each queue separately - it
+     * shares every other one across its queues - and this method is how the starter and the module's docs give a queue
+     * its own bound. Derive any other setting with {@link #toBuilder()}.
      */
     public ShardOwnerSettings withStuckHandlerTimeout(Duration stuckHandlerTimeout) {
-        return new ShardOwnerSettings(readBatchSize, ackBatchSize, ackFlushInterval, chaseDelay, holeExpiry, sweepInterval,
-                                      maxHolesPerChase, keyConcurrency, pollBackstop, maxSweepInterval, pumpThreads,
-                                      shedGrace, leaseTtl, watermarkCap, stuckHandlerTimeout);
+        return toBuilder().setStuckHandlerTimeout(stuckHandlerTimeout).build();
     }
 
     /**

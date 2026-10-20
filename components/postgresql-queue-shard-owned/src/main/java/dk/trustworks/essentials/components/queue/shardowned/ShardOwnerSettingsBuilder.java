@@ -18,10 +18,13 @@ package dk.trustworks.essentials.components.queue.shardowned;
 
 import java.time.Duration;
 
+import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
+
 /**
- * Builder for {@link ShardOwnerSettings}, starting from {@link ShardOwnerSettings#defaults()}: set only what differs.
+ * Builder for {@link ShardOwnerSettings}: set only what differs. {@link ShardOwnerSettings#builder()} starts from
+ * {@link ShardOwnerSettings#defaults()}, {@link ShardOwnerSettings#toBuilder()} from the settings it is called on.
  * The canonical constructor takes every setting in a row, and a caller naming two of them had to repeat thirteen
- * defaults - and change every such call when a setting was added. Each setting is documented on the record.
+ * others - and change every such call when a setting was added. Each setting is documented on the record.
  */
 public final class ShardOwnerSettingsBuilder {
     private int      readBatchSize;
@@ -41,22 +44,26 @@ public final class ShardOwnerSettingsBuilder {
     private Duration stuckHandlerTimeout;
 
     ShardOwnerSettingsBuilder() {
-        var defaults = ShardOwnerSettings.defaults();
-        readBatchSize = defaults.readBatchSize();
-        ackBatchSize = defaults.ackBatchSize();
-        ackFlushInterval = defaults.ackFlushInterval();
-        chaseDelay = defaults.chaseDelay();
-        holeExpiry = defaults.holeExpiry();
-        sweepInterval = defaults.sweepInterval();
-        maxHolesPerChase = defaults.maxHolesPerChase();
-        keyConcurrency = defaults.keyConcurrency();
-        pollBackstop = defaults.pollBackstop();
-        maxSweepInterval = defaults.maxSweepInterval();
-        pumpThreads = defaults.pumpThreads();
-        shedGrace = defaults.shedGrace();
-        leaseTtl = defaults.leaseTtl();
-        watermarkCap = defaults.watermarkCap();
-        stuckHandlerTimeout = defaults.stuckHandlerTimeout();
+        this(ShardOwnerSettings.defaults());
+    }
+
+    ShardOwnerSettingsBuilder(ShardOwnerSettings from) {
+        requireNonNull(from, "No settings to start from provided");
+        readBatchSize = from.readBatchSize();
+        ackBatchSize = from.ackBatchSize();
+        ackFlushInterval = from.ackFlushInterval();
+        chaseDelay = from.chaseDelay();
+        holeExpiry = from.holeExpiry();
+        sweepInterval = from.sweepInterval();
+        maxHolesPerChase = from.maxHolesPerChase();
+        keyConcurrency = from.keyConcurrency();
+        pollBackstop = from.pollBackstop();
+        maxSweepInterval = from.maxSweepInterval();
+        pumpThreads = from.pumpThreads();
+        shedGrace = from.shedGrace();
+        leaseTtl = from.leaseTtl();
+        watermarkCap = from.watermarkCap();
+        stuckHandlerTimeout = from.stuckHandlerTimeout();
     }
 
     public ShardOwnerSettingsBuilder setReadBatchSize(int readBatchSize) {

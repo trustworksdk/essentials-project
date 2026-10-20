@@ -67,12 +67,12 @@ class ShardOwnedTakeoverAttemptsIT {
     /**
      * Defaults, except for a short lease, so a takeover after a crash does not wait out a production TTL
      */
-    private static final ShardOwnerSettings SHORT_LEASE = new ShardOwnerSettings(500, 200,
-                                                                                Duration.ofMillis(1), Duration.ofMillis(2),
-                                                                                Duration.ofMillis(300), Duration.ofMillis(100),
-                                                                                1_000, 8, Duration.ofMillis(100), Duration.ofSeconds(30), 2,
-                                                                                Duration.ofSeconds(5), LEASE_TTL, Duration.ofSeconds(60),
-                                                                                ShardOwnerSettings.DEFAULT_STUCK_HANDLER_TIMEOUT);
+    private static final ShardOwnerSettings SHORT_LEASE = ShardOwnerSettings.builder()
+                                                                            .setHoleExpiry(Duration.ofMillis(300))
+                                                                            .setSweepInterval(Duration.ofMillis(100))
+                                                                            .setPollBackstop(Duration.ofMillis(100))
+                                                                            .setLeaseTtl(LEASE_TTL)
+                                                                            .build();
 
     @Container
     static PostgreSQLContainer postgres = LabPostgres.create();

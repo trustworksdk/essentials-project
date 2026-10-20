@@ -44,12 +44,7 @@ class ShardOwnedSharedInstanceIdIT {
     /**
      * A 1 s lease, so the heartbeat runs every ~333 ms instead of every 10 s
      */
-    private static final ShardOwnerSettings SHORT_LEASE = new ShardOwnerSettings(500, 200,
-                                                                                Duration.ofMillis(1), Duration.ofMillis(2),
-                                                                                Duration.ofSeconds(10), Duration.ofMillis(500),
-                                                                                1_000, 8, Duration.ofMillis(500), Duration.ofSeconds(30), 2,
-                                                                                Duration.ofSeconds(5), Duration.ofSeconds(1), Duration.ofSeconds(60),
-                                                                                ShardOwnerSettings.DEFAULT_STUCK_HANDLER_TIMEOUT);
+    private static final ShardOwnerSettings SHORT_LEASE = ShardOwnerSettings.builder().setLeaseTtl(Duration.ofSeconds(1)).build();
 
     @Container
     static PostgreSQLContainer postgres = LabPostgres.create();

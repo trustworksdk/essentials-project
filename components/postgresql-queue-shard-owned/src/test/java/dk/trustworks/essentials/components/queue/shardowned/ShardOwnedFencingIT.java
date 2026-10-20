@@ -187,13 +187,9 @@ class ShardOwnedFencingIT {
 
     private static LeasedOwner owner(String lane, ShardOwnedStorage storage, ShardOwnedStorage.LeaseGrant grant, ShardOwnerMetrics metrics,
                                      AtomicInteger handled) {
-        var d = ShardOwnerSettings.defaults();
         // An acknowledgement batch size and flush interval no pump pass reaches, so the acknowledgement is still pending
         // when flushOnStop runs.
-        var settings = new ShardOwnerSettings(d.readBatchSize(), 1_000, Duration.ofDays(36_500), d.chaseDelay(), d.holeExpiry(),
-                                              d.sweepInterval(), d.maxHolesPerChase(), d.keyConcurrency(), d.pollBackstop(),
-                                              d.maxSweepInterval(), d.pumpThreads(), d.shedGrace(), d.leaseTtl(), d.watermarkCap(),
-                                              ShardOwnerSettings.DEFAULT_STUCK_HANDLER_TIMEOUT);
+        var settings = ShardOwnerSettings.builder().setAckBatchSize(1_000).setAckFlushInterval(Duration.ofDays(36_500)).build();
         var policy = RedeliveryPolicy.fixed(Duration.ofSeconds(1), 3);
         if ("ordered".equals(lane)) {
             return new OrderedShardOwner(storage, 0, grant.fence(), settings, (id, key, payload, type) -> handled.incrementAndGet(),
@@ -216,10 +212,12 @@ class ShardOwnedFencingIT {
     void a_working_owner_keeps_its_lease_alive() throws Exception {
         var received = new java.util.concurrent.CopyOnWriteArrayList<String>();
         // A lease TTL of 900ms, so several renewals must happen inside the test window.
-        var shortLease = new ShardOwnerSettings(500, 200, Duration.ofMillis(1), Duration.ofMillis(2),
-                                                Duration.ofMillis(300), Duration.ofMillis(100),
-                                                1_000, 8, Duration.ofMillis(50), Duration.ofSeconds(30), 2, Duration.ofSeconds(5), Duration.ofMillis(1000), Duration.ofSeconds(60),
-                                                ShardOwnerSettings.DEFAULT_STUCK_HANDLER_TIMEOUT);
+        var shortLease = ShardOwnerSettings.builder()
+                                           .setHoleExpiry(Duration.ofMillis(300))
+                                           .setSweepInterval(Duration.ofMillis(100))
+                                           .setPollBackstop(Duration.ofMillis(50))
+                                           .setLeaseTtl(Duration.ofMillis(1000))
+                                           .build();
 
         try (var queue = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "instance-1")) {
             queue.startConsuming((messageId, payload, payloadType) -> received.add(new String(payload, StandardCharsets.UTF_8)),
@@ -255,10 +253,12 @@ class ShardOwnedFencingIT {
     @ValueSource(strings = {"unordered", "ordered"})
     void a_serving_owners_unit_the_lease_check_finds_taken_is_counted_lost_once(String lane) throws Exception {
         // leaseTtl 1s: the heartbeat, and so the lease check, runs every 333 ms.
-        var shortLease = new ShardOwnerSettings(500, 200, Duration.ofMillis(1), Duration.ofMillis(2),
-                                                Duration.ofMillis(300), Duration.ofMillis(100),
-                                                1_000, 8, Duration.ofMillis(50), Duration.ofSeconds(30), 2, Duration.ofSeconds(5), Duration.ofMillis(1000), Duration.ofSeconds(60),
-                                                ShardOwnerSettings.DEFAULT_STUCK_HANDLER_TIMEOUT);
+        var shortLease = ShardOwnerSettings.builder()
+                                           .setHoleExpiry(Duration.ofMillis(300))
+                                           .setSweepInterval(Duration.ofMillis(100))
+                                           .setPollBackstop(Duration.ofMillis(50))
+                                           .setLeaseTtl(Duration.ofMillis(1000))
+                                           .build();
 
         try (var queue = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "instance-1")) {
             if ("ordered".equals(lane)) {

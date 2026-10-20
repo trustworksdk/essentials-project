@@ -157,12 +157,7 @@ class ShardOwnedCostDecompositionIT {
 
         var defaults = ShardOwnerSettings.defaults();
         var settings = step.perMessageAck()
-                       ? new ShardOwnerSettings(defaults.readBatchSize(), 1, Duration.ZERO,
-                                                defaults.chaseDelay(), defaults.holeExpiry(), defaults.sweepInterval(),
-                                                defaults.maxHolesPerChase(),
-                                                defaults.keyConcurrency(), defaults.pollBackstop(), Duration.ofSeconds(30), 2, Duration.ofSeconds(5), Duration.ofMillis(30000),
-                                                defaults.watermarkCap(),
-                                                ShardOwnerSettings.DEFAULT_STUCK_HANDLER_TIMEOUT)
+                       ? ShardOwnerSettings.builder().setAckBatchSize(1).setAckFlushInterval(Duration.ZERO).build()
                        : defaults;
 
         var handled = new AtomicInteger();

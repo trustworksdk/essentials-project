@@ -59,10 +59,12 @@ public final class ShardOwnedNodeMain {
         config.setMaximumPoolSize(20);
         var dataSource = new HikariDataSource(config);
 
-        var settings = new ShardOwnerSettings(500, 200, Duration.ofMillis(1), Duration.ofMillis(2),
-                                              Duration.ofMillis(300), Duration.ofMillis(100),
-                                              1_000, 8, Duration.ofMillis(50), Duration.ofSeconds(30), 2, Duration.ofSeconds(5), Duration.ofMillis(1000), Duration.ofSeconds(60),
-                                              ShardOwnerSettings.DEFAULT_STUCK_HANDLER_TIMEOUT);
+        var settings = ShardOwnerSettings.builder()
+                                         .setHoleExpiry(Duration.ofMillis(300))
+                                         .setSweepInterval(Duration.ofMillis(100))
+                                         .setPollBackstop(Duration.ofMillis(50))
+                                         .setLeaseTtl(Duration.ofMillis(1000))
+                                         .build();
 
         var queue = new ShardOwnedQueue(dataSource, QUEUE_ID, shardCount, instanceId);
         if ("ordered".equals(lane)) {

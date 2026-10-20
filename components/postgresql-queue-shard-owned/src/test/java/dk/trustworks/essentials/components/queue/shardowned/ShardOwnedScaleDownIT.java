@@ -78,15 +78,12 @@ class ShardOwnedScaleDownIT {
      * behaviour that is about rebalancing rather than about lease expiry.
      */
     private static ShardOwnerSettings fastLease() {
-        var defaults = ShardOwnerSettings.defaults();
-        return new ShardOwnerSettings(defaults.readBatchSize(), defaults.ackBatchSize(),
-                                      defaults.ackFlushInterval(), defaults.chaseDelay(),
-                                      Duration.ofMillis(300), Duration.ofMillis(100),
-                                      defaults.maxHolesPerChase(), defaults.keyConcurrency(),
-                                      Duration.ofMillis(50), Duration.ofSeconds(30),
-                                      defaults.pumpThreads(), defaults.shedGrace(),
-                                      Duration.ofSeconds(3), Duration.ofSeconds(60),
-                                      ShardOwnerSettings.DEFAULT_STUCK_HANDLER_TIMEOUT);
+        return ShardOwnerSettings.builder()
+                                 .setHoleExpiry(Duration.ofMillis(300))
+                                 .setSweepInterval(Duration.ofMillis(100))
+                                 .setPollBackstop(Duration.ofMillis(50))
+                                 .setLeaseTtl(Duration.ofSeconds(3))
+                                 .build();
     }
 
     @Test

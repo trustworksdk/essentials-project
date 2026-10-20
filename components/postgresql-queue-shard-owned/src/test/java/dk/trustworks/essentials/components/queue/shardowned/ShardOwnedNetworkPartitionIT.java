@@ -170,15 +170,7 @@ class ShardOwnedNetworkPartitionIT {
      * fence, not from this number.
      */
     private static ShardOwnerSettings shortLease() {
-        var defaults = ShardOwnerSettings.defaults();
-        return new ShardOwnerSettings(defaults.readBatchSize(), defaults.ackBatchSize(),
-                                      defaults.ackFlushInterval(), defaults.chaseDelay(),
-                                      defaults.holeExpiry(), defaults.sweepInterval(),
-                                      defaults.maxHolesPerChase(), defaults.keyConcurrency(),
-                                      defaults.pollBackstop(), defaults.maxSweepInterval(),
-                                      defaults.pumpThreads(), defaults.shedGrace(),
-                                      Duration.ofSeconds(3), defaults.watermarkCap(),
-                                      ShardOwnerSettings.DEFAULT_STUCK_HANDLER_TIMEOUT);
+        return ShardOwnerSettings.builder().setLeaseTtl(Duration.ofSeconds(3)).build();
     }
 
     private static HikariDataSource pool(String jdbcUrl) {

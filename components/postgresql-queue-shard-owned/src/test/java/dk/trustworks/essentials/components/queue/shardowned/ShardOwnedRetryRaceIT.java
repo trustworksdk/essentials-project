@@ -84,10 +84,12 @@ class ShardOwnedRetryRaceIT {
         // leaves the due entry in the schedule; and sweepFromHead runs regardless, because it has no
         // capacity check. Saturating the shard with slow filler messages is what keeps that ordering
         // happening over and over.
-        var settings = new ShardOwnerSettings(500, 200, Duration.ofMillis(1), Duration.ofMillis(2),
-                                              Duration.ofSeconds(10), Duration.ofMillis(20), 1_000,
-                                              4, Duration.ofMillis(20), Duration.ofSeconds(30), 1, Duration.ofSeconds(5), Duration.ofMillis(30000), Duration.ofSeconds(60),
-                                              ShardOwnerSettings.DEFAULT_STUCK_HANDLER_TIMEOUT);
+        var settings = ShardOwnerSettings.builder()
+                                         .setSweepInterval(Duration.ofMillis(20))
+                                         .setKeyConcurrency(4)
+                                         .setPollBackstop(Duration.ofMillis(20))
+                                         .setPumpThreads(1)
+                                         .build();
 
         var successes  = new CopyOnWriteArrayList<String>();
         var failedOnce = new ConcurrentHashMap<String, Boolean>();

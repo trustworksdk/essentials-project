@@ -391,11 +391,7 @@ class ShardPumpDeliveryFailureTest {
      */
     @Test
     void a_batched_read_hands_each_owner_the_row_limit_the_pump_read_it_with() throws InterruptedException {
-        var d = ShardOwnerSettings.defaults();
-        var pumpSettings = new ShardOwnerSettings(7, d.ackBatchSize(), d.ackFlushInterval(), d.chaseDelay(), d.holeExpiry(),
-                                                  d.sweepInterval(), d.maxHolesPerChase(), d.keyConcurrency(), d.pollBackstop(),
-                                                  d.maxSweepInterval(), d.pumpThreads(), d.shedGrace(), d.leaseTtl(), d.watermarkCap(),
-                                                  ShardOwnerSettings.DEFAULT_STUCK_HANDLER_TIMEOUT);
+        var pumpSettings = ShardOwnerSettings.builder().setReadBatchSize(7).build();
         var metrics = new ShardOwnerMetrics();
         var first   = new BatchStubOwner((short) 9, 0, metrics);
         var second  = new BatchStubOwner((short) 9, 1, metrics);

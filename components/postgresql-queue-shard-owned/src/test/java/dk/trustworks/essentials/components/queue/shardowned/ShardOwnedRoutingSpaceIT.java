@@ -243,15 +243,7 @@ class ShardOwnedRoutingSpaceIT {
 
     /** Short lease and heartbeat, so rebalancing across many instances converges inside the test. */
     private static ShardOwnerSettings fastLease() {
-        var defaults = ShardOwnerSettings.defaults();
-        return new ShardOwnerSettings(defaults.readBatchSize(), defaults.ackBatchSize(),
-                                      defaults.ackFlushInterval(), defaults.chaseDelay(),
-                                      defaults.holeExpiry(), defaults.sweepInterval(),
-                                      defaults.maxHolesPerChase(), defaults.keyConcurrency(),
-                                      defaults.pollBackstop(), defaults.maxSweepInterval(),
-                                      defaults.pumpThreads(), Duration.ofSeconds(2),
-                                      Duration.ofSeconds(2), defaults.watermarkCap(),
-                                      ShardOwnerSettings.DEFAULT_STUCK_HANDLER_TIMEOUT);
+        return ShardOwnerSettings.builder().setShedGrace(Duration.ofSeconds(2)).setLeaseTtl(Duration.ofSeconds(2)).build();
     }
 
     /**
