@@ -577,7 +577,9 @@ class ShardOwnedOrderedWatermarkIT {
         int pid;
         try (var statement = writer.prepareStatement("SELECT pg_backend_pid()");
              var resultSet = statement.executeQuery()) {
-            resultSet.next();
+            if (!resultSet.next()) {
+                throw new AssertionError("pg_backend_pid() returned no row");
+            }
             pid = resultSet.getInt(1);
         }
         try (var statement = observer.prepareStatement("SELECT backend_xid::text::bigint FROM pg_stat_activity WHERE pid = ? AND backend_xid IS NOT NULL")) {
