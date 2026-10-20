@@ -21,7 +21,6 @@ import dk.trustworks.essentials.components.queue.shardowned.spi.QueueObserver;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
-import java.util.function.*;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
@@ -386,9 +385,13 @@ public final class ShardOwnerMetrics {
 
     /**
      * Where {@link #keptUnitsInHandler()} reads from: one source per {@link ShardOwnedQueue} these metrics are given to,
-     * each counting its own kept units. A subscription's two lanes share these metrics, so both register.
+     * each counting its own kept units, from the queue's {@code start()} for as long as the queue is started or has a kept
+     * unit with a key in a handler ({@link KeptUnitsInHandlerSource#finished}). A subscription's two lanes share these
+     * metrics, so both register. A finished source is dropped by the next read of {@link #keptUnitsInHandler()} and the
+     * next registration: metrics shared through {@code ShardOwnedQueueBuilder.setMetrics} by queues built and closed over
+     * time hold the queues that run, or whose kept handler does, and not every queue ever built on them.
      */
-    private final List<IntSupplier> keptUnitsInHandlerSources = new CopyOnWriteArrayList<>();
+    private final Set<KeptUnitsInHandlerSource> keptUnitsInHandlerSources = ConcurrentHashMap.newKeySet();
 
     /**
      * Ordered units a stop kept because a key was still in its handler {@code shedGrace} after the stop began, and whose
@@ -417,17 +420,77 @@ public final class ShardOwnerMetrics {
     public int keptUnitsInHandler() {
         var count = 0;
         for (var source : keptUnitsInHandlerSources) {
-            count += source.getAsInt();
+            var kept = source.keptUnitsInHandler();
+            if (kept == 0 && !source.isStarted()) {
+                dropIfFinished(source);
+            } else {
+                count += kept;
+            }
         }
         return count;
     }
 
     /**
-     * Have {@link #keptUnitsInHandler()} count what {@code source} counts. Called by each {@link ShardOwnedQueue} these
-     * metrics are given to, once, as it is built.
+     * Have {@link #keptUnitsInHandler()} count what {@code source} counts, until {@code source} is
+     * {@link KeptUnitsInHandlerSource#finished finished}; first drop every source registered here that is finished by now.
+     * Called by a {@link ShardOwnedQueue} these metrics are given to whenever it may stop being finished: as its
+     * {@code start()} installs a run, as a stop writes the units it keeps, and as it adds a unit released with a key still in
+     * a handler - each time after the write, which is what makes the drop safe ({@link #dropIfFinished}). Registering a
+     * source already registered changes nothing.
      */
-    void countKeptUnitsInHandler(IntSupplier source) {
-        keptUnitsInHandlerSources.add(requireNonNull(source, "No source provided"));
+    void countKeptUnitsInHandler(KeptUnitsInHandlerSource source) {
+        requireNonNull(source, "No source provided");
+        for (var registered : keptUnitsInHandlerSources) {
+            if (!registered.equals(source) && registered.finished()) {
+                dropIfFinished(registered);
+            }
+        }
+        keptUnitsInHandlerSources.add(source);
+    }
+
+    /**
+     * Drop {@code source}, found {@link KeptUnitsInHandlerSource#finished finished}, and add it again should it no longer be
+     * finished once it is out. A queue registers after each write that may make it unfinished
+     * ({@link #countKeptUnitsInHandler}): a registration before the removal is followed by this second look, which sees
+     * the write, and one after it adds the source back itself. So no source is left out while it is started or counts a
+     * kept unit.
+     */
+    private void dropIfFinished(KeptUnitsInHandlerSource source) {
+        keptUnitsInHandlerSources.remove(source);
+        if (!source.finished()) {
+            keptUnitsInHandlerSources.add(source);
+        }
+    }
+
+    /**
+     * How many sources {@link #keptUnitsInHandler()} reads from now, read without dropping any - for a test to see that
+     * queues built and closed on these metrics do not stay registered.
+     */
+    int keptUnitsInHandlerSourceCount() {
+        return keptUnitsInHandlerSources.size();
+    }
+
+    /**
+     * What one {@link ShardOwnedQueue} adds to {@link #keptUnitsInHandler()}.
+     */
+    interface KeptUnitsInHandlerSource {
+        /**
+         * How many ordered units the queue keeps whose key is in a handler now.
+         */
+        int keptUnitsInHandler();
+
+        /**
+         * Whether the queue is started.
+         */
+        boolean isStarted();
+
+        /**
+         * Whether the queue is not started and counts no kept unit: a queue that stays so adds nothing to
+         * {@link #keptUnitsInHandler()} until it registers again.
+         */
+        default boolean finished() {
+            return !isStarted() && keptUnitsInHandler() == 0;
+        }
     }
 
     /**

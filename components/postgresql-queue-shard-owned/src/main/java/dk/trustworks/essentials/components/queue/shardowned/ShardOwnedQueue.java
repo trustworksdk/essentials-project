@@ -216,6 +216,21 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      */
     private final    Set<LeasedOwner>         releasedPastStuckHandler = ConcurrentHashMap.newKeySet();
     /**
+     * What this queue adds to {@link ShardOwnerMetrics#keptUnitsInHandler()}, one object for the life of the queue so the
+     * metrics can drop it and take it back ({@link #countKeptUnitsInHandlerInMetrics()}).
+     */
+    private final    ShardOwnerMetrics.KeptUnitsInHandlerSource keptUnitsInHandlerSource = new ShardOwnerMetrics.KeptUnitsInHandlerSource() {
+        @Override
+        public int keptUnitsInHandler() {
+            return ShardOwnedQueue.this.keptUnitsInHandler();
+        }
+
+        @Override
+        public boolean isStarted() {
+            return ShardOwnedQueue.this.isStarted();
+        }
+    };
+    /**
      * How many hand-backs of an ended run - {@link #handBackWithinBudget} on its budget thread
      * ({@link #withinShutdownBudget}) - are still running ({@link #handBackStillRunning()}): counted up by {@link #endRun}
      * before it starts the thread, and down by that thread once its work has returned or thrown. Not by the stop, which
@@ -341,8 +356,6 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         this.shardCount = shardCount;
         this.instanceId = requireNonNull(instanceId, "No instanceId provided");
         this.storage = new ShardOwnedStorage(dataSource, queueId);
-        // Last, once every field the count reads is set: the metrics may be read on another thread from here on.
-        metrics.countKeptUnitsInHandler(this::keptUnitsInHandler);
     }
 
     /**
@@ -527,6 +540,9 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             if (!currentRun.compareAndSet(null, run)) {
                 return;
             }
+            // After the run is installed, so the metrics, dropping this queue's source while it was stopped and counted
+            // nothing, see it started once it is out, or find it added back here (ShardOwnerMetrics.dropIfFinished).
+            countKeptUnitsInHandlerInMetrics();
             // Before this start registers the instance: the hand-back of an earlier stop of this queue, or a stop of the
             // other lane of the subscription, reading it from then on leaves the membership row to this run
             // (handBackWithinBudget). A deletion by this queue's own hand-back that read it before is waited for, up to
@@ -2505,6 +2521,17 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
     }
 
     /**
+     * Have {@link ShardOwnerMetrics#keptUnitsInHandler()} count this queue ({@link #keptUnitsInHandlerSource}). Called after
+     * each write that may leave this queue started or counting a kept unit: by {@link #start()} once it has installed its
+     * run, by {@link #endRun} once it has written {@link #keptOrderedOwners}, and as an owner is added to
+     * {@link #releasedPastStuckHandler}. Not as the queue is built: the metrics drop a source once its queue is stopped
+     * and counts nothing, so metrics shared by queues built and closed over time do not keep every one of them.
+     */
+    private void countKeptUnitsInHandlerInMetrics() {
+        metrics.countKeptUnitsInHandler(keptUnitsInHandlerSource);
+    }
+
+    /**
      * How many ordered units a stop of this queue kept still have a key in a handler ({@link #keptOrderedOwners}): what
      * this queue adds to {@link ShardOwnerMetrics#keptUnitsInHandler()}. A unit given up on and taken over
      * ({@link #reviewStuckKeptUnits()}) counts too while its old handler runs on, and so does one a shed or a dead pump's
@@ -2555,6 +2582,8 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         pruneReleasedPastStuckHandler();
         if (owner.inFlight() > 0) {
             releasedPastStuckHandler.add(owner);
+            // After the add: a tick of a run a stop has taken out may get here with the queue stopped and its source dropped.
+            countKeptUnitsInHandlerInMetrics();
         }
         log.warn("Instance {} released ordered unit {} on queue {} {} with {} key(s) {} still in a handler, the longest there {} ms, "
                          + "longer than stuckHandlerTimeout ({}), so those handlers were not waited for. Whoever "
@@ -3111,6 +3140,9 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         stillKept.addAll(returnedEarlier);
         stillKept.addAll(keptNow);
         keptOrderedOwners = List.copyOf(stillKept);
+        // After the write: the run is out of currentRun already, and the metrics may have dropped this queue's source,
+        // stopped and counting nothing, before these units were kept.
+        countKeptUnitsInHandlerInMetrics();
         // This run's own need for the membership row ends here, unless a unit is kept with its key still in a handler, or
         // one an earlier stop kept is still at STOP_FLUSHING: written before the hand-back reads the other lane's
         // (handBackWithinBudget), so of two lanes ending at once at least one reads the other's as ended.

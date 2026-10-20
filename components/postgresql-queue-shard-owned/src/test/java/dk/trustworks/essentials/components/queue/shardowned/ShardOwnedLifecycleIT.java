@@ -118,6 +118,82 @@ class ShardOwnedLifecycleIT {
         }
     }
 
+    /**
+     * Queues started and closed one after another on one {@link ShardOwnerMetrics} - shared through
+     * {@code ShardOwnedQueueBuilder.setMetrics} - leave no source of {@link ShardOwnerMetrics#keptUnitsInHandler()} behind.
+     * Every queue's constructor used to register one that nothing removed, so each closed queue stayed reachable from the
+     * metrics, and every read of the gauge went over all of them. Now the start of each queue drops the one closed before
+     * it, and a read drops the last.
+     */
+    @Test
+    void queues_started_and_closed_on_shared_metrics_leave_no_kept_units_source_behind() throws Exception {
+        var settings = settingsWithShedGrace(Duration.ofSeconds(1));
+        var metrics  = new ShardOwnerMetrics();
+        try (var runtime = new ShardRuntime(dataSource, settings)) {
+            for (var i = 0; i < 5; i++) {
+                try (var queue = ShardOwnedQueue.builder().setDataSource(dataSource).setQueueId(QUEUE_ID).setShardCount(SHARD_COUNT)
+                                                .setInstanceId("shared-metrics-" + i).setRuntime(runtime).setMetrics(metrics).build()) {
+                    startConsuming(queue, "unordered", settings);
+                    assertThat(metrics.keptUnitsInHandlerSourceCount()).as("the running queue alone, after %d closed before it", i)
+                                                                       .isEqualTo(1);
+                }
+            }
+        }
+
+        assertThat(metrics.keptUnitsInHandler()).isZero();
+        assertThat(metrics.keptUnitsInHandlerSourceCount()).as("no closed queue stays registered").isZero();
+    }
+
+    /**
+     * A read of {@link ShardOwnerMetrics#keptUnitsInHandler()} while a stop drains a held ordered handler finds the queue
+     * stopped (its run is out of {@code currentRun}) and counting nothing (the unit is not kept yet), so it drops the
+     * queue's source. Once the stop has kept the unit, the gauge counts it again, for as long as the handler runs: the stop
+     * registers the source again after it has written the units it keeps ({@code endRun}). Without that, the gauge read 0
+     * while the kept handler ran.
+     */
+    @Test
+    void a_unit_kept_by_a_stop_is_counted_though_a_read_during_the_drain_dropped_the_queues_source() throws Exception {
+        var entries  = new AtomicInteger();
+        var entered  = new CountDownLatch(1);
+        var release  = new CountDownLatch(1);
+        var settings = settingsWithShedGrace(Duration.ofSeconds(2));
+        try (var runtime = new ShardRuntime(dataSource, settings)) {
+            var queue = ShardOwnedQueue.builder().setDataSource(dataSource).setQueueId(QUEUE_ID).setShardCount(SHARD_COUNT)
+                                       .setInstanceId("kept-source-dropped-in-drain").setRuntime(runtime).build();
+            var metrics = queue.metrics();
+            try {
+                queue.startConsumingOrdered((messageId, key, payload, payloadType) -> {
+                    // The first delivery of the key holds its handler; a later one returns at once.
+                    if (entries.incrementAndGet() == 1) {
+                        entered.countDown();
+                        awaitQuietly(release);
+                    }
+                }, settings, SHARD_COUNT);
+                queue.enqueueOrdered(List.of(new ShardOwnedStorage.OrderedPayload("ACC-1", 0, "0".getBytes(StandardCharsets.UTF_8), 1)));
+                assertThat(entered.await(20, TimeUnit.SECONDS)).isTrue();
+
+                var stopping = CompletableFuture.runAsync(queue::stop);
+                Awaitility.await().atMost(Duration.ofSeconds(5)).until(() -> !queue.isStarted());
+                assertThat(metrics.keptUnitsInHandler()).as("premise: read during the drain, nothing is kept yet").isZero();
+                assertThat(metrics.keptUnitsInHandlerSourceCount()).as("premise: that read dropped the queue's source").isZero();
+                assertThat(stopping).as("premise: the stop is still draining the held handler").isNotDone();
+
+                stopping.get(10, TimeUnit.SECONDS);
+                assertThat(queue.keptOrderedUnitNotHandedBack()).as("premise: the stop kept the unit, its key in the handler").isTrue();
+                assertThat(metrics.keptUnitsInHandler()).as("the kept unit is counted while its handler runs").isEqualTo(1);
+
+                release.countDown();
+                Awaitility.await().atMost(Duration.ofSeconds(10))
+                          .untilAsserted(() -> assertThat(metrics.keptUnitsInHandler()).as("not once its handler has returned").isZero());
+            } finally {
+                release.countDown();
+                queue.stop();
+            }
+        } finally {
+            release.countDown();
+        }
+    }
+
     @Test
     void the_spi_queue_and_its_subscription_report_and_honour_their_lifecycle() throws Exception {
         var delivered = ConcurrentHashMap.<String>newKeySet();
