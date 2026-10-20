@@ -19,7 +19,9 @@ package dk.trustworks.essentials.components.queue.shardowned;
 import dk.trustworks.essentials.components.queue.shardowned.spi.QueueObserver;
 
 import java.util.*;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
+import java.util.function.*;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
@@ -380,6 +382,47 @@ public final class ShardOwnerMetrics {
     public final LongAdder     deliveryPauses                   = new LongAdder();
 
     /**
+     * Where {@link #keptUnitsInHandler()} reads from: one source per {@link ShardOwnedQueue} these metrics are given to,
+     * each counting its own kept units. A subscription's two lanes share these metrics, so both register.
+     */
+    private final List<IntSupplier> keptUnitsInHandlerSources = new CopyOnWriteArrayList<>();
+
+    /**
+     * Ordered units a stop kept because a key was still in its handler {@code shedGrace} after the stop began, and whose
+     * key is in that handler still: read now from the queues these metrics belong to, not counted up and down. Normally
+     * zero; above zero for as long as such a handler runs. While one does, no run of that queue takes the unit and a
+     * {@code PostgresqlMessageQueue} keeps the subscription's instance id out of use - until the handler has run longer
+     * than {@code stuckHandlerTimeout} ({@link ShardOwnerSettings}), after which a run of that queue - the one running then,
+     * or the next - or a subscription registering under the instance id takes the unit over, and the id is free again. A unit taken over that way still counts here while its old handler runs on, since that handler
+     * still holds a thread and may still be running the key beside its new owner. Alert on it staying above zero, next to
+     * {@link #shardsAwaitingTakeover}: {@code QueueHealth.unownedShards()} cannot see such a unit while this instance is
+     * live, as its lease row names it. A WARN names each unit, its keys and how long they have run, once its handler has
+     * run longer than {@code leaseTtl}, and then at most once a minute per unit, from each heartbeat or start of the
+     * queue, and each {@code consume()} of a {@code PostgresqlMessageQueue} waiting for the instance id, that finds it
+     * still in its handler: a queue stopped for good and asked by nothing logs no more of it, which this count still
+     * shows.
+     * <p>
+     * Readable only through {@link ShardOwnedQueue#metrics()} and {@link #snapshot()}: a {@code PostgresqlMessageQueue}
+     * keeps its metrics private, and no {@code QueueObserver} callback reports it, so for a queue used through
+     * {@code MessageQueue} the WARN is the signal.
+     */
+    public int keptUnitsInHandler() {
+        var count = 0;
+        for (var source : keptUnitsInHandlerSources) {
+            count += source.getAsInt();
+        }
+        return count;
+    }
+
+    /**
+     * Have {@link #keptUnitsInHandler()} count what {@code source} counts. Called by each {@link ShardOwnedQueue} these
+     * metrics are given to, once, as it is built.
+     */
+    void countKeptUnitsInHandler(IntSupplier source) {
+        keptUnitsInHandlerSources.add(requireNonNull(source, "No source provided"));
+    }
+
+    /**
      * Handler invocations that ran longer than {@code leaseTtl}.
      * <p>
      * Non-zero means the lease is shorter than the work: should this instance lose its liveness while
@@ -496,6 +539,7 @@ public final class ShardOwnerMetrics {
         snapshot.put("maxConcurrentKeys", maxConcurrentKeys.get());
         snapshot.put("surplusInstances", surplusInstances.get());
         snapshot.put("deliveryPauses", deliveryPauses.sum());
+        snapshot.put("keptUnitsInHandler", keptUnitsInHandler());
         snapshot.put("orderedReadStatements", orderedReadStatements.sum());
         snapshot.put("horizonProbes", horizonProbes.sum());
         snapshot.put("watermarkAdvances", watermarkAdvances.sum());

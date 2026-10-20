@@ -475,7 +475,8 @@ class ShardOwnedAdminSurfaceIT {
                                       defaults.maxHolesPerChase(), defaults.keyConcurrency(),
                                       defaults.pollBackstop(), defaults.maxSweepInterval(),
                                       defaults.pumpThreads(), defaults.shedGrace(),
-                                      Duration.ofSeconds(3), Duration.ofSeconds(60));
+                                      Duration.ofSeconds(3), Duration.ofSeconds(60),
+                                      ShardOwnerSettings.DEFAULT_STUCK_HANDLER_TIMEOUT);
     }
 
     /**

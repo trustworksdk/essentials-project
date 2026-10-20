@@ -250,7 +250,8 @@ class ShardOwnedRoutingSpaceIT {
                                       defaults.maxHolesPerChase(), defaults.keyConcurrency(),
                                       defaults.pollBackstop(), defaults.maxSweepInterval(),
                                       defaults.pumpThreads(), Duration.ofSeconds(2),
-                                      Duration.ofSeconds(2), defaults.watermarkCap());
+                                      Duration.ofSeconds(2), defaults.watermarkCap(),
+                                      ShardOwnerSettings.DEFAULT_STUCK_HANDLER_TIMEOUT);
     }
 
     /**

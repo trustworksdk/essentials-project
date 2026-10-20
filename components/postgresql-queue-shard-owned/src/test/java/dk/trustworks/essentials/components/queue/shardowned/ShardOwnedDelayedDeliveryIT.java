@@ -148,7 +148,8 @@ class ShardOwnedDelayedDeliveryIT {
         return new ShardOwnerSettings(d.readBatchSize(), d.ackBatchSize(), d.ackFlushInterval(), d.chaseDelay(),
                                       holeExpiry, d.sweepInterval(), d.maxHolesPerChase(), d.keyConcurrency(),
                                       d.pollBackstop(), d.maxSweepInterval(), d.pumpThreads(), d.shedGrace(),
-                                      d.leaseTtl(), d.watermarkCap());
+                                      d.leaseTtl(), d.watermarkCap(),
+                                      ShardOwnerSettings.DEFAULT_STUCK_HANDLER_TIMEOUT);
     }
 
     /**

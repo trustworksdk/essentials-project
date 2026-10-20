@@ -556,7 +556,8 @@ class ShardOwnedLifecycleIT {
         var defaults = ShardOwnerSettings.defaults();
         return new ShardOwnerSettings(defaults.readBatchSize(), defaults.ackBatchSize(), Duration.ofMillis(1), Duration.ofMillis(2),
                                       Duration.ofMillis(300), Duration.ofMillis(100), 1_000, 8,
-                                      Duration.ofMillis(50), Duration.ofSeconds(30), 2, shedGrace, Duration.ofMillis(1000), Duration.ofSeconds(60));
+                                      Duration.ofMillis(50), Duration.ofSeconds(30), 2, shedGrace, Duration.ofMillis(1000), Duration.ofSeconds(60),
+                                      ShardOwnerSettings.DEFAULT_STUCK_HANDLER_TIMEOUT);
     }
 
     private int orderedUnitsOwnedBy(String instanceId) throws Exception {
@@ -872,7 +873,8 @@ class ShardOwnedLifecycleIT {
         var base = settingsWithShedGrace(Duration.ofSeconds(1));
         return new ShardOwnerSettings(base.readBatchSize(), base.ackBatchSize(), base.ackFlushInterval(), base.chaseDelay(), base.holeExpiry(),
                                       Duration.ofSeconds(30), base.maxHolesPerChase(), base.keyConcurrency(), Duration.ofSeconds(30),
-                                      Duration.ofSeconds(30), base.pumpThreads(), base.shedGrace(), base.leaseTtl(), base.watermarkCap());
+                                      Duration.ofSeconds(30), base.pumpThreads(), base.shedGrace(), base.leaseTtl(), base.watermarkCap(),
+                                      ShardOwnerSettings.DEFAULT_STUCK_HANDLER_TIMEOUT);
     }
 
     /**

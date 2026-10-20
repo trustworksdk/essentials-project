@@ -119,6 +119,51 @@ class ShardOwnedQueueAutoConfigurationIT {
                 });
     }
 
+    /**
+     * The stuck-handler bound is on by default, settable for every queue, and settable per queue by name - a
+     * {@code DurableQueues} name such as {@code Inbox:orders} in brackets - with every other setting shared.
+     */
+    @Test
+    void the_stuck_handler_timeout_defaults_to_fifteen_minutes_and_can_be_set_for_all_queues_and_per_queue() {
+        runner().withPropertyValues("essentials.shard-owned-queue.queues.orders=2",
+                                    "essentials.shard-owned-queue.queues.reports=2")
+                .run(context -> {
+                    assertThat(context.getBean(ShardOwnerSettings.class).stuckHandlerTimeout()).isEqualTo(Duration.ofMinutes(15));
+                    assertThat(context.getBean(ShardOwnedQueueFactory.class).settingsFor(QueueName.of("orders")).stuckHandlerTimeout())
+                            .isEqualTo(Duration.ofMinutes(15));
+                });
+        runner().withPropertyValues("essentials.shard-owned-queue.queues.orders=2",
+                                    "essentials.shard-owned-queue.queues.reports=2",
+                                    "essentials.shard-owned-queue.lease-ttl=12s",
+                                    "essentials.shard-owned-queue.stuck-handler-timeout=20m",
+                                    "essentials.shard-owned-queue.stuck-handler-timeouts.reports=3h")
+                // Not withPropertyValues, which splits a pair at its first ':'.
+                .withInitializer(context -> context.getEnvironment().getPropertySources().addFirst(
+                        new org.springframework.core.env.MapPropertySource("inbox-timeout", java.util.Map.of(
+                                "essentials.shard-owned-queue.stuck-handler-timeouts.[Inbox:orders]", "2h"))))
+                .run(context -> {
+                    var settings = context.getBean(ShardOwnerSettings.class);
+                    var factory  = context.getBean(ShardOwnedQueueFactory.class);
+                    assertThat(settings.stuckHandlerTimeout()).as("every queue's").isEqualTo(Duration.ofMinutes(20));
+                    assertThat(factory.settingsFor(QueueName.of("orders"))).as("a queue not named per queue takes every queue's")
+                                                                         .isEqualTo(settings);
+                    assertThat(factory.settingsFor(QueueName.of("reports")))
+                            .as("a queue named per queue takes its own, every other setting shared")
+                            .isEqualTo(settings.withStuckHandlerTimeout(Duration.ofHours(3)));
+                    assertThat(factory.settingsFor(QueueName.of("Inbox:orders")).stuckHandlerTimeout())
+                            .as("a name relaxed binding would mangle, in brackets").isEqualTo(Duration.ofHours(2));
+                    assertThat(factory.settingsFor(QueueName.of("reports")).leaseTtl()).isEqualTo(Duration.ofSeconds(12));
+                });
+    }
+
+    @Test
+    void a_stuck_handler_timeout_that_is_not_positive_fails_the_context() {
+        runner().withPropertyValues("essentials.shard-owned-queue.stuck-handler-timeouts.reports=0s")
+                .run(context -> assertThat(context).hasFailed());
+        runner().withPropertyValues("essentials.shard-owned-queue.stuck-handler-timeout=0s")
+                .run(context -> assertThat(context).hasFailed());
+    }
+
     @Test
     void a_pool_the_pumps_would_exhaust_fails_the_context() {
         // The default two pumps and the listener hold three connections permanently; a pool of three

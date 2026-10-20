@@ -71,7 +71,8 @@ class ShardOwnedWatermarkXidWindowIT {
                                                                               2,
                                                                               Duration.ofSeconds(5),
                                                                               Duration.ofSeconds(30),
-                                                                              Duration.ofSeconds(30));  // watermarkCap
+                                                                              Duration.ofSeconds(30),
+                                                                              ShardOwnerSettings.DEFAULT_STUCK_HANDLER_TIMEOUT);  // watermarkCap
 
     @Container
     static PostgreSQLContainer postgres = LabPostgres.create();

@@ -66,7 +66,8 @@ class ShardOwnedOrderedIdleCostIT {
                                    1_000, 8, Duration.ofMillis(500),
                                    SWEEP,                    // maxSweepInterval: no backoff
                                    2, Duration.ofSeconds(5), Duration.ofSeconds(30),
-                                   Duration.ofSeconds(60));
+                                   Duration.ofSeconds(60),
+                                   ShardOwnerSettings.DEFAULT_STUCK_HANDLER_TIMEOUT);
 
     @Container
     static PostgreSQLContainer postgres = LabPostgres.create();

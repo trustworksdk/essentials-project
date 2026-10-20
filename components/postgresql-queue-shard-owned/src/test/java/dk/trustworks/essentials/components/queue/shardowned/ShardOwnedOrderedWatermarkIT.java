@@ -72,7 +72,8 @@ class ShardOwnedOrderedWatermarkIT {
                                                                              2,
                                                                              Duration.ofSeconds(5),
                                                                              Duration.ofSeconds(30),
-                                                                             Duration.ofSeconds(30));  // watermarkCap
+                                                                             Duration.ofSeconds(30),
+                                                                             ShardOwnerSettings.DEFAULT_STUCK_HANDLER_TIMEOUT);  // watermarkCap
 
     @Container
     static PostgreSQLContainer postgres = LabPostgres.create();
@@ -673,7 +674,8 @@ class ShardOwnedOrderedWatermarkIT {
     private static ShardOwnerSettings byHand(int readBatchSize, Duration watermarkCap) {
         return new ShardOwnerSettings(readBatchSize, 1_000, Duration.ofDays(36_500), Duration.ofMillis(2), Duration.ofMillis(200),
                                       Duration.ofSeconds(20), 1_000, 8, Duration.ofMillis(500), Duration.ofSeconds(20), 2,
-                                      Duration.ofSeconds(5), Duration.ofSeconds(30), watermarkCap);
+                                      Duration.ofSeconds(5), Duration.ofSeconds(30), watermarkCap,
+                                      ShardOwnerSettings.DEFAULT_STUCK_HANDLER_TIMEOUT);
     }
 
     /**

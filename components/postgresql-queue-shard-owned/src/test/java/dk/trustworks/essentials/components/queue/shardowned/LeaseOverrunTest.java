@@ -34,7 +34,8 @@ class LeaseOverrunTest {
         return new ShardOwnerSettings(d.readBatchSize(), d.ackBatchSize(), d.ackFlushInterval(), d.chaseDelay(),
                                       d.holeExpiry(), d.sweepInterval(), d.maxHolesPerChase(), d.keyConcurrency(),
                                       d.pollBackstop(), d.maxSweepInterval(), d.pumpThreads(), d.shedGrace(),
-                                      leaseTtl, d.watermarkCap());
+                                      leaseTtl, d.watermarkCap(),
+                                      ShardOwnerSettings.DEFAULT_STUCK_HANDLER_TIMEOUT);
     }
 
     @Test

@@ -18,6 +18,8 @@ package dk.trustworks.essentials.components.queue.shardowned;
 
 import java.time.Duration;
 
+import static dk.trustworks.essentials.shared.FailFast.*;
+
 /**
  * Tuning for a {@link ShardOwner}. A record, so being wide is its job.
  *
@@ -73,6 +75,24 @@ import java.time.Duration;
  *                         the lane indefinitely. Setting it as low as {@code holeExpiry} throws away the
  *                         exactness the watermark is for and reproduces the mechanism it replaced.
  *                         Advances that need it are counted as {@code watermarkCapped}
+ * @param stuckHandlerTimeout how long a message may be in its handler before this queue treats the handler as stuck
+ *                         and stops waiting for it. Default 15 minutes ({@link #DEFAULT_STUCK_HANDLER_TIMEOUT}); set it
+ *                         above the longest time a handler of this queue really takes, as {@code messageHandlingTimeout}
+ *                         is set for the classic {@code DurableQueues}. Must be positive. There is no off switch: a
+ *                         value longer than the process will run gives the behaviour from before this setting existed.
+ *                         <p>
+ *                         Applied to one wait today: an ordered unit a stop kept because a key was still in its handler
+ *                         {@code shedGrace} after the stop began. Without the bound, a later run of the same queue, and
+ *                         a {@code PostgresqlMessageQueue} {@code consume()} wanting that subscription's instance id,
+ *                         wait for that handler to return for as long as it runs, so a handler that never returns
+ *                         leaves the unit unserved, and the instance id out of use, until the process restarts.
+ *                         Once the key has been in its handler longer than this, they stop waiting: the next run
+ *                         takes the unit over under a new fence, as from an owner that did not let go of it. The
+ *                         handler's acknowledgement is then refused, its message delivered again with an attempt
+ *                         charged, and that key may run in two handlers at once - the hung one and the new one - which
+ *                         is the at-least-once the bound trades the stuck unit for. A kept unit is reported at WARN
+ *                         once its handler has run longer than {@code leaseTtl}, at most once a minute per unit, and
+ *                         counted in {@code ShardOwnerMetrics.keptUnitsInHandler()}
  */
 public record ShardOwnerSettings(int readBatchSize,
                                  int ackBatchSize,
@@ -87,7 +107,52 @@ public record ShardOwnerSettings(int readBatchSize,
                                  int pumpThreads,
                                  Duration shedGrace,
                                  Duration leaseTtl,
-                                 Duration watermarkCap) {
+                                 Duration watermarkCap,
+                                 Duration stuckHandlerTimeout) {
+
+    /**
+     * The {@code stuckHandlerTimeout} a queue gets unless it is given another: 15 minutes.
+     */
+    public static final Duration DEFAULT_STUCK_HANDLER_TIMEOUT = Duration.ofMinutes(15);
+
+    public ShardOwnerSettings {
+        requireNonNull(stuckHandlerTimeout, "No stuckHandlerTimeout provided");
+        requireTrue(stuckHandlerTimeout.isPositive(), "stuckHandlerTimeout must be positive");
+    }
+
+    /**
+     * The settings before {@code stuckHandlerTimeout} existed, with that one at its default
+     * ({@link #DEFAULT_STUCK_HANDLER_TIMEOUT}).
+     *
+     * @deprecated use {@link #builder()}, which starts from {@link #defaults()}, or the canonical constructor, which takes
+     * {@code stuckHandlerTimeout} as well
+     */
+    @Deprecated(forRemoval = true, since = "0.60.1")
+    public ShardOwnerSettings(int readBatchSize,
+                              int ackBatchSize,
+                              Duration ackFlushInterval,
+                              Duration chaseDelay,
+                              Duration holeExpiry,
+                              Duration sweepInterval,
+                              int maxHolesPerChase,
+                              int keyConcurrency,
+                              Duration pollBackstop,
+                              Duration maxSweepInterval,
+                              int pumpThreads,
+                              Duration shedGrace,
+                              Duration leaseTtl,
+                              Duration watermarkCap) {
+        this(readBatchSize, ackBatchSize, ackFlushInterval, chaseDelay, holeExpiry, sweepInterval, maxHolesPerChase,
+             keyConcurrency, pollBackstop, maxSweepInterval, pumpThreads, shedGrace, leaseTtl, watermarkCap,
+             DEFAULT_STUCK_HANDLER_TIMEOUT);
+    }
+
+    /**
+     * A builder starting from {@link #defaults()}: set only the settings that differ.
+     */
+    public static ShardOwnerSettingsBuilder builder() {
+        return new ShardOwnerSettingsBuilder();
+    }
 
     public static ShardOwnerSettings defaults() {
         return new ShardOwnerSettings(500,
@@ -103,7 +168,18 @@ public record ShardOwnerSettings(int readBatchSize,
                                       2,
                                       Duration.ofSeconds(5),
                                       Duration.ofSeconds(30),
-                                      Duration.ofSeconds(60));
+                                      Duration.ofSeconds(60),
+                                      DEFAULT_STUCK_HANDLER_TIMEOUT);
+    }
+
+    /**
+     * These settings with another {@code stuckHandlerTimeout}: how one queue is given its own bound while every other
+     * setting stays shared, as the Spring starter does for {@code essentials.shard-owned-queue.stuck-handler-timeouts}.
+     */
+    public ShardOwnerSettings withStuckHandlerTimeout(Duration stuckHandlerTimeout) {
+        return new ShardOwnerSettings(readBatchSize, ackBatchSize, ackFlushInterval, chaseDelay, holeExpiry, sweepInterval,
+                                      maxHolesPerChase, keyConcurrency, pollBackstop, maxSweepInterval, pumpThreads,
+                                      shedGrace, leaseTtl, watermarkCap, stuckHandlerTimeout);
     }
 
     /**

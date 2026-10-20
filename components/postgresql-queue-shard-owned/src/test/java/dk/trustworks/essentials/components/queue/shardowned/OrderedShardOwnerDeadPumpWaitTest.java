@@ -40,7 +40,7 @@ class OrderedShardOwnerDeadPumpWaitTest {
     @Test
     void the_wait_is_timed_from_the_death_not_from_the_first_heartbeat_that_asks() throws Exception {
         var owner = owner();
-        keysInFlight(owner).add("HOLD");
+        keysInFlight(owner).put("HOLD", System.nanoTime());
 
         // The pump ends the owner as it dies.
         owner.beginDraining();
@@ -60,7 +60,7 @@ class OrderedShardOwnerDeadPumpWaitTest {
     @Test
     void within_the_grace_since_the_death_nothing_is_reported() throws Exception {
         var owner = owner();
-        keysInFlight(owner).add("HOLD");
+        keysInFlight(owner).put("HOLD", System.nanoTime());
 
         owner.beginDraining();
 
@@ -70,7 +70,7 @@ class OrderedShardOwnerDeadPumpWaitTest {
     @Test
     void an_owner_that_never_began_draining_is_timed_from_the_first_ask() throws Exception {
         var owner = owner();
-        keysInFlight(owner).add("HOLD");
+        keysInFlight(owner).put("HOLD", System.nanoTime());
 
         var beforeFirstAsk = System.nanoTime();
         assertThat(owner.stuckOnDeadPump()).as("the first ask starts the clock").isEmpty();
@@ -87,7 +87,8 @@ class OrderedShardOwnerDeadPumpWaitTest {
         var d = ShardOwnerSettings.defaults();
         var settings = new ShardOwnerSettings(d.readBatchSize(), d.ackBatchSize(), d.ackFlushInterval(), d.chaseDelay(), d.holeExpiry(),
                                               d.sweepInterval(), d.maxHolesPerChase(), d.keyConcurrency(), d.pollBackstop(),
-                                              d.maxSweepInterval(), d.pumpThreads(), SHED_GRACE, d.leaseTtl(), d.watermarkCap());
+                                              d.maxSweepInterval(), d.pumpThreads(), SHED_GRACE, d.leaseTtl(), d.watermarkCap(),
+                                              ShardOwnerSettings.DEFAULT_STUCK_HANDLER_TIMEOUT);
         // Nothing here touches the database: stuckOnDeadPump and beginDraining are in-memory.
         var noDatabase = (DataSource) Proxy.newProxyInstance(DataSource.class.getClassLoader(), new Class<?>[]{DataSource.class},
                                                              (proxy, method, args) -> {
@@ -103,10 +104,10 @@ class OrderedShardOwnerDeadPumpWaitTest {
      * hand-back up, and reaching it through dispatch would need a database read.
      */
     @SuppressWarnings("unchecked")
-    private static Set<String> keysInFlight(OrderedShardOwner owner) throws Exception {
+    private static Map<String, Long> keysInFlight(OrderedShardOwner owner) throws Exception {
         var field = OrderedShardOwner.class.getDeclaredField("keysInFlight");
         field.setAccessible(true);
-        return (Set<String>) field.get(owner);
+        return (Map<String, Long>) field.get(owner);
     }
 
     private static void sleepAtLeast(long sinceNanos, Duration duration) {

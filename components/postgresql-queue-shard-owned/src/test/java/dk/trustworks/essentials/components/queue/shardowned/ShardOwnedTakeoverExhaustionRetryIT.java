@@ -260,7 +260,8 @@ class ShardOwnedTakeoverExhaustionRetryIT {
                                                        defaults.holeExpiry(), defaults.sweepInterval(), defaults.maxHolesPerChase(),
                                                        defaults.keyConcurrency(), defaults.pollBackstop(), defaults.maxSweepInterval(),
                                                        defaults.pumpThreads(), defaults.shedGrace(), defaults.leaseTtl(),
-                                                       defaults.watermarkCap());
+                                                       defaults.watermarkCap(),
+                                                       ShardOwnerSettings.DEFAULT_STUCK_HANDLER_TIMEOUT);
         var failing = new ShardOwner(storage, SHARD, storage.acquireLease("unordered", SHARD, OWNER, 60_000).orElseThrow(),
                                      defaults, (id, payload, type) -> { }, failingMetrics,
                                      RedeliveryPolicy.fixed(Duration.ofSeconds(1), MAX_ATTEMPTS), new ShardWakeup(pump.wakeup()), OWNER,

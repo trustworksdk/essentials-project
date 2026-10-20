@@ -252,7 +252,8 @@ class ShardOwnedQueueIT {
         var shortLease = new ShardOwnerSettings(500, 200,
                                                 Duration.ofMillis(1), Duration.ofMillis(2),
                                                 Duration.ofMillis(300), Duration.ofMillis(100),
-                                                1_000, 8, Duration.ofMillis(100), Duration.ofSeconds(30), 2, Duration.ofSeconds(5), Duration.ofMillis(1000), Duration.ofSeconds(60));
+                                                1_000, 8, Duration.ofMillis(100), Duration.ofSeconds(30), 2, Duration.ofSeconds(5), Duration.ofMillis(1000), Duration.ofSeconds(60),
+                                                ShardOwnerSettings.DEFAULT_STUCK_HANDLER_TIMEOUT);
         first.startConsuming((messageId, payload, payloadType) -> {
             firstReceived.add(new String(payload, StandardCharsets.UTF_8));
             try {

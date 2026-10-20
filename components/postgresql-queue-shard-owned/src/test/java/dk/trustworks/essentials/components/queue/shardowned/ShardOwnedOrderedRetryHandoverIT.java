@@ -96,7 +96,8 @@ class ShardOwnedOrderedRetryHandoverIT {
         return new ShardOwnerSettings(500, 200, Duration.ofMillis(1), Duration.ofMillis(2),
                                       Duration.ofMillis(300), Duration.ofMillis(100), 1_000, 8,
                                       Duration.ofMillis(50), Duration.ofMillis(200), 2, Duration.ofSeconds(5),
-                                      Duration.ofMillis(1000), Duration.ofSeconds(60));
+                                      Duration.ofMillis(1000), Duration.ofSeconds(60),
+                                      ShardOwnerSettings.DEFAULT_STUCK_HANDLER_TIMEOUT);
     }
 
     private static RedeliveryPolicy policy() {

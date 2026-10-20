@@ -198,7 +198,9 @@ public class ShardOwnedQueueAutoConfiguration {
         return new ShardOwnedQueueFactory(dataSource, runtime, settings, instanceId, initializer,
                                           interceptors.orderedStream().toList(),
                                           observers.orderedStream().toList(),
-                                          metrics.orderedStream().toList());
+                                          metrics.orderedStream().toList())
+                // Per queue, on top of the shared settings' essentials.shard-owned-queue.stuck-handler-timeout.
+                .setStuckHandlerTimeouts(properties.getStuckHandlerTimeouts());
     }
 
     /**

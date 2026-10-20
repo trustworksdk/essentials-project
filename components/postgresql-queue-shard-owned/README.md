@@ -195,7 +195,7 @@ Re-registering a name with a *different* shard count is refused rather than acce
 |---|---|
 | `consume(handler, options)` | Registers a consumer and starts it. Returns a `Subscription`. A `consume()` made while no subscription is registered also starts the queue; any other, like `Subscription.start()`, starts its own consumer only and leaves the queue as it is, so after a `stop()` the queue's `start()` still restarts the others |
 | `start()` | Starts the consumers of every subscription still registered — after a `stop()`, the ones it stopped, including a subscription stopped on its own with `Subscription.stop()`. It does this only while `isStarted()` reads false; on a queue marked started it returns at once. An unsubscribed subscription is no longer registered and is never started again. A queue that has never consumed has nothing to start |
-| `stop()` | Stops every registered consumer, whether `isStarted()` reads true or not: dispatches nothing new, **waits up to `shedGrace` for handlers already running** and acknowledges them, then **releases the shard leases** so a successor picks them up immediately rather than waiting the lease out. An ordered unit with a key still in a handler after the grace is kept instead, so no successor starts that key while it runs: another instance can take it only once this instance's liveness lapses. Once the handler has returned the unit is handed back — its acknowledgement flushed and its lease released, whether or not the queue runs again — so whichever instance takes it next charges no attempt and does not deliver the handled message again; a hand-back that fails (a database error) is retried once the queue runs again. A `start()` meanwhile leaves that unit alone until it has been handed back, and may take it after that (no key of the unit is delivered until then). They stay registered, so `start()` brings them back. **If a `consume()`/`start()` is still doing its database work, `stop()` does not wait for it past about 4 s** (2 s on a `ShardOwnedQueue`; on an interrupted thread not at all): it returns with `isStarted()` false and logs a WARN, and that start releases the leases and deregisters the instance only once its statements return, which nothing bounds but the driver's `socketTimeout`. Closing the `DataSource` before that start returns makes the release fail — the case a Spring shutdown is most likely to hit, since it closes the pool once `stop()` has returned. Under a partition, or after a failed release, the units stay unserved as after a crash: a successor takes them only once this instance's membership row is older than `leaseTtl`. Set `socketTimeout` on the pool ([Prerequisites](#prerequisites)) |
+| `stop()` | Stops every registered consumer, whether `isStarted()` reads true or not: dispatches nothing new, **waits up to `shedGrace` for handlers already running** and acknowledges them, then **releases the shard leases** so a successor picks them up immediately rather than waiting the lease out. An ordered unit with a key still in a handler after the grace is kept instead, so no successor starts that key while it runs: another instance can take it only once this instance's liveness lapses. Once the handler has returned the unit is handed back — its acknowledgement flushed and its lease released, whether or not the queue runs again — so whichever instance takes it next charges no attempt and does not deliver the handled message again; a hand-back that fails (a database error) is retried once the queue runs again. A `start()` meanwhile leaves that unit alone until it has been handed back, and may take it after that (no key of the unit is delivered until then) — unless the key has been in its handler longer than `stuckHandlerTimeout` (default 15 min): then the restarted queue stops waiting and takes the unit over under a new fence, and that key may run in two handlers at once ([Configuration Reference](#configuration-reference)). They stay registered, so `start()` brings them back. **If a `consume()`/`start()` is still doing its database work, `stop()` does not wait for it past about 4 s** (2 s on a `ShardOwnedQueue`; on an interrupted thread not at all): it returns with `isStarted()` false and logs a WARN, and that start releases the leases and deregisters the instance only once its statements return, which nothing bounds but the driver's `socketTimeout`. Closing the `DataSource` before that start returns makes the release fail — the case a Spring shutdown is most likely to hit, since it closes the pool once `stop()` has returned. Under a partition, or after a failed release, the units stay unserved as after a crash: a successor takes them only once this instance's membership row is older than `leaseTtl`. Set `socketTimeout` on the pool ([Prerequisites](#prerequisites)) |
 | `close()` | The queue's `stop()`: its subscriptions stay registered. Not to be confused with `Subscription.close()`, which ends one subscription as `Subscription.unsubscribe()` does |
 | `isStarted()` | Whether the queue is marked started — by `start()` or by a `consume()` made while no subscription is registered — not whether anything runs. After a `stop()`, a `Subscription.start()` or a later `consume()` runs that subscription's consumers while `isStarted()` reads false |
 
@@ -213,7 +213,8 @@ lets go of a subscription and consumes anew must unsubscribe it first (see
 is free only once both have passed: when the stop kept an ordered unit, because a key was still in
 its handler past `shedGrace`, the id stays out of use until that handler has returned and the unit has
 been handed back (its acknowledgement flushed, its lease released; a `consume()` retries a hand-back that
-failed before it picks an id), as until then that unit's lease
+failed before it picks an id), or until that handler has been running longer than the queue's
+`stuckHandlerTimeout`, as until then that unit's lease
 names the id and a subscription under it would take the unit at once; and when the stop gave up waiting for its lanes' hand-back to the database (releasing the
 leases and deregistering the id, which the stop stops waiting for after 2 s when the database does
 not answer, and at once on an interrupted thread), the id stays out of use until that hand-back has
@@ -563,6 +564,7 @@ every queue once with a user that has them.
 | `watermarkCap` | 60 s | **Ordered lane only.** How long one long-running *write* transaction may pin the lane before the cursor is forced past it — which can skip that transaction's messages | Leave it. An escape hatch, not a tuning knob; if it fires, fix the long transaction |
 | `leaseTtl` | 30 s | How long a shard stays unserved if its owner dies without releasing. The heartbeat renews at a third of it | Lower for faster failover, but not below your worst stop-the-world pause, and **well above your slowest handler** — a handler longer than the lease is what lets a liveness lapse put a key in two handlers at once (`handlersOutlastingLease`) |
 | `shedGrace` | 5 s | How long an ordered shard waits to drain before abandoning a hand-over, and how long `stop()` waits for handlers in flight | Raise if handlers are slow and rebalancing stalls, or if `stop()` keeps ordered units |
+| `stuckHandlerTimeout` | 15 min | How long a message may be in its handler before the queue treats the handler as stuck and stops waiting for it. Applied to one wait: an ordered unit a `stop()` kept because a key was still in its handler | **Behaviour change in 0.60.1**: in 0.60.0 a restart took the kept unit back at once; now it waits for the handler up to this bound, then takes the unit over. Set it above the longest time a handler of the queue really takes, as `messageHandlingTimeout` is set for `postgresql-queue`; per queue with `settings.withStuckHandlerTimeout(...)` on that queue's builder, or `essentials.shard-owned-queue.stuck-handler-timeouts.<queue>` in the starter. Must be positive; there is no off switch |
 
 `watermarkCap` and `holeExpiry` answer the same question for different lanes, and are deliberately
 separate settings with an order of magnitude between them. The ordered lane resolves a gap *exactly*
@@ -817,6 +819,26 @@ every failed attempt is logged at DEBUG, and an INFO for each shard when it reco
 `ShardOwnerMetrics` private. Through `MessageQueue` (and the Spring starter and the `DurableQueues` adapter
 built on it) the same stall reaches `QueueObserver.takeoverStalled`, once when it starts and once when it
 ends, which `MicrometerQueueObserver` publishes as `essentials.queue.shards.awaiting.takeover`.
+
+**`stuckHandlerTimeout` and `ShardOwnerMetrics.keptUnitsInHandler()`.** A `stop()` keeps an ordered unit
+whose key is still in its handler `shedGrace` after the stop began, so no successor starts that key
+while it runs. A restart of the queue, and a `consume()` wanting the stopped subscription's instance id,
+wait for that handler. **Without a bound, a handler that never returns leaves that unit unserved - and
+the instance id out of use - until the process restarts**: the instance stays registered and
+heartbeats, so no other instance takes the unit either. `stuckHandlerTimeout` (default 15 minutes, per
+queue) is that bound: once the key has been in its handler longer, the restarted queue (or the
+`consume()`) stops waiting and takes the unit over under a new fence. The stuck handler's
+acknowledgement is refused and its message delivered again with an attempt charged - one attempt per
+takeover of a kept unit; a message that hangs again in the owner that took it over is not bounded by
+this, as the bound covers only units a stop kept - and **that key may run in two handlers at once**,
+the stuck one and the new one. That is the at-least-once trade the bound makes; set it
+above the longest time a handler of the queue really takes. Once a kept key has been in its handler
+longer than `leaseTtl`, the engine logs a WARN naming the queue, the unit, the key(s), how long they
+have run and the bound, at most once a minute per unit, and one more WARN when it stops waiting.
+`keptUnitsInHandler()` (also in `snapshot()`) counts the kept units whose key is in its handler now:
+normally zero, so alert on it staying above zero. A unit taken over at the bound still counts while
+its stuck handler runs on. Like the counters below, it is readable only through
+`ShardOwnedQueue.metrics()`; through `MessageQueue` the WARN is the signal.
 
 **`ShardOwnerMetrics.pumpFailures`, `batchedReadFailures`, `pumpLoopFailures` and `shardsOnDeadPumps`.**
 Each covers a shard that is leased but delivers nothing for a reason other than a stalled takeover, which

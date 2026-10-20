@@ -177,7 +177,8 @@ class ShardOwnedNetworkPartitionIT {
                                       defaults.maxHolesPerChase(), defaults.keyConcurrency(),
                                       defaults.pollBackstop(), defaults.maxSweepInterval(),
                                       defaults.pumpThreads(), defaults.shedGrace(),
-                                      Duration.ofSeconds(3), defaults.watermarkCap());
+                                      Duration.ofSeconds(3), defaults.watermarkCap(),
+                                      ShardOwnerSettings.DEFAULT_STUCK_HANDLER_TIMEOUT);
     }
 
     private static HikariDataSource pool(String jdbcUrl) {

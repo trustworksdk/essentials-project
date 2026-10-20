@@ -161,7 +161,8 @@ class ShardOwnedCostDecompositionIT {
                                                 defaults.chaseDelay(), defaults.holeExpiry(), defaults.sweepInterval(),
                                                 defaults.maxHolesPerChase(),
                                                 defaults.keyConcurrency(), defaults.pollBackstop(), Duration.ofSeconds(30), 2, Duration.ofSeconds(5), Duration.ofMillis(30000),
-                                                defaults.watermarkCap())
+                                                defaults.watermarkCap(),
+                                                ShardOwnerSettings.DEFAULT_STUCK_HANDLER_TIMEOUT)
                        : defaults;
 
         var handled = new AtomicInteger();

@@ -173,6 +173,34 @@ public class ShardOwnedQueueProperties {
      * advancing past it. Deliberately far above {@code holeExpiry} — see {@link ShardOwnerSettings}.
      */
     private Duration watermarkCap = Duration.ofSeconds(60);
+    /**
+     * How long a message may be in its handler before the queue treats the handler as stuck and stops waiting for it.
+     * Default 15 minutes: set it above the longest time a handler really takes, as
+     * {@code essentials.durable-queues.message-handling-timeout} is set for the classic durable queues. Must be positive.
+     * Applies to every queue but those named in {@code stuck-handler-timeouts}.
+     * <p>
+     * Applied to one wait: an ordered unit a stop kept because a key was still in its handler {@code shed-grace} after the
+     * stop began. Without the bound, a restart of that queue - and a new subscription wanting the old one's instance id -
+     * waits for that handler for as long as it runs, so a handler that never returns leaves the unit unserved until the
+     * process restarts. Past the bound the queue takes the unit over under a new fence: the stuck handler's
+     * acknowledgement is refused and its message delivered again, so that key may run in two handlers at once.
+     * <p>
+     * <b>A behaviour change from 0.60.0,</b> where a restart took the kept unit back at once: it now waits for the handler
+     * up to this bound, then takes the unit over. A queue whose handlers legitimately run longer than 15 minutes must
+     * raise it, for that queue in {@code stuck-handler-timeouts} or for all here.
+     */
+    // Literal, not ShardOwnerSettings.DEFAULT_STUCK_HANDLER_TIMEOUT, so the configuration metadata carries the default:
+    // the processor reads an initializer it can evaluate, not a constant of another class. ShardOwnedQueuePropertiesTest
+    // keeps the two equal.
+    private Duration stuckHandlerTimeout = Duration.ofMinutes(15);
+    /**
+     * Per-queue {@code stuck-handler-timeout}, as {@code name: duration}, for a queue whose handlers run longer (or
+     * shorter) than the rest. A name absent here gets {@code stuck-handler-timeout}. Keyed by the queue's name - for a
+     * queue the {@code DurableQueues} adapter uses, the framework's name, such as {@code Inbox:orders}; a name with
+     * characters relaxed binding would drop, such as {@code :}, goes in brackets:
+     * {@code stuck-handler-timeouts.[Inbox:orders]: 2h}.
+     */
+    private Map<String, Duration> stuckHandlerTimeouts = new LinkedHashMap<>();
 
     /**
      * Micrometer meters per queue, under {@code essentials.shard-owned-queue.metrics}.
@@ -253,7 +281,23 @@ public class ShardOwnedQueueProperties {
         return new ShardOwnerSettings(readBatchSize, ackBatchSize, ackFlushInterval, chaseDelay,
                                       holeExpiry, sweepInterval, maxHolesPerChase, keyConcurrency,
                                       pollBackstop, maxSweepInterval, pumpThreads,
-                                      shedGrace, leaseTtl, watermarkCap);
+                                      shedGrace, leaseTtl, watermarkCap, stuckHandlerTimeout);
+    }
+
+    public Duration getStuckHandlerTimeout() {
+        return stuckHandlerTimeout;
+    }
+
+    public void setStuckHandlerTimeout(Duration stuckHandlerTimeout) {
+        this.stuckHandlerTimeout = stuckHandlerTimeout;
+    }
+
+    public Map<String, Duration> getStuckHandlerTimeouts() {
+        return stuckHandlerTimeouts;
+    }
+
+    public void setStuckHandlerTimeouts(Map<String, Duration> stuckHandlerTimeouts) {
+        this.stuckHandlerTimeouts = stuckHandlerTimeouts;
     }
 
     public Duration getWatermarkCap() {

@@ -192,12 +192,15 @@ public final class PostgresqlMessageQueue implements MessageQueue {
      *     <li>A lane kept an ordered unit on stop, and has not handed it back yet: the key it kept the unit for is still in
      *     its handler, or has left it and the lane is still flushing the unit's acknowledgements and releasing its lease
      *     row, or failed to, which {@link #reserveSubscriptionIndex} has the lane retry
-     *     ({@link ShardOwnedQueue#keptOrderedUnitNotHandedBack()}). The unit's lease row names the id, and a new pair
+     *     ({@link ShardOwnedQueue#keptOrderedUnitAwaited()}). The unit's lease row names the id, and a new pair
      *     registering under it would take the unit at once: it could start the key beside that handler, or, the handler
      *     returned, charge an attempt and deliver again what the handler acknowledged. Asked of the old lanes, which know
-     *     when the unit is handed back - not timed: a lease TTL, which it used to be, is when another instance id may take
-     *     the unit; as a hold it was too short for a handler that runs longer, and kept the id out of use for nothing once
-     *     one that returns sooner had returned. A subscription that is only stopped keeps its index, and its lanes,
+     *     when the unit is handed back - not timed by a lease TTL, which it used to be: that is when another instance id may
+     *     take the unit; as a hold it was too short for a handler that runs longer, and kept the id out of use for nothing
+     *     once one that returns sooner had returned. Bounded by the queue's {@code stuckHandlerTimeout}
+     *     ({@link ShardOwnerSettings}) instead: once the key has been in its handler longer, the lanes stop waiting for it,
+     *     and the next pair registering under the id takes the unit over under a new fence - the message delivered again,
+     *     possibly beside the handler still running. A subscription that is only stopped keeps its index, and its lanes,
      *     restarted by a queue {@link #start()} or a {@link Subscription#start()}, ask their kept owners the same before
      *     they take the unit; a new pair's lanes have none to ask.</li>
      *     <li>A lane's hand-back to the database is still running on a thread its stop gave up waiting for
@@ -1056,14 +1059,15 @@ public final class PostgresqlMessageQueue implements MessageQueue {
      * registering it - once every stop of its {@code lanes} owed has returned. At once, unless the instance id is still in
      * use on the database ({@link #heldIndexes}): only once every ordered unit a lane's stop kept has been handed back,
      * which the lane does once the key it was kept for has left its handler
-     * ({@link ShardOwnedQueue#keptOrderedUnitNotHandedBack()}), and no lane's hand-back is still running
+     * ({@link ShardOwnedQueue#keptOrderedUnitAwaited()}) - or its key has been in its handler longer than the queue's
+     * {@code stuckHandlerTimeout} - and no lane's hand-back is still running
      * ({@link ShardOwnedQueue#handBackStillRunning()}), which {@link #reserveSubscriptionIndex} asks the lanes each time,
      * once it has had them retry a hand-back of such a unit that failed.
      *
      * @param ended what ended, for the log: {@code "an unsubscribed subscription"} or {@code "a failed consume()"}
      */
     private void releaseSubscriptionIndex(int index, List<ShardOwnedQueue> lanes, String ended) {
-        var keptUnitNotHandedBack = lanes.stream().anyMatch(ShardOwnedQueue::keptOrderedUnitNotHandedBack);
+        var keptUnitNotHandedBack = lanes.stream().anyMatch(ShardOwnedQueue::keptOrderedUnitAwaited);
         var handBackStillRunning  = lanes.stream().anyMatch(ShardOwnedQueue::handBackStillRunning);
         if (!keptUnitNotHandedBack && !handBackStillRunning) {
             synchronized (handOver) {
@@ -1079,14 +1083,16 @@ public final class PostgresqlMessageQueue implements MessageQueue {
         String because;
         if (keptUnitNotHandedBack && handBackStillRunning) {
             until = "until the handler of the key it kept an ordered unit for has returned and the unit has been handed back, which "
-                    + "each consume() of the queue retries should it fail, and the hand-back of its lanes to the database has finished";
+                    + "each consume() of the queue retries should it fail, or that key has been in its handler longer than "
+                    + "stuckHandlerTimeout (" + settings.stuckHandlerTimeout() + "), and the hand-back of its lanes to the database has finished";
             because = "it kept an ordered unit whose key was still in a handler, and the unit's lease names that id, so a "
                       + "subscription registering under it would take the unit at once and could start the key beside that handler, or, once it "
                       + "has returned, charge an attempt and deliver the handled message again; "
                       + "and the stop of its lanes gave up waiting for their hand-back, which may still deregister that id";
         } else if (keptUnitNotHandedBack) {
             until = "until the handler of the key it kept an ordered unit for has returned and the unit has been handed back, which "
-                    + "each consume() of the queue retries should it fail";
+                    + "each consume() of the queue retries should it fail, or that key has been in its handler longer than "
+                    + "stuckHandlerTimeout (" + settings.stuckHandlerTimeout() + ")";
             because = "it kept an ordered unit whose key was still in a handler, and the unit's lease names that id, so a "
                       + "subscription registering under it would take the unit at once and could start the key beside that handler, or, once it "
                       + "has returned, charge an attempt and deliver the handled message again";
@@ -1105,7 +1111,7 @@ public final class PostgresqlMessageQueue implements MessageQueue {
      */
     private record HeldIndex(List<ShardOwnedQueue> lanes) {
         private boolean isDue() {
-            return lanes.stream().noneMatch(lane -> lane.keptOrderedUnitNotHandedBack() || lane.handBackStillRunning());
+            return lanes.stream().noneMatch(lane -> lane.keptOrderedUnitAwaited() || lane.handBackStillRunning());
         }
     }
 
@@ -1199,7 +1205,8 @@ public final class PostgresqlMessageQueue implements MessageQueue {
      * under the id, so the index is kept then. A stop that kept an ordered unit because a key was still in its handler
      * leaves the unit's lease row naming the id, so the index is given back only once the unit has been handed back,
      * which the lane does once that key has left its handler, and {@link #reserveSubscriptionIndex} retries should that
-     * fail ({@link ShardOwnedQueue#keptOrderedUnitNotHandedBack()}, {@link #releaseSubscriptionIndex}): a pair registering
+     * fail, or until that key has been in its handler longer than the queue's {@code stuckHandlerTimeout}
+     * ({@link ShardOwnedQueue#keptOrderedUnitAwaited()}, {@link #releaseSubscriptionIndex}): a pair registering
      * under the id before then would take that unit at once. Asked
      * of the lanes when the index is wanted, not of each stop as it returns: either of the two stops - the unsubscribe's
      * or the holder's - may find a lane already stopped by the other, and a lane remembers what any of its stops kept

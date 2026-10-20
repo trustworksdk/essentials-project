@@ -140,9 +140,11 @@ final class OrderedShardOwner implements BatchReadableOwner {
      */
     private final Map<String, TreeMap<Long, ShardOwnedStorage.OrderedRow>> readyByKey            = new HashMap<>();
     /**
-     * Keys with a message currently in a handler. At most one per key, which is what enforces FIFO.
+     * Keys with a message currently in a handler, each with when it was handed to the handler executor, by
+     * {@link System#nanoTime()} - which {@link #keysInHandler()} times the longest of from. At most one per key, which is
+     * what enforces FIFO.
      */
-    private final Set<String>                                              keysInFlight          = new HashSet<>();
+    private final Map<String, Long>                                        keysInFlight          = new LinkedHashMap<>();
     /**
      * Highest key_order handed to a handler per key, used to detect ordering violations.
      */
@@ -728,7 +730,7 @@ final class OrderedShardOwner implements BatchReadableOwner {
                 // guarantee — no query, no lock, no exclusion list.
                 // In flight, or waiting out a backoff: either way the key is not allowed to move
                 // on. A key whose message failed must retry THAT message before any later one.
-                if (keysInFlight.contains(key) || keysAwaitingRetry.contains(key)) {
+                if (keysInFlight.containsKey(key) || keysAwaitingRetry.contains(key)) {
                     metrics.keyHeadOfLineBlocks.increment();
                     continue;
                 }
@@ -767,7 +769,7 @@ final class OrderedShardOwner implements BatchReadableOwner {
                 }
                 highestDeliveredOrder.merge(key, next.getKey(), Math::max);
 
-                keysInFlight.add(key);
+                keysInFlight.put(key, System.nanoTime());
                 activeKeys.incrementAndGet();
                 metrics.maxConcurrentKeys.accumulateAndGet(activeKeys.get(), Math::max);
                 submitted++;
@@ -1300,10 +1302,10 @@ final class OrderedShardOwner implements BatchReadableOwner {
             List<String> stuckKeys;
             boolean      notReportedYet;
             synchronized (stateLock) {
-                stuckKeys = List.copyOf(keysInFlight);
+                stuckKeys = List.copyOf(keysInFlight.keySet());
                 // Forget keys that have since finished, so one that gets stuck again later is reported again.
-                reportedStuckKeys.retainAll(keysInFlight);
-                notReportedYet = reportedStuckKeys.addAll(keysInFlight);
+                reportedStuckKeys.retainAll(keysInFlight.keySet());
+                notReportedYet = reportedStuckKeys.addAll(keysInFlight.keySet());
             }
             if (notReportedYet) {
                 log.warn("Ordered shard {}: shed abandoned with {} key(s) still in a handler {} — keeping the shard. "
@@ -1378,7 +1380,7 @@ final class OrderedShardOwner implements BatchReadableOwner {
                 return Optional.empty();
             }
             deadPumpWaitReported = true;
-            return Optional.of(new StuckOnDeadPump(List.copyOf(keysInFlight), Duration.ofNanos(waited)));
+            return Optional.of(new StuckOnDeadPump(List.copyOf(keysInFlight.keySet()), Duration.ofNanos(waited)));
         }
     }
 
@@ -1391,6 +1393,40 @@ final class OrderedShardOwner implements BatchReadableOwner {
      *               {@link OrderedShardOwner#stuckOnDeadPump()})
      */
     record StuckOnDeadPump(List<String> keys, Duration waited) {
+        /**
+         * The keys as a log line names them: capped, as an abandoned shed's are.
+         */
+        String describeKeys() {
+            return OrderedShardOwner.describeKeys(keys);
+        }
+    }
+
+    /**
+     * The keys in a handler now, and how long the one handed to its handler first has been there: timed from when this
+     * owner handed the message to the handler executor, so a handler still waiting for a thread counts too. Asked by
+     * {@code ShardOwnedQueue} of an owner its stop kept, to tell when that handler has outlasted
+     * {@code stuckHandlerTimeout} and to name the keys in its WARN.
+     *
+     * @return empty when no key is in a handler
+     */
+    Optional<KeysInHandler> keysInHandler() {
+        var now = System.nanoTime();
+        synchronized (stateLock) {
+            if (keysInFlight.isEmpty()) {
+                return Optional.empty();
+            }
+            var earliest = keysInFlight.values().stream().mapToLong(Long::longValue).min().getAsLong();
+            return Optional.of(new KeysInHandler(List.copyOf(keysInFlight.keySet()), Duration.ofNanos(now - earliest)));
+        }
+    }
+
+    /**
+     * The keys of an owner in a handler, and how long the longest-running has been there. See {@link #keysInHandler()}.
+     *
+     * @param keys    the keys in a handler
+     * @param longest how long the key handed to its handler first has been there
+     */
+    record KeysInHandler(List<String> keys, Duration longest) {
         /**
          * The keys as a log line names them: capped, as an abandoned shed's are.
          */

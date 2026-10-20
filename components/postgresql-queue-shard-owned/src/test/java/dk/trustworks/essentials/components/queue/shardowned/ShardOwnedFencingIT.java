@@ -192,7 +192,8 @@ class ShardOwnedFencingIT {
         // when flushOnStop runs.
         var settings = new ShardOwnerSettings(d.readBatchSize(), 1_000, Duration.ofDays(36_500), d.chaseDelay(), d.holeExpiry(),
                                               d.sweepInterval(), d.maxHolesPerChase(), d.keyConcurrency(), d.pollBackstop(),
-                                              d.maxSweepInterval(), d.pumpThreads(), d.shedGrace(), d.leaseTtl(), d.watermarkCap());
+                                              d.maxSweepInterval(), d.pumpThreads(), d.shedGrace(), d.leaseTtl(), d.watermarkCap(),
+                                              ShardOwnerSettings.DEFAULT_STUCK_HANDLER_TIMEOUT);
         var policy = RedeliveryPolicy.fixed(Duration.ofSeconds(1), 3);
         if ("ordered".equals(lane)) {
             return new OrderedShardOwner(storage, 0, grant.fence(), settings, (id, key, payload, type) -> handled.incrementAndGet(),
@@ -217,7 +218,8 @@ class ShardOwnedFencingIT {
         // A lease TTL of 900ms, so several renewals must happen inside the test window.
         var shortLease = new ShardOwnerSettings(500, 200, Duration.ofMillis(1), Duration.ofMillis(2),
                                                 Duration.ofMillis(300), Duration.ofMillis(100),
-                                                1_000, 8, Duration.ofMillis(50), Duration.ofSeconds(30), 2, Duration.ofSeconds(5), Duration.ofMillis(1000), Duration.ofSeconds(60));
+                                                1_000, 8, Duration.ofMillis(50), Duration.ofSeconds(30), 2, Duration.ofSeconds(5), Duration.ofMillis(1000), Duration.ofSeconds(60),
+                                                ShardOwnerSettings.DEFAULT_STUCK_HANDLER_TIMEOUT);
 
         try (var queue = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "instance-1")) {
             queue.startConsuming((messageId, payload, payloadType) -> received.add(new String(payload, StandardCharsets.UTF_8)),
@@ -255,7 +257,8 @@ class ShardOwnedFencingIT {
         // leaseTtl 1s: the heartbeat, and so the lease check, runs every 333 ms.
         var shortLease = new ShardOwnerSettings(500, 200, Duration.ofMillis(1), Duration.ofMillis(2),
                                                 Duration.ofMillis(300), Duration.ofMillis(100),
-                                                1_000, 8, Duration.ofMillis(50), Duration.ofSeconds(30), 2, Duration.ofSeconds(5), Duration.ofMillis(1000), Duration.ofSeconds(60));
+                                                1_000, 8, Duration.ofMillis(50), Duration.ofSeconds(30), 2, Duration.ofSeconds(5), Duration.ofMillis(1000), Duration.ofSeconds(60),
+                                                ShardOwnerSettings.DEFAULT_STUCK_HANDLER_TIMEOUT);
 
         try (var queue = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "instance-1")) {
             if ("ordered".equals(lane)) {

@@ -23,6 +23,7 @@ import org.slf4j.*;
 
 import javax.sql.DataSource;
 import java.sql.SQLException;
+import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -61,6 +62,11 @@ public class ShardOwnedQueueFactory implements MessageQueues, AutoCloseable {
     private final List<ShardOwnedQueueMetrics>  metrics;
 
     private final Map<QueueName, PostgresqlMessageQueue> queues = new ConcurrentHashMap<>();
+    /**
+     * The queues given their own {@code stuckHandlerTimeout}, by name ({@link #setStuckHandlerTimeouts}); every other
+     * queue takes the one in {@link #settings}.
+     */
+    private final Map<QueueName, Duration>               stuckHandlerTimeouts = new ConcurrentHashMap<>();
 
     public ShardOwnedQueueFactory(DataSource dataSource,
                                   ShardRuntime runtime,
@@ -84,6 +90,34 @@ public class ShardOwnedQueueFactory implements MessageQueues, AutoCloseable {
     }
 
     /**
+     * Give the queues named here their own {@code stuckHandlerTimeout} ({@link ShardOwnerSettings}), every other setting
+     * shared: what {@code essentials.shard-owned-queue.stuck-handler-timeouts} configures. Call it before the first
+     * {@link #queue} of a queue named here: a queue already built keeps the settings it was built with. A name absent here
+     * takes the {@code stuckHandlerTimeout} of the settings this factory was given.
+     *
+     * @param perQueue queue name to its bound; each bound positive
+     * @return this factory
+     */
+    public ShardOwnedQueueFactory setStuckHandlerTimeouts(Map<String, Duration> perQueue) {
+        requireNonNull(perQueue, "No perQueue provided");
+        perQueue.forEach((name, timeout) -> {
+            // Checked here, so a wrong value fails the context rather than the first queue() of that name.
+            settings.withStuckHandlerTimeout(requireNonNull(timeout, "No stuckHandlerTimeout provided for queue '" + name + "'"));
+            stuckHandlerTimeouts.put(QueueName.of(name), timeout);
+        });
+        return this;
+    }
+
+    /**
+     * The settings the queue named {@code queueName} is built with: this factory's, with that queue's own
+     * {@code stuckHandlerTimeout} when {@link #setStuckHandlerTimeouts} named it.
+     */
+    ShardOwnerSettings settingsFor(QueueName queueName) {
+        var own = stuckHandlerTimeouts.get(queueName);
+        return own == null ? settings : settings.withStuckHandlerTimeout(own);
+    }
+
+    /**
      * The queue registered under {@code queueName}.
      *
      * @throws IllegalStateException if the name has not been registered — either list it under
@@ -97,7 +131,7 @@ public class ShardOwnedQueueFactory implements MessageQueues, AutoCloseable {
                                               .setDataSource(dataSource)
                                               .setQueueName(name)
                                               .setInstanceId(instanceId)
-                                              .setSettings(settings)
+                                              .setSettings(settingsFor(name))
                                               // The process's one runtime. Without it every queue's
                                               // consumers borrowed a second, shared runtime, and the
                                               // bean's pumps and listener held their connections for
