@@ -445,10 +445,12 @@ final class OrderedShardOwner implements BatchReadableOwner {
                                                            redeliveryPolicy.maxAttempts())) {
                 if (storage.moveToDeadLetterIfOwned(connection, ShardOwnedSchema.ORDERED_TABLE, "ordered", shard, seq,
                                                     ShardOwnedStorage.EXHAUSTED_BY_TAKEOVERS, instanceId, fence)) {
+                    // Counted before the observer is told: the move has committed, so an observer that throws must not
+                    // take the count with it - no later pass finds the row to move again.
+                    metrics.deadLettered.increment();
                     metrics.observer().deadLettered(new MessageId(MessageId.Lane.ORDERED, shard, seq),
                                                     redeliveryPolicy.maxAttempts(),
                                                     new IllegalStateException(ShardOwnedStorage.EXHAUSTED_BY_TAKEOVERS));
-                    metrics.deadLettered.increment();
                 }
             }
             exhaustionPending = false;
@@ -926,9 +928,11 @@ final class OrderedShardOwner implements BatchReadableOwner {
                     // the block outlive this process.
                     blockKey(key, keyOrder);
                 }
+                // Counted before the observer is told: the move has committed, and an observer that throws must not take
+                // the count with it
+                metrics.deadLettered.increment();
                 metrics.observer().deadLettered(new MessageId(MessageId.Lane.ORDERED, shard, row.seq()),
                                                 attempts, cause);
-                metrics.deadLettered.increment();
                 return;
             }
             var delay = redeliveryPolicy.delayAfter(attempts);
