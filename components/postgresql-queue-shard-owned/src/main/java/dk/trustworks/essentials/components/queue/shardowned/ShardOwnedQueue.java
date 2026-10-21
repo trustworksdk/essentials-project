@@ -179,7 +179,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * and delivers again nothing the handler acknowledged. It runs as the last key leaves its handler, whether or not the
      * queue runs by then ({@link OrderedShardOwner#whenNoKeyInHandler}), and is retried by every heartbeat tick, by a
      * start, by the stop of a later run, and by {@link PostgresqlMessageQueue} before it lets a {@code consume()} register
-     * under the instance id ({@link #handBackKeptUnits()}), until it has released the row. Until then no run of this queue
+     * under the instance id ({@link #reviewAndHandBackKeptUnits()}), until it has released the row. Until then no run of this queue
      * acquires the unit ({@link #keptUnitsNotHandedBack()}), and the acquire loops count it towards their limit as a row
      * this instance holds: {@link ShardOwnedStorage#acquireLeaseGrant} accepts a row naming its own owner, so a restart would
      * take the unit at once, start that key beside the handler while it runs, and after it treat the unit as taken over
@@ -979,8 +979,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         // handed back yet, is handed back now, so this start - or another instance - finds it released; reviewed first, so
         // one given up with no key in a handler - kept past stopFlushGiveUpAfter with the stop's flush of it not returned - is
         // among them.
-        reviewStuckKeptUnits();
-        handBackKeptUnits();
+        reviewAndHandBackKeptUnits();
         if (!runtime.hasLivePump()) {
             log.warn("Instance {} acquires no {} unit on queue {}: every pump of its ShardRuntime has died, so nothing would "
                              + "serve them. They stay free for other instances; restart the ShardRuntime to serve them here",
@@ -1408,20 +1407,11 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                          summarise(unreleasedAcquisitions.keySet()), queueId, e);
             }
             // A unit an earlier stop kept whose handler has outlasted stuckHandlerTimeout is no longer waited for: the
-            // rebalance takes it over. Reviewed BEFORE the hand-backs below: a unit given up with no key in a handler -
-            // kept past stopFlushGiveUpAfter with the stop's flush of it not returned - is then handed back in this
-            // pass rather than taken over.
-            try {
-                reviewStuckKeptUnits();
-            } catch (RuntimeException e) {
-                Exceptions.rethrowIfCriticalError(e);
-                log.warn("Instance {} could not review the ordered units a stop of queue {} kept; retried on the next heartbeat",
-                         instanceId, queueId, e);
-            }
-            // BEFORE the rebalance, as the hand-backs around it: a unit an earlier stop kept whose handler has returned, and
-            // whose hand-back as its last key left the handler did not run or failed, is free for an acquire loop - this
-            // instance's or another's - once it is handed back. Each unit's failure is its own, and logged there.
-            handBackKeptUnits();
+            // rebalance takes it over. BEFORE the rebalance, as the hand-backs around it: a unit an earlier stop kept whose
+            // handler has returned, and whose hand-back as its last key left the handler did not run or failed - or one the
+            // review gives up with no key in a handler - is free for an acquire loop, this instance's or another's, once it
+            // is handed back. Each unit's failure is its own, and logged there.
+            reviewAndHandBackKeptUnits();
             // Prune releasedPastStuckHandler here, not only when the keptUnitsInHandler gauge is read: nothing in production
             // may ever read it, and an owner kept in that set holds what it had buffered.
             pruneReleasedPastStuckHandler();
@@ -2528,7 +2518,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * would read the unit as taken over from an owner that never let go of it, charge an attempt and deliver again what
      * the handler acknowledged. {@link PostgresqlMessageQueue} asks {@link #keptOrderedUnitAwaited()}, which is this but for
      * a unit given up on past {@code stuckHandlerTimeout} ({@link #reviewStuckKeptUnits()}), before it lets the next {@code consume()} register
-     * under an ended subscription's instance id, once it has had {@link #handBackKeptUnits()} retry a hand-back that has
+     * under an ended subscription's instance id, once it has had {@link #reviewAndHandBackKeptUnits()} retry a hand-back that has
      * not run or has failed. True for such a unit too, until it is handed back or found taken.
      * <p>
      * Asked of the owners themselves, so false from the moment the unit is handed back, whether or not this queue runs
@@ -3064,16 +3054,46 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
     }
 
     /**
-     * Hand back every kept unit ({@link #keptOrderedOwners}) no key of which is in a handler and whose lease row still
-     * names this instance ({@link #handBackKeptUnit}), on the caller's thread. Called by every heartbeat tick, before its
-     * rebalance, by a start before it leases anything, and by {@link PostgresqlMessageQueue} for the lanes of an ended
-     * subscription whose instance id it holds ({@link #keptOrderedUnitAwaited()}), before it asks whether a
-     * {@code consume()} may register under that id: those lanes never run again, so nothing else retries a hand-back that
-     * failed as the key left its handler. Each caller reviews the kept units first ({@link #reviewStuckKeptUnits()}), so a
-     * unit that review gives up with no key in a handler is handed back here before any acquire may take it over. Each unit's failure
-     * is its own and logged; nothing is thrown, but a critical error.
+     * Review the kept units ({@link #reviewStuckKeptUnits()}), then hand back every one that can be ({@link #handBackKeptUnits()}),
+     * on the caller's thread - in that order, which is why {@link #handBackKeptUnits()} is only ever run through here
+     * ({@code endRun}, {@code releaseKeptOrderedUnit} and {@code PostgresqlMessageQueue.releaseSubscriptionIndex} call the
+     * review directly, each before any unit it hands back or releases itself). A unit kept longer than
+     * {@link #stopFlushGiveUpAfter} with the flush of the stop that kept it not returned is still at
+     * {@link KeptUnit.Phase#STOP_FLUSHING}, which no hand-back claims, until the review gives it up: reviewed first, one
+     * given up with no key in a handler is handed back in the same pass - its acknowledgements flushed under the fence it
+     * was kept under, its row released, so whoever takes it next charges no attempt and delivers again nothing it handled.
+     * Handed back first, the pass left that unit at {@code STOP_FLUSHING}, the review then
+     * gave it up, and the acquire after it - the caller's, or the next {@code consume()}'s - took it over unclean: an
+     * attempt charged and the handled message delivered again.
+     * <p>
+     * Called by every heartbeat tick, before its rebalance, by a start before it leases anything, and by
+     * {@link PostgresqlMessageQueue} for the lanes of an ended subscription whose instance id it holds
+     * ({@link #keptOrderedUnitAwaited()}), before it asks whether a {@code consume()} may register under that id. A review
+     * that throws is logged and the hand-backs still run: a unit a failed review did not give up stays awaited until a
+     * later one does. Nothing is thrown, but a critical error.
      */
-    void handBackKeptUnits() {
+    void reviewAndHandBackKeptUnits() {
+        try {
+            reviewStuckKeptUnits();
+        } catch (RuntimeException e) {
+            Exceptions.rethrowIfCriticalError(e);
+            log.warn("Instance {} could not review the ordered units a stop of queue {} kept; handing back those it can all the same. "
+                             + "The review is retried by this lane's next heartbeat tick or start, or, for a lane of an ended "
+                             + "PostgresqlMessageQueue subscription, by the next consume() while its instance id is held",
+                     instanceId, queueId, e);
+        }
+        handBackKeptUnits();
+    }
+
+    /**
+     * Hand back every kept unit ({@link #keptOrderedOwners}) no key of which is in a handler and whose lease row still
+     * names this instance ({@link #handBackKeptUnit}), on the caller's thread: the second half of
+     * {@link #reviewAndHandBackKeptUnits()}, and run only from there, after the review. It retries a hand-back that did not
+     * run, or failed, as the key left its handler: for the lanes of an ended
+     * {@link PostgresqlMessageQueue} subscription, which never run again, the next {@code consume()} is the only one. Each
+     * unit's failure is its own and logged; nothing is thrown, but a critical error.
+     */
+    private void handBackKeptUnits() {
         for (var kept : keptOrderedOwners) {
             handBackKeptUnit(kept);
         }

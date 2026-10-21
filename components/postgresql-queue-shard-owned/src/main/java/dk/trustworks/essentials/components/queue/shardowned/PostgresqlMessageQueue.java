@@ -1031,13 +1031,14 @@ public final class PostgresqlMessageQueue implements MessageQueue {
      * The lowest subscription index no live subscription holds and no ended one still holds for its instance id's use on
      * the database ({@link #heldIndexes}), now reserved ({@link #subscriptionIndexes}).
      * <p>
-     * First, each held index's lanes review their kept units ({@link ShardOwnedQueue#reviewStuckKeptUnits()}), giving
+     * First, each held index's lanes review their kept units and then hand back what they can, in that order
+     * ({@link ShardOwnedQueue#reviewAndHandBackKeptUnits()}). The review ({@link ShardOwnedQueue#reviewStuckKeptUnits()}) gives
      * up, for good and with a WARN, one whose key has been in its handler longer than the queue's
      * {@code stuckHandlerTimeout}, once the stop that kept it has flushed it ({@code ShardOwnedQueue.KeptUnit.Phase.STOP_FLUSHING}),
      * and one kept longer than {@link ShardOwnedQueue#stopFlushGiveUpAfter} whose stop has still not flushed it, so
      * {@link HeldIndex#isDue()} below need only read.
-     * Then they retry handing back an ordered unit a stop of theirs kept whose key has left its handler
-     * ({@link ShardOwnedQueue#handBackKeptUnits()}) - one just given up with no key in a handler included: the lanes of an
+     * The hand-backs retry an ordered unit a stop of theirs kept whose key has left its handler - one just given up with
+     * no key in a handler included, handed back in this pass rather than taken over by this {@code consume()}: the lanes of an
      * ended subscription never run again, so this is the only retry of a hand-back that failed as the key left its
      * handler. The index stays held until one succeeds, or finds the unit taken by another instance once the old
      * instance's liveness lapsed: given back after a failed hand-back, the next {@code consume()} took the unit as from a
@@ -1052,8 +1053,7 @@ public final class PostgresqlMessageQueue implements MessageQueue {
         }
         for (var index : stillHeld) {
             for (var lane : index.lanes()) {
-                lane.reviewStuckKeptUnits();
-                lane.handBackKeptUnits();
+                lane.reviewAndHandBackKeptUnits();
             }
         }
         synchronized (handOver) {

@@ -980,7 +980,7 @@ class ShardOwnedUnsubscribeIT {
         // A grace of 3 s: the ordered lane's stop drains that long before its budget thread starts, time enough for the test
         // to hold that thread, and not the unordered lane's, which hands back first.
         var settings = settingsWith(Duration.ofSeconds(3), leaseTtl).withStuckHandlerTimeout(stuckHandlerTimeout);
-        var holding  = new ShardOwnedLifecycleIT.FlushHoldingDataSource(dataSource, ShardOwnedLifecycleIT.FlushHoldingDataSource.STOP_BUDGET_THREAD);
+        var holding  = new FlushHoldingDataSource(dataSource, FlushHoldingDataSource.STOP_BUDGET_THREAD);
         try (var queue = PostgresqlMessageQueue.builder()
                                                .setDataSource(holding)
                                                .setQueueId(QUEUE_ID)
@@ -1050,6 +1050,119 @@ class ShardOwnedUnsubscribeIT {
                     assertThat(fenceOf(keptUnit)).as("the kept unit taken over under a newer fence").isGreaterThan(keptFence);
                     assertThat(deliveredAgain).as("the key's message delivered again while the first handler runs").containsExactly("ACC-1");
                 });
+            } finally {
+                release.countDown();
+                holding.letConnect();
+                holding.letAcknowledge();
+            }
+        }
+    }
+
+    /**
+     * {@link #an_unsubscribed_subscription_whose_stop_flush_hangs_frees_its_instance_id_once_its_kept_unit_is_given_up},
+     * but the kept key's handler returns within the wait. Nothing hands the unit back while the stop's flush hangs
+     * ({@code ShardOwnedQueue.KeptUnit.Phase.STOP_FLUSHING}), and the lanes of an ended subscription never run again, so
+     * the next {@code consume()} past {@link ShardOwnedQueue#stopFlushGiveUpAfter} is the pass that hands the unit back.
+     * It has the old lanes review their kept units before they hand back
+     * ({@link ShardOwnedQueue#reviewAndHandBackKeptUnits()}), so the unit, given up with no key in a handler, is handed back
+     * in that pass: its acknowledgement flushed under the fence the stop kept it under and its row released, so the new
+     * subscription takes it again with no attempt charged and the handled message is not delivered again. Handed back
+     * before the review, as {@code reserveSubscriptionIndex} once did, the pass found the unit still waiting for the flush,
+     * the review then gave it up and freed the instance id, and the new subscription took the unit over unclean: the handled
+     * message delivered again.
+     */
+    @Test
+    void an_unsubscribed_unit_whose_stop_flush_never_returns_is_handed_back_by_the_next_consume_past_the_stuck_handler_timeout() throws Exception {
+        // stopFlushGiveUpAfter: max(stuckHandlerTimeout, SHUTDOWN_BUDGET + max(leaseTtl, SHUTDOWN_BUDGET)) = 6 s. No other
+        // instance runs, so nothing takes the kept unit as the unsubscribed instance's liveness lapses.
+        var leaseTtl            = Duration.ofSeconds(4);
+        var stuckHandlerTimeout = Duration.ofSeconds(6);
+        var entered             = new CountDownLatch(1);
+        var release             = new CountDownLatch(1);
+        var deliveredAgain      = ConcurrentHashMap.<String>newKeySet();
+        MessageHandler recording = (messageId, key, payload, payloadType) -> {
+            if (key != null) {
+                deliveredAgain.add(key);
+            }
+        };
+        // A grace of 3 s: the ordered lane's stop drains that long before its budget thread starts, time enough for the test
+        // to hold that thread, and not the unordered lane's, which hands back first.
+        var settings = settingsWith(Duration.ofSeconds(3), leaseTtl).withStuckHandlerTimeout(stuckHandlerTimeout);
+        var holding  = new FlushHoldingDataSource(dataSource, FlushHoldingDataSource.STOP_BUDGET_THREAD);
+        try (var queue = PostgresqlMessageQueue.builder()
+                                               .setDataSource(holding)
+                                               .setQueueId(QUEUE_ID)
+                                               .setShardCount(SHARD_COUNT)
+                                               .setInstanceId(INSTANCE_ID)
+                                               .setSettings(settings)
+                                               .setLifecycleHook(PostgresqlMessageQueue.LifecycleHook.NONE)
+                                               .build()) {
+            try {
+                var first = queue.consume((messageId, key, payload, payloadType) -> {
+                    if (key != null) {
+                        entered.countDown();
+                        awaitQuietly(release);
+                    }
+                }, ConsumerOptions.defaults());
+                var lanes = queue.registeredConsumers();
+                assertThat(lanes).as("premise: the first subscription's two lanes").hasSize(2);
+                var unordered = lanes.get(0);
+                var ordered   = lanes.get(1);
+                queue.enqueue(Message.ordered("in-handler".getBytes(StandardCharsets.UTF_8), 1, "ACC-1", 0));
+                assertThat(entered.await(20, TimeUnit.SECONDS)).as("premise: the key is in its handler").isTrue();
+
+                var unsubscribing = CompletableFuture.runAsync(first::unsubscribe);
+                // The unordered lane stops first; once it has handed back and the ordered lane's stop is draining, hold the
+                // next stop budget thread to ask for a connection: the ordered lane's.
+                Awaitility.await().atMost(Duration.ofSeconds(10))
+                          .until(() -> !unordered.isStarted() && !ordered.isStarted() && !unordered.handBackStillRunning());
+                holding.holdConnections();
+                unsubscribing.get(20, TimeUnit.SECONDS);
+                // The give-up is timed from when the stop kept the unit, which came before the unsubscribe returned.
+                var unsubscribedAt = System.nanoTime();
+                var giveUpAfter    = ordered.stopFlushGiveUpAfter(settings);
+                assertThat(giveUpAfter).as("premise: the wait for the stop's flush").isEqualTo(stuckHandlerTimeout);
+                assertThat(holding.awaitConnectionHeld(Duration.ofSeconds(10))).as("premise: the ordered lane's stop flush hangs").isTrue();
+                assertThat(ordered.handBackStillRunning()).as("premise: its stop gave up waiting for that flush").isTrue();
+                assertThat(ordered.keptOrderedUnitAwaited()).as("premise: that stop kept the busy unit").isTrue();
+                var keptUnit  = ShardOwnedSchema.unitForKey("ACC-1", ShardOwnedSchema.ORDERED_UNITS);
+                var keptFence = fenceOf(keptUnit);
+
+                release.countDown();
+                Awaitility.await().atMost(Duration.ofSeconds(5)).untilAsserted(
+                        () -> assertThat(ordered.metrics().keptUnitsInHandler()).as("premise: the kept key has left its handler").isZero());
+                assertThat(Duration.ofNanos(System.nanoTime() - unsubscribedAt)).as("premise: the handler returned soon after the unsubscribe")
+                                                                               .isLessThan(giveUpAfter.minusSeconds(1));
+
+                // Past the give-up from when the stop kept the unit. Nothing has handed the unit back meanwhile: the flush
+                // still hangs, and the ended subscription's lanes run no heartbeat.
+                Awaitility.await().atMost(giveUpAfter.plusSeconds(5))
+                          .until(() -> Duration.ofNanos(System.nanoTime() - unsubscribedAt).compareTo(giveUpAfter.plusMillis(500)) > 0);
+                assertThat(ownerOf(keptUnit)).as("premise: nothing hands the unit back while the flush hangs").isEqualTo(INSTANCE_ID);
+                assertThat(fenceOf(keptUnit)).as("premise: nor takes it over").isEqualTo(keptFence);
+                assertThat(orderedMessagesLeft()).as("premise: the handled message is not acknowledged yet").isEqualTo(1);
+
+                var second = queue.consume(recording, ConsumerOptions.defaults());
+                assertThat(second.isStarted()).isTrue();
+                assertThat(ordered.handBackStillRunning()).as("premise: the stop's flush still hangs").isTrue();
+                assertThat(holding.awaitAcknowledgementHeld(Duration.ZERO)).as("premise: before it has flushed anything").isFalse();
+                assertThat(laneWarnings()).as("premise: the lane gave the unit up, its stop's flush still running")
+                                          .anyMatch(warning -> warning.contains("stops waiting for ordered unit " + keptUnit)
+                                                  && warning.contains("still not finished flushing"));
+                assertThat(laneInfos()).as("the consume() handed the unit back under the fence the stop kept it under")
+                                       .filteredOn(info -> info.contains("released ordered unit " + keptUnit + " on queue")
+                                               && info.contains("under the fence a stop kept it under"))
+                                       .hasSize(1);
+                assertThat(orderedMessagesLeft()).as("the handled message acknowledged by the hand-back").isZero();
+                assertThat(registeredInstances()).as("the new subscription registers under the caller's own instance id")
+                                                 .containsExactly(INSTANCE_ID);
+                Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+                    assertThat(ownerOf(keptUnit)).as("the unit taken again by the new subscription").isEqualTo(INSTANCE_ID);
+                    assertThat(fenceOf(keptUnit)).as("under a newer fence").isGreaterThan(keptFence);
+                    assertThat(orderedUnitsOwnedBy(INSTANCE_ID)).as("with every other ordered unit").isEqualTo(ShardOwnedSchema.ORDERED_UNITS);
+                });
+                Awaitility.await().during(Duration.ofMillis(1500)).atMost(Duration.ofSeconds(3)).untilAsserted(
+                        () -> assertThat(deliveredAgain).as("the handled message is not delivered again").isEmpty());
             } finally {
                 release.countDown();
                 holding.letConnect();
