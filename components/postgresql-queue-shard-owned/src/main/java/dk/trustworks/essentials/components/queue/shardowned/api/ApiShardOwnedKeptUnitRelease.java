@@ -55,10 +55,20 @@ public record ApiShardOwnedKeptUnitRelease(QueueName queueName,
 
     /**
      * Keeps an unmodifiable copy of {@code keysInHandler}, so neither the list given here nor the one
-     * {@link #keysInHandler()} returns can change this record; {@code null} becomes an empty list.
+     * {@link #keysInHandler()} returns can change this record. A {@code null} key in it is refused.
+     * <p>
+     * A {@code null} list becomes an empty one, unlike {@link KeptUnitRelease}, which refuses it: this is the admin
+     * API's shape, which a client may build from a JSON answer that lacks the field (as {@code ApiTableStatistics}
+     * does for its indexes), and an absent list is read as no key in a handler. {@link #from} never passes
+     * {@code null}, since {@link KeptUnitRelease} refuses it; build this record through {@link #from}, so an empty
+     * {@link #keysInHandler()} means the engine found no key in a handler.
      */
     public ApiShardOwnedKeptUnitRelease {
-        keysInHandler = keysInHandler == null ? List.of() : List.copyOf(keysInHandler);
+        keysInHandler = keysInHandler == null
+                        ? List.of()
+                        : keysInHandler.stream()
+                                       .map(key -> requireNonNull(key, "keysInHandler holds a null key"))
+                                       .toList();
     }
 
     public static ApiShardOwnedKeptUnitRelease from(QueueName queueName, KeptUnitRelease release) {

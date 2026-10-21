@@ -77,6 +77,15 @@ class ApiShardOwnedKeptUnitReleaseTest {
         assertThat(api.keysInHandler()).isEmpty();
     }
 
+    @Test
+    void a_null_key_in_a_handler_is_refused_with_a_message_naming_the_field() {
+        var keys = Arrays.asList("ACC-1", null);
+
+        assertThatThrownBy(() -> new ApiShardOwnedKeptUnitRelease(QueueName.of("orders"), 3, "node-1", "BUSY", keys, 0))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("keysInHandler");
+    }
+
     /**
      * {@link ApiShardOwnedKeptUnitReleases#from} carries the instance ids that answered, in order, and each release, so an
      * answer that released nothing still names the process that gave it.
