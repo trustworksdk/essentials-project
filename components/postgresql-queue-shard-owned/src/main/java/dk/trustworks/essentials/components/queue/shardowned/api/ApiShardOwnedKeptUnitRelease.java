@@ -49,6 +49,14 @@ public record ApiShardOwnedKeptUnitRelease(QueueName queueName,
                                            List<String> keysInHandler,
                                            long longestInHandlerMillis) {
 
+    /**
+     * Keeps an unmodifiable copy of {@code keysInHandler}, so neither the list given here nor the one
+     * {@link #keysInHandler()} returns can change this record; {@code null} becomes an empty list.
+     */
+    public ApiShardOwnedKeptUnitRelease {
+        keysInHandler = keysInHandler == null ? List.of() : List.copyOf(keysInHandler);
+    }
+
     public static ApiShardOwnedKeptUnitRelease from(QueueName queueName, KeptUnitRelease release) {
         requireNonNull(queueName, "No queueName provided");
         requireNonNull(release, "No release provided");

@@ -17,11 +17,12 @@
 package dk.trustworks.essentials.components.queue.shardowned.api;
 
 import dk.trustworks.essentials.components.queue.shardowned.spi.*;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 
 import java.time.Duration;
-import java.util.List;
+import java.util.*;
 
 import static org.assertj.core.api.Assertions.*;
 
@@ -55,5 +56,24 @@ class ApiShardOwnedKeptUnitReleaseTest {
 
         assertThat(api.keysInHandler()).isEmpty();
         assertThat(api.longestInHandlerMillis()).isZero();
+    }
+
+    @Test
+    void the_record_keeps_its_own_unmodifiable_copy_of_the_keys_in_a_handler() {
+        var keys = new ArrayList<>(List.of("ACC-1", "ACC-2"));
+
+        var api = new ApiShardOwnedKeptUnitRelease(QueueName.of("orders"), 3, "node-1", "BUSY", keys, 5);
+        keys.add("ACC-3");
+
+        assertThat(api.keysInHandler()).as("a later change to the given list").containsExactly("ACC-1", "ACC-2");
+        assertThatThrownBy(() -> api.keysInHandler().add("ACC-4")).isInstanceOf(UnsupportedOperationException.class);
+        assertThat(api.keysInHandler()).containsExactly("ACC-1", "ACC-2");
+    }
+
+    @Test
+    void no_keys_in_a_handler_given_is_an_empty_list() {
+        var api = new ApiShardOwnedKeptUnitRelease(QueueName.of("orders"), 3, "node-1", "BUSY", null, 0);
+
+        assertThat(api.keysInHandler()).isEmpty();
     }
 }
