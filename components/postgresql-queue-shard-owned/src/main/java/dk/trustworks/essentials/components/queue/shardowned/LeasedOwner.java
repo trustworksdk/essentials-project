@@ -203,7 +203,9 @@ interface LeasedOwner {
      *     ended, so a unit the stop gave up is not counted lost.</li>
      *     <li>The owner's own fenced write refused - its acknowledgement flush, or the attempt charge in
      *     {@link #onTakeover}: {@code RELEASED} and a WARN (the charge logs at DEBUG when the owner had already ended, and
-     *     counts {@code leasesLost} only when it had not; a refused acknowledgement counts {@code fencedOutAcks}). No
+     *     counts {@code leasesLost} only when it had not; a refused acknowledgement counts {@code fencedOutAcks}, and
+     *     both it and its WARN only when the refusal moved the row: one already {@code RELEASED} - released by this
+     *     instance, or found taken - logs at DEBUG and counts nothing). No
      *     wake-up: those writes run on the owner's own pump, inside a pass, or on {@code stop()}'s flush of owners it had
      *     already ended; the pump drops the owner at the end of that pass, and a wake-up would only cost it one empty
      *     pass more.</li>

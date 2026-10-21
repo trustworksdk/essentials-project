@@ -1316,8 +1316,16 @@ final class OrderedShardOwner implements BatchReadableOwner {
             // means the shard has moved. Leave the work for whoever holds it — acknowledging after a
             // real fencing rejection would delete messages the new owner is about to deliver, and for
             // an ordered key that is loss AND reordering at once.
+            // Counted and logged only by the refusal that moves the row to RELEASED. One already there was released by
+            // this instance (releaseLeaseRows: a stop, a shed, a hand-back or release on request of a kept unit) or found
+            // taken by an earlier check or write: a flush returning after that - a stop's, still running once its kept
+            // unit was given up and released - is refused by what already ended this owner, not by a lease lost now.
+            if (leaseRow.advanceTo(LeaseRow.RELEASED) == LeaseRow.RELEASED) {
+                log.debug("Ordered shard {}: acknowledgement refused under fence {} for a lease row already given up or found taken",
+                          shard, fence);
+                return;
+            }
             metrics.fencedOutAcks.increment();
-            leaseRow.advanceTo(LeaseRow.RELEASED);
             log.warn("Ordered shard {}: acknowledgement rejected under fence {} — lease lost, stopping", shard, fence);
             return;
         }

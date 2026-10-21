@@ -998,8 +998,15 @@ final class ShardOwner implements LeasedOwner {
             // already gone. Only the first means the shard has moved, and treating the second as if
             // it had cost a lease that was still held: the owner stopped, the shard was re-acquired,
             // and everything in flight was redelivered.
+            // Counted and logged only by the refusal that moves the row to RELEASED. One already there was released by
+            // this instance (releaseLeaseRows: a stop, a shed, a dead pump's hand-back) or found taken by an earlier check
+            // or write: a refusal after that is not a lease lost now.
+            if (leaseRow.advanceTo(LeaseRow.RELEASED) == LeaseRow.RELEASED) {
+                log.debug("Shard {}: acknowledgement refused under fence {} for a lease row already given up or found taken",
+                          shard, fence);
+                return;
+            }
             metrics.fencedOutAcks.increment();
-            leaseRow.advanceTo(LeaseRow.RELEASED);
             log.warn("Shard {}: acknowledgement rejected under fence {} — lease lost, stopping", shard, fence);
             return;
         }

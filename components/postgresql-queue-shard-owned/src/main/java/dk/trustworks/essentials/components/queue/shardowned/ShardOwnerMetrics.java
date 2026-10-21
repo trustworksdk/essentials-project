@@ -318,7 +318,10 @@ public final class ShardOwnerMetrics {
      */
     public final LongAdder     readsSkippedByHandoff            = new LongAdder();
     /**
-     * Acknowledgements the fence clause rejected because the lease had moved on.
+     * Acknowledgements the fence clause rejected because the lease had moved on. Counted only by the refused flush that
+     * moves its owner's lease row to {@code RELEASED} ({@link LeasedOwner.LeaseRow}): a flush refused once the row is
+     * {@code RELEASED} already - released by this instance, as by a stop whose flush returned after its kept unit was
+     * given up and released, or found taken by an earlier check or write - counts nothing.
      */
     public final LongAdder     fencedOutAcks                    = new LongAdder();
     public final LongAdder     leaseRenewals                    = new LongAdder();

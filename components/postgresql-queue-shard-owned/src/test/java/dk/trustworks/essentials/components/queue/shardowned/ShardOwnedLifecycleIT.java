@@ -698,7 +698,10 @@ class ShardOwnedLifecycleIT {
      * thread lets the unit out of {@code STOP_FLUSHING}, which no hand-back claims, so the unit was never given up past
      * {@code stuckHandlerTimeout}: a release on request answered {@code BUSY} for as long as the thread hung, and nothing
      * logged why. Kept longer than the bound and still there, the unit is given up with a WARN, and a release on request
-     * releases it.
+     * releases it. Should the flush return after all, the handler having returned meanwhile, the thread says it finished
+     * only after the unit was given up - it used to WARN that it was keeping the unit, advising a release on request - and
+     * its acknowledgement, refused because the row is released, is no lost lease: it used to count in
+     * {@code fencedOutAcks} and WARN "lease lost".
      */
     @Test
     void a_unit_a_stop_kept_whose_flush_never_returns_is_released_on_request_past_the_stuck_handler_timeout() throws Exception {
@@ -710,8 +713,12 @@ class ShardOwnedLifecycleIT {
         var holding     = new FlushHoldingDataSource(dataSource, FlushHoldingDataSource.STOP_BUDGET_THREAD);
         var logged      = new ListAppender<ILoggingEvent>();
         var queueLogger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(ShardOwnedQueue.class);
+        var ownerLogged = new ListAppender<ILoggingEvent>();
+        var ownerLogger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(OrderedShardOwner.class);
         logged.start();
         queueLogger.addAppender(logged);
+        ownerLogged.start();
+        ownerLogger.addAppender(ownerLogged);
         try (var runtime = new ShardRuntime(dataSource, settings)) {
             var queue = ShardOwnedQueue.builder().setDataSource(holding).setQueueId(QUEUE_ID).setShardCount(SHARD_COUNT)
                                        .setInstanceId(instanceId).setRuntime(runtime).build();
@@ -757,6 +764,23 @@ class ShardOwnedLifecycleIT {
                                        .filteredOn(message -> message.contains("stops waiting for ordered unit " + kept.shard())
                                                && message.contains("still not finished flushing"))
                                        .as("one WARN gives the unit up").hasSize(1);
+
+                // The released unit's handler returns: its acknowledgement waits in the kept owner, released by the request.
+                // Then the stop's flush returns after all and tries that acknowledgement under the fence the unit was kept
+                // under, which the fence refuses: the row is released.
+                release.countDown();
+                Awaitility.await().atMost(Duration.ofSeconds(5))
+                          .untilAsserted(() -> assertThat(queue.metrics().keptUnitsInHandler()).as("premise: the kept handler has returned").isZero());
+                holding.letConnect();
+                assertThat(holding.awaitAcknowledgementHeld(Duration.ofSeconds(10)))
+                        .as("premise: the stop's flush tries the released owner's acknowledgement").isTrue();
+                holding.letAcknowledge();
+                Awaitility.await().atMost(Duration.ofSeconds(10))
+                          .untilAsserted(() -> assertThat(queue.handBackStillRunning()).as("premise: the stop's budget thread has finished").isFalse());
+                assertTheLateStopFlushReportsTheUnitGivenUpAndNoLostLease(queue, logged, ownerLogged, kept.shard());
+                assertThat(ownerOf("ordered", kept.shard())).as("the late flush leaves the released row released").isNull();
+                assertThat(fenceOf("ordered", kept.shard())).as("under the fence it was kept under").isEqualTo(kept.fence());
+                assertThat(instanceRegistered(instanceId)).as("and does not deregister the instance its stop kept a unit for").isTrue();
             } finally {
                 release.countDown();
                 holding.letConnect();
@@ -765,14 +789,39 @@ class ShardOwnedLifecycleIT {
             }
         } finally {
             queueLogger.detachAppender(logged);
+            ownerLogger.detachAppender(ownerLogged);
         }
+    }
+
+    /**
+     * What the budget thread of a stop that kept {@code unit} says once its flush, hung past {@code stopFlushGiveUpAfter},
+     * has returned and the thread has finished, the unit given up meanwhile: no "is keeping" WARN - whose advice to release
+     * the unit on request no longer applies - but one INFO that it finished only after this queue had stopped waiting for
+     * the unit, and no refused acknowledgement of the unit counted or logged as a lost lease.
+     */
+    private static void assertTheLateStopFlushReportsTheUnitGivenUpAndNoLostLease(ShardOwnedQueue queue, ListAppender<ILoggingEvent> queueLogged,
+                                                                               ListAppender<ILoggingEvent> ownerLogged, int unit) {
+        assertThat(queueLogged.list).extracting(ILoggingEvent::getFormattedMessage)
+                                    .as("the late flush does not say it is keeping the unit given up meanwhile")
+                                    .noneMatch(message -> message.contains("is keeping"));
+        assertThat(queueLogged.list).filteredOn(event -> event.getLevel() == ch.qos.logback.classic.Level.INFO)
+                                    .extracting(ILoggingEvent::getFormattedMessage)
+                                    .filteredOn(message -> message.contains("only after this queue had stopped waiting for them")
+                                            && message.contains("[" + unit + "]"))
+                                    .as("it says, at INFO, that it finished only after the unit was given up").hasSize(1);
+        assertThat(queue.metrics().fencedOutAcks.sum()).as("no acknowledgement counted as fenced out").isZero();
+        assertThat(ownerLogged.list).extracting(ILoggingEvent::getFormattedMessage)
+                                    .as("nor logged as a lost lease")
+                                    .noneMatch(message -> message.contains("lease lost"));
     }
 
     /**
      * The same hung flush of the stop that kept a unit, with the queue restarted meanwhile: the restart leaves the unit
      * alone while it waits for that flush, and a heartbeat once it has been kept longer than {@code stuckHandlerTimeout}
      * gives it up, and the queue takes it over under a new fence, delivering the key's message again beside its stuck
-     * handler - the at-least-once the bound accepts. It used to stay unserved for as long as the flush hung.
+     * handler - the at-least-once the bound accepts. It used to stay unserved for as long as the flush hung. Should the
+     * flush return after all, the thread leaves the restarted queue's rows, fences and membership row alone, and says the
+     * unit was given up rather than kept.
      */
     @Test
     void a_unit_a_stop_kept_whose_flush_never_returns_is_taken_over_by_a_restarted_queue_past_the_stuck_handler_timeout() throws Exception {
@@ -780,8 +829,16 @@ class ShardOwnedLifecycleIT {
         var entered    = new CountDownLatch(1);
         var release    = new CountDownLatch(1);
         var settings   = settingsWithShedGrace(Duration.ofMillis(300)).toBuilder().setStuckHandlerTimeout(HUNG_FLUSH_BOUND).build();
-        var instanceId = "kept-behind-a-hung-stop-flush-restarted";
-        var holding    = new FlushHoldingDataSource(dataSource, FlushHoldingDataSource.STOP_BUDGET_THREAD);
+        var instanceId  = "kept-behind-a-hung-stop-flush-restarted";
+        var holding     = new FlushHoldingDataSource(dataSource, FlushHoldingDataSource.STOP_BUDGET_THREAD);
+        var logged      = new ListAppender<ILoggingEvent>();
+        var queueLogger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(ShardOwnedQueue.class);
+        var ownerLogged = new ListAppender<ILoggingEvent>();
+        var ownerLogger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(OrderedShardOwner.class);
+        logged.start();
+        queueLogger.addAppender(logged);
+        ownerLogged.start();
+        ownerLogger.addAppender(ownerLogged);
         try (var runtime = new ShardRuntime(dataSource, settings)) {
             var queue = ShardOwnedQueue.builder().setDataSource(holding).setQueueId(QUEUE_ID).setShardCount(SHARD_COUNT)
                                        .setInstanceId(instanceId).setRuntime(runtime).build();
@@ -815,12 +872,32 @@ class ShardOwnedLifecycleIT {
                 assertThat(queue.handBackStillRunning()).as("premise: the stop's budget thread still hangs").isTrue();
                 assertThat(holding.awaitAcknowledgementHeld(Duration.ZERO)).as("premise: before it has flushed anything").isFalse();
                 assertThat(queue.keptOrderedUnitAwaited()).as("nothing waits for the unit any more").isFalse();
+
+                // The stop's flush returns after all, the stuck handler still running: the thread goes on to release the
+                // rows of the run it ended, under that run's fences, and to the deregistration - with the restarted run
+                // holding every unit, the one it took over among them.
+                var takenOver = fenceOf("ordered", kept.shard());
+                holding.letConnect();
+                holding.letAcknowledge();
+                Awaitility.await().atMost(Duration.ofSeconds(10))
+                          .untilAsserted(() -> assertThat(queue.handBackStillRunning()).as("premise: the stop's budget thread has finished").isFalse());
+                assertTheLateStopFlushReportsTheUnitGivenUpAndNoLostLease(queue, logged, ownerLogged, kept.shard());
+                assertThat(ownerOf("ordered", kept.shard())).as("the late thread leaves the unit taken over to the restarted queue").isEqualTo(instanceId);
+                assertThat(fenceOf("ordered", kept.shard())).as("under the fence it took the unit over under").isEqualTo(takenOver);
+                assertThat(unitsOwnedBy("ordered", instanceId)).as("nor releases a row the restarted queue holds").isEqualTo(ShardOwnedSchema.ORDERED_UNITS);
+                assertThat(queue.shardsHeld()).as("which still serves every unit").isEqualTo(ShardOwnedSchema.ORDERED_UNITS);
+                assertThat(instanceRegistered(instanceId)).as("nor deregisters the instance the restarted queue runs under").isTrue();
+                Awaitility.await().during(Duration.ofMillis(1_000)).atMost(Duration.ofSeconds(3)).untilAsserted(
+                        () -> assertThat(entries).as("nor has the message delivered again").hasValue(2));
             } finally {
                 release.countDown();
                 holding.letConnect();
                 holding.letAcknowledge();
                 queue.stop();
             }
+        } finally {
+            queueLogger.detachAppender(logged);
+            ownerLogger.detachAppender(ownerLogged);
         }
     }
 
@@ -831,6 +908,8 @@ class ShardOwnedLifecycleIT {
      * fence and its row released, so the restarted queue takes it again with no attempt charged and the handled message is
      * not delivered again. Reviewed after the hand-backs, as it was, the tick passed its hand-back with the unit still
      * waiting for the flush, and its rebalance took the unit over at once: an unclean takeover delivering the message again.
+     * Should the flush return after all, the thread leaves the restarted queue's rows, fences and membership row alone, and
+     * says the unit was given up rather than kept.
      */
     @Test
     void a_unit_a_stop_kept_whose_flush_never_returns_is_handed_back_past_the_stuck_handler_timeout_once_its_handler_has_returned() throws Exception {
@@ -856,8 +935,12 @@ class ShardOwnedLifecycleIT {
         var holding     = new FlushHoldingDataSource(dataSource, FlushHoldingDataSource.STOP_BUDGET_THREAD);
         var logged      = new ListAppender<ILoggingEvent>();
         var queueLogger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(ShardOwnedQueue.class);
+        var ownerLogged = new ListAppender<ILoggingEvent>();
+        var ownerLogger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(OrderedShardOwner.class);
         logged.start();
         queueLogger.addAppender(logged);
+        ownerLogged.start();
+        ownerLogger.addAppender(ownerLogged);
         try (var runtime = new ShardRuntime(dataSource, settings)) {
             var queue = ShardOwnedQueue.builder().setDataSource(holding).setQueueId(QUEUE_ID).setShardCount(SHARD_COUNT)
                                        .setInstanceId(instanceId).setRuntime(runtime).build();
@@ -914,6 +997,23 @@ class ShardOwnedLifecycleIT {
                 assertThat(queue.remaining()).as("the handled message was acknowledged by the hand-back").isZero();
                 Awaitility.await().during(Duration.ofMillis(1500)).atMost(Duration.ofSeconds(3)).untilAsserted(
                         () -> assertThat(entries).as("the handled message is not delivered again").hasValue(1));
+
+                // The stop's flush returns after all: the thread goes on to release the rows of the run it ended, under
+                // that run's fences, and to the deregistration - with the restarted run holding every unit, the one handed
+                // back and taken again among them.
+                var takenAgain = fenceOf("ordered", kept.shard());
+                holding.letConnect();
+                holding.letAcknowledge();
+                Awaitility.await().atMost(Duration.ofSeconds(10))
+                          .untilAsserted(() -> assertThat(queue.handBackStillRunning()).as("premise: the stop's budget thread has finished").isFalse());
+                assertTheLateStopFlushReportsTheUnitGivenUpAndNoLostLease(queue, logged, ownerLogged, kept.shard());
+                assertThat(ownerOf("ordered", kept.shard())).as("the late thread leaves the unit handed back to the restarted queue").isEqualTo(instanceId);
+                assertThat(fenceOf("ordered", kept.shard())).as("under the fence it took the unit under").isEqualTo(takenAgain);
+                assertThat(unitsOwnedBy("ordered", instanceId)).as("nor releases a row the restarted queue holds").isEqualTo(ShardOwnedSchema.ORDERED_UNITS);
+                assertThat(queue.shardsHeld()).as("which still serves every unit").isEqualTo(ShardOwnedSchema.ORDERED_UNITS);
+                assertThat(instanceRegistered(instanceId)).as("nor deregisters the instance the restarted queue runs under").isTrue();
+                Awaitility.await().during(Duration.ofMillis(1_000)).atMost(Duration.ofSeconds(3)).untilAsserted(
+                        () -> assertThat(entries).as("nor has the handled message delivered again").hasValue(1));
             } finally {
                 release.countDown();
                 holding.letConnect();
@@ -922,6 +1022,7 @@ class ShardOwnedLifecycleIT {
             }
         } finally {
             queueLogger.detachAppender(logged);
+            ownerLogger.detachAppender(ownerLogged);
         }
     }
 

@@ -3759,6 +3759,8 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
     private void handBackWithinBudget(List<LeasedOwner> serving, List<LeasedOwner> toRelease, List<LeasedOwner> kept,
                                       List<LeasedOwner> keptEarlier, List<LeasedOwner> busyEarlier, List<KeptUnit> returnedEarlier,
                                       List<KeptUnit> keptNow, boolean deregister) {
+        // The units of keptNow this thread lets out of STOP_FLUSHING below; the rest a review gave up while the flush ran.
+        var letOut = new ArrayList<KeptUnit>();
         try {
             // What the pumps would have flushed had they gone on serving these owners. Valid still:
             // releasing a lease does not bump its fence, and the leases go only after this. Nothing to
@@ -3774,9 +3776,12 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             // hand-back flushing and releasing one of them while this flush still ran made this flush, refused, count a
             // lease lost. Unless this flush outlasts stopFlushGiveUpAfter: a review may have given such a unit up by
             // then (reviewStuckKeptUnits), which leaves the move below doing nothing, and the hand-back registered after it
-            // claims the unit from where the review left it.
+            // claims the unit from where the review left it. Such a unit is not reported as kept (reportKeptOnStop), and
+            // this flush's refused writes to it, once it was released, are no lost lease (OrderedShardOwner.flushAckBatch).
             for (var unit : keptNow) {
-                unit.moveFrom(KeptUnit.Phase.STOP_FLUSHING, KeptUnit.Phase.AWAITING_HAND_BACK);
+                if (unit.moveFrom(KeptUnit.Phase.STOP_FLUSHING, KeptUnit.Phase.AWAITING_HAND_BACK)) {
+                    letOut.add(unit);
+                }
                 if (unit.owner() instanceof OrderedShardOwner ordered) {
                     ordered.whenNoKeyInHandler(() -> handBackKeptUnitOnItsOwnThread(unit));
                 }
@@ -3797,21 +3802,10 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         // Before the deregistration below, as this run's own rows are released before it. One whose hand-back fails here
         // does not keep the instance registered, as a release that fails above does not.
         returnedEarlier.forEach(this::handBackKeptUnit);
+        // Never deregisters, whatever became of the units since: endRun counted this hand-back as one that does not
+        // (handBackMayStillDeregister).
         if (!kept.isEmpty()) {
-            log.warn("Instance {} is keeping {} ordered unit(s) [{}] on queue {}: a key was still in a handler "
-                             + "{} after stop began. Each is handed back - its acknowledgements flushed, its lease released - "
-                             + "once its handler has returned, whether or not this queue runs again; until then another "
-                             + "instance can take it only once this one's liveness lapses ({} ms), so no successor starts a "
-                             + "key that may still be running here - unless the key has been in its handler longer than "
-                             + "stuckHandlerTimeout ({}), when a later run of this queue, or a PostgresqlMessageQueue subscription "
-                             + "registering under this instance id, takes the unit over - or unless it is released on request "
-                             + "before that (MessageQueue.releaseKeptOrderedUnit(\"{}\", unit), admin API POST "
-                             + ".../ordered-units/{unit}/release-kept?instanceId={}, on this process), which accepts that the messages in "
-                             + "those handlers are delivered again, possibly beside them. Raise shedGrace if "
-                             + "handlers routinely outlast it",
-                     instanceId, kept.size(), summarise(kept.stream().map(LeasedOwner::shard).toList()), queueId,
-                     Duration.ofNanos(activeSettings.shedGraceNanos()), leaseTtlMillis, activeSettings.stuckHandlerTimeout(),
-                     instanceId, instanceId);
+            reportKeptOnStop(keptNow, letOut);
             return;
         }
         if (!deregister) {
@@ -3909,6 +3903,42 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                 deregistrationsRunning.decrementAndGet();
                 deregistrationFinished.notifyAll();
             }
+        }
+    }
+
+    /**
+     * Say what became of the ordered units the stop ending a run kept ({@code keptNow}), once its budget thread has flushed
+     * ({@link #handBackWithinBudget}). The units that thread let out of {@link KeptUnit.Phase#STOP_FLUSHING}
+     * ({@code letOut}) are kept: a WARN says so and how each is handed back or released. The rest were given up while that
+     * flush still ran, kept longer than {@link #stopFlushGiveUpAfter} ({@link #reviewStuckKeptUnits()}, which said so at
+     * WARN), and may have been handed back, released on request or taken over since: one INFO line, never the keeping WARN,
+     * whose advice to release the unit on request no longer applies.
+     */
+    private void reportKeptOnStop(List<KeptUnit> keptNow, List<KeptUnit> letOut) {
+        if (!letOut.isEmpty()) {
+            log.warn("Instance {} is keeping {} ordered unit(s) [{}] on queue {}: a key was still in a handler "
+                             + "{} after stop began. Each is handed back - its acknowledgements flushed, its lease released - "
+                             + "once its handler has returned, whether or not this queue runs again; until then another "
+                             + "instance can take it only once this one's liveness lapses ({} ms), so no successor starts a "
+                             + "key that may still be running here - unless the key has been in its handler longer than "
+                             + "stuckHandlerTimeout ({}), when a later run of this queue, or a PostgresqlMessageQueue subscription "
+                             + "registering under this instance id, takes the unit over - or unless it is released on request "
+                             + "before that (MessageQueue.releaseKeptOrderedUnit(\"{}\", unit), admin API POST "
+                             + ".../ordered-units/{unit}/release-kept?instanceId={}, on this process), which accepts that the messages in "
+                             + "those handlers are delivered again, possibly beside them. Raise shedGrace if "
+                             + "handlers routinely outlast it",
+                     instanceId, letOut.size(), summarise(letOut.stream().map(unit -> unit.owner().shard()).toList()), queueId,
+                     Duration.ofNanos(activeSettings.shedGraceNanos()), leaseTtlMillis, activeSettings.stuckHandlerTimeout(),
+                     instanceId, instanceId);
+        }
+        var givenUp = keptNow.stream().filter(unit -> !letOut.contains(unit)).map(unit -> unit.owner().shard()).toList();
+        if (!givenUp.isEmpty()) {
+            log.info("Instance {} finished flushing {} of the ordered unit(s) the stop of queue {} kept [{}] only after this "
+                             + "queue had stopped waiting for them: each had been kept longer than {} with that flush not "
+                             + "returned, and was given up then, as logged at WARN. This stop leaves each as that give-up left "
+                             + "it - handed back, released on request or taken over since, or still to be, like any unit given "
+                             + "up on; a hand-back under the fence a unit was kept under leaves alone whoever has taken it over",
+                     instanceId, givenUp.size(), queueId, summarise(givenUp), stopFlushGiveUpAfter(activeSettings));
         }
     }
 
