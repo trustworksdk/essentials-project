@@ -877,7 +877,11 @@ for another instance id - still says which process answered. Each entry of `rele
 release's flush took its batch of acknowledgements, and how long the longest had been there: a handler that
 returned before that is acknowledged and not named, and a key named is not acknowledged), `ALREADY_TAKEN` (the row had been taken under a newer fence
 meanwhile; nothing released) or `BUSY` (the stop that kept it is still flushing it, or another
-hand-back or release of it is running; nothing done, ask again). A release with a key in its handler is logged as a WARN naming
+hand-back or release of it is running; nothing done, ask again) - except a unit kept longer than
+`stuckHandlerTimeout` - or, when that is longer, than 2 s plus the network timeout that stop puts on
+its waits for the database (`leaseTtl`, or 2 s when that is longer) - with that flush still running:
+the release reviews the kept units first, so such a unit is given up and released, not answered
+`BUSY`. A release with a key in its handler is logged as a WARN naming
 the unit and the keys. Once released, the unit no longer keeps an unsubscribed subscription's instance
 id out of use, and a later stop does not stay registered for it.
 
