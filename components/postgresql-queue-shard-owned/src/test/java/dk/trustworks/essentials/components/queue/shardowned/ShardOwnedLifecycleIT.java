@@ -4748,7 +4748,8 @@ class ShardOwnedLifecycleIT {
             if (holdConnections.get()) {
                 heldThread.compareAndSet(null, current);
             }
-            return heldThread.get() == current;
+            // Thread does not override equals(): this is the identity check, written the way the rest of this class compares threads.
+            return current.equals(heldThread.get());
         }
 
         // Connection's own loader, not the thread's context loader: a proxy class must be defined in a loader that sees
