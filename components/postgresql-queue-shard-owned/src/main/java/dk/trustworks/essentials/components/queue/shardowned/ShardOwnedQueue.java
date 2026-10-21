@@ -251,7 +251,8 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      */
     private final    AtomicInteger            deregistrationsRunning = new AtomicInteger();
     /**
-     * Notified each time {@link #deregistrationsRunning} is counted down, for {@link #awaitDeregistrationsRunning}.
+     * Notified each time {@link #deregistrationsRunning} is counted down, which is done holding this monitor, for
+     * {@link #awaitDeregistrationsRunning}.
      */
     private final    Object                   deregistrationFinished = new Object();
     /**
@@ -3334,8 +3335,10 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                          instanceId, e);
             }
         } finally {
-            deregistrationsRunning.decrementAndGet();
+            // Counted down under the monitor awaitDeregistrationsRunning re-reads the count under, so the change and its
+            // notify are one step to a waiter.
             synchronized (deregistrationFinished) {
+                deregistrationsRunning.decrementAndGet();
                 deregistrationFinished.notifyAll();
             }
         }
