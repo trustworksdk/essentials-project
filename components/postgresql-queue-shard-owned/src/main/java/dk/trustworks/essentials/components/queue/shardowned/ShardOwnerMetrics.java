@@ -401,7 +401,7 @@ public final class ShardOwnerMetrics {
      * than {@code stuckHandlerTimeout} ({@link ShardOwnerSettings}), after which a run of that queue - the one running then,
      * or the next - or a subscription registering under the instance id takes the unit over, and the id is free again; or
      * until the unit is released on request ({@code MessageQueue.releaseKeptOrderedUnit}), after which an instance below its
-     * fair share may take it under a new fence, and the id is free again. A unit taken over that way still counts here while its old handler runs on, since that handler
+     * fair share may take it under a new fence, and the id is free again. A unit taken over at the bound still counts here while its old handler runs on, since that handler
      * still holds a thread and may still be running the key beside its new owner. So does an ordered unit a fair-share shed,
      * or the hand-back from a dead pump, released with a key still in a handler because that key had been there longer than
      * {@code stuckHandlerTimeout} - each such release logged at WARN, naming the unit, its keys and how long - for as long
