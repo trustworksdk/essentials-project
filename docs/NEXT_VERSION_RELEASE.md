@@ -476,7 +476,9 @@ Spring Boot applications see no change: the starter passes its own listener. (`a
   message's count from 1, and the bulk increment a new owner made at takeover was never read back. The first failure
   under a new owner now continues from the count stored on the row.
 - **A clean handover charges nothing.** When the previous owner stopped and released the shard, no queued message is
-  charged an attempt, so deploys and rebalances no longer cost messages attempts. Before, every takeover charged
+  charged an attempt, so deploys and rebalances no longer cost queued messages attempts; only a message still in a handler when
+  its shard or unit is released without waiting for that handler can be charged, by the releasing instance (§1.1.24).
+  Before, every takeover charged
   every queued row.
 - **A takeover after a crash or a lost lease charges one attempt only to the rows the previous owner could have had
   in flight**: on the unordered lane a window of `parallelConsumers + ackBatchSize` rows and the rows that had
@@ -631,6 +633,21 @@ in `ShardOwnerMetrics.takeoverAttemptBumps` of the releasing queue, and the rele
 charged and which keys were dead-lettered. What to do: nothing, unless a queue's ordered handlers legitimately run past
 its `stuckHandlerTimeout` - then each such shed or release costs that message an attempt, and enough of them
 dead-letter it, so raise the bound as above. (`<!-- fix:U-011 -->`)
+
+**The unordered lane now charges a hung handler's delivery too, past the same bound.** It waits for no handler: a
+fair-share shed and a dead pump's hand-back release an unordered shard at once, and `stop()` once `shedGrace` has run
+out, with whatever is still in its handlers, and the next owner, finding the shard released, charges nothing. With a
+clean handover now charging nothing (§1.1.18), a message whose unordered handler hangs on every delivery would be
+delivered again after every rebalance or restart - and, with the dead-pump hand-back new in this release (§2), after
+every dead pump - with its attempt count unchanged, never reaching the dead-letter table, each delivery leaving one
+more handler thread hung and holding a handler permit; in 0.60.0 takeovers raised its stored count, but nothing ever
+dead-lettered it. Now, before such a release, each message that has been in its handler longer
+than `stuckHandlerTimeout` is charged one attempt, and dead-lettered at its `maxAttempts` with the same error; a
+message in its handler for less is released uncharged, as before - a slow handler is not taken for a hung one. The
+charge is counted in `ShardOwnerMetrics.takeoverAttemptBumps` of the releasing queue, and a release that charged logs
+one WARN naming the shard, how many messages it charged and which it dead-lettered. What to do: nothing, unless a
+queue's unordered handlers legitimately run past its `stuckHandlerTimeout` - then a rebalance or stop that releases a
+shard while one runs costs that message an attempt, so raise the bound as above. (`<!-- fix:U-014 -->`)
 
 ---
 

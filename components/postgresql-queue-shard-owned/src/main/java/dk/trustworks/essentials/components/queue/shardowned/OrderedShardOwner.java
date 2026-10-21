@@ -1589,7 +1589,7 @@ final class OrderedShardOwner implements BatchReadableOwner {
                 }
                 var charged = keyBySeq.isEmpty()
                               ? Map.<Long, Integer>of()
-                              : storage.chargeOrderedRowsInHandler(connection, shard, keyBySeq.keySet(), instanceId, fence);
+                              : storage.chargeRowsInHandler(connection, ShardOwnedSchema.ORDERED_TABLE, shard, keyBySeq.keySet(), instanceId, fence);
                 metrics.takeoverAttemptBumps.add(charged.size());
                 // The charge has committed: recorded before anything else can fail, or a retried release charges again
                 chargedOnRelease = charged;

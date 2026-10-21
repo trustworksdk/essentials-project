@@ -117,6 +117,17 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  *                         once - which is the at-least-once the bound trades the stuck unit for. A kept unit with a key
  *                         in its handler, and a unit the queue stopped waiting for in any of the three while that handler runs
  *                         on, is counted in {@code ShardOwnerMetrics.keptUnitsInHandler()}
+ *                         <p>
+ *                         The unordered lane waits for no handler: a fair-share shed and the hand-back from a dead pump
+ *                         release a shard at once, and a stop once {@code shedGrace} has run out, with whatever is in
+ *                         its handlers. This bound decides what such a release charges: each message in a handler
+ *                         longer than this is charged an attempt before the release, and dead-lettered if that brings
+ *                         it to its {@code maxAttempts}, as the shard's next owner, finding it released, charges
+ *                         nothing; a message in a handler for less is released uncharged, its handler taken to be slow,
+ *                         not hung. A message whose unordered handler hangs on every delivery therefore reaches the
+ *                         dead-letter table once it has been released past this bound {@code maxAttempts} times. Each
+ *                         release that charged logs one WARN naming the shard, how many it charged and which it
+ *                         dead-lettered; such a shard is not counted in {@code keptUnitsInHandler()}
  */
 public record ShardOwnerSettings(int readBatchSize,
                                  int ackBatchSize,

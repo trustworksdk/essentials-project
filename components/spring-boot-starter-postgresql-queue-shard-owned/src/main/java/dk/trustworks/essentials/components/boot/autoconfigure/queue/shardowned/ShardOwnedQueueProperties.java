@@ -192,6 +192,11 @@ public class ShardOwnedQueueProperties {
      * otherwise the unit's next owner delivers the message of each key still in a handler again, possibly beside its
      * handler, so those keys may run in two handlers at once.
      * <p>
+     * The unordered lane waits for no handler - a fair-share shed and a dead pump's hand-back release a shard at once, a
+     * stop once {@code shed-grace} has run out - but a message in a handler longer than this bound when its shard is
+     * released is charged an attempt first, and dead-lettered if that brings it to its maximum attempts; one in a handler
+     * for less is released uncharged.
+     * <p>
      * <b>A behaviour change from 0.60.0,</b> where a restart took the kept unit back at once: it now waits for the handler
      * up to this bound, then takes the unit over; a fair-share shed, which waited however long the handler ran, now
      * releases the unit past this bound, and so does the dead-pump hand-back, new in 0.60.1. A queue whose handlers legitimately run longer than 15 minutes must

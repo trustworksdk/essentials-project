@@ -382,6 +382,138 @@ class ShardOwnedDeadPumpHandBackIT {
     }
 
     /**
+     * A dead pump's unordered shard is handed back at once, with whatever is in its handlers; a message in one longer than
+     * {@code stuckHandlerTimeout} is charged its attempt first, once. A live pump here takes the shard again under a new
+     * fence, charging nothing itself (the row was released), and delivers the message with that attempt counted. Released
+     * uncharged, a message whose handler hung on every delivery never reached the dead-letter table.
+     */
+    @Test
+    void an_unordered_shard_on_a_dead_pump_is_handed_back_with_the_message_in_its_handler_past_the_stuck_handler_timeout_charged_once() throws Exception {
+        var stuckHandlerTimeout  = Duration.ofSeconds(1);
+        var settings             = settings(2, Duration.ofMillis(300), Duration.ofSeconds(1), stuckHandlerTimeout);
+        var entered              = new CountDownLatch(1);
+        var release              = new CountDownLatch(1);
+        var entries              = new AtomicInteger();
+        var heldShard            = new CompletableFuture<Integer>();
+        var attemptsOnRedelivery = new CompletableFuture<Integer>();
+        var logged               = captureQueueLog();
+        try (var runtime = new ShardRuntime(dataSource, settings)) {
+            var queue = queue(runtime, "dead-pump-stuck-u");
+            try {
+                queue.startConsuming((messageId, payload, payloadType) -> {
+                    if (entries.incrementAndGet() == 1) {
+                        heldShard.complete(messageId.shard());
+                        entered.countDown();
+                        awaitQuietly(release);
+                    } else {
+                        attemptsOnRedelivery.complete(unorderedAttemptsOf(messageId.shard(), messageId.sequence()));
+                    }
+                }, settings, SHARD_COUNT);
+                queue.enqueue(List.of("HOLD".getBytes(StandardCharsets.UTF_8)), 1);
+                assertThat(entered.await(20, TimeUnit.SECONDS)).as("premise: the message is in its handler").isTrue();
+                var shard       = heldShard.get();
+                var fenceBefore = fenceOf("unordered", shard);
+                Thread.sleep(stuckHandlerTimeout.toMillis() + 300);
+
+                kill(runtime.pumpFor(QUEUE_ID, "unordered", shard));
+
+                Awaitility.await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
+                    assertThat(fenceOf("unordered", shard)).as("handed back and taken again").isGreaterThan(fenceBefore);
+                    assertThat(entries.get()).as("the message delivered again beside the hung handler").isEqualTo(2);
+                });
+                assertThat(release.getCount()).as("premise: the first handler is still held").isEqualTo(1);
+                assertThat(queue.metrics().takeoverAttemptBumps.sum()).as("the hand-back charged the message in the hung handler once")
+                                                                     .isEqualTo(1);
+                assertThat(attemptsOnRedelivery.get(5, TimeUnit.SECONDS)).as("the message is redelivered with that one attempt counted")
+                                                                         .isEqualTo(1);
+                assertThat(warnings(logged, "released unordered shard")).as("one WARN for the hand-back").singleElement().satisfies(warning -> {
+                    assertThat(warning.getArgumentArray()[1]).as("the shard").isEqualTo(shard);
+                    assertThat(warning.getFormattedMessage()).contains("on queue " + QUEUE_ID + " from its dead pump having charged 1 message(s) that "
+                                                                       + "were in a handler longer than stuckHandlerTimeout (PT1S) an attempt");
+                });
+            } finally {
+                release.countDown();
+                queue.stop();
+            }
+        } finally {
+            releaseQueueLog(logged);
+        }
+    }
+
+    /**
+     * A dead pump's unordered shard whose charge before its release fails - refused by the database here - is left held, with
+     * a WARN naming it, and retried on the next heartbeat, while the dead pump's other shards are handed back all the same.
+     * Once the database lets the charge through, the held shard is handed back with the message in its handler charged once.
+     */
+    @Test
+    void a_dead_pumps_unordered_shard_whose_charge_before_its_release_fails_is_held_while_the_pumps_other_shards_are_handed_back() throws Exception {
+        var stuckHandlerTimeout = Duration.ofSeconds(1);
+        var settings            = settings(2, Duration.ofMillis(300), Duration.ofSeconds(1), stuckHandlerTimeout);
+        var entered             = new CountDownLatch(1);
+        var release             = new CountDownLatch(1);
+        var entries             = new AtomicInteger();
+        var heldShard           = new CompletableFuture<Integer>();
+        var logged              = captureQueueLog();
+        try (var runtime = new ShardRuntime(dataSource, settings)) {
+            var queue = queue(runtime, "dead-pump-charge-u");
+            try {
+                queue.startConsuming((messageId, payload, payloadType) -> {
+                    if (entries.incrementAndGet() == 1) {
+                        heldShard.complete(messageId.shard());
+                        entered.countDown();
+                        awaitQuietly(release);
+                    }
+                }, settings, SHARD_COUNT);
+                queue.enqueue(List.of("HOLD".getBytes(StandardCharsets.UTF_8)), 1);
+                assertThat(entered.await(20, TimeUnit.SECONDS)).as("premise: the message is in its handler").isTrue();
+                var shard         = heldShard.get();
+                var doomed        = runtime.pumpFor(QUEUE_ID, "unordered", shard);
+                var doomedShards  = unitsOn(runtime, doomed, "unordered", SHARD_COUNT);
+                var idleShards    = doomedShards.stream().filter(candidate -> candidate != shard).toList();
+                var fencesBefore  = fences("unordered", doomedShards);
+                assertThat(idleShards).as("premise: the dead pump serves other shards too").isNotEmpty();
+                // Past the bound before the pump dies, so the first hand-back after the death finds the message stuck and the
+                // idle shards ready together.
+                Thread.sleep(stuckHandlerTimeout.toMillis() + 300);
+
+                failUnorderedAttemptCharges(true);
+                try {
+                    kill(doomed);
+
+                    Awaitility.await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
+                        for (var idle : idleShards) {
+                            assertThat(fenceOf("unordered", idle)).as("idle shard %d was handed back and taken again while the charge fails", idle)
+                                                                  .isGreaterThan(fencesBefore.get(idle));
+                        }
+                    });
+                    var chargeFailures = warnings(logged, "could not charge the messages in a handler of unordered shard");
+                    assertThat(chargeFailures).as("premise: the charge was attempted and refused by the database").isNotEmpty();
+                    assertThat(chargeFailures.getFirst().getArgumentArray()[1]).as("the shard named").isEqualTo(shard);
+                    assertThat(chargeFailures.getFirst().getThrowableProxy().getMessage()).contains("simulated failure charging");
+                    assertThat(ownerOf("unordered", shard)).as("the shard whose charge failed is still leased").isEqualTo("dead-pump-charge-u");
+                    assertThat(fenceOf("unordered", shard)).as("and not taken again").isEqualTo(fencesBefore.get(shard));
+                    assertThat(queue.metrics().shardsOnDeadPumps.get()).as("it alone is still on the dead pump").isEqualTo(1);
+                    assertThat(queue.metrics().takeoverAttemptBumps.sum()).as("nothing charged while the database refuses it").isZero();
+                } finally {
+                    failUnorderedAttemptCharges(false);
+                }
+
+                Awaitility.await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
+                    assertThat(fenceOf("unordered", shard)).as("handed back once the charge goes through, and taken again").isGreaterThan(fencesBefore.get(shard));
+                    assertThat(queue.metrics().shardsOnDeadPumps.get()).isZero();
+                });
+                assertThat(queue.metrics().takeoverAttemptBumps.sum()).as("the message in the hung handler charged once").isEqualTo(1);
+            } finally {
+                release.countDown();
+                failUnorderedAttemptCharges(false);
+                queue.stop();
+            }
+        } finally {
+            releaseQueueLog(logged);
+        }
+    }
+
+    /**
      * With no live pump left the shards are handed back and left free, not taken again: a shard taken now would land on
      * the dead pump, be ended and be handed back on every heartbeat. Each lane has its own acquire loop and its own guard.
      * <p>
@@ -1312,7 +1444,7 @@ class ShardOwnedDeadPumpHandBackIT {
 
     /**
      * Make every write that raises the attempts of an ordered row fail, as a database error would, or stop doing so: the
-     * charge a release past {@code stuckHandlerTimeout} makes before it releases ({@code ShardOwnedStorage.chargeOrderedRowsInHandler}).
+     * charge a release past {@code stuckHandlerTimeout} makes before it releases ({@code ShardOwnedStorage.chargeRowsInHandler}).
      */
     private void failOrderedAttemptCharges(boolean fail) throws Exception {
         try (var connection = dataSource.getConnection(); var statement = connection.createStatement()) {
@@ -1325,6 +1457,38 @@ class ShardOwnedDeadPumpHandBackIT {
             } else {
                 statement.execute("DROP TRIGGER IF EXISTS fail_ordered_attempt_charge ON " + ShardOwnedSchema.ORDERED_TABLE);
             }
+        }
+    }
+
+    /**
+     * Make every charge of an unordered message's attempt count fail, as a database error would, or stop doing so: the
+     * unordered twin of {@link #failOrderedAttemptCharges}.
+     */
+    private void failUnorderedAttemptCharges(boolean fail) throws Exception {
+        try (var connection = dataSource.getConnection(); var statement = connection.createStatement()) {
+            if (fail) {
+                statement.execute("CREATE OR REPLACE FUNCTION fail_unordered_attempt_charge() RETURNS trigger AS $$ BEGIN "
+                                          + "IF NEW.attempts > OLD.attempts THEN RAISE EXCEPTION 'simulated failure charging an unordered attempt'; END IF; "
+                                          + "RETURN NEW; END $$ LANGUAGE plpgsql");
+                statement.execute("CREATE TRIGGER fail_unordered_attempt_charge BEFORE UPDATE ON " + ShardOwnedSchema.UNORDERED_TABLE
+                                          + " FOR EACH ROW EXECUTE FUNCTION fail_unordered_attempt_charge()");
+            } else {
+                statement.execute("DROP TRIGGER IF EXISTS fail_unordered_attempt_charge ON " + ShardOwnedSchema.UNORDERED_TABLE);
+            }
+        }
+    }
+
+    /**
+     * The stored attempt count of unordered message {@code seq} of {@code shard}, read from inside a handler: unchecked, as a
+     * handler cannot throw a checked exception.
+     */
+    private int unorderedAttemptsOf(int shard, long seq) {
+        try {
+            return queryForInt(dataSource, "Reading the attempts of unordered message " + shard + "/" + seq,
+                               "SELECT attempts FROM " + ShardOwnedSchema.UNORDERED_TABLE + " WHERE queue_id = ? AND shard = ? AND seq = ?",
+                               QUEUE_ID, shard, seq);
+        } catch (java.sql.SQLException e) {
+            throw new IllegalStateException(e);
         }
     }
 

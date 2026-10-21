@@ -34,7 +34,8 @@ package dk.trustworks.essentials.components.queue.shardowned.spi;
  * Every method has a default, so implementing one concern does not mean stubbing the others. The
  * engine calls these on its own threads and does not catch what they throw — an observer that fails
  * is a bug in the observer, and swallowing it would hide the bug while corrupting the measurement it
- * was installed to produce. The exception is {@link #takeoverStalled}, which says why.
+ * was installed to produce. The exceptions are {@link #takeoverStalled}, which says why, and
+ * {@link #deadLettered} for a message dead-lettered as its unordered shard was released, which says what follows.
  *
  * <h2>Calling the queue back from {@link #shardOwnershipChanged}</h2>
  * A {@code MessageQueue.consume()}, {@code start()} or {@link Subscription#start()} tells its acquisitions, and the
@@ -109,6 +110,14 @@ public interface QueueObserver {
     default void retryScheduled(String key, int attempt, long delayMillis) {
     }
 
+    /**
+     * A message was moved to the dead-letter table.
+     * <p>
+     * One dead-lettered as its unordered shard was released with the message in a handler longer than
+     * {@code stuckHandlerTimeout} (its error is {@code ShardOwnedStorage.EXHAUSTED_IN_A_RELEASED_HANDLER}) is told by the
+     * instance releasing the shard, before the release; what this throws then is caught and logged at WARN, and the shard is
+     * released all the same, the move having been made by then.
+     */
     default void deadLettered(MessageId id, int attempts, Throwable cause) {
     }
 

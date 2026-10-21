@@ -583,7 +583,7 @@ var slowShedding = settings.toBuilder().setShedGrace(Duration.ofSeconds(30)).bui
 | `watermarkCap` | 60 s | **Ordered lane only.** How long one long-running *write* transaction may pin the lane before the cursor is forced past it — which can skip that transaction's messages | Leave it. An escape hatch, not a tuning knob; if it fires, fix the long transaction |
 | `leaseTtl` | 30 s | How long a shard stays unserved if its owner dies without releasing. The heartbeat renews at a third of it | Lower for faster failover, but not below your worst stop-the-world pause, and **well above your slowest handler** — a handler longer than the lease is what lets a liveness lapse put a key in two handlers at once (`handlersOutlastingLease`) |
 | `shedGrace` | 5 s | How long an ordered shard waits to drain before abandoning a hand-over (retried every heartbeat; once a key has been in its handler longer than `stuckHandlerTimeout`, the hand-over goes ahead with every key still in a handler), and how long `stop()` waits for handlers in flight | Raise if handlers are slow and rebalancing stalls, or if `stop()` keeps ordered units |
-| `stuckHandlerTimeout` | 15 min | How long a message may be in its handler before the queue treats the handler as stuck and stops waiting for it. Applied to the three waits for an ordered unit's handler: a unit a `stop()` kept because a key was still in its handler, a fair-share shed, and the hand-back of a unit whose pump died. Each time it stops waiting, the message in that handler is charged an attempt, and dead-lettered if that brings it to `maxAttempts` | **Behaviour change in 0.60.1**: in 0.60.0 a restart took the kept unit back at once; now it waits for the handler up to this bound, then takes the unit over. A fair-share shed, which waited for the handler however long it ran, now releases the unit past this bound, the handler still running; the dead-pump hand-back, new in 0.60.1, does the same. Set it above the longest time a handler of the queue really takes, as `messageHandlingTimeout` is set for `postgresql-queue`; per queue with `settings.withStuckHandlerTimeout(...)` on that queue's builder, or `essentials.shard-owned-queue.stuck-handler-timeouts.<queue>` in the starter. Must be positive; there is no off switch |
+| `stuckHandlerTimeout` | 15 min | How long a message may be in its handler before the queue treats the handler as stuck and stops waiting for it. Applied to the three waits for an ordered unit's handler: a unit a `stop()` kept because a key was still in its handler, a fair-share shed, and the hand-back of a unit whose pump died. Each time it stops waiting, the message in that handler is charged an attempt, and dead-lettered if that brings it to `maxAttempts`. The unordered lane waits for no handler, but a message in a handler longer than this when its shard is released (shed, dead-pump hand-back, `stop()`) is charged an attempt first, and dead-lettered at `maxAttempts` | **Behaviour change in 0.60.1**: in 0.60.0 a restart took the kept unit back at once; now it waits for the handler up to this bound, then takes the unit over. A fair-share shed, which waited for the handler however long it ran, now releases the unit past this bound, the handler still running; the dead-pump hand-back, new in 0.60.1, does the same. Set it above the longest time a handler of the queue really takes, as `messageHandlingTimeout` is set for `postgresql-queue`; per queue with `settings.withStuckHandlerTimeout(...)` on that queue's builder, or `essentials.shard-owned-queue.stuck-handler-timeouts.<queue>` in the starter. Must be positive; there is no off switch |
 
 `watermarkCap` and `holeExpiry` answer the same question for different lanes, and are deliberately
 separate settings with an order of magnitude between them. The ordered lane resolves a gap *exactly*
@@ -888,6 +888,21 @@ the unit, the key(s) and how long the longest has been there. The row is release
 charges no attempt; instead each message still in a handler is charged an attempt before the release,
 and dead-lettered if that brings it to `maxAttempts`. The next owner delivers the rest again, possibly
 beside their handlers.
+
+The unordered lane waits for no handler: a fair-share shed and a dead pump's hand-back release a shard
+at once, and `stop()` once `shedGrace` has run out, with whatever is still in its handlers. Its next
+owner finds the row released and charges nothing, so before the release each message that has been in
+its handler longer than `stuckHandlerTimeout` is charged an attempt, and dead-lettered if that brings it
+to `maxAttempts`; a message in a handler for less is released uncharged, its handler taken to be slow,
+not hung. A message whose unordered handler hangs on every delivery therefore reaches the dead-letter
+table once it has been released past the bound `maxAttempts` times, instead of being delivered again
+after every rebalance or restart, each delivery leaving one more handler hung. A release that charged
+logs one WARN naming the shard, how many it charged and which it dead-lettered. A charge that fails
+with an attempt or a dead-letter move still owed leaves that shard leased: the shed and the dead-pump
+hand-back retry it on the next heartbeat and release the other shards meanwhile; `stop()` leaves its
+lease as a failed release does, so whoever takes the shard over next charges, as after a crash. A
+`QueueObserver` that throws when told of a message the charge dead-lettered does not keep the shard: it
+is released all the same, with a WARN.
 
 `keptUnitsInHandler()` (also in `snapshot()`) counts the kept units whose key is in its handler now:
 normally zero, so alert on it staying above zero. A unit taken over at the bound still counts while

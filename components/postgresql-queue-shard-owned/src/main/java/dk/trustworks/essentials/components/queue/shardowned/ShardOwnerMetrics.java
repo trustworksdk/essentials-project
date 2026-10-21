@@ -128,9 +128,11 @@ public final class ShardOwnerMetrics {
     public final LongAdder     handlerFailures                  = new LongAdder();
     /**
      * Rows whose attempt count was charged for a delivery whose outcome was never recorded: by a new owner on an unclean
-     * takeover, and by an ordered owner releasing its unit with a message still in a handler past
-     * {@code stuckHandlerTimeout}, or on request ({@code OrderedShardOwner.chargeKeysInHandlerBeforeRelease}), as the
-     * next owner of a released unit charges nothing. The fast path never writes an attempt count, so this is the only
+     * takeover, by an ordered owner releasing its unit with a message still in a handler past
+     * {@code stuckHandlerTimeout}, or on request ({@code OrderedShardOwner.chargeKeysInHandlerBeforeRelease}), and by an
+     * unordered owner releasing its shard - a shed, a dead pump's hand-back or a stop - with a message in a handler longer
+     * than {@code stuckHandlerTimeout} ({@code ShardOwner.chargeInHandlerBeforeRelease}), as the next owner of a released
+     * unit charges nothing. The fast path never writes an attempt count, so this is the only
      * thing standing between a JVM-killing - or forever hanging - handler and an infinite redelivery loop, which makes it
      * worth counting rather than only logging. Counted on the metrics of the owner that charged.
      */
