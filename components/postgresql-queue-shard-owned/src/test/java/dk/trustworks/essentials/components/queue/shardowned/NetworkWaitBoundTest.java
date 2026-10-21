@@ -1,0 +1,195 @@
+/*
+ * Copyright 2021-2026 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package dk.trustworks.essentials.components.queue.shardowned;
+
+import org.junit.jupiter.api.Test;
+
+import java.lang.reflect.Proxy;
+import java.sql.*;
+import java.time.Duration;
+import java.util.*;
+import java.util.concurrent.atomic.AtomicReference;
+
+import static org.assertj.core.api.Assertions.*;
+
+/**
+ * {@link NetworkWaitBound} on a fake {@link Connection} that records what is asked of it: no bound outside
+ * {@link NetworkWaitBound#during}; inside it the bound is set on a connection with no network timeout or a longer one, and
+ * set back as the connection is closed, before the connection's own close - what a pool that does not reset the timeout
+ * itself relies on, which the ITs' Hikari pool (it does reset it) cannot show. A connection whose own timeout is already
+ * no longer than the bound (a {@code socketTimeout} on the {@code DataSource}) is handed over untouched: the bound only
+ * ever tightens.
+ */
+// This test class's own loader, not the thread's context loader: a proxy class must be defined in a loader that sees its
+// interface, which the context loader need not. The connections the tests take are fakes holding nothing to close; a test
+// that closes one does so to assert what the close does. Identity is the correct equals() for a proxy.
+@SuppressWarnings({"PMD.UseProperClassLoader", "PMD.CloseResource", "PMD.CompareObjectsWithEquals"})
+class NetworkWaitBoundTest {
+
+    private static final Duration BOUND        = Duration.ofSeconds(30);
+    private static final int      BOUND_MILLIS = 30_000;
+
+    @Test
+    void outside_during_the_connection_is_handed_over_as_it_is() throws SQLException {
+        var fake = new FakeConnection(0);
+
+        var connection = NetworkWaitBound.bound(fake.connection);
+
+        assertThat(connection).isSameAs(fake.connection);
+        connection.close();
+        assertThat(fake.calls).containsExactly("close");
+    }
+
+    @Test
+    void inside_during_a_connection_with_no_network_timeout_gets_the_bound_and_has_it_set_back_before_it_is_closed() throws SQLException {
+        var fake = new FakeConnection(0);
+
+        var connection = boundDuring(fake);
+
+        assertThat(connection).isNotSameAs(fake.connection);
+        assertThat(fake.networkTimeout).isEqualTo(BOUND_MILLIS);
+        assertThat(connection.getNetworkTimeout()).isEqualTo(BOUND_MILLIS);
+        connection.close();
+        assertThat(fake.calls).containsExactly("getNetworkTimeout", "setNetworkTimeout(30000)", "getNetworkTimeout",
+                                               "isClosed", "setNetworkTimeout(0)", "close");
+        assertThat(fake.networkTimeout).isZero();
+    }
+
+    @Test
+    void inside_during_a_connection_with_a_longer_network_timeout_gets_the_bound_and_its_own_back_as_it_is_closed() throws SQLException {
+        var fake = new FakeConnection(60_000);
+
+        var connection = boundDuring(fake);
+
+        assertThat(fake.networkTimeout).isEqualTo(BOUND_MILLIS);
+        connection.close();
+        assertThat(fake.calls).containsExactly("getNetworkTimeout", "setNetworkTimeout(30000)",
+                                               "isClosed", "setNetworkTimeout(60000)", "close");
+        assertThat(fake.networkTimeout).isEqualTo(60_000);
+    }
+
+    @Test
+    void inside_during_a_connection_whose_own_network_timeout_is_tighter_than_the_bound_keeps_it_untouched() throws SQLException {
+        var fake = new FakeConnection(3_000);
+
+        var connection = boundDuring(fake);
+
+        assertThat(connection).isSameAs(fake.connection);
+        assertThat(fake.networkTimeout).isEqualTo(3_000);
+        connection.close();
+        assertThat(fake.calls).containsExactly("getNetworkTimeout", "close");
+    }
+
+    @Test
+    void inside_during_a_connection_whose_own_network_timeout_equals_the_bound_keeps_it_untouched() {
+        var fake = new FakeConnection(BOUND_MILLIS);
+
+        var connection = boundDuring(fake);
+
+        assertThat(connection).isSameAs(fake.connection);
+        assertThat(fake.calls).containsExactly("getNetworkTimeout");
+    }
+
+    @Test
+    void a_connection_already_closed_by_the_driver_is_not_set_back() throws SQLException {
+        var fake = new FakeConnection(0);
+        var connection = boundDuring(fake);
+
+        fake.closed = true;
+        connection.close();
+
+        assertThat(fake.calls).containsExactly("getNetworkTimeout", "setNetworkTimeout(30000)", "isClosed", "close");
+    }
+
+    @Test
+    void a_driver_without_network_timeouts_hands_the_connection_over_as_it_is() throws SQLException {
+        var fake = new FakeConnection(0);
+        fake.getNetworkTimeoutFailure = new SQLFeatureNotSupportedException("no network timeout");
+
+        var connection = boundDuring(fake);
+
+        assertThat(connection).isSameAs(fake.connection);
+        connection.close();
+        assertThat(fake.calls).containsExactly("getNetworkTimeout", "close");
+    }
+
+    @Test
+    void the_bound_connection_equals_only_itself_and_hashes_by_identity() {
+        var fake       = new FakeConnection(0);
+        var connection = boundDuring(fake);
+
+        assertThat(connection.equals(connection)).isTrue();
+        assertThat(connection.equals(fake.connection)).isFalse();
+        assertThat(connection.hashCode()).isEqualTo(System.identityHashCode(connection));
+    }
+
+    private static Connection boundDuring(FakeConnection fake) {
+        var bound = new AtomicReference<Connection>();
+        NetworkWaitBound.during(BOUND, () -> bound.set(NetworkWaitBound.bound(fake.connection)));
+        return bound.get();
+    }
+
+    /**
+     * A {@link Connection} that only knows its network timeout and whether it is closed, and records every call made to
+     * it other than {@code equals}, {@code hashCode} and {@code toString}.
+     */
+    private static final class FakeConnection {
+        final List<String> calls = new ArrayList<>();
+        final Connection   connection;
+        int                networkTimeout;
+        boolean            closed;
+        SQLException       getNetworkTimeoutFailure;
+
+        FakeConnection(int networkTimeout) {
+            this.networkTimeout = networkTimeout;
+            this.connection = (Connection) Proxy.newProxyInstance(NetworkWaitBoundTest.class.getClassLoader(), new Class<?>[]{Connection.class},
+                                                                  (proxy, method, args) -> switch (method.getName()) {
+                                                                      case "equals" -> proxy == args[0];
+                                                                      case "hashCode" -> System.identityHashCode(proxy);
+                                                                      case "toString" -> "FakeConnection";
+                                                                      default -> answer(method.getName(), args);
+                                                                  });
+        }
+
+        private Object answer(String method, Object... args) throws SQLException {
+            switch (method) {
+                case "getNetworkTimeout" -> {
+                    calls.add(method);
+                    if (getNetworkTimeoutFailure != null) {
+                        throw getNetworkTimeoutFailure;
+                    }
+                    return networkTimeout;
+                }
+                case "setNetworkTimeout" -> {
+                    calls.add(method + "(" + args[1] + ")");
+                    networkTimeout = (Integer) args[1];
+                    return null;
+                }
+                case "isClosed" -> {
+                    calls.add(method);
+                    return closed;
+                }
+                case "close" -> {
+                    calls.add(method);
+                    closed = true;
+                    return null;
+                }
+                default -> throw new UnsupportedOperationException(method);
+            }
+        }
+    }
+}

@@ -165,7 +165,7 @@ public final class PostgresqlMessageQueue implements MessageQueue {
      * The subscription index of every subscription this queue has handed out and not yet ended: reserved by
      * {@link #consume}, given back when it fails without registering anything or when its subscription has been
      * unsubscribed and both its lanes stopped - unless a lane kept an ordered unit it has not handed back yet, or its
-     * hand-back to the database is still running, see {@link #heldIndexes}. A {@code consume()} takes the lowest
+     * hand-back to the database is still running and may still deregister the id, see {@link #heldIndexes}. A {@code consume()} takes the lowest
      * index free, so the instance id a subscription registers under ({@link #consume}) is the caller's verbatim again
      * once every earlier subscription has ended, rather than one more suffix per subscription the process ever made.
      */
@@ -189,10 +189,17 @@ public final class PostgresqlMessageQueue implements MessageQueue {
      *     possibly beside the handler still running. A subscription that is only stopped keeps its index, and its lanes,
      *     restarted by a queue {@link #start()} or a {@link Subscription#start()}, ask their kept owners the same before
      *     they take the unit; a new pair's lanes have none to ask.</li>
-     *     <li>A lane's hand-back to the database is still running on a thread its stop gave up waiting for
-     *     ({@link ShardOwnedQueue#handBackStillRunning()}): it may still delete the id's membership row, and a new pair
-     *     registering under the id meanwhile could lose its row to it, its units then read as ownerless by every other
-     *     instance until its next heartbeat.</li>
+     *     <li>A lane's hand-back to the database is still running on a thread its stop gave up waiting for, and may still
+     *     delete the id's membership row ({@link ShardOwnedQueue#handBackMayStillDeregister()}): a new pair registering
+     *     under the id meanwhile could lose its row to it, its units then read as ownerless by every other instance until
+     *     its next heartbeat. Not a hand-back whose stop kept an ordered unit, which never gets to that deletion: the
+     *     reason above holds the id for such a stop, and only until it ends - its unit handed back, or given up past
+     *     {@code stuckHandlerTimeout}, the unit waiting for that hand-back's flush included. Each wait of the hand-back for
+     *     the database is bounded by the queue's {@code leaseTtl}, or by {@link ShardOwnedQueue#SHUTDOWN_BUDGET} when that
+     *     is longer, unless the connection's own network timeout is shorter (the network timeout {@code ShardOwnedQueue}'s
+     *     {@code withinShutdownBudget} sets, or leaves as it is), so a hand-back held
+     *     up by a connection that does not answer ends, and stops holding the id, once each of its statements has had that
+     *     long.</li>
      * </ul>
      * The next {@code consume()} registers under another index meanwhile. {@link #reserveSubscriptionIndex} frees the
      * ones that are due.
@@ -653,8 +660,8 @@ public final class PostgresqlMessageQueue implements MessageQueue {
         // given back by a failed consume() or an unsubscribed subscription is taken again, so a caller
         // that unsubscribes and consumes anew keeps its instance id instead of a new suffix each time -
         // unless the old pair kept an ordered unit on stop that it has not handed back yet, as that
-        // unit's lease names the id, or its stop gave up waiting for its hand-back to the database,
-        // which may still deregister the id (heldIndexes): taking the id then would start the key
+        // unit's lease names the id, or its stop gave up waiting for its hand-back to the database
+        // and that may still deregister the id (heldIndexes): taking the id then would start the key
         // beside its running handler, or take the unit back as from a crashed owner once that handler
         // has returned, or lose the new pair's membership row to that late deregistration.
         var subscriptionIndex = reserveSubscriptionIndex();
@@ -988,7 +995,7 @@ public final class PostgresqlMessageQueue implements MessageQueue {
              * go. The instance id the pair registered under is given back once its lanes have stopped, for the next
              * {@code consume()} - once the unit has been handed back when a lane's stop kept an ordered unit because a key
              * was still in its handler, as that unit's lease names the id, and only once a lane's hand-back to the database
-             * that its stop gave up waiting for has finished, as that may still deregister the id ({@link #heldIndexes}).
+             * that its stop gave up waiting for has finished, when it may still deregister the id ({@link #heldIndexes}).
              * What a lane's stop throws escapes, once both have stopped, as from {@link #stop()}; the subscription is
              * unsubscribed either way.
              */
@@ -1069,8 +1076,9 @@ public final class PostgresqlMessageQueue implements MessageQueue {
      * which the lane does once the key it was kept for has left its handler
      * ({@link ShardOwnedQueue#keptOrderedUnitAwaited()}) - or its key has been in its handler longer than the queue's
      * {@code stuckHandlerTimeout}, or the unit has been released on request ({@link #releaseKeptOrderedUnit}) - and no
-     * lane's hand-back is still running
-     * ({@link ShardOwnedQueue#handBackStillRunning()}), which {@link #reserveSubscriptionIndex} asks the lanes each time,
+     * lane's hand-back that may still deregister the id is running ({@link ShardOwnedQueue#handBackMayStillDeregister()}:
+     * the hand-back of a stop that kept a unit never deregisters, so one hung in its flush does not hold the id past the
+     * unit), which {@link #reserveSubscriptionIndex} asks the lanes each time,
      * once it has had them review their kept units and retry a hand-back of such a unit that failed. Reviewed here first
      * too ({@link ShardOwnedQueue#reviewStuckKeptUnits()}), so a unit whose key is past that bound, once the stop that kept
      * it has flushed it, already does not hold the index.
@@ -1080,10 +1088,10 @@ public final class PostgresqlMessageQueue implements MessageQueue {
     private void releaseSubscriptionIndex(int index, List<ShardOwnedQueue> lanes, String ended) {
         lanes.forEach(ShardOwnedQueue::reviewStuckKeptUnits);
         var keptUnitNotHandedBack = lanes.stream().anyMatch(ShardOwnedQueue::keptOrderedUnitAwaited);
-        var handBackStillRunning  = lanes.stream().anyMatch(ShardOwnedQueue::handBackStillRunning);
+        var handBackMayDeregister = lanes.stream().anyMatch(ShardOwnedQueue::handBackMayStillDeregister);
         // Out of endingLanes in the same step that frees or holds the index: releaseKeptOrderedUnit then finds them in
         // heldIndexes, or every unit they kept was handed back, released or given up on, and they are not asked.
-        if (!keptUnitNotHandedBack && !handBackStillRunning) {
+        if (!keptUnitNotHandedBack && !handBackMayDeregister) {
             synchronized (handOver) {
                 endingLanes.removeAll(lanes);
                 subscriptionIndexes.clear(index);
@@ -1097,7 +1105,7 @@ public final class PostgresqlMessageQueue implements MessageQueue {
         // One line per hold, naming every reason it has and what ends it: both reasons must have passed (HeldIndex.isDue).
         String until;
         String because;
-        if (keptUnitNotHandedBack && handBackStillRunning) {
+        if (keptUnitNotHandedBack && handBackMayDeregister) {
             until = "until the handler of the key it kept an ordered unit for has returned and the unit has been handed back, which "
                     + "each consume() of the queue retries should it fail, or that key has been in its handler longer than "
                     + "stuckHandlerTimeout (" + settings.stuckHandlerTimeout() + "), or the unit has been released on request "
@@ -1125,14 +1133,15 @@ public final class PostgresqlMessageQueue implements MessageQueue {
 
     /**
      * An index in {@link #heldIndexes}: free again once every ordered unit a stop of its {@code lanes} kept has been
-     * handed back, and no hand-back of theirs is still running - both asked of the lanes, which alone know.
+     * handed back, and no hand-back of theirs that may still deregister the id is running - both asked of the lanes, which
+     * alone know.
      * {@link #isDue()} only reads, under {@link #handOver}: the review that gives a unit up past the queue's
      * {@code stuckHandlerTimeout} runs before, outside it ({@link #reserveSubscriptionIndex}). Reading, it still takes each
      * kept owner's lock briefly, to read the owner's in-flight count.
      */
     private record HeldIndex(List<ShardOwnedQueue> lanes) {
         private boolean isDue() {
-            return lanes.stream().noneMatch(lane -> lane.keptOrderedUnitAwaited() || lane.handBackStillRunning());
+            return lanes.stream().noneMatch(lane -> lane.keptOrderedUnitAwaited() || lane.handBackMayStillDeregister());
         }
     }
 
@@ -1222,8 +1231,8 @@ public final class PostgresqlMessageQueue implements MessageQueue {
      * that id. A stop returning does not mean its database work is done, though: each lane's stop waits for its hand-back
      * - flushing acknowledgements, releasing lease rows, deregistering the id - no longer than
      * {@link ShardOwnedQueue#SHUTDOWN_BUDGET}, and the abandoned thread may deregister the id later; so the index stays
-     * held until no lane's hand-back is still running ({@link ShardOwnedQueue#handBackStillRunning()},
-     * {@link #heldIndexes}). A critical error ({@link Exceptions#isCriticalError}) from a stop may leave a lane running
+     * held until no lane's hand-back that may still deregister it is running
+     * ({@link ShardOwnedQueue#handBackMayStillDeregister()}, {@link #heldIndexes}). A critical error ({@link Exceptions#isCriticalError}) from a stop may leave a lane running
      * under the id, so the index is kept then. A stop that kept an ordered unit because a key was still in its handler
      * leaves the unit's lease row naming the id, so the index is given back only once the unit has been handed back,
      * which the lane does once that key has left its handler, and {@link #reserveSubscriptionIndex} retries should that

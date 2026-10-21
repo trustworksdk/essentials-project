@@ -953,6 +953,106 @@ class ShardOwnedUnsubscribeIT {
     }
 
     /**
+     * {@link #a_subscription_whose_kept_unit_outlasts_the_stuck_handler_timeout_frees_its_instance_id_for_a_subscription_that_takes_the_unit_over}
+     * with the ordered lane's stop flush hung as well - its budget thread held as it asks for a connection, as on a
+     * connection that does not answer - and still hung once the bound has passed. A stop that kept a unit never deletes the
+     * instance's membership row, so its hand-back does not hold the instance id: past the bound the kept unit is given up,
+     * and the next {@code consume()} registers under the caller's own id and takes the unit over while that hand-back still
+     * hangs. The id used to stay out of use for as long as the flush hung, every {@code consume()} meanwhile registering
+     * under another instance id.
+     */
+    @Test
+    void an_unsubscribed_subscription_whose_stop_flush_hangs_frees_its_instance_id_once_its_kept_unit_is_given_up() throws Exception {
+        // Far beyond the test, so the unsubscribed instance's membership row cannot age out and let another id take the unit.
+        var leaseTtl            = Duration.ofSeconds(20);
+        var stuckHandlerTimeout = Duration.ofSeconds(8);
+        var entered             = new CountDownLatch(1);
+        var release             = new CountDownLatch(1);
+        var deliveredAgain      = ConcurrentHashMap.<String>newKeySet();
+        MessageHandler recording = (messageId, key, payload, payloadType) -> {
+            if (key != null) {
+                deliveredAgain.add(key);
+            }
+        };
+        // A grace of 3 s: the ordered lane's stop drains that long before its budget thread starts, time enough for the test
+        // to hold that thread, and not the unordered lane's, which hands back first.
+        var settings = settingsWith(Duration.ofSeconds(3), leaseTtl).withStuckHandlerTimeout(stuckHandlerTimeout);
+        var holding  = new ShardOwnedLifecycleIT.FlushHoldingDataSource(dataSource, ShardOwnedLifecycleIT.FlushHoldingDataSource.STOP_BUDGET_THREAD);
+        try (var queue = PostgresqlMessageQueue.builder()
+                                               .setDataSource(holding)
+                                               .setQueueId(QUEUE_ID)
+                                               .setShardCount(SHARD_COUNT)
+                                               .setInstanceId(INSTANCE_ID)
+                                               .setSettings(settings)
+                                               .setLifecycleHook(PostgresqlMessageQueue.LifecycleHook.NONE)
+                                               .build()) {
+            try {
+                var first = queue.consume((messageId, key, payload, payloadType) -> {
+                    if (key != null) {
+                        entered.countDown();
+                        awaitQuietly(release);
+                    }
+                }, ConsumerOptions.defaults());
+                var lanes = queue.registeredConsumers();
+                assertThat(lanes).as("premise: the first subscription's two lanes").hasSize(2);
+                var unordered = lanes.get(0);
+                var ordered   = lanes.get(1);
+                queue.enqueue(Message.ordered("in-handler".getBytes(StandardCharsets.UTF_8), 1, "ACC-1", 0));
+                assertThat(entered.await(20, TimeUnit.SECONDS)).as("premise: the key is in its handler").isTrue();
+                var enteredAt = System.nanoTime();
+
+                var unsubscribing = CompletableFuture.runAsync(first::unsubscribe);
+                // The unordered lane stops first; once it has handed back and the ordered lane's stop is draining, hold the
+                // next stop budget thread to ask for a connection: the ordered lane's.
+                Awaitility.await().atMost(Duration.ofSeconds(10))
+                          .until(() -> !unordered.isStarted() && !ordered.isStarted() && !unordered.handBackStillRunning());
+                holding.holdConnections();
+                unsubscribing.get(20, TimeUnit.SECONDS);
+                // A unit still waiting for its stop's flush is given up once kept longer than the bound, timed from when the
+                // stop kept it, which came before the unsubscribe returned.
+                var unsubscribedAt = System.nanoTime();
+                assertThat(holding.awaitConnectionHeld(Duration.ofSeconds(10))).as("premise: the ordered lane's stop flush hangs").isTrue();
+                assertThat(ordered.handBackStillRunning()).as("premise: its stop gave up waiting for that flush").isTrue();
+                assertThat(ordered.keptOrderedUnitAwaited()).as("premise: that stop kept the busy unit").isTrue();
+                assertThat(ordered.handBackMayStillDeregister()).as("a hand-back whose stop kept a unit never deregisters").isFalse();
+                var keptUnit  = ShardOwnedSchema.unitForKey("ACC-1", ShardOwnedSchema.ORDERED_UNITS);
+                var keptFence = fenceOf(keptUnit);
+                assertThat(infos()).as("the hold names the kept unit alone, not the hung hand-back")
+                                   .filteredOn(info -> info.contains("keeps the instance id '" + INSTANCE_ID + "'"))
+                                   .singleElement()
+                                   .satisfies(info -> assertThat(info).contains("it kept an ordered unit whose key was still in a handler")
+                                                                      .doesNotContain("hand-back of its lanes to the database"));
+
+                var second = queue.consume(recording, ConsumerOptions.defaults());
+                assertThat(Duration.ofNanos(System.nanoTime() - enteredAt)).as("premise: before the bound").isLessThan(stuckHandlerTimeout);
+                assertThat(registeredInstances()).as("before the bound the instance id is out of use")
+                                                 .containsExactly(INSTANCE_ID, INSTANCE_ID + "-1");
+                second.unsubscribe();
+
+                // Past the bound from when the stop kept the unit; the next consume() reviews the kept unit and gives it up.
+                Awaitility.await().atMost(stuckHandlerTimeout.plusSeconds(5))
+                          .until(() -> Duration.ofNanos(System.nanoTime() - unsubscribedAt).compareTo(stuckHandlerTimeout) > 0);
+                var third = queue.consume(recording, ConsumerOptions.defaults());
+                assertThat(third.isStarted()).isTrue();
+                assertThat(ordered.handBackStillRunning()).as("premise: the stop's flush still hangs").isTrue();
+                assertThat(laneWarnings()).as("premise: the lane gave the unit up, its stop's flush still running")
+                                          .anyMatch(warning -> warning.contains("stops waiting for ordered unit " + keptUnit)
+                                                  && warning.contains("still not finished flushing"));
+                assertThat(registeredInstances()).as("past the bound the caller's own instance id is free again, the flush hung or not")
+                                                 .containsExactly(INSTANCE_ID);
+                Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+                    assertThat(fenceOf(keptUnit)).as("the kept unit taken over under a newer fence").isGreaterThan(keptFence);
+                    assertThat(deliveredAgain).as("the key's message delivered again while the first handler runs").containsExactly("ACC-1");
+                });
+            } finally {
+                release.countDown();
+                holding.letConnect();
+                holding.letAcknowledge();
+            }
+        }
+    }
+
+    /**
      * {@link #a_queue_restarted_while_a_key_outlasts_the_stuck_handler_timeout_in_the_handler_its_stop_kept_takes_the_unit_over}
      * and then a second instance: the restarted queue took the kept unit over once, and from then on it is any other unit
      * to it, though the stuck handler still runs. The second instance halves the fair share, the restarted queue sheds

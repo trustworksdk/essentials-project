@@ -111,9 +111,13 @@ have passed: when the stop kept an ordered unit, because a key was still in its 
 running longer than the queue's `stuckHandlerTimeout` (default 15 min, below), or until the unit is
 released on request (`MessageQueue.releaseKeptOrderedUnit`, `POST .../ordered-units/{unit}/release-kept?instanceId=…`, below),
 as until then that unit's lease names the id and a subscription under it would take the unit at once and
-could start the key beside the running handler; and when the stop gave up waiting for its lanes' hand-back to the database (releasing the
-leases and deregistering the id), the id stays out of use until that hand-back has returned, as it may
-still delete the id's membership row. A `consume()` before then registers under another instance id,
+could start the key beside the running handler; and, when the stop gave up waiting for the
+hand-back to the database of a lane whose stop kept no ordered unit (releasing that lane's leases and
+deregistering the id; an ordered lane that kept one never deletes the id's membership row from its
+hand-back), the id stays out of use
+until that hand-back has returned, as it may still delete the id's membership row, each of its waits
+for the database bounded by the queue's `leaseTtl` (2 s at least) unless the connection's own network
+timeout is shorter. A `consume()` before then registers under another instance id,
 the lowest one free (`<id>-1` when the unsubscribed subscription held `<id>` and no other is registered
 or held back), with no COMPETING WARN unless another subscription is registered. Once the handler has
 returned, the engine hands the kept unit back, whether or not anything runs under the id again: it flushes

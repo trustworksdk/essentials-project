@@ -2884,6 +2884,48 @@ class ShardOwnedLifecycleIT {
     }
 
     /**
+     * The hand-back of a {@code stop()} - on the thread the stop gives up waiting for after the 2 s budget - waits for each
+     * answer from the database no longer than the queue's {@code leaseTtl}. A test transaction holds unit 0's lease row and
+     * never lets go while the test watches, so the stop's release waits on it as on a connection that never answers: the
+     * release throws once it has waited that long, the thread goes on to deregister the instance, and ends. It used to wait
+     * until the row was let go - on a half-open socket with no {@code socketTimeout}, for the life of the process - holding
+     * its pool connection, with {@code handBackStillRunning()} true all along.
+     */
+    @Test
+    void a_stop_whose_hand_back_the_database_never_answers_ends_that_hand_back_once_a_statement_has_waited_the_lease_ttl() throws Exception {
+        var instanceId = "stop-hand-back-never-answered";
+        var leaseTtl   = Duration.ofSeconds(4);
+        var settings   = settingsWith(Duration.ofMillis(300), leaseTtl);
+        var queue      = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, instanceId);
+        try (var locking = dataSource.getConnection()) {
+            startConsuming(queue, "unordered", settings);
+            Awaitility.await().atMost(Duration.ofSeconds(10)).until(() -> unorderedShardsOwnedBy(instanceId) == SHARD_COUNT);
+
+            locking.setAutoCommit(false);
+            try {
+                assertThat(lockLeaseRowOf(locking, "unordered", 0)).as("premise: the test holds unit 0's lease row").isTrue();
+                var stopping = System.nanoTime();
+                queue.stop();
+                assertThat(queue.handBackStillRunning()).as("premise: the stop gave up waiting for its hand-back").isTrue();
+
+                Awaitility.await().atMost(leaseTtl.plusSeconds(10)).until(() -> !queue.handBackStillRunning());
+                var endedAfter = Duration.ofNanos(System.nanoTime() - stopping);
+
+                assertThat(endedAfter).as("the release waited for its answer up to the bound, not less")
+                                      .isGreaterThanOrEqualTo(leaseTtl.minusMillis(500));
+                assertThat(unorderedShardsOwnedBy(instanceId)).as("premise: the release behind the held row never got through")
+                                                             .isPositive();
+                assertThat(instanceRegistered(instanceId)).as("the thread went on past the failed release and deregistered the instance")
+                                                          .isFalse();
+            } finally {
+                locking.rollback();
+            }
+        } finally {
+            queue.stop();
+        }
+    }
+
+    /**
      * A {@code start()} made while the hand-back of the {@code stop()} before it is deleting the instance's membership row -
      * the deletion under way when the start began, here behind a row lock a test transaction holds on the row - waits for
      * that deletion before it registers the instance, at most the 2 s budget, and then says once that it goes on without
@@ -4820,9 +4862,9 @@ class ShardOwnedLifecycleIT {
      * ({@link #holdConnections}), and, on that connection, as it prepares a delete from the ordered lane - an owner's
      * acknowledgement flush, its batch already taken - until {@link #letAcknowledge}. Only the first such thread that asks
      * for a connection once told to hold is held, so a later one goes through. Every other thread, and the held one once
-     * let through, get the delegate's connections as they are.
+     * let through, get the delegate's connections as they are. Package-private for {@code ShardOwnedUnsubscribeIT}.
      */
-    private static final class FlushHoldingDataSource implements DataSource {
+    static final class FlushHoldingDataSource implements DataSource {
         static final  String                  STOP_BUDGET_THREAD         = "shard-queue-stop-";
         static final  String                  KEPT_UNIT_HAND_BACK_THREAD = "shard-queue-kept-unit-";
         private final DataSource              delegate;

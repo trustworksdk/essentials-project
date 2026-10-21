@@ -216,10 +216,14 @@ been handed back (its acknowledgement flushed, its lease released; before it pic
 retries a hand-back that failed), or until that handler has been running longer than the queue's
 `stuckHandlerTimeout`, or until the unit is released on request (`MessageQueue.releaseKeptOrderedUnit`,
 `POST .../ordered-units/{unit}/release-kept?instanceId=…`), as until then that unit's lease
-names the id and a subscription under it would take the unit at once; and when the stop gave up waiting for its lanes' hand-back to the database (releasing the
-leases and deregistering the id, which the stop stops waiting for after 2 s when the database does
-not answer, and at once on an interrupted thread), the id stays out of use until that hand-back has
-returned, as it may still delete the id's membership row. A `consume()` before then registers under
+names the id and a subscription under it would take the unit at once; and, when the stop gave up
+waiting for the hand-back to the database of a lane whose stop kept no ordered unit (releasing that
+lane's leases and deregistering the id, which the stop stops waiting for after 2 s when the database
+does not answer, and at once on an interrupted thread; an ordered lane that kept one never deletes
+the id's membership row from its hand-back), the id stays out of use until that hand-back has
+returned, as it may still delete the id's
+membership row, each of its waits for the database bounded by the queue's `leaseTtl` (2 s at least)
+unless the connection's own network timeout is shorter. A `consume()` before then registers under
 another instance id, the lowest one free (`<id>-1` when the unsubscribed subscription held `<id>` and
 no other is registered or held back), with no competing-consumer WARN unless another subscription is
 registered.

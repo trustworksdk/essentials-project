@@ -128,7 +128,15 @@ public final class ShardOwnedStorage {
     }
 
     public Connection connection() throws SQLException {
-        return dataSource.getConnection();
+        return open();
+    }
+
+    /**
+     * Every connection this handle uses or hands out comes from here: the {@code DataSource}'s, bounded when the calling
+     * thread runs inside {@link NetworkWaitBound#during} - a stop's database work on the thread it may abandon.
+     */
+    private Connection open() throws SQLException {
+        return NetworkWaitBound.bound(dataSource.getConnection());
     }
 
     /**
@@ -442,7 +450,7 @@ public final class ShardOwnedStorage {
      * had in flight is redelivered. Asking is one primary-key lookup, and only on the ambiguous path.
      */
     public boolean stillOwns(String lane, int shard, String owner, long fence) throws SQLException {
-        try (var connection = dataSource.getConnection();
+        try (var connection = open();
              var statement = connection.prepareStatement(
                      "SELECT 1 FROM " + LEASE_TABLE + " WHERE queue_id = ? AND lane = ? AND shard = ?"
                              + " AND owner = ? AND fence = ?")) {
@@ -462,7 +470,7 @@ public final class ShardOwnedStorage {
      * the shared {@code lease} column.
      */
     public long nextSessionFence() throws SQLException {
-        try (var connection = dataSource.getConnection();
+        try (var connection = open();
              var statement = connection.prepareStatement("SELECT nextval('" + ShardOwnedSchema.SESSION_FENCE_SEQUENCE + "')");
              var resultSet = statement.executeQuery()) {
             resultSet.next();
@@ -669,7 +677,7 @@ public final class ShardOwnedStorage {
     public boolean heartbeat(String instanceId) throws SQLException {
         // The previous row is read by a CTE in the same statement; without FOR UPDATE it sees the row as it was
         // before the upsert
-        try (var connection = dataSource.getConnection();
+        try (var connection = open();
              var statement = connection.prepareStatement(
                      "WITH previous AS (SELECT incarnation FROM " + INSTANCE_TABLE + " WHERE queue_id = ? AND instance_id = ?)"
                              + " INSERT INTO " + INSTANCE_TABLE + " (queue_id, instance_id, last_seen, incarnation) VALUES (?, ?, now(), ?)"
@@ -718,7 +726,7 @@ public final class ShardOwnedStorage {
      * stale fair share until the row aged out.
      */
     public void deregisterInstance(String instanceId) throws SQLException {
-        try (var connection = dataSource.getConnection();
+        try (var connection = open();
              var statement = connection.prepareStatement(
                      "DELETE FROM " + INSTANCE_TABLE + " WHERE queue_id = ? AND instance_id = ?")) {
             statement.setShort(1, queueId);
@@ -738,7 +746,7 @@ public final class ShardOwnedStorage {
      * and a row young enough to matter to {@code fairShare} must never be removed by it.
      */
     public int pruneDepartedInstances(long staleAfterMillis) throws SQLException {
-        try (var connection = dataSource.getConnection();
+        try (var connection = open();
              var statement = connection.prepareStatement(
                      "DELETE FROM " + INSTANCE_TABLE
                              + " WHERE queue_id = ? AND last_seen < now() - make_interval(secs => ? / 1000.0)")) {
@@ -760,7 +768,7 @@ public final class ShardOwnedStorage {
      * @param staleAfterMillis an instance that has not been seen for this long is presumed gone
      */
     public int countLiveInstances(long staleAfterMillis) throws SQLException {
-        try (var connection = dataSource.getConnection();
+        try (var connection = open();
              var statement = connection.prepareStatement(
                      "SELECT count(*) FROM " + INSTANCE_TABLE
                              + " WHERE queue_id = ? AND last_seen > now() - make_interval(secs => ? / 1000.0)")) {
@@ -779,7 +787,7 @@ public final class ShardOwnedStorage {
      * @param staleAfterMillis an instance that has not been seen for this long is presumed gone
      */
     public int countInstances(long staleAfterMillis) throws SQLException {
-        try (var connection = dataSource.getConnection();
+        try (var connection = open();
              var statement = connection.prepareStatement(
                      "SELECT count(*) FROM " + INSTANCE_TABLE
                              + " WHERE queue_id = ? AND last_seen > now() - make_interval(secs => ? / 1000.0)")) {
@@ -800,7 +808,7 @@ public final class ShardOwnedStorage {
      * draining them.
      */
     public void releaseLease(String lane, int shard, String owner) throws SQLException {
-        try (var connection = dataSource.getConnection();
+        try (var connection = open();
              var statement = connection.prepareStatement(
                      // owner = NULL, not a back-dated expiry: there is no expiry any more. The
                      // fence is still deliberately NOT bumped — the next acquirer bumps it, because
@@ -846,7 +854,7 @@ public final class ShardOwnedStorage {
             return 0;
         }
         var shardArray = shards.stream().map(Integer::shortValue).toArray(Short[]::new);
-        try (var connection = dataSource.getConnection();
+        try (var connection = open();
              var statement = connection.prepareStatement(
                      "UPDATE " + LEASE_TABLE + " SET owner = NULL"
                              + " WHERE queue_id = ? AND lane = ? AND shard = ANY(?) AND owner = ?")) {
@@ -891,7 +899,7 @@ public final class ShardOwnedStorage {
             fences[index] = entry.getValue();
             index++;
         }
-        try (var connection = dataSource.getConnection();
+        try (var connection = open();
              var statement = connection.prepareStatement(
                      "UPDATE " + LEASE_TABLE + " l SET owner = NULL"
                              + " FROM unnest(?::int[], ?::bigint[]) AS released(shard, fence)"
@@ -930,7 +938,7 @@ public final class ShardOwnedStorage {
         if (shards.length == 0) {
             return Map.of();
         }
-        try (var connection = dataSource.getConnection();
+        try (var connection = open();
              var statement = connection.prepareStatement(
                      "SELECT shard, fence FROM " + LEASE_TABLE
                              + " WHERE queue_id = ? AND lane = ? AND owner = ? AND shard = ANY(?)")) {
@@ -985,7 +993,7 @@ public final class ShardOwnedStorage {
                 + " WHERE l.queue_id = ? AND l.lane = ? AND l.shard = ?"
                 + "   AND (l.owner IS NULL OR l.owner = ? OR" + ownerIsGoneClause() + ")"
                 + " RETURNING l.fence";
-        try (var connection = dataSource.getConnection();
+        try (var connection = open();
              var statement = connection.prepareStatement(sql)) {
             statement.setString(1, sessionId);
             statement.setLong(2, ttlMillis);
@@ -1039,7 +1047,7 @@ public final class ShardOwnedStorage {
                 + " WHERE l.queue_id = ? AND l.lane = ? AND l.shard = ?"
                 + "   AND (l.owner IS NULL OR l.owner = ? OR" + ownerIsGoneClause() + ")"
                 + " RETURNING l.fence, p.owner IS NULL";
-        try (var connection = dataSource.getConnection();
+        try (var connection = open();
              var statement = connection.prepareStatement(sql)) {
             statement.setShort(1, queueId);
             statement.setString(2, lane);
@@ -1235,7 +1243,7 @@ public final class ShardOwnedStorage {
      * — a queue registered by raw id rather than by name has nothing to grow.
      */
     public OptionalInt currentShardCount() throws SQLException {
-        try (var connection = dataSource.getConnection();
+        try (var connection = open();
              var statement = connection.prepareStatement(
                      "SELECT shard_count FROM " + REGISTRY_TABLE + " WHERE queue_id = ?")) {
             statement.setShort(1, queueId);
@@ -1260,7 +1268,7 @@ public final class ShardOwnedStorage {
      * other path already reports.
      */
     public int orderedUnits() throws SQLException {
-        try (var connection = dataSource.getConnection();
+        try (var connection = open();
              var statement = connection.prepareStatement(
                      "SELECT ordered_units FROM " + REGISTRY_TABLE + " WHERE queue_id = ?")) {
             statement.setShort(1, queueId);
@@ -1278,7 +1286,7 @@ public final class ShardOwnedStorage {
      * "this queue is busy", and those look identical in depth.
      */
     public int[] ownedShardsPerLane(long ttlMillis) throws SQLException {
-        try (var connection = dataSource.getConnection();
+        try (var connection = open();
              var statement = connection.prepareStatement(
                      "SELECT l.lane, count(*) FILTER (WHERE l.owner IS NOT NULL AND NOT"
                              + ownerIsGoneClause() + ")"
@@ -1300,7 +1308,7 @@ public final class ShardOwnedStorage {
     }
 
     public long countRemaining(int shard) throws SQLException {
-        try (var connection = dataSource.getConnection();
+        try (var connection = open();
              var statement = connection.prepareStatement(
                      "SELECT count(*) FROM " + UNORDERED_TABLE + " WHERE queue_id = ? AND shard = ?")) {
             statement.setShort(1, queueId);
@@ -1335,7 +1343,7 @@ public final class ShardOwnedStorage {
     }
 
     private ShardDepth shardDepth(String sql, int shard) throws SQLException {
-        try (var connection = dataSource.getConnection();
+        try (var connection = open();
              var statement = connection.prepareStatement(sql)) {
             statement.setShort(1, queueId);
             statement.setInt(2, shard);
@@ -1355,7 +1363,7 @@ public final class ShardOwnedStorage {
     }
 
     public List<Long> allSeqs(int shard) throws SQLException {
-        try (var connection = dataSource.getConnection();
+        try (var connection = open();
              var statement = connection.prepareStatement(
                      "SELECT seq FROM " + UNORDERED_TABLE + " WHERE queue_id = ? AND shard = ?")) {
             statement.setShort(1, queueId);
@@ -1871,7 +1879,7 @@ public final class ShardOwnedStorage {
      * there, which happens once per event on the producing thread.
      */
     public boolean hasOrderedMessagesForKey(int shard, String key) throws SQLException {
-        try (var connection = dataSource.getConnection();
+        try (var connection = open();
              var statement = connection.prepareStatement(
                      "SELECT 1 FROM " + ORDERED_TABLE
                              + " WHERE queue_id = ? AND shard = ? AND msg_key = ? LIMIT 1")) {
@@ -1885,7 +1893,7 @@ public final class ShardOwnedStorage {
     }
 
     public long countOrderedRemaining(int shard) throws SQLException {
-        try (var connection = dataSource.getConnection();
+        try (var connection = open();
              var statement = connection.prepareStatement(
                      "SELECT count(*) FROM " + ORDERED_TABLE + " WHERE queue_id = ? AND shard = ?")) {
             statement.setShort(1, queueId);
@@ -2211,7 +2219,7 @@ public final class ShardOwnedStorage {
     }
 
     public DeadLetterSummary deadLetterSummary() throws SQLException {
-        try (var connection = dataSource.getConnection();
+        try (var connection = open();
              var statement = connection.prepareStatement(
                      "SELECT count(*),"
                              + "       count(*) FILTER (WHERE blocked_by_key_order IS NOT NULL),"
@@ -2226,7 +2234,7 @@ public final class ShardOwnedStorage {
     }
 
     public long countDeadLetters() throws SQLException {
-        try (var connection = dataSource.getConnection();
+        try (var connection = open();
              var statement = connection.prepareStatement(
                      "SELECT count(*) FROM " + DLQ_TABLE + " WHERE queue_id = ?")) {
             statement.setShort(1, queueId);
@@ -2252,7 +2260,7 @@ public final class ShardOwnedStorage {
     }
 
     public List<DeadLetter> deadLetters(int offset, int limit) throws SQLException {
-        try (var connection = dataSource.getConnection();
+        try (var connection = open();
              var statement = connection.prepareStatement(
                      "SELECT source_lane, msg_key, seq, payload, attempts, last_error, shard, payload_type,"
                              + " blocked_by_key_order, COALESCE(key_order, 0) FROM " + DLQ_TABLE
@@ -2291,7 +2299,7 @@ public final class ShardOwnedStorage {
         var table = ordered ? ORDERED_TABLE : UNORDERED_TABLE;
         var key      = ordered ? "msg_key" : "NULL::text";
         var keyOrder = ordered ? "key_order" : "0::bigint";
-        try (var connection = dataSource.getConnection();
+        try (var connection = open();
              var statement = connection.prepareStatement(
                      "SELECT " + key + ", payload, payload_type, attempts, enqueued_at, visible_at, " + keyOrder
                              + " FROM " + table + " WHERE queue_id = ? AND shard = ? AND seq = ?")) {
@@ -2343,7 +2351,7 @@ public final class ShardOwnedStorage {
                 + ", shard " + (ascending ? "ASC" : "DESC")
                 + ", seq " + (ascending ? "ASC" : "DESC")
                 + " LIMIT ? OFFSET ?";
-        try (var connection = dataSource.getConnection();
+        try (var connection = open();
              var statement = connection.prepareStatement(sql)) {
             statement.setShort(1, queueId);
             statement.setShort(2, queueId);
@@ -2383,7 +2391,7 @@ public final class ShardOwnedStorage {
      */
     public boolean deleteMessage(int shard, long seq, boolean ordered) throws SQLException {
         var table = ordered ? ORDERED_TABLE : UNORDERED_TABLE;
-        try (var connection = dataSource.getConnection();
+        try (var connection = open();
              var statement = connection.prepareStatement(
                      "DELETE FROM " + table + " WHERE queue_id = ? AND shard = ? AND seq = ?")) {
             statement.setShort(1, queueId);
@@ -2403,7 +2411,7 @@ public final class ShardOwnedStorage {
      * @return false if there was no such dead letter
      */
     public boolean deleteDeadLetter(int shard, long seq, boolean ordered) throws SQLException {
-        try (var connection = dataSource.getConnection();
+        try (var connection = open();
              var statement = connection.prepareStatement(
                      "DELETE FROM " + DLQ_TABLE + " WHERE queue_id = ? AND shard = ? AND seq = ? AND source_lane = ?")) {
             statement.setShort(1, queueId);
@@ -2438,7 +2446,7 @@ public final class ShardOwnedStorage {
     public int resurrectKey(int shard, String key) throws SQLException {
         requireNonNull(key, "No key provided");
         var sequence = ShardOwnedSchema.orderedSequenceName(queueId);
-        try (var connection = dataSource.getConnection()) {
+        try (var connection = open()) {
             var autoCommit = connection.getAutoCommit();
             connection.setAutoCommit(false);
             try {
@@ -2489,7 +2497,7 @@ public final class ShardOwnedStorage {
      */
     public boolean retryMessage(int shard, long seq, boolean ordered, long delayMillis) throws SQLException {
         var table = ordered ? ORDERED_TABLE : UNORDERED_TABLE;
-        try (var connection = dataSource.getConnection();
+        try (var connection = open();
              var statement = connection.prepareStatement(
                      "UPDATE " + table + " SET attempts = 0, visible_at = now() + make_interval(secs => ? / 1000.0)"
                              + (ordered ? ", lease = NULL" : "")
@@ -2507,7 +2515,7 @@ public final class ShardOwnedStorage {
      */
     public boolean deadLetterMessage(int shard, long seq, boolean ordered, String reason) throws SQLException {
         var table = ordered ? ORDERED_TABLE : UNORDERED_TABLE;
-        try (var connection = dataSource.getConnection()) {
+        try (var connection = open()) {
             if (findMessage(shard, seq, ordered).isEmpty()) {
                 return false;
             }
@@ -2540,7 +2548,7 @@ public final class ShardOwnedStorage {
         var selected = ordered
                        ? "queue_id, shard, msg_key, key_order, nextval('" + sequence + "'), payload, payload_type, 0"
                        : "queue_id, shard, nextval('" + sequence + "'), payload, payload_type, 0";
-        try (var connection = dataSource.getConnection()) {
+        try (var connection = open()) {
             connection.setAutoCommit(false);
             try {
                 if (ordered) {
@@ -2590,7 +2598,7 @@ public final class ShardOwnedStorage {
      */
     public long purge() throws SQLException {
         var removed = 0L;
-        try (var connection = dataSource.getConnection()) {
+        try (var connection = open()) {
             for (var table : List.of(UNORDERED_TABLE, ORDERED_TABLE, DLQ_TABLE)) {
                 try (var statement = connection.prepareStatement("DELETE FROM " + table + " WHERE queue_id = ?")) {
                     statement.setShort(1, queueId);

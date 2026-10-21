@@ -240,6 +240,15 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      */
     private final    AtomicInteger            handBacksRunning = new AtomicInteger();
     /**
+     * How many of the hand-backs {@link #handBacksRunning} counts may still delete this instance's membership row
+     * ({@link #handBackMayStillDeregister()}): those of a stop that deregisters and, as {@link #endRun} found them, kept
+     * no ordered unit and had none an earlier stop kept still awaited in a handler (not given up or released on request)
+     * or still being flushed or handed back - each
+     * of which makes {@link #handBackWithinBudget} return before it reaches the deletion. Counted up and down with
+     * {@code handBacksRunning}.
+     */
+    private final    AtomicInteger            handBacksThatMayDeregister = new AtomicInteger();
+    /**
      * How many of this queue's own hand-backs ({@link #handBackWithinBudget}) are deciding whether to delete this
      * instance's membership row, or deleting it: counted up before a hand-back reads {@link #runNeedsMembership} for that
      * decision, and down once it has left the row or its deletion has returned or thrown, when
@@ -2886,14 +2895,17 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      *       that flush still running, WARN that the unit is held up for it, at most once a minute per unit.</li>
      *   <li>Whatever its handler does, once the unit has been kept longer than {@code stuckHandlerTimeout} and still
      *       stands at {@link KeptUnit.Phase#STOP_FLUSHING} ({@link KeptUnit#keptFor()}), give it up the same way, with
-     *       one WARN: that budget thread's database work has no timeout of its own and may never return - on a connection
-     *       that hangs with no {@code socketTimeout} - and nothing else lets the unit out of that phase. A unit with no
+     *       one WARN: that budget thread's flush is still running, and nothing else lets the unit out of that phase. Each
+     *       of its waits for the database is bounded ({@link #withinShutdownBudget}), but the flush can still outlast
+     *       {@code stuckHandlerTimeout}: answers that come too slowly to reach that bound, a wait for a pool connection, or
+     *       a {@code stuckHandlerTimeout} shorter than that bound. A unit with no
      *       key in a handler is then handed back ({@link #handBackKeptUnit}): a heartbeat tick, a start and a
      *       {@link PostgresqlMessageQueue} {@code consume()} review before they hand back, so in the same pass, unless the
      *       hand-back fails and an acquire takes the unit over. Should that flush return once the unit has been released or
      *       taken over, its writes are refused, and the messages it acknowledges delivered again: the at-least-once the
-     *       bound accepts. An ended {@link PostgresqlMessageQueue} subscription's instance id stays out of use while that
-     *       flush runs all the same ({@link #handBackStillRunning()}).</li>
+     *       bound accepts. This lane's hand-back then does not hold an ended {@link PostgresqlMessageQueue}
+     *       subscription's instance id: a stop that kept a unit never deletes the membership row
+     *       ({@link #handBackMayStillDeregister()}). This give-up is the backstop to that bound, for those three cases.</li>
      *   <li>Before the bound, once the key has been in its handler longer than {@code leaseTtl}, WARN that the unit is
      *       held up, naming the queue, the unit, its keys in a handler, how long the longest has been there and the bound
      *       - at most once a minute per unit ({@code KeptUnit.warningDue}, an {@link ErrorWindow}). Before
@@ -2914,11 +2926,12 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             if (kept.isGivenUp() || !kept.owner().holdsLeaseRow()) {
                 continue;
             }
-            // The stop's budget thread lets the unit out of STOP_FLUSHING once its flush returns, and that flush has no
-            // query timeout of its own: on a connection that hangs - a half-open socket with no socketTimeout - it may
-            // never return, and nothing else lets the unit out. So kept longer than stuckHandlerTimeout and still at
-            // STOP_FLUSHING, the unit is given up whatever its handler does: a flush still running then is refused should
-            // it return once the unit has been released or taken over.
+            // The stop's budget thread lets the unit out of STOP_FLUSHING once its flush returns or throws, and nothing else
+            // lets it out. Each of that flush's waits for the database is bounded (withinShutdownBudget), but the flush can
+            // still outlast stuckHandlerTimeout: answers that come too slowly to reach that bound, a wait for a pool
+            // connection, or a stuckHandlerTimeout shorter than that bound. So kept longer than stuckHandlerTimeout and
+            // still at STOP_FLUSHING, the unit is given up whatever its handler does: a flush still running then is
+            // refused should it return once the unit has been released or taken over.
             var keptFor = kept.keptFor();
             if (kept.phase() == KeptUnit.Phase.STOP_FLUSHING && keptFor.compareTo(settings.stuckHandlerTimeout()) >= 0) {
                 if (kept.moveFrom(KeptUnit.Phase.STOP_FLUSHING, KeptUnit.Phase.GIVEN_UP)) {
@@ -2927,10 +2940,11 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                                      + "longer than stuckHandlerTimeout ({}), and that stop has still not finished flushing the "
                                      + "acknowledgements of the owners it ended, so nothing has handed the unit back. {}. Should "
                                      + "that flush return once the unit has been released or taken over, its writes for the unit "
-                                     + "are refused, and the messages they acknowledge are delivered again. While that flush runs, "
-                                     + "an ended PostgresqlMessageQueue subscription this queue is a lane of keeps its instance id out "
-                                     + "of use, so the next consume() registers under another one. A database call that "
-                                     + "never returns is often a connection hung with no socketTimeout set on the DataSource",
+                                     + "are refused, and the messages they acknowledge are delivered again. A flush still running "
+                                     + "this long is getting its answers too slowly to reach the network bound on each of its "
+                                     + "waits for the database (leaseTtl, or " + SHUTDOWN_BUDGET.toSeconds() + " s when that is "
+                                     + "longer, unless the connection's own network timeout is shorter), is waiting for a pool "
+                                     + "connection, or stuckHandlerTimeout is shorter than that bound",
                              instanceId, kept.owner().shard(), queueId, keptFor.toMillis(), settings.stuckHandlerTimeout(),
                              stillInHandler.map(keys -> keys.keys().size() + " key(s) " + keys.describeKeys() + " are still in a "
                                      + "handler, the longest there " + keys.longest().toMillis() + " ms. A run of this queue - the "
@@ -3269,13 +3283,31 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * leaves the row to a run started since - unless that deletion was already under way when the start began and
      * outlasts the start's {@link #SHUTDOWN_BUDGET} wait ({@link #awaitDeregistrationsRunning}); then the row is gone
      * until the run's next heartbeat. Another queue registering under the same id meanwhile can, and other
-     * instances then read its units as ownerless. {@link PostgresqlMessageQueue} asks this before it lets the next
-     * {@code consume()} register under an ended subscription's instance id. Like {@link #keptOrderedUnitNotHandedBack()},
-     * asked right after a {@code stop()} that gave up waiting for a start still running, it does not yet count the
-     * hand-back that start does once its statements return.
+     * instances then read its units as ownerless - which only a hand-back that may still get to that deletion can do
+     * ({@link #handBackMayStillDeregister()}). Like {@link #keptOrderedUnitNotHandedBack()}, asked right after a
+     * {@code stop()} that gave up waiting for a start still running, it does not yet count the hand-back that start does
+     * once its statements return.
+     * <p>
+     * Bounded on a database that does not answer: the thread waits for each answer no longer than
+     * {@link #withinShutdownBudget} allows.
      */
     boolean handBackStillRunning() {
         return handBacksRunning.get() > 0;
+    }
+
+    /**
+     * Whether a hand-back {@link #handBackStillRunning()} counts may still delete the membership row of this queue's
+     * instance id: one whose stop deregisters, and kept no ordered unit, with none an earlier stop kept still awaited in a
+     * handler (not given up or released on request), at {@link KeptUnit.Phase#STOP_FLUSHING} or at {@link KeptUnit.Phase#HANDING_BACK} when {@link #endRun} looked. Any of
+     * those makes {@link #handBackWithinBudget} return before the deletion, whatever it finds once it gets there, so a
+     * hand-back whose stop kept a unit cannot delete the row however long its flush hangs; what else it writes - the
+     * acknowledgements, the charges, the lease releases - is fenced under the fences of the units it hands back, which
+     * a pair registering under the id since has bumped on every unit it took. {@link PostgresqlMessageQueue} asks this,
+     * with {@link #keptOrderedUnitAwaited()}, before it lets the next {@code consume()} register under an ended
+     * subscription's instance id.
+     */
+    boolean handBackMayStillDeregister() {
+        return handBacksThatMayDeregister.get() > 0;
     }
 
     /**
@@ -3582,20 +3614,32 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         // deregistration owed: a start that failed before it adopted anything.
         if (!held.isEmpty() || !returnedEarlier.isEmpty() || deregister) {
             // Counted until the work is done, not until the budget runs out: past it the stop goes on without the thread,
-            // which may still deregister the instance id (handBackStillRunning).
+            // which may still deregister the instance id (handBackStillRunning) - unless it is to return before the
+            // deletion whatever it finds there (handBackMayStillDeregister): a kept unit of this run, or one an earlier
+            // stop kept that is still in a handler, being flushed or being handed back.
+            var mayDeregister = deregister && kept.isEmpty() && keptEarlier.isEmpty() && busyEarlier.isEmpty();
             handBacksRunning.incrementAndGet();
+            if (mayDeregister) {
+                handBacksThatMayDeregister.incrementAndGet();
+            }
+            Runnable handedBack = () -> {
+                if (mayDeregister) {
+                    handBacksThatMayDeregister.decrementAndGet();
+                }
+                handBacksRunning.decrementAndGet();
+            };
             withinShutdownBudget(() -> {
                 try {
                     handBackWithinBudget(serving, toRelease, kept, keptEarlierOwners, busyEarlierOwners, returnedEarlier, keptNow,
                                          deregister);
                 } finally {
-                    handBacksRunning.decrementAndGet();
+                    handedBack.run();
                 }
             }, () -> {
                 // The thread did not start, so nothing of the work above runs: no flush of the kept owners to wait for, and
                 // nothing else would let this run's kept units out of STOP_FLUSHING - a heartbeat tick, a start or a
                 // consume() hands them back instead.
-                handBacksRunning.decrementAndGet();
+                handedBack.run();
                 keptNow.forEach(unit -> unit.moveFrom(KeptUnit.Phase.STOP_FLUSHING, KeptUnit.Phase.AWAITING_HAND_BACK));
             });
         }
@@ -3872,14 +3916,34 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * Abandoning is safe precisely because the work is best-effort: whatever it had not done when the
      * budget ran out is something the cluster already recovers from on its own. The thread is a
      * daemon, so an attempt still blocked inside the pool cannot hold the JVM up either.
+     * <p>
+     * Abandoned is not ended, though, so the thread bounds its own waits on the database: every connection it borrows has
+     * its network timeout set to the queue's {@code leaseTtl}, or to {@link #SHUTDOWN_BUDGET} when that is longer, unless
+     * the connection's own network timeout is shorter - then it is left as it is - and set back before the connection goes
+     * back to the pool ({@link NetworkWaitBound}). A statement on a connection that hangs
+     * - a half-open socket, with no {@code socketTimeout} on the {@code DataSource} - otherwise never returned: the thread
+     * held its pool connection for the life of the process, the stop's kept units waited for its flush until
+     * {@code stuckHandlerTimeout} gave them up ({@link KeptUnit.Phase#STOP_FLUSHING}), and while it might still delete the
+     * instance's membership row a {@link PostgresqlMessageQueue} kept that subscription's instance id out of use
+     * ({@link #handBackMayStillDeregister()}), one more of each for every stop that hung the same way. Past the bound the
+     * statement throws, and the work goes on as after any failure there: the flush lets the kept units out, a release or a
+     * deregistration that failed is left to expire or age out, and the thread ends. The library sets this itself because
+     * this thread exists for exactly the deployments that set no {@code socketTimeout}; that setting is still the one to
+     * make (README, "Set socketTimeout on the DataSource"), as it bounds every connection, the heartbeat's and the pumps'
+     * included, which this does not. Why {@code leaseTtl}: the stop has cancelled this instance's heartbeat, so from at
+     * most a lease TTL after the stop the cluster treats the instance as gone whether or not this work got through - other
+     * instances take its units without a release and leave it out of their fair share without a deregistration - and what
+     * the work leaves undone costs what a crash costs, the successor's redeliveries and takeover charge. Never below the
+     * budget: the time the stop waits for this work anyway.
      *
      * @param notStarted run when the thread could not be created or started - {@code work} then never runs - before what
      *                   that threw is let out
      */
     private void withinShutdownBudget(Runnable work, Runnable notStarted) {
+        var networkWaitBound = Duration.ofMillis(Math.max(leaseTtlMillis, SHUTDOWN_BUDGET.toMillis()));
         Thread thread;
         try {
-            thread = new Thread(work, "shard-queue-stop-" + queueId);
+            thread = new Thread(() -> NetworkWaitBound.during(networkWaitBound, work), "shard-queue-stop-" + queueId);
             thread.setDaemon(true);
             thread.start();
         } catch (RuntimeException | Error e) {
@@ -4252,8 +4316,10 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
              * ({@link OrderedShardOwner#whenNoKeyInHandler}) - or, when that thread could not be created or started
              * ({@link #withinShutdownBudget}'s {@code notStarted}), by {@link #endRun} on the stop's own thread, with no
              * flush run and no {@code whenNoKeyInHandler} registered: a heartbeat tick, a start or a {@code consume()}
-             * hands it back then. One exception bounds the wait: that flush has no timeout of its own and may never
-             * return - on a connection that hangs with no {@code socketTimeout} - so a unit kept longer than
+             * hands it back then. One exception bounds the wait: each of that flush's waits for the database is bounded
+             * ({@link #withinShutdownBudget}), but the flush can still outlast {@code stuckHandlerTimeout} - answers that
+             * come too slowly to reach that bound, a wait for a pool connection, or a {@code stuckHandlerTimeout} shorter
+             * than that bound - so a unit kept longer than
              * {@code stuckHandlerTimeout} and still here is given up ({@link #GIVEN_UP}, {@link #reviewStuckKeptUnits()}),
              * whatever its handler does; that flush, should it return once the unit has been released or taken over, is
              * refused then.
