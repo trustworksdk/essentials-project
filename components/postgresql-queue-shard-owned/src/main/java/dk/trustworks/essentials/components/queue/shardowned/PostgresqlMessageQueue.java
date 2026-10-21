@@ -194,7 +194,8 @@ public final class PostgresqlMessageQueue implements MessageQueue {
      *     under the id meanwhile could lose its row to it, its units then read as ownerless by every other instance until
      *     its next heartbeat. Not a hand-back whose stop kept an ordered unit, which never gets to that deletion: the
      *     reason above holds the id for such a stop, and only until it ends - its unit handed back, or given up past
-     *     {@code stuckHandlerTimeout}, the unit waiting for that hand-back's flush included. Each wait of the hand-back for
+     *     {@code stuckHandlerTimeout}, or, while it still waits for that hand-back's flush, past
+     *     {@link ShardOwnedQueue#stopFlushGiveUpAfter}. Each wait of the hand-back for
      *     the database is bounded by the queue's {@code leaseTtl}, or by {@link ShardOwnedQueue#SHUTDOWN_BUDGET} when that
      *     is longer, unless the connection's own network timeout is shorter (the network timeout {@code ShardOwnedQueue}'s
      *     {@code withinShutdownBudget} sets, or leaves as it is), so a hand-back held
@@ -1033,7 +1034,8 @@ public final class PostgresqlMessageQueue implements MessageQueue {
      * First, each held index's lanes review their kept units ({@link ShardOwnedQueue#reviewStuckKeptUnits()}), giving
      * up, for good and with a WARN, one whose key has been in its handler longer than the queue's
      * {@code stuckHandlerTimeout}, once the stop that kept it has flushed it ({@code ShardOwnedQueue.KeptUnit.Phase.STOP_FLUSHING}),
-     * and one kept that long whose stop has still not flushed it, so {@link HeldIndex#isDue()} below need only read.
+     * and one kept longer than {@link ShardOwnedQueue#stopFlushGiveUpAfter} whose stop has still not flushed it, so
+     * {@link HeldIndex#isDue()} below need only read.
      * Then they retry handing back an ordered unit a stop of theirs kept whose key has left its handler
      * ({@link ShardOwnedQueue#handBackKeptUnits()}) - one just given up with no key in a handler included: the lanes of an
      * ended subscription never run again, so this is the only retry of a hand-back that failed as the key left its

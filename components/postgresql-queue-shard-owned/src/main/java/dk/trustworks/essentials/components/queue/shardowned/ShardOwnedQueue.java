@@ -184,8 +184,9 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * this instance holds: {@link ShardOwnedStorage#acquireLeaseGrant} accepts a row naming its own owner, so a restart would
      * take the unit at once, start that key beside the handler while it runs, and after it treat the unit as taken over
      * from an owner that never let go of it. That wait is bounded by {@code stuckHandlerTimeout} ({@link ShardOwnerSettings}):
-     * once the key has been in its handler longer - or the unit has been kept that long with the stop that kept it still
-     * flushing it - nothing waits for the unit any more ({@link #reviewStuckKeptUnits()}): with no key of it in a handler
+     * once the key has been in its handler longer - or the unit has been kept as long, or longer when the stop's flush is
+     * allowed more ({@link #stopFlushGiveUpAfter}), with the stop that kept it still flushing it - nothing waits for the
+     * unit any more ({@link #reviewStuckKeptUnits()}): with no key of it in a handler
      * it is handed back in that pass; with one, a run of this queue - the one running then, or the next - takes it over
      * under a new fence, once ({@link #keptUnitsGivenUp()}), the key's message delivered again beside the handler. Replaced by {@link #endRun} alone, with the owners not handed back then - those given up on included, while
      * their handler runs on - and those the run it ends keeps.
@@ -976,7 +977,8 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         // First, pumps or none: a unit an earlier stop kept whose handler has run longer than stuckHandlerTimeout is no
         // longer waited for: this start takes it over below. And one whose handler has returned since, and that is not
         // handed back yet, is handed back now, so this start - or another instance - finds it released; reviewed first, so
-        // one given up with no key in a handler - kept that long with the stop's flush of it not returned - is among them.
+        // one given up with no key in a handler - kept past stopFlushGiveUpAfter with the stop's flush of it not returned - is
+        // among them.
         reviewStuckKeptUnits();
         handBackKeptUnits();
         if (!runtime.hasLivePump()) {
@@ -1406,8 +1408,9 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                          summarise(unreleasedAcquisitions.keySet()), queueId, e);
             }
             // A unit an earlier stop kept whose handler has outlasted stuckHandlerTimeout is no longer waited for: the
-            // rebalance takes it over. Reviewed BEFORE the hand-backs below: a unit given up with no key in a handler - kept
-            // that long with the stop's flush of it not returned - is then handed back in this pass rather than taken over.
+            // rebalance takes it over. Reviewed BEFORE the hand-backs below: a unit given up with no key in a handler -
+            // kept past stopFlushGiveUpAfter with the stop's flush of it not returned - is then handed back in this
+            // pass rather than taken over.
             try {
                 reviewStuckKeptUnits();
             } catch (RuntimeException e) {
@@ -2541,8 +2544,8 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
     /**
      * Whether a later run of this queue, or a queue registering under its instance id, still has to wait for an ordered unit
      * a stop of this queue kept: one not handed back yet ({@link #keptOrderedUnitNotHandedBack()}) whose key has not been in
-     * its handler longer than {@code stuckHandlerTimeout} ({@link ShardOwnerSettings}), nor that has been kept that long
-     * with the stop that kept it still flushing it, as the last review of the kept units found
+     * its handler longer than {@code stuckHandlerTimeout} ({@link ShardOwnerSettings}), nor that has been kept longer than
+     * {@link #stopFlushGiveUpAfter} with the stop that kept it still flushing it, as the last review of the kept units found
      * ({@link #reviewStuckKeptUnits()}, which gives such a unit up), and that was not released on request
      * with its key still in the handler ({@link #releaseKeptOrderedUnit}). A read only: it gives nothing up and logs
      * nothing, so the caller that wants a unit past the bound to count as given up has that review run first.
@@ -2560,7 +2563,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * given up on: the units no run of this queue acquires until they have been
      * handed back, and that its acquire loops count as rows this instance holds. A unit whose hand-back failed included:
      * every heartbeat tick retries it ({@link #handBackKeptUnits()}), and one the budget thread of the stop that kept it is
-     * still flushing ({@link KeptUnit.Phase#STOP_FLUSHING}), for up to {@code stuckHandlerTimeout}. One given up on ({@link #reviewStuckKeptUnits()}) is not here
+     * still flushing ({@link KeptUnit.Phase#STOP_FLUSHING}), for up to {@link #stopFlushGiveUpAfter}. One given up on ({@link #reviewStuckKeptUnits()}) is not here
      * but in {@link #keptUnitsGivenUp()}, unless a hand-back of it is running ({@link KeptUnit.Phase#HANDING_BACK}): its
      * handler has returned, and the unit is being released.
      */
@@ -2576,7 +2579,8 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
 
     /**
      * The ordered units a stop of this queue kept whose key was in its handler longer than {@code stuckHandlerTimeout}, or
-     * that were kept that long with that stop still flushing them ({@link #reviewStuckKeptUnits()}), whose kept owner still
+     * that were kept longer than {@link #stopFlushGiveUpAfter} with that stop still flushing them
+     * ({@link #reviewStuckKeptUnits()}), whose kept owner still
      * holds its lease row, and that no acquire of this queue
      * has asked for since ({@link KeptUnit.Phase#GIVEN_UP}, not yet {@code TAKEOVER_ASKED}): the units the ordered acquire loop takes over, under a new
      * fence, before any free unit ({@link #acquireFreeOrderedShards}). Taken over, the unit has a new owner in the run,
@@ -2891,26 +2895,34 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      *       ({@link #keptUnitsGivenUp()}), and neither the unit nor its handler keeps the instance registered on a later
      *       stop or keeps a {@link PostgresqlMessageQueue} subscription's instance id out of use
      *       ({@link #keptOrderedUnitAwaited()}). The handler's acknowledgement is refused under the new fence and its
-     *       message delivered again, with an attempt charged, possibly while the handler still runs. Past the bound with
-     *       that flush still running, WARN that the unit is held up for it, at most once a minute per unit.</li>
-     *   <li>Whatever its handler does, once the unit has been kept longer than {@code stuckHandlerTimeout} and still
-     *       stands at {@link KeptUnit.Phase#STOP_FLUSHING} ({@link KeptUnit#keptFor()}), give it up the same way, with
-     *       one WARN: that budget thread's flush is still running, and nothing else lets the unit out of that phase. Each
-     *       of its waits for the database is bounded ({@link #withinShutdownBudget}), but the flush can still outlast
-     *       {@code stuckHandlerTimeout}: answers that come too slowly to reach that bound, a wait for a pool connection, or
-     *       a {@code stuckHandlerTimeout} shorter than that bound. A unit with no
-     *       key in a handler is then handed back ({@link #handBackKeptUnit}): a heartbeat tick, a start and a
-     *       {@link PostgresqlMessageQueue} {@code consume()} review before they hand back, so in the same pass, unless the
-     *       hand-back fails and an acquire takes the unit over. Should that flush return once the unit has been released or
-     *       taken over, its writes are refused, and the messages it acknowledges delivered again: the at-least-once the
-     *       bound accepts. This lane's hand-back then does not hold an ended {@link PostgresqlMessageQueue}
-     *       subscription's instance id: a stop that kept a unit never deletes the membership row
-     *       ({@link #handBackMayStillDeregister()}). This give-up is the backstop to that bound, for those three cases.</li>
-     *   <li>Before the bound, once the key has been in its handler longer than {@code leaseTtl}, WARN that the unit is
-     *       held up, naming the queue, the unit, its keys in a handler, how long the longest has been there and the bound
-     *       - at most once a minute per unit ({@code KeptUnit.warningDue}, an {@link ErrorWindow}). Before
-     *       {@code leaseTtl}, the stop's own WARN said it kept the unit, and the acquire loops say at DEBUG that they skip
-     *       it.</li>
+     *       message delivered again, with an attempt charged, possibly while the handler still runs.</li>
+     *   <li>Whatever its handler does, once the unit has been kept longer than {@link #stopFlushGiveUpAfter} -
+     *       {@code stuckHandlerTimeout}, or {@link #SHUTDOWN_BUDGET} plus the network bound on each of the budget thread's
+     *       waits for the database when that is longer - and still stands at {@link KeptUnit.Phase#STOP_FLUSHING}
+     *       ({@link KeptUnit#keptFor()}), give it up the same way, with one WARN: that budget thread's flush is still
+     *       running, and nothing else lets the unit out of that phase. Each of that flush's waits for the database is
+     *       bounded ({@link #withinShutdownBudget}), but the flush can still run longer: answers that come too slowly to
+     *       reach that bound, or a wait for a pool connection longer than {@link #SHUTDOWN_BUDGET}. Not at
+     *       {@code stuckHandlerTimeout} alone, which bounds how long a handler may run, not how long a flush may take: a
+     *       short one gave up a flush that was only slow, and whatever handed the unit back or took it over beside that
+     *       flush had the flush refused. A unit with no key in a handler is then handed back ({@link #handBackKeptUnit}): a
+     *       heartbeat tick, a start and a {@link PostgresqlMessageQueue} {@code consume()} review before they hand back, so
+     *       in the same pass, unless the hand-back fails and an acquire takes the unit over. Should that flush return once
+     *       the unit has been released or taken over, its writes are refused, and the messages it acknowledges delivered
+     *       again: the at-least-once the bound accepts. This lane's hand-back then does not hold an ended
+     *       {@link PostgresqlMessageQueue} subscription's instance id: a stop that kept a unit never deletes the
+     *       membership row ({@link #handBackMayStillDeregister()}). This give-up is the backstop to that bound, for those
+     *       two cases.</li>
+     *   <li>Before that, once a unit still at {@link KeptUnit.Phase#STOP_FLUSHING} has been kept longer than that network
+     *       bound ({@link #stopNetworkWaitBound()}), its key in a handler or not, WARN that the unit is held up because the
+     *       stop's flush has not returned, how long it has been kept, its keys in a handler, and that a release on request
+     *       answers {@code BUSY} until that flush returns or the unit is given up - at most once a minute per unit
+     *       ({@code KeptUnit.warningDue}, an {@link ErrorWindow}).</li>
+     *   <li>For a unit waiting for its handler ({@link KeptUnit.Phase#AWAITING_HAND_BACK}), before the bound, once the key
+     *       has been in its handler longer than {@code leaseTtl}, WARN that the unit is held up, naming the queue, the
+     *       unit, its keys in a handler, how long the longest has been there and the bound, and how to release it on
+     *       request - at most once a minute per unit, from the same window. Before {@code leaseTtl}, the stop's own WARN
+     *       said it kept the unit, and the acquire loops say at DEBUG that they skip it.</li>
      * </ul>
      * Called by every heartbeat tick and start, before they acquire anything, by a stop as it ends a run, and by
      * {@link PostgresqlMessageQueue} for the lanes of an ended subscription before it asks them
@@ -2922,41 +2934,13 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         if (settings == null) {
             return;
         }
+        var giveUpFlushingAfter = stopFlushGiveUpAfter(settings);
         for (var kept : keptOrderedOwners) {
             if (kept.isGivenUp() || !kept.owner().holdsLeaseRow()) {
                 continue;
             }
-            // The stop's budget thread lets the unit out of STOP_FLUSHING once its flush returns or throws, and nothing else
-            // lets it out. Each of that flush's waits for the database is bounded (withinShutdownBudget), but the flush can
-            // still outlast stuckHandlerTimeout: answers that come too slowly to reach that bound, a wait for a pool
-            // connection, or a stuckHandlerTimeout shorter than that bound. So kept longer than stuckHandlerTimeout and
-            // still at STOP_FLUSHING, the unit is given up whatever its handler does: a flush still running then is
-            // refused should it return once the unit has been released or taken over.
-            var keptFor = kept.keptFor();
-            if (kept.phase() == KeptUnit.Phase.STOP_FLUSHING && keptFor.compareTo(settings.stuckHandlerTimeout()) >= 0) {
-                if (kept.moveFrom(KeptUnit.Phase.STOP_FLUSHING, KeptUnit.Phase.GIVEN_UP)) {
-                    var stillInHandler = kept.keysInHandler();
-                    log.warn("Instance {} stops waiting for ordered unit {} on queue {}: a stop of this queue kept it {} ms ago, "
-                                     + "longer than stuckHandlerTimeout ({}), and that stop has still not finished flushing the "
-                                     + "acknowledgements of the owners it ended, so nothing has handed the unit back. {}. Should "
-                                     + "that flush return once the unit has been released or taken over, its writes for the unit "
-                                     + "are refused, and the messages they acknowledge are delivered again. A flush still running "
-                                     + "this long is getting its answers too slowly to reach the network bound on each of its "
-                                     + "waits for the database (leaseTtl, or " + SHUTDOWN_BUDGET.toSeconds() + " s when that is "
-                                     + "longer, unless the connection's own network timeout is shorter), is waiting for a pool "
-                                     + "connection, or stuckHandlerTimeout is shorter than that bound",
-                             instanceId, kept.owner().shard(), queueId, keptFor.toMillis(), settings.stuckHandlerTimeout(),
-                             stillInHandler.map(keys -> keys.keys().size() + " key(s) " + keys.describeKeys() + " are still in a "
-                                     + "handler, the longest there " + keys.longest().toMillis() + " ms. A run of this queue - the "
-                                     + "one running now, or the next - takes the unit over under a new fence, or another instance "
-                                     + "once this instance's liveness has lapsed: the messages in those handlers are "
-                                     + "delivered again, with an attempt charged, and a key may be in two handlers at once")
-                                           .orElse("No key of it is in a handler: a heartbeat tick, a start or a later stop of "
-                                                   + "this queue hands it back, as does the next consume() of a "
-                                                   + "PostgresqlMessageQueue whose ended subscription this queue is a lane of, "
-                                                   + "unless a run of this queue takes it over first, under a new fence, or "
-                                                   + "another instance once this instance's liveness has lapsed"));
-                }
+            if (kept.phase() == KeptUnit.Phase.STOP_FLUSHING) {
+                reviewUnitStillFlushedByItsStop(kept, settings, giveUpFlushingAfter);
                 continue;
             }
             var inHandler = kept.keysInHandler();
@@ -2966,8 +2950,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             var longest = inHandler.get().longest();
             if (longest.compareTo(settings.stuckHandlerTimeout()) >= 0) {
                 // From AWAITING_HAND_BACK only: not while the stop's budget thread is still flushing the owner - taken over
-                // then, that flush would be refused; given up above once it has run past the bound - nor while a hand-back
-                // runs, whose handler has returned.
+                // then, that flush would be refused; reviewed above - nor while a hand-back runs, whose handler has returned.
                 if (kept.moveFrom(KeptUnit.Phase.AWAITING_HAND_BACK, KeptUnit.Phase.GIVEN_UP)) {
                     log.warn("Instance {} stops waiting for ordered unit {} on queue {}: a stop of this queue kept it because {} key(s) "
                                      + "{} were still in a handler, and the longest has now been there {} ms, longer than "
@@ -2979,16 +2962,10 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                                      + "handlers of this queue legitimately run this long",
                              instanceId, kept.owner().shard(), queueId, inHandler.get().keys().size(), inHandler.get().describeKeys(),
                              longest.toMillis(), settings.stuckHandlerTimeout());
-                } else if (kept.phase() == KeptUnit.Phase.STOP_FLUSHING && kept.warningDue()) {
-                    log.warn("Instance {} holds ordered unit {} on queue {} unserved: a stop of this queue kept it because {} key(s) {} were "
-                                     + "still in a handler, and the longest has now been there {} ms, longer than stuckHandlerTimeout "
-                                     + "({}), but that stop is still flushing the acknowledgements of the owners it ended, this one "
-                                     + "among them. Nothing gives the unit up until that flush has returned, or until the unit has "
-                                     + "been kept longer than stuckHandlerTimeout - {} ms so far. Logged at most once a minute per unit",
-                             instanceId, kept.owner().shard(), queueId, inHandler.get().keys().size(), inHandler.get().describeKeys(),
-                             longest.toMillis(), settings.stuckHandlerTimeout(), keptFor.toMillis());
                 }
-            } else if (longest.toMillis() > leaseTtlMillis && kept.warningDue()) {
+            } else if (kept.phase() == KeptUnit.Phase.AWAITING_HAND_BACK && longest.toMillis() > leaseTtlMillis && kept.warningDue()) {
+                // AWAITING_HAND_BACK only: at HANDING_BACK a hand-back or release on request of the unit is running, and a
+                // release on request asked now answers BUSY.
                 log.warn("Instance {} holds ordered unit {} on queue {} unserved: a stop of this queue kept it because {} key(s) {} were "
                                  + "still in a handler, and the longest has now been there {} ms, longer than the {} ms leaseTtl. No run "
                                  + "of this queue takes the unit, and no other instance while this one is live, until that handler "
@@ -3002,6 +2979,88 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                          instanceId, kept.owner().shard(), kept.owner().shard(), instanceId);
             }
         }
+    }
+
+    /**
+     * {@link #reviewStuckKeptUnits()} for a unit still at {@link KeptUnit.Phase#STOP_FLUSHING}: the budget thread of the stop
+     * that kept it lets it out of that phase once its flush returns or throws, and nothing else does - nothing hands the
+     * unit back, gives it up past {@code stuckHandlerTimeout}, or releases it on request ({@code BUSY}) meanwhile. Kept
+     * {@code giveUpAfter} ({@link #stopFlushGiveUpAfter}) or longer, give it up whatever its handler does: a flush still
+     * running then is refused should it return once the unit has been released or taken over. Kept longer than the network
+     * bound on that flush's waits for the database ({@link #stopNetworkWaitBound()}) - a statement on a connection that does
+     * not answer has thrown by then - WARN that the unit is held up for that flush, at most once a minute per unit.
+     */
+    private void reviewUnitStillFlushedByItsStop(KeptUnit kept, ShardOwnerSettings settings, Duration giveUpAfter) {
+        var keptFor = kept.keptFor();
+        if (keptFor.compareTo(giveUpAfter) >= 0) {
+            if (kept.moveFrom(KeptUnit.Phase.STOP_FLUSHING, KeptUnit.Phase.GIVEN_UP)) {
+                var stillInHandler = kept.keysInHandler();
+                log.warn("Instance {} stops waiting for ordered unit {} on queue {}: a stop of this queue kept it {} ms ago, "
+                                 + "longer than {} (stuckHandlerTimeout {}, or when longer the {} s shutdown budget plus the network "
+                                 + "bound on each of that stop's waits for the database), and that stop has still not finished "
+                                 + "flushing the acknowledgements of the owners it ended, so nothing has handed the unit back. {}. "
+                                 + "Should that flush return once the unit has been released or taken over, its writes for the "
+                                 + "unit are refused, and the messages they acknowledge are delivered again. A flush still running "
+                                 + "this long is getting its answers too slowly to reach that network bound (leaseTtl, or "
+                                 + SHUTDOWN_BUDGET.toSeconds() + " s when that is longer, unless the connection's own network "
+                                 + "timeout is shorter), or has waited for a pool connection longer than the shutdown budget",
+                         instanceId, kept.owner().shard(), queueId, keptFor.toMillis(), giveUpAfter, settings.stuckHandlerTimeout(),
+                         SHUTDOWN_BUDGET.toSeconds(),
+                         stillInHandler.map(keys -> keys.keys().size() + " key(s) " + keys.describeKeys() + " are still in a "
+                                 + "handler, the longest there " + keys.longest().toMillis() + " ms. A run of this queue - the "
+                                 + "one running now, or the next - takes the unit over under a new fence, or another instance "
+                                 + "once this instance's liveness has lapsed: the messages in those handlers are "
+                                 + "delivered again, with an attempt charged, and a key may be in two handlers at once")
+                                       .orElse("No key of it is in a handler: a heartbeat tick, a start or a later stop of "
+                                               + "this queue hands it back, as does the next consume() of a "
+                                               + "PostgresqlMessageQueue whose ended subscription this queue is a lane of, "
+                                               + "unless a run of this queue takes it over first, under a new fence, or "
+                                               + "another instance once this instance's liveness has lapsed"));
+            }
+            return;
+        }
+        if (keptFor.compareTo(stopNetworkWaitBound()) > 0 && kept.phase() == KeptUnit.Phase.STOP_FLUSHING && kept.warningDue()) {
+            var inHandler = kept.keysInHandler();
+            log.warn("Instance {} holds ordered unit {} on queue {} unserved: a stop of this queue kept it {} ms ago and has still not "
+                             + "finished flushing the acknowledgements of the owners it ended, this one among them. {}. Until that "
+                             + "flush returns no run of this queue hands the unit back or takes it over, and no other instance "
+                             + "while this one is live, and a release on request "
+                             + "(MessageQueue.releaseKeptOrderedUnit) answers BUSY - until the unit has been kept {} "
+                             + "(stuckHandlerTimeout {}, or when longer the {} s shutdown budget plus the network bound on each of that "
+                             + "stop's waits for the database), when it is given up. Logged at most once a minute per unit",
+                     instanceId, kept.owner().shard(), queueId, keptFor.toMillis(),
+                     inHandler.map(keys -> keys.keys().size() + " key(s) " + keys.describeKeys() + " are still in a handler, the "
+                             + "longest there " + keys.longest().toMillis() + " ms")
+                              .orElse("No key of it is in a handler"),
+                     giveUpAfter, settings.stuckHandlerTimeout(), SHUTDOWN_BUDGET.toSeconds());
+        }
+    }
+
+    /**
+     * How long a unit a stop kept may wait at {@link KeptUnit.Phase#STOP_FLUSHING} for that stop's budget thread to flush
+     * it before {@link #reviewStuckKeptUnits()} gives it up: the queue's {@code stuckHandlerTimeout}, or, when that is
+     * longer, {@link #SHUTDOWN_BUDGET} - what a stop allows its database work - plus the network bound the budget thread
+     * puts on each of its waits for the database ({@link #stopNetworkWaitBound()}). The second floors the first because
+     * {@code stuckHandlerTimeout} bounds how long a handler may run, not how long a flush may take: on its own, a short
+     * one gave up a flush that was only slow - waiting for a pool connection, or for a statement still within the network
+     * bound - and the next heartbeat tick, start or {@code consume()} then handed the unit back or took it over while
+     * that flush still ran, the double flush {@link KeptUnit.Phase#STOP_FLUSHING} exists to prevent: the flush's
+     * delete, refused, counted a lease lost ({@code fencedOutAcks}). Read from the queue's settings and {@code leaseTtl}
+     * as they are now. Package-private for tests.
+     */
+    Duration stopFlushGiveUpAfter(ShardOwnerSettings settings) {
+        var flushAllowance = SHUTDOWN_BUDGET.plus(stopNetworkWaitBound());
+        return settings.stuckHandlerTimeout().compareTo(flushAllowance) >= 0 ? settings.stuckHandlerTimeout() : flushAllowance;
+    }
+
+    /**
+     * The network timeout the stop's budget thread sets on each connection it borrows ({@link #withinShutdownBudget},
+     * {@link NetworkWaitBound}): the queue's {@code leaseTtl}, or {@link #SHUTDOWN_BUDGET} when that is longer. A connection
+     * whose own network timeout is shorter keeps its own, so no wait of that thread for the database lasts longer than
+     * this. Package-private for tests.
+     */
+    Duration stopNetworkWaitBound() {
+        return Duration.ofMillis(Math.max(leaseTtlMillis, SHUTDOWN_BUDGET.toMillis()));
     }
 
     /**
@@ -3047,7 +3106,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
     /**
      * Hand back the ordered unit {@code kept}, which a stop of this queue kept because a key was still in its handler: when
      * no key of its owner is in a handler, its lease row still names this instance, the budget thread of the stop that
-     * kept it has flushed it ({@link KeptUnit.Phase#STOP_FLUSHING}) - or has not within {@code stuckHandlerTimeout}, and
+     * kept it has flushed it ({@link KeptUnit.Phase#STOP_FLUSHING}) - or has not within {@link #stopFlushGiveUpAfter}, and
      * the unit was given up on ({@link #reviewStuckKeptUnits()}) -, and no other hand-back of it is running
      * ({@link KeptUnit#claimHandBack}), flush the owner's acknowledgements under the fence it was kept under and release its
      * row ({@link #releaseLeaseRows}). Both are fenced: the fence is still valid, as releasing does not bump it, and a unit
@@ -3055,7 +3114,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * owner to {@code RELEASED} itself ({@link LeasedOwner.LeaseRow}), and nothing is released then. Every caller - the key
      * leaving its handler, a heartbeat tick, a start, a later stop, a {@link PostgresqlMessageQueue} {@code consume()} -
      * comes through here, so none flushes the owner while that budget thread may still be flushing it, bar one whose
-     * flush has outlasted {@code stuckHandlerTimeout}: the thread's own flush, finding the row released, was refused and
+     * flush has outlasted {@link #stopFlushGiveUpAfter}: the thread's own flush, finding the row released, was refused and
      * counted a lease lost.
      * <p>
      * Whoever takes the unit next finds it released ({@link ShardOwnedStorage.LeaseGrant#previousOwnerReleased()}): it
@@ -3127,7 +3186,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * and reported {@link KeptUnitRelease.Outcome#ALREADY_TAKEN}. Nothing is done while the stop that kept the unit is still
      * flushing it ({@link KeptUnit.Phase#STOP_FLUSHING}) or another hand-back or release of it runs:
      * {@link KeptUnitRelease.Outcome#BUSY}. The kept units are reviewed first ({@link #reviewStuckKeptUnits()}), as no
-     * heartbeat does it for a queue that is stopped: a unit kept longer than {@code stuckHandlerTimeout} whose stop has
+     * heartbeat does it for a queue that is stopped: a unit kept longer than {@link #stopFlushGiveUpAfter} whose stop has
      * still not flushed it is given up on then, and released here rather than answered {@code BUSY} for as long as that
      * flush hangs. More than one kept entry can name the unit - a run of this queue that took it
      * over past {@code stuckHandlerTimeout} and whose stop kept it again lists its entry after the earlier one - so each is
@@ -3573,8 +3632,8 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         // that budget thread does is busy by then: the budget thread reads their phase again before it deregisters
         // (handBackWithinBudget).
         // And a fourth kind, listed still but keeping nothing registered: those with a key in its handler that were given up
-        // on - the key there longer than stuckHandlerTimeout, or the unit kept that long with the flush of the stop that
-        // kept it not returned - which nothing waits for (reviewStuckKeptUnits) - a run of this queue may have taken
+        // on - the key there longer than stuckHandlerTimeout, or the unit kept longer than stopFlushGiveUpAfter with the flush
+        // of the stop that kept it not returned - which nothing waits for (reviewStuckKeptUnits) - a run of this queue may have taken
         // the unit over already, and another instance may once this one deregisters - and those released on request with
         // their key still in the handler (releaseKeptOrderedUnit, FORCE_RELEASED), whose row is released already.
         reviewStuckKeptUnits();
@@ -3713,7 +3772,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             // every unit stands at STOP_FLUSHING, which no hand-back claims - a heartbeat tick's, a restart's or a
             // consume()'s included, which may run meanwhile once the stop has given up waiting for this thread. A
             // hand-back flushing and releasing one of them while this flush still ran made this flush, refused, count a
-            // lease lost. Unless this flush outlasts stuckHandlerTimeout: a review may have given such a unit up by
+            // lease lost. Unless this flush outlasts stopFlushGiveUpAfter: a review may have given such a unit up by
             // then (reviewStuckKeptUnits), which leaves the move below doing nothing, and the hand-back registered after it
             // claims the unit from where the review left it.
             for (var unit : keptNow) {
@@ -3918,12 +3977,12 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * daemon, so an attempt still blocked inside the pool cannot hold the JVM up either.
      * <p>
      * Abandoned is not ended, though, so the thread bounds its own waits on the database: every connection it borrows has
-     * its network timeout set to the queue's {@code leaseTtl}, or to {@link #SHUTDOWN_BUDGET} when that is longer, unless
-     * the connection's own network timeout is shorter - then it is left as it is - and set back before the connection goes
-     * back to the pool ({@link NetworkWaitBound}). A statement on a connection that hangs
+     * its network timeout set to the queue's {@code leaseTtl}, or to {@link #SHUTDOWN_BUDGET} when that is longer
+     * ({@link #stopNetworkWaitBound()}), unless the connection's own network timeout is shorter - then it is left as it is -
+     * and set back before the connection goes back to the pool ({@link NetworkWaitBound}). A statement on a connection that hangs
      * - a half-open socket, with no {@code socketTimeout} on the {@code DataSource} - otherwise never returned: the thread
-     * held its pool connection for the life of the process, the stop's kept units waited for its flush until
-     * {@code stuckHandlerTimeout} gave them up ({@link KeptUnit.Phase#STOP_FLUSHING}), and while it might still delete the
+     * held its pool connection for the life of the process, the stop's kept units waited for its flush until a review gave
+     * them up ({@link KeptUnit.Phase#STOP_FLUSHING}, {@link #stopFlushGiveUpAfter}), and while it might still delete the
      * instance's membership row a {@link PostgresqlMessageQueue} kept that subscription's instance id out of use
      * ({@link #handBackMayStillDeregister()}), one more of each for every stop that hung the same way. Past the bound the
      * statement throws, and the work goes on as after any failure there: the flush lets the kept units out, a release or a
@@ -3940,7 +3999,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      *                   that threw is let out
      */
     private void withinShutdownBudget(Runnable work, Runnable notStarted) {
-        var networkWaitBound = Duration.ofMillis(Math.max(leaseTtlMillis, SHUTDOWN_BUDGET.toMillis()));
+        var networkWaitBound = stopNetworkWaitBound();
         Thread thread;
         try {
             thread = new Thread(() -> NetworkWaitBound.during(networkWaitBound, work), "shard-queue-stop-" + queueId);
@@ -4140,7 +4199,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
 
         /**
          * A unit the stop ending a run keeps, in {@link Phase#STOP_FLUSHING} until that stop's budget thread has flushed it,
-         * or could not be started, or until it has been kept longer than {@code stuckHandlerTimeout}
+         * or could not be started, or until it has been kept longer than {@link #stopFlushGiveUpAfter}
          * ({@link #reviewStuckKeptUnits()}).
          */
         KeptUnit(LeasedOwner owner) {
@@ -4186,7 +4245,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
          * @return the phase the claim moved the unit from, which the hand-back moves it back to should it leave the row
          * held ({@link #endHandBack}); {@code null} when no hand-back may run now - while the unit stands at
          * {@link Phase#STOP_FLUSHING} (the stop's budget thread is still flushing the owner, and no review has given the unit
-         * up past {@code stuckHandlerTimeout}: {@link #reviewStuckKeptUnits()}), another hand-back runs, or the unit is
+         * up past {@link #stopFlushGiveUpAfter}: {@link #reviewStuckKeptUnits()}), another hand-back runs, or the unit is
          * handed back
          */
         Phase claimHandBack() {
@@ -4233,7 +4292,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
 
         /**
          * Whether the unit has been given up on: its key has been in its handler longer than {@code stuckHandlerTimeout},
-         * or the stop that kept it had not flushed it that long after keeping it ({@link Phase#GIVEN_UP},
+         * or the stop that kept it had not flushed it {@link #stopFlushGiveUpAfter} after keeping it ({@link Phase#GIVEN_UP},
          * {@link Phase#TAKEOVER_ASKED}).
          */
         boolean isGivenUp() {
@@ -4301,7 +4360,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
          *                                                                                |
          *                                                                                +--&gt; FORCE_RELEASED
          *
-         *   STOP_FLUSHING --&gt; GIVEN_UP too, once kept longer than stuckHandlerTimeout with the stop's flush not returned.
+         *   STOP_FLUSHING --&gt; GIVEN_UP too, once kept longer than stopFlushGiveUpAfter with the stop's flush not returned.
          *   HANDING_BACK goes back to the phase it was claimed from when the hand-back leaves the row held.
          * </pre>
          */
@@ -4317,12 +4376,12 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
              * ({@link #withinShutdownBudget}'s {@code notStarted}), by {@link #endRun} on the stop's own thread, with no
              * flush run and no {@code whenNoKeyInHandler} registered: a heartbeat tick, a start or a {@code consume()}
              * hands it back then. One exception bounds the wait: each of that flush's waits for the database is bounded
-             * ({@link #withinShutdownBudget}), but the flush can still outlast {@code stuckHandlerTimeout} - answers that
-             * come too slowly to reach that bound, a wait for a pool connection, or a {@code stuckHandlerTimeout} shorter
-             * than that bound - so a unit kept longer than
-             * {@code stuckHandlerTimeout} and still here is given up ({@link #GIVEN_UP}, {@link #reviewStuckKeptUnits()}),
-             * whatever its handler does; that flush, should it return once the unit has been released or taken over, is
-             * refused then.
+             * ({@link #withinShutdownBudget}), but the flush can still run longer - answers that come too slowly to reach
+             * that bound, or a long wait for a pool connection - so a unit kept longer than {@link #stopFlushGiveUpAfter}
+             * ({@code stuckHandlerTimeout}, or when longer the shutdown budget plus that bound, which gives a slow flush at
+             * least the shutdown budget plus one full network-bound wait) and still here is given up ({@link #GIVEN_UP},
+             * {@link #reviewStuckKeptUnits()}), whatever its handler does; that flush, should it return once the unit has
+             * been released or taken over, is refused then.
              */
             STOP_FLUSHING,
             /**
@@ -4345,8 +4404,8 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
              */
             HANDED_BACK,
             /**
-             * Its key has been in its handler longer than {@code stuckHandlerTimeout}, or it has been kept that long still
-             * at {@link #STOP_FLUSHING} ({@link #reviewStuckKeptUnits()}): nothing waits for it any more, and the ordered
+             * Its key has been in its handler longer than {@code stuckHandlerTimeout}, or it has been kept longer than
+             * {@link #stopFlushGiveUpAfter} still at {@link #STOP_FLUSHING} ({@link #reviewStuckKeptUnits()}): nothing waits for it any more, and the ordered
              * acquire loop takes it over, under a new fence, before any free unit ({@link #keptUnitsGivenUp()}). Still
              * handed back should no key of it be in a handler before it is taken over.
              */
@@ -4384,7 +4443,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             }
 
             /**
-             * Whether the unit has been given up on past {@code stuckHandlerTimeout}: {@link #GIVEN_UP} or
+             * Whether the unit has been given up on ({@link #reviewStuckKeptUnits()}): {@link #GIVEN_UP} or
              * {@link #TAKEOVER_ASKED}.
              */
             boolean isGivenUp() {

@@ -57,6 +57,15 @@ class ShardOwnedLifecycleIT {
 
     private static final short QUEUE_ID    = 1;
     private static final int   SHARD_COUNT = 4;
+    /**
+     * The {@code stuckHandlerTimeout} of the tests whose stop flush never returns. A stop whose budget thread is held takes
+     * {@code shedGrace} plus the whole {@code SHUTDOWN_BUDGET}, about 2.3 s, and a restart and a handler release follow it
+     * before some premises are read: far past that, each premise read before the bound keeps several seconds of margin on
+     * a loaded build. Longer than {@code SHUTDOWN_BUDGET} plus the network bound on the flush's waits at these tests'
+     * {@code leaseTtl} (1 s, so 2 s), so it is what a unit still waiting for that flush is given up at
+     * ({@code ShardOwnedQueue.stopFlushGiveUpAfter}).
+     */
+    private static final Duration HUNG_FLUSH_BOUND = Duration.ofSeconds(12);
 
     @Container
     static PostgreSQLContainer postgres = LabPostgres.create();
@@ -696,7 +705,7 @@ class ShardOwnedLifecycleIT {
         var entries     = new AtomicInteger();
         var entered     = new CountDownLatch(1);
         var release     = new CountDownLatch(1);
-        var settings    = settingsWithShedGrace(Duration.ofMillis(300)).toBuilder().setStuckHandlerTimeout(Duration.ofSeconds(6)).build();
+        var settings    = settingsWithShedGrace(Duration.ofMillis(300)).toBuilder().setStuckHandlerTimeout(HUNG_FLUSH_BOUND).build();
         var instanceId  = "kept-behind-a-hung-stop-flush";
         var holding     = new FlushHoldingDataSource(dataSource, FlushHoldingDataSource.STOP_BUDGET_THREAD);
         var logged      = new ListAppender<ILoggingEvent>();
@@ -726,13 +735,15 @@ class ShardOwnedLifecycleIT {
                 assertThat(queue.metrics().keptUnitsInHandler()).as("premise: the busy unit is kept").isEqualTo(1);
                 var keptUnit = ShardOwnedSchema.unitForKey("ACC-1", ShardOwnedSchema.ORDERED_UNITS);
                 var kept     = new UnitFence(keptUnit, fenceOf("ordered", keptUnit));
+                assertThat(queue.stopFlushGiveUpAfter(settings)).as("premise: the unit still waiting for the flush is given up at the bound")
+                                                                .isEqualTo(settings.stuckHandlerTimeout());
                 assertThat(Duration.ofNanos(System.nanoTime() - stoppedAt)).as("premise: well within the bound")
                                                                            .isLessThan(settings.stuckHandlerTimeout().minusSeconds(2));
                 assertThat(queue.releaseKeptOrderedUnit(instanceId, keptUnit))
                         .as("premise: within the bound, a release on request waits for the stop's flush")
                         .hasValueSatisfying(answer -> assertThat(answer.outcome()).isEqualTo(KeptUnitRelease.Outcome.BUSY));
 
-                Awaitility.await().atMost(Duration.ofSeconds(20)).pollInterval(Duration.ofMillis(500)).untilAsserted(
+                Awaitility.await().atMost(HUNG_FLUSH_BOUND.plusSeconds(20)).pollInterval(Duration.ofMillis(500)).untilAsserted(
                         () -> assertThat(queue.releaseKeptOrderedUnit(instanceId, keptUnit))
                                 .as("past the bound, released on request though the stop's flush still hangs")
                                 .hasValueSatisfying(answer -> assertThat(answer.outcome()).isEqualTo(KeptUnitRelease.Outcome.RELEASED)));
@@ -768,7 +779,7 @@ class ShardOwnedLifecycleIT {
         var entries    = new AtomicInteger();
         var entered    = new CountDownLatch(1);
         var release    = new CountDownLatch(1);
-        var settings   = settingsWithShedGrace(Duration.ofMillis(300)).toBuilder().setStuckHandlerTimeout(Duration.ofSeconds(6)).build();
+        var settings   = settingsWithShedGrace(Duration.ofMillis(300)).toBuilder().setStuckHandlerTimeout(HUNG_FLUSH_BOUND).build();
         var instanceId = "kept-behind-a-hung-stop-flush-restarted";
         var holding    = new FlushHoldingDataSource(dataSource, FlushHoldingDataSource.STOP_BUDGET_THREAD);
         try (var runtime = new ShardRuntime(dataSource, settings)) {
@@ -795,7 +806,7 @@ class ShardOwnedLifecycleIT {
                 queue.start();
                 assertThat(queue.shardsHeld()).as("premise: the restart leaves the kept unit alone").isEqualTo(ShardOwnedSchema.ORDERED_UNITS - 1);
 
-                Awaitility.await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
+                Awaitility.await().atMost(HUNG_FLUSH_BOUND.plusSeconds(20)).untilAsserted(() -> {
                     assertThat(fenceOf("ordered", kept.shard())).as("taken over past the bound, under a new fence").isGreaterThan(kept.fence());
                     assertThat(ownerOf("ordered", kept.shard())).as("by the restarted queue").isEqualTo(instanceId);
                     assertThat(queue.shardsHeld()).as("every unit").isEqualTo(ShardOwnedSchema.ORDERED_UNITS);
@@ -840,7 +851,7 @@ class ShardOwnedLifecycleIT {
         var entries     = new AtomicInteger();
         var entered     = new CountDownLatch(1);
         var release     = new CountDownLatch(1);
-        var settings    = settingsWithShedGrace(Duration.ofMillis(300)).toBuilder().setStuckHandlerTimeout(Duration.ofSeconds(6)).build();
+        var settings    = settingsWithShedGrace(Duration.ofMillis(300)).toBuilder().setStuckHandlerTimeout(HUNG_FLUSH_BOUND).build();
         var instanceId  = "kept-behind-a-hung-stop-flush-handed-back";
         var holding     = new FlushHoldingDataSource(dataSource, FlushHoldingDataSource.STOP_BUDGET_THREAD);
         var logged      = new ListAppender<ILoggingEvent>();
@@ -883,11 +894,11 @@ class ShardOwnedLifecycleIT {
 
                 if (restartPastTheBound) {
                     // Nothing reviews the kept units of a stopped queue: the start does, once the bound has passed.
-                    Awaitility.await().atMost(Duration.ofSeconds(20)).until(
+                    Awaitility.await().atMost(HUNG_FLUSH_BOUND.plusSeconds(20)).until(
                             () -> Duration.ofNanos(System.nanoTime() - stoppedAt).compareTo(settings.stuckHandlerTimeout().plusMillis(500)) >= 0);
                     queue.start();
                 }
-                Awaitility.await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
+                Awaitility.await().atMost(HUNG_FLUSH_BOUND.plusSeconds(20)).untilAsserted(() -> {
                     assertThat(logged.list).extracting(ILoggingEvent::getFormattedMessage)
                                            .filteredOn(message -> message.contains("released ordered unit " + kept.shard() + " on queue")
                                                    && message.contains("under the fence a stop kept it under"))
@@ -903,6 +914,195 @@ class ShardOwnedLifecycleIT {
                 assertThat(queue.remaining()).as("the handled message was acknowledged by the hand-back").isZero();
                 Awaitility.await().during(Duration.ofMillis(1500)).atMost(Duration.ofSeconds(3)).untilAsserted(
                         () -> assertThat(entries).as("the handled message is not delivered again").hasValue(1));
+            } finally {
+                release.countDown();
+                holding.letConnect();
+                holding.letAcknowledge();
+                queue.stop();
+            }
+        } finally {
+            queueLogger.detachAppender(logged);
+        }
+    }
+
+    /**
+     * A unit a stop kept whose budget thread is still flushing, with a {@code stuckHandlerTimeout} shorter than that flush
+     * is allowed: {@code SHUTDOWN_BUDGET} plus the network bound on each of its waits for the database ({@code leaseTtl}
+     * here). {@code stuckHandlerTimeout} bounds how long a handler may run, not how long a flush may take, so past it the
+     * unit is not given up while the flush is still within that allowance: a release on request answers {@code BUSY} and
+     * the unit is still waited for. Given up at {@code stuckHandlerTimeout}, as it was, a flush that was only slow had the
+     * unit handed back or taken over beside it - the double flush {@code STOP_FLUSHING} exists to prevent, the flush's
+     * delete then refused and counted as a lost lease. Past the allowance the unit is given up and released on request.
+     */
+    @Test
+    void a_unit_a_stop_kept_whose_flush_outlasts_a_short_stuck_handler_timeout_is_not_given_up_within_the_flush_allowance() throws Exception {
+        var entries     = new AtomicInteger();
+        var entered     = new CountDownLatch(1);
+        var release     = new CountDownLatch(1);
+        // leaseTtl 10 s: the flush is allowed SHUTDOWN_BUDGET + 10 s = 12 s, far past the 2 s stuckHandlerTimeout. Nothing
+        // heartbeats a stopped queue, so the lease TTL plays no other part here.
+        var settings    = settingsWithShedGrace(Duration.ofMillis(300)).toBuilder()
+                                                                       .setLeaseTtl(Duration.ofSeconds(10))
+                                                                       .setStuckHandlerTimeout(Duration.ofSeconds(2))
+                                                                       .build();
+        var instanceId  = "kept-behind-a-slow-stop-flush";
+        var holding     = new FlushHoldingDataSource(dataSource, FlushHoldingDataSource.STOP_BUDGET_THREAD);
+        var logged      = new ListAppender<ILoggingEvent>();
+        var queueLogger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(ShardOwnedQueue.class);
+        logged.start();
+        queueLogger.addAppender(logged);
+        try (var runtime = new ShardRuntime(dataSource, settings)) {
+            var queue = ShardOwnedQueue.builder().setDataSource(holding).setQueueId(QUEUE_ID).setShardCount(SHARD_COUNT)
+                                       .setInstanceId(instanceId).setRuntime(runtime).build();
+            try {
+                queue.startConsumingOrdered((messageId, key, payload, payloadType) -> {
+                    // The first delivery of the key holds its handler; a later one returns at once.
+                    if (entries.incrementAndGet() == 1) {
+                        entered.countDown();
+                        awaitQuietly(release);
+                    }
+                }, settings, SHARD_COUNT);
+                var giveUpAfter = queue.stopFlushGiveUpAfter(settings);
+                assertThat(giveUpAfter).as("premise: the flush is allowed SHUTDOWN_BUDGET plus leaseTtl, longer than stuckHandlerTimeout")
+                                       .isEqualTo(ShardOwnedQueue.SHUTDOWN_BUDGET.plus(settings.leaseTtl()));
+                queue.enqueueOrdered(List.of(new ShardOwnedStorage.OrderedPayload("ACC-1", 0, "0".getBytes(StandardCharsets.UTF_8), 1)));
+                assertThat(entered.await(20, TimeUnit.SECONDS)).isTrue();
+
+                // The stop's budget thread is held as it asks for its connection: a flush still within what it is allowed.
+                holding.holdConnections();
+                var stoppedAt = System.nanoTime();
+                queue.stop();
+                assertThat(holding.awaitConnectionHeld(Duration.ofSeconds(10))).as("premise: the stop's budget thread is held").isTrue();
+                assertThat(queue.metrics().keptUnitsInHandler()).as("premise: the busy unit is kept").isEqualTo(1);
+                var keptUnit = ShardOwnedSchema.unitForKey("ACC-1", ShardOwnedSchema.ORDERED_UNITS);
+                var kept     = new UnitFence(keptUnit, fenceOf("ordered", keptUnit));
+
+                // Past stuckHandlerTimeout from the stop - the unit was kept within the stop - and so past it for the key in
+                // its handler too.
+                Awaitility.await().atMost(Duration.ofSeconds(10)).until(
+                        () -> Duration.ofNanos(System.nanoTime() - stoppedAt).compareTo(settings.stuckHandlerTimeout().plusSeconds(1)) >= 0);
+                assertThat(queue.releaseKeptOrderedUnit(instanceId, keptUnit))
+                        .as("past stuckHandlerTimeout, a release on request still waits for the stop's flush")
+                        .hasValueSatisfying(answer -> assertThat(answer.outcome()).isEqualTo(KeptUnitRelease.Outcome.BUSY));
+                assertThat(Duration.ofNanos(System.nanoTime() - stoppedAt)).as("premise: well within what the flush is allowed")
+                                                                           .isLessThan(giveUpAfter.minusSeconds(3));
+                assertThat(queue.keptOrderedUnitAwaited()).as("the unit is still waited for").isTrue();
+                assertThat(ownerOf("ordered", kept.shard())).as("its row still names the instance").isEqualTo(instanceId);
+                assertThat(fenceOf("ordered", kept.shard())).as("under the fence it was kept under").isEqualTo(kept.fence());
+                assertThat(logged.list).extracting(ILoggingEvent::getFormattedMessage)
+                                       .noneMatch(message -> message.contains("stops waiting for ordered unit " + kept.shard()));
+
+                Awaitility.await().atMost(Duration.ofSeconds(30)).pollInterval(Duration.ofMillis(500)).untilAsserted(
+                        () -> assertThat(queue.releaseKeptOrderedUnit(instanceId, keptUnit))
+                                .as("past what the flush is allowed, released on request though it is still held")
+                                .hasValueSatisfying(answer -> assertThat(answer.outcome()).isEqualTo(KeptUnitRelease.Outcome.RELEASED)));
+                assertThat(Duration.ofNanos(System.nanoTime() - stoppedAt)).as("not before what the flush is allowed")
+                                                                           .isGreaterThanOrEqualTo(giveUpAfter);
+                assertThat(queue.handBackStillRunning()).as("premise: the stop's budget thread is still held").isTrue();
+                assertThat(logged.list).extracting(ILoggingEvent::getFormattedMessage)
+                                       .filteredOn(message -> message.contains("stops waiting for ordered unit " + kept.shard())
+                                               && message.contains("still not finished flushing"))
+                                       .as("one WARN gives the unit up").hasSize(1);
+            } finally {
+                release.countDown();
+                holding.letConnect();
+                holding.letAcknowledge();
+                queue.stop();
+            }
+        } finally {
+            queueLogger.detachAppender(logged);
+        }
+    }
+
+    /**
+     * A unit a stop kept, held up because that stop's budget thread has not finished flushing it, with its key still in the
+     * handler longer than {@code leaseTtl}. The held-up WARN says what holds the unit - the stop's flush - and that a release
+     * on request answers {@code BUSY} until that flush returns or the unit is given up. It used to log the WARN for a unit
+     * whose handler outlasts {@code leaseTtl}, which says the unit waits only for that handler and points at
+     * {@code releaseKeptOrderedUnit}: an operator following it got {@code BUSY} every time, with nothing saying why.
+     */
+    @Test
+    void a_unit_held_up_for_its_stops_flush_is_reported_as_such_with_its_key_in_the_handler() throws Exception {
+        aUnitHeldUpForItsStopsFlushIsReportedAsSuch(false);
+    }
+
+    /**
+     * As above, but the key the unit was kept for has left its handler: the unit waits for the stop's flush alone. Nothing
+     * reported it held up until it was given up.
+     */
+    @Test
+    void a_unit_held_up_for_its_stops_flush_is_reported_as_such_once_its_handler_has_returned() throws Exception {
+        aUnitHeldUpForItsStopsFlushIsReportedAsSuch(true);
+    }
+
+    private void aUnitHeldUpForItsStopsFlushIsReportedAsSuch(boolean handlerReturned) throws Exception {
+        var entries     = new AtomicInteger();
+        var entered     = new CountDownLatch(1);
+        var release     = new CountDownLatch(1);
+        // stuckHandlerTimeout far past the test: nothing gives the unit up while it is watched.
+        var settings    = settingsWithShedGrace(Duration.ofMillis(300)).toBuilder().setStuckHandlerTimeout(Duration.ofMinutes(5)).build();
+        var instanceId  = "held-up-for-a-stop-flush-" + (handlerReturned ? "handler-returned" : "key-in-handler");
+        var holding     = new FlushHoldingDataSource(dataSource, FlushHoldingDataSource.STOP_BUDGET_THREAD);
+        var logged      = new ListAppender<ILoggingEvent>();
+        var queueLogger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(ShardOwnedQueue.class);
+        logged.start();
+        queueLogger.addAppender(logged);
+        try (var runtime = new ShardRuntime(dataSource, settings)) {
+            var queue = ShardOwnedQueue.builder().setDataSource(holding).setQueueId(QUEUE_ID).setShardCount(SHARD_COUNT)
+                                       .setInstanceId(instanceId).setRuntime(runtime).build();
+            try {
+                queue.startConsumingOrdered((messageId, key, payload, payloadType) -> {
+                    // The first delivery of the key holds its handler; a later one returns at once.
+                    if (entries.incrementAndGet() == 1) {
+                        entered.countDown();
+                        awaitQuietly(release);
+                    }
+                }, settings, SHARD_COUNT);
+                queue.enqueueOrdered(List.of(new ShardOwnedStorage.OrderedPayload("ACC-1", 0, "0".getBytes(StandardCharsets.UTF_8), 1)));
+                assertThat(entered.await(20, TimeUnit.SECONDS)).isTrue();
+
+                holding.holdConnections();
+                var stoppedAt = System.nanoTime();
+                queue.stop();
+                assertThat(holding.awaitConnectionHeld(Duration.ofSeconds(10))).as("premise: the stop's budget thread is held").isTrue();
+                assertThat(queue.metrics().keptUnitsInHandler()).as("premise: the busy unit is kept").isEqualTo(1);
+                var keptUnit = ShardOwnedSchema.unitForKey("ACC-1", ShardOwnedSchema.ORDERED_UNITS);
+                if (handlerReturned) {
+                    release.countDown();
+                    Awaitility.await().atMost(Duration.ofSeconds(5)).untilAsserted(
+                            () -> assertThat(queue.metrics().keptUnitsInHandler()).as("premise: the kept key has left its handler").isZero());
+                }
+
+                // Kept longer than the network bound on the flush's waits for the database (here SHUTDOWN_BUDGET, the 1 s
+                // leaseTtl being shorter): stop() returns only after waiting SHUTDOWN_BUDGET for its budget thread, which it
+                // starts after keeping the unit, so the unit has been kept longer than that. Nothing reviews the kept
+                // units of a stopped queue on its own; the review is asked here as a heartbeat tick would ask it.
+                var networkWaitBound = queue.stopNetworkWaitBound();
+                assertThat(networkWaitBound).as("premise").isEqualTo(ShardOwnedQueue.SHUTDOWN_BUDGET);
+                Awaitility.await().atMost(Duration.ofSeconds(10)).until(
+                        () -> Duration.ofNanos(System.nanoTime() - stoppedAt).compareTo(networkWaitBound.plusMillis(500)) >= 0);
+                queue.reviewStuckKeptUnits();
+                queue.reviewStuckKeptUnits();
+
+                var heldUp = logged.list.stream()
+                                        .filter(event -> event.getLevel() == ch.qos.logback.classic.Level.WARN)
+                                        .map(ILoggingEvent::getFormattedMessage)
+                                        .filter(message -> message.contains("holds ordered unit " + keptUnit + " on queue " + QUEUE_ID + " unserved"))
+                                        .toList();
+                assertThat(heldUp).as("one held-up WARN, rate limited").singleElement().satisfies(warning -> {
+                    assertThat(warning).as("names the stop's flush as what holds the unit")
+                                       .contains("has still not finished flushing the acknowledgements of the owners it ended");
+                    assertThat(warning).as("and what a release on request answers meanwhile").contains("answers BUSY");
+                    assertThat(warning).as("not the advice for a unit waiting for its handler").doesNotContain("release-kept");
+                    if (handlerReturned) {
+                        assertThat(warning).contains("No key of it is in a handler");
+                    } else {
+                        assertThat(warning).contains("1 key(s)").contains("ACC-1");
+                    }
+                });
+                assertThat(queue.releaseKeptOrderedUnit(instanceId, keptUnit)).as("as the WARN says")
+                        .hasValueSatisfying(answer -> assertThat(answer.outcome()).isEqualTo(KeptUnitRelease.Outcome.BUSY));
+                assertThat(queue.keptOrderedUnitNotHandedBack()).as("premise: the unit is still kept").isTrue();
             } finally {
                 release.countDown();
                 holding.letConnect();

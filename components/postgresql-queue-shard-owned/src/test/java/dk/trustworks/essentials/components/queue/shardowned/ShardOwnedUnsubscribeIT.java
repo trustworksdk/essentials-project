@@ -955,16 +955,19 @@ class ShardOwnedUnsubscribeIT {
     /**
      * {@link #a_subscription_whose_kept_unit_outlasts_the_stuck_handler_timeout_frees_its_instance_id_for_a_subscription_that_takes_the_unit_over}
      * with the ordered lane's stop flush hung as well - its budget thread held as it asks for a connection, as on a
-     * connection that does not answer - and still hung once the bound has passed. A stop that kept a unit never deletes the
-     * instance's membership row, so its hand-back does not hold the instance id: past the bound the kept unit is given up,
+     * connection that does not answer - and still hung once the unit has waited for it longer than it is waited for
+     * ({@link ShardOwnedQueue#stopFlushGiveUpAfter}). A stop that kept a unit never deletes the instance's membership row,
+     * so its hand-back does not hold the instance id: past that wait the kept unit is given up,
      * and the next {@code consume()} registers under the caller's own id and takes the unit over while that hand-back still
      * hangs. The id used to stay out of use for as long as the flush hung, every {@code consume()} meanwhile registering
      * under another instance id.
      */
     @Test
     void an_unsubscribed_subscription_whose_stop_flush_hangs_frees_its_instance_id_once_its_kept_unit_is_given_up() throws Exception {
-        // Far beyond the test, so the unsubscribed instance's membership row cannot age out and let another id take the unit.
-        var leaseTtl            = Duration.ofSeconds(20);
+        // Long enough that the unsubscribed instance's membership row cannot age out while the second subscription runs under
+        // another id, which could then take the unit. It also sets how long a unit still waiting for its stop's flush is
+        // waited for: SHUTDOWN_BUDGET plus leaseTtl, as that is longer than stuckHandlerTimeout (stopFlushGiveUpAfter).
+        var leaseTtl            = Duration.ofSeconds(15);
         var stuckHandlerTimeout = Duration.ofSeconds(8);
         var entered             = new CountDownLatch(1);
         var release             = new CountDownLatch(1);
@@ -1008,9 +1011,12 @@ class ShardOwnedUnsubscribeIT {
                           .until(() -> !unordered.isStarted() && !ordered.isStarted() && !unordered.handBackStillRunning());
                 holding.holdConnections();
                 unsubscribing.get(20, TimeUnit.SECONDS);
-                // A unit still waiting for its stop's flush is given up once kept longer than the bound, timed from when the
-                // stop kept it, which came before the unsubscribe returned.
+                // A unit still waiting for its stop's flush is given up once kept longer than stopFlushGiveUpAfter, timed from
+                // when the stop kept it, which came before the unsubscribe returned.
                 var unsubscribedAt = System.nanoTime();
+                var giveUpAfter    = ordered.stopFlushGiveUpAfter(settings);
+                assertThat(giveUpAfter).as("premise: the flush is waited for longer than stuckHandlerTimeout")
+                                       .isEqualTo(ShardOwnedQueue.SHUTDOWN_BUDGET.plus(leaseTtl));
                 assertThat(holding.awaitConnectionHeld(Duration.ofSeconds(10))).as("premise: the ordered lane's stop flush hangs").isTrue();
                 assertThat(ordered.handBackStillRunning()).as("premise: its stop gave up waiting for that flush").isTrue();
                 assertThat(ordered.keptOrderedUnitAwaited()).as("premise: that stop kept the busy unit").isTrue();
@@ -1024,21 +1030,21 @@ class ShardOwnedUnsubscribeIT {
                                                                       .doesNotContain("hand-back of its lanes to the database"));
 
                 var second = queue.consume(recording, ConsumerOptions.defaults());
-                assertThat(Duration.ofNanos(System.nanoTime() - enteredAt)).as("premise: before the bound").isLessThan(stuckHandlerTimeout);
-                assertThat(registeredInstances()).as("before the bound the instance id is out of use")
+                assertThat(Duration.ofNanos(System.nanoTime() - enteredAt)).as("premise: before the unit is given up").isLessThan(giveUpAfter);
+                assertThat(registeredInstances()).as("before the unit is given up the instance id is out of use")
                                                  .containsExactly(INSTANCE_ID, INSTANCE_ID + "-1");
                 second.unsubscribe();
 
-                // Past the bound from when the stop kept the unit; the next consume() reviews the kept unit and gives it up.
-                Awaitility.await().atMost(stuckHandlerTimeout.plusSeconds(5))
-                          .until(() -> Duration.ofNanos(System.nanoTime() - unsubscribedAt).compareTo(stuckHandlerTimeout) > 0);
+                // Past the give-up from when the stop kept the unit; the next consume() reviews the kept unit and gives it up.
+                Awaitility.await().atMost(giveUpAfter.plusSeconds(5))
+                          .until(() -> Duration.ofNanos(System.nanoTime() - unsubscribedAt).compareTo(giveUpAfter) > 0);
                 var third = queue.consume(recording, ConsumerOptions.defaults());
                 assertThat(third.isStarted()).isTrue();
                 assertThat(ordered.handBackStillRunning()).as("premise: the stop's flush still hangs").isTrue();
                 assertThat(laneWarnings()).as("premise: the lane gave the unit up, its stop's flush still running")
                                           .anyMatch(warning -> warning.contains("stops waiting for ordered unit " + keptUnit)
                                                   && warning.contains("still not finished flushing"));
-                assertThat(registeredInstances()).as("past the bound the caller's own instance id is free again, the flush hung or not")
+                assertThat(registeredInstances()).as("once the unit is given up the caller's own instance id is free again, the flush hung or not")
                                                  .containsExactly(INSTANCE_ID);
                 Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
                     assertThat(fenceOf(keptUnit)).as("the kept unit taken over under a newer fence").isGreaterThan(keptFence);

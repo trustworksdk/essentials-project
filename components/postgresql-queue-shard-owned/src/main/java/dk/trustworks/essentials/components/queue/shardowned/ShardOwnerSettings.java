@@ -92,7 +92,17 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  *                           fence, as from an owner that did not let go of it - the handler's acknowledgement refused,
  *                           its message delivered again with an attempt charged. Reported at WARN once its handler has
  *                           run longer than {@code leaseTtl}, at most once a minute per unit, and once more when the
- *                           queue stops waiting.</li>
+ *                           queue stops waiting. Not while the stop that kept the unit is still flushing the
+ *                           acknowledgements of the owners it ended, on a thread the stop waits for no longer than 2 s:
+ *                           no run of this queue hands the unit back or takes it over beside that flush, and no other
+ *                           instance while this one is live. That flush's writes would then be refused. A unit still
+ *                           waiting for that flush is given up, whatever its handler does, once it has been kept longer
+ *                           than this setting, or longer than 2 s plus the network timeout that thread sets on its
+ *                           connections ({@code leaseTtl}, or 2 s when that is longer) when that is longer: this
+ *                           setting bounds how long a handler may run, not how long a flush may take, so a short one
+ *                           still gives a slow flush at least the 2 s plus one full network-bound wait. Reported at
+ *                           WARN once it has waited longer than that network timeout, at most once a minute per
+ *                           unit.</li>
  *                           <li>A fair-share shed of an ordered unit, which waits for the keys in its handlers before it
  *                           releases the unit, and otherwise keeps it and retries on the next heartbeat - leaving the
  *                           cluster unbalanced and the unit's other keys unserved. Once {@code shedGrace} has run out
