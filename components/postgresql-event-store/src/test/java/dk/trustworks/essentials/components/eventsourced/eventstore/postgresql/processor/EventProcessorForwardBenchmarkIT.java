@@ -60,7 +60,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * until every event with a handler is in the inbox (handled, or still queued) — the reader's rate, which EF-2 is about —
  * and <b>drain</b> until every one of them was handled, which adds the single inbox consumer. {@code view_all_five} is
  * a {@link ViewEventProcessor} handling all five on the reader's thread, so its forward and drain are one number: the
- * reader's rate is what a projection gets end to end.
+ * reader's rate is what a projection gets end to end. {@code view_one_of_five} is a view handling one of them, as a
+ * projection of a few event types of a busy aggregate type does.
  * <p>
  * Each repeat uses its own aggregate type and processor name, so its event table, resume point and inbox queue are
  * fresh. {@code mvn verify -pl components/postgresql-event-store -Dbenchmark.run=true -Dit.test=EventProcessorForwardBenchmarkIT}
@@ -187,6 +188,11 @@ class EventProcessorForwardBenchmarkIT {
     @Test
     void view_all_five() {
         measure("view_all_five", aggregateType -> new AllFiveViewProcessor(viewDependencies, aggregateType), 5);
+    }
+
+    @Test
+    void view_one_of_five() {
+        measure("view_one_of_five", aggregateType -> new OneOfFiveViewProcessor(viewDependencies, aggregateType), 1);
     }
 
     private interface BenchProcessor {
@@ -405,6 +411,41 @@ class EventProcessorForwardBenchmarkIT {
         @MessageHandler
         void on(BenchFilled e) {
             handled.incrementAndGet();
+        }
+
+        @MessageHandler
+        void on(BenchClosed e) {
+            handled.incrementAndGet();
+        }
+    }
+
+    static class OneOfFiveViewProcessor extends ViewEventProcessor implements BenchProcessor {
+        private final AtomicInteger handled = new AtomicInteger();
+        private final AggregateType aggregateType;
+
+        OneOfFiveViewProcessor(ViewEventProcessorDependencies dependencies, AggregateType aggregateType) {
+            super(dependencies);
+            this.aggregateType = aggregateType;
+        }
+
+        @Override
+        public String getProcessorName() {
+            return "BenchView1of5" + aggregateType;
+        }
+
+        @Override
+        protected List<AggregateType> reactsToEventsRelatedToAggregateTypes() {
+            return List.of(aggregateType);
+        }
+
+        @Override
+        public AtomicInteger handled() {
+            return handled;
+        }
+
+        @Override
+        public QueueName inboxQueueName() {
+            return null;
         }
 
         @MessageHandler
