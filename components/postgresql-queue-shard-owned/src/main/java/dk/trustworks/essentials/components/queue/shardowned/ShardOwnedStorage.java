@@ -710,8 +710,8 @@ public final class ShardOwnedStorage {
      * its handler past {@code shedGrace}, which must stay away from other instances until the instance's liveness lapses,
      * a lease TTL after its last heartbeat - and has not started again by the time the stop's hand-back, which may outlast
      * the stop, gets there. The two lanes of one {@code PostgresqlMessageQueue} subscription share an
-     * instance id, and so this row; there a lane's stop leaves it to the other lane while that one is still running or
-     * has kept an ordered unit, so the lane stopping last deletes it when neither lane's stop kept an ordered unit, and
+     * instance id, and so this row; there a lane's stop leaves it to the other lane while that one is still running, has
+     * kept an ordered unit, or is still handing one back, so the lane stopping last deletes it when neither lane's stop kept an ordered unit, and
      * nobody does when either kept one ({@code ShardOwnedQueue}'s {@code shareMembershipWith}). The pair knows that in memory, exactly, where the database does not: a lease row of
      * the other lane naming the instance - what an earlier revision of the engine went by - may be a unit that lane is
      * serving or kept, or one whose release failed, which nobody serves and which only held the other instances at a

@@ -1193,6 +1193,139 @@ class ShardOwnedLifecycleIT {
     }
 
     /**
+     * The same claim as {@link #a_later_stop_leaves_the_instance_registered_while_a_unit_it_was_to_hand_back_is_released_on_request},
+     * seen from the other lane of a {@link PostgresqlMessageQueue} subscription, which shares the instance's membership
+     * row ({@link ShardOwnedQueue#shareMembershipWith}). The ordered lane's later stop ended its run with the unit awaiting
+     * a hand-back, so it wrote its need for the row false, and a release on request claimed the unit after that. The
+     * unordered lane's stop, reading the ordered lane's need while that release still held the unit's row, used to read
+     * that snapshot, find the row needed by nobody and delete it: the unit read as ownerless, another instance could take
+     * it under a new fence, and the release's flush was refused. The ordered lane's need now counts a running hand-back
+     * live, and the unordered lane's stop leaves the row. {@code PostgresqlMessageQueue} stops the unordered lane first;
+     * its hand-back reads the ordered lane's need this late when it runs past {@link ShardOwnedQueue#SHUTDOWN_BUDGET} on a
+     * thread the stop gave up waiting for, which this test stands in for by stopping the unordered lane last.
+     */
+    @Test
+    void the_other_lane_of_a_subscription_leaves_the_instance_registered_while_a_unit_the_ordered_lane_kept_is_released_on_request() throws Exception {
+        var entries       = new AtomicInteger();
+        var entered       = new CountDownLatch(1);
+        var release       = new CountDownLatch(1);
+        // A long lease: a heartbeat tick, every third of it, would otherwise retry the failed hand-back itself.
+        var settings      = settingsWithShedGrace(Duration.ofMillis(300)).toBuilder().setLeaseTtl(Duration.ofSeconds(30)).build();
+        var instanceId    = "kept-released-on-request-under-the-other-lanes-stop";
+        var requesterName = "release-kept-unit-on-request";
+        var stopHolding   = new FlushHoldingDataSource(dataSource, FlushHoldingDataSource.STOP_BUDGET_THREAD);
+        var request       = new FlushHoldingDataSource(stopHolding, requesterName);
+        try (var runtime = new ShardRuntime(dataSource, settings)) {
+            var ordered = ShardOwnedQueue.builder().setDataSource(request).setQueueId(QUEUE_ID).setShardCount(SHARD_COUNT)
+                                         .setInstanceId(instanceId).setRuntime(runtime).build();
+            // Not through the holding DataSources: its stop's budget thread bears the same name as the ordered lane's.
+            var unordered = ShardOwnedQueue.builder().setDataSource(dataSource).setQueueId(QUEUE_ID).setShardCount(SHARD_COUNT)
+                                           .setInstanceId(instanceId).setRuntime(runtime).build();
+            // As PostgresqlMessageQueue.consume() pairs a subscription's two lanes.
+            ordered.shareMembershipWith(unordered);
+            unordered.shareMembershipWith(ordered);
+            var releaseOnRequest = new FutureTask<Optional<KeptUnitRelease>>(
+                    () -> ordered.releaseKeptOrderedUnit(instanceId, ShardOwnedSchema.unitForKey("ACC-1", ShardOwnedSchema.ORDERED_UNITS)));
+            try {
+                unordered.startConsuming((messageId, payload, payloadType) -> { }, settings, SHARD_COUNT);
+                ordered.startConsumingOrdered((messageId, key, payload, payloadType) -> {
+                    // The first delivery of the key holds its handler; a later one returns at once.
+                    if (entries.incrementAndGet() == 1) {
+                        entered.countDown();
+                        awaitQuietly(release);
+                    }
+                }, settings, SHARD_COUNT);
+                ordered.enqueueOrdered(List.of(new ShardOwnedStorage.OrderedPayload("ACC-1", 0, "0".getBytes(StandardCharsets.UTF_8), 1)));
+                assertThat(entered.await(20, TimeUnit.SECONDS)).isTrue();
+
+                ordered.stop();
+                assertThat(ordered.metrics().keptUnitsInHandler()).as("premise: the busy unit is kept").isEqualTo(1);
+                Awaitility.await().atMost(Duration.ofSeconds(10))
+                          .untilAsserted(() -> assertThat(ordered.handBackStillRunning()).as("premise: the stop's budget thread has flushed the kept owner")
+                                                                                       .isFalse());
+                var keptUnit = ShardOwnedSchema.unitForKey("ACC-1", ShardOwnedSchema.ORDERED_UNITS);
+                var kept     = new UnitFence(keptUnit, fenceOf("ordered", keptUnit));
+                assertThat(ownerOf("ordered", kept.shard())).as("premise: the kept unit's row names the instance").isEqualTo(instanceId);
+
+                ordered.start();
+                assertThat(ordered.shardsHeld()).as("premise: the restart leaves the kept unit alone")
+                                                .isEqualTo(ShardOwnedSchema.ORDERED_UNITS - 1);
+
+                // The kept handler returns, and the hand-back its key leaving the handler starts fails to release the row.
+                LeaseReleaseRefusals.failLeaseReleasesOf(dataSource, new short[]{QUEUE_ID}, "ordered", kept.shard(), true);
+                try {
+                    release.countDown();
+                    Awaitility.await().atMost(Duration.ofSeconds(10))
+                              .untilAsserted(() -> assertThat(LeaseReleaseRefusals.releasesRefused(dataSource, QUEUE_ID, kept.shard()))
+                                      .as("premise: the kept unit's hand-back failed to release its row").isGreaterThanOrEqualTo(1));
+                    Awaitility.await().atMost(Duration.ofSeconds(10))
+                              .untilAsserted(() -> assertThat(threadsNamed(FlushHoldingDataSource.KEPT_UNIT_HAND_BACK_THREAD + QUEUE_ID + "-" + kept.shard()))
+                                      .as("premise: that hand-back has ended, leaving the unit awaiting a hand-back").isZero());
+                    assertThat(ordered.orderedRemaining()).as("premise: its acknowledgement was flushed").isZero();
+
+                    // The ordered lane's later stop keeps nothing of its own and finds the unit awaiting a hand-back, so it
+                    // writes its need for the row false; its budget thread, which is to hand the unit back, is held as it
+                    // asks for its first connection.
+                    stopHolding.holdConnections();
+                    ordered.stop();
+                    assertThat(ordered.shardsHeld()).as("premise: the ordered lane's later stop has ended its run").isZero();
+                    assertThat(stopHolding.awaitConnectionHeld(Duration.ofSeconds(10)))
+                            .as("premise: that stop's budget thread is held before its hand-backs").isTrue();
+                } finally {
+                    LeaseReleaseRefusals.failLeaseReleasesOf(dataSource, new short[]{QUEUE_ID}, "ordered", kept.shard(), false);
+                }
+
+                // A release on request claims the unit after that stop ended its run, and is held as it asks for a
+                // connection to flush it.
+                request.holdConnections();
+                var requester = new Thread(releaseOnRequest, requesterName);
+                requester.setDaemon(true);
+                requester.start();
+                assertThat(request.awaitConnectionHeld(Duration.ofSeconds(10)))
+                        .as("premise: the release on request has claimed the unit and is about to flush it").isTrue();
+
+                stopHolding.letAcknowledge();
+                stopHolding.letConnect();
+                Awaitility.await().atMost(Duration.ofSeconds(10))
+                          .untilAsserted(() -> assertThat(ordered.handBackStillRunning()).as("premise: the ordered lane's budget thread has finished")
+                                                                                       .isFalse());
+                assertThat(orderedUnitsOwnedBy(instanceId)).as("premise: the ordered lane's stop has released the units of its own run").isEqualTo(1);
+
+                // The other lane stops now, with that release still holding the unit's row.
+                unordered.stop();
+                Awaitility.await().atMost(Duration.ofSeconds(10))
+                          .untilAsserted(() -> {
+                              assertThat(unordered.handBackStillRunning()).as("premise: the unordered lane's budget thread has finished").isFalse();
+                              assertThat(unorderedShardsOwnedBy(instanceId)).as("premise: the unordered lane's stop has released its shards").isZero();
+                          });
+                Awaitility.await().during(Duration.ofMillis(1_000)).atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
+                    assertThat(instanceRegistered(instanceId)).as("the other lane's stop leaves the instance registered").isTrue();
+                    assertThat(ownerOf("ordered", kept.shard())).as("the kept unit's row still names the instance").isEqualTo(instanceId);
+                    assertThat(fenceOf("ordered", kept.shard())).as("under the fence it was kept under").isEqualTo(kept.fence());
+                });
+
+                request.letAcknowledge();
+                request.letConnect();
+                assertThat(releaseOnRequest.get(10, TimeUnit.SECONDS))
+                        .as("the release on request released the unit")
+                        .hasValueSatisfying(answer -> assertThat(answer.outcome()).isEqualTo(KeptUnitRelease.Outcome.RELEASED));
+                assertThat(ownerOf("ordered", kept.shard())).as("released").isNull();
+                assertThat(ordered.keptOrderedUnitNotHandedBack()).as("handed back").isFalse();
+                assertThat(ordered.metrics().fencedOutAcks.sum()).as("no flush of the kept owner was refused").isZero();
+                assertThat(entries).as("the message the kept handler handled is not delivered again").hasValue(1);
+            } finally {
+                release.countDown();
+                stopHolding.letConnect();
+                stopHolding.letAcknowledge();
+                request.letConnect();
+                request.letAcknowledge();
+                unordered.stop();
+                ordered.stop();
+            }
+        }
+    }
+
+    /**
      * How many live threads have a name starting with {@code prefix}.
      */
     private static long threadsNamed(String prefix) {

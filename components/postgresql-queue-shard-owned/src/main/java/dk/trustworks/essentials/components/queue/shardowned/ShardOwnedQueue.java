@@ -271,8 +271,10 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * {@link KeptUnit.Phase#HANDING_BACK}) - once it has decided
      * that, after draining. A run a stop has taken out still needs the row until then - while its owners drain,
      * and while a start still running ends it for a stop that gave up waiting ({@link #endRunOfStart}). An abrupt stop
-     * leaves it set, as it leaves the units leased: it stands in for a crash, whose membership row ages out. Read by the
-     * stop of the other lane of the subscription, and by the hand-back of an earlier stop of this queue, which may finish
+     * leaves it set, as it leaves the units leased: it stands in for a crash, whose membership row ages out. A snapshot as
+     * of those writes: a hand-back of a kept unit claimed after {@code endRun} wrote it is not in it, and
+     * {@link #needsMembership()} reads that from the kept units live. Read through {@code needsMembership()} by the stop
+     * of the other lane of the subscription, and by the hand-back of an earlier stop of this queue, which may finish
      * after a later start has set it ({@link #handBackWithinBudget}).
      * <p>
      * A queue-wide field a run writes, exempt from the rule against those for the reason {@link #keptOrderedOwners}
@@ -3090,7 +3092,10 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * <p>
      * The row's lifetime is the pair's, decided by the lanes' own stops: the stop of one lane deletes it only when the
      * other no longer needs it ({@link #needsMembership()}) and it kept no ordered unit itself, and otherwise leaves it to
-     * that lane's stop. So the row is deleted by the lane stopping last when neither lane's stop kept an ordered unit.
+     * that lane's stop. So the row is deleted by the lane stopping last when neither lane's stop kept an ordered unit,
+     * unless a hand-back of an ordered unit an earlier stop kept is still releasing that unit's row when that lane reads
+     * the other's need: that lane then leaves the row, which the other lane's stop deletes if its own read comes after
+     * that hand-back has ended, and which otherwise ages out as for a kept unit.
      * When either kept one, because a key was still in its handler past {@code shedGrace}, nobody deletes it - the lane
      * that kept the unit still needs it, so the other lane's later stop leaves it too - and it ages out a lease TTL after
      * the last heartbeat. The kept unit is handed back as soon as its handler has returned ({@link #keptOrderedOwners}),
@@ -3125,9 +3130,29 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * leaves the units leased. Read by the stop of the other lane of the subscription ({@link #shareMembershipWith}),
      * and by the hand-back of each stop of this queue, before it deletes the row: a hand-back reading it after a later
      * start of this queue reads that start's need.
+     * <p>
+     * Also true, whatever {@link #endRun} wrote, while a hand-back or release on request of a unit a stop of this queue
+     * kept is running with the unit's lease row still naming this instance ({@link #keptUnitsBeingHandedBack()}): read
+     * live from the kept units, so a claim made after {@code endRun} read their phases - by the thread a key leaving its
+     * handler started, a heartbeat tick still running, a start, a {@code consume()}, a release on request, or this
+     * queue's own stop handing back a unit an earlier stop kept - counts from the moment it is made. Deleted while such a
+     * hand-back runs, the row would make the unit read as ownerless: another instance could take it under a new fence,
+     * and the hand-back's flush would be refused. A claim made after a stop's hand-back has read this, and before its
+     * deletion lands, is not seen by that stop.
      */
     boolean needsMembership() {
-        return runNeedsMembership;
+        return runNeedsMembership || keptOrderedOwners.stream().anyMatch(KeptUnit::handBackRunningWithRowHeld);
+    }
+
+    /**
+     * The owners of the units a stop of this queue kept ({@link #keptOrderedOwners}) that a hand-back or release on
+     * request is running for now ({@link KeptUnit.Phase#HANDING_BACK}) and whose lease row still names this instance:
+     * read live, as each claim moves its unit there ({@link KeptUnit#claimHandBack}). None of them is this caller's own
+     * claim when the caller has finished its hand-backs: a hand-back leaves its unit at {@link KeptUnit.Phase#HANDED_BACK},
+     * at {@link KeptUnit.Phase#FORCE_RELEASED} or back where it was claimed from.
+     */
+    private List<LeasedOwner> keptUnitsBeingHandedBack() {
+        return keptOrderedOwners.stream().filter(KeptUnit::handBackRunningWithRowHeld).map(KeptUnit::owner).toList();
     }
 
     /**
@@ -3423,10 +3448,13 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * an earlier one whose handler has returned but whose budget thread has not flushed it yet,
      * {@link KeptUnit.Phase#STOP_FLUSHING}, or whose hand-back or release on request another thread is still running,
      * {@link KeptUnit.Phase#HANDING_BACK}: this stop cannot claim it, and its row names this instance until that thread
-     * has released it) as {@link #endRun} found them, nor a unit of {@code returnedEarlier} another thread has claimed
-     * since, found at {@link KeptUnit.Phase#HANDING_BACK} with its row held once this thread's own hand-backs are done -
-     * a claim made after that read is not waited for -, no run of this queue started since needs the row ({@link #needsMembership()}), and the other lane of the {@code PostgresqlMessageQueue}
-     * subscription, which shares the membership row ({@link #shareMembershipWith}), no longer needs it either. When that
+     * has released it) as {@link #endRun} found them, nor a kept unit another thread has claimed since, found at
+     * {@link KeptUnit.Phase#HANDING_BACK} with its row held once this thread's own hand-backs are done
+     * ({@link #keptUnitsBeingHandedBack()}), this queue no longer needs the row - no run of it started since, and no such
+     * claim made since that read ({@link #needsMembership()}) -, and the other lane of the {@code PostgresqlMessageQueue}
+     * subscription, which shares the membership row ({@link #shareMembershipWith}), no longer needs it either: a claim of
+     * a unit that lane kept counts there whenever it was made before this thread reads that lane's need, whatever that
+     * lane's stop wrote. Only a claim made after those reads, before the deletion lands, is not waited for. When that
      * lane does, its own stop deletes the row later, or leaves it to age out if it keeps an ordered unit; when a later run
      * of this queue does, its own stop.
      */
@@ -3499,26 +3527,20 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         // release on request of it running (KeptUnit.Phase.HANDING_BACK), whose claim leaves this stop none to make.
         // Its row still names this instance until that thread has released it, and deleted, the
         // instance's row would make the unit read as ownerless - taken at once, that thread's flush is refused.
-        // endRun read busyEarlier before this thread began; a returnedEarlier unit another thread claimed since - the thread
-        // its key leaving the handler started, a heartbeat tick still running, a start, a consume() or a release on
-        // request - refused this thread's claim above, and handBackKeptUnit returned without a word. Read again here, after
-        // those hand-backs: such a unit stands at HANDING_BACK with its row held, which this thread's own hand-back never
-        // leaves behind (it ends at HANDED_BACK, or back where it was claimed from). That leaves a claim made after this
-        // read, of a unit whose row a failed hand-back left held, which the deletion below does not wait for. Nor is this
-        // case covered for the other lane of the subscription (shareMembershipWith): endRun wrote this run's need for the
-        // row (runNeedsMembership) false with such a unit among returnedEarlier, and nothing writes it true for the claim,
-        // so that lane's stop may delete the row while the hand-back of such a unit runs.
-        var busy = new ArrayList<>(busyEarlier);
-        for (var unit : returnedEarlier) {
-            if (unit.phase() == KeptUnit.Phase.HANDING_BACK && unit.owner().holdsLeaseRow()) {
-                busy.add(unit.owner());
-            }
-        }
+        // endRun read busyEarlier before this thread began; a kept unit another thread claimed since - the thread its key
+        // leaving the handler started, a heartbeat tick still running, a start, a consume() or a release on request - is not
+        // among them, and one of returnedEarlier refused this thread's claim above, where handBackKeptUnit returned without a
+        // word. Read again here, live, after those hand-backs (keptUnitsBeingHandedBack): such a unit stands at HANDING_BACK
+        // with its row held, which this thread's own hand-back never leaves behind (it ends at HANDED_BACK, or back where it
+        // was claimed from). A claim made after this read is read again below, with this queue's other needs for the row
+        // (needsMembership), and the other lane of the subscription reads it there too, whatever endRun wrote.
+        var busy = new LinkedHashSet<>(busyEarlier);
+        busy.addAll(keptUnitsBeingHandedBack());
         if (!busy.isEmpty()) {
-            log.info("Instance {} stays registered on queue {}: an earlier stop kept {} ordered unit(s) [{}] whose handler has "
-                             + "returned, and that stop's flush or another thread's hand-back of them was still running when "
-                             + "this stop ended its run or came to deregister the instance; their leases name this instance "
-                             + "until a hand-back has released them once that work is done, or this instance's liveness "
+            log.info("Instance {} stays registered on queue {}: an earlier stop kept {} ordered unit(s) [{}] that the flush of "
+                             + "that stop, or another thread's hand-back or release on request of them, was still working on "
+                             + "when this stop ended its run or came to deregister the instance; their leases name this instance "
+                             + "until a hand-back or release on request has released them, or this instance's liveness "
                              + "lapses ({} ms)",
                      instanceId, queueId, busy.size(), summarise(busy.stream().map(LeasedOwner::shard).toList()),
                      leaseTtlMillis);
@@ -3543,18 +3565,23 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             // later run sets it again - its start, or its stop keeping an ordered unit. The stop gives up waiting for this
             // thread after SHUTDOWN_BUDGET, so this can run after the queue has started again under the same instance id
             // and registered it; deleted then, the row the new run needs is gone, and other instances read its units as
-            // ownerless until its next heartbeat.
+            // ownerless until its next heartbeat. It also reads, live, a hand-back of a unit a stop of this queue kept that
+            // another thread claimed since the read above. A claim made after this read, and before the deletion below
+            // lands, is not seen, here nor by the other lane's read: the row is then deleted while that hand-back runs.
             if (needsMembership()) {
-                log.debug("Instance {} leaves its membership row on queue {} to a run of this queue started since the stop "
-                                  + "whose hand-back this is, which needs it: it is running, its stop is still draining, or that "
-                                  + "stop kept an ordered unit",
+                log.debug("Instance {} leaves its membership row on queue {}: a run of this queue started since the stop whose "
+                                  + "hand-back this is needs it - it is running, its stop is still draining, or that stop kept an "
+                                  + "ordered unit - or a hand-back or release on request of an ordered unit a stop of this queue "
+                                  + "kept is running and has not released that unit's lease yet",
                           instanceId, queueId);
                 return;
             }
             var otherLane = membershipSharedWith;
             if (otherLane != null && otherLane.needsMembership()) {
                 log.debug("Instance {} leaves its membership row on queue {} to the {} lane of the same subscription, which still "
-                                  + "needs it: it is running, its stop is still draining, or that stop kept an ordered unit",
+                                  + "needs it: it is running, its stop is still draining, that stop kept an ordered unit, or a "
+                                  + "hand-back or release on request of an ordered unit a stop of that lane kept is running and "
+                                  + "has not released that unit's lease yet",
                           instanceId, queueId, otherLane.activeLane);
                 return;
             }
@@ -3971,6 +3998,15 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
          */
         private boolean notHandedBack() {
             return owner.inFlight() > 0 || owner.holdsLeaseRow();
+        }
+
+        /**
+         * Whether a hand-back or release on request of the unit is running ({@link Phase#HANDING_BACK}) and its lease row
+         * still names this instance: what keeps the instance's membership row needed for it
+         * ({@link #needsMembership()}). The phase first, then the row, each read live.
+         */
+        private boolean handBackRunningWithRowHeld() {
+            return phase.get() == Phase.HANDING_BACK && owner.holdsLeaseRow();
         }
 
         /**
