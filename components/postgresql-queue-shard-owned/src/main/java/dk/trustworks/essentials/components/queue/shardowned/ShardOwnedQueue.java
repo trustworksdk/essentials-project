@@ -2784,11 +2784,12 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                                  + "of this queue takes the unit, and no other instance while this one is live, until that handler "
                                  + "returns or has been there longer than stuckHandlerTimeout ({}), when a run of this queue, or a "
                                  + "PostgresqlMessageQueue subscription registering under this instance id, takes it over - or until "
-                                 + "it is released on request before that (MessageQueue.releaseKeptOrderedUnit, admin API POST "
-                                 + ".../ordered-units/{unit}/release-kept, on this instance), which accepts that the messages in "
+                                 + "it is released on request before that (MessageQueue.releaseKeptOrderedUnit(\"{}\", {}), admin API POST "
+                                 + ".../ordered-units/{}/release-kept?instanceId={}, on this process), which accepts that the messages in "
                                  + "those handlers are delivered again, possibly beside them. Logged at most once a minute per unit",
                          instanceId, kept.owner().shard(), queueId, inHandler.get().keys().size(), inHandler.get().describeKeys(),
-                         longest.toMillis(), leaseTtlMillis, settings.stuckHandlerTimeout());
+                         longest.toMillis(), leaseTtlMillis, settings.stuckHandlerTimeout(),
+                         instanceId, kept.owner().shard(), kept.owner().shard(), instanceId);
             }
         }
     }
@@ -2937,12 +2938,22 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * it is an ordinary hand-back ({@link KeptUnit.Phase#HANDED_BACK}), and nothing is charged. A {@code BUSY} entry, not
      * claimed, names the keys as they stand when asked. Not counted as a release ({@link #countRelease}): the stop that
      * kept the unit counted it.
+     * <p>
+     * Asked for another instance id than this queue's ({@code requestedInstanceId}), this touches nothing - not even the
+     * review - and answers empty: the operator named the instance whose WARN reported the unit kept, and a unit of the
+     * same number this queue kept is not the one diagnosed.
      *
-     * @return what was done, empty when this queue keeps no such unit with its row still held
+     * @param requestedInstanceId the instance id the caller asks for, as the stop's WARN names it
+     * @return what was done, empty when this queue keeps no such unit with its row still held, or runs under another
+     * instance id than {@code requestedInstanceId}
      * @throws SQLException when the flush, the charge or the release fails; the unit is then left as it was, kept, for a
      *                      later hand-back or request, and a later request does not charge again
      */
-    Optional<KeptUnitRelease> releaseKeptOrderedUnit(int unit) throws SQLException {
+    Optional<KeptUnitRelease> releaseKeptOrderedUnit(String requestedInstanceId, int unit) throws SQLException {
+        requireNonNull(requestedInstanceId, "No requestedInstanceId provided");
+        if (!instanceId.equals(requestedInstanceId)) {
+            return Optional.empty();
+        }
         reviewStuckKeptUnits();
         // More than one kept entry can name the unit: a run of this queue that took it over past stuckHandlerTimeout, and
         // whose stop kept it again, lists its own entry after the earlier one, which still reads as holding its row until a
@@ -3454,12 +3465,13 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                              + "key that may still be running here - unless the key has been in its handler longer than "
                              + "stuckHandlerTimeout ({}), when a later run of this queue, or a PostgresqlMessageQueue subscription "
                              + "registering under this instance id, takes the unit over - or unless it is released on request "
-                             + "before that (MessageQueue.releaseKeptOrderedUnit, admin API POST "
-                             + ".../ordered-units/{unit}/release-kept, on this instance), which accepts that the messages in "
+                             + "before that (MessageQueue.releaseKeptOrderedUnit(\"{}\", unit), admin API POST "
+                             + ".../ordered-units/{unit}/release-kept?instanceId={}, on this process), which accepts that the messages in "
                              + "those handlers are delivered again, possibly beside them. Raise shedGrace if "
                              + "handlers routinely outlast it",
                      instanceId, kept.size(), summarise(kept.stream().map(LeasedOwner::shard).toList()), queueId,
-                     Duration.ofNanos(activeSettings.shedGraceNanos()), leaseTtlMillis, activeSettings.stuckHandlerTimeout());
+                     Duration.ofNanos(activeSettings.shedGraceNanos()), leaseTtlMillis, activeSettings.stuckHandlerTimeout(),
+                     instanceId, instanceId);
             return;
         }
         if (!deregister) {
@@ -3763,6 +3775,14 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      */
     public short queueId() {
         return queueId;
+    }
+
+    /**
+     * The instance id this queue registers and leases under - for a lane of a {@code PostgresqlMessageQueue}
+     * subscription, the subscription's, which may carry a suffix.
+     */
+    String instanceId() {
+        return instanceId;
     }
 
     public int shardCount() {

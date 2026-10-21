@@ -674,7 +674,11 @@ class ShardOwnedUnsubscribeIT {
                 assertThat(laneWarnings()).filteredOn(warning -> warning.contains(heldUp))
                                           .singleElement()
                                           .satisfies(warning -> assertThat(warning).contains("[ACC-1]", "longer than the 3000 ms leaseTtl",
-                                                                                             "stuckHandlerTimeout (PT20S)"));
+                                                                                             "stuckHandlerTimeout (PT20S)",
+                                                                                             // The call the operator copies: the instance id it
+                                                                                             // must pass, and the unit.
+                                                                                             "releaseKeptOrderedUnit(\"" + INSTANCE_ID + "\", " + kept.shard() + ")",
+                                                                                             "ordered-units/" + kept.shard() + "/release-kept?instanceId=" + INSTANCE_ID));
                 // Several heartbeats skip the unit meanwhile: still one WARN, the unit left alone, the key not delivered again.
                 Awaitility.await().during(Duration.ofSeconds(3)).atMost(Duration.ofSeconds(6))
                           .untilAsserted(() -> {
@@ -828,6 +832,12 @@ class ShardOwnedUnsubscribeIT {
                 assertThat(laneWarnings()).as("premise: nothing gave the unit up while the queue was stopped")
                                           .noneMatch(warning -> warning.contains(stopsWaiting));
                 assertThat(fenceOf(kept.shard())).as("premise: nor took it").isEqualTo(kept.fence());
+                // A release on request for another instance id touches nothing, not even the review that would give the
+                // unit up now: no heartbeat runs it for a stopped queue, so done for that request it would be a side effect.
+                assertThat(queue.releaseKeptOrderedUnit(INSTANCE_ID + "-other", kept.shard()).releases()).as("asked for another instance id, nothing is released")
+                                                                                                       .isEmpty();
+                assertThat(laneWarnings()).as("nor is the unit given up").noneMatch(warning -> warning.contains(stopsWaiting));
+                assertThat(fenceOf(kept.shard())).as("nor taken").isEqualTo(kept.fence());
 
                 queue.start();
                 // As soon as start() returns: the start took the unit over, not a heartbeat.
@@ -1035,7 +1045,14 @@ class ShardOwnedUnsubscribeIT {
                 queue.enqueue(Message.ordered("in-handler".getBytes(StandardCharsets.UTF_8), 1, "ACC-1", 0));
                 assertThat(entered.await(20, TimeUnit.SECONDS)).as("premise: the key is in its handler").isTrue();
                 var unitOfTheKey = ShardOwnedSchema.unitForKey("ACC-1", ShardOwnedSchema.ORDERED_UNITS);
-                assertThat(queue.releaseKeptOrderedUnit(unitOfTheKey)).as("nothing is kept while the queue runs").isEmpty();
+                assertThat(queue.releaseKeptOrderedUnit(INSTANCE_ID, unitOfTheKey).releases()).as("nothing is kept while the queue runs").isEmpty();
+                // The SPI refuses a request naming no instance id itself, not only the admin API in front of it.
+                assertThatThrownBy(() -> queue.releaseKeptOrderedUnit(" ", unitOfTheKey)).as("a blank instance id is refused")
+                                                                                       .isInstanceOf(IllegalArgumentException.class)
+                                                                                       .hasMessageContaining("No instanceId provided");
+                assertThatThrownBy(() -> queue.releaseKeptOrderedUnit(null, unitOfTheKey)).as("no instance id is refused")
+                                                                                        .isInstanceOf(IllegalArgumentException.class)
+                                                                                        .hasMessageContaining("No instanceId provided");
 
                 queue.stop();
                 var kept = keptOrderedFence(INSTANCE_ID);
@@ -1047,14 +1064,14 @@ class ShardOwnedUnsubscribeIT {
 
                 var notKept      = (kept.shard() + 1) % ShardOwnedSchema.ORDERED_UNITS;
                 var notKeptFence = fenceOf(notKept);
-                assertThat(queue.releaseKeptOrderedUnit(notKept)).as("a unit no stop kept is not released").isEmpty();
+                assertThat(queue.releaseKeptOrderedUnit(INSTANCE_ID, notKept).releases()).as("a unit no stop kept is not released").isEmpty();
                 assertThat(ownerOf(notKept)).as("and keeps its owner").isEqualTo(INSTANCE_ID);
                 assertThat(fenceOf(notKept)).as("and its fence").isEqualTo(notKeptFence);
 
                 // Asked until queue.stop()'s budget thread has flushed the kept unit: that stop goes on without the thread
                 // after SHUTDOWN_BUDGET, and until it has flushed the release answers BUSY.
                 var releases = Awaitility.await().atMost(Duration.ofSeconds(5))
-                                         .until(() -> queue.releaseKeptOrderedUnit(kept.shard()),
+                                         .until(() -> queue.releaseKeptOrderedUnit(INSTANCE_ID, kept.shard()).releases(),
                                                 answer -> answer.stream().noneMatch(entry -> entry.outcome() == KeptUnitRelease.Outcome.BUSY));
                 assertThat(releases).as("the release says what it released").singleElement().satisfies(released -> {
                     assertThat(released.unit()).isEqualTo(kept.shard());
@@ -1077,7 +1094,7 @@ class ShardOwnedUnsubscribeIT {
                 // The release charged the delivery in the held handler as an attempt; the restarted run, finding the row
                 // released, charged nothing.
                 assertThat(metrics.takeoverAttemptBumps.sum()).as("the release charged the message in the held handler once").isEqualTo(1);
-                assertThat(queue.releaseKeptOrderedUnit(kept.shard())).as("released once: the unit is no longer kept").isEmpty();
+                assertThat(queue.releaseKeptOrderedUnit(INSTANCE_ID, kept.shard()).releases()).as("released once: the unit is no longer kept").isEmpty();
                 assertThat(fenceOf(notKept)).as("the unit no stop kept is untouched").isEqualTo(notKeptFence);
 
                 // A later stop while the released unit's first handler still runs: nothing waits for that handler, so the
@@ -1139,7 +1156,7 @@ class ShardOwnedUnsubscribeIT {
                     queue.start();
                     // Asked until queue.stop()'s budget thread has flushed the kept unit: until then the release answers BUSY.
                     var releases = Awaitility.await().atMost(Duration.ofSeconds(5))
-                                             .until(() -> queue.releaseKeptOrderedUnit(unitOfTheKey),
+                                             .until(() -> queue.releaseKeptOrderedUnit(INSTANCE_ID, unitOfTheKey).releases(),
                                                     answer -> answer.stream().noneMatch(entry -> entry.outcome() == KeptUnitRelease.Outcome.BUSY));
                     assertThat(releases).as("release " + delivery).singleElement().satisfies(released -> {
                         assertThat(released.outcome()).isEqualTo(KeptUnitRelease.Outcome.RELEASED);
@@ -1202,7 +1219,7 @@ class ShardOwnedUnsubscribeIT {
                 takeOrderedUnit(kept.shard(), "other", kept.fence() + 1);
 
                 var releases = Awaitility.await().atMost(Duration.ofSeconds(5))
-                                         .until(() -> queue.releaseKeptOrderedUnit(kept.shard()),
+                                         .until(() -> queue.releaseKeptOrderedUnit(INSTANCE_ID, kept.shard()).releases(),
                                                 answer -> answer.stream().noneMatch(entry -> entry.outcome() == KeptUnitRelease.Outcome.BUSY));
                 assertThat(releases).as("the release says the unit was taken meanwhile").singleElement().satisfies(answer -> {
                     assertThat(answer.unit()).isEqualTo(kept.shard());
@@ -1214,7 +1231,7 @@ class ShardOwnedUnsubscribeIT {
                 assertThat(fenceOf(kept.shard())).as("under its fence").isEqualTo(kept.fence() + 1);
                 assertThat(laneWarnings()).as("no release is reported")
                                           .noneMatch(warning -> warning.contains("released ordered unit " + kept.shard() + " on queue " + QUEUE_ID));
-                assertThat(queue.releaseKeptOrderedUnit(kept.shard())).as("asked again: the unit is no longer kept").isEmpty();
+                assertThat(queue.releaseKeptOrderedUnit(INSTANCE_ID, kept.shard()).releases()).as("asked again: the unit is no longer kept").isEmpty();
                 assertThat(ownerOf(kept.shard())).isEqualTo("other");
                 assertThat(fenceOf(kept.shard())).isEqualTo(kept.fence() + 1);
             } finally {
@@ -1271,7 +1288,7 @@ class ShardOwnedUnsubscribeIT {
                               .untilAsserted(() -> assertThat(metrics.keptUnitsInHandler()).as("premise: the handler has returned").isZero());
                 });
                 var releases = Awaitility.await().pollInSameThread().atMost(Duration.ofSeconds(5))
-                                         .until(() -> queue.releaseKeptOrderedUnit(kept.shard()),
+                                         .until(() -> queue.releaseKeptOrderedUnit(INSTANCE_ID, kept.shard()).releases(),
                                                 answer -> answer.stream().noneMatch(entry -> entry.outcome() == KeptUnitRelease.Outcome.BUSY));
                 assertThat(inReleaseFlush).as("premise: the handler returned inside the release's flush, under its claim").isTrue();
                 assertThat(releases).as("the release names no key in a handler").singleElement().satisfies(answer -> {
@@ -1337,7 +1354,7 @@ class ShardOwnedUnsubscribeIT {
                 assertThat(keptAgain.fence()).as("premise: under the takeover's newer fence").isGreaterThan(keptFirst.fence());
 
                 var releases = Awaitility.await().atMost(Duration.ofSeconds(5))
-                                         .until(() -> queue.releaseKeptOrderedUnit(keptAgain.shard()),
+                                         .until(() -> queue.releaseKeptOrderedUnit(INSTANCE_ID, keptAgain.shard()).releases(),
                                                 answer -> answer.stream().noneMatch(entry -> entry.outcome() == KeptUnitRelease.Outcome.BUSY));
                 assertThat(releases).as("the entry that held the row is released").singleElement().satisfies(answer -> {
                     assertThat(answer.outcome()).isEqualTo(KeptUnitRelease.Outcome.RELEASED);
@@ -1345,7 +1362,7 @@ class ShardOwnedUnsubscribeIT {
                 });
                 assertThat(ownerOf(keptAgain.shard())).as("the row is released").isNull();
                 assertThat(fenceOf(keptAgain.shard())).as("a release does not bump the fence").isEqualTo(keptAgain.fence());
-                assertThat(queue.releaseKeptOrderedUnit(keptAgain.shard())).as("asked again: the unit is no longer kept").isEmpty();
+                assertThat(queue.releaseKeptOrderedUnit(INSTANCE_ID, keptAgain.shard()).releases()).as("asked again: the unit is no longer kept").isEmpty();
             } finally {
                 release.countDown();
             }
@@ -1390,11 +1407,11 @@ class ShardOwnedUnsubscribeIT {
                                                                 .noneMatch(ShardOwnedQueue::handBackStillRunning));
                 LeaseReleaseRefusals.failLeaseReleasesOf(dataSource, queueIds, "ordered", kept.shard(), true);
                 try {
-                    assertThatThrownBy(() -> queue.releaseKeptOrderedUnit(kept.shard()))
-                            .as("no lane released anything, so the request fails with the lane's failure")
+                    assertThatThrownBy(() -> queue.releaseKeptOrderedUnit(INSTANCE_ID, kept.shard()).releases())
+                            .as("the request fails with the lane's failure, as it is")
                             .isInstanceOf(SQLException.class)
                             .hasMessageContaining("simulated failure releasing")
-                            .satisfies(failure -> assertThat(failure.getSuppressed()).as("one lane failed").isEmpty());
+                            .satisfies(failure -> assertThat(failure.getSuppressed()).as("nothing added to it").isEmpty());
                     assertThat(LeaseReleaseRefusals.releasesRefused(dataSource, QUEUE_ID, kept.shard()))
                             .as("premise: the release was attempted and refused by the database").isEqualTo(1);
                 } finally {
@@ -1410,7 +1427,7 @@ class ShardOwnedUnsubscribeIT {
                 assertThat(laneWarnings()).as("no release is reported")
                                           .noneMatch(warning -> warning.contains("released ordered unit " + kept.shard() + " on queue " + QUEUE_ID));
 
-                assertThat(queue.releaseKeptOrderedUnit(kept.shard())).as("asked again, with the database letting it through, the unit is released")
+                assertThat(queue.releaseKeptOrderedUnit(INSTANCE_ID, kept.shard()).releases()).as("asked again, with the database letting it through, the unit is released")
                                                                       .singleElement()
                                                                       .satisfies(released -> {
                                                                           assertThat(released.outcome()).isEqualTo(KeptUnitRelease.Outcome.RELEASED);
@@ -1439,20 +1456,20 @@ class ShardOwnedUnsubscribeIT {
     /**
      * Two subscriptions of the queue keeping the same ordered unit - an unsubscribed one, whose membership row aged out so
      * that the next subscription took the unit over under a newer fence, and that next one, stopped while the key's message
-     * delivered again is in its handler too - and a release on request that releases the unit in the stopped one, which
-     * holds its row, while the unsubscribed one's attempt fails, here at the connection for its flush. The request answers
-     * what was released, and logs the failure at WARN, once: the unsubscribed one's entry is left kept, and asked again it
-     * finds the row no longer its own. Thrown instead, the failure would hide the release that happened, and an operator
-     * retrying would be told only that the unit was found taken ({@code ALREADY_TAKEN}), with no record of that release.
+     * delivered again is in its handler too - and a release on request naming one instance id. Only the subscription
+     * running under that id is touched: asked for the unsubscribed one's id, the request finds that one's row taken and
+     * leaves the unit the other kept, its row and its fence alone; asked for the other's, it releases that one. Both
+     * answers name the instance ids this process has for the queue. Before the request named an instance id, asking for
+     * the unit the operator had diagnosed under one subscription released it under whichever subscription of this process
+     * had kept a unit of that number.
      */
     @Test
-    void a_release_on_request_that_fails_in_one_subscription_answers_what_another_released_and_logs_the_failure() throws Exception {
+    void a_release_on_request_touches_only_the_subscription_running_under_the_instance_id_asked_for() throws Exception {
         // A heartbeat every second, and the unsubscribed instance's membership row aged out 3 s after its last one.
-        var leaseTtl     = Duration.ofSeconds(3);
-        var entries      = new AtomicInteger();
-        var entered      = new CountDownLatch(1);
-        var release      = new CountDownLatch(1);
-        var onConnection = new RunBeforeConnectionDataSource(dataSource);
+        var leaseTtl = Duration.ofSeconds(3);
+        var entries  = new AtomicInteger();
+        var entered  = new CountDownLatch(1);
+        var release  = new CountDownLatch(1);
         MessageHandler holding = (messageId, key, payload, payloadType) -> {
             // Every delivery of the key holds its handler: the first, and the one the takeover delivers again.
             if (key != null) {
@@ -1461,14 +1478,7 @@ class ShardOwnedUnsubscribeIT {
                 awaitQuietly(release, Duration.ofSeconds(60));
             }
         };
-        try (var queue = PostgresqlMessageQueue.builder()
-                                               .setDataSource(onConnection)
-                                               .setQueueId(QUEUE_ID)
-                                               .setShardCount(SHARD_COUNT)
-                                               .setInstanceId(INSTANCE_ID)
-                                               .setSettings(settingsWith(Duration.ofMillis(300), leaseTtl))
-                                               .setLifecycleHook(PostgresqlMessageQueue.LifecycleHook.NONE)
-                                               .build()) {
+        try (var queue = newQueue(PostgresqlMessageQueue.LifecycleHook.NONE, settingsWith(Duration.ofMillis(300), leaseTtl))) {
             try {
                 var first = queue.consume(holding, ConsumerOptions.defaults());
                 queue.enqueue(Message.ordered("in-handler".getBytes(StandardCharsets.UTF_8), 1, "ACC-1", 0));
@@ -1490,52 +1500,46 @@ class ShardOwnedUnsubscribeIT {
                 var keptAgain = keptOrderedFence(INSTANCE_ID + "-1");
                 assertThat(keptAgain.shard()).as("premise: the second subscription's stop kept the same unit").isEqualTo(keptFirst.shard());
                 // second.stop() goes on without its budget thread after SHUTDOWN_BUDGET, and until that thread has flushed the
-                // kept unit the second subscription answers BUSY: the unsubscribed one's flush would then be the first, not
-                // refused. This waits on the second subscription's lanes only: registeredConsumers() no longer lists first's.
+                // kept unit the second subscription answers BUSY. This waits on the second subscription's lanes only:
+                // registeredConsumers() no longer lists first's.
                 var secondLanes = queue.registeredConsumers();
                 Awaitility.await().atMost(Duration.ofSeconds(5))
                           .untilAsserted(() -> assertThat(secondLanes).as("premise: second.stop()'s budget thread has flushed the kept unit")
                                                                       .noneMatch(ShardOwnedQueue::handBackStillRunning));
+                // The second subscription's stop WARN names the suffixed id it runs under, the one the operator must pass.
+                assertThat(laneWarnings()).as("the stop that kept the unit names its own instance id in the release call")
+                                          .filteredOn(warning -> warning.startsWith("Instance " + INSTANCE_ID + "-1 is keeping "))
+                                          .singleElement()
+                                          .satisfies(warning -> assertThat(warning).contains("releaseKeptOrderedUnit(\"" + INSTANCE_ID + "-1\", unit)",
+                                                                                             "release-kept?instanceId=" + INSTANCE_ID + "-1,"));
 
-                // The second connection a release on request asks for its flush is refused: the registered, stopped
-                // subscription is asked first, and flushes and releases; the unsubscribed one's attempt then fails.
-                var flushes = new AtomicInteger();
-                var caller  = Thread.currentThread();
-                onConnection.refuseWhen(() -> Thread.currentThread().equals(caller) && inTheFlushOfAReleaseOnRequest()
-                        && flushes.incrementAndGet() == 2);
-                List<KeptUnitRelease> releases;
-                try {
-                    releases = queue.releaseKeptOrderedUnit(keptAgain.shard());
-                } finally {
-                    onConnection.refuseWhen(() -> false);
-                }
-                assertThat(flushes).as("premise: both subscriptions' entries were claimed and flushed, the second refused").hasValue(2);
-                assertThat(releases).as("the release that happened is answered").singleElement().satisfies(released -> {
-                    assertThat(released.outcome()).isEqualTo(KeptUnitRelease.Outcome.RELEASED);
-                    assertThat(released.instanceId()).isEqualTo(INSTANCE_ID + "-1");
-                    assertThat(released.keysInHandler()).containsExactly("ACC-1");
-                });
+                var askedForTheFirst = queue.releaseKeptOrderedUnit(INSTANCE_ID, keptAgain.shard());
+                assertThat(askedForTheFirst.answeredBy()).as("the answer names the instance ids this process has for the queue")
+                                                         .containsExactly(INSTANCE_ID, INSTANCE_ID + "-1");
+                assertThat(askedForTheFirst.releases()).as("only the subscription under the id asked for answers: its row was taken")
+                                                       .singleElement()
+                                                       .satisfies(answer -> {
+                                                           assertThat(answer.outcome()).isEqualTo(KeptUnitRelease.Outcome.ALREADY_TAKEN);
+                                                           assertThat(answer.instanceId()).isEqualTo(INSTANCE_ID);
+                                                       });
+                assertThat(ownerOf(keptAgain.shard())).as("the unit the other subscription kept keeps its row").isEqualTo(INSTANCE_ID + "-1");
+                assertThat(fenceOf(keptAgain.shard())).as("and its fence").isEqualTo(keptAgain.fence());
+                assertThat(secondLanes).as("and is still kept").anyMatch(ShardOwnedQueue::keptOrderedUnitNotHandedBack);
+                assertThat(laneWarnings()).as("no release is reported")
+                                          .noneMatch(warning -> warning.contains("released ordered unit " + keptAgain.shard() + " on queue " + QUEUE_ID));
+
+                var askedForTheSecond = queue.releaseKeptOrderedUnit(INSTANCE_ID + "-1", keptAgain.shard());
+                assertThat(askedForTheSecond.releases()).as("asked for the other subscription's id, the unit it kept is released")
+                                                        .singleElement()
+                                                        .satisfies(released -> {
+                                                            assertThat(released.outcome()).isEqualTo(KeptUnitRelease.Outcome.RELEASED);
+                                                            assertThat(released.instanceId()).isEqualTo(INSTANCE_ID + "-1");
+                                                            assertThat(released.keysInHandler()).containsExactly("ACC-1");
+                                                        });
                 assertThat(ownerOf(keptAgain.shard())).as("the row is released").isNull();
-                List<ILoggingEvent> failureWarnings;
-                // The appender adds under its own monitor (AppenderBase.doAppend).
-                synchronized (logged) {
-                    failureWarnings = logged.list.stream()
-                                                 .filter(event -> event.getLevel() == WARN
-                                                         && event.getFormattedMessage().contains("released ordered unit " + keptAgain.shard()
-                                                                                                         + " on request in one subscription, but releasing it in another failed"))
-                                                 .toList();
-                }
-                assertThat(failureWarnings).as("the failure is logged at WARN, once")
-                                           .singleElement()
-                                           .satisfies(event -> assertThat(event.getThrowableProxy().getMessage()).isEqualTo(REFUSED_CONNECTION));
 
-                assertThat(queue.releaseKeptOrderedUnit(keptAgain.shard())).as("the failed entry was left kept, and finds its row taken")
-                                                                           .singleElement()
-                                                                           .satisfies(answer -> {
-                                                                               assertThat(answer.outcome()).isEqualTo(KeptUnitRelease.Outcome.ALREADY_TAKEN);
-                                                                               assertThat(answer.instanceId()).isEqualTo(INSTANCE_ID);
-                                                                           });
-                assertThat(queue.releaseKeptOrderedUnit(keptAgain.shard())).as("asked again: the unit is no longer kept").isEmpty();
+                assertThat(queue.releaseKeptOrderedUnit(INSTANCE_ID, keptAgain.shard()).releases()).as("asked again: nothing kept under the first id").isEmpty();
+                assertThat(queue.releaseKeptOrderedUnit(INSTANCE_ID + "-1", keptAgain.shard()).releases()).as("nor under the second").isEmpty();
             } finally {
                 release.countDown();
             }
@@ -1585,7 +1589,7 @@ class ShardOwnedUnsubscribeIT {
                 // Asked until first.unsubscribe()'s budget thread has flushed the kept unit: the stop of first's lanes goes on
                 // without that thread after SHUTDOWN_BUDGET, and until it has flushed the release answers BUSY.
                 var releases = Awaitility.await().atMost(Duration.ofSeconds(5))
-                                         .until(() -> queue.releaseKeptOrderedUnit(kept.shard()),
+                                         .until(() -> queue.releaseKeptOrderedUnit(INSTANCE_ID, kept.shard()).releases(),
                                                 answer -> answer.stream().noneMatch(entry -> entry.outcome() == KeptUnitRelease.Outcome.BUSY));
                 assertThat(releases).as("the unsubscribed subscription's lane releases the unit it kept")
                                     .singleElement()
@@ -1649,7 +1653,7 @@ class ShardOwnedUnsubscribeIT {
                     assertThat(holding.awaitHeld(Duration.ofSeconds(20))).as("premise: the ordered lane's stop kept the unit and says so").isTrue();
                     assertThat(queue.registeredConsumers()).as("premise: the unsubscribe has taken the lanes out of the queue").isEmpty();
                     assertThat(unsubscribing).as("premise: the unsubscribe is still stopping the lanes").isNotDone();
-                    releases = queue.releaseKeptOrderedUnit(unit);
+                    releases = queue.releaseKeptOrderedUnit(INSTANCE_ID, unit).releases();
                 } finally {
                     holding.letGo();
                 }
@@ -1662,7 +1666,7 @@ class ShardOwnedUnsubscribeIT {
                                     });
                 assertThat(ownerOf(unit)).as("the row is released").isNull();
                 unsubscribing.get(15, TimeUnit.SECONDS);
-                assertThat(queue.releaseKeptOrderedUnit(unit)).as("released once: the unit is no longer kept").isEmpty();
+                assertThat(queue.releaseKeptOrderedUnit(INSTANCE_ID, unit).releases()).as("released once: the unit is no longer kept").isEmpty();
             } finally {
                 holding.letGo();
                 laneLogger.detachAppender(holding);
@@ -1717,7 +1721,7 @@ class ShardOwnedUnsubscribeIT {
                     assertThat(holding.awaitHeld(Duration.ofSeconds(20))).as("premise: the ordered lane's stop kept the unit and says so").isTrue();
                     assertThat(queue.registeredConsumers()).as("premise: the failing consume() registered nothing").isEmpty();
                     assertThat(consuming).as("premise: the consume() is still stopping the lanes").isNotDone();
-                    releases = queue.releaseKeptOrderedUnit(unit);
+                    releases = queue.releaseKeptOrderedUnit(INSTANCE_ID, unit).releases();
                 } finally {
                     holding.letGo();
                 }
@@ -1733,7 +1737,7 @@ class ShardOwnedUnsubscribeIT {
                                                                               .hasRootCauseInstanceOf(IllegalStateException.class)
                                                                               .hasMessageContaining("refuses the ordered lane's first acquisition");
                 failTheOrderedStart.set(false);
-                assertThat(queue.releaseKeptOrderedUnit(unit)).as("released once: the unit is no longer kept").isEmpty();
+                assertThat(queue.releaseKeptOrderedUnit(INSTANCE_ID, unit).releases()).as("released once: the unit is no longer kept").isEmpty();
             } finally {
                 holding.letGo();
                 laneLogger.detachAppender(holding);
@@ -2215,22 +2219,14 @@ class ShardOwnedUnsubscribeIT {
     }
 
     /**
-     * The message of the {@link SQLException} a {@link RunBeforeConnectionDataSource} answers a refused connection request
-     * with.
-     */
-    private static final String REFUSED_CONNECTION = "Simulated failure: the test refused this connection";
-
-    /**
      * A {@link javax.sql.DataSource} that, told to ({@link #runOnce}), runs an action on one thread as that thread next asks
-     * for a connection, once, before handing it the delegate's; and that, told to ({@link #refuseWhen}), refuses every
-     * request for which a condition, asked on the requesting thread, holds, throwing an {@link SQLException}
-     * ({@link #REFUSED_CONNECTION}). Every other request gets the delegate's connection as it is.
+     * for a connection, once, before handing it the delegate's. Every other request gets the delegate's connection as it
+     * is.
      */
     private static final class RunBeforeConnectionDataSource implements javax.sql.DataSource {
         private final javax.sql.DataSource             delegate;
         private final AtomicReference<Thread>          onThread   = new AtomicReference<>();
         private final AtomicReference<Runnable>        action     = new AtomicReference<>();
-        private final AtomicReference<BooleanSupplier> refuseWhen = new AtomicReference<>(() -> false);
 
         RunBeforeConnectionDataSource(javax.sql.DataSource delegate) {
             this.delegate = delegate;
@@ -2241,18 +2237,7 @@ class ShardOwnedUnsubscribeIT {
             onThread.set(thread);
         }
 
-        /**
-         * Refuse each connection request for which {@code condition} holds, from now until the next call; asked once per
-         * request, on the requesting thread, before {@link #runOnce}'s action.
-         */
-        void refuseWhen(BooleanSupplier condition) {
-            refuseWhen.set(condition);
-        }
-
         private void runIfTold() throws SQLException {
-            if (refuseWhen.get().getAsBoolean()) {
-                throw new SQLException(REFUSED_CONNECTION);
-            }
             if (!Thread.currentThread().equals(onThread.get())) {
                 return;
             }

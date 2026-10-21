@@ -109,7 +109,7 @@ have passed: when the stop kept an ordered unit, because a key was still in its 
 `shedGrace`, the id stays out of use until that handler has returned and the unit has been handed back
 (before it picks an id, a `consume()` retries a hand-back that failed), or until that handler has been
 running longer than the queue's `stuckHandlerTimeout` (default 15 min, below), or until the unit is
-released on request (`MessageQueue.releaseKeptOrderedUnit`, `POST .../ordered-units/{unit}/release-kept`, below),
+released on request (`MessageQueue.releaseKeptOrderedUnit`, `POST .../ordered-units/{unit}/release-kept?instanceId=…`, below),
 as until then that unit's lease names the id and a subscription under it would take the unit at once and
 could start the key beside the running handler; and when the stop gave up waiting for its lanes' hand-back to the database (releasing the
 leases and deregistering the id), the id stays out of use until that hand-back has returned, as it may
@@ -137,17 +137,20 @@ it above the longest time a handler of the queue really takes, as `messageHandli
 the queue, the unit, the key(s) and how long they have run, at most once a minute per unit; it WARNs once
 more when it stops waiting. `ShardOwnerMetrics.keptUnitsInHandler` counts such units (below).
 **To release a kept unit before the bound** - a handler known to be hung - call
-`MessageQueue.releaseKeptOrderedUnit(unit)` (admin API: `ShardOwnedQueuesApi.releaseKeptOrderedUnit`,
-`POST /shard-owned-queues/{queueName}/ordered-units/{unit}/release-kept`, `QUEUE_WRITER`) on the instance
-whose WARN named the unit: kept units live in that process's memory, and any other instance answers with
-an empty list. It flushes the unit's acknowledgements under the fence it was kept under and releases its
+`MessageQueue.releaseKeptOrderedUnit(instanceId, unit)` (admin API: `ShardOwnedQueuesApi.releaseKeptOrderedUnit`,
+`POST /shard-owned-queues/{queueName}/ordered-units/{unit}/release-kept?instanceId=…`, `QUEUE_WRITER`) on the
+instance whose WARN named the unit, with the instance id that WARN names (required): kept units live in that
+process's memory, and only a unit a subscription under that instance id kept is touched - one of the same
+number kept under another id is left alone. The answer is `{answeredBy, releases}`: `answeredBy` names the
+instance ids the answering process has for the queue, so an empty `releases` from another process, or for
+another instance id, says which process answered. It flushes the unit's acknowledgements under the fence it was kept under and releases its
 lease row, so any instance below its fair share takes it under a new fence - and **delivers the messages
 still in a handler again, possibly beside those handlers** (the cost the wait exists to avoid). Before the
 release each of those messages is charged an attempt, and one that reaches `maxAttempts` by it is
 dead-lettered instead of delivered again, so a message whose handler hangs on every delivery reaches the
 dead-letter table once the queue has stopped waiting for it `maxAttempts` times (a hang an owner goes on
-serving its unit through is not bounded by this). Only a unit a stop kept whose row still names the stopping instance is
-touched. Each entry reports `RELEASED` (with the keys in a handler), `ALREADY_TAKEN` (taken under a newer
+serving its unit through is not bounded by this). Only a unit a stop kept whose row still names the requested instance id
+is touched. Each entry of `releases` reports `RELEASED` (with the keys in a handler), `ALREADY_TAKEN` (taken under a newer
 fence meanwhile, nothing released) or `BUSY` (the stop is still flushing it or another hand-back or release
 of it runs; ask again).
 Once released the unit no longer keeps an unsubscribed subscription's id out of use. The same
@@ -638,7 +641,7 @@ api.retryMessage(principal, orders, id, Duration.ZERO);
 api.markAsDeadLetterMessage(principal, orders, id, "parked by hand");
 api.resurrectDeadLetterMessage(principal, orders, id);
 api.resurrectDeadLettersForKey(principal, orders, "account-7");   // the whole key, in key_order
-api.releaseKeptOrderedUnit(principal, orders, 17);   // a unit a stop kept behind a hung handler; ask the instance that kept it
+api.releaseKeptOrderedUnit(principal, orders, "node-1", 17);   // a unit a stop of instance node-1 kept behind a hung handler; ask that instance
 api.deleteMessage(principal, orders, id);
 api.purgeQueue(principal, orders);
 ```
@@ -677,7 +680,7 @@ Endpoints live under the admin API base path (default `/api/essentials/admin/v1`
 | `POST` | `/shard-owned-queues/{queueName}/messages/{messageId}/retry` |
 | `POST` | `/shard-owned-queues/{queueName}/messages/{messageId}/mark-as-dead-letter` |
 | `POST` | `/shard-owned-queues/{queueName}/messages/{messageId}/resurrect` |
-| `POST` | `/shard-owned-queues/{queueName}/ordered-units/{unit}/release-kept` |
+| `POST` | `/shard-owned-queues/{queueName}/ordered-units/{unit}/release-kept?instanceId=…` |
 
 These endpoints **are** in the generated OpenAPI contract: `EssentialsAdminApiSpec` carries the
 `shard-owned-queues` paths and `ShardOwnedQueuesController` sits in `spring-boot-starter-admin-api`

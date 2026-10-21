@@ -172,20 +172,25 @@ public interface ShardOwnedQueuesApi {
      * <p>
      * <b>Accepts reordering and duplicate delivery for that key</b>: each message still in a handler is charged an
      * attempt before the release, and dead-lettered if that brings it to {@code maxAttempts}, and whoever takes the unit
-     * next delivers the rest again, possibly while those handlers still run them. Only a unit a stop kept and whose lease row
-     * still names the stopping instance is touched; every other unit is left alone. Kept units live in the memory of the
-     * process whose stop kept them, so call the instance named in the WARN that reported the unit kept - any other
-     * answers with an empty list.
+     * next delivers the rest again, possibly while those handlers still run them. Only a unit a stop of a subscription
+     * running under {@code instanceId} kept, and whose lease row still names that instance id, is touched; every other
+     * unit - one of the same number a subscription under another instance id kept included - is left alone. Kept units
+     * live in the memory of the process whose stop kept them, so call the instance named in the WARN that reported the
+     * unit kept, with the instance id that WARN names: any other process, or another instance id, releases nothing, and
+     * the answer's {@code answeredBy} names the instance ids the answering process has for the queue.
      * <p>
      * A default method, so an implementation of this interface written before it existed still compiles: the default
-     * releases nothing and answers with an empty list. {@link DefaultShardOwnedQueuesApi} implements it.
+     * releases nothing and answers {@link ApiShardOwnedKeptUnitReleases#NONE}. {@link DefaultShardOwnedQueuesApi}
+     * implements it.
      *
-     * @param unit the ordered unit, as that WARN names it
-     * @return what was done, one entry per subscription of the queue in the answering instance that had kept the unit;
-     * empty when none had, or no queue is registered under that name
+     * @param instanceId the instance id that WARN names - the subscription's, which may carry a suffix
+     * @param unit       the ordered unit, as that WARN names it
+     * @return the instance ids that answered, and what was done: one entry per subscription of the queue in the answering
+     * process running under {@code instanceId} that had kept the unit, none when none had; both empty when no queue is
+     * registered under that name
      */
-    default List<ApiShardOwnedKeptUnitRelease> releaseKeptOrderedUnit(Object principal, QueueName queueName, int unit) {
-        return List.of();
+    default ApiShardOwnedKeptUnitReleases releaseKeptOrderedUnit(Object principal, QueueName queueName, String instanceId, int unit) {
+        return ApiShardOwnedKeptUnitReleases.NONE;
     }
 
     /**

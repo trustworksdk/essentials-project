@@ -1534,8 +1534,8 @@ public final class PostgresqlMessageQueue implements MessageQueue {
      * {@code consume()}, or having its failed starts undone ({@link #beingStarted}), of every unsubscribed one while its
      * lanes' stops are still under way and of a failed {@code consume()}'s pair until its index is given back or held
      * ({@link #endingLanes}), and of every ended one whose instance id
-     * is still held because a lane of it kept a unit ({@link #heldIndexes}); each releases only a unit its own stop kept
-     * ({@code ShardOwnedQueue.releaseKeptOrderedUnit}). A request made while an unsubscribe was still stopping the lanes -
+     * is still held because a lane of it kept a unit ({@link #heldIndexes}); each releases only a unit its own stop kept,
+     * and only when it runs under {@code instanceId} ({@code ShardOwnedQueue.releaseKeptOrderedUnit}). A request made while an unsubscribe was still stopping the lanes -
      * after the ordered lane's stop had kept the unit, before the stops had returned - used to reach no lane and come back
      * empty. An ended subscription whose index this
      * queue has given back already is not asked: each unit it kept was handed back, released, or given up on past
@@ -1543,12 +1543,17 @@ public final class PostgresqlMessageQueue implements MessageQueue {
      * instance id, or by another instance once that id's liveness lapses. A held index freed by the release is given back
      * by the next {@code consume()} ({@link #reserveSubscriptionIndex}).
      * <p>
-     * A lane whose release fails with a {@link SQLException} - its unit then left kept - does not hide what the other lanes
-     * released: every lane is asked, and the failure is thrown only when no lane answered {@link KeptUnitRelease.Outcome#RELEASED}
-     * (the other failures added to it as suppressed). Otherwise each failure is logged at WARN and the entries are returned.
+     * One subscription at most runs under {@code instanceId} among the lanes asked: each takes an index of its own
+     * ({@link #reserveSubscriptionIndex}), which is given back only once its lanes are neither in {@link #endingLanes} nor
+     * in {@link #heldIndexes}. So a {@link SQLException} from its release - its unit then left kept - is thrown as it is,
+     * and nothing another subscription kept could have been released beside it.
+     * <p>
+     * {@link KeptUnitReleases#answeredBy()} is this queue's own instance id, then that of each lane asked that differs from
+     * it, in the order the lanes were asked.
      */
     @Override
-    public List<KeptUnitRelease> releaseKeptOrderedUnit(int unit) throws SQLException {
+    public KeptUnitReleases releaseKeptOrderedUnit(String instanceId, int unit) throws SQLException {
+        requireTrue(instanceId != null && !instanceId.isBlank(), "No instanceId provided - the instance id the WARN that reported the unit kept names");
         var units = orderedUnits();
         requireTrue(unit >= 0 && unit < units, "unit must be from 0 to " + (units - 1) + ", the queue's ordered units, but was " + unit);
         // All four read in one step under handOver, so no lane is between two of them: a consume() takes its pair out of
@@ -1562,28 +1567,16 @@ public final class PostgresqlMessageQueue implements MessageQueue {
             lanes.addAll(endingLanes);
             heldIndexes.values().forEach(held -> lanes.addAll(held.lanes()));
         }
+        // This queue's own id first, so even a process running no subscription of the queue names itself.
+        var answeredBy = new LinkedHashSet<String>();
+        answeredBy.add(this.instanceId);
+        lanes.forEach(lane -> answeredBy.add(lane.instanceId()));
         var releases = new ArrayList<KeptUnitRelease>();
-        var failures = new ArrayList<SQLException>();
         for (var lane : lanes) {
-            try {
-                lane.releaseKeptOrderedUnit(unit).ifPresent(releases::add);
-            } catch (SQLException e) {
-                failures.add(e);
-            }
+            // A lane under another instance id answers empty without touching anything.
+            lane.releaseKeptOrderedUnit(instanceId, unit).ifPresent(releases::add);
         }
-        if (failures.isEmpty()) {
-            return releases;
-        }
-        if (releases.stream().noneMatch(release -> release.outcome() == KeptUnitRelease.Outcome.RELEASED)) {
-            var first = failures.getFirst();
-            failures.stream().skip(1).forEach(first::addSuppressed);
-            throw first;
-        }
-        for (var failure : failures) {
-            log.warn("Queue {} released ordered unit {} on request in one subscription, but releasing it in another failed; that "
-                             + "one's unit is left kept, for a later hand-back or request", queueId, unit, failure);
-        }
-        return releases;
+        return new KeptUnitReleases(List.copyOf(answeredBy), releases);
     }
 
     @Override

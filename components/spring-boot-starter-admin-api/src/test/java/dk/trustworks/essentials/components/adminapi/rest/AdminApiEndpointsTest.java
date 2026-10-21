@@ -219,43 +219,57 @@ class AdminApiEndpointsTest {
         }
 
         @Test
-        void releasing_a_kept_ordered_unit_reports_what_was_released() throws Exception {
+        void releasing_a_kept_ordered_unit_reports_who_answered_and_what_was_released() throws Exception {
             var orders = dk.trustworks.essentials.components.queue.shardowned.spi.QueueName.of("orders");
-            when(shardOwnedQueuesApi.releaseKeptOrderedUnit(any(), eq(orders), eq(7)))
-                    .thenReturn(List.of(new dk.trustworks.essentials.components.queue.shardowned.api.ApiShardOwnedKeptUnitRelease(
-                            orders, 7, "node-1", "RELEASED", List.of("ACC-1"), 90_000L)));
+            when(shardOwnedQueuesApi.releaseKeptOrderedUnit(any(), eq(orders), eq("node-1"), eq(7)))
+                    .thenReturn(new dk.trustworks.essentials.components.queue.shardowned.api.ApiShardOwnedKeptUnitReleases(
+                            List.of("node-1"),
+                            List.of(new dk.trustworks.essentials.components.queue.shardowned.api.ApiShardOwnedKeptUnitRelease(
+                                    orders, 7, "node-1", "RELEASED", List.of("ACC-1"), 90_000L))));
 
-            mockMvc.perform(post(BASE + "/shard-owned-queues/orders/ordered-units/7/release-kept"))
+            mockMvc.perform(post(BASE + "/shard-owned-queues/orders/ordered-units/7/release-kept").param("instanceId", "node-1"))
                    .andExpect(status().isOk())
-                   .andExpect(jsonPath("$[0].unit").value(7))
-                   .andExpect(jsonPath("$[0].instanceId").value("node-1"))
-                   .andExpect(jsonPath("$[0].outcome").value("RELEASED"))
-                   .andExpect(jsonPath("$[0].keysInHandler[0]").value("ACC-1"))
-                   .andExpect(jsonPath("$[0].longestInHandlerMillis").value(90_000));
+                   .andExpect(jsonPath("$.answeredBy[0]").value("node-1"))
+                   .andExpect(jsonPath("$.releases[0].unit").value(7))
+                   .andExpect(jsonPath("$.releases[0].instanceId").value("node-1"))
+                   .andExpect(jsonPath("$.releases[0].outcome").value("RELEASED"))
+                   .andExpect(jsonPath("$.releases[0].keysInHandler[0]").value("ACC-1"))
+                   .andExpect(jsonPath("$.releases[0].longestInHandlerMillis").value(90_000));
         }
 
         @Test
-        void releasing_an_ordered_unit_the_answering_instance_did_not_keep_is_a_normal_empty_answer() throws Exception {
-            when(shardOwnedQueuesApi.releaseKeptOrderedUnit(any(), any(), anyInt())).thenReturn(List.of());
+        void releasing_an_ordered_unit_the_answering_process_did_not_keep_names_the_process_that_answered() throws Exception {
+            when(shardOwnedQueuesApi.releaseKeptOrderedUnit(any(), any(), eq("node-1"), anyInt()))
+                    .thenReturn(new dk.trustworks.essentials.components.queue.shardowned.api.ApiShardOwnedKeptUnitReleases(
+                            List.of("node-2", "node-2-1"), List.of()));
 
-            mockMvc.perform(post(BASE + "/shard-owned-queues/orders/ordered-units/7/release-kept"))
+            mockMvc.perform(post(BASE + "/shard-owned-queues/orders/ordered-units/7/release-kept").param("instanceId", "node-1"))
                    .andExpect(status().isOk())
-                   .andExpect(jsonPath("$").isEmpty());
+                   .andExpect(jsonPath("$.answeredBy[0]").value("node-2"))
+                   .andExpect(jsonPath("$.answeredBy[1]").value("node-2-1"))
+                   .andExpect(jsonPath("$.releases").isEmpty());
         }
 
         @Test
         void releasing_a_kept_ordered_unit_without_the_queue_writer_role_is_forbidden() throws Exception {
-            when(shardOwnedQueuesApi.releaseKeptOrderedUnit(any(), any(), anyInt()))
+            when(shardOwnedQueuesApi.releaseKeptOrderedUnit(any(), any(), any(), anyInt()))
                     .thenThrow(new EssentialsSecurityException("Unauthorized access required role is missing"));
 
-            mockMvc.perform(post(BASE + "/shard-owned-queues/orders/ordered-units/7/release-kept"))
+            mockMvc.perform(post(BASE + "/shard-owned-queues/orders/ordered-units/7/release-kept").param("instanceId", "node-1"))
                    .andExpect(status().isForbidden())
                    .andExpect(jsonPath("$.status").value(403));
         }
 
         @Test
         void releasing_an_ordered_unit_that_is_not_a_number_is_a_bad_request() throws Exception {
-            mockMvc.perform(post(BASE + "/shard-owned-queues/orders/ordered-units/seven/release-kept"))
+            mockMvc.perform(post(BASE + "/shard-owned-queues/orders/ordered-units/seven/release-kept").param("instanceId", "node-1"))
+                   .andExpect(status().isBadRequest());
+            verifyNoInteractions(shardOwnedQueuesApi);
+        }
+
+        @Test
+        void releasing_an_ordered_unit_without_naming_the_instance_id_is_a_bad_request() throws Exception {
+            mockMvc.perform(post(BASE + "/shard-owned-queues/orders/ordered-units/7/release-kept"))
                    .andExpect(status().isBadRequest());
             verifyNoInteractions(shardOwnedQueuesApi);
         }

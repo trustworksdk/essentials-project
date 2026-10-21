@@ -1045,14 +1045,16 @@ const actions = {
            <p>If the handler is still broken the first message fails its way back and the key stops again.</p>`,
         run: () => api(`/shard-owned-queues/${encodeURIComponent(shardOwnedState.queue)}/ordered-keys/${encodeURIComponent(key)}/resurrect`, { method: 'POST' })
     }),
-    /* Kept units live in the memory of the process whose stop kept them, so this acts on whichever instance takes the
-       request, and an empty answer is normal elsewhere. The answer is shown on the page (shardOwnedState.lastRelease). */
+    /* Kept units live in the memory of the process whose stop kept them, so this acts on whichever process takes the
+       request, and only on a unit a subscription under the given instance id kept; an empty answer is normal elsewhere.
+       The answer, naming the instance ids of the process that gave it, is shown on the page (shardOwnedState.lastRelease). */
     shardReleaseKept: (name, data) => ({
         title: 'Release a kept ordered unit?', danger: true, confirmLabel: 'Release unit',
         body: `<p>Releases an ordered unit of <code class="mono">${esc(name)}</code> that a stop kept because a key of it
            was still in its handler, without waiting for that handler any longer: the way out of a handler known to be
-           hung before the queue's <code>stuckHandlerTimeout</code> ends the wait. Only a unit a stop kept and whose
-           lease row still names the stopping instance is touched; every other unit is left alone.</p>
+           hung before the queue's <code>stuckHandlerTimeout</code> ends the wait. Only a unit a stop of a subscription
+           running under the instance id given here kept, and whose lease row still names that instance id, is touched;
+           every other unit - one of the same number kept under another instance id included - is left alone.</p>
            <p><strong>Accepts reordering and duplicate delivery for its keys:</strong> each message still in a handler
            is charged an attempt before the release, and dead-lettered if that brings it to its maximum attempts, which
            blocks its key, and whoever takes the unit next delivers the rest again, possibly
@@ -1060,18 +1062,24 @@ const actions = {
            <p><strong>Acts on the instance serving this console only</strong> - the one that takes this request, which
            behind a load balancer is not necessarily the one that rendered this page. A kept unit lives in the memory
            of the process whose stop kept it, so use the console of the instance named in the WARN that reported the
-           unit kept; any other releases nothing.</p>
+           unit kept; any other releases nothing. The answer names the instance ids of the process that gave it.</p>
+           <label for="keptInstanceId">Instance id, as that WARN names it</label>
+           <input type="text" id="keptInstanceId" autocomplete="off" spellcheck="false">
            <label for="keptUnit">Ordered unit, as that WARN names it</label>
            <input type="number" id="keptUnit" min="0" ${data.units ? `max="${esc(Number(data.units) - 1)}"` : ''} step="1"
                   autocomplete="off">`,
         run: async () => {
+            const instanceId = (document.getElementById('keptInstanceId')?.value ?? '').trim();
+            if (instanceId === '') {
+                throw { status: 400, message: 'Enter the instance id the WARN that reported the unit kept names.' };
+            }
             const raw = document.getElementById('keptUnit')?.value ?? '';
             const unit = Number(raw);
             if (raw.trim() === '' || !Number.isInteger(unit) || unit < 0) {
                 throw { status: 400, message: 'Enter the ordered unit as a whole number, as the WARN that reported it kept names it.' };
             }
-            const results = await api(`/shard-owned-queues/${encodeURIComponent(name)}/ordered-units/${encodeURIComponent(unit)}/release-kept`, { method: 'POST' });
-            shardOwnedState.lastRelease = { queue: name, unit, results: results ?? [] };
+            const answer = await api(`/shard-owned-queues/${encodeURIComponent(name)}/ordered-units/${encodeURIComponent(unit)}/release-kept?instanceId=${encodeURIComponent(instanceId)}`, { method: 'POST' });
+            shardOwnedState.lastRelease = { queue: name, unit, instanceId, answeredBy: answer?.answeredBy ?? [], results: answer?.releases ?? [] };
         }
     }),
     shardDelete: (id) => ({
@@ -1522,16 +1530,19 @@ const keptReleaseOutcome = {
 };
 
 const keptReleaseNotice = (release) => `<div class="notice">
-      <strong>Release of kept ordered unit ${num(release.unit)}, answered by the instance that took the request:</strong>
+      <strong>Release of kept ordered unit ${num(release.unit)} of instance <span class="mono">${esc(release.instanceId)}</span>,
+        ${release.answeredBy.length
+            ? `answered by the process with instance id(s) <span class="mono">${release.answeredBy.map(esc).join(', ')}</span>`
+            : 'answered with no instance id: no queue of that name is registered on the process that took the request, or its implementation keeps no units'}:</strong>
       ${release.results.length
         ? release.results.map((r) => `<br>${(keptReleaseOutcome[r.outcome] ?? (() => badge('neutral', r.outcome)))()}
             lease row of instance <span class="mono">${esc(r.instanceId)}</span>${r.keysInHandler.length
                 ? `; key(s) still in a handler: <span class="mono">${r.keysInHandler.map(esc).join(', ')}</span>,
                    the longest there for ${millis(r.longestInHandlerMillis)}`
                 : ''}`).join('')
-        : `that instance kept no such unit with its lease row still held, so nothing was released. A kept unit lives in
-           the memory of the process whose stop kept it: use the console of the instance named in the WARN that
-           reported it.`}</div>`;
+        : `that process kept no such unit under that instance id with its lease row still held, so nothing was released.
+           A kept unit lives in the memory of the process whose stop kept it: use the console of the instance named in
+           the WARN that reported it, with the instance id that WARN names.`}</div>`;
 
 const laneBar = (owned, total) => {
     const pct = total > 0 ? Math.round((owned / total) * 100) : 0;

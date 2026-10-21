@@ -1805,11 +1805,13 @@ paths:
     post:
       tags:
       - shard-owned-queues
-      summary: "Release an ordered unit a stop kept because a key of it was still\
-        \ in its handler, without waiting for that handler any longer. Whoever takes\
-        \ the unit next delivers the messages still in a handler again, possibly while\
-        \ those handlers still run them. Answered by the instance receiving the request,\
-        \ from its own memory: an empty list means it kept no such unit with its lease\
+      summary: "Release an ordered unit a stop of a subscription running under the\
+        \ given instance id kept because a key of it was still in its handler, without\
+        \ waiting for that handler any longer. Whoever takes the unit next delivers\
+        \ the messages still in a handler again, possibly while those handlers still\
+        \ run them. Answered by the process receiving the request, from its own memory:\
+        \ answeredBy names the instance ids that process has for the queue, and empty\
+        \ releases mean it kept no such unit under that instance id with its lease\
         \ row still held."
       operationId: shardOwnedReleaseKeptOrderedUnit
       parameters:
@@ -1826,15 +1828,20 @@ paths:
         schema:
           type: integer
           format: int32
+      - name: instanceId
+        in: query
+        description: The instance id the WARN reporting the unit kept names. Only
+          a unit a subscription under it kept is touched.
+        required: true
+        schema:
+          type: string
       responses:
         "200":
-          description: 200 — The matching items.
+          description: "200 — The instance ids that answered, and what was done."
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/ApiShardOwnedKeptUnitRelease"
+                $ref: "#/components/schemas/ApiShardOwnedKeptUnitReleases"
         "400":
           description: "Malformed or out-of-range parameter, or invalid request body."
           content:
@@ -3950,6 +3957,17 @@ components:
         longestInHandlerMillis:
           type: integer
           format: int64
+    ApiShardOwnedKeptUnitReleases:
+      type: object
+      properties:
+        answeredBy:
+          type: array
+          items:
+            type: string
+        releases:
+          type: array
+          items:
+            $ref: "#/components/schemas/ApiShardOwnedKeptUnitRelease"
     ApiShardOwnedMessage:
       required:
       - attempts

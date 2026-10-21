@@ -146,14 +146,17 @@ public class ShardOwnedQueuesController {
     }
 
     /**
-     * Release an ordered unit a stop kept behind a handler still running, accepting that the key may then be in two
-     * handlers at once. Answered by the instance that receives the request, from its own memory: an empty list means it
-     * kept no such unit - ask the instance named in the WARN that reported the unit kept.
+     * Release an ordered unit a stop of a subscription running under {@code instanceId} kept behind a handler still
+     * running, accepting that the key may then be in two handlers at once. Answered by the process that receives the
+     * request, from its own memory: {@code answeredBy} names the instance ids it has for the queue, and empty
+     * {@code releases} mean it kept no such unit under {@code instanceId} - ask the process named in the WARN that
+     * reported the unit kept, with the instance id that WARN names.
      */
     @PostMapping("/shard-owned-queues/{queueName}/ordered-units/{unit}/release-kept")
-    public List<ApiShardOwnedKeptUnitRelease> releaseKeptOrderedUnit(@PathVariable String queueName,
-                                                                      @PathVariable int unit) {
-        return shardOwnedQueuesApi.releaseKeptOrderedUnit(principal(), QueueName.of(queueName), unit);
+    public ApiShardOwnedKeptUnitReleases releaseKeptOrderedUnit(@PathVariable String queueName,
+                                                                @PathVariable int unit,
+                                                                @RequestParam String instanceId) {
+        return shardOwnedQueuesApi.releaseKeptOrderedUnit(principal(), QueueName.of(queueName), instanceId, unit);
     }
 
     @DeleteMapping("/shard-owned-queues/{queueName}/messages")

@@ -76,4 +76,47 @@ class ApiShardOwnedKeptUnitReleaseTest {
 
         assertThat(api.keysInHandler()).isEmpty();
     }
+
+    /**
+     * {@link ApiShardOwnedKeptUnitReleases#from} carries the instance ids that answered, in order, and each release, so an
+     * answer that released nothing still names the process that gave it.
+     */
+    @Test
+    void the_answer_names_the_instance_ids_that_answered_beside_what_was_released() {
+        var queueName = QueueName.of("orders");
+        var answer = new KeptUnitReleases(List.of("node-1", "node-1-1"),
+                                          List.of(new KeptUnitRelease(17, "node-1-1", KeptUnitRelease.Outcome.RELEASED, List.of("ACC-1"), Duration.ofSeconds(90))));
+
+        var api = ApiShardOwnedKeptUnitReleases.from(queueName, answer);
+
+        assertThat(api.answeredBy()).containsExactly("node-1", "node-1-1");
+        assertThat(api.releases()).singleElement().satisfies(release -> {
+            assertThat(release.queueName()).isEqualTo(queueName);
+            assertThat(release.instanceId()).isEqualTo("node-1-1");
+            assertThat(release.outcome()).isEqualTo("RELEASED");
+        });
+    }
+
+    @Test
+    void an_answer_that_released_nothing_still_names_who_answered() {
+        var api = ApiShardOwnedKeptUnitReleases.from(QueueName.of("orders"), new KeptUnitReleases(List.of("node-2"), List.of()));
+
+        assertThat(api.answeredBy()).containsExactly("node-2");
+        assertThat(api.releases()).isEmpty();
+    }
+
+    @Test
+    void the_answer_keeps_its_own_unmodifiable_copies() {
+        var answeredBy = new ArrayList<>(List.of("node-1"));
+        var releases   = new ArrayList<ApiShardOwnedKeptUnitRelease>();
+
+        var api = new ApiShardOwnedKeptUnitReleases(answeredBy, releases);
+        answeredBy.add("node-2");
+        releases.add(new ApiShardOwnedKeptUnitRelease(QueueName.of("orders"), 3, "node-1", "BUSY", List.of(), 0));
+
+        assertThat(api.answeredBy()).containsExactly("node-1");
+        assertThat(api.releases()).isEmpty();
+        assertThatThrownBy(() -> api.answeredBy().add("node-3")).isInstanceOf(UnsupportedOperationException.class);
+        assertThat(new ApiShardOwnedKeptUnitReleases(null, null)).isEqualTo(ApiShardOwnedKeptUnitReleases.NONE);
+    }
 }

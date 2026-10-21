@@ -305,8 +305,8 @@ public interface MessageQueue extends Lifecycle, AutoCloseable {
     int resurrectKey(String key) throws SQLException;
 
     /**
-     * Release ordered unit {@code unit} now, if a stop of a subscription of this queue in <b>this process</b> kept it -
-     * accepting that a key of it may be in two handlers at once.
+     * Release ordered unit {@code unit} now, if a stop of a subscription of this queue in <b>this process</b> running under
+     * instance id {@code instanceId} kept it - accepting that a key of it may be in two handlers at once.
      * <p>
      * A stop keeps an ordered unit, its lease row still naming the subscription's instance id, when a key of it is still
      * in its handler {@code shedGrace} after the stop began: a successor taking the unit then could start that key while
@@ -321,19 +321,25 @@ public interface MessageQueue extends Lifecycle, AutoCloseable {
      * possibly while those handlers still run them</b> - the reordering and duplicate delivery the wait exists to prevent. A unit whose handler
      * has returned meanwhile is simply handed back, as it would have been, and nothing is charged.
      * <p>
-     * Only a unit a stop kept and whose lease row still names the subscription's instance id under that fence is
-     * touched; every other unit, this process's included, is left alone. Kept units live in the memory of the process
-     * whose stop kept them, so ask the process named in the WARN that reported the unit kept: anywhere else this
-     * returns nothing. Each subscription registered with this queue is asked, and each that a {@code consume()} is still
-     * starting; and each that has ended - unsubscribed, or a {@code consume()} that failed - while its lanes' stops are
-     * still under way, or while this queue still keeps its instance id out of use because of a unit it kept.
+     * Only a unit a stop of a subscription running under {@code instanceId} kept, and whose lease row still names that
+     * instance id under that fence, is touched; every other unit, this process's included - one a subscription under
+     * another instance id kept among them - is left alone. Kept units live in the memory of the process whose stop kept
+     * them, so ask the process named in the WARN that reported the unit kept, with the instance id that WARN names:
+     * anywhere else, or with another instance id, this releases nothing, and the answer's
+     * {@link KeptUnitReleases#answeredBy()} names the instance ids this process has for the queue, so the caller can tell
+     * which process answered. Each subscription registered with this queue is asked, and each that a {@code consume()}
+     * is still starting; and each that has ended - unsubscribed, or a {@code consume()} that failed - while its lanes'
+     * stops are still under way, or while this queue still keeps its instance id out of use because of a unit it kept.
      *
-     * @param unit the ordered unit, as the stop's WARN names it; from {@code 0} to the queue's ordered unit count, exclusive
-     * @return what was done, one entry per subscription that had kept the unit; empty when none had - the default, for an
-     * implementation that keeps no units
+     * @param instanceId the instance id the stop's WARN names - the subscription's, which may carry a suffix
+     * @param unit       the ordered unit, as the stop's WARN names it; from {@code 0} to the queue's ordered unit count,
+     *                   exclusive
+     * @return the instance ids that answered, and what was done: one entry per subscription under {@code instanceId}
+     * that had kept the unit, none when none had; {@link KeptUnitReleases#NONE} - the default - for an implementation
+     * that keeps no units
      */
-    default List<KeptUnitRelease> releaseKeptOrderedUnit(int unit) throws SQLException {
-        return List.of();
+    default KeptUnitReleases releaseKeptOrderedUnit(String instanceId, int unit) throws SQLException {
+        return KeptUnitReleases.NONE;
     }
 
     /**

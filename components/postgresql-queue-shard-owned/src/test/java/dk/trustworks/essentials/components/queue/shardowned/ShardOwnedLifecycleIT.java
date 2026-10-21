@@ -649,7 +649,7 @@ class ShardOwnedLifecycleIT {
                 assertThat(holding.awaitAcknowledgementHeld(Duration.ofSeconds(10)))
                         .as("premise: the stop's budget thread is flushing the kept owner's acknowledgement").isTrue();
 
-                assertThat(queue.releaseKeptOrderedUnit(keptUnit))
+                assertThat(queue.releaseKeptOrderedUnit(instanceId, keptUnit))
                         .as("a release on request while the stop is still flushing the unit")
                         .hasValueSatisfying(answer -> {
                             assertThat(answer.outcome()).as("waits for that flush").isEqualTo(KeptUnitRelease.Outcome.BUSY);
@@ -672,7 +672,7 @@ class ShardOwnedLifecycleIT {
                 assertThat(queue.orderedRemaining()).as("the handled message's acknowledgement was flushed").isZero();
                 assertThat(ownerOf("ordered", kept.shard())).as("the kept unit's row is released").isNull();
                 assertThat(fenceOf("ordered", kept.shard())).as("under the fence it was kept under").isEqualTo(kept.fence());
-                assertThat(queue.releaseKeptOrderedUnit(keptUnit)).as("nothing is left to release on request").isEmpty();
+                assertThat(queue.releaseKeptOrderedUnit(instanceId, keptUnit)).as("nothing is left to release on request").isEmpty();
                 assertThat(entries).as("the message the kept handler handled is not delivered again").hasValue(1);
             } finally {
                 release.countDown();
@@ -728,12 +728,12 @@ class ShardOwnedLifecycleIT {
                 var kept     = new UnitFence(keptUnit, fenceOf("ordered", keptUnit));
                 assertThat(Duration.ofNanos(System.nanoTime() - stoppedAt)).as("premise: well within the bound")
                                                                            .isLessThan(settings.stuckHandlerTimeout().minusSeconds(2));
-                assertThat(queue.releaseKeptOrderedUnit(keptUnit))
+                assertThat(queue.releaseKeptOrderedUnit(instanceId, keptUnit))
                         .as("premise: within the bound, a release on request waits for the stop's flush")
                         .hasValueSatisfying(answer -> assertThat(answer.outcome()).isEqualTo(KeptUnitRelease.Outcome.BUSY));
 
                 Awaitility.await().atMost(Duration.ofSeconds(20)).pollInterval(Duration.ofMillis(500)).untilAsserted(
-                        () -> assertThat(queue.releaseKeptOrderedUnit(keptUnit))
+                        () -> assertThat(queue.releaseKeptOrderedUnit(instanceId, keptUnit))
                                 .as("past the bound, released on request though the stop's flush still hangs")
                                 .hasValueSatisfying(answer -> assertThat(answer.outcome()).isEqualTo(KeptUnitRelease.Outcome.RELEASED)));
                 assertThat(Duration.ofNanos(System.nanoTime() - stoppedAt)).as("not before the bound")
@@ -1103,7 +1103,7 @@ class ShardOwnedLifecycleIT {
             var queue = ShardOwnedQueue.builder().setDataSource(request).setQueueId(QUEUE_ID).setShardCount(SHARD_COUNT)
                                        .setInstanceId(instanceId).setRuntime(runtime).build();
             var releaseOnRequest = new FutureTask<Optional<KeptUnitRelease>>(
-                    () -> queue.releaseKeptOrderedUnit(ShardOwnedSchema.unitForKey("ACC-1", ShardOwnedSchema.ORDERED_UNITS)));
+                    () -> queue.releaseKeptOrderedUnit(instanceId, ShardOwnedSchema.unitForKey("ACC-1", ShardOwnedSchema.ORDERED_UNITS)));
             try {
                 queue.startConsumingOrdered((messageId, key, payload, payloadType) -> {
                     // The first delivery of the key holds its handler; a later one returns at once.

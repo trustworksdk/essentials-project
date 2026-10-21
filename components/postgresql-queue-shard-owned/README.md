@@ -215,7 +215,7 @@ its handler past `shedGrace`, the id stays out of use until that handler has ret
 been handed back (its acknowledgement flushed, its lease released; before it picks an id, a `consume()`
 retries a hand-back that failed), or until that handler has been running longer than the queue's
 `stuckHandlerTimeout`, or until the unit is released on request (`MessageQueue.releaseKeptOrderedUnit`,
-`POST .../ordered-units/{unit}/release-kept`), as until then that unit's lease
+`POST .../ordered-units/{unit}/release-kept?instanceId=…`), as until then that unit's lease
 names the id and a subscription under it would take the unit at once; and when the stop gave up waiting for its lanes' hand-back to the database (releasing the
 leases and deregistering the id, which the stop stops waiting for after 2 s when the database does
 not answer, and at once on an interrupted thread), the id stays out of use until that hand-back has
@@ -857,16 +857,19 @@ the queue, the unit, the key(s), how long they have run and the bound, at most o
 and one more WARN when it stops waiting.
 
 **Releasing a kept unit before the bound.** For a handler known to be hung, an operator need not wait
-for `stuckHandlerTimeout`: `MessageQueue.releaseKeptOrderedUnit(unit)` - in the admin API
-`ShardOwnedQueuesApi.releaseKeptOrderedUnit`, `POST /shard-owned-queues/{queueName}/ordered-units/{unit}/release-kept`,
+for `stuckHandlerTimeout`: `MessageQueue.releaseKeptOrderedUnit(instanceId, unit)` - in the admin API
+`ShardOwnedQueuesApi.releaseKeptOrderedUnit`, `POST /shard-owned-queues/{queueName}/ordered-units/{unit}/release-kept?instanceId=…`,
 `QUEUE_WRITER` - flushes the kept unit's acknowledgements under the fence it was kept under and releases
 its lease row, so any instance below its fair share takes it under a new fence. **It accepts the cost
 the wait exists to avoid**: each message still in a handler is charged an attempt before the release,
 and dead-lettered if that brings it to `maxAttempts`, and whoever takes the unit delivers the rest
-again, possibly while those handlers still run them. It touches only a unit a stop kept whose lease row still
-names the stopping instance; every other unit is left alone. Kept units live in the memory of the
-process whose stop kept them, so call the instance whose WARN named the unit - any other answers with
-an empty list. Each entry says what was done: `RELEASED` (with the keys still in a handler once the
+again, possibly while those handlers still run them. It touches only a unit a stop of a subscription
+running under the instance id given kept, whose lease row still names that instance id; every other unit,
+one of the same number kept under another instance id included, is left alone. Kept units live in the
+memory of the process whose stop kept them, so call the instance whose WARN named the unit, with the
+instance id that WARN names (required). The answer is `{answeredBy, releases}`: `answeredBy` names the
+instance ids the answering process has for the queue, so an empty `releases` - from another process, or
+for another instance id - still says which process answered. Each entry of `releases` says what was done: `RELEASED` (with the keys still in a handler once the
 unit's acknowledgements were flushed, and how long the longest had been there; a handler that returned
 before that flush is, approximately, acknowledged and not named), `ALREADY_TAKEN` (the row had been taken under a newer fence
 meanwhile; nothing released) or `BUSY` (the stop that kept it is still flushing it, or another
@@ -970,7 +973,7 @@ api.retryMessage(principal, orders, id, Duration.ZERO);
 api.markAsDeadLetterMessage(principal, orders, id, "parked by hand");
 api.resurrectDeadLetterMessage(principal, orders, id);
 api.resurrectDeadLettersForKey(principal, orders, "account-7");   // the whole key, in key_order
-api.releaseKeptOrderedUnit(principal, orders, 17);   // a unit a stop kept behind a hung handler - see stuckHandlerTimeout
+api.releaseKeptOrderedUnit(principal, orders, "node-1", 17);   // a unit a stop of instance node-1 kept behind a hung handler - see stuckHandlerTimeout
 api.deleteMessage(principal, orders, id);
 api.purgeQueue(principal, orders);
 ```
@@ -1008,7 +1011,7 @@ and an `EssentialsSecurityProvider` are on the classpath. Under the admin API ba
 | `POST` | `/shard-owned-queues/{queueName}/messages/{messageId}/retry` |
 | `POST` | `/shard-owned-queues/{queueName}/messages/{messageId}/mark-as-dead-letter` |
 | `POST` | `/shard-owned-queues/{queueName}/messages/{messageId}/resurrect` |
-| `POST` | `/shard-owned-queues/{queueName}/ordered-units/{unit}/release-kept` |
+| `POST` | `/shard-owned-queues/{queueName}/ordered-units/{unit}/release-kept?instanceId=…` |
 
 ## The Low-Level Engine
 

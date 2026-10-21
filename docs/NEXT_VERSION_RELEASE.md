@@ -835,21 +835,25 @@ dead-letter it, so raise the bound as above. (`<!-- fix:U-011 -->`)
   whose key is still in its handler, normally zero, and the units a shed or a dead pump's hand-back released at the
   bound while their stuck handler runs on. (`7af80bc49`, `03f9153d8`, `52aca6c2a`)
 - **Shard-owned engine: release an ordered unit a stop kept, before `stuckHandlerTimeout`.**
-  `MessageQueue.releaseKeptOrderedUnit(unit)`, in the admin API `ShardOwnedQueuesApi.releaseKeptOrderedUnit` and
-  `POST /shard-owned-queues/{queueName}/ordered-units/{unit}/release-kept` (role `QUEUE_WRITER`). For a handler known to
+  `MessageQueue.releaseKeptOrderedUnit(instanceId, unit)`, in the admin API `ShardOwnedQueuesApi.releaseKeptOrderedUnit` and
+  `POST /shard-owned-queues/{queueName}/ordered-units/{unit}/release-kept?instanceId=…` (role `QUEUE_WRITER`). For a handler known to
   be hung: a stop keeps an ordered unit whose key is still in its handler, and until now nothing an operator could call
   freed it before the handler returned, the instance's liveness lapsed or the bound fired. The call flushes the unit's
   acknowledgements and releases its lease row, so any instance below its fair share takes it under a new fence - and
   **delivers the messages still in a handler again, possibly while those handlers still run them**, the reordering and
   duplicate delivery the wait exists to prevent; each of those messages is charged an attempt before the release, and
-  one that reaches `maxAttempts` by it is dead-lettered instead (§1.1.24). It touches only a unit a stop kept whose row still names the stopping
-  instance, and answers from that process's memory: call the instance whose WARN named the unit; any other answers
-  with an empty list. Each entry says `RELEASED` (with the keys still in a handler once the unit's acknowledgements
+  one that reaches `maxAttempts` by it is dead-lettered instead (§1.1.24). It takes the instance id the WARN
+  that reported the unit kept names, required, and touches only a unit a subscription running under that instance
+  id kept whose row still names it - a unit of the same number kept under another instance id is left alone - and
+  answers from that process's memory: call the instance whose WARN named the unit. The answer is
+  `{answeredBy, releases}` (`KeptUnitReleases`, `ApiShardOwnedKeptUnitReleases`): `answeredBy` names the instance ids
+  the answering process has for the queue, so an empty `releases` from another process, or for another instance id,
+  still says which process answered. Each entry of `releases` says `RELEASED` (with the keys still in a handler once the unit's acknowledgements
   were flushed - a handler that returned before that flush is, approximately, acknowledged and not named), `ALREADY_TAKEN` or `BUSY`
   (ask again). A `default` method on both `MessageQueue` and `ShardOwnedQueuesApi` that releases nothing, so an
   implementation of your own of either still compiles. The admin console's Shard-owned queues page offers it as
-  **Release kept unit**, acting on the instance that takes the request and showing its answer. (`e23164f9e`,
-  `7eaa0c7ef`, `97a4795ed`)
+  **Release kept unit**, which asks for the instance id and the unit, acts on the instance that takes the request and
+  shows its answer, naming the instance ids that answered. (`e23164f9e`, `7eaa0c7ef`, `97a4795ed`, `<!-- fix:U-012 -->`)
 - **Shard-owned engine: `spi.RedeliveryRequested(delay)`.** A handler throws it to ask for redelivery after `delay`
   without it counting as an attempt, being reported as a failure or leading to a dead letter (§1.1.18).
   (`a4f541e4`, `f9fdd99b`)
