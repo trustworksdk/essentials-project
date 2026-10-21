@@ -125,7 +125,7 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
      * consuming from polling switches back to the CDC bus. See
      * {@link CdcProperties.CdcHealthCheckProperties#getActiveCutbackDebounce()} for the full
      * rationale. FAILED/INACTIVE transitions switch to polling immediately; only ACTIVE cutbacks
-     * are debounced.
+     * after an interruption are debounced, never the first activation after boot.
      */
     private final Duration                                                    activeCutbackDebounce;
     private final MeterRegistry                                               meterRegistry;
@@ -583,6 +583,9 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
      * flips non-ACTIVE again during the debounce window the pending cutback is cancelled. This
      * prevents thrash when the underlying CDC pipeline oscillates (e.g. pgoutput intermittently
      * stalling). Polling keeps delivering during the window; the catch-up covers whatever it had not fetched yet.
+     * Only a recovery is debounced: until CDC has been interrupted once ({@link CdcAvailability#interruptions()}), an
+     * ACTIVE is the first activation after boot, and a subscription that started on polling during warm-up moves onto
+     * the bus at once - debounced, every subscription started during boot polled for the whole window.
      * <p>
      * Tenants: polling and the catch-up load every tenant's events, and {@code onlyIncludeEventIfItBelongsToTenant} is
      * applied on the way out, after the tracker - whichever source is current, callers see one consistent stream. The
@@ -661,7 +664,9 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
                     if (firstEmission.compareAndSet(true, false)) {
                         return Mono.just(state);
                     }
-                    return state == CdcAvailability.State.ACTIVE
+                    // Only a recovery is debounced. Before CDC was ever interrupted, an ACTIVE is its first activation
+                    // after boot (warm-up): debounced, every subscription started during boot polled for the whole window
+                    return state == CdcAvailability.State.ACTIVE && availability.interruptions().count() > 0
                             ? Mono.just(state).delayElement(activeCutbackDebounce)
                             : Mono.just(state);
                 })

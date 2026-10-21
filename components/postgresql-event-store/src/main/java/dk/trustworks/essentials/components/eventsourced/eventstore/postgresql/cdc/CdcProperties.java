@@ -1184,6 +1184,11 @@ public class CdcProperties {
          * Nothing published during the window is lost: polling keeps delivering until the cutback, and the cutback
          * attaches to the bus first and then catches up from the event store on whatever polling had not fetched.
          * <p>
+         * Only a recovery is debounced. The first activation after boot is not: subscriptions start before the WAL
+         * tailer, so each begins on polling (warm-up) and moves onto the bus as soon as CDC is ACTIVE. Until CDC has
+         * been interrupted once there is nothing to recover from, and debouncing it kept every subscription on polling
+         * for the whole window after every start.
+         * <p>
          * Default = {@link #interval}, matching the natural rhythm of the effectiveness monitor:
          * we wait one full monitor window of steady ACTIVE before trusting that CDC has
          * recovered. Set higher for jittery environments, lower if you want faster CDC recovery.

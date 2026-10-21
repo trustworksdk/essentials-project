@@ -241,7 +241,7 @@
     },
     {
       "name": "essentials.eventstore.cdc.health-check.active-cutback-debounce",
-      "description": "How long availability must stay steadily ACTIVE before an in-flight CDC subscription cuts back from polling to the CDC live bus. ACTIVE to FAILED or INACTIVE switches to polling immediately. Nothing is lost during the window.",
+      "description": "How long availability must stay steadily ACTIVE before an in-flight CDC subscription cuts back from polling to the CDC live bus. ACTIVE to FAILED or INACTIVE switches to polling immediately. Only a recovery after an interruption is debounced; the first activation after startup is not. Nothing is lost during the window.",
       "defaultValue": "60s"
     },
     {

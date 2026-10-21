@@ -1268,9 +1268,12 @@ Sampled every `cdc.slot.metricsInterval` (default 30s) by `CdcSlotMetrics`. Tagg
 
 Availability starts `INACTIVE` and only becomes `ACTIVE` once the WAL tailer has connected and taken the slot.
 The lifecycle starts subscriptions *before* that, so every subscription that comes up during boot legitimately
-begins on the polling path and switches to the CDC bus once `CdcEventStore`'s adaptive live source has seen
-`ACTIVE` last for `activeCutbackDebounce` - catching up first on what polling had not fetched (see
-[§2](#2-architecture)).
+begins on the polling path and switches to the CDC bus as soon as `CdcEventStore`'s adaptive live source sees
+`ACTIVE` - catching up first on what polling had not fetched (see [§2](#2-architecture)). The first activation
+is not debounced: `activeCutbackDebounce` guards a recovery, and until CDC has been interrupted once there is
+nothing to recover from. It used to be debounced too, which kept every subscription on polling for the whole
+window (60 s by default) after every start - in the trading demo that held the order flow at polling speed for
+its first ~40 s.
 
 Those startup polls are **warm-up polls**, counted by `essentials.cdc.warmup_poll_total` and reported as
 `warmupPollCount`. They are not failures, and how many you get depends on a race between subscription startup
