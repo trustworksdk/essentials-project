@@ -166,8 +166,10 @@ targets, with a `-N` suffix for plugin-only releases.
   `shedGrace` keeps that unit, and the subscription's instance id, until that handler has returned and the unit has
   been handed back (its acknowledgement flushed, its lease released, so its next owner charges no attempt and
   delivers nothing again), or for another instance until the lease TTL runs out; an operator can release such a
-  unit sooner on the instance that kept it, with `MessageQueue.releaseKeptOrderedUnit` or the admin API's
-  `POST /shard-owned-queues/{queueName}/ordered-units/{unit}/release-kept`, accepting that the messages still in a
+  unit sooner on the instance that kept it, with `MessageQueue.releaseKeptOrderedUnit(instanceId, unit)` or the
+  admin API's `POST /shard-owned-queues/{queueName}/ordered-units/{unit}/release-kept?instanceId=…`, naming the
+  instance id the kept-unit WARN printed - only a unit a subscription under that id kept is released, and the answer's
+  `answeredBy` names the instance ids of the process that answered - accepting that the messages still in a
   handler are delivered again, possibly beside those handlers; and a new Gotcha
   lists what a `QueueObserver` calling the queue back from `shardOwnershipChanged` gets - a `consume()` from a release
   a stop tells, or from one a failed start tells while it stops the lanes it had started, returns a subscription
@@ -183,7 +185,14 @@ targets, with a `-N` suffix for plugin-only releases.
   stop kept for a key still in its handler: it waits for that handler up to `stuckHandlerTimeout` (default 15
   minutes, per queue, `essentials.shard-owned-queue.stuck-handler-timeout` and `stuck-handler-timeouts.<queue>`),
   then takes the unit over under a new fence, and that key may run in two handlers at once. A WARN once the handler
-  outlasts `leaseTtl`, at most once a minute per unit, and `ShardOwnerMetrics.keptUnitsInHandler()`.
+  outlasts `leaseTtl`, at most once a minute per unit, and `ShardOwnerMetrics.keptUnitsInHandler()`. An ordered
+  unit released with a message still in a handler that has not returned - by a fair-share shed or a dead pump's
+  hand-back past `stuckHandlerTimeout`, or on request with `MessageQueue.releaseKeptOrderedUnit` - charges that
+  message an attempt before the release and dead-letters it at `maxAttempts`, so a message whose handler hangs on
+  every delivery reaches the dead-letter table once the queue has stopped waiting for it `maxAttempts` times. An
+  unordered shard, released without waiting for its handlers - by a fair-share shed, a dead pump's hand-back or a
+  `stop()` once `shedGrace` has run out - charges each message in a handler longer than `stuckHandlerTimeout` the same
+  way and dead-letters it at `maxAttempts`; a message in a handler for less is released uncharged.
 - **Docs: supported PostgreSQL is 15+.** `LLM.md` states the floor (the majors the PostgreSQL community still patches)
   and the fenced-lock and shard-owned docs point at it instead of the old 9.5+ and 13+.
 - **Docs: `shared` helpers for Essentials 0.60.1** (`LLM-shared.md`). § Exceptions lists `ROOT_CAUSE_PREFIX`,
