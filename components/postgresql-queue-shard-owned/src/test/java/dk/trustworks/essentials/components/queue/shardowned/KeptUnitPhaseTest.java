@@ -151,27 +151,29 @@ class KeptUnitPhaseTest {
      * A release on request ({@code ShardOwnedQueue.releaseKeptOrderedUnit}) ends where nothing waits for the handler any
      * more while a key is still in it - so neither a later stop nor a {@code PostgresqlMessageQueue} holding an ended
      * subscription's instance id waits for it - as an ordinary hand-back when none is, and back where it was claimed from
-     * when the release left the row held.
+     * when the release left the row held. Whether a key is in its handler is the release's own reading, passed in, never
+     * asked of the owner again (an owner answering nothing here): read again after the release, it could disagree with
+     * the keys the release named in its log line and its answer.
      */
     @Test
     void a_release_on_request_ends_force_released_while_a_key_is_in_its_handler_and_handed_back_when_none_is() {
         for (var claimedFrom : List.of(AWAITING_HAND_BACK, GIVEN_UP, TAKEOVER_ASKED)) {
-            var inHandler = unitAt(claimedFrom, owner(1));
+            var inHandler = unitAt(claimedFrom);
             assertThat(inHandler.claimHandBack()).isEqualTo(claimedFrom);
-            inHandler.endForcedRelease(claimedFrom, false);
+            inHandler.endForcedRelease(claimedFrom, false, true);
             assertThat(inHandler.phase()).as("claimed from %s, a key in its handler", claimedFrom).isEqualTo(FORCE_RELEASED);
             assertThat(inHandler.nothingWaitsForHandler()).isTrue();
             assertThat(inHandler.isGivenUp()).as("released, not given up on").isFalse();
             assertThat(inHandler.claimHandBack()).as("nothing left to hand back").isNull();
 
-            var returned = unitAt(claimedFrom, owner(0));
+            var returned = unitAt(claimedFrom);
             assertThat(returned.claimHandBack()).isEqualTo(claimedFrom);
-            returned.endForcedRelease(claimedFrom, false);
+            returned.endForcedRelease(claimedFrom, false, false);
             assertThat(returned.phase()).as("claimed from %s, no key in its handler", claimedFrom).isEqualTo(HANDED_BACK);
 
-            var failed = unitAt(claimedFrom, owner(1));
+            var failed = unitAt(claimedFrom);
             assertThat(failed.claimHandBack()).isEqualTo(claimedFrom);
-            failed.endForcedRelease(claimedFrom, true);
+            failed.endForcedRelease(claimedFrom, true, true);
             assertThat(failed.phase()).as("claimed from %s, row still held", claimedFrom).isEqualTo(claimedFrom);
         }
         assertThat(EnumSet.allOf(Phase.class)).filteredOn(Phase::nothingWaitsForHandler)
@@ -220,20 +222,6 @@ class KeptUnitPhaseTest {
     private static LeasedOwner owner() {
         return (LeasedOwner) Proxy.newProxyInstance(LeasedOwner.class.getClassLoader(), new Class<?>[]{LeasedOwner.class},
                                                     (proxy, method, args) -> {
-                                                        throw new UnsupportedOperationException(method.getName());
-                                                    });
-    }
-
-    /**
-     * An owner that answers only how many of its keys are in a handler: what ending a release on request asks.
-     */
-    @SuppressWarnings("PMD.UseProperClassLoader")
-    private static LeasedOwner owner(int inFlight) {
-        return (LeasedOwner) Proxy.newProxyInstance(LeasedOwner.class.getClassLoader(), new Class<?>[]{LeasedOwner.class},
-                                                    (proxy, method, args) -> {
-                                                        if ("inFlight".equals(method.getName())) {
-                                                            return inFlight;
-                                                        }
                                                         throw new UnsupportedOperationException(method.getName());
                                                     });
     }

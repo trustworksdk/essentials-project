@@ -1524,7 +1524,7 @@ const keptReleaseNotice = (release) => `<div class="notice">
       ${release.results.length
         ? release.results.map((r) => `<br>${(keptReleaseOutcome[r.outcome] ?? (() => badge('neutral', r.outcome)))()}
             lease row of instance <span class="mono">${esc(r.instanceId)}</span>${r.keysInHandler.length
-                ? `; key(s) in a handler when asked: <span class="mono">${r.keysInHandler.map(esc).join(', ')}</span>,
+                ? `; key(s) still in a handler: <span class="mono">${r.keysInHandler.map(esc).join(', ')}</span>,
                    the longest there for ${millis(r.longestInHandlerMillis)}`
                 : ''}`).join('')
         : `that instance kept no such unit with its lease row still held, so nothing was released. A kept unit lives in

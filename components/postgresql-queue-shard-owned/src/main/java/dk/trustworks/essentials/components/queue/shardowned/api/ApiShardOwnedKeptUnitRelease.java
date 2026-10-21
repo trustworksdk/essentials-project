@@ -34,8 +34,12 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  *                               row had been taken under a newer fence meanwhile, nothing released; {@code BUSY} - the stop
  *                               that kept it is still flushing it, or another hand-back or release of it is running, nothing
  *                               done, ask again
- * @param keysInHandler          the unit's keys in a handler when it was asked. After {@code RELEASED}, whoever takes the
- *                               unit next delivers their messages again, possibly while these handlers still run them
+ * @param keysInHandler          the unit's keys still in a handler, as {@link KeptUnitRelease#keysInHandler()} reads them:
+ *                               on {@code RELEASED} and {@code ALREADY_TAKEN} after the release flushed the unit's
+ *                               acknowledgements - when the instance still held the row - so a handler that returned
+ *                               before that flush is, approximately, not named; on {@code BUSY} as they stood when
+ *                               asked. After {@code RELEASED}, whoever takes the unit next delivers their messages
+ *                               again, possibly while these handlers still run them
  * @param longestInHandlerMillis how long the key handed to its handler first had been there; zero when none was
  */
 public record ApiShardOwnedKeptUnitRelease(QueueName queueName,

@@ -1143,6 +1143,75 @@ class ShardOwnedUnsubscribeIT {
     }
 
     /**
+     * A kept unit whose handler returns while a release on request is under way - after the release was asked for, before
+     * it flushes the unit's acknowledgements: that flush acknowledges the handler's message, so nobody delivers it again,
+     * and the release says so - {@link KeptUnitRelease.Outcome#RELEASED} naming no key, the INFO of an ordinary hand-back,
+     * no WARN. It read the keys in a handler before it claimed the unit and flushed, and reported the returned key as one
+     * whose message the next owner delivers again, possibly in two handlers at once, when it would not.
+     */
+    @Test
+    void a_kept_unit_whose_handler_returns_before_the_release_on_request_flushes_is_reported_with_no_key_in_a_handler() throws Exception {
+        var leaseTtl     = Duration.ofSeconds(3);
+        var entries      = new AtomicInteger();
+        var entered      = new CountDownLatch(1);
+        var release      = new CountDownLatch(1);
+        var onConnection = new RunBeforeConnectionDataSource(dataSource);
+        try (var queue = PostgresqlMessageQueue.builder()
+                                               .setDataSource(onConnection)
+                                               .setQueueId(QUEUE_ID)
+                                               .setShardCount(SHARD_COUNT)
+                                               .setInstanceId(INSTANCE_ID)
+                                               .setSettings(settingsWith(Duration.ofMillis(300), leaseTtl))
+                                               .setLifecycleHook(PostgresqlMessageQueue.LifecycleHook.NONE)
+                                               .build()) {
+            try {
+                queue.consume((messageId, key, payload, payloadType) -> {
+                    if (key != null) {
+                        entries.incrementAndGet();
+                        entered.countDown();
+                        awaitQuietly(release, Duration.ofSeconds(60));
+                    }
+                }, ConsumerOptions.defaults());
+                var metrics = queue.registeredConsumers().getFirst().metrics();
+                queue.enqueue(Message.ordered("in-handler".getBytes(StandardCharsets.UTF_8), 1, "ACC-1", 0));
+                assertThat(entered.await(20, TimeUnit.SECONDS)).as("premise: the key is in its handler").isTrue();
+
+                // Stopped, and not started again: nothing but the release below acknowledges the message.
+                queue.stop();
+                var kept = keptOrderedFence(INSTANCE_ID);
+                assertThat(orderedMessagesLeft()).as("premise: the message in the handler is not acknowledged").isEqualTo(1);
+
+                // The release's first connection - its flush's, under its claim - waits for the handler to return first.
+                var inReleaseFlush = new AtomicBoolean();
+                onConnection.runOnce(Thread.currentThread(), () -> {
+                    inReleaseFlush.set(inTheFlushOfAReleaseOnRequest());
+                    release.countDown();
+                    Awaitility.await().atMost(Duration.ofSeconds(10))
+                              .untilAsserted(() -> assertThat(metrics.keptUnitsInHandler()).as("premise: the handler has returned").isZero());
+                });
+                var releases = Awaitility.await().pollInSameThread().atMost(Duration.ofSeconds(5))
+                                         .until(() -> queue.releaseKeptOrderedUnit(kept.shard()),
+                                                answer -> answer.stream().noneMatch(entry -> entry.outcome() == KeptUnitRelease.Outcome.BUSY));
+                assertThat(inReleaseFlush).as("premise: the handler returned inside the release's flush, under its claim").isTrue();
+                assertThat(releases).as("the release names no key in a handler").singleElement().satisfies(answer -> {
+                    assertThat(answer.outcome()).isEqualTo(KeptUnitRelease.Outcome.RELEASED);
+                    assertThat(answer.keysInHandler()).isEmpty();
+                    assertThat(answer.longestInHandler()).isZero();
+                });
+                assertThat(orderedMessagesLeft()).as("the release's flush acknowledged the handled message").isZero();
+                assertThat(ownerOf(kept.shard())).as("the row is released").isNull();
+                assertThat(laneWarnings()).as("no WARN of a message delivered again")
+                                          .noneMatch(warning -> warning.contains("released ordered unit " + kept.shard() + " on queue " + QUEUE_ID));
+                assertThat(laneInfos()).as("the INFO of an ordinary hand-back")
+                                       .anyMatch(info -> info.contains("handed back ordered unit " + kept.shard() + " on queue " + QUEUE_ID + " on request"));
+                assertThat(entries).as("delivered once").hasValue(1);
+            } finally {
+                release.countDown();
+            }
+        }
+    }
+
+    /**
      * {@link #a_queue_restarted_while_a_key_outlasts_the_stuck_handler_timeout_in_the_handler_its_stop_kept_takes_the_unit_over},
      * with the message delivered again hanging too, and the queue stopped once more: the queue now lists two kept entries
      * for the unit - the first stop's, whose row the restart took over and which still reads as holding it until a fenced
@@ -1681,6 +1750,96 @@ class ShardOwnedUnsubscribeIT {
             latch.await(atMost.toMillis(), TimeUnit.MILLISECONDS);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+        }
+    }
+
+    /**
+     * Whether the calling thread is inside {@link ShardOwnedQueue#releaseKeptOrderedUnit} and not inside the
+     * {@code releaseLeaseRows} it calls: asking for a connection there, it is the release's flush, under its claim.
+     */
+    private static boolean inTheFlushOfAReleaseOnRequest() {
+        return StackWalker.getInstance().walk(frames -> {
+            var methods = frames.filter(frame -> frame.getClassName().equals(ShardOwnedQueue.class.getName()))
+                                .map(StackWalker.StackFrame::getMethodName)
+                                .toList();
+            return methods.contains("releaseKeptOrderedUnit") && !methods.contains("releaseLeaseRows");
+        });
+    }
+
+    /**
+     * A {@link javax.sql.DataSource} that, told to ({@link #runOnce}), runs an action on one thread as that thread next asks
+     * for a connection, once, before handing it the delegate's. Every other request gets the delegate's connection as it is.
+     */
+    private static final class RunBeforeConnectionDataSource implements javax.sql.DataSource {
+        private final javax.sql.DataSource      delegate;
+        private final AtomicReference<Thread>   onThread = new AtomicReference<>();
+        private final AtomicReference<Runnable> action   = new AtomicReference<>();
+
+        RunBeforeConnectionDataSource(javax.sql.DataSource delegate) {
+            this.delegate = delegate;
+        }
+
+        void runOnce(Thread thread, Runnable runnable) {
+            action.set(runnable);
+            onThread.set(thread);
+        }
+
+        private void runIfTold() {
+            if (!Thread.currentThread().equals(onThread.get())) {
+                return;
+            }
+            var runnable = action.getAndSet(null);
+            if (runnable != null) {
+                onThread.set(null);
+                runnable.run();
+            }
+        }
+
+        @Override
+        public Connection getConnection() throws SQLException {
+            runIfTold();
+            return delegate.getConnection();
+        }
+
+        @Override
+        public Connection getConnection(String username, String password) throws SQLException {
+            runIfTold();
+            return delegate.getConnection(username, password);
+        }
+
+        @Override
+        public java.io.PrintWriter getLogWriter() throws SQLException {
+            return delegate.getLogWriter();
+        }
+
+        @Override
+        public void setLogWriter(java.io.PrintWriter out) throws SQLException {
+            delegate.setLogWriter(out);
+        }
+
+        @Override
+        public void setLoginTimeout(int seconds) throws SQLException {
+            delegate.setLoginTimeout(seconds);
+        }
+
+        @Override
+        public int getLoginTimeout() throws SQLException {
+            return delegate.getLoginTimeout();
+        }
+
+        @Override
+        public java.util.logging.Logger getParentLogger() throws SQLFeatureNotSupportedException {
+            return delegate.getParentLogger();
+        }
+
+        @Override
+        public <T> T unwrap(Class<T> iface) throws SQLException {
+            return delegate.unwrap(iface);
+        }
+
+        @Override
+        public boolean isWrapperFor(Class<?> iface) throws SQLException {
+            return delegate.isWrapperFor(iface);
         }
     }
 }

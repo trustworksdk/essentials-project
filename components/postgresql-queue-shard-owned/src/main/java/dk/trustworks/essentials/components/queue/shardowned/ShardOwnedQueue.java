@@ -2785,12 +2785,16 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * tried in turn until one is released; with none released, the answer is {@code BUSY} when any entry was, else
      * {@code ALREADY_TAKEN}.
      * <p>
-     * Released with a key still in its handler, the unit moves to {@link KeptUnit.Phase#FORCE_RELEASED}: nothing waits
-     * for that handler any more. Whoever takes the unit next finds it released - no takeover charge - and delivers the
-     * key's message again, as it was never acknowledged, possibly while the handler still runs it; the handler's
-     * acknowledgement, once it returns, is not flushed, as the owner no longer holds the row. One WARN says so, naming
-     * the keys. Released with none in a handler, it is an ordinary hand-back ({@link KeptUnit.Phase#HANDED_BACK}). Not
-     * counted as a release ({@link #countRelease}): the stop that kept the unit counted it.
+     * Which keys are in a handler is read once per entry, under the claim, after the flush and before the row is released:
+     * approximately, a handler that returned before the flush had its acknowledgement flushed and is not named (the two
+     * narrow windows where the reading and the flush disagree are described at the read). That one reading decides
+     * the log line, the keys in the answer and the phase the unit ends in. Released with a key still in its handler, the
+     * unit moves to {@link KeptUnit.Phase#FORCE_RELEASED}: nothing waits for that handler any more. Whoever takes the unit
+     * next finds it released - no takeover charge - and delivers the key's message again, as it was never acknowledged,
+     * possibly while the handler still runs it; the handler's acknowledgement, once it returns, is not flushed, as the
+     * owner no longer holds the row. One WARN says so, naming the keys. Released with none in a handler, it is an ordinary
+     * hand-back ({@link KeptUnit.Phase#HANDED_BACK}). A {@code BUSY} entry, not claimed, names the keys as they stand when
+     * asked. Not counted as a release ({@link #countRelease}): the stop that kept the unit counted it.
      *
      * @return what was done, empty when this queue keeps no such unit with its row still held
      * @throws SQLException when the flush or the release fails; the unit is then left as it was, kept, for a later
@@ -2807,15 +2811,15 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             if (owner.shard() != unit || !owner.holdsLeaseRow()) {
                 continue;
             }
-            var inHandler   = kept.keysInHandler();
-            var keys        = inHandler.map(OrderedShardOwner.KeysInHandler::keys).orElse(List.of());
-            var longest     = inHandler.map(OrderedShardOwner.KeysInHandler::longest).orElse(Duration.ZERO);
             var claimedFrom = kept.claimHandBack();
             if (claimedFrom == null) {
-                busy = new KeptUnitRelease(unit, instanceId, KeptUnitRelease.Outcome.BUSY, keys, longest);
+                // Not claimed, so read as the keys stand now: approximate, as a handler may return before the stop's flush
+                // or the hand-back working on the unit does.
+                busy = keptUnitRelease(unit, KeptUnitRelease.Outcome.BUSY, kept.keysInHandler());
                 continue;
             }
-            var released = false;
+            var released  = false;
+            var inHandler = Optional.<OrderedShardOwner.KeysInHandler>empty();
             try {
                 // Asked again under the claim: the stop's own flush may have found the row taken since.
                 if (owner.holdsLeaseRow()) {
@@ -2823,30 +2827,27 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                         owner.flushOnStop(connection);
                     }
                 }
+                // Read once, under the claim, after the flush and before the row is released: the keys whose
+                // acknowledgements this release drops. A handler that returned before the flush had its acknowledgement
+                // flushed, so its message is not delivered again; one still in a handler here returns to an owner whose
+                // row is released, and its acknowledgement is never flushed. The reading is approximate, in both
+                // directions: a handler that returns while the flush runs, after the flush took its batch, goes unnamed
+                // though its acknowledgement is not flushed; one that queued its acknowledgement before the flush took
+                // its batch but has not yet left its handler bookkeeping is named though its acknowledgement was
+                // flushed. Both windows are narrow. The log line, the answer and the phase the unit ends in all go by
+                // this one reading. Should the flush throw, the row is still held, and the unit goes back where it was
+                // claimed from whatever this reads.
+                inHandler = kept.keysInHandler();
                 if (owner.holdsLeaseRow()) {
                     released = releaseLeaseRows(List.of(owner)) > 0;
                 }
             } finally {
-                kept.endForcedRelease(claimedFrom, owner.holdsLeaseRow());
+                kept.endForcedRelease(claimedFrom, owner.holdsLeaseRow(), inHandler.isPresent());
             }
-            if (!released) {
-                taken = new KeptUnitRelease(unit, instanceId, KeptUnitRelease.Outcome.ALREADY_TAKEN, keys, longest);
-                continue;
+            if (released) {
+                return Optional.of(reportReleasedOnRequest(unit, inHandler));
             }
-            if (keys.isEmpty()) {
-                log.info("Instance {} handed back ordered unit {} on queue {} on request, which a stop kept while a key was in its handler: "
-                                 + "that handler had returned, its acknowledgements are flushed and its lease released",
-                         instanceId, unit, queueId);
-            } else {
-                log.warn("Instance {} released ordered unit {} on queue {} on request, which a stop kept while {} key(s) {} were in a "
-                                 + "handler, the longest there {} ms: its acknowledgements are flushed and its lease released "
-                                 + "without waiting for those handlers. Whoever takes the unit next does so under a new fence and "
-                                 + "delivers the messages in those handlers again, possibly while those handlers still run them; "
-                                 + "nothing they do is acknowledged under the old fence. Counted in "
-                                 + "ShardOwnerMetrics.keptUnitsInHandler while one runs",
-                         instanceId, unit, queueId, keys.size(), inHandler.get().describeKeys(), longest.toMillis());
-            }
-            return Optional.of(new KeptUnitRelease(unit, instanceId, KeptUnitRelease.Outcome.RELEASED, keys, longest));
+            taken = keptUnitRelease(unit, KeptUnitRelease.Outcome.ALREADY_TAKEN, inHandler);
         }
         // Nothing released. Busy before taken: an entry that could not be claimed may still hold the row, while one found
         // taken holds nothing any more.
@@ -2864,6 +2865,37 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             return Optional.of(taken);
         }
         return Optional.empty();
+    }
+
+    /**
+     * The answer of {@link #releaseKeptOrderedUnit} for one kept entry of {@code unit}, naming the keys {@code inHandler}
+     * read.
+     */
+    private KeptUnitRelease keptUnitRelease(int unit, KeptUnitRelease.Outcome outcome, Optional<OrderedShardOwner.KeysInHandler> inHandler) {
+        return new KeptUnitRelease(unit, instanceId, outcome,
+                                   inHandler.map(OrderedShardOwner.KeysInHandler::keys).orElse(List.of()),
+                                   inHandler.map(OrderedShardOwner.KeysInHandler::longest).orElse(Duration.ZERO));
+    }
+
+    /**
+     * Log what {@link #releaseKeptOrderedUnit} did with {@code unit}, released with the keys {@code inHandler} read under
+     * its claim still in a handler - a WARN when there are any, as whoever takes the unit next delivers their messages
+     * again - and give the answer.
+     */
+    private KeptUnitRelease reportReleasedOnRequest(int unit, Optional<OrderedShardOwner.KeysInHandler> inHandler) {
+        var answer = keptUnitRelease(unit, KeptUnitRelease.Outcome.RELEASED, inHandler);
+        inHandler.ifPresentOrElse(
+                held -> log.warn("Instance {} released ordered unit {} on queue {} on request, which a stop kept while {} key(s) {} were in "
+                                         + "a handler, the longest there {} ms: its acknowledgements are flushed and its lease released "
+                                         + "without waiting for those handlers. Whoever takes the unit next does so under a new fence and "
+                                         + "delivers the messages in those handlers again, possibly while those handlers still run them; "
+                                         + "nothing they do is acknowledged under the old fence. Counted in "
+                                         + "ShardOwnerMetrics.keptUnitsInHandler while one runs",
+                                 instanceId, unit, queueId, held.keys().size(), held.describeKeys(), held.longest().toMillis()),
+                () -> log.info("Instance {} handed back ordered unit {} on queue {} on request, which a stop kept while a key was in its "
+                                       + "handler: that handler had returned, its acknowledgements are flushed and its lease released",
+                               instanceId, unit, queueId));
+        return answer;
     }
 
     /**
@@ -3661,11 +3693,15 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         /**
          * End the release on request this caller claimed ({@link #claimHandBack}, {@link #releaseKeptOrderedUnit}): back to
          * {@code claimedFrom} when the owner still holds its lease row - the release failed - and otherwise
-         * {@link Phase#FORCE_RELEASED} while a key of the owner is still in a handler, {@link Phase#HANDED_BACK} when none
-         * is.
+         * {@link Phase#FORCE_RELEASED} when {@code keyInHandler}, {@link Phase#HANDED_BACK} when not.
+         *
+         * @param keyInHandler whether a key of the owner was in a handler when the release read it, under its claim and
+         *                     after its flush - the reading its log line and its answer name too, so all three agree. Not
+         *                     read again here: a handler returning after that reading had its acknowledgement dropped all
+         *                     the same.
          */
-        void endForcedRelease(Phase claimedFrom, boolean rowHeld) {
-            moveFrom(Phase.HANDING_BACK, rowHeld ? claimedFrom : owner.inFlight() > 0 ? Phase.FORCE_RELEASED : Phase.HANDED_BACK);
+        void endForcedRelease(Phase claimedFrom, boolean rowHeld, boolean keyInHandler) {
+            moveFrom(Phase.HANDING_BACK, rowHeld ? claimedFrom : keyInHandler ? Phase.FORCE_RELEASED : Phase.HANDED_BACK);
         }
 
         /**

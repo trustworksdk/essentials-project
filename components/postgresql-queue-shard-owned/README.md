@@ -864,8 +864,9 @@ the wait exists to avoid**: whoever takes the unit delivers the messages still i
 possibly while those handlers still run them. It touches only a unit a stop kept whose lease row still
 names the stopping instance; every other unit is left alone. Kept units live in the memory of the
 process whose stop kept them, so call the instance whose WARN named the unit - any other answers with
-an empty list. Each entry says what was done: `RELEASED` (with the keys that were in a handler and how
-long the longest had been there), `ALREADY_TAKEN` (the row had been taken under a newer fence
+an empty list. Each entry says what was done: `RELEASED` (with the keys still in a handler once the
+unit's acknowledgements were flushed, and how long the longest had been there; a handler that returned
+before that flush is, approximately, acknowledged and not named), `ALREADY_TAKEN` (the row had been taken under a newer fence
 meanwhile; nothing released) or `BUSY` (the stop that kept it is still flushing it, or another
 hand-back or release of it is running; nothing done, ask again). A release with a key in its handler is logged as a WARN naming
 the unit and the keys. Once released, the unit no longer keeps an unsubscribed subscription's instance

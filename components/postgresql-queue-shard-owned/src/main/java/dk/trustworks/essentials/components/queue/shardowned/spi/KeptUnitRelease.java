@@ -30,9 +30,13 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * @param unit             the ordered unit
  * @param instanceId       the instance id whose lease row it was - the subscription's, which may carry a suffix
  * @param outcome          what was done; see {@link Outcome}
- * @param keysInHandler    the unit's keys in a handler when it was asked, empty when none was. On {@link Outcome#RELEASED}
- *                         their messages are delivered again by whoever takes the unit next, possibly while these
- *                         handlers still run them
+ * @param keysInHandler    the unit's keys in a handler, empty when none was: on {@link Outcome#RELEASED} and
+ *                         {@link Outcome#ALREADY_TAKEN} read after the release flushed its acknowledgements - when it
+ *                         still held the row - and just before it released that row, or tried to, so a handler that
+ *                         returned before that flush is, approximately, not named; on {@link Outcome#BUSY} as they
+ *                         stood when asked.
+ *                         On {@link Outcome#RELEASED} their messages are delivered again by whoever takes the unit
+ *                         next, possibly while these handlers still run them
  * @param longestInHandler how long the key handed to its handler first had been there, {@link Duration#ZERO} when no key
  *                         was in a handler
  */
