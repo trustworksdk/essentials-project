@@ -24,10 +24,13 @@ import dk.trustworks.essentials.examples.trading.accounts.use_cases.book_trade.B
 import dk.trustworks.essentials.examples.trading.accounts.use_cases.release_hold.ReleaseHold;
 import dk.trustworks.essentials.examples.trading.accounts.use_cases.release_shares.ReleaseShares;
 import dk.trustworks.essentials.examples.trading.orders.aggregates.Orders;
+import dk.trustworks.essentials.examples.trading.orders.config.OrderProcessingProperties;
 import dk.trustworks.essentials.examples.trading.orders.events.*;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
+
+import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
  * Carries an order's outcome to its account: every fill is booked ({@code BookTrade}, consuming the order's hold or
@@ -43,8 +46,19 @@ import java.util.List;
 @Service
 public class OrderLedgerProcessor extends EventProcessor {
 
-    public OrderLedgerProcessor(EventProcessorDependencies dependencies) {
+    private final OrderProcessingProperties consumers;
+
+    public OrderLedgerProcessor(EventProcessorDependencies dependencies, OrderProcessingProperties consumers) {
         super(dependencies);
+        this.consumers = requireNonNull(consumers, "No consumers provided");
+    }
+
+    /**
+     * One order's events stay in order on any number of threads, so a release still never overtakes its bookings.
+     */
+    @Override
+    protected int getNumberOfParallelInboxMessageConsumers() {
+        return consumers.getLedger();
     }
 
     @Override

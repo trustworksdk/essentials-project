@@ -55,6 +55,14 @@ books: an order is short-lived.
   cent (Q-5), from `market_data`'s `MarketQuotes` seam. No fresh quote → `422`, never a guess. A fill above the hold
   is still booked.
 
+## Consumers
+
+`trading-demo.orders.consumers.*` (`OrderProcessingProperties`): threads on `Inbox:ExchangeOrderRouter`
+(`exchange-router`, 1), `Inbox:OrderLedgerProcessor` (`ledger`, 1) and `Inbox:Orders:ExchangeReports`
+(`exchange-reports`, 2). Each inbox keeps one order's messages in order on any number of threads. 8 / 8 / 8 with a
+60-connection pool completed the order flow ~2x faster than the defaults; more threads on the default 20-connection pool
+did not help (EF-2 doc §5, M5). Mind PostgreSQL's `max_connections` (100) before raising the pool on two instances.
+
 ## Stub exchange
 
 `trading-demo.orders.stub-exchange.*`: `fill-mode` (`IMMEDIATE` matches on arrival; `NEVER`), `resting-instruments`

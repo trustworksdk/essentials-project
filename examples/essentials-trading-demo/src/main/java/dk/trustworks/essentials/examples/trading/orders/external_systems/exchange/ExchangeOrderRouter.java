@@ -20,6 +20,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ev
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.*;
 import dk.trustworks.essentials.components.foundation.messaging.*;
 import dk.trustworks.essentials.examples.trading.orders.aggregates.Orders;
+import dk.trustworks.essentials.examples.trading.orders.config.OrderProcessingProperties;
 import dk.trustworks.essentials.examples.trading.orders.events.*;
 import dk.trustworks.essentials.examples.trading.orders.types.OrderId;
 import dk.trustworks.essentials.examples.trading.orders.use_cases.record_exchange_answer.RecordExchangeAnswer;
@@ -52,13 +53,16 @@ public class ExchangeOrderRouter extends EventProcessor {
     private final ExchangeReports              reports;
     private final Orders                       orders;
     private final ExchangeSubmissionProperties submission;
+    private final OrderProcessingProperties    consumers;
 
     public ExchangeOrderRouter(EventProcessorDependencies dependencies,
                                ExchangeGateway gateway,
                                ExchangeReports reports,
                                Orders orders,
-                               ExchangeSubmissionProperties submission) {
+                               ExchangeSubmissionProperties submission,
+                               OrderProcessingProperties consumers) {
         super(dependencies);
+        this.consumers = requireNonNull(consumers, "No consumers provided");
         this.gateway = requireNonNull(gateway, "No gateway provided");
         this.reports = requireNonNull(reports, "No reports provided");
         this.orders = requireNonNull(orders, "No orders provided");
@@ -73,6 +77,14 @@ public class ExchangeOrderRouter extends EventProcessor {
     @Override
     protected List<AggregateType> reactsToEventsRelatedToAggregateTypes() {
         return List.of(Orders.AGGREGATE_TYPE);
+    }
+
+    /**
+     * One order's events stay in order on any number of threads, so its cancel still follows its submission.
+     */
+    @Override
+    protected int getNumberOfParallelInboxMessageConsumers() {
+        return consumers.getExchangeRouter();
     }
 
     @MessageHandler(unitOfWork = UnitOfWorkMode.NONE)

@@ -488,7 +488,26 @@ event or message:
 The first two are small, local fixes in `postgresql-event-store`, both made (2026-10-20/21): the lock is checked in
 memory (`EventProcessor` forward 1.65-2.6x), and a view passes over events it has no handler for (`view_one_of_five`
 4.5x). Neither moves the order flow's end-to-end rate, which the inbox consumers bound. The last row is what EF-2
-itself is about. A C1-only
+itself is about.
+
+**M5 measured** (2026-10-21, one instance, same setup, both fixes in, 10 % of orders cancelled): more threads on the
+router, ledger and reports inboxes (`trading-demo.orders.consumers.*`), each inbox still `SingleGlobalConsumer`, so one
+order's messages stay in order. Completed orders/s, A and D alternating within each round:
+
+| Round | A: 1 / 1 / 2 consumers, pool 20 | D: 8 / 8 / 8 consumers, pool 60 |
+|---|---|---|
+| 1 | 62 | 172 |
+| 2 | 133 | 159 |
+| 3 | 114 | 172 |
+| 4 | 74 | 102 |
+| 5 | 64 | 106 |
+| **Median** | **74** | **159** (D ahead in every round, 1.2-2.8x) |
+
+4 / 4 / 4 and 8 / 8 / 8 on the 20-connection pool (two rounds each: 60 / 128 and 91 / 132) were no better than A: the
+pool, shared with ~20 subscriptions and the placing threads, bounds what more consumers can do. No dead letter and no
+order left open in any run. So one instance gets most of what partitioned handling promises, given the connections
+for it; EF-2's cross-instance story matters less than its parallelism and its connection budget. The run-to-run spread
+on this devcontainer is large (A: 62-133), so the size of the gain is indicative, its direction is not in doubt. A C1-only
 JVM (`spring-boot:run`'s default `optimizedLaunch`) made no difference.
 
 Two hazards to watch during M3/M4. Kill the reader's instance with `kill -9` mid-run to see the PK collision in §3.5,

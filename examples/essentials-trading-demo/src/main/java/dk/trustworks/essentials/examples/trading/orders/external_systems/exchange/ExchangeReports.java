@@ -20,6 +20,7 @@ import dk.trustworks.essentials.components.foundation.messaging.RedeliveryPolicy
 import dk.trustworks.essentials.components.foundation.messaging.eip.store_and_forward.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.Message;
 import dk.trustworks.essentials.components.foundation.transaction.*;
+import dk.trustworks.essentials.examples.trading.orders.config.OrderProcessingProperties;
 import dk.trustworks.essentials.reactive.command.CommandBus;
 import org.slf4j.*;
 import org.springframework.context.event.EventListener;
@@ -50,9 +51,11 @@ public class ExchangeReports {
     private final Inboxes                                 inboxes;
     private final CommandBus                              commandBus;
     private final UnitOfWorkFactory<? extends UnitOfWork> unitOfWorkFactory;
+    private final OrderProcessingProperties               consumers;
     private volatile Inbox                                inbox;
 
-    public ExchangeReports(Inboxes inboxes, CommandBus commandBus, UnitOfWorkFactory<? extends UnitOfWork> unitOfWorkFactory) {
+    public ExchangeReports(Inboxes inboxes, CommandBus commandBus, UnitOfWorkFactory<? extends UnitOfWork> unitOfWorkFactory, OrderProcessingProperties consumers) {
+        this.consumers = requireNonNull(consumers, "No consumers provided");
         this.inboxes = requireNonNull(inboxes, "No inboxes provided");
         this.commandBus = requireNonNull(commandBus, "No commandBus provided");
         this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory provided");
@@ -79,7 +82,7 @@ public class ExchangeReports {
             inbox = inboxes.getOrCreateInbox(InboxConfig.builder()
                                                         .inboxName(INBOX_NAME)
                                                         .messageConsumptionMode(MessageConsumptionMode.GlobalCompetingConsumers)
-                                                        .numberOfParallelMessageConsumers(2)
+                                                        .numberOfParallelMessageConsumers(consumers.getExchangeReports())
                                                         .redeliveryPolicy(RedeliveryPolicy.fixedBackoff(Duration.ofMillis(50), MAX_ATTEMPTS))
                                                         .build(),
                                              this::record);

@@ -24,7 +24,7 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.*;
 
 @Configuration
-@EnableConfigurationProperties({StubExchangeProperties.class, ExchangeSubmissionProperties.class, PlaceOrderProperties.class})
+@EnableConfigurationProperties({StubExchangeProperties.class, ExchangeSubmissionProperties.class, PlaceOrderProperties.class, OrderProcessingProperties.class})
 public class OrdersConfiguration {
 
     @Bean
