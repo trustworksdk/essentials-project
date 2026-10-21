@@ -1874,9 +1874,8 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                             charge = chargeKeysInHandlerBeforeRelease(ordered);
                         } catch (SQLException | RuntimeException | Error e) {
                             // This unit's failure is its own: it stays held, shed-complete, and is retried on the next heartbeat,
-                            // while the other units are released. Still HELD, it keeps the run above its fair share, so the step
-                            // below usually only asks for the shed again and returns: while the charge keeps failing, the acquire
-                            // step, the take-over of given-up kept units included, is deferred.
+                            // while the other units are released. The fair-share comparison below leaves it out, as it does every
+                            // shed-complete unit, so a charge that keeps failing does not keep this tick from the acquire step.
                             Exceptions.rethrowIfCriticalError(e);
                             warnChargeBeforeReleaseFailed(ordered, "in a fair-share shed", e);
                             continue;
@@ -1917,8 +1916,15 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
 
         // leaseHeld (HELD), as on the unordered lane: only an owner that serves its unit is asked to shed. One whose pump died
         // (ENDED_ROW_HELD) drains until no key is in its handlers, or one has been there longer than stuckHandlerTimeout, and
-        // is released by handBackUnitsOnDeadPumps.
-        var held = run.owners.stream().filter(LeasedOwner::leaseHeld).toList();
+        // is released by handBackUnitsOnDeadPumps. Nor is one whose shed is complete: it is on its way out. The loop above took
+        // every unit it released out of `owners`, so one still here is one whose release a later tick retries - its charge
+        // before the release failed, or its shed completed after the loop read it. Counted, a unit whose charge kept failing
+        // kept the run above its fair share for as long as it failed: each tick only asked for that shed again and returned,
+        // and never reached the acquire step, so a given-up kept unit was not taken over. Its row is still this instance's, so the acquire step counts it towards its limit (holdsLeaseRow).
+        var held = run.owners.stream()
+                             .filter(LeasedOwner::leaseHeld)
+                             .filter(owner -> !(owner instanceof OrderedShardOwner ordered && ordered.shedComplete()))
+                             .toList();
         if (held.size() > fairShare) {
             var asked = new ArrayList<Integer>();
             for (var owner : held.subList(fairShare, held.size())) {

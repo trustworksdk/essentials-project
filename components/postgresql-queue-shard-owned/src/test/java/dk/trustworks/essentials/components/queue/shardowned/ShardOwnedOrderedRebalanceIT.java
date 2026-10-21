@@ -408,6 +408,217 @@ class ShardOwnedOrderedRebalanceIT {
     }
 
     /**
+     * The shed loop's charge failure is its own unit's: a shed unit whose charge before its release past
+     * {@code stuckHandlerTimeout} fails - refused by the database here - stays leased to the incumbent, with one WARN per
+     * attempt naming it, while a unit after it in the run's owners whose shed completes later, while that charge still
+     * fails, is released and taken by the joining instance. Rethrown, the failure would end the whole loop, and no unit
+     * after it would be released for as long as the charge kept failing. Once the database lets the charge through the held unit is
+     * released too, and its message is delivered again with the one attempt counted.
+     * <p>
+     * Both units are in the incumbent's shed, the failing one first in its owners. The later one's key enters its handler
+     * well after the failing one's, so its shed is abandoned while the failing one completes, and its handler is let go
+     * only once the failing charge has been refused: its shed completes on a later tick than the failing one's.
+     */
+    @Test
+    void a_shed_unit_whose_charge_before_its_release_fails_is_held_while_a_unit_shed_after_it_is_released() throws Exception {
+        var half          = ShardOwnedSchema.ORDERED_UNITS / 2;
+        var failingUnit   = half + 8;
+        var laterUnit     = ShardOwnedSchema.ORDERED_UNITS - 1;
+        var failingKey    = keyOnUnit(failingUnit);
+        var laterKey      = keyOnUnit(laterUnit);
+        var failingEntered = new CountDownLatch(1);
+        var laterEntered  = new CountDownLatch(1);
+        var releaseLater  = new CountDownLatch(1);
+        var release       = new CountDownLatch(1);
+        var entries       = new java.util.concurrent.atomic.AtomicInteger();
+        var attemptsOnRedelivery = new CompletableFuture<Integer>();
+        var logged        = ShardOwnedRebalanceIT.captureQueueLog();
+        var settings      = fast(Duration.ofMillis(500), Duration.ofMillis(1000), Duration.ofSeconds(10));
+
+        var first  = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "ord-charge-a");
+        var second = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "ord-charge-b");
+        try {
+            first.startConsumingOrdered((messageId, key, payload, payloadType) -> {
+                if (failingKey.equals(key) && entries.incrementAndGet() == 1) {
+                    failingEntered.countDown();
+                    awaitQuietly(release);
+                } else if (laterKey.equals(key)) {
+                    laterEntered.countDown();
+                    awaitQuietly(releaseLater);
+                }
+            }, settings, SHARD_COUNT);
+            Awaitility.await().atMost(Duration.ofSeconds(10))
+                      .untilAsserted(() -> assertThat(first.shardsHeld()).isEqualTo(ShardOwnedSchema.ORDERED_UNITS));
+            first.enqueueOrdered(List.of(new ShardOwnedStorage.OrderedPayload(failingKey, 0, "failing".getBytes(StandardCharsets.UTF_8), 1)));
+            assertThat(failingEntered.await(15, TimeUnit.SECONDS)).as("premise: the failing unit's key is in its handler").isTrue();
+            // This gap is the window between the failing key passing stuckHandlerTimeout and the later key passing it: the
+            // failing charge must be refused, and the later handler let go, inside it. Wide, so a stalled heartbeat on a
+            // loaded build does not carry the later key past its bound first (that fails the premise below, not vacuously).
+            Thread.sleep(5_000);
+            first.enqueueOrdered(List.of(new ShardOwnedStorage.OrderedPayload(laterKey, 0, "later".getBytes(StandardCharsets.UTF_8), 1)));
+            assertThat(laterEntered.await(15, TimeUnit.SECONDS)).as("premise: the later unit's key is in its handler").isTrue();
+            var failingFence = fenceOf(failingUnit);
+            failOrderedAttemptChargesOn(failingUnit, true);
+            try {
+                second.startConsumingOrdered((messageId, key, payload, payloadType) -> {
+                    if (failingKey.equals(key)) {
+                        attemptsOnRedelivery.complete(attemptsOf(messageId.sequence()));
+                    }
+                }, settings, SHARD_COUNT);
+
+                Awaitility.await().atMost(Duration.ofSeconds(30))
+                          .untilAsserted(() -> assertThat(chargeFailuresOf(logged, failingUnit)).as("premise: the charge was refused").isNotEmpty());
+                assertThat(chargeFailuresOf(logged, failingUnit).getFirst().getThrowableProxy().getMessage()).contains("simulated failure charging");
+                assertThat(ownerOf(laterUnit)).as("premise: the later unit was not released before the failing charge").isEqualTo("ord-charge-a");
+                var failuresBefore = chargeFailuresOf(logged, failingUnit).size();
+                releaseLater.countDown();
+
+                Awaitility.await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
+                    assertThat(ownerOf(laterUnit)).as("the unit shed after the failing one is released and taken by the joining instance").isEqualTo("ord-charge-b");
+                    assertThat(second.shardsHeld()).as("every shed unit but the failing one").isEqualTo(half - 1);
+                });
+                assertThat(chargeFailuresOf(logged, failingUnit).size()).as("premise: the charge was still failing meanwhile").isGreaterThan(failuresBefore);
+                assertThat(ownerOf(failingUnit)).as("the unit whose charge failed is still leased to the incumbent").isEqualTo("ord-charge-a");
+                assertThat(fenceOf(failingUnit)).as("and not taken").isEqualTo(failingFence);
+                assertThat(first.metrics().takeoverAttemptBumps.sum()).as("nothing charged while the database refuses it").isZero();
+            } finally {
+                failOrderedAttemptChargesOn(failingUnit, false);
+            }
+
+            Awaitility.await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
+                assertThat(ownerOf(failingUnit)).as("released once the charge goes through").isEqualTo("ord-charge-b");
+                assertThat(first.shardsHeld()).isEqualTo(half);
+                assertThat(second.shardsHeld()).isEqualTo(half);
+            });
+            assertThat(attemptsOnRedelivery.get(10, TimeUnit.SECONDS)).as("the message is redelivered with one attempt counted").isEqualTo(1);
+        } finally {
+            failOrderedAttemptChargesOn(failingUnit, false);
+            releaseLater.countDown();
+            release.countDown();
+            ShardOwnedRebalanceIT.releaseQueueLog(logged);
+            first.close();
+            second.close();
+        }
+    }
+
+    /**
+     * A shed unit whose charge before its release keeps failing does not keep the incumbent from its acquire step: a unit
+     * an earlier stop of the incumbent kept, given up past {@code stuckHandlerTimeout}, is taken over while the charge
+     * still fails. Still held, the failing unit used to count towards the fair share, so the incumbent stayed one unit
+     * above it: each tick only asked for that shed again and returned before the acquire step, and the given-up kept unit
+     * - whose row names a live instance, so no other instance takes it - was served by nobody for as long as the charge
+     * failed.
+     * <p>
+     * The joining instance starts before the kept key passes the bound, so the incumbent is over its share - shedding, and
+     * not acquiring - from before the kept unit is given up until its failing unit's shed completes.
+     */
+    @Test
+    void a_shed_unit_whose_charge_before_its_release_keeps_failing_does_not_keep_a_given_up_kept_unit_from_being_taken_over() throws Exception {
+        var stuckHandlerTimeout = Duration.ofSeconds(6);
+        var keptUnit      = 0;
+        var failingUnit   = ShardOwnedSchema.ORDERED_UNITS - 1;
+        var keptKey       = keyOnUnit(keptUnit);
+        var failingKey    = keyOnUnit(failingUnit);
+        var keptEntered   = new CountDownLatch(1);
+        var failingEntered = new CountDownLatch(1);
+        var release       = new CountDownLatch(1);
+        var keptEntries   = new java.util.concurrent.atomic.AtomicInteger();
+        var failingEntries = new java.util.concurrent.atomic.AtomicInteger();
+        var logged        = ShardOwnedRebalanceIT.captureQueueLog();
+        var settings      = fast(Duration.ofMillis(500), Duration.ofMillis(1000), stuckHandlerTimeout);
+
+        var first  = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "ord-kept-a");
+        var second = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "ord-kept-b");
+        try {
+            // The first delivery of each key holds its handler for the whole test; a later one returns at once.
+            first.startConsumingOrdered((messageId, key, payload, payloadType) -> {
+                if (keptKey.equals(key) && keptEntries.incrementAndGet() == 1) {
+                    keptEntered.countDown();
+                    awaitQuietly(release);
+                } else if (failingKey.equals(key) && failingEntries.incrementAndGet() == 1) {
+                    failingEntered.countDown();
+                    awaitQuietly(release);
+                }
+            }, settings, SHARD_COUNT);
+            Awaitility.await().atMost(Duration.ofSeconds(10))
+                      .untilAsserted(() -> assertThat(first.shardsHeld()).isEqualTo(ShardOwnedSchema.ORDERED_UNITS));
+            first.enqueueOrdered(List.of(new ShardOwnedStorage.OrderedPayload(keptKey, 0, "kept".getBytes(StandardCharsets.UTF_8), 1)));
+            assertThat(keptEntered.await(15, TimeUnit.SECONDS)).as("premise: the kept unit's key is in its handler").isTrue();
+            var keptSince = System.nanoTime();
+
+            first.stop();
+            var keptFence = fenceOf(keptUnit);
+            assertThat(ownerOf(keptUnit)).as("premise: the stop kept the unit").isEqualTo("ord-kept-a");
+            first.start();
+            Awaitility.await().atMost(Duration.ofSeconds(10))
+                      .untilAsserted(() -> assertThat(first.shardsHeld()).as("premise: every unit but the kept one").isEqualTo(ShardOwnedSchema.ORDERED_UNITS - 1));
+            first.enqueueOrdered(List.of(new ShardOwnedStorage.OrderedPayload(failingKey, 0, "failing".getBytes(StandardCharsets.UTF_8), 1)));
+            assertThat(failingEntered.await(15, TimeUnit.SECONDS)).as("premise: the failing unit's key is in its handler").isTrue();
+            failOrderedAttemptChargesOn(failingUnit, true);
+            try {
+                var failingFence = fenceOf(failingUnit);
+                second.startConsumingOrdered((messageId, key, payload, payloadType) -> { }, settings, SHARD_COUNT);
+                assertThat(Duration.ofNanos(System.nanoTime() - keptSince))
+                        .as("premise: the joining instance started well before the kept key passed the bound")
+                        .isLessThan(stuckHandlerTimeout.minusSeconds(2));
+                assertThat(fenceOf(keptUnit)).as("premise: the kept unit not taken over yet").isEqualTo(keptFence);
+
+                Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> {
+                    assertThat(chargeFailuresOf(logged, failingUnit)).as("premise: the charge was refused").isNotEmpty();
+                    assertThat(fenceOf(keptUnit)).as("the given-up kept unit taken over while the charge fails").isGreaterThan(keptFence);
+                });
+                assertThat(ownerOf(failingUnit)).as("the unit whose charge failed is still leased to the incumbent").isEqualTo("ord-kept-a");
+                assertThat(fenceOf(failingUnit)).as("and not taken").isEqualTo(failingFence);
+                assertThat(release.getCount()).as("premise: both handlers are still held").isEqualTo(1);
+            } finally {
+                failOrderedAttemptChargesOn(failingUnit, false);
+            }
+        } finally {
+            failOrderedAttemptChargesOn(failingUnit, false);
+            release.countDown();
+            ShardOwnedRebalanceIT.releaseQueueLog(logged);
+            first.close();
+            second.close();
+        }
+    }
+
+    /**
+     * Refuse, in the database, every write raising the attempts of an ordered row on {@code unit} - the charge before a
+     * release past {@code stuckHandlerTimeout} - or stop refusing it.
+     */
+    private void failOrderedAttemptChargesOn(int unit, boolean fail) throws Exception {
+        try (var connection = dataSource.getConnection(); var statement = connection.createStatement()) {
+            if (fail) {
+                statement.execute("CREATE OR REPLACE FUNCTION fail_ordered_attempt_charge() RETURNS trigger AS $$ BEGIN "
+                                          + "IF NEW.attempts > OLD.attempts AND NEW.shard = " + unit + " THEN "
+                                          + "RAISE EXCEPTION 'simulated failure charging an ordered attempt on unit " + unit + "'; END IF; "
+                                          + "RETURN NEW; END $$ LANGUAGE plpgsql");
+                statement.execute("CREATE TRIGGER fail_ordered_attempt_charge BEFORE UPDATE ON " + ShardOwnedSchema.ORDERED_TABLE
+                                          + " FOR EACH ROW EXECUTE FUNCTION fail_ordered_attempt_charge()");
+            } else {
+                statement.execute("DROP TRIGGER IF EXISTS fail_ordered_attempt_charge ON " + ShardOwnedSchema.ORDERED_TABLE);
+            }
+        }
+    }
+
+    /**
+     * The WARNs saying the charge before the release of {@code unit} failed, so the unit was not released.
+     */
+    private static List<ILoggingEvent> chargeFailuresOf(ListAppender<ILoggingEvent> logged, int unit) {
+        return queueWarnings(logged, "could not charge the messages in a handler of ordered unit").stream()
+                                                                                               .filter(event -> Integer.valueOf(unit).equals(event.getArgumentArray()[1]))
+                                                                                               .toList();
+    }
+
+    private static void awaitQuietly(CountDownLatch latch) {
+        try {
+            latch.await(90, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    /**
      * A key the ordered lane routes to {@code unit}.
      */
     private static String keyOnUnit(int unit) {
