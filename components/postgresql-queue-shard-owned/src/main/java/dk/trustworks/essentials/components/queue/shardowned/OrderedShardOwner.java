@@ -659,7 +659,9 @@ final class OrderedShardOwner implements BatchReadableOwner {
             advanceShed(connection);
         }
 
-        if (!pendingAcks.isEmpty()
+        // Not once the shed is complete: a shed completed past stuckHandlerTimeout has named the keys whose acknowledgements
+        // it left unflushed (shedPastStuckHandler), and the release's WARN says their messages are delivered again.
+        if (!shedComplete.get() && !pendingAcks.isEmpty()
                 && (pendingAcks.size() >= settings.ackBatchSize() || now - lastAckFlushNanos >= settings.ackFlushIntervalNanos())) {
             flushAcks(connection);
             lastAckFlushNanos = now;
@@ -1258,6 +1260,55 @@ final class OrderedShardOwner implements BatchReadableOwner {
             }
             batch = List.copyOf(pendingAcks);
         }
+        flushAckBatch(connection, batch);
+    }
+
+    /**
+     * Flush the acknowledgements queued now, and name the keys in a handler as they stood when those were taken: the two
+     * are read in one hold of {@link #stateLock} ({@link #acksAndKeysInHandler()}), so they agree exactly. A handler queues
+     * its acknowledgement before its key leaves {@link #keysInFlight} ({@link #runHandler}), so a key not named had its
+     * acknowledgement in the batch flushed here, and a named key's acknowledgement was not in it: queued once this call has
+     * taken the batch, it waits for a later flush. Asked by {@code ShardOwnedQueue.releaseKeptOrderedUnit}, which releases
+     * the row next without another flush, so the keys named are exactly those whose acknowledgements the release drops.
+     * Read as two steps - flushed, then asked - a handler returning while the flush ran went unnamed though its
+     * acknowledgement was never flushed.
+     *
+     * @return the keys in a handler when the batch was taken; empty when none was
+     * @throws SQLException when the flush fails; nothing is acknowledged then, and the acknowledgements stay queued
+     */
+    Optional<KeysInHandler> flushAcksNamingKeysInHandler(Connection connection) throws SQLException {
+        var taken = acksAndKeysInHandler();
+        flushAckBatch(connection, taken.acks());
+        return taken.inHandler();
+    }
+
+    /**
+     * The acknowledgements queued now and the keys in a handler now, read in one hold of {@link #stateLock}. See
+     * {@link #flushAcksNamingKeysInHandler}.
+     */
+    private AcksAndKeysInHandler acksAndKeysInHandler() {
+        synchronized (stateLock) {
+            return new AcksAndKeysInHandler(List.copyOf(pendingAcks), keysInHandler());
+        }
+    }
+
+    /**
+     * What {@link #acksAndKeysInHandler()} read.
+     *
+     * @param acks      the sequence values whose acknowledgements were queued
+     * @param inHandler the keys in a handler; empty when none was
+     */
+    private record AcksAndKeysInHandler(List<Long> acks, Optional<KeysInHandler> inHandler) {
+    }
+
+    /**
+     * Delete {@code batch}, fenced, and drop it from {@link #pendingAcks}; nothing for an empty batch. A refusal by the
+     * fence moves the owner to {@code RELEASED} and leaves the batch queued.
+     */
+    private void flushAckBatch(Connection connection, List<Long> batch) throws SQLException {
+        if (batch.isEmpty()) {
+            return;
+        }
         var deleted = storage.acknowledgeOrdered(connection, shard, batch, instanceId, fence);
         metrics.ackFlushes.increment();
         if (deleted == 0 && !storage.stillOwns("ordered", shard, instanceId, fence)) {
@@ -1310,8 +1361,11 @@ final class OrderedShardOwner implements BatchReadableOwner {
      * out, the key handed to its handler first had been there longer than {@code stuckHandlerTimeout}
      * ({@link ShardOwnerSettings}), which counts that handler as stuck: the shed is then completed with the keys still in
      * their handlers ({@link #shedPastStuckHandler()}), its acknowledgements flushed as on a quiesced shed, and the queue
-     * releases the unit. Otherwise, when the grace runs out the shed is abandoned and the shard kept, and the queue retries
-     * it on its next heartbeat.
+     * releases the unit. The keys named are read with the batch that flush takes ({@link #acksAndKeysInHandler()}), and
+     * nothing on the way to the shed's release flushes it after that, so they are exactly the keys whose acknowledgements
+     * the release drops.
+     * Otherwise, when the grace runs out the shed is abandoned and the shard kept, and the queue retries it on its next
+     * heartbeat.
      */
     private boolean advanceShed(Connection connection) throws SQLException {
         int inFlight;
@@ -1340,10 +1394,16 @@ final class OrderedShardOwner implements BatchReadableOwner {
             // Released with every key still in a handler - the stuck one and any other still running - so the next owner
             // delivers each of those messages again, possibly beside its handler: the at-least-once the bound trades the
             // stuck unit for.
-            var inHandler = keysInHandler();
+            // The keys and the acknowledgements to flush are read together (acksAndKeysInHandler), so the keys named are
+            // exactly those whose acknowledgements this shed does not flush. Read as two steps - the keys, then the batch -
+            // a handler returning between them was named though its acknowledgement was flushed.
+            var taken     = acksAndKeysInHandler();
+            var inHandler = taken.inHandler();
             if (inHandler.isPresent() && inHandler.get().longest().compareTo(settings.stuckHandlerTimeout()) >= 0) {
-                // Flushed while the fence is still valid, as for a quiesced shed: what finished is not delivered again.
-                flushAcks(connection);
+                // Flushed while the fence is still valid, as for a quiesced shed: what finished is not delivered again. A
+                // named handler returning from here on queues an acknowledgement nothing flushes: the pump flushes nothing
+                // more for a complete shed (pumpOnce), and the queue releases the row without a flush.
+                flushAckBatch(connection, taken.acks());
                 shedPastStuckHandler = inHandler.get();
                 shedComplete.set(true);
                 metrics.shedsCompleted.increment();
@@ -1599,8 +1659,10 @@ final class OrderedShardOwner implements BatchReadableOwner {
 
     /**
      * The keys still in a handler when this owner's shed was completed without them, because the longest had been there
-     * longer than {@code stuckHandlerTimeout}, and how long it had been there then. Asked by the queue as it releases a
-     * unit whose shed is complete ({@link #shedComplete()}), to WARN about what the release leaves running.
+     * longer than {@code stuckHandlerTimeout}, and how long it had been there then: read with the batch of
+     * acknowledgements the shed flushed, so exactly the keys whose acknowledgements it did not flush ({@link #advanceShed}).
+     * Asked by the queue as it releases a unit whose shed is complete ({@link #shedComplete()}), to WARN about what the
+     * release leaves running.
      *
      * @return empty for a shed that quiesced, and while no shed has completed
      */

@@ -869,9 +869,9 @@ one of the same number kept under another instance id included, is left alone. K
 memory of the process whose stop kept them, so call the instance whose WARN named the unit, with the
 instance id that WARN names (required). The answer is `{answeredBy, releases}`: `answeredBy` names the
 instance ids the answering process has for the queue, so an empty `releases` - from another process, or
-for another instance id - still says which process answered. Each entry of `releases` says what was done: `RELEASED` (with the keys still in a handler once the
-unit's acknowledgements were flushed, and how long the longest had been there; a handler that returned
-before that flush is, approximately, acknowledged and not named), `ALREADY_TAKEN` (the row had been taken under a newer fence
+for another instance id - still says which process answered. Each entry of `releases` says what was done: `RELEASED` (with the keys in a handler when the
+release's flush took its batch of acknowledgements, and how long the longest had been there: a handler that
+returned before that is acknowledged and not named, and a key named is not acknowledged), `ALREADY_TAKEN` (the row had been taken under a newer fence
 meanwhile; nothing released) or `BUSY` (the stop that kept it is still flushing it, or another
 hand-back or release of it is running; nothing done, ask again). A release with a key in its handler is logged as a WARN naming
 the unit and the keys. Once released, the unit no longer keeps an unsubscribed subscription's instance

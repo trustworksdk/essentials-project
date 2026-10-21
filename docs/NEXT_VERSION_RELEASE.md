@@ -848,12 +848,13 @@ dead-letter it, so raise the bound as above. (`<!-- fix:U-011 -->`)
   answers from that process's memory: call the instance whose WARN named the unit. The answer is
   `{answeredBy, releases}` (`KeptUnitReleases`, `ApiShardOwnedKeptUnitReleases`): `answeredBy` names the instance ids
   the answering process has for the queue, so an empty `releases` from another process, or for another instance id,
-  still says which process answered. Each entry of `releases` says `RELEASED` (with the keys still in a handler once the unit's acknowledgements
-  were flushed - a handler that returned before that flush is, approximately, acknowledged and not named), `ALREADY_TAKEN` or `BUSY`
+  still says which process answered. Each entry of `releases` says `RELEASED` (with the keys in a handler when the release's flush took its batch
+  of acknowledgements: a handler that returned before that is acknowledged and not named, and a key named is not
+  acknowledged), `ALREADY_TAKEN` or `BUSY`
   (ask again). A `default` method on both `MessageQueue` and `ShardOwnedQueuesApi` that releases nothing, so an
   implementation of your own of either still compiles. The admin console's Shard-owned queues page offers it as
   **Release kept unit**, which asks for the instance id and the unit, acts on the instance that takes the request and
-  shows its answer, naming the instance ids that answered. (`e23164f9e`, `7eaa0c7ef`, `97a4795ed`, `<!-- fix:U-012 -->`)
+  shows its answer, naming the instance ids that answered. (`e23164f9e`, `7eaa0c7ef`, `97a4795ed`, `<!-- fix:U-012 -->`, `<!-- fix:U-002 -->`)
 - **Shard-owned engine: `spi.RedeliveryRequested(delay)`.** A handler throws it to ask for redelivery after `delay`
   without it counting as an attempt, being reported as a failure or leading to a dead letter (§1.1.18).
   (`a4f541e4`, `f9fdd99b`)

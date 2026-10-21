@@ -22,7 +22,7 @@ import dk.trustworks.essentials.shared.concurrent.Locks;
 import org.slf4j.*;
 
 import javax.sql.DataSource;
-import java.sql.SQLException;
+import java.sql.*;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
@@ -2932,9 +2932,13 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * tried in turn until one is released; with none released, the answer is {@code BUSY} when any entry was, else
      * {@code ALREADY_TAKEN}.
      * <p>
-     * Which keys are in a handler is read once per entry, under the claim, after the flush and before the row is released:
-     * approximately, a handler that returned before the flush had its acknowledgement flushed and is not named (the two
-     * narrow windows where the reading and the flush disagree are described at the read). That one reading decides
+     * Which keys are in a handler is read once per entry, under the claim, together with the batch of acknowledgements the
+     * flush takes, and before the row is released ({@link OrderedShardOwner#flushAcksNamingKeysInHandler}), or without a
+     * flush when the row is already found taken. Released, a handler that returned before that had its acknowledgement
+     * flushed and is not named, and a named key's acknowledgement is not flushed, as nothing flushes the owner between that
+     * flush and the release. Found taken ({@link KeptUnitRelease.Outcome#ALREADY_TAKEN}), the flush may have been refused
+     * by the newer fence and acknowledged nothing, so the keys named do not say which messages are delivered again. That
+     * one reading decides
      * the log line, the keys in the answer and the phase the unit ends in. Released with a key still in its handler, the
      * unit moves to {@link KeptUnit.Phase#FORCE_RELEASED}: nothing waits for that handler any more. Before the row is
      * released, the key's message is charged an attempt, under the kept fence, and dead-lettered if that brings it to the
@@ -2984,23 +2988,23 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             var inHandler = Optional.<OrderedShardOwner.KeysInHandler>empty();
             var charge    = OrderedShardOwner.ReleaseCharge.NONE;
             try {
-                // Asked again under the claim: the stop's own flush may have found the row taken since.
+                // Read once, under the claim, with the batch of acknowledgements the flush takes and before the row is
+                // released (KeptUnit.flushAcksNamingKeysInHandler): the keys whose acknowledgements this release drops,
+                // exactly. A handler that returned before the batch was taken had its acknowledgement in it, flushed, so
+                // its message is not delivered again; one still in a handler then returns to an owner whose row is released
+                // with no flush after this one, and its acknowledgement is never flushed. Read after the flush, a handler
+                // returning while the flush ran went unnamed though its acknowledgement was never flushed. The log line,
+                // the answer and the phase the unit ends in all go by this one reading. Asked again under the claim: the
+                // stop's own flush may have found the row taken since, and the keys are then read without a flush. Should
+                // the flush throw, the row is still held, and the unit goes back where it was claimed from with no key
+                // read.
                 if (owner.holdsLeaseRow()) {
                     try (var connection = storage.connection()) {
-                        owner.flushOnStop(connection);
+                        inHandler = kept.flushAcksNamingKeysInHandler(connection);
                     }
+                } else {
+                    inHandler = kept.keysInHandler();
                 }
-                // Read once, under the claim, after the flush and before the row is released: the keys whose
-                // acknowledgements this release drops. A handler that returned before the flush had its acknowledgement
-                // flushed, so its message is not delivered again; one still in a handler here returns to an owner whose
-                // row is released, and its acknowledgement is never flushed. The reading is approximate, in both
-                // directions: a handler that returns while the flush runs, after the flush took its batch, goes unnamed
-                // though its acknowledgement is not flushed; one that queued its acknowledgement before the flush took
-                // its batch but has not yet left its handler bookkeeping is named though its acknowledgement was
-                // flushed. Both windows are narrow. The log line, the answer and the phase the unit ends in all go by
-                // this one reading. Should the flush throw, the row is still held, and the unit goes back where it was
-                // claimed from whatever this reads.
-                inHandler = kept.keysInHandler();
                 if (owner.holdsLeaseRow()) {
                     // Each message still in a handler is charged its attempt before the release, as the next owner charges
                     // nothing for a released unit. Should it throw, nothing is released, and a later request does not charge again.
@@ -3979,6 +3983,20 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
          */
         private Optional<OrderedShardOwner.KeysInHandler> keysInHandler() {
             return owner instanceof OrderedShardOwner ordered ? ordered.keysInHandler() : Optional.empty();
+        }
+
+        /**
+         * Flush the owner's acknowledgements, and name its keys in a handler as they stood when the batch flushed was
+         * taken ({@link OrderedShardOwner#flushAcksNamingKeysInHandler}): no key a handler left before that is named, and
+         * no named key's acknowledgement is flushed. For an owner that is not an {@link OrderedShardOwner} - only ordered
+         * owners are kept - a flush, and empty.
+         */
+        private Optional<OrderedShardOwner.KeysInHandler> flushAcksNamingKeysInHandler(Connection connection) throws SQLException {
+            if (owner instanceof OrderedShardOwner ordered) {
+                return ordered.flushAcksNamingKeysInHandler(connection);
+            }
+            owner.flushOnStop(connection);
+            return Optional.empty();
         }
 
         /**

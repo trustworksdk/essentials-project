@@ -1310,6 +1310,107 @@ class ShardOwnedUnsubscribeIT {
     }
 
     /**
+     * A kept unit with a key whose handler returns while the release on request's flush is writing - after that flush took
+     * its batch of acknowledgements, so the handler's acknowledgement is not in it: the release names that key with the one
+     * still hung, and the WARN says both their messages are delivered again, which they are, as neither is acknowledged.
+     * The release read the keys after its flush, so that key went unnamed: the answer and the log said its message was
+     * not delivered again, and the next owner delivered it all the same. A third key's handler, returned before the
+     * release, had its acknowledgement flushed by it and is not named.
+     */
+    @Test
+    void a_kept_unit_whose_handler_returns_while_the_release_on_request_flushes_names_that_key_whose_acknowledgement_it_did_not_flush() throws Exception {
+        var leaseTtl      = Duration.ofSeconds(3);
+        var hung          = "ACC-1";
+        var unit          = ShardOwnedSchema.unitForKey(hung, ShardOwnedSchema.ORDERED_UNITS);
+        var sameUnit      = java.util.stream.IntStream.range(2, 100_000).mapToObj(i -> "ACC-" + i)
+                                                      .filter(key -> ShardOwnedSchema.unitForKey(key, ShardOwnedSchema.ORDERED_UNITS) == unit)
+                                                      .limit(2)
+                                                      .toList();
+        var returnedBefore = sameUnit.get(0);
+        var returnsDuring  = sameUnit.get(1);
+        var releases       = Map.of(hung, new CountDownLatch(1), returnedBefore, new CountDownLatch(1), returnsDuring, new CountDownLatch(1));
+        var entered        = new CountDownLatch(3);
+        var onConnection   = new RunBeforeConnectionDataSource(dataSource);
+        try (var queue = PostgresqlMessageQueue.builder()
+                                               .setDataSource(onConnection)
+                                               .setQueueId(QUEUE_ID)
+                                               .setShardCount(SHARD_COUNT)
+                                               .setInstanceId(INSTANCE_ID)
+                                               .setSettings(settingsWith(Duration.ofMillis(300), leaseTtl))
+                                               .setLifecycleHook(PostgresqlMessageQueue.LifecycleHook.NONE)
+                                               .build()) {
+            try {
+                queue.consume((messageId, key, payload, payloadType) -> {
+                    if (key != null) {
+                        entered.countDown();
+                        awaitQuietly(releases.get(key), Duration.ofSeconds(60));
+                    }
+                }, ConsumerOptions.defaults());
+                for (var key : List.of(hung, returnedBefore, returnsDuring)) {
+                    queue.enqueue(Message.ordered(key.getBytes(StandardCharsets.UTF_8), 1, key, 0));
+                }
+                assertThat(entered.await(20, TimeUnit.SECONDS)).as("premise: the three keys of one unit are in their handlers").isTrue();
+
+                // Stopped, and not started again: nothing but the release below acknowledges a message.
+                queue.stop();
+                var kept = keptOrderedFence(INSTANCE_ID);
+                assertThat(kept.shard()).as("premise: the stop kept the unit of the keys in their handlers").isEqualTo(unit);
+                Awaitility.await().atMost(Duration.ofSeconds(10))
+                          .untilAsserted(() -> assertThat(queue.registeredConsumers()).as("premise: the stop's flush has returned")
+                                                                                      .noneMatch(ShardOwnedQueue::handBackStillRunning));
+                // Returned after the stop's flush: its acknowledgement waits for the release's flush.
+                releases.get(returnedBefore).countDown();
+                Awaitility.await().atMost(Duration.ofSeconds(10))
+                          .untilAsserted(() -> assertThat(keysInHandlerOfKeptUnit(queue, unit)).as("premise: one handler has returned").isEqualTo(2));
+                assertThat(orderedMessagesLeft()).as("premise: no message is acknowledged yet").isEqualTo(3);
+
+                // The release's flush writes only once it has taken its batch: the handler returns while that write runs.
+                var inReleaseFlush = new AtomicBoolean();
+                onConnection.runOnceBeforeStatement(Thread.currentThread(), "DELETE FROM " + ShardOwnedSchema.ORDERED_TABLE, () -> {
+                    inReleaseFlush.set(inTheFlushOfAReleaseOnRequest());
+                    releases.get(returnsDuring).countDown();
+                    Awaitility.await().atMost(Duration.ofSeconds(10))
+                              .untilAsserted(() -> assertThat(keysInHandlerOfKeptUnit(queue, unit)).as("premise: the handler has returned").isEqualTo(1));
+                });
+                var answer = Awaitility.await().pollInSameThread().atMost(Duration.ofSeconds(5))
+                                       .until(() -> queue.releaseKeptOrderedUnit(INSTANCE_ID, kept.shard()).releases(),
+                                              entries -> entries.stream().noneMatch(entry -> entry.outcome() == KeptUnitRelease.Outcome.BUSY));
+                assertThat(inReleaseFlush).as("premise: the handler returned inside the release's flush, under its claim").isTrue();
+                assertThat(answer).as("the release names every key whose acknowledgement it did not flush").singleElement().satisfies(released -> {
+                    assertThat(released.outcome()).isEqualTo(KeptUnitRelease.Outcome.RELEASED);
+                    assertThat(released.keysInHandler()).containsExactlyInAnyOrder(hung, returnsDuring);
+                });
+                assertThat(laneWarnings()).as("the WARN names both keys")
+                                          .filteredOn(warning -> warning.contains("released ordered unit " + kept.shard() + " on queue " + QUEUE_ID + " on request"))
+                                          .singleElement()
+                                          .satisfies(warning -> assertThat(warning).contains(hung, returnsDuring).doesNotContain(returnedBefore));
+                assertThat(orderedMessagesLeft()).as("only the message of the key returned before the release is acknowledged").isEqualTo(2);
+                assertThat(ownerOf(kept.shard())).as("the row is released").isNull();
+            } finally {
+                releases.values().forEach(CountDownLatch::countDown);
+            }
+        }
+    }
+
+    /**
+     * How many keys of the owners of {@code unit} that a stop of {@code queue} kept are in a handler.
+     */
+    @SuppressWarnings("unchecked")
+    private static int keysInHandlerOfKeptUnit(PostgresqlMessageQueue queue, int unit) throws ReflectiveOperationException {
+        var field = ShardOwnedQueue.class.getDeclaredField("keptOrderedOwners");
+        field.setAccessible(true);
+        var inHandler = 0;
+        for (var lane : queue.registeredConsumers()) {
+            for (var kept : (List<ShardOwnedQueue.KeptUnit>) field.get(lane)) {
+                if (kept.owner().shard() == unit) {
+                    inHandler += kept.owner().inFlight();
+                }
+            }
+        }
+        return inHandler;
+    }
+
+    /**
      * {@link #a_queue_restarted_while_a_key_outlasts_the_stuck_handler_timeout_in_the_handler_its_stop_kept_takes_the_unit_over},
      * with the message delivered again hanging too, and the queue stopped once more: the queue now lists two kept entries
      * for the unit - the first stop's, whose row the restart took over and which still reads as holding it until a fenced
@@ -2227,6 +2328,9 @@ class ShardOwnedUnsubscribeIT {
         private final javax.sql.DataSource             delegate;
         private final AtomicReference<Thread>          onThread   = new AtomicReference<>();
         private final AtomicReference<Runnable>        action     = new AtomicReference<>();
+        private final AtomicReference<Thread>          statementThread = new AtomicReference<>();
+        private final AtomicReference<String>          statementPrefix = new AtomicReference<>();
+        private final AtomicReference<Runnable>        statementAction = new AtomicReference<>();
 
         RunBeforeConnectionDataSource(javax.sql.DataSource delegate) {
             this.delegate = delegate;
@@ -2235,6 +2339,16 @@ class ShardOwnedUnsubscribeIT {
         void runOnce(Thread thread, Runnable runnable) {
             action.set(runnable);
             onThread.set(thread);
+        }
+
+        /**
+         * Run {@code runnable} once, on {@code thread}, as it next prepares a statement starting with {@code sqlPrefix} on a
+         * connection it asks for from here on, before that statement is prepared.
+         */
+        void runOnceBeforeStatement(Thread thread, String sqlPrefix, Runnable runnable) {
+            statementPrefix.set(sqlPrefix);
+            statementAction.set(runnable);
+            statementThread.set(thread);
         }
 
         private void runIfTold() throws SQLException {
@@ -2248,16 +2362,40 @@ class ShardOwnedUnsubscribeIT {
             }
         }
 
+        // Connection's own loader, not the thread's context loader: a proxy class must be defined in a loader that sees
+        // its interface, which the context loader need not.
+        @SuppressWarnings("PMD.UseProperClassLoader")
+        private Connection watched(Connection connection) {
+            if (!Thread.currentThread().equals(statementThread.get())) {
+                return connection;
+            }
+            return (Connection) java.lang.reflect.Proxy.newProxyInstance(Connection.class.getClassLoader(), new Class<?>[]{Connection.class}, (proxy, method, args) -> {
+                if ("prepareStatement".equals(method.getName()) && args != null && args[0] instanceof String sql
+                        && sql.startsWith(statementPrefix.get()) && Thread.currentThread().equals(statementThread.get())) {
+                    var runnable = statementAction.getAndSet(null);
+                    if (runnable != null) {
+                        statementThread.set(null);
+                        runnable.run();
+                    }
+                }
+                try {
+                    return method.invoke(connection, args);
+                } catch (java.lang.reflect.InvocationTargetException e) {
+                    throw e.getCause();
+                }
+            });
+        }
+
         @Override
         public Connection getConnection() throws SQLException {
             runIfTold();
-            return delegate.getConnection();
+            return watched(delegate.getConnection());
         }
 
         @Override
         public Connection getConnection(String username, String password) throws SQLException {
             runIfTold();
-            return delegate.getConnection(username, password);
+            return watched(delegate.getConnection(username, password));
         }
 
         @Override

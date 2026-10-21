@@ -35,11 +35,15 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  *                               that kept it is still flushing it, or another hand-back or release of it is running, nothing
  *                               done, ask again
  * @param keysInHandler          the unit's keys still in a handler, as {@link KeptUnitRelease#keysInHandler()} reads them:
- *                               on {@code RELEASED} and {@code ALREADY_TAKEN} after the release flushed the unit's
- *                               acknowledgements - when the instance still held the row - so a handler that returned
- *                               before that flush is, approximately, not named; on {@code BUSY} as they stood when
- *                               asked. After {@code RELEASED}, whoever takes the unit next delivers their messages
- *                               again, possibly while these handlers still run them
+ *                               on {@code RELEASED} when the release's flush took its batch of acknowledgements, so a
+ *                               handler that returned before that had its acknowledgement flushed and is not named, and
+ *                               no named key's acknowledgement was flushed; on {@code ALREADY_TAKEN} when that flush took
+ *                               its batch, or without a flush when the row was already found taken, and as the row had
+ *                               been taken under a newer fence, that flush may have been refused and acknowledged
+ *                               nothing, so these keys do not say which messages are delivered again; on {@code BUSY} as
+ *                               they stood when asked. After
+ *                               {@code RELEASED}, whoever takes the unit next delivers their messages again, possibly
+ *                               while these handlers still run them
  * @param longestInHandlerMillis how long the key handed to its handler first had been there; zero when none was
  */
 public record ApiShardOwnedKeptUnitRelease(QueueName queueName,
