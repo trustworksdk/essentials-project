@@ -8,14 +8,15 @@ description: >-
   and smoke-builds it so a context-startup failure surfaces here. Always writes a project CLAUDE.md
   that points back to the essentials-docs skill.
 user-invocable: true
+argument-hint: "[--preset <file>] [--report <file>]"
 allowed-tools: [Read, Write, Edit, Bash, Glob, AskUserQuestion]
 ---
 
 # /essentials:init
 
 Bootstrap a new Trustworks Essentials project. Walk through the steps below in order, using
-`AskUserQuestion` for every choice. Do not skip steps — each one captures information that later
-steps depend on.
+`AskUserQuestion` for every choice (a `--preset` answers some of them up front — § Preset and report).
+Do not skip steps — each one captures information that later steps depend on.
 
 **This command asks; a script writes.** The project is rendered from the plugin's template tree by
 `scripts/init-render.py`: two runs with the same answers produce the same bytes, and those bytes are
@@ -39,6 +40,62 @@ edit the generated project into agreement.
 
 The LLM docs under `${CLAUDE_PLUGIN_ROOT}/references/llm/` are consumed by the `essentials-docs`
 skill and are **never** copied into the generated project.
+
+## Preset and report (another plugin's entry point)
+
+Arguments: `$ARGUMENTS`
+
+**No arguments — a person running the command by hand — means this section does not apply**: every
+step asks, exactly as written. Another plugin's agent (sdd hands over to this command inline) passes
+`--preset <file>` to answer questions up front and `--report <file>` to get a machine-readable result.
+Either may come alone. Both are a contract, so `scripts/init-report.py` decides and writes them, never
+the model.
+
+**`--preset <file>`** is a JSON object with any subset of the ten `answers.json` keys (Step 10) and
+their value sets, plus `targetMode` (`current` = Step 1's "In the current directory", `subdirectory` =
+"In a new subdirectory") and `targetDir` (absolute, or relative to the workspace; supersedes
+`targetMode`). Before Step 0's questions, run:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/init-report.py" preset --preset "<file>" --workspace "$(pwd)"
+```
+
+It prints `preset` (the usable keys and values, `targetDir` made absolute), `ignored` (key → reason: a
+value the renderer would reject, an unknown key, a superseded `targetMode`, or an unreadable file as
+`(preset)`) and `ask` (the keys still to ask). It never fails on a preset, and neither does this
+command: an ignored key is asked as if it were absent. Say once, before the first question, which
+answers came from the preset and which keys were ignored and why.
+
+Then, in every step: **a question whose key is in `preset` is neither asked nor confirmed again** —
+take the value. Questions that have no key (Step 0's escape hatch, an existing `CLAUDE.md` or
+`README.md`, the workspace pointer, a Step 12 forwarder) are asked as without a preset. Step 7's
+four-tuple confirmation stays whenever any of `projectName`, `groupId`, `artifactId`, `packagePath`
+was asked; a preset value the user changes there counts as asked.
+
+**`--report <file>`** is written at Step 14, and also whenever the command stops before Step 11 has
+rendered the project — every stop or abort in the steps and § Error handling — with
+`--status stopped --stopped-at "Step <n>"`. A project that was rendered is `rendered` even when the lint
+or the build failed; `--stack-lint` and `--smoke-build` carry that.
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/init-report.py" write --report "<file>" --workspace "${WORKSPACE_DIR}" \
+  --status rendered --preset "<preset file>" --answers /tmp/essentials-init/answers.json \
+  --target "${TARGET_DIR}" --stack-lint "${LINT_RESULT}" --smoke-build "${SMOKE_RESULT}"
+#   stack-lint: passed | failed | not-run      smoke-build: passed | compiled-only | failed | not-run
+```
+
+Leave out `--preset` when there was none, and `--answers` or `--target` when the stop came before they
+existed. `--asked k,k,…` (comma-separated keys) is needed only on a stop — the keys asked so far — or
+when the user changed a preset value at Step 7; otherwise it defaults to every key the preset did not
+supply. Exit 2 is a wrong call: fix it from the `init-report:` line and rerun. Only where the script
+cannot run — `CLAUDE_PLUGIN_ROOT` unset or no Python 3.11 — write the report by hand, exactly this,
+plus `"essentialsVersion"` from the § Version stamp command when the plugin root is known:
+
+```json
+{"contractVersion": 1, "status": "stopped", "stoppedAt": "Step 0", "target": null,
+ "workspace": "<absolute $(pwd)>", "answers": {}, "preset": [], "asked": [], "ignoredPreset": {},
+ "stackLint": "not-run", "smokeBuild": "not-run"}
+```
 
 ## Step 0 — Pre-flight check
 
@@ -101,7 +158,8 @@ Ask via `AskUserQuestion`:
   1. **"In the current directory"** — "Scaffold into `$(pwd)`. Use only if the current directory is empty (or contains only .git/README/CLAUDE.md/LICENSE/.gitignore)."
   2. **"In a new subdirectory"** — "Create `./<artifactId>/` and scaffold there. The artifactId is captured later. Recommended if the current directory is non-empty."
 
-Remember the choice as `TARGET_MODE`.
+Remember the choice as `TARGET_MODE`. A preset `targetMode` is this choice (`current`, `subdirectory`);
+a preset `targetDir` replaces the question, and Step 8 resolves it.
 
 ## Step 2 — Frontend
 
@@ -173,8 +231,8 @@ Remember as `COMPOSE` (boolean). Integration tests use Testcontainers either way
 
 ## Step 7 — Project metadata
 
-Capture three free-text values. Use `AskUserQuestion` for each, with a single sensible default as
-the recommended option and "Other" letting the user enter their own.
+Capture three free-text values. Use `AskUserQuestion` for each the preset does not supply, with a
+single sensible default as the recommended option and "Other" letting the user enter their own.
 
 1. **Project display name** — e.g., "Orders Service". Used in the POM `<name>` and the project
    CLAUDE.md heading. Default suggestion: derive from the current directory name.
@@ -205,6 +263,13 @@ anything else (exit 2), so ask again rather than letting it fail.
 - `TARGET_MODE == "new subdirectory"` ⇒ `TARGET_DIR = WORKSPACE_DIR/<artifactId>`. If it exists and
   is non-empty, abort: "directory `<X>` already exists and is non-empty; remove it or pick a
   different artifactId". Do **not** overwrite.
+- A preset `targetDir` ⇒ `TARGET_DIR` = the absolute path `init-report.py preset` printed;
+  `mkdir -p` it. Equal to `WORKSPACE_DIR`, it is current-directory mode in every later step.
+  Otherwise it is subdirectory mode with two differences: an existing non-empty directory is not an
+  abort — its entries are handled as in current-directory mode below (`--preserve`, and the
+  `CLAUDE.md`/`README.md` question); and unless `TARGET_DIR` is `WORKSPACE_DIR/<artifactId>`, there
+  is **no workspace pointer** (it names `./<artifactId>/`, so it would point at the wrong directory):
+  render without `--workspace-out`, skip Step 13.5, and say so in Step 14.
 
 The renderer writes only into an absent or empty directory (`.git/` aside). An entry that already
 exists is named with `--preserve`: the renderer never overwrites it, and when it would have written
@@ -301,7 +366,7 @@ keys, a missing one, and a value outside its set):
 
 `language` = `LANGUAGE`, `db` = `DB_PROFILE`, `web` = `WEB`, `frontend` = `FRONTEND`, `compose` =
 `COMPOSE` (a JSON boolean), `lintGate` from Step 9, the metadata from Step 7, and `packagePath` as
-the user confirmed it.
+the user confirmed it — or each as the preset supplied it.
 
 ## Step 11 — Render the project
 
@@ -591,6 +656,8 @@ Add your first slice:
   /essentials:slice-check            # audit slices against the law
 ```
 
+With `--report`, write the report now (§ Preset and report), `--status rendered`.
+
 If `FRONTEND == "none"`, drop the frontend lines from "Next steps". Use `mvn` instead of `./mvnw`
 when no wrapper was created, and say how to create it (the Step 12 command).
 
@@ -622,9 +689,13 @@ If `TARGET_MODE == "new subdirectory"`, add a line about the workspace pointer:
 
 - `WORKSPACE_CLAUDE_MD_MODE == "none"` or `"overwrite"`: "Wrote the workspace pointer at `${WORKSPACE_DIR}/CLAUDE.md`, so planner and implementer sessions launched from the workspace root know the project lives at `${artifactId}/` and that the stack pins are authoritative in `${artifactId}/pom.xml`."
 - `WORKSPACE_CLAUDE_MD_MODE == "merge"`: "Merged the Essentials workspace pointer into `${WORKSPACE_DIR}/CLAUDE.md` — review the new `## Trustworks Essentials project pointer` section."
+- No pointer, because a preset `targetDir` is not `<artifactId>/` (Step 8): "No workspace pointer was written: it can only name `./<artifactId>/`, and the project is at `${TARGET_DIR}`."
 - `WORKSPACE_CLAUDE_MD_MODE == "skip"`: warn loudly — "Skipped writing `${WORKSPACE_DIR}/CLAUDE.md`. Planners and implementers launched at this workspace will have no signal that the project lives at `${artifactId}/` and may scaffold files at the wrong root or invent their own stack pins. Recommended: paste the pointer (quoted below) into your workspace `CLAUDE.md`." Then quote the side-rendered `CLAUDE.md.essentials-init` and delete it.
 
 ## Error handling
+
+With `--report`, every stop below that comes before Step 11 has rendered the project writes the
+`stopped` report first (§ Preset and report). A bad preset is never one of them.
 
 - `${CLAUDE_PLUGIN_ROOT}` unset (the command was invoked outside Claude Code's plugin runner) ⇒
   abort: "This command must be invoked from within Claude Code with the essentials plugin installed."

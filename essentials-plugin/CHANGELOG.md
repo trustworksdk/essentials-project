@@ -57,6 +57,37 @@ targets, with a `-N` suffix for plugin-only releases.
   `x-manifestVersion` of `"1.4"` or later, rather than for a `scenarios` property, before writing `flow`,
   `scenarios` or `requirements`. A slice-lint note on a copy without `x-manifestVersion` names "the
   project's schema copy" rather than reading "schema this copy's".
+- **An integration contract for another plugin's agent: `capabilities.json` and `references/sdd-contract.md`.**
+  A static `capabilities.json` at the plugin root (`contractVersion` 1) lists what another plugin may drive
+  without a person answering questions; sdd reads it with `jq` before handing over. It advertises
+  `init.preset`, `slice.render.agent` (interface 1), `slice.render.tests-none`, `slice.render.manifest`,
+  `slice.render.report` and `schema.sdd-keys`. `tests/scripts/test_capabilities.py` checks each value
+  against the code. The marks a rendered project carries (the `CLAUDE.md` stamp, the rules pointer, the
+  slice layout, …) are now a documented contract too. Run by hand, every command behaves as before.
+- **`/essentials:init --preset <file> --report <file>`.** The preset answers any of the ten answer keys,
+  plus `targetMode`/`targetDir`, up front. A bad value is asked as if it were absent and an unknown key is
+  ignored; the report lists both. The JSON report says what was rendered, or where the command stopped.
+  The new `scripts/init-report.py` validates the preset with `init-render.py`'s own checks and writes the
+  report.
+- **`render-slice.py render` is a versioned interface (1)**, with three additions:
+  - `--tests none` writes no stub tests and stamps the manifest's `tests:` block `present: false`.
+  - `--manifest <slice.yaml>` renders from a manifest someone wrote before any code. Its identity must
+    agree with the flags, and its contracts supply the inputs `--set` did not. The slice directory (and,
+    with `--new-bc`, the BC directory) may already hold orientation files, and every `CLAUDE.md` there is
+    kept. The manifest is merged block by block: the derived keys are rewritten, and `flow`, `scenarios`,
+    `requirements`, `summary`, `x-*` and every other key the render does not own keep their exact bytes.
+  - The `--json` report adds `interface`, `reportVersion`, `essentialsVersion`, `tier`, `slice`, `tests`,
+    `inputSources`, `files` with roles, `kept`, `manifest`, `behaviours` (what the rendered code already
+    does, from the new `references/slice/templates/behaviours.json`) and `stubTests` (every stub test,
+    with the behaviours it covers).
+
+  New golden `tests/slice-golden/kotlin-decider-manifest` renders and compiles an sdd-style plan.
+- **Fixed: a render that failed part-way left files behind.** `render-slice.py` exited 2, documented as
+  "writes nothing", even when a write or a `--wire` edit failed after earlier files were written. Every write
+  and edit now goes through a transaction, which is undone on any failure, crashes included.
+- **Rendering into an existing bounded context reads its names.** `AggregateType`, `Aggregates`,
+  `Aggregate` and `Entity` come from the BC's scaffold when they are not passed and it names exactly one
+  of each; before, the render refused with "no value for AggregateType". A new BC still needs them passed.
 - `/essentials:slice-map`'s closed list of checks gains the completeness rule (a read-model column no
   inbound event carries) and the scenario and adoption checks (a `given` event nothing publishes, an
   unknown field, a `test:` that resolves to no test, a malformed scenario, no `flow:`, no scenarios). All

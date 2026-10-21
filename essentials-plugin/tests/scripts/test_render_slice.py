@@ -277,7 +277,7 @@ class RenderAndWireTest(unittest.TestCase):
         self.assertIn("import com.example.shop.orders.use_cases.place_order.PlaceOrderDecider;", config.read_text())
         # Re-wiring the same slice changes nothing.
         values = rs.derive({**BASE, **PLACE}, "decider")
-        self.assertEqual([w["status"] for w in rs.wire("java", "command", "decider", values, self.p.main)],
+        self.assertEqual([w["status"] for w in rs.wire("java", "command", "decider", values, self.p.main, rs.Txn())],
                          ["present", "present", "present"])
         # A user who removed the anchors gets `manual`, and the files are left alone.
         config.write_text(config.read_text().replace(rs.BEAN_ANCHOR, "hand-edited "))
@@ -358,6 +358,262 @@ class RequiresTest(unittest.TestCase):
                                'event-store:$essentialsVersion")\nimplementation("dk.trustworks.essentials.components:'
                                'kotlin-eventsourcing:$essentialsVersion")', "kotlin", "command", "decider", "build.gradle.kts")
         self.assertEqual((code, rep["missing"]), (0, []))
+
+
+SDD_MANIFEST = """\
+# planned by sdd
+schemaVersion: "1.4"
+slice: orders.place_order
+kind: command
+bc: orders
+owner: checkout-team
+status: planned
+summary: Places an order.   # kept as written
+generator: sdd
+language: java
+tier: cqrs
+flow: checkout
+requirements: [REQ-1]
+handles: [PlaceOrder]
+publishes: [OrderPlaced]
+endpoints:
+  - { method: POST, path: "/api/orders/place", auth: user }
+writes: [Order]
+scenarios:
+  - name: places an order
+    when: { command: PlaceOrder, with: { orderId: o-1 } }
+    then:
+      - event: OrderPlaced
+x-sdd-task: "T-1 # not a comment"
+"""
+
+
+class RenderInterfaceTest(unittest.TestCase):
+    """The parts of `render` another plugin's agent drives (references/sdd-contract.md)."""
+
+    def setUp(self):
+        self.p = Project()
+
+    def tearDown(self):
+        self.p.close()
+
+    def snapshot(self) -> dict[str, bytes]:
+        return {f: (self.p.root / f).read_bytes() for f in self.p.files()}
+
+    def orientation(self, manifest: str = SDD_MANIFEST, slice_id: str = "place_order") -> Path:
+        d = self.p.bc / "use_cases" / slice_id
+        d.mkdir(parents=True)
+        (self.p.bc / "CLAUDE.md").write_text("# orders, planned\n")
+        (d / "CLAUDE.md").write_text("# planned slice\n")
+        (d / "slice.yaml").write_text(manifest)
+        return d / "slice.yaml"
+
+    def test_report_names_the_interface_and_the_slice(self):
+        code, out, err = self.p.render("command", "decider", {**BASE, **PLACE}, "--new-bc", "--dry-run")
+        self.assertEqual(code, 0, err)
+        rep = json.loads(out)
+        self.assertEqual((rep["interface"], rep["reportVersion"], rep["tier"], rep["slice"], rep["tests"]),
+                         (rs.INTERFACE, rs.REPORT_VERSION, "cqrs-es", "orders.place_order", "stub"))
+        pin = re.search(r"`essentials\.version` \| \*\*([^*]+)\*\*", rs.STACK_PINS.read_text())
+        self.assertIsNotNone(pin)
+        self.assertEqual(rep["essentialsVersion"], pin and pin.group(1))
+        self.assertEqual(rep["manifest"], {"path": "src/main/java/com/example/shop/orders/use_cases/place_order/slice.yaml",
+                                           "source": "rendered"})
+        self.assertEqual(sorted(f["path"] for f in rep["files"]), rep["written"])
+
+    def test_every_stub_test_is_listed(self):
+        for lane, kinds in (("decider", ("view", "automation", "translation")), ("aggregate", ("view",))):
+            with self.subTest(lane=lane):
+                p = Project()
+                try:
+                    _, out, _ = p.render("command", lane, {**BASE, "Aggregates": "Orders", **PLACE}, "--new-bc")
+                    reps = [json.loads(out)]
+                    for kind in kinds:
+                        extra = {"view": {"view": "order_list", "Event": "OrderPlaced"},
+                                 "automation": {"slice": "ship_order", "Event": "OrderPlaced"},
+                                 "translation": {"externalSystem": "billing", "ExternalEvent": "InvoiceIssued",
+                                                 "Event": "OrderPlaced"}}[kind]
+                        code, out, err = p.render(kind, lane, {**BASE, "Aggregates": "Orders", **extra})
+                        self.assertEqual(code, 0, err)
+                        reps.append(json.loads(out))
+                    for rep in reps:
+                        tests = sorted(f["path"] for f in rep["files"] if f["role"] == "test")
+                        self.assertTrue(tests)
+                        self.assertEqual(sorted(s["path"] for s in rep["stubTests"]), tests)
+                        self.assertTrue(all(t.startswith("src/test/") for t in tests))
+                        self.assertTrue(all(b["status"] in ("implemented", "placeholder") for b in rep["behaviours"]))
+                finally:
+                    p.close()
+
+    def test_tests_none_writes_no_test_and_says_so(self):
+        _, stub, _ = self.p.render("command", "decider", {**BASE, **PLACE}, "--new-bc", "--dry-run")
+        code, out, err = self.p.render("command", "decider", {**BASE, **PLACE}, "--new-bc", "--wire", "--tests", "none")
+        self.assertEqual(code, 0, err)
+        rep, stub = json.loads(out), json.loads(stub)
+        self.assertEqual(rep["stubTests"], [])
+        self.assertFalse(any(f.startswith("src/test/") for f in self.p.files()))
+        self.assertEqual(rep["written"], [w for w in stub["written"] if not w.startswith("src/test/")])
+        self.assertEqual([w["status"] for w in rep["wiring"]], ["applied", "applied", "present"])
+        manifest = (self.p.root / rep["manifest"]["path"]).read_text()
+        self.assertNotIn("present: true", manifest)
+        self.assertIn("unit: { present: false }", manifest)
+
+    def test_a_failure_part_way_restores_every_file(self):
+        self.assertEqual(self.p.render("command", "decider", {**BASE, **PLACE}, "--new-bc", "--wire")[0], 0)
+        before = self.snapshot()
+        real = rs.wire_permits
+
+        def permits_then_fail(path, values, txn):
+            real(path, values, txn)
+            raise OSError(28, "No space left on device")
+
+        setattr(rs, "wire_permits", permits_then_fail)
+        try:
+            code, out, err = self.p.render("command", "decider", {**BASE, "slice": "cancel_order",
+                                                                  "Command": "CancelOrder", "Event": "OrderCancelled"},
+                                           "--wire")
+        finally:
+            setattr(rs, "wire_permits", real)
+        self.assertEqual((code, out), (2, ""))
+        self.assertTrue(err.startswith("render-slice: "), err)
+        self.assertEqual(self.snapshot(), before, "the @Bean and permits edits and every new file are undone")
+        self.assertFalse((self.p.bc / "use_cases" / "cancel_order").exists())
+
+    def test_an_existing_bc_supplies_its_aggregate_names(self):
+        self.p.render("command", "decider", {**BASE, **PLACE}, "--new-bc")
+        values = {"packagePath": "com.example.shop", "bc": "orders", "view": "order_list", "Event": "OrderPlaced"}
+        code, out, err = self.p.render("view", "decider", values)
+        self.assertEqual(code, 0, err)
+        rep = json.loads(out)
+        self.assertEqual((rep["inputs"]["AggregateType"], rep["inputs"]["Aggregate"]), ("Orders", "Order"))
+        self.assertEqual(rep["inputSources"]["AggregateType"], "project")
+
+    def test_manifest_render_keeps_what_it_does_not_own(self):
+        manifest = self.orientation()
+        other = self.p.bc / "use_cases" / "cancel_order"
+        other.mkdir()
+        (other / "slice.yaml").write_text("schemaVersion: \"1.4\"\n")
+        values = {"packagePath": "com.example.shop", "AggregateType": "Orders"}
+        code, out, err = self.p.render("command", "decider", values, "--new-bc", "--wire", "--manifest", str(manifest))
+        self.assertEqual(code, 0, err)
+        rep = json.loads(out)
+        for name, want in (("Command", "PlaceOrder"), ("Event", "OrderPlaced"), ("Aggregate", "Order"),
+                           ("apiPath", "/api/orders/place"), ("owner", "checkout-team"), ("slice", "place_order")):
+            self.assertEqual((rep["inputs"][name], rep["inputSources"][name]), (want, "manifest"))
+        self.assertEqual(rep["manifest"]["source"], "merged")
+        self.assertEqual(sorted(rep["manifest"]["corrected"]), ["generator", "tier"])
+        self.assertIn("lane", rep["manifest"]["filled"])
+        self.assertEqual(rep["kept"], ["src/main/java/com/example/shop/orders/CLAUDE.md",
+                                       "src/main/java/com/example/shop/orders/use_cases/place_order/CLAUDE.md"])
+        self.assertEqual((self.p.bc / "CLAUDE.md").read_text(), "# orders, planned\n")
+        self.assertEqual((other / "slice.yaml").read_text(), "schemaVersion: \"1.4\"\n")
+        merged = manifest.read_text()
+        for kept in ("# planned by sdd\n", 'schemaVersion: "1.4"\n', "summary: Places an order.   # kept as written\n",
+                     "flow: checkout\n", "requirements: [REQ-1]\n", SDD_MANIFEST[SDD_MANIFEST.index("scenarios:"):],
+                     'path: "/api/orders/place"'):
+            self.assertIn(kept, merged)
+        self.assertIn("generator: essentials\n", merged)
+        self.assertRegex(merged, r"\ntier: cqrs-es\b")
+        self.assertRegex(merged, r"\nlane: decider\b")
+        self.assertIn("src/main/java/com/example/shop/orders/use_cases/place_order/slice.yaml", rep["written"])
+
+    def test_manifest_render_without_new_bc(self):
+        self.p.render("command", "decider", {**BASE, "slice": "cancel_order", "Command": "CancelOrder",
+                                             "Event": "OrderCancelled"}, "--new-bc")
+        d = self.p.bc / "use_cases" / "place_order"
+        d.mkdir()
+        (d / "slice.yaml").write_text(SDD_MANIFEST)
+        code, out, err = self.p.render("command", "decider", {"packagePath": "com.example.shop"},
+                                       "--manifest", str(d / "slice.yaml"))
+        self.assertEqual(code, 0, err)
+        self.assertTrue((d / "CLAUDE.md").is_file(), "a CLAUDE.md the planner did not write is rendered")
+        ship = self.p.bc / "use_cases" / "ship_order"
+        ship.mkdir()
+        (ship / "Notes.java").write_text("x")
+        (ship / "slice.yaml").write_text(SDD_MANIFEST.replace("place_order", "ship_order")
+                                         .replace("PlaceOrder", "ShipOrder").replace("OrderPlaced", "OrderShipped"))
+        code, _, err = self.p.render("command", "decider", {"packagePath": "com.example.shop"},
+                                     "--manifest", str(ship / "slice.yaml"))
+        self.assertEqual(code, 2)
+        self.assertIn("holds Notes.java", err)
+
+    def test_manifest_refusals_write_nothing(self):
+        manifest = self.orientation()
+        values = {"packagePath": "com.example.shop", "AggregateType": "Orders"}
+        cases = [
+            ("kind", lambda: manifest.write_text(SDD_MANIFEST.replace("kind: command", "kind: view")), "contradicts --kind"),
+            ("language", lambda: manifest.write_text(SDD_MANIFEST.replace("language: java", "language: kotlin")),
+             "contradicts --lang"),
+            ("slice", lambda: manifest.write_text(SDD_MANIFEST.replace("orders.place_order", "place_order")),
+             "qualified <bc>.<slice-id>"),
+            ("stray", lambda: (self.p.bc / "use_cases" / "place_order" / "Notes.kt").write_text("x"),
+             "more than orientation files"),
+        ]
+        for name, setup, message in cases:
+            with self.subTest(name):
+                manifest.write_text(SDD_MANIFEST)
+                setup()
+                before = self.snapshot()
+                code, out, err = self.p.render("command", "decider", values, "--new-bc", "--manifest", str(manifest))
+                self.assertEqual(code, 2, out)
+                self.assertIn(message, err)
+                self.assertEqual(self.snapshot(), before)
+                (self.p.bc / "use_cases" / "place_order" / "Notes.kt").unlink(missing_ok=True)
+
+    def test_manifest_at_another_slices_path_is_refused(self):
+        manifest = self.orientation()
+        code, _, err = self.p.render("command", "decider", {"packagePath": "com.example.shop", "AggregateType": "Orders",
+                                                            "slice": "cancel_order"},
+                                     "--new-bc", "--manifest", str(manifest))
+        self.assertEqual(code, 2)
+        self.assertIn("contradicts --set slice=cancel_order", err)
+
+    def test_new_bc_with_code_in_it_is_still_refused(self):
+        manifest = self.orientation()
+        (self.p.bc / "types").mkdir()
+        (self.p.bc / "types" / "OrderId.java").write_text("x")
+        code, _, err = self.p.render("command", "decider", {"packagePath": "com.example.shop", "AggregateType": "Orders"},
+                                     "--new-bc", "--manifest", str(manifest))
+        self.assertEqual(code, 2)
+        self.assertIn("more than orientation files", err)
+
+
+class ManifestReaderTest(unittest.TestCase):
+    def read(self, text: str) -> dict:
+        _, blocks, _ = rs.split_blocks(text, "t")
+        return {b.key: rs.read_block(b) for b in blocks}
+
+    def test_block_and_flow_styles_read_alike(self):
+        flow = self.read('handles: [A, "B"]\nendpoints:\n  - { method: GET, path: "/x/{id}", auth: user }\n')
+        block = self.read("handles:\n  - A\n  - 'B'\nendpoints:\n- method: GET\n  path: /x/{id}\n  auth: user\n")
+        self.assertEqual(flow, block)
+        self.assertEqual(flow["endpoints"][0]["path"], "/x/{id}")
+
+    def test_nested_projection(self):
+        v = self.read("projections:\n  - name: P   # c\n    aggregateTypes: [Orders]\n    from:\n      - OrderPlaced\n")
+        self.assertEqual(rs.dig(v["projections"], (0, "from", 0)), "OrderPlaced")
+
+    def test_comments_and_quotes(self):
+        v = self.read("""owner: "a # b"   # comment\nsummary: it's fine # c\n'x-key': 1\n""")
+        self.assertEqual((v["owner"], v["summary"], v["x-key"]), ("a # b", "it's fine", "1"))
+
+    def test_what_it_cannot_read_is_reported(self):
+        for text in ("handles: [A,\n  B]\n", "handles: &a [A]\n", "notes: |\n  text\n"):
+            with self.subTest(text=text):
+                _, blocks, _ = rs.split_blocks(text, "t")
+                with self.assertRaises(rs.Unreadable):
+                    rs.read_block(blocks[0])
+
+    def test_unreadable_top_level_line_is_refused(self):
+        with self.assertRaises(rs.RenderError):
+            rs.split_blocks("a: 1\n? complex\n", "t")
+        with self.assertRaises(rs.RenderError):
+            rs.split_blocks("a: 1\na: 2\n", "t")
+
+    def test_blocks_round_trip_byte_for_byte(self):
+        text = SDD_MANIFEST + "\n# trailing comment\n"
+        header, blocks, trailer = rs.split_blocks(text, "t")
+        self.assertEqual(rs.join_blocks(header, blocks, trailer), text)
 
 
 if __name__ == "__main__":

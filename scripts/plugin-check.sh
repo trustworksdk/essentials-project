@@ -181,14 +181,14 @@ declare -A step_desc=(
     [symlinks]="no tracked symlinks under essentials-plugin/"
     [slice-lint]="every fixture, golden and script case through slice-lint.py (test_slice_lint.py)"
     [lint-hook]="the slice-manifest pre-commit hook template in a temp repo, project in a subdirectory (test_pre_commit_hook.py)"
-    [render-slice]="slice templates render to the committed goldens (render-slice.py check + unit tests)"
+    [render-slice]="slice templates render to the committed goldens (render-slice.py check + unit tests); the behaviour catalog; capabilities.json against the code"
     [slice-source]="slice source facts (test_slice_source.py)"
     [slice-index]="slice index, graph and atlas data (test_slice_index.py, test_slice_atlas.py)"
     [slice-atlas-layout]="Slice Atlas layout: goldens, geometry, stability and the 60-context budget (test_slice_atlas_layout.py)"
     [slice-enrich]="slice-enrich propose/apply on the enrich fixture: goldens, absent-fields-only writes, refusals (test_slice_enrich.py)"
     [slice-law]="slice-law scope lines valid, every lane x kind view within budget and matching its golden (test_slice_law.py)"
     [stack-lint]="stack contract lint (stack-lint.py --self-test + unit tests)"
-    [init-render]="every answer set renders and lints; the nine cells match their goldens (init-render.py)"
+    [init-render]="every answer set renders and lints; the nine cells match their goldens (init-render.py); the init preset and report (test_init_report.py)"
     [review-scan]="review signatures (review-scan.py --self-test + unit tests)"
     [migration-plan]="release-move notes resolve (ids, slugs, pins, citations) and plan the sample projects to their goldens (migration-plan.py --self-test + unit tests)"
     [docs-search]="the essentials-docs search script (test_search.py)"
@@ -321,7 +321,9 @@ step_lint-hook() {
 
 step_render-slice() {
     x "$plugin" uv run --script scripts/render-slice.py check &&
-        x "$plugin" uv run python -m unittest discover -s tests/scripts -p 'test_render_slice.py'
+        x "$plugin" uv run python -m unittest discover -s tests/scripts -p 'test_render_slice.py' &&
+        x "$plugin" uv run python -m unittest discover -s tests/scripts -p 'test_behaviours_catalog.py' &&
+        x "$plugin" uv run python -m unittest discover -s tests/scripts -p 'test_capabilities.py'
 }
 
 step_slice-source() {
@@ -352,7 +354,8 @@ step_stack-lint() {
 step_init-render() {
     x "$plugin" uv run --script scripts/init-render.py --self-test &&
         x "$plugin" uv run --script scripts/init-render.py --all-combinations &&
-        x "$plugin" uv run --script scripts/init-render.py --check
+        x "$plugin" uv run --script scripts/init-render.py --check &&
+        x "$plugin" uv run python -m unittest discover -s tests/scripts -p 'test_init_report.py'
 }
 
 step_review-scan() {

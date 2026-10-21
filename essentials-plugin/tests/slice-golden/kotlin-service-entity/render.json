@@ -1,8 +1,13 @@
 [
   {
+    "interface": 1,
+    "reportVersion": 1,
     "language": "kotlin",
     "kind": "command",
     "lane": "service-entity",
+    "tier": "service-entity",
+    "slice": "orders.place_order",
+    "tests": "stub",
     "families": [
       "bc-scaffold-service-entity",
       "command_service_entity"
@@ -25,6 +30,24 @@
       "sliceCamel": "placeOrder",
       "tier": "service-entity"
     },
+    "inputSources": {
+      "Aggregate": "set",
+      "Bc": "derived",
+      "Command": "set",
+      "Entity": "derived",
+      "Event": "set",
+      "Slice": "derived",
+      "aggregate": "derived",
+      "apiPath": "derived",
+      "bc": "set",
+      "entity": "derived",
+      "lane": "derived",
+      "owner": "derived",
+      "packagePath": "set",
+      "slice": "set",
+      "sliceCamel": "derived",
+      "tier": "derived"
+    },
     "written": [
       "src/main/kotlin/com/example/shop/orders/CLAUDE.md",
       "src/main/kotlin/com/example/shop/orders/config/OrdersConfiguration.kt",
@@ -40,6 +63,65 @@
       "src/test/kotlin/com/example/shop/orders/entities/PlaceOrderTest.kt",
       "src/test/kotlin/com/example/shop/orders/use_cases/place_order/PlaceOrderIT.kt"
     ],
+    "files": [
+      {
+        "path": "src/main/kotlin/com/example/shop/orders/CLAUDE.md",
+        "role": "doc"
+      },
+      {
+        "path": "src/main/kotlin/com/example/shop/orders/config/OrdersConfiguration.kt",
+        "role": "main"
+      },
+      {
+        "path": "src/main/kotlin/com/example/shop/orders/entities/CLAUDE.md",
+        "role": "doc"
+      },
+      {
+        "path": "src/main/kotlin/com/example/shop/orders/events/OrderEvent.kt",
+        "role": "main"
+      },
+      {
+        "path": "src/main/kotlin/com/example/shop/orders/events/OrderPlaced.kt",
+        "role": "main"
+      },
+      {
+        "path": "src/main/kotlin/com/example/shop/orders/types/OrderId.kt",
+        "role": "main"
+      },
+      {
+        "path": "src/main/kotlin/com/example/shop/orders/use_cases/place_order/CLAUDE.md",
+        "role": "doc"
+      },
+      {
+        "path": "src/main/kotlin/com/example/shop/orders/use_cases/place_order/PlaceOrder.kt",
+        "role": "main"
+      },
+      {
+        "path": "src/main/kotlin/com/example/shop/orders/use_cases/place_order/PlaceOrderAPI.kt",
+        "role": "main"
+      },
+      {
+        "path": "src/main/kotlin/com/example/shop/orders/use_cases/place_order/PlaceOrderHandler.kt",
+        "role": "main"
+      },
+      {
+        "path": "src/main/kotlin/com/example/shop/orders/use_cases/place_order/slice.yaml",
+        "role": "manifest"
+      },
+      {
+        "path": "src/test/kotlin/com/example/shop/orders/entities/PlaceOrderTest.kt",
+        "role": "test"
+      },
+      {
+        "path": "src/test/kotlin/com/example/shop/orders/use_cases/place_order/PlaceOrderIT.kt",
+        "role": "test"
+      }
+    ],
+    "kept": [],
+    "manifest": {
+      "path": "src/main/kotlin/com/example/shop/orders/use_cases/place_order/slice.yaml",
+      "source": "rendered"
+    },
     "wiring": [],
     "todos": [
       "src/main/kotlin/com/example/shop/orders/CLAUDE.md:7: **Purpose:** TODO one sentence — what this context is responsible for.",
@@ -56,6 +138,50 @@
       "src/test/kotlin/com/example/shop/orders/use_cases/place_order/PlaceOrderIT.kt:26: // TODO: seed a Order, send PlaceOrder on the bus, assert the row changed.",
       "src/test/kotlin/com/example/shop/orders/use_cases/place_order/PlaceOrderIT.kt:31: // TODO: subscribe to the EventBus (or use a test recorder bean) and assert OrderPlaced arrived.",
       "src/test/kotlin/com/example/shop/orders/use_cases/place_order/PlaceOrderIT.kt:37: // TODO: send the same command twice; assert one change and one event."
+    ],
+    "behaviours": [
+      {
+        "id": "command.emits-event",
+        "status": "implemented",
+        "summary": "The handler loads the entity, and when its guard method reports a change, saves it and publishes the slice's event on the EventBus in the same transaction.",
+        "where": "src/main/kotlin/com/example/shop/orders/use_cases/place_order/PlaceOrderHandler.kt#handle"
+      },
+      {
+        "id": "command.idempotent-replay",
+        "status": "implemented",
+        "summary": "When the entity's guard method reports the state was already reached, the handler neither saves nor publishes, so a repeated command changes nothing.",
+        "where": "src/main/kotlin/com/example/shop/orders/use_cases/place_order/PlaceOrderHandler.kt#handle"
+      },
+      {
+        "id": "command.invariant",
+        "status": "placeholder",
+        "summary": "The handler calls a placeholder guard method on the hand-written entity; calling the one invariant method this slice's intent maps to is left to the developer.",
+        "where": "src/main/kotlin/com/example/shop/orders/use_cases/place_order/PlaceOrderHandler.kt#handle"
+      },
+      {
+        "id": "command.payload",
+        "status": "placeholder",
+        "summary": "The command, the request body and the event carry one placeholder String; the real payload fields are left to the developer.",
+        "where": "src/main/kotlin/com/example/shop/orders/use_cases/place_order/PlaceOrder.kt"
+      },
+      {
+        "id": "command.http-endpoint",
+        "status": "placeholder",
+        "summary": "The POST endpoint generates a fresh id and sends the command, but the handler requires an existing entity and throws for that id, so the request fails until the developer makes this a creation slice or takes the id from the path.",
+        "where": "src/main/kotlin/com/example/shop/orders/use_cases/place_order/PlaceOrderAPI.kt"
+      }
+    ],
+    "stubTests": [
+      {
+        "path": "src/test/kotlin/com/example/shop/orders/use_cases/place_order/PlaceOrderIT.kt",
+        "covers": []
+      },
+      {
+        "path": "src/test/kotlin/com/example/shop/orders/entities/PlaceOrderTest.kt",
+        "covers": [
+          "command.idempotent-replay"
+        ]
+      }
     ]
   },
   {
@@ -66,9 +192,14 @@
     ]
   },
   {
+    "interface": 1,
+    "reportVersion": 1,
     "language": "kotlin",
     "kind": "command",
     "lane": "service-entity",
+    "tier": "service-entity",
+    "slice": "orders.cancel_order",
+    "tests": "stub",
     "families": [
       "command_service_entity"
     ],
@@ -90,6 +221,24 @@
       "sliceCamel": "cancelOrder",
       "tier": "service-entity"
     },
+    "inputSources": {
+      "Aggregate": "set",
+      "Bc": "derived",
+      "Command": "set",
+      "Entity": "derived",
+      "Event": "set",
+      "Slice": "derived",
+      "aggregate": "derived",
+      "apiPath": "set",
+      "bc": "set",
+      "entity": "derived",
+      "lane": "derived",
+      "owner": "derived",
+      "packagePath": "set",
+      "slice": "set",
+      "sliceCamel": "derived",
+      "tier": "derived"
+    },
     "written": [
       "src/main/kotlin/com/example/shop/orders/events/OrderCancelled.kt",
       "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/CLAUDE.md",
@@ -100,6 +249,45 @@
       "src/test/kotlin/com/example/shop/orders/entities/CancelOrderTest.kt",
       "src/test/kotlin/com/example/shop/orders/use_cases/cancel_order/CancelOrderIT.kt"
     ],
+    "files": [
+      {
+        "path": "src/main/kotlin/com/example/shop/orders/events/OrderCancelled.kt",
+        "role": "main"
+      },
+      {
+        "path": "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/CLAUDE.md",
+        "role": "doc"
+      },
+      {
+        "path": "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/CancelOrder.kt",
+        "role": "main"
+      },
+      {
+        "path": "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/CancelOrderAPI.kt",
+        "role": "main"
+      },
+      {
+        "path": "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/CancelOrderHandler.kt",
+        "role": "main"
+      },
+      {
+        "path": "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/slice.yaml",
+        "role": "manifest"
+      },
+      {
+        "path": "src/test/kotlin/com/example/shop/orders/entities/CancelOrderTest.kt",
+        "role": "test"
+      },
+      {
+        "path": "src/test/kotlin/com/example/shop/orders/use_cases/cancel_order/CancelOrderIT.kt",
+        "role": "test"
+      }
+    ],
+    "kept": [],
+    "manifest": {
+      "path": "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/slice.yaml",
+      "source": "rendered"
+    },
     "wiring": [],
     "todos": [
       "src/main/kotlin/com/example/shop/orders/events/OrderCancelled.kt:24: // TODO: replace with the facts this event carries",
@@ -114,12 +302,61 @@
       "src/test/kotlin/com/example/shop/orders/use_cases/cancel_order/CancelOrderIT.kt:26: // TODO: seed a Order, send CancelOrder on the bus, assert the row changed.",
       "src/test/kotlin/com/example/shop/orders/use_cases/cancel_order/CancelOrderIT.kt:31: // TODO: subscribe to the EventBus (or use a test recorder bean) and assert OrderCancelled arrived.",
       "src/test/kotlin/com/example/shop/orders/use_cases/cancel_order/CancelOrderIT.kt:37: // TODO: send the same command twice; assert one change and one event."
+    ],
+    "behaviours": [
+      {
+        "id": "command.emits-event",
+        "status": "implemented",
+        "summary": "The handler loads the entity, and when its guard method reports a change, saves it and publishes the slice's event on the EventBus in the same transaction.",
+        "where": "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/CancelOrderHandler.kt#handle"
+      },
+      {
+        "id": "command.idempotent-replay",
+        "status": "implemented",
+        "summary": "When the entity's guard method reports the state was already reached, the handler neither saves nor publishes, so a repeated command changes nothing.",
+        "where": "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/CancelOrderHandler.kt#handle"
+      },
+      {
+        "id": "command.invariant",
+        "status": "placeholder",
+        "summary": "The handler calls a placeholder guard method on the hand-written entity; calling the one invariant method this slice's intent maps to is left to the developer.",
+        "where": "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/CancelOrderHandler.kt#handle"
+      },
+      {
+        "id": "command.payload",
+        "status": "placeholder",
+        "summary": "The command, the request body and the event carry one placeholder String; the real payload fields are left to the developer.",
+        "where": "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/CancelOrder.kt"
+      },
+      {
+        "id": "command.http-endpoint",
+        "status": "placeholder",
+        "summary": "The POST endpoint generates a fresh id and sends the command, but the handler requires an existing entity and throws for that id, so the request fails until the developer makes this a creation slice or takes the id from the path.",
+        "where": "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/CancelOrderAPI.kt"
+      }
+    ],
+    "stubTests": [
+      {
+        "path": "src/test/kotlin/com/example/shop/orders/use_cases/cancel_order/CancelOrderIT.kt",
+        "covers": []
+      },
+      {
+        "path": "src/test/kotlin/com/example/shop/orders/entities/CancelOrderTest.kt",
+        "covers": [
+          "command.idempotent-replay"
+        ]
+      }
     ]
   },
   {
+    "interface": 1,
+    "reportVersion": 1,
     "language": "kotlin",
     "kind": "view",
     "lane": "service-entity",
+    "tier": "service-entity",
+    "slice": "orders.order_list",
+    "tests": "stub",
     "families": [
       "view_service_entity"
     ],
@@ -139,6 +376,22 @@
       "view": "order_list",
       "viewCamel": "orderList"
     },
+    "inputSources": {
+      "Aggregate": "set",
+      "Bc": "derived",
+      "Entity": "derived",
+      "View": "derived",
+      "aggregate": "derived",
+      "apiPath": "derived",
+      "bc": "set",
+      "entity": "derived",
+      "lane": "derived",
+      "owner": "derived",
+      "packagePath": "set",
+      "tier": "derived",
+      "view": "set",
+      "viewCamel": "derived"
+    },
     "written": [
       "src/main/kotlin/com/example/shop/orders/views/order_list/CLAUDE.md",
       "src/main/kotlin/com/example/shop/orders/views/order_list/OrderListAPI.kt",
@@ -147,6 +400,37 @@
       "src/main/kotlin/com/example/shop/orders/views/order_list/slice.yaml",
       "src/test/kotlin/com/example/shop/orders/views/order_list/OrderListIT.kt"
     ],
+    "files": [
+      {
+        "path": "src/main/kotlin/com/example/shop/orders/views/order_list/CLAUDE.md",
+        "role": "doc"
+      },
+      {
+        "path": "src/main/kotlin/com/example/shop/orders/views/order_list/OrderListAPI.kt",
+        "role": "main"
+      },
+      {
+        "path": "src/main/kotlin/com/example/shop/orders/views/order_list/OrderListQueries.kt",
+        "role": "main"
+      },
+      {
+        "path": "src/main/kotlin/com/example/shop/orders/views/order_list/OrderListView.kt",
+        "role": "main"
+      },
+      {
+        "path": "src/main/kotlin/com/example/shop/orders/views/order_list/slice.yaml",
+        "role": "manifest"
+      },
+      {
+        "path": "src/test/kotlin/com/example/shop/orders/views/order_list/OrderListIT.kt",
+        "role": "test"
+      }
+    ],
+    "kept": [],
+    "manifest": {
+      "path": "src/main/kotlin/com/example/shop/orders/views/order_list/slice.yaml",
+      "source": "rendered"
+    },
     "wiring": [],
     "todos": [
       "src/main/kotlin/com/example/shop/orders/views/order_list/CLAUDE.md:7: **Purpose:** TODO one sentence, present tense.",
@@ -156,6 +440,44 @@
       "src/test/kotlin/com/example/shop/orders/views/order_list/OrderListIT.kt:25: // TODO: seed one Order row, query it, assert every property on OrderListView returns the",
       "src/test/kotlin/com/example/shop/orders/views/order_list/OrderListIT.kt:31: // TODO: once the slice has a filtering query (findByStatus, …), seed rows that differ on it and",
       "src/test/kotlin/com/example/shop/orders/views/order_list/OrderListIT.kt:37: // TODO: send the command that changes the row, then query without waiting."
+    ],
+    "behaviours": [
+      {
+        "id": "view.query-endpoint",
+        "status": "implemented",
+        "summary": "A GET on the view's path returns every entity row, projected onto the view interface.",
+        "where": "src/main/kotlin/com/example/shop/orders/views/order_list/OrderListAPI.kt"
+      },
+      {
+        "id": "view.query-by-id",
+        "status": "implemented",
+        "summary": "A GET on the view's path with an id returns that row projected onto the view interface; an unknown id throws NoSuchElementException, which no handler maps to 404.",
+        "where": "src/main/kotlin/com/example/shop/orders/views/order_list/OrderListAPI.kt"
+      },
+      {
+        "id": "view.strongly-consistent-read",
+        "status": "implemented",
+        "summary": "The queries read the entity's own table, so a committed write is visible to the next query with no projection lag.",
+        "where": "src/main/kotlin/com/example/shop/orders/views/order_list/OrderListQueries.kt"
+      },
+      {
+        "id": "view.served-fields",
+        "status": "placeholder",
+        "summary": "The view interface exposes only the id; the fields this view serves are left to the developer.",
+        "where": "src/main/kotlin/com/example/shop/orders/views/order_list/OrderListView.kt"
+      },
+      {
+        "id": "view.filtered-queries",
+        "status": "placeholder",
+        "summary": "Only the find-all and find-by-id queries exist; the filtering queries this view serves are left to the developer.",
+        "where": "src/main/kotlin/com/example/shop/orders/views/order_list/OrderListQueries.kt"
+      }
+    ],
+    "stubTests": [
+      {
+        "path": "src/test/kotlin/com/example/shop/orders/views/order_list/OrderListIT.kt",
+        "covers": []
+      }
     ]
   }
 ]

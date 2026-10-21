@@ -1049,6 +1049,17 @@ entries are in [`essentials-plugin/CHANGELOG.md`](../essentials-plugin/CHANGELOG
   written as the project's requirement source names them (`requirements: [REQ-ORDERS-12]`). `slice-lint`
   checks only that it is a non-empty list of distinct, non-empty strings; a requirement-trace tool such as
   sdd's checks the ids themselves. The plugin never writes the field and every rewrite keeps it as written.
+- **An integration contract for other plugins' agents** (`essentials-plugin/references/sdd-contract.md`,
+  advertised in a static `essentials-plugin/capabilities.json`). The sdd plugin uses it to hand project setup to
+  `/essentials:init` and to render slice skeletons. `/essentials:init --preset <file> --report <file>` answers
+  questions up front and writes a JSON report. `render-slice.py render` is now a versioned interface with
+  `--tests none` (no stub tests), `--manifest <slice.yaml>` (render from a manifest a planner wrote, keeping every
+  key the render does not own byte for byte) and a report that lists what the skeleton already implements and
+  every stub test. Run by hand, every command behaves as before.
+- **Fixed: a slice render that failed part-way left files behind.** `render-slice.py` exited 2 ("nothing written")
+  even when a write or a `--wire` edit failed after earlier files were written. It now restores every file it
+  created or edited before exiting. Rendering into an existing bounded context also reads `AggregateType`,
+  `Aggregates`, `Aggregate` and `Entity` from its scaffold when they are not passed, instead of refusing.
 - **`/essentials:slice-enrich`** drafts the absent human-owned manifest fields (`flow`, `scenarios`, `summary`,
   `invariants`, `tier`, `consistency`, `featureFlag`, `maps`) from evidence in the code and tests, and writes
   only what you accept.

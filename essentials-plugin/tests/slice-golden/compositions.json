@@ -307,6 +307,32 @@
           }
         }
       ]
+    },
+    "kotlin-decider-manifest": {
+      "language": "kotlin",
+      "lane": "decider",
+      "host": "kotlin-pg-event-sourced",
+      "inputs": {
+        "packagePath": "com.example.shop"
+      },
+      "steps": [
+        {
+          "orientation": "_seeds/kotlin-decider-manifest"
+        },
+        {
+          "kind": "command",
+          "newBc": true,
+          "tests": "none",
+          "manifest": "src/main/kotlin/com/example/shop/orders/use_cases/place_order/slice.yaml",
+          "inputs": {
+            "AggregateType": "Orders"
+          }
+        },
+        {
+          "kind": "view",
+          "manifest": "src/main/kotlin/com/example/shop/orders/views/order_list/slice.yaml"
+        }
+      ]
     }
   }
 }

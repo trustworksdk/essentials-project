@@ -90,6 +90,9 @@ references/init-assets/project/contracts/openapi.json.template, the `"openapi"` 
                                      the plugin's release version, which is the essentials.version pin
                                      plus an optional -N by design (the plugin-docs CI job holds it to
                                      the pin); JSON has no comment for a cite-ok marker
+capabilities.json, a `"since"` value only (on a line holding no other version)
+                                     the plugin release that first offered a capability: a plugin
+                                     version, like plugin.json's, which starts with the pin by design
 
 Usage
 -----
@@ -148,6 +151,8 @@ NOT_A_PIN = {
         re.compile(r'^\s*"openapi"\s*:\s*"[\d.]+"\s*,?\s*$'),
     ".claude-plugin/plugin.json":
         re.compile(r'^\s*"version"\s*:\s*"[\d.]+(-\d+)?"\s*,?\s*$'),
+    "capabilities.json":
+        re.compile(r'^\s*(?:"[\w.-]+"\s*:\s*\{\s*)?"since"\s*:\s*"\d+\.\d+\.\d+(-\d+)?"(?!.*\d+\.\d+\.\d+).*$'),
 }
 
 # Not scanned for law-section: a release record cites the law as it stood, the LLM docs never cite it.
@@ -634,7 +639,7 @@ allow:   <!-- cite-ok: reason --> on the flagged line or the line above it
 exempt:  stack-pins.md, stack-contract.md, CHANGELOG.md, references/llm/**,
          tests/fixtures/**, tests/citations/**, tests/golden/**, references/stack/migrations/**,
          tests/migration-plan/**, the seed spec's
-         "openapi" line, plugin.json's "version" line; the three binding docs in references/stack/ are exempt
+         "openapi" line, plugin.json's "version" line, capabilities.json's "since" values; the three binding docs in references/stack/ are exempt
          from restated-requirement only. law-section exempts only CHANGELOG.md,
          references/llm/** and tests/citations/**
 exit:    0 clean, 1 findings, 2 usage error (bad arguments, unreadable pins/contract)
