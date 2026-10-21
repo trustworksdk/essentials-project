@@ -60,8 +60,9 @@ books: an order is short-lived.
 `trading-demo.orders.consumers.*` (`OrderProcessingProperties`): threads on `Inbox:ExchangeOrderRouter`
 (`exchange-router`, 1), `Inbox:OrderLedgerProcessor` (`ledger`, 1) and `Inbox:Orders:ExchangeReports`
 (`exchange-reports`, 2). Each inbox keeps one order's messages in order on any number of threads. 8 / 8 / 8 with a
-60-connection pool completed the order flow ~2x faster than the defaults; more threads on the default 20-connection pool
-did not help (EF-2 doc §5, M5). Mind PostgreSQL's `max_connections` (100) before raising the pool on two instances.
+40-connection pool (`spring.datasource.hikari.maximum-pool-size`) completed the order flow ~2x faster than the defaults
+(60 did no better); more threads on the default 20-connection pool did not help (EF-2 doc §5, M5). Two instances at 40
+fit PostgreSQL's `max_connections` of 100. Defaults left as they are, by decision.
 
 ## Stub exchange
 

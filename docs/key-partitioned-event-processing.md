@@ -507,7 +507,11 @@ order's messages stay in order. Completed orders/s, A and D alternating within e
 pool, shared with ~20 subscriptions and the placing threads, bounds what more consumers can do. No dead letter and no
 order left open in any run. So one instance gets most of what partitioned handling promises, given the connections
 for it; EF-2's cross-instance story matters less than its parallelism and its connection budget. The run-to-run spread
-on this devcontainer is large (A: 62-133), so the size of the gain is indicative, its direction is not in doubt. A C1-only
+on this devcontainer is large (A: 62-133), so the size of the gain is indicative, its direction is not in doubt.
+
+A 40-connection pool does as well as 60 (three more rounds, alternating: A 150 / 104 / 100, 8 / 8 / 8 on pool 40
+220 / 224 / 209, on pool 60 215 / 217 / 203), and two instances at 40 stay inside PostgreSQL's default
+`max_connections` of 100. A C1-only
 JVM (`spring-boot:run`'s default `optimizedLaunch`) made no difference.
 
 Two hazards to watch during M3/M4. Kill the reader's instance with `kill -9` mid-run to see the PK collision in §3.5,
