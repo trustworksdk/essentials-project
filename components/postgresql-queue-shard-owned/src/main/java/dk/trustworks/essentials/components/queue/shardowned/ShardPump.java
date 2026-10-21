@@ -952,7 +952,7 @@ final class ShardPump implements Runnable {
         // a fixed query rate under a process however quiet it was; the owners' own deadlines already
         // account for their sweeps, retries and flushes, and a notification wakes this pump
         // immediately regardless of how long it intended to sleep.
-        var wait = Math.max(settings.pollBackstop().toMillis(), settings.maxSweepInterval().toNanos() / 1_000_000L);
+        var wait = Math.max(settings.pollBackstop().toMillis(), settings.maxSweepInterval().toMillis());
         for (var owner : owners) {
             // An owner awaiting its takeover is not pumped, so its own deadlines mean nothing yet - and it has never
             // swept, so its sweep always reads as overdue and its deadline as 0. Folding it in parked the pump 1 ms
