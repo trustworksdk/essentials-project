@@ -55,6 +55,6 @@ class RuntimeScopedSettingsTest {
     private static DescribedPredicate<JavaMethodCall> anAccessorOfShardOwnerSettingsOtherThanRuntimeScoped() {
         return DescribedPredicate.describe("a method of ShardOwnerSettings other than runtimeScoped()",
                                            call -> call.getTargetOwner().isEquivalentTo(ShardOwnerSettings.class)
-                                                   && !call.getName().equals("runtimeScoped"));
+                                                   && !"runtimeScoped".equals(call.getName()));
     }
 }
