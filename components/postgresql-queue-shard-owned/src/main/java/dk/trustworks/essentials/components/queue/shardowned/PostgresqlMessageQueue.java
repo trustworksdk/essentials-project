@@ -125,7 +125,7 @@ public final class PostgresqlMessageQueue implements MessageQueue {
     private final ReentrantLock                 lifecycleLock      = new ReentrantLock();
     /**
      * Guards {@link #holder}, {@link #beingStarted}, {@link #stopsWithoutLock}, {@link #toDeregister},
-     * {@link #subscriptionIndexes} and {@link #heldIndexes}. Held for a few reads and writes of them only, never across a start or a stop.
+     * {@link #subscriptionIndexes}, {@link #heldIndexes} and {@link #endingLanes}. Held for a few reads and writes of them only, never across a start or a stop.
      */
     private final Object                        handOver           = new Object();
     /**
@@ -198,6 +198,22 @@ public final class PostgresqlMessageQueue implements MessageQueue {
      * ones that are due.
      */
     private final Map<Integer, HeldIndex>       heldIndexes         = new HashMap<>();
+    /**
+     * The lanes of every subscription that has ended - unsubscribed, or a {@code consume()} that failed without
+     * registering it - whose subscription index {@link #releaseSubscriptionIndex} has not yet given back or held
+     * ({@link #heldIndexes}): from before they leave {@link #consumers} ({@link Subscription#unsubscribe()}), or in the
+     * same step as they leave {@link #beingStarted} (a failed {@code consume()}), and taken out under {@link #handOver} in the same step that gives the index
+     * back or holds it, so a lane is never in none of them while {@link #releaseKeptOrderedUnit} looks. For an
+     * unsubscribe that gap is the whole of the lanes' stops, each draining for up to its {@code shedGrace} and then
+     * waiting up to {@link ShardOwnedQueue#SHUTDOWN_BUDGET} for its hand-back, and in it
+     * the ordered lane's stop keeps a unit whose key is still in its handler, and logs the WARN that says so unless its
+     * hand-back outlasts that budget: a release on request reacting to that WARN found no lane to ask, and answered as if
+     * this instance kept no such unit. A failed {@code consume()}'s pair is stopped while still in {@link #beingStarted}
+     * and is here only from then until {@code consume()} gives back or holds its index. A critical error ({@link Exceptions#isCriticalError})
+     * from a stop leaves the lanes here for good, as it leaves their index reserved: a lane may still be running under the
+     * id, and may still keep a unit worth releasing.
+     */
+    private final List<ShardOwnedQueue>         endingLanes         = new ArrayList<>();
     /**
      * What a test does once a {@code consume()}, a {@link #start()} or a {@link Subscription#start()} has taken
      * {@link #lifecycleLock}; {@link LifecycleHook#NONE} unless a test passed one to the builder
@@ -832,8 +848,13 @@ public final class PostgresqlMessageQueue implements MessageQueue {
             // failed starts are undone: called by an observer on the thread of a consume() still starting, this lets go of
             // the lock reentrantly while that consume()'s pair is still being started, and a stop that gives up waiting
             // meanwhile must still find that pair here.
+            // A pair not registered has ended, its failed starts undone: its lanes go to endingLanes in the same step, so a
+            // release on request still asks them until consume() gives the index back or holds it.
             synchronized (handOver) {
                 beingStarted.removeAll(pair);
+                if (!attempt.registered) {
+                    endingLanes.addAll(pair);
+                }
             }
             letGoOfLifecycle();
         }
@@ -981,6 +1002,10 @@ public final class PostgresqlMessageQueue implements MessageQueue {
                 // before, is ended by the stop below, or by the holder's own should it get there first.
                 unorderedConsumer.retire();
                 orderedConsumer.retire();
+                // Before they leave consumers: a release on request asks them until their index is given back or held.
+                synchronized (handOver) {
+                    endingLanes.addAll(pair);
+                }
                 var deregistration = new Deregistration(pair, subscriptionIndex);
                 deregister(deregistration);
                 deregistration.stopLanes();
@@ -1055,13 +1080,17 @@ public final class PostgresqlMessageQueue implements MessageQueue {
         lanes.forEach(ShardOwnedQueue::reviewStuckKeptUnits);
         var keptUnitNotHandedBack = lanes.stream().anyMatch(ShardOwnedQueue::keptOrderedUnitAwaited);
         var handBackStillRunning  = lanes.stream().anyMatch(ShardOwnedQueue::handBackStillRunning);
+        // Out of endingLanes in the same step that frees or holds the index: releaseKeptOrderedUnit then finds them in
+        // heldIndexes, or every unit they kept was handed back, released or given up on, and they are not asked.
         if (!keptUnitNotHandedBack && !handBackStillRunning) {
             synchronized (handOver) {
+                endingLanes.removeAll(lanes);
                 subscriptionIndexes.clear(index);
             }
             return;
         }
         synchronized (handOver) {
+            endingLanes.removeAll(lanes);
             heldIndexes.put(index, new HeldIndex(lanes));
         }
         // One line per hold, naming every reason it has and what ends it: both reasons must have passed (HeldIndex.isDue).
@@ -1501,9 +1530,14 @@ public final class PostgresqlMessageQueue implements MessageQueue {
     /**
      * {@inheritDoc}
      * <p>
-     * Asks the lanes of every subscription registered now ({@link #consumers}) and of every unsubscribed one whose
-     * instance id is still held because a lane of it kept a unit ({@link #heldIndexes}); each releases only a unit its
-     * own stop kept ({@code ShardOwnedQueue.releaseKeptOrderedUnit}). An unsubscribed subscription whose index this
+     * Asks the lanes of every subscription registered now ({@link #consumers}) or still being started by a
+     * {@code consume()}, or having its failed starts undone ({@link #beingStarted}), of every unsubscribed one while its
+     * lanes' stops are still under way and of a failed {@code consume()}'s pair until its index is given back or held
+     * ({@link #endingLanes}), and of every ended one whose instance id
+     * is still held because a lane of it kept a unit ({@link #heldIndexes}); each releases only a unit its own stop kept
+     * ({@code ShardOwnedQueue.releaseKeptOrderedUnit}). A request made while an unsubscribe was still stopping the lanes -
+     * after the ordered lane's stop had kept the unit, before the stops had returned - used to reach no lane and come back
+     * empty. An ended subscription whose index this
      * queue has given back already is not asked: each unit it kept was handed back, released, or given up on past
      * {@code stuckHandlerTimeout} - and one given up on is taken over by the next subscription registering under its
      * instance id, or by another instance once that id's liveness lapses. A held index freed by the release is given back
@@ -1517,8 +1551,15 @@ public final class PostgresqlMessageQueue implements MessageQueue {
     public List<KeptUnitRelease> releaseKeptOrderedUnit(int unit) throws SQLException {
         var units = orderedUnits();
         requireTrue(unit >= 0 && unit < units, "unit must be from 0 to " + (units - 1) + ", the queue's ordered units, but was " + unit);
-        var lanes = new LinkedHashSet<ShardOwnedQueue>(consumers);
+        // All four read in one step under handOver, so no lane is between two of them: a consume() takes its pair out of
+        // beingStarted once it is in consumers or, failed, in the same step that puts it in endingLanes; an unsubscribe puts
+        // a lane in endingLanes before it takes it out of consumers; and a lane leaves endingLanes in the step that puts it
+        // in heldIndexes or frees its index.
+        var lanes = new LinkedHashSet<ShardOwnedQueue>();
         synchronized (handOver) {
+            lanes.addAll(consumers);
+            lanes.addAll(beingStarted);
+            lanes.addAll(endingLanes);
             heldIndexes.values().forEach(held -> lanes.addAll(held.lanes()));
         }
         var releases = new ArrayList<KeptUnitRelease>();

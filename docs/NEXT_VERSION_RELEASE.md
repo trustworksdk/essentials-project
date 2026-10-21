@@ -834,7 +834,7 @@ release, is bounded the same way (§2). (`03f9153d8`)
   (ask again). A `default` method on both `MessageQueue` and `ShardOwnedQueuesApi` that releases nothing, so an
   implementation of your own of either still compiles. The admin console's Shard-owned queues page offers it as
   **Release kept unit**, acting on the instance that takes the request and showing its answer. (`e23164f9e`,
-  `<!-- fix:U-023 -->`)
+  `<!-- fix:U-023 -->`, `<!-- fix:U-026 -->`)
 - **Shard-owned engine: `spi.RedeliveryRequested(delay)`.** A handler throws it to ask for redelivery after `delay`
   without it counting as an attempt, being reported as a failure or leading to a dead letter (§1.1.18).
   (`a4f541e4`, `f9fdd99b`)

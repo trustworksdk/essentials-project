@@ -321,8 +321,9 @@ public interface MessageQueue extends Lifecycle, AutoCloseable {
      * Only a unit a stop kept and whose lease row still names the subscription's instance id under that fence is
      * touched; every other unit, this process's included, is left alone. Kept units live in the memory of the process
      * whose stop kept them, so ask the process named in the WARN that reported the unit kept: anywhere else this
-     * returns nothing. Each subscription registered with this queue is asked, and each unsubscribed one whose instance id
-     * this queue still keeps out of use because of a unit it kept.
+     * returns nothing. Each subscription registered with this queue is asked, and each that a {@code consume()} is still
+     * starting; and each that has ended - unsubscribed, or a {@code consume()} that failed - while its lanes' stops are
+     * still under way, or while this queue still keeps its instance id out of use because of a unit it kept.
      *
      * @param unit the ordered unit, as the stop's WARN names it; from {@code 0} to the queue's ordered unit count, exclusive
      * @return what was done, one entry per subscription that had kept the unit; empty when none had - the default, for an

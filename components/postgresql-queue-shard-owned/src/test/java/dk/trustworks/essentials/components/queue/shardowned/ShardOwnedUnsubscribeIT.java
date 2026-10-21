@@ -1341,6 +1341,176 @@ class ShardOwnedUnsubscribeIT {
         }
     }
 
+    /**
+     * A release on request made while an unsubscribe is still stopping the subscription's lanes - here held where the
+     * ordered lane's stop logs the WARN that it is keeping the unit, which names {@code releaseKeptOrderedUnit} - reaches
+     * those lanes and releases the unit. The unsubscribe has taken the lanes out of the queue's registered consumers by
+     * then, and they reach the held indexes only once both stops have returned, up to the shutdown budget later; the queue
+     * asked those two alone, so the request came back empty, as from an instance that kept no such unit.
+     */
+    @Test
+    void a_kept_unit_released_on_request_while_an_unsubscribe_is_still_stopping_its_lanes_is_released_by_those_lanes() throws Exception {
+        // Far beyond the test, so the unsubscribed instance's membership row cannot age out and let another id take the unit.
+        var leaseTtl = Duration.ofSeconds(20);
+        var entered  = new CountDownLatch(1);
+        var release  = new CountDownLatch(1);
+        var holding  = holdAtTheWarningThatAUnitIsKept();
+        try (var queue = newQueue(PostgresqlMessageQueue.LifecycleHook.NONE, settingsWith(Duration.ofMillis(300), leaseTtl))) {
+            try {
+                var subscription = queue.consume((messageId, key, payload, payloadType) -> {
+                    if (key != null) {
+                        entered.countDown();
+                        awaitQuietly(release, Duration.ofSeconds(60));
+                    }
+                }, ConsumerOptions.defaults());
+                queue.enqueue(Message.ordered("in-handler".getBytes(StandardCharsets.UTF_8), 1, "ACC-1", 0));
+                assertThat(entered.await(20, TimeUnit.SECONDS)).as("premise: the key is in its handler").isTrue();
+                var unit = ShardOwnedSchema.unitForKey("ACC-1", ShardOwnedSchema.ORDERED_UNITS);
+
+                var unsubscribing = CompletableFuture.runAsync(subscription::unsubscribe);
+                List<KeptUnitRelease> releases;
+                try {
+                    assertThat(holding.awaitHeld(Duration.ofSeconds(20))).as("premise: the ordered lane's stop kept the unit and says so").isTrue();
+                    assertThat(queue.registeredConsumers()).as("premise: the unsubscribe has taken the lanes out of the queue").isEmpty();
+                    assertThat(unsubscribing).as("premise: the unsubscribe is still stopping the lanes").isNotDone();
+                    releases = queue.releaseKeptOrderedUnit(unit);
+                } finally {
+                    holding.letGo();
+                }
+                assertThat(releases).as("the lanes still being stopped are asked, and release the unit they kept")
+                                    .singleElement()
+                                    .satisfies(released -> {
+                                        assertThat(released.outcome()).isEqualTo(KeptUnitRelease.Outcome.RELEASED);
+                                        assertThat(released.instanceId()).isEqualTo(INSTANCE_ID);
+                                        assertThat(released.keysInHandler()).containsExactly("ACC-1");
+                                    });
+                assertThat(ownerOf(unit)).as("the row is released").isNull();
+                unsubscribing.get(15, TimeUnit.SECONDS);
+                assertThat(queue.releaseKeptOrderedUnit(unit)).as("released once: the unit is no longer kept").isEmpty();
+            } finally {
+                holding.letGo();
+                laneLogger.detachAppender(holding);
+                release.countDown();
+            }
+        }
+    }
+
+    /**
+     * {@link #a_kept_unit_released_on_request_while_an_unsubscribe_is_still_stopping_its_lanes_is_released_by_those_lanes}
+     * for a {@code consume()} that fails once its ordered lane has handed the key to the handler: its undo stops both lanes,
+     * the ordered lane's stop keeps the unit, and a release on request made then reaches the pair, which is in neither the
+     * registered consumers nor the held indexes until {@code consume()} has given up on it.
+     */
+    @Test
+    void a_kept_unit_released_on_request_while_a_failed_consume_is_still_stopping_its_lanes_is_released_by_those_lanes() throws Exception {
+        var leaseTtl            = Duration.ofSeconds(20);
+        var entered             = new CountDownLatch(1);
+        var release             = new CountDownLatch(1);
+        var acquisitionsTold    = new AtomicInteger();
+        var failTheOrderedStart = new AtomicBoolean(true);
+        var holding             = holdAtTheWarningThatAUnitIsKept();
+        try (var queue = newQueue(PostgresqlMessageQueue.LifecycleHook.NONE, settingsWith(Duration.ofMillis(300), leaseTtl))) {
+            queue.addObserver(new QueueObserver() {
+                @Override
+                public void shardOwnershipChanged(int shard, boolean acquired) {
+                    // The unordered lane starts first and tells its SHARD_COUNT acquisitions; the next is the ordered lane's
+                    // first, told once its units are served.
+                    if (acquired && failTheOrderedStart.get() && acquisitionsTold.incrementAndGet() == SHARD_COUNT + 1) {
+                        awaitQuietly(entered, Duration.ofSeconds(20));
+                        throw new IllegalStateException("The observer refuses the ordered lane's first acquisition");
+                    }
+                }
+            });
+            try {
+                queue.enqueue(Message.ordered("in-handler".getBytes(StandardCharsets.UTF_8), 1, "ACC-1", 0));
+                var unit = ShardOwnedSchema.unitForKey("ACC-1", ShardOwnedSchema.ORDERED_UNITS);
+                var consuming = CompletableFuture.supplyAsync(() -> {
+                    try {
+                        return queue.consume((messageId, key, payload, payloadType) -> {
+                            if (key != null) {
+                                entered.countDown();
+                                awaitQuietly(release, Duration.ofSeconds(60));
+                            }
+                        }, ConsumerOptions.defaults());
+                    } catch (SQLException e) {
+                        throw new IllegalStateException(e);
+                    }
+                });
+                List<KeptUnitRelease> releases;
+                try {
+                    assertThat(holding.awaitHeld(Duration.ofSeconds(20))).as("premise: the ordered lane's stop kept the unit and says so").isTrue();
+                    assertThat(queue.registeredConsumers()).as("premise: the failing consume() registered nothing").isEmpty();
+                    assertThat(consuming).as("premise: the consume() is still stopping the lanes").isNotDone();
+                    releases = queue.releaseKeptOrderedUnit(unit);
+                } finally {
+                    holding.letGo();
+                }
+                assertThat(releases).as("the lanes still being stopped are asked, and release the unit they kept")
+                                    .singleElement()
+                                    .satisfies(released -> {
+                                        assertThat(released.outcome()).isEqualTo(KeptUnitRelease.Outcome.RELEASED);
+                                        assertThat(released.instanceId()).isEqualTo(INSTANCE_ID);
+                                        assertThat(released.keysInHandler()).containsExactly("ACC-1");
+                                    });
+                assertThat(ownerOf(unit)).as("the row is released").isNull();
+                assertThatThrownBy(() -> consuming.get(15, TimeUnit.SECONDS)).as("premise: the consume() failed")
+                                                                              .hasRootCauseInstanceOf(IllegalStateException.class)
+                                                                              .hasMessageContaining("refuses the ordered lane's first acquisition");
+                failTheOrderedStart.set(false);
+                assertThat(queue.releaseKeptOrderedUnit(unit)).as("released once: the unit is no longer kept").isEmpty();
+            } finally {
+                holding.letGo();
+                laneLogger.detachAppender(holding);
+                release.countDown();
+            }
+        }
+    }
+
+    /**
+     * Attach to the lanes' logger an appender that holds the thread logging the WARN that a stop of {@link #INSTANCE_ID} is
+     * keeping an ordered unit - the stop's budget thread, past its flush of the kept unit - until
+     * {@link HoldingAppender#letGo}. Detach it once done.
+     */
+    private HoldingAppender holdAtTheWarningThatAUnitIsKept() {
+        var holding = new HoldingAppender(message -> message.startsWith("Instance " + INSTANCE_ID + " is keeping "));
+        holding.setContext(laneLogger.getLoggerContext());
+        holding.start();
+        laneLogger.addAppender(holding);
+        return holding;
+    }
+
+    /**
+     * Holds the first thread that logs a message {@code holdAt} matches, inside that logging call, until {@link #letGo}.
+     * Unsynchronized: a {@code ch.qos.logback.core.AppenderBase} holds its monitor across {@code append}, so every other
+     * thread logging to the same logger would wait behind the held one.
+     */
+    private static final class HoldingAppender extends ch.qos.logback.core.UnsynchronizedAppenderBase<ILoggingEvent> {
+        private final Predicate<String> holdAt;
+        private final AtomicBoolean     armed = new AtomicBoolean(true);
+        private final CountDownLatch    held  = new CountDownLatch(1);
+        private final CountDownLatch    going = new CountDownLatch(1);
+
+        private HoldingAppender(Predicate<String> holdAt) {
+            this.holdAt = holdAt;
+        }
+
+        @Override
+        protected void append(ILoggingEvent event) {
+            if (holdAt.test(event.getFormattedMessage()) && armed.compareAndSet(true, false)) {
+                held.countDown();
+                awaitQuietly(going, Duration.ofSeconds(30));
+            }
+        }
+
+        boolean awaitHeld(Duration timeout) throws InterruptedException {
+            return held.await(timeout.toMillis(), TimeUnit.MILLISECONDS);
+        }
+
+        void letGo() {
+            going.countDown();
+        }
+    }
+
     private record UnitFence(int shard, long fence) {
     }
 
