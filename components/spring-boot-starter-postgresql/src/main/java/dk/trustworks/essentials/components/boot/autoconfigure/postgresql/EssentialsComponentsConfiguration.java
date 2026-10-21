@@ -240,8 +240,11 @@ public class EssentialsComponentsConfiguration {
     @ConditionalOnMissingBean
     @ConditionalOnMissingClass("dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.spring.SpringTransactionAwareEventStoreUnitOfWorkFactory")
     public HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory(Jdbi jdbi,
-                                                                                           PlatformTransactionManager transactionManager) {
-        return new SpringTransactionAwareJdbiUnitOfWorkFactory(jdbi, transactionManager);
+                                                                                           PlatformTransactionManager transactionManager,
+                                                                                           EssentialsComponentsProperties properties) {
+        var unitOfWorkFactory = new SpringTransactionAwareJdbiUnitOfWorkFactory(jdbi, transactionManager);
+        unitOfWorkFactory.setTransactionIsolation(properties.getUnitOfWork().getTransactionIsolation());
+        return unitOfWorkFactory;
     }
 
     /**

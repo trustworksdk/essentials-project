@@ -79,6 +79,19 @@ public abstract class SpringTransactionAwareUnitOfWorkFactory<TRX_MGR extends Pl
         return defaultTransactionDefinition;
     }
 
+    /**
+     * Which isolation level the transactions this factory starts ask for - {@link UnitOfWorkTransactionIsolation#READ_COMMITTED}
+     * unless changed here. Set it while configuring the factory, before the first {@code UnitOfWork} is started: it
+     * changes {@link #defaultTransactionDefinition}, which every later transaction uses.
+     *
+     * @param transactionIsolation the isolation level to ask for
+     */
+    public void setTransactionIsolation(UnitOfWorkTransactionIsolation transactionIsolation) {
+        requireNonNull(transactionIsolation, "No transactionIsolation provided");
+        defaultTransactionDefinition.setIsolationLevel(transactionIsolation.springIsolationLevel());
+        log.info("'{}' starts transactions with isolation {}", this.getClass().getName(), transactionIsolation);
+    }
+
     public TRX_MGR getTransactionManager() {
         return transactionManager;
     }

@@ -28,6 +28,11 @@ spring:
 
 essentials:
   immutable-jackson-module-enabled: true
+  unit-of-work:
+    # The compose PostgreSQL runs with its stock default, READ COMMITTED, so asking for it explicitly only costs a
+    # SHOW TRANSACTION ISOLATION LEVEL round trip per transaction (~620 000 in one order-flow run; 13 % more completed
+    # orders/s without them - EF-2 doc §5)
+    transaction-isolation: database-default
   scheduler:
     enabled: true
     number-of-threads: 2

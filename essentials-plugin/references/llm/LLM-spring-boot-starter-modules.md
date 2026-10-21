@@ -205,6 +205,14 @@ Prefix: `essentials.durable-queues`
 | `enable-queue-statistics-ttl` | `false` | Auto-cleanup stats |
 | `queue-statistics-ttl-duration` | `90` | Days |
 
+#### UnitOfWork
+
+Prefix: `essentials.unit-of-work` - applies to the `UnitOfWorkFactory` the PostgreSQL starter and the event store starter define
+
+| Property | Default | Notes |
+|----------|---------|-------|
+| `transaction-isolation` | `read-committed` | Isolation level every `UnitOfWork` transaction asks for. `database-default` asks for none: same guarantee where the database's default is READ COMMITTED (PostgreSQL's, unless `default_transaction_isolation` was changed for server, database or role), and saves a round trip per transaction - Spring reads the connection's isolation level (`SHOW TRANSACTION ISOLATION LEVEL`) before every transaction that names one. Nothing checks the database default; choose `database-default` only if you know it |
+
 #### MultiTableChangeListener
 
 Prefix: `essentials.multi-table-change-listener`

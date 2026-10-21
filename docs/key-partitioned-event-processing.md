@@ -511,7 +511,17 @@ on this devcontainer is large (A: 62-133), so the size of the gain is indicative
 
 A 40-connection pool does as well as 60 (three more rounds, alternating: A 150 / 104 / 100, 8 / 8 / 8 on pool 40
 220 / 224 / 209, on pool 60 215 / 217 / 203), and two instances at 40 stay inside PostgreSQL's default
-`max_connections` of 100. A C1-only
+`max_connections` of 100.
+
+**The third row** (`SHOW TRANSACTION ISOLATION LEVEL`) came from Spring, not Jdbi: `SpringTransactionAwareUnitOfWorkFactory`
+asks for READ COMMITTED explicitly, so `DataSourceTransactionManager` reads the connection's level before every
+transaction. `essentials.unit-of-work.transaction-isolation: database-default` asks for none (opt-in; the default stays
+READ COMMITTED, as a database whose default differs would otherwise lose the guarantee silently). Same setup, defaults
+for the consumers, three rounds alternating: ~623 000 isolation queries per run and 144 / 163 completed orders/s with
+the explicit level (a third run stalled - see below), none and 168 / 183 / 185 without. The demo opts in.
+
+**An intermittent stall, not yet explained**: some runs never complete because a few orders never close (53 in one
+run, 1 in another; no dead letters). Seen with and without each of the fixes above. A C1-only
 JVM (`spring-boot:run`'s default `optimizedLaunch`) made no difference.
 
 Two hazards to watch during M3/M4. Kill the reader's instance with `kill -9` mid-run to see the PK collision in §3.5,

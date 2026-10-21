@@ -221,6 +221,22 @@ essentials.durable-queues.verbose-tracing=false
 
 > ⚠️ **Warning:** `fully-transactional` mode causes issues with retries and dead letter handling because when an exception occurs, the transaction is marked for rollback and retry counts are never increased. Use `single-operation-transaction` for reliable message processing.
 
+### UnitOfWork Configuration
+
+```properties
+essentials.unit-of-work.transaction-isolation=read-committed
+```
+
+| Property | Default | Description |
+|----------|---------|-------------|
+| `transaction-isolation` | `read-committed` | Isolation level every `UnitOfWork` transaction asks for, for the `UnitOfWorkFactory` this starter and the event store starter define. `database-default` asks for none and runs at the database's own default |
+
+`read-committed` makes Spring read the connection's isolation level before every transaction (on PostgreSQL a
+`SHOW TRANSACTION ISOLATION LEVEL` round trip), so it can set it and restore it afterwards. `database-default` saves
+that round trip and gives the same guarantee **where the database's default is READ COMMITTED**, as PostgreSQL's is
+unless `default_transaction_isolation` was changed for the server, the database or the role. Nothing checks it - choose
+`database-default` only if you know the default.
+
 ### MultiTableChangeListener Configuration
 
 ```properties

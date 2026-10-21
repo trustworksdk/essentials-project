@@ -25,6 +25,7 @@ import dk.trustworks.essentials.components.foundation.messaging.queue.operations
 import dk.trustworks.essentials.components.foundation.postgresql.*;
 import dk.trustworks.essentials.components.foundation.schema.SchemaMode;
 import dk.trustworks.essentials.components.foundation.transaction.UnitOfWork;
+import dk.trustworks.essentials.components.foundation.transaction.spring.*;
 import dk.trustworks.essentials.components.queue.postgresql.*;
 import dk.trustworks.essentials.reactive.*;
 import dk.trustworks.essentials.reactive.command.*;
@@ -100,6 +101,7 @@ public class EssentialsComponentsProperties {
     private final EssentialsComponentsMetricsProperties metrics                          = new EssentialsComponentsMetricsProperties();
     private final SchedulerProperties                   scheduler                        = new SchedulerProperties();
     private final SchemaProperties                      schema                           = new SchemaProperties();
+    private final UnitOfWorkProperties                  unitOfWork                       = new UnitOfWorkProperties();
 
     /**
      * Should the EssentialsImmutableJacksonModule be included in the ObjectMapper configuration - default is true<br>
@@ -245,6 +247,37 @@ public class EssentialsComponentsProperties {
      */
     public SchemaProperties getSchema() {
         return schema;
+    }
+
+    /**
+     * @return the {@code essentials.unit-of-work.*} properties - how the {@link SpringTransactionAwareUnitOfWorkFactory}
+     * starts its transactions
+     */
+    public UnitOfWorkProperties getUnitOfWork() {
+        return unitOfWork;
+    }
+
+    public static class UnitOfWorkProperties {
+        private UnitOfWorkTransactionIsolation transactionIsolation = UnitOfWorkTransactionIsolation.READ_COMMITTED;
+
+        /**
+         * The isolation level every transaction a {@code UnitOfWork} starts asks for - default
+         * {@link UnitOfWorkTransactionIsolation#READ_COMMITTED}. {@link UnitOfWorkTransactionIsolation#DATABASE_DEFAULT}
+         * saves Spring's isolation-level query (a round trip) at the start of every transaction, and gives the same
+         * guarantee where the database's default is READ COMMITTED, as PostgreSQL's is unless changed
+         *
+         * @return the isolation level every transaction asks for
+         */
+        public UnitOfWorkTransactionIsolation getTransactionIsolation() {
+            return transactionIsolation;
+        }
+
+        /**
+         * @param transactionIsolation the isolation level every transaction asks for - see {@link #getTransactionIsolation()}
+         */
+        public void setTransactionIsolation(UnitOfWorkTransactionIsolation transactionIsolation) {
+            this.transactionIsolation = transactionIsolation;
+        }
     }
 
     public static class MultiTableChangeListenerProperties {

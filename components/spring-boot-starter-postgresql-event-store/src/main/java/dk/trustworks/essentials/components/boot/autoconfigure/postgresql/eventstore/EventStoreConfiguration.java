@@ -183,8 +183,11 @@ public class EventStoreConfiguration {
     @Bean
     @ConditionalOnMissingBean
     public EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> eventStoreUnitOfWorkFactory(Jdbi jdbi,
-                                                                                                   PlatformTransactionManager transactionManager) {
-        return new SpringTransactionAwareEventStoreUnitOfWorkFactory(jdbi, transactionManager);
+                                                                                                   PlatformTransactionManager transactionManager,
+                                                                                                   EssentialsComponentsProperties essentialsComponentsProperties) {
+        var unitOfWorkFactory = new SpringTransactionAwareEventStoreUnitOfWorkFactory(jdbi, transactionManager);
+        unitOfWorkFactory.setTransactionIsolation(essentialsComponentsProperties.getUnitOfWork().getTransactionIsolation());
+        return unitOfWorkFactory;
     }
 
     @Bean

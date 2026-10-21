@@ -87,6 +87,8 @@ Cross-cutting infrastructure abstractions: transactions, distributed locking, du
 
 ## Gotchas
 
+- **`SpringTransactionAwareUnitOfWorkFactory` asks for READ COMMITTED explicitly by default, which costs a round trip per transaction** — Spring's `DataSourceTransactionManager` reads the connection's isolation level (`SHOW TRANSACTION ISOLATION LEVEL` on PostgreSQL) before every transaction that names one, so it can restore it. `setTransactionIsolation(UnitOfWorkTransactionIsolation.DATABASE_DEFAULT)` (starter: `essentials.unit-of-work.transaction-isolation`) asks for none. Kept opt-in on purpose: on a database whose default is not READ COMMITTED, switching the default would silently weaken the guarantee. Set it before the first UoW — it mutates `defaultTransactionDefinition`
+
 - `lockConfirmationInterval` MUST be strictly less than `lockTimeOut` — `DBFencedLockManager` does not enforce this; violation → spurious lock loss
 - `DBFencedLockManager` uses hostname as default `lockManagerInstanceId`; containers without stable hostnames need explicit id
 - `releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation=false` means locks survive DB blips locally but risk split-brain if the DB actually moved the lock
