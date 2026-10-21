@@ -1053,8 +1053,10 @@ const actions = {
            was still in its handler, without waiting for that handler any longer: the way out of a handler known to be
            hung before the queue's <code>stuckHandlerTimeout</code> ends the wait. Only a unit a stop kept and whose
            lease row still names the stopping instance is touched; every other unit is left alone.</p>
-           <p><strong>Accepts reordering and duplicate delivery for its keys:</strong> whoever takes the unit next
-           delivers the messages still in a handler again, possibly while those handlers still run them.</p>
+           <p><strong>Accepts reordering and duplicate delivery for its keys:</strong> each message still in a handler
+           is charged an attempt before the release, and dead-lettered if that brings it to its maximum attempts, which
+           blocks its key, and whoever takes the unit next delivers the rest again, possibly
+           while those handlers still run them.</p>
            <p><strong>Acts on the instance serving this console only</strong> - the one that takes this request, which
            behind a load balancer is not necessarily the one that rendered this page. A kept unit lives in the memory
            of the process whose stop kept it, so use the console of the instance named in the WARN that reported the

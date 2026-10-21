@@ -1074,6 +1074,9 @@ class ShardOwnedUnsubscribeIT {
                               assertThat(entries).as("the key's message delivered again while the first handler runs").hasValue(2);
                           });
                 assertThat(metrics.keptUnitsInHandler()).as("the first handler still runs, and is still counted").isEqualTo(1);
+                // The release charged the delivery in the held handler as an attempt; the restarted run, finding the row
+                // released, charged nothing.
+                assertThat(metrics.takeoverAttemptBumps.sum()).as("the release charged the message in the held handler once").isEqualTo(1);
                 assertThat(queue.releaseKeptOrderedUnit(kept.shard())).as("released once: the unit is no longer kept").isEmpty();
                 assertThat(fenceOf(notKept)).as("the unit no stop kept is untouched").isEqualTo(notKeptFence);
 
@@ -1091,6 +1094,80 @@ class ShardOwnedUnsubscribeIT {
                           .untilAsserted(() -> assertThat(metrics.keptUnitsInHandler()).as("the first handler has returned").isZero());
                 Awaitility.await().atMost(Duration.ofSeconds(5))
                           .untilAsserted(() -> assertThat(orderedMessagesLeft()).as("the new owner acknowledged the message").isZero());
+            } finally {
+                release.countDown();
+            }
+        }
+    }
+
+    /**
+     * A message whose handler hangs on every delivery reaches the dead-letter table once its unit has been released on
+     * request ({@link MessageQueue#releaseKeptOrderedUnit}) as often as its {@code maxAttempts}: each release charges the
+     * delivery in the hung handler as an attempt, under the fence the unit was kept under, and the release that brings it to
+     * the limit dead-letters it, so the key is not delivered again. Before, the release charged nothing, nor did the next
+     * owner, finding the row released, and a hung handler records no attempt: the message was handed on with its count
+     * unchanged and delivered again after every release, never dead-lettered, each cycle leaving one more handler hung. The
+     * shed and the dead-pump hand-back past {@code stuckHandlerTimeout} charge the same way
+     * ({@code ShardOwnedOrderedRebalanceIT}, {@code ShardOwnedDeadPumpHandBackIT}).
+     */
+    @Test
+    void a_message_whose_handler_hangs_on_every_delivery_is_dead_lettered_once_releases_on_request_have_charged_its_attempts() throws Exception {
+        // A heartbeat every second; the bound stays at its 15-minute default, far beyond the test.
+        var leaseTtl = Duration.ofSeconds(3);
+        var entries  = new AtomicInteger();
+        var entered  = new Semaphore(0);
+        var release  = new CountDownLatch(1);
+        try (var queue = newQueue(PostgresqlMessageQueue.LifecycleHook.NONE, settingsWith(Duration.ofMillis(300), leaseTtl))) {
+            try {
+                var subscription = queue.consume((messageId, key, payload, payloadType) -> {
+                    // Every delivery of the key hangs, until the test ends.
+                    if (key != null) {
+                        entries.incrementAndGet();
+                        entered.release();
+                        awaitQuietly(release, Duration.ofSeconds(90));
+                    }
+                }, new ConsumerOptions(8, Integer.MAX_VALUE, 2, RetryBackoff.fixed(Duration.ofMillis(100))));
+                var metrics = queue.registeredConsumers().getFirst().metrics();
+                queue.enqueue(Message.ordered("hangs".getBytes(StandardCharsets.UTF_8), 1, "ACC-1", 0));
+                var unitOfTheKey = ShardOwnedSchema.unitForKey("ACC-1", ShardOwnedSchema.ORDERED_UNITS);
+
+                for (var delivery = 1; delivery <= 2; delivery++) {
+                    assertThat(entered.tryAcquire(20, TimeUnit.SECONDS)).as("premise: delivery " + delivery + " is in its handler").isTrue();
+                    queue.stop();
+                    assertThat(keptOrderedFence(INSTANCE_ID).shard()).as("premise: the stop kept the unit of the key in its handler")
+                                                                      .isEqualTo(unitOfTheKey);
+                    queue.start();
+                    // Asked until queue.stop()'s budget thread has flushed the kept unit: until then the release answers BUSY.
+                    var releases = Awaitility.await().atMost(Duration.ofSeconds(5))
+                                             .until(() -> queue.releaseKeptOrderedUnit(unitOfTheKey),
+                                                    answer -> answer.stream().noneMatch(entry -> entry.outcome() == KeptUnitRelease.Outcome.BUSY));
+                    assertThat(releases).as("release " + delivery).singleElement().satisfies(released -> {
+                        assertThat(released.outcome()).isEqualTo(KeptUnitRelease.Outcome.RELEASED);
+                        assertThat(released.keysInHandler()).containsExactly("ACC-1");
+                    });
+                    assertThat(metrics.takeoverAttemptBumps.sum()).as("each release charges the delivery in the hung handler once")
+                                                                  .isEqualTo(delivery);
+                }
+
+                Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+                    assertThat(queue.deadLetters(0, 10)).as("dead-lettered by the release that brought it to maxAttempts").singleElement().satisfies(deadLetter -> {
+                        assertThat(deadLetter.key()).isEqualTo("ACC-1");
+                        assertThat(deadLetter.attempts()).isEqualTo(2);
+                        assertThat(deadLetter.lastError()).isEqualTo(ShardOwnedStorage.EXHAUSTED_IN_A_RELEASED_HANDLER);
+                        assertThat(deadLetter.neverDelivered()).isFalse();
+                    });
+                    assertThat(orderedMessagesLeft()).as("nothing left to deliver").isZero();
+                    assertThat(subscription.orderedUnitsHeld()).as("the released unit is taken again").isEqualTo(ShardOwnedSchema.ORDERED_UNITS);
+                });
+                Awaitility.await().during(Duration.ofSeconds(2)).atMost(Duration.ofSeconds(5))
+                          .untilAsserted(() -> assertThat(entries).as("not delivered a third time").hasValue(2));
+                assertThat(metrics.deadLettered.sum()).as("counted once").isEqualTo(1);
+                assertThat(laneWarnings()).as("the second release names the dead letter")
+                                          .filteredOn(warning -> warning.contains("released ordered unit " + unitOfTheKey + " on queue " + QUEUE_ID + " on request"))
+                                          .hasSize(2)
+                                          .last()
+                                          .satisfies(warning -> assertThat(warning).contains("1 message(s) in those handlers were charged an attempt",
+                                                                                             "1 dead-lettered at their attempt limit [ACC-1]"));
             } finally {
                 release.countDown();
             }
@@ -1281,7 +1358,8 @@ class ShardOwnedUnsubscribeIT {
      * still naming the instance under the fence it was kept under, no release reported. Asked again once the database lets
      * the release through, it is released. A queue that swallowed the failure answered an empty list, as from an instance
      * that keeps no such unit, for a unit that was still kept; a lane that dropped its kept entry on the failure left the
-     * row naming the instance with nothing left to release it on request.
+     * row naming the instance with nothing left to release it on request. The message in the handler is charged one
+     * attempt, by the first request, whose charge committed before its release was refused, and not again by the second.
      */
     @Test
     void a_kept_unit_whose_release_on_request_the_database_refuses_is_left_kept_and_the_request_fails() throws Exception {
@@ -1322,6 +1400,10 @@ class ShardOwnedUnsubscribeIT {
                 } finally {
                     LeaseReleaseRefusals.failLeaseReleasesOf(dataSource, queueIds, "ordered", kept.shard(), false);
                 }
+                // The charge before the release committed on its own connection, before the release was refused.
+                assertThat(lanes.getFirst().metrics().takeoverAttemptBumps.sum()).as("premise: the refused request charged the message in the handler")
+                                                                                   .isEqualTo(1);
+                assertThat(storedAttemptsOfOrderedKey("ACC-1")).as("premise: the charge is stored").isEqualTo(1);
                 assertThat(ownerOf(kept.shard())).as("the row still names the instance").isEqualTo(INSTANCE_ID);
                 assertThat(fenceOf(kept.shard())).as("under the fence it was kept under").isEqualTo(kept.fence());
                 assertThat(lanes).as("the unit is still kept").anyMatch(ShardOwnedQueue::keptOrderedUnitNotHandedBack);
@@ -1336,10 +1418,22 @@ class ShardOwnedUnsubscribeIT {
                                                                           assertThat(released.keysInHandler()).containsExactly("ACC-1");
                                                                       });
                 assertThat(ownerOf(kept.shard())).as("the row is released").isNull();
+                // The retried release charges nothing again: the charge is made once per owner. Charged on every request, the
+                // message would reach the dead-letter table after fewer hangs than maxAttempts.
+                assertThat(lanes.getFirst().metrics().takeoverAttemptBumps.sum()).as("the retried release did not charge again").isEqualTo(1);
+                assertThat(storedAttemptsOfOrderedKey("ACC-1")).as("the message, never acknowledged, is stored with the one charge").isEqualTo(1);
             } finally {
                 release.countDown();
             }
         }
+    }
+
+    /**
+     * The stored attempt count of the ordered message of {@code key} on this queue: the test enqueues one per key.
+     */
+    private int storedAttemptsOfOrderedKey(String key) throws SQLException {
+        return queryForInt(dataSource, "Reading the attempts of the ordered message of key " + key,
+                           "SELECT attempts FROM " + ShardOwnedSchema.ORDERED_TABLE + " WHERE queue_id = ? AND msg_key = ?", QUEUE_ID, key);
     }
 
     /**
@@ -2107,14 +2201,16 @@ class ShardOwnedUnsubscribeIT {
 
     /**
      * Whether the calling thread is inside {@link ShardOwnedQueue#releaseKeptOrderedUnit} and not inside the
-     * {@code releaseLeaseRows} it calls: asking for a connection there, it is the release's flush, under its claim.
+     * {@code chargeKeysInHandlerBeforeRelease} or {@code releaseLeaseRows} it calls: asking for a connection there, it is
+     * the release's flush, under its claim.
      */
     private static boolean inTheFlushOfAReleaseOnRequest() {
         return StackWalker.getInstance().walk(frames -> {
             var methods = frames.filter(frame -> frame.getClassName().equals(ShardOwnedQueue.class.getName()))
                                 .map(StackWalker.StackFrame::getMethodName)
                                 .toList();
-            return methods.contains("releaseKeptOrderedUnit") && !methods.contains("releaseLeaseRows");
+            return methods.contains("releaseKeptOrderedUnit") && !methods.contains("chargeKeysInHandlerBeforeRelease")
+                    && !methods.contains("releaseLeaseRows");
         });
     }
 

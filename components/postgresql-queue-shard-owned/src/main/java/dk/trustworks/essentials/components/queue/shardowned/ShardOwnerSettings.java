@@ -104,10 +104,18 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  *                           that one and any other still running.</li>
  *                         </ul>
  *                         Each time the queue stops waiting it logs one WARN naming the queue, the unit, the keys and
- *                         how long the longest has been in its handler. The unit's next owner delivers the message of
- *                         each key still in a handler again, possibly beside its handler, so each of those keys may run
- *                         in two handlers at once - which is the at-least-once the bound trades the stuck unit for. A kept unit with a key in its
- *                         handler, and a unit the queue stopped waiting for in any of the three while that handler runs
+ *                         how long the longest has been in its handler. Every one of the three counts the delivery in
+ *                         that handler as an attempt: the takeover of the first charges it, and the shed and the
+ *                         hand-back, which release the unit, so its next owner charges nothing, charge it themselves
+ *                         before the release, as {@code MessageQueue.releaseKeptOrderedUnit} does - dead-lettering a
+ *                         message the charge brings to its {@code maxAttempts}. A message whose handler hangs on every
+ *                         delivery therefore reaches the dead-letter table once the queue has stopped waiting for it
+ *                         {@code maxAttempts} times; a hang in a handler of an owner that goes on serving its unit is not
+ *                         bounded by this. Released uncharged, it was handed from owner to owner for good. The unit's
+ *                         next owner delivers the message of each key still in a handler again, unless it was
+ *                         dead-lettered, possibly beside its handler, so each of those keys may run in two handlers at
+ *                         once - which is the at-least-once the bound trades the stuck unit for. A kept unit with a key
+ *                         in its handler, and a unit the queue stopped waiting for in any of the three while that handler runs
  *                         on, is counted in {@code ShardOwnerMetrics.keptUnitsInHandler()}
  */
 public record ShardOwnerSettings(int readBatchSize,

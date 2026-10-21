@@ -170,8 +170,9 @@ public interface ShardOwnedQueuesApi {
      * any longer: the way out of a handler known to be hung before the queue's {@code stuckHandlerTimeout} ends the wait
      * (see {@link MessageQueue#releaseKeptOrderedUnit}).
      * <p>
-     * <b>Accepts reordering and duplicate delivery for that key</b>: whoever takes the unit next delivers the messages
-     * still in a handler again, possibly while those handlers still run them. Only a unit a stop kept and whose lease row
+     * <b>Accepts reordering and duplicate delivery for that key</b>: each message still in a handler is charged an
+     * attempt before the release, and dead-lettered if that brings it to {@code maxAttempts}, and whoever takes the unit
+     * next delivers the rest again, possibly while those handlers still run them. Only a unit a stop kept and whose lease row
      * still names the stopping instance is touched; every other unit is left alone. Kept units live in the memory of the
      * process whose stop kept them, so call the instance named in the WARN that reported the unit kept - any other
      * answers with an empty list.

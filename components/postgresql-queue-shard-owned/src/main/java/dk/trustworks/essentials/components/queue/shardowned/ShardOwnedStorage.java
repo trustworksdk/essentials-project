@@ -1081,6 +1081,17 @@ public final class ShardOwnedStorage {
             + "session recorded before that is not kept on a live row";
 
     /**
+     * The error recorded for an ordered message dead-lettered as its unit was released while the message was still in a
+     * handler that had not returned (past {@code stuckHandlerTimeout}, or on request), when the attempt that release
+     * charged brought it to the redelivery limit (see {@link #chargeOrderedRowsInHandler}); also the message of the cause
+     * the owner hands to {@code QueueObserver.deadLettered} for it. The delivery that brought it here recorded no failure:
+     * its handler had not returned. The earlier attempts may have been failures, but the live lanes keep no error text.
+     */
+    public static final String EXHAUSTED_IN_A_RELEASED_HANDLER = "Reached its attempt limit when its ordered unit was released "
+            + "while this message was still in a handler that had not returned (past stuckHandlerTimeout, or released on "
+            + "request), which counts that delivery as an attempt; any error an earlier delivery recorded is not kept on a live row";
+
+    /**
      * Bulk attempt increment on takeover.
      * <p>
      * A handler that crashes the JVM never records its attempt, so without this a poison message
@@ -1691,6 +1702,51 @@ public final class ShardOwnedStorage {
             statement.setString(7, owner);
             statement.setLong(8, fence);
             return statement.executeUpdate();
+        }
+    }
+
+    /**
+     * Charge one attempt to each of the ordered rows {@code seqs}: the messages still in a handler of an owner that is about
+     * to release its unit without waiting for those handlers (past {@code stuckHandlerTimeout}, or on request). The next
+     * owner finds the unit released and charges nothing, and a handler that never returns records no attempt, so this is
+     * what lets a message whose handler hangs on every delivery reach the redelivery limit. Unlike
+     * {@link #bumpOrderedAttemptsOnTakeover(Connection, int, int, String, long)} it charges exactly the rows named: the
+     * releasing owner knows which messages are in its handlers.
+     * <p>
+     * <b>Fenced</b>, as every owner write is: the charge lands only while {@code owner} still holds the unit's lease under
+     * {@code fence}, which a release does not bump.
+     *
+     * @param seqs  the sequence values of the messages in a handler
+     * @param owner the instance releasing the unit
+     * @param fence the fence it holds the unit under
+     * @return each charged row's sequence value with its attempt count after the charge, in sequence order; empty when
+     *         {@code owner} no longer holds the lease under {@code fence}, or none of the rows is left
+     */
+    Map<Long, Integer> chargeOrderedRowsInHandler(Connection connection, int shard, Collection<Long> seqs, String owner, long fence)
+            throws SQLException {
+        requireNonNull(seqs, "No seqs provided");
+        requireNonNull(owner, "No owner provided");
+        if (seqs.isEmpty()) {
+            return Map.of();
+        }
+        try (var statement = connection.prepareStatement(
+                "UPDATE " + ORDERED_TABLE + " o SET attempts = o.attempts + 1"
+                        + " WHERE o.queue_id = ? AND o.shard = ? AND o.seq = ANY(?)"
+                        + ownedByClause("o")
+                        + " RETURNING o.seq, o.attempts")) {
+            statement.setShort(1, queueId);
+            statement.setInt(2, shard);
+            statement.setArray(3, connection.createArrayOf("bigint", seqs.toArray(Long[]::new)));
+            statement.setString(4, "ordered");
+            statement.setString(5, owner);
+            statement.setLong(6, fence);
+            var charged = new TreeMap<Long, Integer>();
+            try (var resultSet = statement.executeQuery()) {
+                while (resultSet.next()) {
+                    charged.put(resultSet.getLong(1), resultSet.getInt(2));
+                }
+            }
+            return charged;
         }
     }
 

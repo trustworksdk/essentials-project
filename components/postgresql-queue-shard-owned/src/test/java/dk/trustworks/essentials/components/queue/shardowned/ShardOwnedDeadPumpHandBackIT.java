@@ -232,8 +232,9 @@ class ShardOwnedDeadPumpHandBackIT {
     /**
      * The wait for a dead pump's ordered unit is bounded by {@code stuckHandlerTimeout}: once the key has been in its handler
      * longer, the handler counts as stuck and the unit is handed back with it still running, named in one WARN and counted
-     * in {@code keptUnitsInHandler} while the handler runs on. A live pump here takes the unit again under a new fence,
-     * charging no attempt (the row was released), and delivers the stuck key's message again beside the hung handler -
+     * in {@code keptUnitsInHandler} while the handler runs on; the message in that handler is charged one attempt before the
+     * release. A live pump here takes the unit again under a new fence, charging nothing itself (the row was released), and
+     * delivers the stuck key's message, with that attempt counted, again beside the hung handler -
      * the at-least-once the bound trades the stuck unit for. Unbounded, a handler that never returned kept the unit
      * leased and unserved until the runtime was restarted.
      */
@@ -244,15 +245,21 @@ class ShardOwnedDeadPumpHandBackIT {
         var release   = new CountDownLatch(1);
         var entries   = new AtomicInteger();
         var heldUnit  = new CompletableFuture<Integer>();
+        var attemptsOnRedelivery = new CompletableFuture<Integer>();
         var logged    = captureQueueLog();
         try (var runtime = new ShardRuntime(dataSource, settings)) {
             var queue = queue(runtime, "dead-pump-stuck");
             try {
                 queue.startConsumingOrdered((messageId, key, payload, payloadType) -> {
-                    if ("HOLD".equals(key) && entries.incrementAndGet() == 1) {
+                    if (!"HOLD".equals(key)) {
+                        return;
+                    }
+                    if (entries.incrementAndGet() == 1) {
                         heldUnit.complete(messageId.shard());
                         entered.countDown();
                         awaitQuietly(release);
+                    } else {
+                        attemptsOnRedelivery.complete(attemptsOf(messageId.sequence()));
                     }
                 }, settings, SHARD_COUNT);
                 queue.enqueueOrdered(List.of(new ShardOwnedStorage.OrderedPayload("HOLD", 0, "HOLD-0".getBytes(StandardCharsets.UTF_8), 1)));
@@ -271,7 +278,13 @@ class ShardOwnedDeadPumpHandBackIT {
                 assertThat(runtime.pumpFor(QUEUE_ID, "ordered", unit).isDead()).as("taken again on a live pump").isFalse();
                 assertThat(queue.metrics().shardsOnDeadPumps.get()).isZero();
                 assertThat(queue.metrics().keptUnitsInHandler()).as("counted while the stuck handler runs on").isEqualTo(1);
-                assertThat(queue.metrics().takeoverAttemptBumps.sum()).as("released, not taken over: no attempt charged").isZero();
+                // The delivery in the hung handler is an attempt: the hand-back charges it before it releases the row, and the
+                // takeover after it, finding the row released, charges nothing. Uncharged, a message whose handler hung on every
+                // delivery never reached the dead-letter table.
+                assertThat(queue.metrics().takeoverAttemptBumps.sum()).as("the hand-back charged the message in the hung handler once")
+                                                                     .isEqualTo(1);
+                assertThat(attemptsOnRedelivery.get(5, TimeUnit.SECONDS)).as("the message is redelivered with that one attempt counted")
+                                                                         .isEqualTo(1);
                 var stuckWarnings = warnings(logged, "so those handlers were not waited for");
                 assertThat(stuckWarnings).as("one WARN for the hand-back").hasSize(1);
                 assertThat(stuckWarnings.getFirst().getArgumentArray()[1]).as("the unit").isEqualTo(unit);
@@ -285,6 +298,80 @@ class ShardOwnedDeadPumpHandBackIT {
                         () -> assertThat(queue.releasedPastStuckHandlerSize()).as("pruned by the heartbeat once the handler returned").isZero());
                 Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(
                         () -> assertThat(queue.metrics().keptUnitsInHandler()).as("no longer once the handler returned").isZero());
+            } finally {
+                release.countDown();
+                queue.stop();
+            }
+        } finally {
+            releaseQueueLog(logged);
+        }
+    }
+
+    /**
+     * A dead pump's ordered unit whose charge before its release past {@code stuckHandlerTimeout} fails - refused by the
+     * database here - is left held, with one WARN per attempt naming it, and retried on the next heartbeat, while the dead
+     * pump's other units are handed back all the same. A failed charge used to end the whole hand-back: no unit of the dead
+     * pump was released, the ones with no key in a handler included, for as long as that charge kept failing. Once the
+     * database lets the charge through, the held unit is handed back with the message in its handler charged once.
+     */
+    @Test
+    void a_dead_pumps_unit_whose_charge_before_its_release_fails_is_held_while_the_pumps_other_units_are_handed_back() throws Exception {
+        var stuckHandlerTimeout = Duration.ofSeconds(1);
+        var settings            = settings(2, Duration.ofMillis(300), Duration.ofSeconds(1), stuckHandlerTimeout);
+        var entered             = new CountDownLatch(1);
+        var release             = new CountDownLatch(1);
+        var entries             = new AtomicInteger();
+        var heldUnit            = new CompletableFuture<Integer>();
+        var logged              = captureQueueLog();
+        try (var runtime = new ShardRuntime(dataSource, settings)) {
+            var queue = queue(runtime, "dead-pump-charge");
+            try {
+                queue.startConsumingOrdered((messageId, key, payload, payloadType) -> {
+                    if ("HOLD".equals(key) && entries.incrementAndGet() == 1) {
+                        heldUnit.complete(messageId.shard());
+                        entered.countDown();
+                        awaitQuietly(release);
+                    }
+                }, settings, SHARD_COUNT);
+                queue.enqueueOrdered(List.of(new ShardOwnedStorage.OrderedPayload("HOLD", 0, "HOLD-0".getBytes(StandardCharsets.UTF_8), 1)));
+                assertThat(entered.await(20, TimeUnit.SECONDS)).as("premise: the key is in its handler").isTrue();
+                var unit         = heldUnit.get();
+                var doomed       = runtime.pumpFor(QUEUE_ID, "ordered", unit);
+                var doomedUnits  = unitsOn(runtime, doomed, "ordered", ShardOwnedSchema.ORDERED_UNITS);
+                var idleUnits    = doomedUnits.stream().filter(candidate -> candidate != unit).toList();
+                var fencesBefore = fences("ordered", doomedUnits);
+                assertThat(idleUnits).as("premise: the dead pump serves other units too").isNotEmpty();
+                // Past the bound before the pump dies, so the first hand-back after the death finds the held unit stuck and
+                // the idle units ready together.
+                Thread.sleep(stuckHandlerTimeout.toMillis() + 500);
+
+                failOrderedAttemptCharges(true);
+                try {
+                    kill(doomed);
+
+                    Awaitility.await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
+                        for (var idle : idleUnits) {
+                            assertThat(fenceOf("ordered", idle)).as("idle unit %d was handed back and taken again while the charge fails", idle)
+                                                                .isGreaterThan(fencesBefore.get(idle));
+                        }
+                    });
+                    var chargeFailures = warnings(logged, "could not charge the messages in a handler of ordered unit");
+                    assertThat(chargeFailures).as("premise: the charge was attempted and refused by the database").isNotEmpty();
+                    assertThat(chargeFailures.getFirst().getArgumentArray()[1]).as("the unit named").isEqualTo(unit);
+                    assertThat(chargeFailures.getFirst().getThrowableProxy().getMessage()).contains("simulated failure charging");
+                    assertThat(ownerOf("ordered", unit)).as("the unit whose charge failed is still leased").isEqualTo("dead-pump-charge");
+                    assertThat(fenceOf("ordered", unit)).as("and not taken again").isEqualTo(fencesBefore.get(unit));
+                    assertThat(queue.metrics().shardsOnDeadPumps.get()).as("it alone is still on the dead pump").isEqualTo(1);
+                    assertThat(queue.metrics().takeoverAttemptBumps.sum()).as("nothing charged while the database refuses it").isZero();
+                } finally {
+                    failOrderedAttemptCharges(false);
+                }
+
+                Awaitility.await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
+                    assertThat(fenceOf("ordered", unit)).as("handed back once the charge goes through, and taken again").isGreaterThan(fencesBefore.get(unit));
+                    assertThat(queue.metrics().shardsOnDeadPumps.get()).isZero();
+                });
+                assertThat(queue.metrics().takeoverAttemptBumps.sum()).as("the message in the hung handler charged once").isEqualTo(1);
             } finally {
                 release.countDown();
                 queue.stop();
@@ -1224,6 +1311,24 @@ class ShardOwnedDeadPumpHandBackIT {
     }
 
     /**
+     * Make every write that raises the attempts of an ordered row fail, as a database error would, or stop doing so: the
+     * charge a release past {@code stuckHandlerTimeout} makes before it releases ({@code ShardOwnedStorage.chargeOrderedRowsInHandler}).
+     */
+    private void failOrderedAttemptCharges(boolean fail) throws Exception {
+        try (var connection = dataSource.getConnection(); var statement = connection.createStatement()) {
+            if (fail) {
+                statement.execute("CREATE OR REPLACE FUNCTION fail_ordered_attempt_charge() RETURNS trigger AS $$ BEGIN "
+                                          + "IF NEW.attempts > OLD.attempts THEN RAISE EXCEPTION 'simulated failure charging an ordered attempt'; END IF; "
+                                          + "RETURN NEW; END $$ LANGUAGE plpgsql");
+                statement.execute("CREATE TRIGGER fail_ordered_attempt_charge BEFORE UPDATE ON " + ShardOwnedSchema.ORDERED_TABLE
+                                          + " FOR EACH ROW EXECUTE FUNCTION fail_ordered_attempt_charge()");
+            } else {
+                statement.execute("DROP TRIGGER IF EXISTS fail_ordered_attempt_charge ON " + ShardOwnedSchema.ORDERED_TABLE);
+            }
+        }
+    }
+
+    /**
      * Every unit of the dead pump still leased to the instance under the fence it had at the death, and still counted on
      * the dead pump: nothing took it again. On its own this does not show a hand-back was attempted - a unit nobody tried
      * to release looks the same - so call it after {@link #awaitReleasesRefused}, which does.
@@ -1272,6 +1377,19 @@ class ShardOwnedDeadPumpHandBackIT {
 
     private long fenceOf(String lane, int shard) throws Exception {
         return fenceOf(QUEUE_ID, lane, shard);
+    }
+
+    /**
+     * The stored attempt count of ordered message {@code seq}, read from inside a handler: unchecked, as a handler cannot throw
+     * a checked exception.
+     */
+    private int attemptsOf(long seq) {
+        try {
+            return queryForInt(dataSource, "Reading the attempts of ordered message " + seq,
+                               "SELECT attempts FROM " + ShardOwnedSchema.ORDERED_TABLE + " WHERE queue_id = ? AND seq = ?", QUEUE_ID, seq);
+        } catch (java.sql.SQLException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     private long fenceOf(short queueId, String lane, int shard) throws Exception {

@@ -140,11 +140,11 @@ final class OrderedShardOwner implements BatchReadableOwner {
      */
     private final Map<String, TreeMap<Long, ShardOwnedStorage.OrderedRow>> readyByKey            = new HashMap<>();
     /**
-     * Keys with a message currently in a handler, each with when it was handed to the handler executor, by
-     * {@link System#nanoTime()} - which {@link #keysInHandler()} times the longest of from. At most one per key, which is
-     * what enforces FIFO.
+     * Keys with a message currently in a handler, each with that message's sequence value and when it was handed to the
+     * handler executor, by {@link System#nanoTime()} - which {@link #keysInHandler()} times the longest of from. At most
+     * one per key, which is what enforces FIFO.
      */
-    private final Map<String, Long>                                        keysInFlight          = new LinkedHashMap<>();
+    private final Map<String, InHandler>                                   keysInFlight          = new LinkedHashMap<>();
     /**
      * Highest key_order handed to a handler per key, used to detect ordering violations.
      */
@@ -335,6 +335,28 @@ final class OrderedShardOwner implements BatchReadableOwner {
      * {@code ShardOwner#exhaustionPending}.
      */
     private boolean exhaustionPending;
+
+    /**
+     * Guards the four fields of {@link #chargeKeysInHandlerBeforeRelease} below it.
+     */
+    private final Object              releaseChargeLock     = new Object();
+    /**
+     * The rows charged before a release past their handlers, each with its attempt count after the charge; {@code null}
+     * until that charge has committed. See {@link #chargeKeysInHandlerBeforeRelease}.
+     */
+    private       Map<Long, Integer>  chargedOnRelease;
+    /**
+     * The key of each row in {@link #chargedOnRelease}.
+     */
+    private       Map<Long, String>   keysChargedOnRelease;
+    /**
+     * The keys whose charged message has been dead-lettered at the redelivery limit.
+     */
+    private final List<String>        deadLetteredOnRelease = new ArrayList<>();
+    /**
+     * The completed answer of {@link #chargeKeysInHandlerBeforeRelease}; {@code null} until a call has completed.
+     */
+    private       ReleaseCharge       releaseCharge;
 
     /**
      * What to run once no key is in a handler ({@link #whenNoKeyInHandler}); {@code null} unless this owner's queue kept
@@ -778,7 +800,7 @@ final class OrderedShardOwner implements BatchReadableOwner {
                 }
                 highestDeliveredOrder.merge(key, next.getKey(), Math::max);
 
-                keysInFlight.put(key, System.nanoTime());
+                keysInFlight.put(key, new InHandler(next.getValue().seq(), System.nanoTime()));
                 activeKeys.incrementAndGet();
                 metrics.maxConcurrentKeys.accumulateAndGet(activeKeys.get(), Math::max);
                 submitted++;
@@ -1455,8 +1477,99 @@ final class OrderedShardOwner implements BatchReadableOwner {
             if (keysInFlight.isEmpty()) {
                 return Optional.empty();
             }
-            var earliest = keysInFlight.values().stream().mapToLong(Long::longValue).min().getAsLong();
+            var earliest = keysInFlight.values().stream().mapToLong(InHandler::sinceNanos).min().getAsLong();
             return Optional.of(new KeysInHandler(List.copyOf(keysInFlight.keySet()), Duration.ofNanos(now - earliest)));
+        }
+    }
+
+    /**
+     * The message of a key in a handler ({@link #keysInFlight}).
+     *
+     * @param seq        the message's sequence value
+     * @param sinceNanos when it was handed to the handler executor, by {@link System#nanoTime()}
+     */
+    record InHandler(long seq, long sinceNanos) {
+    }
+
+    /**
+     * Charge one attempt to the message of each key still in a handler, and dead-letter each one the charge brings to the
+     * redelivery limit, before the queue releases this owner's lease row without waiting for those handlers: past
+     * {@code stuckHandlerTimeout}, by a fair-share shed ({@link #shedPastStuckHandler()}) or by the hand-back from a dead
+     * pump ({@code ShardOwnedQueue.handBackUnitsOnDeadPumps}), or on request ({@code ShardOwnedQueue.releaseKeptOrderedUnit}).
+     * <p>
+     * Whoever takes a released unit next charges nothing ({@link ShardOwnedStorage.LeaseGrant#previousOwnerReleased()}),
+     * and a handler that hangs never returns to record its attempt, so without this a message whose handler hung on every
+     * delivery was handed from owner to owner with its count unchanged, and never reached the dead-letter table. It is the
+     * charge an unclean takeover makes for a delivery whose outcome was never recorded ({@link #onTakeover}), made by the
+     * owner that knows which rows those are: exactly the messages in a handler, nothing queued behind them. A row the charge
+     * brings to the limit is dead-lettered here with {@link ShardOwnedStorage#EXHAUSTED_IN_A_RELEASED_HANDLER}, as the next
+     * owner runs no exhaustion pass for a released unit; that owner then finds the key blocked behind the dead letter
+     * ({@link #refreshDeadLetterBlocks}). The handler may still be running the message when it is dead-lettered.
+     * <p>
+     * Fenced, as the release after it is: the row must still name this instance under this owner's fence, which releasing
+     * does not bump. Charged once per owner: the charge is recorded as soon as it has committed, so a release that failed
+     * and is retried does not charge again; the dead-letter moves after it are made until a call completes them, as the
+     * takeover's exhaustion pass is, and the completed answer is returned to every later call. No key enters a handler of
+     * an owner being released - a shed or a drain dispatches nothing - so a later call would find no key the first one did
+     * not charge. Callers do not run it for one owner at the same time (the queue's heartbeat, or a release on request
+     * under its claim); the monitor makes it safe if they do.
+     *
+     * @return what was charged and dead-lettered; nothing when no key is in a handler, or when the row no longer names this
+     *         owner
+     */
+    ReleaseCharge chargeKeysInHandlerBeforeRelease(Connection connection) throws SQLException {
+        synchronized (releaseChargeLock) {
+            if (releaseCharge != null) {
+                return releaseCharge;
+            }
+            if (chargedOnRelease == null) {
+                var keyBySeq = new LinkedHashMap<Long, String>();
+                synchronized (stateLock) {
+                    keysInFlight.forEach((key, inHandler) -> keyBySeq.put(inHandler.seq(), key));
+                }
+                var charged = keyBySeq.isEmpty()
+                              ? Map.<Long, Integer>of()
+                              : storage.chargeOrderedRowsInHandler(connection, shard, keyBySeq.keySet(), instanceId, fence);
+                metrics.takeoverAttemptBumps.add(charged.size());
+                // The charge has committed: recorded before anything else can fail, or a retried release charges again
+                chargedOnRelease = charged;
+                keysChargedOnRelease = keyBySeq;
+            }
+            for (var row : chargedOnRelease.entrySet()) {
+                var key = keysChargedOnRelease.get(row.getKey());
+                if (!redeliveryPolicy.isExhausted(row.getValue()) || deadLetteredOnRelease.contains(key)) {
+                    continue;
+                }
+                if (storage.moveToDeadLetterIfOwned(connection, ShardOwnedSchema.ORDERED_TABLE, "ordered", shard, row.getKey(),
+                                                    ShardOwnedStorage.EXHAUSTED_IN_A_RELEASED_HANDLER, instanceId, fence)) {
+                    deadLetteredOnRelease.add(key);
+                    // Counted before the observer is told: one that throws leaves the move made and remembered, so no later
+                    // call reaches this line for the key again.
+                    metrics.deadLettered.increment();
+                    metrics.observer().deadLettered(new MessageId(MessageId.Lane.ORDERED, shard, row.getKey()), row.getValue(),
+                                                    new IllegalStateException(ShardOwnedStorage.EXHAUSTED_IN_A_RELEASED_HANDLER));
+                }
+            }
+            releaseCharge = new ReleaseCharge(chargedOnRelease.size(), List.copyOf(deadLetteredOnRelease));
+            return releaseCharge;
+        }
+    }
+
+    /**
+     * What {@link #chargeKeysInHandlerBeforeRelease} did.
+     *
+     * @param charged          how many messages in a handler were charged an attempt
+     * @param deadLetteredKeys the keys whose message the charge brought to the redelivery limit, and which were
+     *                         dead-lettered
+     */
+    record ReleaseCharge(int charged, List<String> deadLetteredKeys) {
+        static final ReleaseCharge NONE = new ReleaseCharge(0, List.of());
+
+        /**
+         * The dead-lettered keys as a log line names them: capped, as an abandoned shed's are.
+         */
+        String describeDeadLetteredKeys() {
+            return OrderedShardOwner.describeKeys(deadLetteredKeys);
         }
     }
 

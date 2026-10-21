@@ -187,9 +187,10 @@ public class ShardOwnedQueueProperties {
      * one's instance id - waits for that handler, and past the bound takes the unit over under a new fence, the stuck
      * handler's acknowledgement refused. A fair-share shed of an ordered unit, and the hand-back of an ordered unit whose
      * pump died, which wait for the keys in their handlers: past the bound each releases the unit with every key still in a
-     * handler - the one past the bound and any other still running. Each time the queue stops waiting it logs one WARN;
-     * the unit's next owner delivers the message of each key still in a handler again, possibly beside its handler, so
-     * those keys may run in two handlers at once.
+     * handler - the one past the bound and any other still running. Each time the queue stops waiting it logs one WARN,
+     * and the message in that handler is charged an attempt, and dead-lettered if that brings it to its maximum attempts;
+     * otherwise the unit's next owner delivers the message of each key still in a handler again, possibly beside its
+     * handler, so those keys may run in two handlers at once.
      * <p>
      * <b>A behaviour change from 0.60.0,</b> where a restart took the kept unit back at once: it now waits for the handler
      * up to this bound, then takes the unit over; a fair-share shed, which waited however long the handler ran, now

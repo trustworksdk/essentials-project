@@ -323,8 +323,9 @@ class ShardOwnedOrderedRebalanceIT {
 
     /**
      * The abandoned shed is bounded by {@code stuckHandlerTimeout}: once the grace runs out with a key in its handler longer
-     * than that, the handler counts as stuck and the shed releases the unit with it still running. The joining instance
-     * takes the unit under a new fence, charging no attempt (the row was released), and delivers the stuck key's message
+     * than that, the handler counts as stuck and the shed releases the unit with it still running, having charged the message
+     * in that handler one attempt first. The joining instance takes the unit under a new fence, charging nothing itself (the
+     * row was released), and delivers the stuck key's message, with that attempt counted,
      * again beside the hung handler - the at-least-once the bound trades the stuck unit for - and the release is named in
      * one WARN and counted in {@code keptUnitsInHandler} while the handler runs on. Unbounded, a hung handler kept the
      * unit on the incumbent, the cluster unbalanced and the unit's other keys unserved, until a restart.
@@ -338,6 +339,7 @@ class ShardOwnedOrderedRebalanceIT {
         var entered   = new CountDownLatch(1);
         var release   = new CountDownLatch(1);
         var entries   = new java.util.concurrent.atomic.AtomicInteger();
+        var attemptsOnRedelivery = new CompletableFuture<Integer>();
         var logged    = ShardOwnedRebalanceIT.captureQueueLog();
         var settings  = fast(Duration.ofMillis(500), Duration.ofMillis(1000), Duration.ofSeconds(3));
 
@@ -362,6 +364,7 @@ class ShardOwnedOrderedRebalanceIT {
 
             second.startConsumingOrdered((messageId, key, payload, payloadType) -> {
                 if (stuckKey.equals(key)) {
+                    attemptsOnRedelivery.complete(attemptsOf(messageId.sequence()));
                     entries.incrementAndGet();
                 }
             }, settings, SHARD_COUNT);
@@ -373,7 +376,12 @@ class ShardOwnedOrderedRebalanceIT {
             });
             assertThat(release.getCount()).as("premise: the first handler is still held").isEqualTo(1);
             assertThat(first.metrics().keptUnitsInHandler()).as("counted while the stuck handler runs on").isEqualTo(1);
-            assertThat(second.metrics().takeoverAttemptBumps.sum()).as("released, not taken over: no attempt charged").isZero();
+            // The delivery in the hung handler is an attempt: the shed charges it before it releases the row, as the joining
+            // instance finds the row released and charges nothing. Uncharged, a message whose handler hung on every delivery
+            // never reached the dead-letter table.
+            assertThat(first.metrics().takeoverAttemptBumps.sum()).as("the shed charged the message in the hung handler once").isEqualTo(1);
+            assertThat(second.metrics().takeoverAttemptBumps.sum()).as("released, not taken over: the joining instance charges nothing").isZero();
+            assertThat(attemptsOnRedelivery.get(5, TimeUnit.SECONDS)).as("the message is redelivered with that one attempt counted").isEqualTo(1);
             var stuckWarnings = queueWarnings(logged, "so those handlers were not waited for");
             assertThat(stuckWarnings).as("one WARN for the release").hasSize(1);
             assertThat(stuckWarnings.getFirst().getArgumentArray()[1]).as("the unit").isEqualTo(stuckUnit);
@@ -415,6 +423,20 @@ class ShardOwnedOrderedRebalanceIT {
         return SingleRowQueries.queryForLong(dataSource, "Reading the fence of ordered unit " + unit,
                                              "SELECT fence FROM " + ShardOwnedSchema.LEASE_TABLE + " WHERE queue_id = ? AND lane = 'ordered' AND shard = ?",
                                              QUEUE_ID, unit);
+    }
+
+    /**
+     * The stored attempt count of ordered message {@code seq}, read from inside a handler: unchecked, as a handler cannot throw
+     * a checked exception.
+     */
+    private int attemptsOf(long seq) {
+        try {
+            return SingleRowQueries.queryForInt(dataSource, "Reading the attempts of ordered message " + seq,
+                                                "SELECT attempts FROM " + ShardOwnedSchema.ORDERED_TABLE + " WHERE queue_id = ? AND seq = ?",
+                                                QUEUE_ID, seq);
+        } catch (java.sql.SQLException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     private String ownerOf(int unit) throws Exception {

@@ -613,10 +613,24 @@ handler that never returned left the cluster unbalanced and the unit's other key
 restarted. Once a key has been in its handler longer than `stuckHandlerTimeout`, the shed releases the unit with every
 key still in a handler - that one and any other still running - and logs one WARN naming the queue, the unit, the
 key(s) and how long the longest has been in its handler. The next owner delivers each of those messages again, possibly
-beside its handler - no attempt charged, as the lease was released - so **those keys, too, may run in two handlers at
-once**, and `keptUnitsInHandler()` counts the unit while a handler of it runs on. The same advice applies: raise the
-bound for a queue whose ordered handlers legitimately run longer. The hand-back of a dead pump's unit, new in this
-release, is bounded the same way (§2). (`03f9153d8`)
+beside its handler, so **those keys, too, may run in two handlers at once**, and `keptUnitsInHandler()` counts the unit
+while a handler of it runs on. The same advice applies: raise the bound for a queue whose ordered handlers legitimately
+run longer. The hand-back of a dead pump's unit, new in this release, is bounded the same way (§2). (`03f9153d8`)
+
+**Every one of these releases counts the delivery in the handler it stops waiting for as an attempt**, as the takeover
+of a kept unit at the bound does: before a shed or a dead pump's hand-back releases a unit past `stuckHandlerTimeout`,
+and before `MessageQueue.releaseKeptOrderedUnit` releases one with a key still in its handler (§2), each message still
+in a handler is charged one attempt, and a message that reaches its `maxAttempts` by it is dead-lettered then, with an
+error saying its unit was released while it was still in a handler. The next owner finds the unit released and charges
+nothing itself. Before this, those releases charged nothing either, and a handler that never returns records no
+failure, so a message whose ordered handler hangs on every delivery - a deadlock on its own data, a remote call with
+no timeout - was handed from owner to owner with its attempt count unchanged and delivered again after every release,
+never reaching the dead-letter table, each time leaving one more handler hung. Now it is dead-lettered after
+`maxAttempts` such releases, and its key is blocked behind the dead letter as after any other. The charge is counted
+in `ShardOwnerMetrics.takeoverAttemptBumps` of the releasing queue, and the release's WARN says how many messages were
+charged and which keys were dead-lettered. What to do: nothing, unless a queue's ordered handlers legitimately run past
+its `stuckHandlerTimeout` - then each such shed or release costs that message an attempt, and enough of them
+dead-letter it, so raise the bound as above. (`<!-- fix:U-011 -->`)
 
 ---
 
@@ -827,7 +841,8 @@ release, is bounded the same way (§2). (`03f9153d8`)
   freed it before the handler returned, the instance's liveness lapsed or the bound fired. The call flushes the unit's
   acknowledgements and releases its lease row, so any instance below its fair share takes it under a new fence - and
   **delivers the messages still in a handler again, possibly while those handlers still run them**, the reordering and
-  duplicate delivery the wait exists to prevent. It touches only a unit a stop kept whose row still names the stopping
+  duplicate delivery the wait exists to prevent; each of those messages is charged an attempt before the release, and
+  one that reaches `maxAttempts` by it is dead-lettered instead (§1.1.24). It touches only a unit a stop kept whose row still names the stopping
   instance, and answers from that process's memory: call the instance whose WARN named the unit; any other answers
   with an empty list. Each entry says `RELEASED` (with the keys still in a handler once the unit's acknowledgements
   were flushed - a handler that returned before that flush is, approximately, acknowledged and not named), `ALREADY_TAKEN` or `BUSY`

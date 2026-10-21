@@ -314,9 +314,12 @@ public interface MessageQueue extends Lifecycle, AutoCloseable {
      * keys, and nothing takes the unit before the instance's liveness lapses or the handler has been there longer than
      * the queue's {@code stuckHandlerTimeout}. This is the operator's way out before then, for a handler known to be hung:
      * the unit's acknowledgements are flushed under the fence it was kept under and its lease row released, so any
-     * instance below its fair share may take it under a new fence. <b>Whoever takes it delivers the messages still in a
-     * handler again, possibly while those handlers still run them</b> - the reordering and duplicate delivery the wait
-     * exists to prevent. A unit whose handler has returned meanwhile is simply handed back, as it would have been.
+     * instance below its fair share may take it under a new fence. Before the release each message still in a handler is
+     * charged an attempt, as a takeover would charge one, and a message that reaches {@code maxAttempts} by it is
+     * dead-lettered: a message whose handler hangs on every delivery, released this way each time, reaches the
+     * dead-letter table. <b>Whoever takes it delivers the messages still in a handler again, bar those dead-lettered,
+     * possibly while those handlers still run them</b> - the reordering and duplicate delivery the wait exists to prevent. A unit whose handler
+     * has returned meanwhile is simply handed back, as it would have been, and nothing is charged.
      * <p>
      * Only a unit a stop kept and whose lease row still names the subscription's instance id under that fence is
      * touched; every other unit, this process's included, is left alone. Kept units live in the memory of the process

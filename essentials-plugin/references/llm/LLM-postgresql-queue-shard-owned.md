@@ -142,16 +142,20 @@ more when it stops waiting. `ShardOwnerMetrics.keptUnitsInHandler` counts such u
 whose WARN named the unit: kept units live in that process's memory, and any other instance answers with
 an empty list. It flushes the unit's acknowledgements under the fence it was kept under and releases its
 lease row, so any instance below its fair share takes it under a new fence - and **delivers the messages
-still in a handler again, possibly beside those handlers** (the cost the wait exists to avoid; no attempt
-charged, the row was released). Only a unit a stop kept whose row still names the stopping instance is
+still in a handler again, possibly beside those handlers** (the cost the wait exists to avoid). Before the
+release each of those messages is charged an attempt, and one that reaches `maxAttempts` by it is
+dead-lettered instead of delivered again, so a message whose handler hangs on every delivery reaches the
+dead-letter table once the queue has stopped waiting for it `maxAttempts` times (a hang an owner goes on
+serving its unit through is not bounded by this). Only a unit a stop kept whose row still names the stopping instance is
 touched. Each entry reports `RELEASED` (with the keys in a handler), `ALREADY_TAKEN` (taken under a newer
 fence meanwhile, nothing released) or `BUSY` (the stop is still flushing it or another hand-back or release
 of it runs; ask again).
 Once released the unit no longer keeps an unsubscribed subscription's id out of use. The same
 bound covers a fair-share shed of an ordered unit and the hand-back of a unit whose pump died, which wait
 for the keys in their handlers: past it each releases the unit with every key still in a handler — the one
-past the bound and any other still running — with one WARN, and the next owner delivers each of those
-messages again, possibly beside its handler (no attempt charged: the row was released). Stopping
+past the bound and any other still running — with one WARN. Each of those messages is charged an attempt
+before the release, as on a release on request, and dead-lettered if that brings it to `maxAttempts`; the
+next owner delivers the rest again, possibly beside their handlers. Stopping
 instead left one stopped subscription behind per round — a COMPETING WARN with a new `-N` instance id
 suffix each time, and a queue `stop()`/`start()` restarting every abandoned handler. `ShardOwnedDurableQueues`
 unsubscribes on every consumer stop and cancel, so a `DurableLocalCommandBus` restart or an `Inbox`
@@ -256,7 +260,7 @@ var slowShedding = settings.toBuilder().setShedGrace(Duration.ofSeconds(30)).bui
 | `watermarkCap` | 60 s | **ORDERED lane only.** How long one long-running *write* transaction may pin the lane before the cursor is forced past it — which can skip that transaction's messages | Leave it. It is an escape hatch, not a tuning knob; if it fires, fix the long transaction |
 | `leaseTtl` | 30 s | How long a shard stays unserved if its owner dies without releasing. Heartbeat renews at a third of it | Lower for faster failover, but not below your worst stop-the-world pause, and **well above your slowest handler**: if an instance loses liveness while a handler runs longer than the rest of the lease, a successor starts the same key beside it. `ShardOwnerMetrics.handlersOutlastingLease` counts handlers that ran longer than `leaseTtl`, with a WARN at most once a minute |
 | `shedGrace` | 5 s | How long an ordered shard waits to drain before abandoning a hand-over (retried every heartbeat; once a key has been in its handler longer than `stuckHandlerTimeout`, the hand-over goes ahead with every key still in a handler), and how long `stop()` waits for handlers in flight | Raise if handlers are slow and rebalancing stalls, or if `stop()` keeps ordered units |
-| `stuckHandlerTimeout` | 15 min | How long a message may be in its handler before the queue treats the handler as stuck and stops waiting for it. Applied to the three waits for an ordered unit's handler: a unit a `stop()` kept because a key was still in its handler (past it a restart of the queue, or a `consume()` wanting that subscription's instance id, takes the unit over under a new fence), a fair-share shed, and the hand-back of a unit whose pump died (past it both release the unit with every key still in a handler — the one past the bound and any other still running — one WARN each). Either way the next owner delivers the message of each key still in a handler again, possibly beside its handler, and **those keys may run in two handlers at once**. Must be positive; no off switch | **New in 0.60.1, and a behaviour change**: in 0.60.0 a restart (or that `consume()`) took the kept unit back at once; now it waits for the handler up to this bound, then takes the unit over. A fair-share shed, which waited for the handler however long it ran, now releases the unit past this bound; the dead-pump hand-back, new in 0.60.1, does the same. Raise it, for the queue or for all, if handlers legitimately run longer than 15 minutes. Per queue: `settings.withStuckHandlerTimeout(...)` on that queue's `PostgresqlMessageQueueBuilder.setSettings`, or `essentials.shard-owned-queue.stuck-handler-timeouts.<queue>` in the starter (`stuck-handler-timeout` for every queue) |
+| `stuckHandlerTimeout` | 15 min | How long a message may be in its handler before the queue treats the handler as stuck and stops waiting for it. Applied to the three waits for an ordered unit's handler: a unit a `stop()` kept because a key was still in its handler (past it a restart of the queue, or a `consume()` wanting that subscription's instance id, takes the unit over under a new fence), a fair-share shed, and the hand-back of a unit whose pump died (past it both release the unit with every key still in a handler — the one past the bound and any other still running — one WARN each). Each time it stops waiting, the message in that handler is charged an attempt, and dead-lettered if that brings it to `maxAttempts`; otherwise the next owner delivers the message of each key still in a handler again, possibly beside its handler, and **those keys may run in two handlers at once**. Must be positive; no off switch | **New in 0.60.1, and a behaviour change**: in 0.60.0 a restart (or that `consume()`) took the kept unit back at once; now it waits for the handler up to this bound, then takes the unit over. A fair-share shed, which waited for the handler however long it ran, now releases the unit past this bound; the dead-pump hand-back, new in 0.60.1, does the same. Raise it, for the queue or for all, if handlers legitimately run longer than 15 minutes. Per queue: `settings.withStuckHandlerTimeout(...)` on that queue's `PostgresqlMessageQueueBuilder.setSettings`, or `essentials.shard-owned-queue.stuck-handler-timeouts.<queue>` in the starter (`stuck-handler-timeout` for every queue) |
 
 `watermarkCap` and `holeExpiry` answer the same question for different lanes and are deliberately
 separate settings with an order of magnitude between them. The ordered lane resolves a gap *exactly*
@@ -293,7 +297,11 @@ schedule the retry or dead-letter the message; the next owner redelivers it.
 under the next. A clean handover (the previous owner stopped and released the shard) charges nothing. A takeover
 after a crash or a lost lease charges one attempt to the few rows the previous owner could have had in flight, and a
 message that has taken its owner down `maxAttempts` times is dead-lettered with an error saying no failure was ever
-recorded for it.
+recorded for it. An ordered unit released with a message still in a handler that has not returned - by a shed or a
+dead-pump hand-back past `stuckHandlerTimeout`, or on request - is released, so its next owner charges nothing: the
+releasing owner charges that message its attempt before the release instead, and dead-letters it at `maxAttempts`,
+so a message whose handler hangs on every delivery is dead-lettered too, once the queue has stopped waiting for it
+`maxAttempts` times. A hang in a handler of an owner that goes on serving its unit is not bounded by this.
 
 ### What a handler is given
 
@@ -377,8 +385,9 @@ deploy with ordered traffic sees one shard count throughout, and `ShardOwnedOrde
 `ShardOwnedMultiProcessIT` assert no key is ever in two handlers while shards move between instances.
 The one exception is a handler the queue counts as stuck: once a key has been in its handler longer than
 `stuckHandlerTimeout`, a shed releases the unit with every key still in a handler — the one past the bound
-and any other still running — and the next owner delivers each of those messages again, possibly beside
-its handler; the hand-back of a dead pump's unit does the same.
+and any other still running — each of those messages is charged an attempt before the release, and
+dead-lettered if that brings it to `maxAttempts`, and the next owner delivers the rest again, possibly
+beside their handlers; the hand-back of a dead pump's unit does the same.
 
 #### Each lane caps how many instances can consume it
 
