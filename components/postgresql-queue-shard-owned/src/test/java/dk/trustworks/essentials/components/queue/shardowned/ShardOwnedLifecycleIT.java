@@ -536,7 +536,7 @@ class ShardOwnedLifecycleIT {
         var release    = new CountDownLatch(1);
         var settings   = settingsWithShedGrace(Duration.ofMillis(300));
         var instanceId = "kept-while-the-stop-flushes";
-        var holding    = new StopFlushHoldingDataSource(dataSource);
+        var holding    = new FlushHoldingDataSource(dataSource, FlushHoldingDataSource.STOP_BUDGET_THREAD);
         try (var runtime = new ShardRuntime(dataSource, settings)) {
             var queue = ShardOwnedQueue.builder().setDataSource(holding).setQueueId(QUEUE_ID).setShardCount(SHARD_COUNT)
                                        .setInstanceId(instanceId).setRuntime(runtime).build();
@@ -615,7 +615,7 @@ class ShardOwnedLifecycleIT {
         var release    = new CountDownLatch(1);
         var settings   = settingsWithShedGrace(Duration.ofMillis(300));
         var instanceId = "kept-while-an-earlier-stop-flushes";
-        var holding    = new StopFlushHoldingDataSource(dataSource);
+        var holding    = new FlushHoldingDataSource(dataSource, FlushHoldingDataSource.STOP_BUDGET_THREAD);
         try (var runtime = new ShardRuntime(dataSource, settings)) {
             var queue = ShardOwnedQueue.builder().setDataSource(holding).setQueueId(QUEUE_ID).setShardCount(SHARD_COUNT)
                                        .setInstanceId(instanceId).setRuntime(runtime).build();
@@ -675,6 +675,214 @@ class ShardOwnedLifecycleIT {
                 queue.stop();
             }
         }
+    }
+
+    /**
+     * A unit a stop kept, flushed by that stop, whose handler has returned since and whose hand-back - on the thread the
+     * key leaving its handler started - is still flushing it when the restarted queue is stopped again. That later stop
+     * cannot claim the hand-back the other thread is running, and keeps nothing of its own: it used to file the unit with
+     * those whose hand-back it runs itself, find the claim taken, and deregister the instance while the running hand-back
+     * had not released the row yet - the unit then read as ownerless, another instance could take it under a new fence,
+     * and the hand-back's flush was refused (a lease-lost WARN, {@code fencedOutAcks}, the handled message delivered
+     * again). It now stays registered, as for a unit the earlier stop's budget thread is still flushing.
+     */
+    @Test
+    void a_later_stop_leaves_the_instance_registered_while_a_hand_back_of_a_unit_an_earlier_stop_kept_is_still_running() throws Exception {
+        var entries    = new AtomicInteger();
+        var entered    = new CountDownLatch(1);
+        var release    = new CountDownLatch(1);
+        // A long lease: a heartbeat tick, every third of it, would otherwise hand the unit back itself, on its own thread,
+        // should it claim the unit before the thread the key leaving its handler starts.
+        var settings   = settingsWithShedGrace(Duration.ofMillis(300)).toBuilder().setLeaseTtl(Duration.ofSeconds(30)).build();
+        var instanceId = "kept-while-its-hand-back-runs";
+        var holding    = new FlushHoldingDataSource(dataSource, FlushHoldingDataSource.KEPT_UNIT_HAND_BACK_THREAD);
+        try (var runtime = new ShardRuntime(dataSource, settings)) {
+            var queue = ShardOwnedQueue.builder().setDataSource(holding).setQueueId(QUEUE_ID).setShardCount(SHARD_COUNT)
+                                       .setInstanceId(instanceId).setRuntime(runtime).build();
+            try {
+                queue.startConsumingOrdered((messageId, key, payload, payloadType) -> {
+                    // The first delivery of the key holds its handler; a later one returns at once.
+                    if (entries.incrementAndGet() == 1) {
+                        entered.countDown();
+                        awaitQuietly(release);
+                    }
+                }, settings, SHARD_COUNT);
+                queue.enqueueOrdered(List.of(new ShardOwnedStorage.OrderedPayload("ACC-1", 0, "0".getBytes(StandardCharsets.UTF_8), 1)));
+                assertThat(entered.await(20, TimeUnit.SECONDS)).isTrue();
+
+                queue.stop();
+                assertThat(queue.metrics().keptUnitsInHandler()).as("premise: the busy unit is kept").isEqualTo(1);
+                Awaitility.await().atMost(Duration.ofSeconds(10))
+                          .untilAsserted(() -> assertThat(queue.handBackStillRunning()).as("premise: the stop's budget thread has flushed the kept owner")
+                                                                                     .isFalse());
+                var keptUnit = ShardOwnedSchema.unitForKey("ACC-1", ShardOwnedSchema.ORDERED_UNITS);
+                var kept     = new UnitFence(keptUnit, fenceOf("ordered", keptUnit));
+                assertThat(ownerOf("ordered", kept.shard())).as("premise: the kept unit's row names the instance").isEqualTo(instanceId);
+
+                queue.start();
+                assertThat(queue.shardsHeld()).as("premise: the restart leaves the kept unit alone")
+                                              .isEqualTo(ShardOwnedSchema.ORDERED_UNITS - 1);
+
+                // The kept handler returns: its last key leaving the handler hands the unit back on a thread of its own,
+                // held as it flushes the acknowledgement the handler left.
+                holding.holdConnections();
+                release.countDown();
+                assertThat(holding.awaitConnectionHeld(Duration.ofSeconds(10)))
+                        .as("premise: the unit is being handed back on the thread its key leaving the handler started").isTrue();
+                holding.letConnect();
+                assertThat(holding.awaitAcknowledgementHeld(Duration.ofSeconds(10)))
+                        .as("premise: that hand-back is flushing the kept owner's acknowledgement").isTrue();
+
+                // The later stop: it keeps nothing of its own, and cannot claim the hand-back running on the other thread.
+                queue.stop();
+                assertThat(queue.shardsHeld()).as("premise: the later stop has ended its run").isZero();
+                Awaitility.await().atMost(Duration.ofSeconds(10))
+                          .untilAsserted(() -> assertThat(orderedUnitsOwnedBy(instanceId))
+                                  .as("premise: the later stop has released the units of its own run").isEqualTo(1));
+                Awaitility.await().atMost(Duration.ofSeconds(10))
+                          .untilAsserted(() -> assertThat(queue.handBackStillRunning()).as("premise: the later stop's budget thread has finished")
+                                                                                     .isFalse());
+                Awaitility.await().during(Duration.ofMillis(1_000)).atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
+                    assertThat(instanceRegistered(instanceId)).as("the later stop leaves the instance registered").isTrue();
+                    assertThat(ownerOf("ordered", kept.shard())).as("the kept unit's row still names the instance").isEqualTo(instanceId);
+                    assertThat(fenceOf("ordered", kept.shard())).as("under the fence it was kept under").isEqualTo(kept.fence());
+                });
+
+                holding.letAcknowledge();
+                Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+                    assertThat(queue.keptOrderedUnitNotHandedBack()).as("handed back once that hand-back has run").isFalse();
+                    assertThat(ownerOf("ordered", kept.shard())).as("released").isNull();
+                });
+                assertThat(queue.metrics().fencedOutAcks.sum()).as("the hand-back's flush of the kept owner was not refused").isZero();
+                assertThat(entries).as("the message the kept handler handled is not delivered again").hasValue(1);
+                assertThat(queue.orderedRemaining()).as("its acknowledgement was flushed").isZero();
+            } finally {
+                release.countDown();
+                holding.letConnect();
+                holding.letAcknowledge();
+                queue.stop();
+            }
+        }
+    }
+
+    /**
+     * A unit a stop kept whose handler has returned and whose hand-back failed, so that the restarted queue's later stop
+     * finds it awaiting a hand-back and takes on handing it back itself, on its budget thread. Before that thread gets to
+     * it, another thread claims the unit - here a release on request - and is still flushing it when the budget thread's
+     * claim is refused. The budget thread used to deregister the instance then, the unit's row still naming it: the unit
+     * read as ownerless, another instance could take it under a new fence, and the running hand-back's flush was refused.
+     * It now reads the unit's phase again after its own hand-backs and stays registered, as for a unit another thread was
+     * already handing back when the stop ended its run.
+     */
+    @Test
+    void a_later_stop_leaves_the_instance_registered_while_a_unit_it_was_to_hand_back_is_released_on_request() throws Exception {
+        var entries       = new AtomicInteger();
+        var entered       = new CountDownLatch(1);
+        var release       = new CountDownLatch(1);
+        // A long lease: a heartbeat tick, every third of it, would otherwise retry the failed hand-back itself.
+        var settings      = settingsWithShedGrace(Duration.ofMillis(300)).toBuilder().setLeaseTtl(Duration.ofSeconds(30)).build();
+        var instanceId    = "kept-released-on-request-under-a-later-stop";
+        var requesterName = "release-kept-unit-on-request";
+        var stopHolding   = new FlushHoldingDataSource(dataSource, FlushHoldingDataSource.STOP_BUDGET_THREAD);
+        var request       = new FlushHoldingDataSource(stopHolding, requesterName);
+        try (var runtime = new ShardRuntime(dataSource, settings)) {
+            var queue = ShardOwnedQueue.builder().setDataSource(request).setQueueId(QUEUE_ID).setShardCount(SHARD_COUNT)
+                                       .setInstanceId(instanceId).setRuntime(runtime).build();
+            var releaseOnRequest = new FutureTask<Optional<KeptUnitRelease>>(
+                    () -> queue.releaseKeptOrderedUnit(ShardOwnedSchema.unitForKey("ACC-1", ShardOwnedSchema.ORDERED_UNITS)));
+            try {
+                queue.startConsumingOrdered((messageId, key, payload, payloadType) -> {
+                    // The first delivery of the key holds its handler; a later one returns at once.
+                    if (entries.incrementAndGet() == 1) {
+                        entered.countDown();
+                        awaitQuietly(release);
+                    }
+                }, settings, SHARD_COUNT);
+                queue.enqueueOrdered(List.of(new ShardOwnedStorage.OrderedPayload("ACC-1", 0, "0".getBytes(StandardCharsets.UTF_8), 1)));
+                assertThat(entered.await(20, TimeUnit.SECONDS)).isTrue();
+
+                queue.stop();
+                assertThat(queue.metrics().keptUnitsInHandler()).as("premise: the busy unit is kept").isEqualTo(1);
+                Awaitility.await().atMost(Duration.ofSeconds(10))
+                          .untilAsserted(() -> assertThat(queue.handBackStillRunning()).as("premise: the stop's budget thread has flushed the kept owner")
+                                                                                     .isFalse());
+                var keptUnit = ShardOwnedSchema.unitForKey("ACC-1", ShardOwnedSchema.ORDERED_UNITS);
+                var kept     = new UnitFence(keptUnit, fenceOf("ordered", keptUnit));
+                assertThat(ownerOf("ordered", kept.shard())).as("premise: the kept unit's row names the instance").isEqualTo(instanceId);
+
+                queue.start();
+                assertThat(queue.shardsHeld()).as("premise: the restart leaves the kept unit alone")
+                                              .isEqualTo(ShardOwnedSchema.ORDERED_UNITS - 1);
+
+                // The kept handler returns, and the hand-back its key leaving the handler starts fails to release the row.
+                LeaseReleaseRefusals.failLeaseReleasesOf(dataSource, new short[]{QUEUE_ID}, "ordered", kept.shard(), true);
+                try {
+                    release.countDown();
+                    Awaitility.await().atMost(Duration.ofSeconds(10))
+                              .untilAsserted(() -> assertThat(LeaseReleaseRefusals.releasesRefused(dataSource, QUEUE_ID, kept.shard()))
+                                      .as("premise: the kept unit's hand-back failed to release its row").isGreaterThanOrEqualTo(1));
+                    Awaitility.await().atMost(Duration.ofSeconds(10))
+                              .untilAsserted(() -> assertThat(threadsNamed(FlushHoldingDataSource.KEPT_UNIT_HAND_BACK_THREAD + QUEUE_ID + "-" + kept.shard()))
+                                      .as("premise: that hand-back has ended, leaving the unit awaiting a hand-back").isZero());
+                    assertThat(queue.orderedRemaining()).as("premise: its acknowledgement was flushed").isZero();
+
+                    // The later stop keeps nothing of its own and finds the unit awaiting a hand-back, which its budget
+                    // thread is to run; that thread is held as it asks for its first connection.
+                    stopHolding.holdConnections();
+                    queue.stop();
+                    assertThat(queue.shardsHeld()).as("premise: the later stop has ended its run").isZero();
+                    assertThat(stopHolding.awaitConnectionHeld(Duration.ofSeconds(10)))
+                            .as("premise: the later stop's budget thread is held before its hand-backs").isTrue();
+                } finally {
+                    LeaseReleaseRefusals.failLeaseReleasesOf(dataSource, new short[]{QUEUE_ID}, "ordered", kept.shard(), false);
+                }
+
+                // Another thread claims the unit first: a release on request, held as it asks for a connection to flush it.
+                request.holdConnections();
+                var requester = new Thread(releaseOnRequest, requesterName);
+                requester.setDaemon(true);
+                requester.start();
+                assertThat(request.awaitConnectionHeld(Duration.ofSeconds(10)))
+                        .as("premise: the release on request has claimed the unit and is about to flush it").isTrue();
+
+                // The later stop's budget thread goes on: its claim of the unit is refused.
+                stopHolding.letAcknowledge();
+                stopHolding.letConnect();
+                Awaitility.await().atMost(Duration.ofSeconds(10))
+                          .untilAsserted(() -> assertThat(queue.handBackStillRunning()).as("premise: the later stop's budget thread has finished")
+                                                                                     .isFalse());
+                assertThat(orderedUnitsOwnedBy(instanceId)).as("premise: the later stop has released the units of its own run").isEqualTo(1);
+                Awaitility.await().during(Duration.ofMillis(1_000)).atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
+                    assertThat(instanceRegistered(instanceId)).as("the later stop leaves the instance registered").isTrue();
+                    assertThat(ownerOf("ordered", kept.shard())).as("the kept unit's row still names the instance").isEqualTo(instanceId);
+                    assertThat(fenceOf("ordered", kept.shard())).as("under the fence it was kept under").isEqualTo(kept.fence());
+                });
+
+                request.letAcknowledge();
+                request.letConnect();
+                assertThat(releaseOnRequest.get(10, TimeUnit.SECONDS))
+                        .as("the release on request released the unit")
+                        .hasValueSatisfying(answer -> assertThat(answer.outcome()).isEqualTo(KeptUnitRelease.Outcome.RELEASED));
+                assertThat(ownerOf("ordered", kept.shard())).as("released").isNull();
+                assertThat(queue.keptOrderedUnitNotHandedBack()).as("handed back").isFalse();
+                assertThat(queue.metrics().fencedOutAcks.sum()).as("no flush of the kept owner was refused").isZero();
+                assertThat(entries).as("the message the kept handler handled is not delivered again").hasValue(1);
+            } finally {
+                release.countDown();
+                stopHolding.letConnect();
+                stopHolding.letAcknowledge();
+                request.letConnect();
+                request.letAcknowledge();
+                queue.stop();
+            }
+        }
+    }
+
+    /**
+     * How many live threads have a name starting with {@code prefix}.
+     */
+    private static long threadsNamed(String prefix) {
+        return Thread.getAllStackTraces().keySet().stream().filter(thread -> thread.isAlive() && thread.getName().startsWith(prefix)).count();
     }
 
     /**
@@ -4158,27 +4366,34 @@ class ShardOwnedLifecycleIT {
     }
 
     /**
-     * A {@link DataSource} that holds the budget thread of a {@code ShardOwnedQueue} stop (named {@code shard-queue-stop-*})
-     * at two points while told to: as it asks for a connection ({@link #holdConnections}), and, on that connection, as it
-     * prepares a delete from the ordered lane - an owner's acknowledgement flush, its batch already taken - until
-     * {@link #letAcknowledge}. Only the first budget thread that asks for a connection once told to hold is held, so a later
-     * stop's budget thread goes through. Every other thread, and the held one once let through, get the delegate's
-     * connections as they are.
+     * A {@link DataSource} that holds one thread of a {@code ShardOwnedQueue} whose name starts with a given prefix - the
+     * budget thread of a stop ({@link #STOP_BUDGET_THREAD}), or the thread a kept unit is handed back on as its key leaves
+     * the handler ({@link #KEPT_UNIT_HAND_BACK_THREAD}), or a thread the test starts under a name of its own - at two
+     * points while told to: as it asks for a connection
+     * ({@link #holdConnections}), and, on that connection, as it prepares a delete from the ordered lane - an owner's
+     * acknowledgement flush, its batch already taken - until {@link #letAcknowledge}. Only the first such thread that asks
+     * for a connection once told to hold is held, so a later one goes through. Every other thread, and the held one once
+     * let through, get the delegate's connections as they are.
      */
-    private static final class StopFlushHoldingDataSource implements DataSource {
+    private static final class FlushHoldingDataSource implements DataSource {
+        static final  String                  STOP_BUDGET_THREAD         = "shard-queue-stop-";
+        static final  String                  KEPT_UNIT_HAND_BACK_THREAD = "shard-queue-kept-unit-";
         private final DataSource              delegate;
-        private final CountDownLatch          connecting      = new CountDownLatch(1);
-        private final CountDownLatch          acknowledging   = new CountDownLatch(1);
-        private final CountDownLatch          acknowledgeHeld = new CountDownLatch(1);
-        private final AtomicBoolean           holdConnections = new AtomicBoolean();
-        private final AtomicReference<Thread> heldThread      = new AtomicReference<>();
+        private final String                  threadNamePrefix;
+        private final CountDownLatch          connecting                 = new CountDownLatch(1);
+        private final CountDownLatch          connectionHeld             = new CountDownLatch(1);
+        private final CountDownLatch          acknowledging              = new CountDownLatch(1);
+        private final CountDownLatch          acknowledgeHeld            = new CountDownLatch(1);
+        private final AtomicBoolean           holdConnections            = new AtomicBoolean();
+        private final AtomicReference<Thread> heldThread                 = new AtomicReference<>();
 
-        StopFlushHoldingDataSource(DataSource delegate) {
+        FlushHoldingDataSource(DataSource delegate, String threadNamePrefix) {
             this.delegate = delegate;
+            this.threadNamePrefix = threadNamePrefix;
         }
 
         /**
-         * Hold a stop's budget thread as it asks for a connection, until {@link #letConnect}.
+         * Hold the first thread named with the prefix as it asks for a connection, until {@link #letConnect}.
          */
         void holdConnections() {
             holdConnections.set(true);
@@ -4194,18 +4409,26 @@ class ShardOwnedLifecycleIT {
         }
 
         /**
-         * Whether a stop's budget thread has reached an ordered acknowledgement, and is held there, within {@code timeout}.
+         * Whether the held thread has asked for a connection, and is held there, within {@code timeout}.
+         */
+        boolean awaitConnectionHeld(Duration timeout) throws InterruptedException {
+            return connectionHeld.await(timeout.toMillis(), TimeUnit.MILLISECONDS);
+        }
+
+        /**
+         * Whether the held thread has reached an ordered acknowledgement, and is held there, within {@code timeout}.
          */
         boolean awaitAcknowledgementHeld(Duration timeout) throws InterruptedException {
             return acknowledgeHeld.await(timeout.toMillis(), TimeUnit.MILLISECONDS);
         }
 
         /**
-         * Whether this is the budget thread held here: the first one to ask for a connection once told to hold.
+         * Whether this is the thread held here: the first one named with the prefix to ask for a connection once told to
+         * hold.
          */
-        private boolean onTheHeldBudgetThread() {
+        private boolean onTheHeldThread() {
             var current = Thread.currentThread();
-            if (!current.getName().startsWith("shard-queue-stop-")) {
+            if (!current.getName().startsWith(threadNamePrefix)) {
                 return false;
             }
             if (holdConnections.get()) {
@@ -4218,7 +4441,7 @@ class ShardOwnedLifecycleIT {
         // its interface, which the context loader need not.
         @SuppressWarnings("PMD.UseProperClassLoader")
         private Connection holding(Connection connection) {
-            if (!onTheHeldBudgetThread()) {
+            if (!onTheHeldThread()) {
                 return connection;
             }
             return (Connection) java.lang.reflect.Proxy.newProxyInstance(
@@ -4238,7 +4461,8 @@ class ShardOwnedLifecycleIT {
 
         @Override
         public Connection getConnection() throws SQLException {
-            if (holdConnections.get() && onTheHeldBudgetThread()) {
+            if (holdConnections.get() && onTheHeldThread()) {
+                connectionHeld.countDown();
                 awaitQuietly(connecting);
             }
             return holding(delegate.getConnection());
@@ -4246,7 +4470,8 @@ class ShardOwnedLifecycleIT {
 
         @Override
         public Connection getConnection(String username, String password) throws SQLException {
-            if (holdConnections.get() && onTheHeldBudgetThread()) {
+            if (holdConnections.get() && onTheHeldThread()) {
+                connectionHeld.countDown();
                 awaitQuietly(connecting);
             }
             return holding(delegate.getConnection(username, password));

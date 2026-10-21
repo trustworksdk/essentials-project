@@ -265,8 +265,9 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
     /**
      * Whether a run of this queue still needs the instance's membership row ({@link #needsMembership()}). Set by
      * {@link #start()} as it installs a run; set by {@link #endRun} to whether an ordered unit is kept - by the run it
-     * ends, or by an earlier one whose key is still in its handler or whose stop's budget thread has not flushed it yet
-     * ({@link #keptOrderedOwners}, {@link KeptUnit.Phase#STOP_FLUSHING}) - once it has decided
+     * ends, or by an earlier one whose key is still in its handler, whose stop's budget thread has not flushed it yet
+     * or whose hand-back is running ({@link #keptOrderedOwners}, {@link KeptUnit.Phase#STOP_FLUSHING},
+     * {@link KeptUnit.Phase#HANDING_BACK}) - once it has decided
      * that, after draining. A run a stop has taken out still needs the row until then - while its owners drain,
      * and while a start still running ends it for a stop that gave up waiting ({@link #endRunOfStart}). An abrupt stop
      * leaves it set, as it leaves the units leased: it stands in for a crash, whose membership row ages out. Read by the
@@ -2950,8 +2951,9 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * Whether this queue still needs its instance's membership row: from the moment a {@link #start()} installs a run
      * until that run is ended, once drained, keeping no ordered unit - by a stop, or by the undo of a failed start - and,
      * when it kept one, until a later run ends keeping nothing, with no key an earlier stop kept a unit for still in its
-     * handler and no such unit that stop's budget thread has not flushed yet ({@link #keptOrderedOwners},
-     * {@link KeptUnit.Phase#STOP_FLUSHING}). A stop that gave up waiting for a start still running
+     * handler and no such unit that stop's budget thread has not flushed yet, nor one a hand-back is still releasing, as
+     * that later run's stop finds them when it ends the run
+     * ({@link #keptOrderedOwners}, {@link KeptUnit.Phase#STOP_FLUSHING}, {@link KeptUnit.Phase#HANDING_BACK}). A stop that gave up waiting for a start still running
      * ({@link #lifecycleLock}) leaves it true until that start has ended the run; an abrupt stop leaves it true, as it
      * leaves the units leased. Read by the stop of the other lane of the subscription ({@link #shareMembershipWith}),
      * and by the hand-back of each stop of this queue, before it deletes the row: a hand-back reading it after a later
@@ -3143,12 +3145,17 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         // Units an earlier stop kept and that are not handed back yet, in three kinds, each owner's in-flight count and
         // phase read once, so none falls between them. Those whose key is still in its handler: this run did not take them
         // (keptUnitsNotHandedBack), and their rows still name this instance, so they keep it registered as this run's own
-        // kept units do. Those whose handler has returned since but that the budget thread of the stop that kept them has
-        // not let out of STOP_FLUSHING yet: no hand-back claims them until that thread has flushed them, this stop's
-        // included, so their rows still name this instance and they keep it registered too - deleted, the row would make
-        // the unit read as ownerless while that thread still flushes it. Those whose handler has returned since, past
-        // STOP_FLUSHING, and whose hand-back did not run or failed: handed back on the budget thread below, as this run's
-        // own rows are released there, and listed still, so a later tick or start retries a hand-back that fails there.
+        // kept units do. Those whose handler has returned since but that another thread is still working on, so this stop
+        // cannot claim their hand-back (busy): the budget thread of the stop that kept them has not let them out of
+        // STOP_FLUSHING yet, or a hand-back or release on request of them is running (HANDING_BACK) - the key leaving its
+        // handler, a heartbeat tick, a start, an earlier stop's budget thread or a consume(). Their rows still name this
+        // instance until that thread has flushed and released them, so they keep it registered too - deleted, the row
+        // would make the unit read as ownerless while that thread still flushes it, and another instance taking it then
+        // has that flush refused. Those whose handler has returned since, neither busy nor handed back, whose hand-back
+        // did not run or failed: handed back on the budget thread below, as this run's own rows are released there, and
+        // listed still, so a later tick or start retries a hand-back that fails there. One another thread claims before
+        // that budget thread does is busy by then: the budget thread reads their phase again before it deregisters
+        // (handBackWithinBudget).
         // And a fourth kind, listed still but keeping nothing registered: those whose key has been in its handler longer
         // than stuckHandlerTimeout, which nothing waits for (reviewStuckKeptUnits) - a run of this queue may have taken
         // the unit over already, and another instance may once this one deregisters - and those released on request with
@@ -3157,19 +3164,21 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         pruneReleasedPastStuckHandler();
         var keptEarlier     = new ArrayList<KeptUnit>();
         var givenUpEarlier  = new ArrayList<KeptUnit>();
-        var flushingEarlier = new ArrayList<KeptUnit>();
+        var busyEarlier     = new ArrayList<KeptUnit>();
         var returnedEarlier = new ArrayList<KeptUnit>();
         for (var earlier : keptOrderedOwners) {
             var phase = earlier.phase();
             if (earlier.owner().inFlight() > 0) {
+                // At HANDING_BACK too: a release on request may claim the unit with its key still in the handler, and
+                // until that release has run the row names this instance, so the unit keeps it registered.
                 (phase.nothingWaitsForHandler() ? givenUpEarlier : keptEarlier).add(earlier);
             } else if (earlier.owner().holdsLeaseRow()) {
-                (phase == KeptUnit.Phase.STOP_FLUSHING ? flushingEarlier : returnedEarlier).add(earlier);
+                (phase == KeptUnit.Phase.STOP_FLUSHING || phase == KeptUnit.Phase.HANDING_BACK ? busyEarlier : returnedEarlier).add(earlier);
             }
         }
         var stillKept = new ArrayList<KeptUnit>(keptEarlier);
         stillKept.addAll(givenUpEarlier);
-        stillKept.addAll(flushingEarlier);
+        stillKept.addAll(busyEarlier);
         stillKept.addAll(returnedEarlier);
         stillKept.addAll(keptNow);
         keptOrderedOwners = List.copyOf(stillKept);
@@ -3177,12 +3186,13 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         // stopped and counting nothing, before these units were kept.
         countKeptUnitsInHandlerInMetrics();
         // This run's own need for the membership row ends here, unless a unit is kept with its key still in a handler, or
-        // one an earlier stop kept is still at STOP_FLUSHING: written before the hand-back reads the other lane's
-        // (handBackWithinBudget), so of two lanes ending at once at least one reads the other's as ended.
-        runNeedsMembership = !keptEarlier.isEmpty() || !flushingEarlier.isEmpty() || !kept.isEmpty();
+        // one an earlier stop kept is still busy - at STOP_FLUSHING, or with a hand-back of it running (HANDING_BACK):
+        // written before the hand-back reads the other lane's (handBackWithinBudget), so of two lanes ending at once at
+        // least one reads the other's as ended.
+        runNeedsMembership = !keptEarlier.isEmpty() || !busyEarlier.isEmpty() || !kept.isEmpty();
         var toRelease = held.stream().filter(owner -> !kept.contains(owner)).toList();
         var keptEarlierOwners = keptEarlier.stream().map(KeptUnit::owner).toList();
-        var flushingEarlierOwners = flushingEarlier.stream().map(KeptUnit::owner).toList();
+        var busyEarlierOwners = busyEarlier.stream().map(KeptUnit::owner).toList();
         // Nothing against the database for a run with no lease row to hand back, no earlier kept unit to hand back and no
         // deregistration owed: a start that failed before it adopted anything.
         if (!held.isEmpty() || !returnedEarlier.isEmpty() || deregister) {
@@ -3191,7 +3201,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             handBacksRunning.incrementAndGet();
             withinShutdownBudget(() -> {
                 try {
-                    handBackWithinBudget(serving, toRelease, kept, keptEarlierOwners, flushingEarlierOwners, returnedEarlier, keptNow,
+                    handBackWithinBudget(serving, toRelease, kept, keptEarlierOwners, busyEarlierOwners, returnedEarlier, keptNow,
                                          deregister);
                 } finally {
                     handBacksRunning.decrementAndGet();
@@ -3241,9 +3251,13 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * the rows of {@code toRelease}, hand back the units an earlier stop kept whose handler has returned since
      * ({@code returnedEarlier}, {@link #handBackKeptUnit}), and deregister this instance
      * ({@link ShardOwnedStorage#deregisterInstance(String)}) when {@code deregister}, no ordered unit is {@code kept} by
-     * this run nor still {@code keptEarlier} by an earlier one with its key in a handler nor {@code flushingEarlier}, kept by
-     * an earlier one whose budget thread has not flushed it yet ({@link KeptUnit.Phase#STOP_FLUSHING}), no run of this queue started
-     * since needs the row ({@link #needsMembership()}), and the other lane of the {@code PostgresqlMessageQueue}
+     * this run nor still {@code keptEarlier} by an earlier one with its key in a handler nor {@code busyEarlier} (kept by
+     * an earlier one whose handler has returned but whose budget thread has not flushed it yet,
+     * {@link KeptUnit.Phase#STOP_FLUSHING}, or whose hand-back or release on request another thread is still running,
+     * {@link KeptUnit.Phase#HANDING_BACK}: this stop cannot claim it, and its row names this instance until that thread
+     * has released it) as {@link #endRun} found them, nor a unit of {@code returnedEarlier} another thread has claimed
+     * since, found at {@link KeptUnit.Phase#HANDING_BACK} with its row held once this thread's own hand-backs are done -
+     * a claim made after that read is not waited for -, no run of this queue started since needs the row ({@link #needsMembership()}), and the other lane of the {@code PostgresqlMessageQueue}
      * subscription, which shares the membership row ({@link #shareMembershipWith}), no longer needs it either. When that
      * lane does, its own stop deletes the row later, or leaves it to age out if it keeps an ordered unit; when a later run
      * of this queue does, its own stop.
@@ -3252,7 +3266,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
     // asks it whether it still needs the membership row, and must never close it.
     @SuppressWarnings("PMD.CloseResource")
     private void handBackWithinBudget(List<LeasedOwner> serving, List<LeasedOwner> toRelease, List<LeasedOwner> kept,
-                                      List<LeasedOwner> keptEarlier, List<LeasedOwner> flushingEarlier, List<KeptUnit> returnedEarlier,
+                                      List<LeasedOwner> keptEarlier, List<LeasedOwner> busyEarlier, List<KeptUnit> returnedEarlier,
                                       List<KeptUnit> keptNow, boolean deregister) {
         try {
             // What the pumps would have flushed had they gone on serving these owners. Valid still:
@@ -3309,15 +3323,33 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                      leaseTtlMillis);
             return;
         }
-        // Nor while the hand-back of the stop that kept a unit is still flushing it: no hand-back claims the unit until
-        // then (KeptUnit.Phase.STOP_FLUSHING), so its row still names this instance, and deleted, the instance's row would
-        // make the unit read as ownerless - taken at once, that flush is refused.
-        if (!flushingEarlier.isEmpty()) {
+        // Nor while another thread is still flushing or releasing a unit an earlier stop kept: the budget thread of the stop
+        // that kept it, before which no hand-back claims the unit (KeptUnit.Phase.STOP_FLUSHING), or a hand-back or
+        // release on request of it running (KeptUnit.Phase.HANDING_BACK), whose claim leaves this stop none to make.
+        // Its row still names this instance until that thread has released it, and deleted, the
+        // instance's row would make the unit read as ownerless - taken at once, that thread's flush is refused.
+        // endRun read busyEarlier before this thread began; a returnedEarlier unit another thread claimed since - the thread
+        // its key leaving the handler started, a heartbeat tick still running, a start, a consume() or a release on
+        // request - refused this thread's claim above, and handBackKeptUnit returned without a word. Read again here, after
+        // those hand-backs: such a unit stands at HANDING_BACK with its row held, which this thread's own hand-back never
+        // leaves behind (it ends at HANDED_BACK, or back where it was claimed from). That leaves a claim made after this
+        // read, of a unit whose row a failed hand-back left held, which the deletion below does not wait for. Nor is this
+        // case covered for the other lane of the subscription (shareMembershipWith): endRun wrote this run's need for the
+        // row (runNeedsMembership) false with such a unit among returnedEarlier, and nothing writes it true for the claim,
+        // so that lane's stop may delete the row while the hand-back of such a unit runs.
+        var busy = new ArrayList<>(busyEarlier);
+        for (var unit : returnedEarlier) {
+            if (unit.phase() == KeptUnit.Phase.HANDING_BACK && unit.owner().holdsLeaseRow()) {
+                busy.add(unit.owner());
+            }
+        }
+        if (!busy.isEmpty()) {
             log.info("Instance {} stays registered on queue {}: an earlier stop kept {} ordered unit(s) [{}] whose handler has "
-                             + "returned, and that stop's hand-back had not flushed them when this stop ended its run; their "
-                             + "leases name this instance "
-                             + "until each is handed back once that flush has passed, or this instance's liveness lapses ({} ms)",
-                     instanceId, queueId, flushingEarlier.size(), summarise(flushingEarlier.stream().map(LeasedOwner::shard).toList()),
+                             + "returned, and that stop's flush or another thread's hand-back of them was still running when "
+                             + "this stop ended its run or came to deregister the instance; their leases name this instance "
+                             + "until a hand-back has released them once that work is done, or this instance's liveness "
+                             + "lapses ({} ms)",
+                     instanceId, queueId, busy.size(), summarise(busy.stream().map(LeasedOwner::shard).toList()),
                      leaseTtlMillis);
             return;
         }
