@@ -68,6 +68,7 @@ class OrderFlowLoadGeneratorIT {
         assertThat(result.state()).as("%s", result).isEqualTo("COMPLETED");
         assertThat(result.placed()).as("%s", result).isEqualTo(100);
         assertThat(result.refused()).as("%s", result).isZero();
+        assertThat(result.restedUnexpectedly()).as("%s", result).isZero();
         assertThat(result.bookings()).as("%s", result).isEqualTo(result.placed() - result.resting());
         assertThat(result.releases()).as("%s", result).isEqualTo(result.placed());
         assertThat(result.endToEndP50Ms()).as("%s", result).isPositive();

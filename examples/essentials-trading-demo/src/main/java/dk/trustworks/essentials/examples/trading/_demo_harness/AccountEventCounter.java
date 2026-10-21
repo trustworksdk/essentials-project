@@ -19,6 +19,7 @@ package dk.trustworks.essentials.examples.trading._demo_harness;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ConfigurableEventStore;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.SeparateTablePerAggregateEventStreamConfiguration;
 import dk.trustworks.essentials.examples.trading.accounts.types.AccountsAggregateTypes;
+import dk.trustworks.essentials.examples.trading.orders.types.*;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
@@ -80,5 +81,22 @@ public class AccountEventCounter {
             bookedAt.put(rs.getString("execution_id"), rs.getTimestamp("booked_at").toInstant());
         }, accountIdPrefix + "%", "%.TradeBooked");
         return bookedAt;
+    }
+
+    /**
+     * Orders of the accounts the exchange accepted that are neither filled, nor asked to cancel, nor closed - for the
+     * order-flow scenario, resting at the exchange although they were priced to fill. Order ids start with their
+     * account id, so the account prefix selects them.
+     */
+    public List<OrderId> openAcceptedOrdersForAccountsStartingWith(String accountIdPrefix) {
+        var configuration = eventStore.getAggregateEventStreamConfiguration(OrdersAggregateTypes.ORDERS);
+        var columns       = configuration.eventStreamTableColumnNames;
+        var type          = columns.eventTypeColumn;
+        var sql = "SELECT " + columns.aggregateIdColumn + " AS order_id FROM " + configuration.eventStreamTableName
+                  + " WHERE " + columns.aggregateIdColumn + " LIKE ?"
+                  + " GROUP BY " + columns.aggregateIdColumn
+                  + " HAVING bool_or(" + type + " LIKE '%.OrderAccepted')"
+                  + " AND NOT bool_or(" + type + " LIKE '%.OrderFilled' OR " + type + " LIKE '%.OrderCancelRequested' OR " + type + " LIKE '%.OrderClosed')";
+        return jdbcTemplate.query(sql, (rs, row) -> OrderId.of(rs.getString("order_id")), accountIdPrefix + "%");
     }
 }

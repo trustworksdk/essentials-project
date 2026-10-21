@@ -309,6 +309,14 @@ quotes `ACME` by default). Done when every order released its hold and every fil
   includes both `EventProcessor` hops. They differ by 30×.
 - **Per-stage latency comes from the event tables**: the `OrderPlaced`, `OrderSubmitted`, `OrderFilled` timestamps
   in `orders_events` and `TradeBooked` in `accounts_events`, joined on `EXE-<orderId>`.
+- **A marketable limit is priced at ask × 1.05, and a run that strands orders still ends.** The stub matches a limit
+  once, on arrival, against the ask of that moment, and an order arrives only after the pipeline's latency. At ask ×
+  1.01 a slow run (pure polling: ~60 s from placement to submission) saw the synthetic feed move past its late orders:
+  they rested for good, the run never drained, and it read exactly like lost events - the intermittent "stall" chased
+  across several sessions (2026-10-21: 319 such orders in one run, every one inside the ask's band at its submission,
+  no event missing). Now, once bookings and releases stand still for 10 s, the run cancels the orders the exchange
+  accepted and neither filled nor cancelled, and reports them as `restedUnexpectedly`. Non-zero means the pipeline was
+  slow enough for the market to move past them; `OrderFlowStrandedOrdersIT` pins the path.
 
 ### Measured, 2026-10-19, devcontainer, `compose` profile, one instance
 

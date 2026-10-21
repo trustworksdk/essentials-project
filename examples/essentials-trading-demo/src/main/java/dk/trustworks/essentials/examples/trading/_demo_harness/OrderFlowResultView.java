@@ -19,7 +19,8 @@ package dk.trustworks.essentials.examples.trading._demo_harness;
 /**
  * One order-flow run. {@code ordersPerSecond} is placement throughput; {@code completedOrdersPerSecond} is placed orders
  * over the time until the last one was booked and released. {@code endToEnd*} is placement to {@code TradeBooked}, per
- * filled order.
+ * filled order. {@code restedUnexpectedly} counts orders priced to fill that rested at the exchange and the run
+ * cancelled to drain - non-zero means the pipeline was slow enough for the market to move past them.
  */
 public record OrderFlowResultView(String runId,
                                   String state,
@@ -28,6 +29,7 @@ public record OrderFlowResultView(String runId,
                                   int threads,
                                   long placed,
                                   long resting,
+                                  long restedUnexpectedly,
                                   long refused,
                                   long conflicts,
                                   long setupMs,

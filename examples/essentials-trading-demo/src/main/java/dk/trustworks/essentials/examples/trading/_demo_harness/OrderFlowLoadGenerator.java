@@ -50,12 +50,17 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * it. A mix of three kinds of buy:
  * <ul>
  *     <li><b>market</b> — held at ask x collar, filled at the ask;</li>
- *     <li><b>marketable limit</b> — limit 1 % above the ask, filled at the ask, the rest of the hold released;</li>
+ *     <li><b>marketable limit</b> — limit 5 % above the ask, filled at the ask, the rest of the hold released. The stub
+ *     exchange matches once, on arrival, against the ask of that moment, and an order reaches it only after the
+ *     pipeline's latency - tens of seconds under load - while the synthetic feed moves; with 1 % a slow run had
+ *     orders arrive unmarketable and rest for good;</li>
  *     <li><b>resting limit</b> ({@code restingSharePercent}) — limit 10 % below the bid, never filled, cancelled by the
  *     customer straight after placing it, which exercises the cancel round trip and the release.</li>
  * </ul>
  * The run is complete when every placed order has released its hold ({@code FundsReleased}) and every fillable one is
- * booked ({@code TradeBooked}), counted in the {@code Accounts} event table. End-to-end latency is per filled order:
+ * booked ({@code TradeBooked}), counted in the {@code Accounts} event table. Should a marketable order rest anyway, the
+ * run would never drain: once the counts stand still for {@link #STRANDED_AFTER}, the orders the exchange accepted and
+ * neither filled nor cancelled are cancelled, and reported as {@code restedUnexpectedly} - a number, not a hang. End-to-end latency is per filled order:
  * the {@code TradeBooked} event's timestamp minus the moment {@code PlaceOrder} returned.
  * <p>
  * Fresh account ids per run ({@code OF-<run>-<n>}). Buys only: a sell needs settled shares. Not a slice: writes go
@@ -69,6 +74,11 @@ public class OrderFlowLoadGenerator implements DisposableBean {
     private static final Money    DEPOSIT       = Money.of("100000000", CurrencyCode.USD);
     private static final int      MAX_ATTEMPTS  = 20;
     private static final Duration DRAIN_TIMEOUT = Duration.ofMinutes(15);
+    /**
+     * How long the bookings and releases may stand still before the run looks for orders resting at the exchange. The
+     * stub answers a submission with its fill at once, so a fillable order makes progress well within it
+     */
+    private static final Duration STRANDED_AFTER = Duration.ofSeconds(10);
 
     public record Settings(int customers, int ordersPerCustomer, int threads, int marketSharePercent, int restingSharePercent, String instrument) {
         public Settings {
@@ -195,7 +205,7 @@ public class OrderFlowLoadGenerator implements DisposableBean {
             return Money.of(bid.getAmount().value().multiply(new BigDecimal("0.90")).setScale(2, RoundingMode.DOWN), bid.getCurrency());
         }
         var ask = marketQuotes.bestAsk(instrument).orElseThrow(() -> new IllegalStateException("Quote for '" + instrument + "' went stale"));
-        return Money.of(ask.getAmount().value().multiply(new BigDecimal("1.01")).setScale(2, RoundingMode.UP), ask.getCurrency());
+        return Money.of(ask.getAmount().value().multiply(new BigDecimal("1.05")).setScale(2, RoundingMode.UP), ask.getCurrency());
     }
 
     /**
@@ -219,20 +229,54 @@ public class OrderFlowLoadGenerator implements DisposableBean {
     }
 
     private void awaitDrained(Run run) throws InterruptedException {
-        var prefix   = run.accountPrefix();
-        var deadline = System.nanoTime() + DRAIN_TIMEOUT.toNanos();
+        var prefix       = run.accountPrefix();
+        var deadline     = System.nanoTime() + DRAIN_TIMEOUT.toNanos();
+        var lastProgress = -1L;
+        var stillSince   = System.nanoTime();
         while (true) {
             run.bookings = eventCounter.countEventsOfTypeForAccountsStartingWith(prefix, "TradeBooked");
             run.releases = eventCounter.countEventsOfTypeForAccountsStartingWith(prefix, "FundsReleased");
-            if (run.bookings >= run.placed.get() - run.resting.get() && run.releases >= run.placed.get()) {
+            if (run.bookings >= run.placed.get() - run.resting.get() - run.restedUnexpectedly.get() && run.releases >= run.placed.get()) {
                 run.drainMs = millisSince(run.placeStarted);
                 return;
             }
             if (System.nanoTime() > deadline) {
                 throw new IllegalStateException("Not drained after " + DRAIN_TIMEOUT + ": " + run.bookings + " bookings, " + run.releases + " releases of "
-                                                + run.placed.get() + " placed orders (" + run.resting.get() + " resting)");
+                                                + run.placed.get() + " placed orders (" + run.resting.get() + " resting, "
+                                                + run.restedUnexpectedly.get() + " rested unexpectedly)");
+            }
+            var progress = run.bookings + run.releases;
+            if (progress != lastProgress) {
+                lastProgress = progress;
+                stillSince = System.nanoTime();
+            } else if (System.nanoTime() - stillSince > STRANDED_AFTER.toNanos()) {
+                cancelStrandedOrders(run);
+                stillSince = System.nanoTime();
             }
             Thread.sleep(100);
+        }
+    }
+
+    /**
+     * Cancels, once each, the run's orders the exchange accepted but neither filled nor was asked to cancel: priced to
+     * fill, they arrived unmarketable and rest. The cancel releases their hold, so the run drains, and they are left
+     * out of the bookings it waits for.
+     */
+    private void cancelStrandedOrders(Run run) {
+        var stranded = eventCounter.openAcceptedOrdersForAccountsStartingWith(run.accountPrefix())
+                                   .stream()
+                                   .filter(orderId -> run.cancelledStranded.add(orderId.toString()))
+                                   .toList();
+        if (stranded.isEmpty()) {
+            return;
+        }
+        log.warn("Order flow {}: {} orders priced to fill rest at the exchange - cancelling them", run.runId, stranded.size());
+        for (var orderId : stranded) {
+            // Order ids are '<accountId>-<n>'
+            var accountId = AccountId.of(orderId.toString().substring(0, orderId.toString().lastIndexOf('-')));
+            if (send(new CancelOrder(accountId, orderId), run)) {
+                run.restedUnexpectedly.incrementAndGet();
+            }
         }
     }
 
@@ -274,6 +318,8 @@ public class OrderFlowLoadGenerator implements DisposableBean {
         final Settings                       settings;
         final AtomicLong                     placed         = new AtomicLong();
         final AtomicLong                     resting        = new AtomicLong();
+        final AtomicLong                     restedUnexpectedly = new AtomicLong();
+        final Set<String>                    cancelledStranded  = ConcurrentHashMap.newKeySet();
         final AtomicLong                     refused        = new AtomicLong();
         final AtomicLong                     conflicts      = new AtomicLong();
         final ConcurrentLinkedQueue<Long>    placeLatencies = new ConcurrentLinkedQueue<>();
@@ -309,6 +355,7 @@ public class OrderFlowLoadGenerator implements DisposableBean {
                                            settings.threads(),
                                            placed.get(),
                                            resting.get(),
+                                           restedUnexpectedly.get(),
                                            refused.get(),
                                            conflicts.get(),
                                            setupMs,
