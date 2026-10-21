@@ -1051,7 +1051,11 @@ class ShardOwnedUnsubscribeIT {
                 assertThat(ownerOf(notKept)).as("and keeps its owner").isEqualTo(INSTANCE_ID);
                 assertThat(fenceOf(notKept)).as("and its fence").isEqualTo(notKeptFence);
 
-                var releases = queue.releaseKeptOrderedUnit(kept.shard());
+                // Asked until queue.stop()'s budget thread has flushed the kept unit: that stop goes on without the thread
+                // after SHUTDOWN_BUDGET, and until it has flushed the release answers BUSY.
+                var releases = Awaitility.await().atMost(Duration.ofSeconds(5))
+                                         .until(() -> queue.releaseKeptOrderedUnit(kept.shard()),
+                                                answer -> answer.stream().noneMatch(entry -> entry.outcome() == KeptUnitRelease.Outcome.BUSY));
                 assertThat(releases).as("the release says what it released").singleElement().satisfies(released -> {
                     assertThat(released.unit()).isEqualTo(kept.shard());
                     assertThat(released.instanceId()).isEqualTo(INSTANCE_ID);
@@ -1301,6 +1305,11 @@ class ShardOwnedUnsubscribeIT {
                 // Stopped, and not started again: nothing but the requests below releases the unit.
                 queue.stop();
                 var kept = keptOrderedFence(INSTANCE_ID);
+                // queue.stop() goes on without its budget thread after SHUTDOWN_BUDGET, and until that thread has flushed the
+                // kept unit a release on request answers BUSY rather than attempting the release refused below.
+                Awaitility.await().atMost(Duration.ofSeconds(5))
+                          .untilAsserted(() -> assertThat(lanes).as("premise: queue.stop()'s budget thread has flushed the kept unit")
+                                                                .noneMatch(ShardOwnedQueue::handBackStillRunning));
                 LeaseReleaseRefusals.failLeaseReleasesOf(dataSource, queueIds, "ordered", kept.shard(), true);
                 try {
                     assertThatThrownBy(() -> queue.releaseKeptOrderedUnit(kept.shard()))
@@ -1386,6 +1395,13 @@ class ShardOwnedUnsubscribeIT {
                 second.stop();
                 var keptAgain = keptOrderedFence(INSTANCE_ID + "-1");
                 assertThat(keptAgain.shard()).as("premise: the second subscription's stop kept the same unit").isEqualTo(keptFirst.shard());
+                // second.stop() goes on without its budget thread after SHUTDOWN_BUDGET, and until that thread has flushed the
+                // kept unit the second subscription answers BUSY: the unsubscribed one's flush would then be the first, not
+                // refused. This waits on the second subscription's lanes only: registeredConsumers() no longer lists first's.
+                var secondLanes = queue.registeredConsumers();
+                Awaitility.await().atMost(Duration.ofSeconds(5))
+                          .untilAsserted(() -> assertThat(secondLanes).as("premise: second.stop()'s budget thread has flushed the kept unit")
+                                                                      .noneMatch(ShardOwnedQueue::handBackStillRunning));
 
                 // The second connection a release on request asks for its flush is refused: the registered, stopped
                 // subscription is asked first, and flushes and releases; the unsubscribed one's attempt then fails.
@@ -1472,13 +1488,18 @@ class ShardOwnedUnsubscribeIT {
                                                  .containsExactly(INSTANCE_ID, INSTANCE_ID + "-1");
                 second.unsubscribe();
 
-                assertThat(queue.releaseKeptOrderedUnit(kept.shard())).as("the unsubscribed subscription's lane releases the unit it kept")
-                                                                      .singleElement()
-                                                                      .satisfies(released -> {
-                                                                          assertThat(released.outcome()).isEqualTo(KeptUnitRelease.Outcome.RELEASED);
-                                                                          assertThat(released.instanceId()).isEqualTo(INSTANCE_ID);
-                                                                          assertThat(released.keysInHandler()).containsExactly("ACC-1");
-                                                                      });
+                // Asked until first.unsubscribe()'s budget thread has flushed the kept unit: the stop of first's lanes goes on
+                // without that thread after SHUTDOWN_BUDGET, and until it has flushed the release answers BUSY.
+                var releases = Awaitility.await().atMost(Duration.ofSeconds(5))
+                                         .until(() -> queue.releaseKeptOrderedUnit(kept.shard()),
+                                                answer -> answer.stream().noneMatch(entry -> entry.outcome() == KeptUnitRelease.Outcome.BUSY));
+                assertThat(releases).as("the unsubscribed subscription's lane releases the unit it kept")
+                                    .singleElement()
+                                    .satisfies(released -> {
+                                        assertThat(released.outcome()).isEqualTo(KeptUnitRelease.Outcome.RELEASED);
+                                        assertThat(released.instanceId()).isEqualTo(INSTANCE_ID);
+                                        assertThat(released.keysInHandler()).containsExactly("ACC-1");
+                                    });
                 assertThat(firstLanes.getFirst().metrics().keptUnitsInHandler()).as("premise: the first handler still runs").isEqualTo(1);
 
                 var third = queue.consume(recording, ConsumerOptions.defaults());
