@@ -1184,6 +1184,11 @@ Not published; listed because they are the reference for how to use the framewor
   handling messages. If you register a `PostgresqlMessageQueue` as a `Lifecycle` bean yourself, call its `stop()`
   or `close()` whatever `isStarted()` reads, as `ShardOwnedQueueFactory.close()` does, or bring it back to started
   with its own `start()` first. (`176fa33a8`)
+- **Shard-owned engine, scaling in** (the module README's scaling table, `LLM-postgresql-queue-shard-owned.md`
+  autoscaling): a graceful stop that keeps an ordered unit (a key still in its handler `shedGrace` after the stop
+  began) does not deregister. Its membership row ages out `leaseTtl` after its last heartbeat, survivors keep
+  counting it in their fair share until then, so before that a survivor already at its share takes none of the
+  units it released. The docs said it always deregistered at once. (`<!-- fix:U-022 -->`)
 - **Design documents:** `docs/slice-atlas-design.md` and `docs/slice-enrich-design.md` (`764af560`, `73d1993f`);
   `docs/durable-queues-improvement-plan.md`, the measurements and open items behind the durable-queue changes, and
   `docs/Durable Queues Port Report.md`, the Rust port experiment they came from (`0925b7ca`).

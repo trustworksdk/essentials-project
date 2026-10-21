@@ -212,8 +212,8 @@ lets go of a subscription and consumes anew must unsubscribe it first (see
 [The Two Lanes](#the-two-lanes)). Two cases delay the id, either one enough, and when both apply it
 is free only once both have passed: when the stop kept an ordered unit, because a key was still in
 its handler past `shedGrace`, the id stays out of use until that handler has returned and the unit has
-been handed back (its acknowledgement flushed, its lease released; a `consume()` retries a hand-back that
-failed before it picks an id), or until that handler has been running longer than the queue's
+been handed back (its acknowledgement flushed, its lease released; before it picks an id, a `consume()`
+retries a hand-back that failed), or until that handler has been running longer than the queue's
 `stuckHandlerTimeout`, or until the unit is released on request (`MessageQueue.releaseKeptOrderedUnit`,
 `POST .../ordered-units/{unit}/release-kept`), as until then that unit's lease
 names the id and a subscription under it would take the unit at once; and when the stop gave up waiting for its lanes' hand-back to the database (releasing the
@@ -661,7 +661,7 @@ Almost never. The table is the whole answer:
 |---|---|---|
 | **Rolling redeploy** | no | nothing |
 | **Scale up** | no | nothing — new pods register and take a share within a heartbeat |
-| **Scale down / pod evicted** | no | nothing — a graceful stop releases its shards and deregisters immediately |
+| **Scale down / pod evicted** | no | nothing — a graceful stop releases its shards and deregisters immediately, unless it keeps an ordered unit whose key is still in its handler `shedGrace` after the stop began ([Lifecycle](#lifecycle)): then it stays registered, also once that unit has been handed back, until its membership row ages out (`leaseTtl` after its last heartbeat), and survivors count it in their fair share until then, so a survivor already at its share takes none of the stopped instance's units before that |
 | **Crash** | no | nothing — shards move when the lease expires (`leaseTtl`, 30 s default) |
 | **Grow an unordered queue** | yes | `ShardOwnedSchema.growShardCount(dataSource, name, n)`. That is all |
 | **Grow an ordered queue** | n/a | nothing to grow — the routing space is fixed |

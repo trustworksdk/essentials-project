@@ -107,7 +107,7 @@ unsubscribed subscription (it still is with any other subscription of the queue,
 WARN for it). Two cases delay the id, either one enough, and when both apply it is free only once both
 have passed: when the stop kept an ordered unit, because a key was still in its handler past
 `shedGrace`, the id stays out of use until that handler has returned and the unit has been handed back
-(a `consume()` retries a hand-back that failed before it picks an id), or until that handler has been
+(before it picks an id, a `consume()` retries a hand-back that failed), or until that handler has been
 running longer than the queue's `stuckHandlerTimeout` (default 15 min, below), or until the unit is
 released on request (`MessageQueue.releaseKeptOrderedUnit`, `POST .../ordered-units/{unit}/release-kept`, below),
 as until then that unit's lease names the id and a subscription under it would take the unit at once and
@@ -404,7 +404,11 @@ accessor.
 **Autoscaling specifics.** Membership is a row per instance, refreshed every `leaseTtl / 3` and
 counted live within `leaseTtl`. A gracefully stopped instance deregisters immediately, so scaling in
 frees its shards and lets survivors take them at once — unless it kept an ordered unit because a key
-outlasted `shedGrace`: its row then ages out with `leaseTtl`, and that unit becomes takeable once its handler has returned (the instance hands it back then) or the row has aged out, whichever is first. An instance that *crashes* is counted live
+outlasted `shedGrace`: it then stays registered and its row ages out with `leaseTtl`, and until it has,
+survivors keep counting it in their fair share, so until then one already at its share takes none of the
+units it released. The kept unit's lease is released once its handler has returned (the instance hands
+it back then, and stays registered): a survivor below its share takes it on its next heartbeat, one at its
+share only once the row has aged out, handed back or not. An instance that *crashes* is counted live
 until its row goes stale, which is the same window its leases take to expire — that is the designed
 failover time, not an extra cost. Rows for departed instances are pruned by the heartbeat.
 
