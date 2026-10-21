@@ -19,18 +19,21 @@ import org.springframework.web.bind.annotation.RestController
  * (§ The read side on this lane).
  *
  * The command IS the contract (§R2) — no adapter layer, no mapper. `PlaceOrderRequest` carries only
- * the fields the client actually sends, because the id is generated here; that is *assembly*.
+ * the fields the client actually sends: the id of the Order to change, and the change. This
+ * slice changes an existing Order — the handler loads it — so the id comes from the client,
+ * never from `OrderId.random()`, which would name a row that does not exist. Turning the
+ * request into the command is *assembly*.
  */
 @RestController
 @RequestMapping("/api/orders")
 class PlaceOrderAPI(private val commandBus: CommandBus) {
 
-    data class PlaceOrderRequest(val placeholder: String)
+    data class PlaceOrderRequest(val orderId: String, val placeholder: String)
     data class PlaceOrderResponse(val orderId: String)
 
     @PostMapping
     fun placeOrder(@RequestBody body: PlaceOrderRequest): PlaceOrderResponse {
-        val id = OrderId.random()
+        val id = OrderId.of(body.orderId)
         commandBus.send<Any?, PlaceOrder>(PlaceOrder(id, body.placeholder))
         return PlaceOrderResponse(id.value)
     }

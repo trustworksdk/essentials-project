@@ -38,7 +38,7 @@ default — turn it on in the `/plugin` Marketplaces tab, or refresh with
 Run `/essentials:doctor` to check them on this machine: it lists each one with the version found and what a missing one costs.
 
 - **Python 3.11 or newer** for every command that runs a script. The deterministic checks are scripts, and a command without them stops or marks its gates not run rather than guessing.
-- **[`uv`](https://docs.astral.sh/uv/)** for the scripts that need `pyyaml` or `jsonschema` (`slice-lint.py`, `slice-source.py`, `slice-index.py`, `slice-enrich.py`). Each pins its dependencies in PEP 723 inline metadata, and the commands run them with `uv run --script`, which installs exactly those versions. Without `uv`, `python3 <script>` works where those packages are already installed (or `pipx run <script>`, which reads the same metadata). `init-render.py`, `render-slice.py`, `slice-law.py`, `stack-lint.py`, `review-scan.py`, `migration-plan.py` and `check-citations.py` are standard library only.
+- **[`uv`](https://docs.astral.sh/uv/)** for the scripts that need `pyyaml` or `jsonschema` (`slice-lint.py`, `slice-source.py`, `slice-index.py`, `slice-enrich.py`). Each pins its dependencies in PEP 723 inline metadata, and the commands run them with `uv run --script`, which installs exactly those versions. Without `uv`, `python3 <script>` works where those packages are already installed (or `pipx run <script>`, which reads the same metadata). `init-render.py`, `init-report.py`, `render-slice.py`, `slice-law.py`, `stack-lint.py`, `review-scan.py`, `migration-plan.py` and `check-citations.py` are standard library only.
 - **For `/essentials:init`'s smoke build:** the JDK `references/stack/stack-pins.md` pins, Maven, and Docker (without Docker the result is compile-only and says so); `npm` to check a frontend.
 - **For `/essentials:upgrade`'s Essentials upgrade:** git (it works on its own branch), the pinned JDK, Maven and Docker — its gate starts the Spring context, so without Docker it does not start; `--check` needs none of them.
 - **git for `/essentials:review`'s base-ref and `--pr` modes.** Outside a git repository only `<path>` mode works.
@@ -138,6 +138,8 @@ The command interactively asks for:
 
 Then `scripts/init-render.py` renders the project from those answers: the contract's S1–S11 applied (dependencies, compiler configuration, the config classes, the contract-first OpenAPI pipeline with a seed `contracts/openapi.json`, the frontend mode), the slice-rules pointer, the wiring tests, and a project `CLAUDE.md` with a strong directive pointing future Claude sessions back to this plugin's `essentials-docs` skill. A `CLAUDE.md` or `README.md` you already have is merged, overwritten or kept, as you choose (merge is the default). The Maven wrapper is generated with pinned versions.
 
+Another plugin's agent can drive it: `--preset <file>` answers some of the questions up front (a bad value is asked as if absent, never a reason to stop) and `--report <file>` writes a JSON report of what was rendered, or where the command stopped. Run by hand with no arguments, it asks every question.
+
 **Then it lints the result with `scripts/stack-lint.py`, builds it, and starts the Spring context.** That last part is the point: the contract's most expensive requirements — above all the starters' non-transitive framework dependencies (S2.1) — compile cleanly and fail at context startup. A scaffold that has only been compiled has not been checked. After that, `mvn verify` regenerates `contracts/openapi.json`; commit it, because the frontend build reads the committed copy.
 
 **No example bounded context is scaffolded.** The generated project gets an empty package and a pointer to `/essentials:add-slice`, which emits a slice matching the project's actual lane. The worked `orders` context at `tests/fixtures/worked-example/` is this plugin's own test fixture, not user-facing content. The generated `CLAUDE.md` carries **"Slicing & anti-god-class rules"** and **"When to write PBT"** sections.
@@ -168,6 +170,8 @@ essentials-plugin/
 ├── CHANGELOG.md
 ├── CLAUDE.md                    (maintainer instructions: what moves together, the invariants,
 │                                 the pre-commit checks and the release checklist)
+├── capabilities.json            (what another plugin's agent may drive, read statically; the
+│                                 contract is references/sdd-contract.md)
 ├── rules/
 │   └── slice-design.md          (THE SLICE LAW — standalone, cited never restated; its sections
 │                                 carry lane / kind / store scope lines for slice-law.py)
@@ -186,6 +190,8 @@ essentials-plugin/
 │   │                             each --help says more)
 │   ├── init-render.py           (/essentials:init's renderer: answers → project, byte-reproducible;
 │   │                             goldens in tests/golden/init/)
+│   ├── init-report.py           (/essentials:init --preset / --report: which preset keys are usable,
+│   │                             and the report another plugin reads; value sets from init-render.py)
 │   ├── render-slice.py          (deterministic slice rendering + wiring for the kind skills;
 │   │                             goldens in tests/slice-golden/)
 │   ├── slice-lint.py            (manifest parse / schema / sole-ownership / tier lint — gates 1, 3,
@@ -230,7 +236,10 @@ essentials-plugin/
 │   │                             slice-map-template.html, atlas/ — the Slice Atlas page (atlas.html
 │   │                             and one lens-<n>-<id>.js per lens, inlined by slice-index.py atlas),
 │   │                             and templates/{java,kotlin}/ — the slice templates across the
-│   │                             decider, aggregate and service-entity lanes)
+│   │                             decider, aggregate and service-entity lanes — with
+│   │                             templates/behaviours.json, what each family's code already does)
+│   ├── sdd-contract.md          (the entry points another plugin's agent drives: render-slice.py
+│   │                             render interface 1, init --preset/--report, the project marks)
 │   └── init-assets/project/     (the /essentials:init template tree + manifest.json, rendered by
 │                                 scripts/init-render.py; versions come only from stack-pins.md)
 ├── tests/                       (the maintainers' expected results; nothing here reaches a project)

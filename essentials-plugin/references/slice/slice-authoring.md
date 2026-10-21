@@ -178,7 +178,8 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/render-slice.py render --lang <language> -
   (`eventsourced-aggregates` is optional in the event-store starter, and no starter brings
   `postgresql-document-db`). Report it and offer to add it before rendering; a slice rendered into a
   project without it does not compile.
-- **`render` exits 2 and writes nothing** on a bad input, a template drift, an existing slice
+- **`render` exits 2 and writes nothing** — a failure part-way through the writes or the wiring edits
+  restores every file it touched — on a bad input, a template drift, an existing slice
   directory or file, a lane that does not match the BC's directories (§1b), a service-entity view whose
   entity does not exist yet, or a refused combination (§1b Kotlin aggregate lane; automation and
   translation on the service-entity lane; `--new-bc` on a non-command kind). Relay the message.
@@ -186,6 +187,12 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/render-slice.py render --lang <language> -
   `manual` with a reason — `manual` means the anchor comment is gone and the edit is yours to make by
   hand; on the decider lane the first entry counts the application's decider configurators, and
   `manual` there means none or more than one, which you report) and `todos` (`path:line: text` of every TODO the templates left).
+  It also carries `behaviours` — what the rendered code already does (`implemented`) and what is left
+  to you (`placeholder`), from `templates/behaviours.json` — and `stubTests`, every stub test written.
+- An existing BC supplies `AggregateType`, `Aggregates`, `Aggregate` and `Entity` when they are not
+  passed and its scaffold names exactly one of each.
+- `--tests none`, `--manifest <slice.yaml>` and the full report are the renderer's interface for another
+  plugin's agent — `references/sdd-contract.md` §2. The kind skills use neither flag.
 
 **`slice.yaml` is the one rendered file that must also be *parsed* before it is written**, and it has
 a rule that no other template has: **every `path:` value is quoted**, in the template and in anything

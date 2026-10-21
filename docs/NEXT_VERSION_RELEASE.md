@@ -1050,6 +1050,21 @@ entries are in [`essentials-plugin/CHANGELOG.md`](../essentials-plugin/CHANGELOG
   written as the project's requirement source names them (`requirements: [REQ-ORDERS-12]`). `slice-lint`
   checks only that it is a non-empty list of distinct, non-empty strings; a requirement-trace tool such as
   sdd's checks the ids themselves. The plugin never writes the field and every rewrite keeps it as written.
+- **An integration contract for other plugins' agents** (`essentials-plugin/references/sdd-contract.md`,
+  advertised in a static `essentials-plugin/capabilities.json`). The sdd plugin uses it to hand project setup to
+  `/essentials:init` and to render slice skeletons. `/essentials:init --preset <file> --report <file>` answers
+  questions up front and writes a JSON report. `render-slice.py render` is now a versioned interface with
+  `--tests none` (no stub tests), `--manifest <slice.yaml>` (render from a manifest a planner wrote, keeping every
+  key the render does not own byte for byte) and a report that lists what the skeleton already implements and
+  every stub test. Run by hand, every command behaves as before.
+- **Fixed: a scaffolded service-entity command endpoint always failed.** Its API generated a new entity id
+  for every request while the handler loads an existing entity, so every POST returned a 500. The request
+  body now carries the id of the entity to change. Slices scaffolded before keep the old code: add the id
+  field to the request by hand.
+- **Fixed: a slice render that failed part-way left files behind.** `render-slice.py` exited 2 ("nothing written")
+  even when a write or a `--wire` edit failed after earlier files were written. It now restores every file it
+  created or edited before exiting. Rendering into an existing bounded context also reads `AggregateType`,
+  `Aggregates`, `Aggregate` and `Entity` from its scaffold when they are not passed, instead of refusing.
 - **`/essentials:slice-enrich`** drafts the absent human-owned manifest fields (`flow`, `scenarios`, `summary`,
   `invariants`, `tier`, `consistency`, `featureFlag`, `maps`) from evidence in the code and tests, and writes
   only what you accept.
@@ -1111,6 +1126,9 @@ Not published; listed because they are the reference for how to use the framewor
 
 ## 6. Documentation
 
+- **The root `README.md` has a "Claude Code Plugin" section**: what the `essentials` plugin does, how it works,
+  how to install it, and its requirements (macOS or Linux, Python 3.11+, `uv`, and the JDK, Maven and Docker for
+  init's smoke build).
 - **`LLM/LLM-traps.md`** gains `ESS-119`–`ESS-123` for 0.60 upgrade symptoms: `QueuedMessageCounts` equality,
   the removed CDC live-drain stall alert, and three groups of compile errors (Jackson 2 serializers and WAL
   filters, `useOrderedUnorderedQuery`, the removed 0.50 `forRemoval` members) (`e088534c`).

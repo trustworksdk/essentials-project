@@ -123,7 +123,9 @@ class RenderedTemplates(unittest.TestCase):
 
     def test_rendered_compositions_check_clean(self):
         root = PLUGIN / "tests" / "slice-golden"
-        compositions = sorted(p for p in root.iterdir() if p.is_dir() and any(p.rglob("slice.yaml")))
+        # _seeds/ holds a composition's inputs (hand-written files, a planner's manifests), not a render.
+        compositions = sorted(p for p in root.iterdir() if p.is_dir() and not p.name.startswith("_")
+                              and any(p.rglob("slice.yaml")))
         self.assertTrue(compositions, f"no rendered compositions under {root}")
         for comp in compositions:
             with self.subTest(composition=comp.name):

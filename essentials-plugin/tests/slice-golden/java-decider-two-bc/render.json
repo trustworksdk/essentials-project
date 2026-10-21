@@ -1,8 +1,13 @@
 [
   {
+    "interface": 1,
+    "reportVersion": 1,
     "language": "java",
     "kind": "command",
     "lane": "decider",
+    "tier": "cqrs-es",
+    "slice": "orders.place_order",
+    "tests": "stub",
     "families": [
       "app-wiring",
       "bc-scaffold",
@@ -25,6 +30,23 @@
       "sliceCamel": "placeOrder",
       "tier": "cqrs-es"
     },
+    "inputSources": {
+      "Aggregate": "set",
+      "AggregateType": "set",
+      "Bc": "derived",
+      "Command": "set",
+      "Event": "set",
+      "Slice": "derived",
+      "aggregate": "derived",
+      "apiPath": "derived",
+      "bc": "set",
+      "lane": "derived",
+      "owner": "derived",
+      "packagePath": "set",
+      "slice": "set",
+      "sliceCamel": "derived",
+      "tier": "derived"
+    },
     "written": [
       "src/main/java/com/example/shop/DeciderWiring.java",
       "src/main/java/com/example/shop/orders/CLAUDE.md",
@@ -40,6 +62,65 @@
       "src/main/java/com/example/shop/orders/use_cases/place_order/slice.yaml",
       "src/test/java/com/example/shop/orders/use_cases/place_order/PlaceOrderTest.java"
     ],
+    "files": [
+      {
+        "path": "src/main/java/com/example/shop/DeciderWiring.java",
+        "role": "main"
+      },
+      {
+        "path": "src/main/java/com/example/shop/orders/CLAUDE.md",
+        "role": "doc"
+      },
+      {
+        "path": "src/main/java/com/example/shop/orders/config/OrdersConfiguration.java",
+        "role": "main"
+      },
+      {
+        "path": "src/main/java/com/example/shop/orders/events/OrderEvent.java",
+        "role": "main"
+      },
+      {
+        "path": "src/main/java/com/example/shop/orders/events/OrderPlaced.java",
+        "role": "main"
+      },
+      {
+        "path": "src/main/java/com/example/shop/orders/routing/OrderCommand.java",
+        "role": "main"
+      },
+      {
+        "path": "src/main/java/com/example/shop/orders/types/OrderId.java",
+        "role": "main"
+      },
+      {
+        "path": "src/main/java/com/example/shop/orders/use_cases/place_order/CLAUDE.md",
+        "role": "doc"
+      },
+      {
+        "path": "src/main/java/com/example/shop/orders/use_cases/place_order/PlaceOrder.java",
+        "role": "main"
+      },
+      {
+        "path": "src/main/java/com/example/shop/orders/use_cases/place_order/PlaceOrderAPI.java",
+        "role": "main"
+      },
+      {
+        "path": "src/main/java/com/example/shop/orders/use_cases/place_order/PlaceOrderDecider.java",
+        "role": "main"
+      },
+      {
+        "path": "src/main/java/com/example/shop/orders/use_cases/place_order/slice.yaml",
+        "role": "manifest"
+      },
+      {
+        "path": "src/test/java/com/example/shop/orders/use_cases/place_order/PlaceOrderTest.java",
+        "role": "test"
+      }
+    ],
+    "kept": [],
+    "manifest": {
+      "path": "src/main/java/com/example/shop/orders/use_cases/place_order/slice.yaml",
+      "source": "rendered"
+    },
     "wiring": [
       {
         "path": "src/main/java/com/example/shop/DeciderWiring.java",
@@ -67,12 +148,76 @@
       "src/main/java/com/example/shop/orders/use_cases/place_order/slice.yaml:9: summary: TODO one sentence, present tense.",
       "src/main/java/com/example/shop/orders/use_cases/place_order/slice.yaml:28: - { id: INV-1, text: \"TODO the rule this slice enforces\", enforcedBy: PlaceOrderDecider }",
       "src/test/java/com/example/shop/orders/use_cases/place_order/PlaceOrderTest.java:39: // TODO: one test per invariant enforced by PlaceOrderDecider."
+    ],
+    "behaviours": [
+      {
+        "id": "app.decider-dispatch",
+        "status": "implemented",
+        "summary": "Registers the application's one configurator, which hands each command sent on the CommandBus to the Decider that can handle it, loads that aggregate's event stream and appends the event it returns.",
+        "where": "src/main/java/com/example/shop/DeciderWiring.java#eventStreamDeciderAndAggregateTypeConfigurator"
+      },
+      {
+        "id": "bc.command-routing",
+        "status": "implemented",
+        "summary": "Routes every command implementing the bounded context's command interface to its aggregate type, taking the stream id from the command and from each event.",
+        "where": "src/main/java/com/example/shop/orders/config/OrdersConfiguration.java"
+      },
+      {
+        "id": "bc.event-json-type",
+        "status": "implemented",
+        "summary": "Writes every event variant of the aggregate with an @type discriminator, so the stream's events round-trip through JSON.",
+        "where": "src/main/java/com/example/shop/orders/events/OrderEvent.java"
+      },
+      {
+        "id": "command.emits-event",
+        "status": "implemented",
+        "summary": "The Decider answers the command with the slice's event, carrying the command's id and payload.",
+        "where": "src/main/java/com/example/shop/orders/use_cases/place_order/PlaceOrderDecider.java#handle"
+      },
+      {
+        "id": "command.idempotent-replay",
+        "status": "implemented",
+        "summary": "The Decider returns no event when the stream already holds the slice's event, so a repeated command appends nothing.",
+        "where": "src/main/java/com/example/shop/orders/use_cases/place_order/PlaceOrderDecider.java#handle"
+      },
+      {
+        "id": "command.invariant",
+        "status": "placeholder",
+        "summary": "The Decider enforces no invariant and rejects no command; the slice's rules are left to the developer.",
+        "where": "src/main/java/com/example/shop/orders/use_cases/place_order/PlaceOrderDecider.java#handle"
+      },
+      {
+        "id": "command.payload",
+        "status": "placeholder",
+        "summary": "The command and the event carry one placeholder String; the real payload fields, and copying them into the event, are left to the developer.",
+        "where": "src/main/java/com/example/shop/orders/use_cases/place_order/PlaceOrder.java"
+      },
+      {
+        "id": "command.http-endpoint",
+        "status": "implemented",
+        "summary": "A POST to the slice's path takes the command as its body, sends it on the CommandBus and answers 202 Accepted.",
+        "where": "src/main/java/com/example/shop/orders/use_cases/place_order/PlaceOrderAPI.java"
+      }
+    ],
+    "stubTests": [
+      {
+        "path": "src/test/java/com/example/shop/orders/use_cases/place_order/PlaceOrderTest.java",
+        "covers": [
+          "command.emits-event",
+          "command.idempotent-replay"
+        ]
+      }
     ]
   },
   {
+    "interface": 1,
+    "reportVersion": 1,
     "language": "java",
     "kind": "command",
     "lane": "decider",
+    "tier": "cqrs-es",
+    "slice": "payments.request_payment",
+    "tests": "stub",
     "families": [
       "app-wiring",
       "bc-scaffold",
@@ -95,6 +240,23 @@
       "sliceCamel": "requestPayment",
       "tier": "cqrs-es"
     },
+    "inputSources": {
+      "Aggregate": "set",
+      "AggregateType": "set",
+      "Bc": "derived",
+      "Command": "set",
+      "Event": "set",
+      "Slice": "derived",
+      "aggregate": "derived",
+      "apiPath": "derived",
+      "bc": "set",
+      "lane": "derived",
+      "owner": "derived",
+      "packagePath": "set",
+      "slice": "set",
+      "sliceCamel": "derived",
+      "tier": "derived"
+    },
     "written": [
       "src/main/java/com/example/shop/payments/CLAUDE.md",
       "src/main/java/com/example/shop/payments/config/PaymentsConfiguration.java",
@@ -109,6 +271,61 @@
       "src/main/java/com/example/shop/payments/use_cases/request_payment/slice.yaml",
       "src/test/java/com/example/shop/payments/use_cases/request_payment/RequestPaymentTest.java"
     ],
+    "files": [
+      {
+        "path": "src/main/java/com/example/shop/payments/CLAUDE.md",
+        "role": "doc"
+      },
+      {
+        "path": "src/main/java/com/example/shop/payments/config/PaymentsConfiguration.java",
+        "role": "main"
+      },
+      {
+        "path": "src/main/java/com/example/shop/payments/events/PaymentEvent.java",
+        "role": "main"
+      },
+      {
+        "path": "src/main/java/com/example/shop/payments/events/PaymentRequested.java",
+        "role": "main"
+      },
+      {
+        "path": "src/main/java/com/example/shop/payments/routing/PaymentCommand.java",
+        "role": "main"
+      },
+      {
+        "path": "src/main/java/com/example/shop/payments/types/PaymentId.java",
+        "role": "main"
+      },
+      {
+        "path": "src/main/java/com/example/shop/payments/use_cases/request_payment/CLAUDE.md",
+        "role": "doc"
+      },
+      {
+        "path": "src/main/java/com/example/shop/payments/use_cases/request_payment/RequestPayment.java",
+        "role": "main"
+      },
+      {
+        "path": "src/main/java/com/example/shop/payments/use_cases/request_payment/RequestPaymentAPI.java",
+        "role": "main"
+      },
+      {
+        "path": "src/main/java/com/example/shop/payments/use_cases/request_payment/RequestPaymentDecider.java",
+        "role": "main"
+      },
+      {
+        "path": "src/main/java/com/example/shop/payments/use_cases/request_payment/slice.yaml",
+        "role": "manifest"
+      },
+      {
+        "path": "src/test/java/com/example/shop/payments/use_cases/request_payment/RequestPaymentTest.java",
+        "role": "test"
+      }
+    ],
+    "kept": [],
+    "manifest": {
+      "path": "src/main/java/com/example/shop/payments/use_cases/request_payment/slice.yaml",
+      "source": "rendered"
+    },
     "wiring": [
       {
         "path": "src/main/java/com/example/shop/DeciderWiring.java",
@@ -136,6 +353,59 @@
       "src/main/java/com/example/shop/payments/use_cases/request_payment/slice.yaml:9: summary: TODO one sentence, present tense.",
       "src/main/java/com/example/shop/payments/use_cases/request_payment/slice.yaml:28: - { id: INV-1, text: \"TODO the rule this slice enforces\", enforcedBy: RequestPaymentDecider }",
       "src/test/java/com/example/shop/payments/use_cases/request_payment/RequestPaymentTest.java:39: // TODO: one test per invariant enforced by RequestPaymentDecider."
+    ],
+    "behaviours": [
+      {
+        "id": "bc.command-routing",
+        "status": "implemented",
+        "summary": "Routes every command implementing the bounded context's command interface to its aggregate type, taking the stream id from the command and from each event.",
+        "where": "src/main/java/com/example/shop/payments/config/PaymentsConfiguration.java"
+      },
+      {
+        "id": "bc.event-json-type",
+        "status": "implemented",
+        "summary": "Writes every event variant of the aggregate with an @type discriminator, so the stream's events round-trip through JSON.",
+        "where": "src/main/java/com/example/shop/payments/events/PaymentEvent.java"
+      },
+      {
+        "id": "command.emits-event",
+        "status": "implemented",
+        "summary": "The Decider answers the command with the slice's event, carrying the command's id and payload.",
+        "where": "src/main/java/com/example/shop/payments/use_cases/request_payment/RequestPaymentDecider.java#handle"
+      },
+      {
+        "id": "command.idempotent-replay",
+        "status": "implemented",
+        "summary": "The Decider returns no event when the stream already holds the slice's event, so a repeated command appends nothing.",
+        "where": "src/main/java/com/example/shop/payments/use_cases/request_payment/RequestPaymentDecider.java#handle"
+      },
+      {
+        "id": "command.invariant",
+        "status": "placeholder",
+        "summary": "The Decider enforces no invariant and rejects no command; the slice's rules are left to the developer.",
+        "where": "src/main/java/com/example/shop/payments/use_cases/request_payment/RequestPaymentDecider.java#handle"
+      },
+      {
+        "id": "command.payload",
+        "status": "placeholder",
+        "summary": "The command and the event carry one placeholder String; the real payload fields, and copying them into the event, are left to the developer.",
+        "where": "src/main/java/com/example/shop/payments/use_cases/request_payment/RequestPayment.java"
+      },
+      {
+        "id": "command.http-endpoint",
+        "status": "implemented",
+        "summary": "A POST to the slice's path takes the command as its body, sends it on the CommandBus and answers 202 Accepted.",
+        "where": "src/main/java/com/example/shop/payments/use_cases/request_payment/RequestPaymentAPI.java"
+      }
+    ],
+    "stubTests": [
+      {
+        "path": "src/test/java/com/example/shop/payments/use_cases/request_payment/RequestPaymentTest.java",
+        "covers": [
+          "command.emits-event",
+          "command.idempotent-replay"
+        ]
+      }
     ]
   }
 ]

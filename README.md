@@ -28,6 +28,7 @@
 - [Why Choose Essentials?](#why-choose-essentials)
 - [When Should You Use This?](#when-should-you-use-this)
 - [Quick Start](#quick-start)
+- [Claude Code Plugin](#claude-code-plugin)
 - [Module Overview](#module-overview)
   - [Core Modules](#core-modules)
   - [Type Integrations](#type-integrations)
@@ -310,6 +311,70 @@ public class OrderService {
 ```
 
 See [Essentials Components](components/README.md) for complete documentation.
+
+---
+
+## Claude Code Plugin
+
+The `essentials` plugin for [Claude Code](https://claude.com/claude-code) ships from this repository
+(`essentials-plugin/`). It gives Claude the framework's own documentation and the rules for structuring an
+Essentials application, plus commands that create, extend, audit and upgrade one.
+
+### What it does
+
+- **Framework knowledge.** The `essentials-docs` skill loads on its own when a question or a file touches
+  `dk.trustworks.essentials.*`. It answers from the same LLM docs this repository maintains in `LLM/`,
+  including the traps index, rather than from memory.
+- **New projects.** `/essentials:init` asks a few questions (Kotlin or Java, WebFlux or WebMvc, the database
+  profile, an optional React frontend, Docker Compose). It then renders a Spring Boot + Maven project wired to
+  the stack contract, lints it, builds it and starts its Spring context before handing it over.
+- **Vertical slices.** `/essentials:add-slice` scaffolds a command, view, automation or translation slice:
+  source, a `slice.yaml` manifest, a per-slice `CLAUDE.md`, a test and the Spring wiring. The
+  `essentials-change` skill handles a change described in prose. `/essentials:slice-check` audits a project
+  against the slice-design rules, and `/essentials:slice-discover` maps an existing codebase onto them.
+- **Seeing the architecture.** `/essentials:slice-map` prints contexts, slices and the event flow between
+  them. `/essentials:slice-map-html` writes the Slice Atlas, a self-contained HTML page with Event Modeling
+  boards, a diff against a git baseline, field lineage and a coupling matrix.
+- **Keeping a project current.** `/essentials:upgrade` audits an existing project against what the plugin
+  ships and can move it to a newer Essentials release, code migrations included. `/essentials:review`
+  reviews a change against the traps, the stack contract and the slice rules.
+
+### How it works
+
+The model asks the questions and makes the judgement calls. Everything mechanical is a script under
+`essentials-plugin/scripts/`: rendering a project or a slice, parsing manifests, reading the facts of a source
+file, and checking the stack contract. Each script's output is checked by committed goldens, so the same
+answers always produce the same files. This repository's CI compiles and starts what the templates render
+against the framework itself. Another plugin's agent can drive `init` and the slice renderer through a
+documented contract (`essentials-plugin/capabilities.json`, `essentials-plugin/references/sdd-contract.md`).
+
+### Install
+
+```
+/plugin marketplace add trustworksdk/essentials-project
+/plugin install essentials@essentials-marketplace
+```
+
+The plugin's version is the Essentials release it targets, with a `-N` suffix for plugin-only releases
+(`<essentials version>-N`). Third-party marketplaces don't auto-update by default: turn that on in the `/plugin`
+Marketplaces tab, or run `/plugin marketplace update essentials-marketplace`. Then run `/essentials:intro`
+for orientation.
+
+### Requirements
+
+- **macOS or Linux, with the system bash.** `doctor.sh` is written for macOS's bash 3.2 and BSD userland as
+  well as for Linux. The docs search and the slice-manifest lint hook use no bash 4 or GNU-only features
+  either. Native Windows is not tested.
+- **Python 3.11 or newer** for every command that runs a script.
+- **[`uv`](https://docs.astral.sh/uv/)** for the scripts that need `pyyaml` or `jsonschema`. They pin their
+  dependencies in PEP 723 metadata and run with `uv run --script`. Without `uv`, have both packages installed.
+  The renderers are standard library only.
+- **JDK 25, Maven and Docker** for `/essentials:init`'s smoke build and `/essentials:upgrade`'s release move.
+  Without Docker, init's build is compile-only and says so. `npm` checks a frontend.
+- **git** for `/essentials:review` on a branch or a pull request, and for the upgrade branch.
+
+`/essentials:doctor` checks all of this on your machine, says what each missing tool costs, and gives the
+install command for your OS. The full description is the [plugin README](essentials-plugin/README.md).
 
 ---
 

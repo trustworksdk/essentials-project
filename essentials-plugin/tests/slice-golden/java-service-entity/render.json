@@ -1,8 +1,13 @@
 [
   {
+    "interface": 1,
+    "reportVersion": 1,
     "language": "java",
     "kind": "command",
     "lane": "service-entity",
+    "tier": "service-entity",
+    "slice": "orders.place_order",
+    "tests": "stub",
     "families": [
       "bc-scaffold-service-entity",
       "command_service_entity"
@@ -25,6 +30,24 @@
       "sliceCamel": "placeOrder",
       "tier": "service-entity"
     },
+    "inputSources": {
+      "Aggregate": "set",
+      "Bc": "derived",
+      "Command": "set",
+      "Entity": "derived",
+      "Event": "set",
+      "Slice": "derived",
+      "aggregate": "derived",
+      "apiPath": "derived",
+      "bc": "set",
+      "entity": "derived",
+      "lane": "derived",
+      "owner": "derived",
+      "packagePath": "set",
+      "slice": "set",
+      "sliceCamel": "derived",
+      "tier": "derived"
+    },
     "written": [
       "src/main/java/com/example/shop/orders/CLAUDE.md",
       "src/main/java/com/example/shop/orders/config/OrdersConfiguration.java",
@@ -40,6 +63,65 @@
       "src/test/java/com/example/shop/orders/entities/PlaceOrderTest.java",
       "src/test/java/com/example/shop/orders/use_cases/place_order/PlaceOrderIT.java"
     ],
+    "files": [
+      {
+        "path": "src/main/java/com/example/shop/orders/CLAUDE.md",
+        "role": "doc"
+      },
+      {
+        "path": "src/main/java/com/example/shop/orders/config/OrdersConfiguration.java",
+        "role": "main"
+      },
+      {
+        "path": "src/main/java/com/example/shop/orders/entities/CLAUDE.md",
+        "role": "doc"
+      },
+      {
+        "path": "src/main/java/com/example/shop/orders/events/OrderEvent.java",
+        "role": "main"
+      },
+      {
+        "path": "src/main/java/com/example/shop/orders/events/OrderPlaced.java",
+        "role": "main"
+      },
+      {
+        "path": "src/main/java/com/example/shop/orders/types/OrderId.java",
+        "role": "main"
+      },
+      {
+        "path": "src/main/java/com/example/shop/orders/use_cases/place_order/CLAUDE.md",
+        "role": "doc"
+      },
+      {
+        "path": "src/main/java/com/example/shop/orders/use_cases/place_order/PlaceOrder.java",
+        "role": "main"
+      },
+      {
+        "path": "src/main/java/com/example/shop/orders/use_cases/place_order/PlaceOrderAPI.java",
+        "role": "main"
+      },
+      {
+        "path": "src/main/java/com/example/shop/orders/use_cases/place_order/PlaceOrderHandler.java",
+        "role": "main"
+      },
+      {
+        "path": "src/main/java/com/example/shop/orders/use_cases/place_order/slice.yaml",
+        "role": "manifest"
+      },
+      {
+        "path": "src/test/java/com/example/shop/orders/entities/PlaceOrderTest.java",
+        "role": "test"
+      },
+      {
+        "path": "src/test/java/com/example/shop/orders/use_cases/place_order/PlaceOrderIT.java",
+        "role": "test"
+      }
+    ],
+    "kept": [],
+    "manifest": {
+      "path": "src/main/java/com/example/shop/orders/use_cases/place_order/slice.yaml",
+      "source": "rendered"
+    },
     "wiring": [
       {
         "path": "src/main/java/com/example/shop/orders/events/OrderEvent.java",
@@ -62,6 +144,50 @@
       "src/test/java/com/example/shop/orders/use_cases/place_order/PlaceOrderIT.java:26: // TODO: seed a Order, send PlaceOrder on the bus, assert the row changed.",
       "src/test/java/com/example/shop/orders/use_cases/place_order/PlaceOrderIT.java:31: // TODO: subscribe to the EventBus (or use a test recorder bean) and assert OrderPlaced arrived.",
       "src/test/java/com/example/shop/orders/use_cases/place_order/PlaceOrderIT.java:37: // TODO: send the same command twice; assert one change and one event."
+    ],
+    "behaviours": [
+      {
+        "id": "command.emits-event",
+        "status": "implemented",
+        "summary": "The handler loads the entity, and when its guard method reports a change, saves it and publishes the slice's event on the EventBus in the same transaction.",
+        "where": "src/main/java/com/example/shop/orders/use_cases/place_order/PlaceOrderHandler.java#handle"
+      },
+      {
+        "id": "command.idempotent-replay",
+        "status": "implemented",
+        "summary": "When the entity's guard method reports the state was already reached, the handler neither saves nor publishes, so a repeated command changes nothing.",
+        "where": "src/main/java/com/example/shop/orders/use_cases/place_order/PlaceOrderHandler.java#handle"
+      },
+      {
+        "id": "command.invariant",
+        "status": "placeholder",
+        "summary": "The handler calls a placeholder guard method on the hand-written entity; calling the one invariant method this slice's intent maps to is left to the developer.",
+        "where": "src/main/java/com/example/shop/orders/use_cases/place_order/PlaceOrderHandler.java#handle"
+      },
+      {
+        "id": "command.payload",
+        "status": "placeholder",
+        "summary": "The command, the request body and the event carry one placeholder String; the real payload fields are left to the developer.",
+        "where": "src/main/java/com/example/shop/orders/use_cases/place_order/PlaceOrder.java"
+      },
+      {
+        "id": "command.http-endpoint",
+        "status": "implemented",
+        "summary": "The POST endpoint takes the id of the entity to change from the request body, sends the command and answers with that id.",
+        "where": "src/main/java/com/example/shop/orders/use_cases/place_order/PlaceOrderAPI.java"
+      }
+    ],
+    "stubTests": [
+      {
+        "path": "src/test/java/com/example/shop/orders/use_cases/place_order/PlaceOrderIT.java",
+        "covers": []
+      },
+      {
+        "path": "src/test/java/com/example/shop/orders/entities/PlaceOrderTest.java",
+        "covers": [
+          "command.idempotent-replay"
+        ]
+      }
     ]
   },
   {
@@ -72,9 +198,14 @@
     ]
   },
   {
+    "interface": 1,
+    "reportVersion": 1,
     "language": "java",
     "kind": "command",
     "lane": "service-entity",
+    "tier": "service-entity",
+    "slice": "orders.cancel_order",
+    "tests": "stub",
     "families": [
       "command_service_entity"
     ],
@@ -96,6 +227,24 @@
       "sliceCamel": "cancelOrder",
       "tier": "service-entity"
     },
+    "inputSources": {
+      "Aggregate": "set",
+      "Bc": "derived",
+      "Command": "set",
+      "Entity": "derived",
+      "Event": "set",
+      "Slice": "derived",
+      "aggregate": "derived",
+      "apiPath": "set",
+      "bc": "set",
+      "entity": "derived",
+      "lane": "derived",
+      "owner": "derived",
+      "packagePath": "set",
+      "slice": "set",
+      "sliceCamel": "derived",
+      "tier": "derived"
+    },
     "written": [
       "src/main/java/com/example/shop/orders/events/OrderCancelled.java",
       "src/main/java/com/example/shop/orders/use_cases/cancel_order/CLAUDE.md",
@@ -106,6 +255,45 @@
       "src/test/java/com/example/shop/orders/entities/CancelOrderTest.java",
       "src/test/java/com/example/shop/orders/use_cases/cancel_order/CancelOrderIT.java"
     ],
+    "files": [
+      {
+        "path": "src/main/java/com/example/shop/orders/events/OrderCancelled.java",
+        "role": "main"
+      },
+      {
+        "path": "src/main/java/com/example/shop/orders/use_cases/cancel_order/CLAUDE.md",
+        "role": "doc"
+      },
+      {
+        "path": "src/main/java/com/example/shop/orders/use_cases/cancel_order/CancelOrder.java",
+        "role": "main"
+      },
+      {
+        "path": "src/main/java/com/example/shop/orders/use_cases/cancel_order/CancelOrderAPI.java",
+        "role": "main"
+      },
+      {
+        "path": "src/main/java/com/example/shop/orders/use_cases/cancel_order/CancelOrderHandler.java",
+        "role": "main"
+      },
+      {
+        "path": "src/main/java/com/example/shop/orders/use_cases/cancel_order/slice.yaml",
+        "role": "manifest"
+      },
+      {
+        "path": "src/test/java/com/example/shop/orders/entities/CancelOrderTest.java",
+        "role": "test"
+      },
+      {
+        "path": "src/test/java/com/example/shop/orders/use_cases/cancel_order/CancelOrderIT.java",
+        "role": "test"
+      }
+    ],
+    "kept": [],
+    "manifest": {
+      "path": "src/main/java/com/example/shop/orders/use_cases/cancel_order/slice.yaml",
+      "source": "rendered"
+    },
     "wiring": [
       {
         "path": "src/main/java/com/example/shop/orders/events/OrderEvent.java",
@@ -126,12 +314,61 @@
       "src/test/java/com/example/shop/orders/use_cases/cancel_order/CancelOrderIT.java:26: // TODO: seed a Order, send CancelOrder on the bus, assert the row changed.",
       "src/test/java/com/example/shop/orders/use_cases/cancel_order/CancelOrderIT.java:31: // TODO: subscribe to the EventBus (or use a test recorder bean) and assert OrderCancelled arrived.",
       "src/test/java/com/example/shop/orders/use_cases/cancel_order/CancelOrderIT.java:37: // TODO: send the same command twice; assert one change and one event."
+    ],
+    "behaviours": [
+      {
+        "id": "command.emits-event",
+        "status": "implemented",
+        "summary": "The handler loads the entity, and when its guard method reports a change, saves it and publishes the slice's event on the EventBus in the same transaction.",
+        "where": "src/main/java/com/example/shop/orders/use_cases/cancel_order/CancelOrderHandler.java#handle"
+      },
+      {
+        "id": "command.idempotent-replay",
+        "status": "implemented",
+        "summary": "When the entity's guard method reports the state was already reached, the handler neither saves nor publishes, so a repeated command changes nothing.",
+        "where": "src/main/java/com/example/shop/orders/use_cases/cancel_order/CancelOrderHandler.java#handle"
+      },
+      {
+        "id": "command.invariant",
+        "status": "placeholder",
+        "summary": "The handler calls a placeholder guard method on the hand-written entity; calling the one invariant method this slice's intent maps to is left to the developer.",
+        "where": "src/main/java/com/example/shop/orders/use_cases/cancel_order/CancelOrderHandler.java#handle"
+      },
+      {
+        "id": "command.payload",
+        "status": "placeholder",
+        "summary": "The command, the request body and the event carry one placeholder String; the real payload fields are left to the developer.",
+        "where": "src/main/java/com/example/shop/orders/use_cases/cancel_order/CancelOrder.java"
+      },
+      {
+        "id": "command.http-endpoint",
+        "status": "implemented",
+        "summary": "The POST endpoint takes the id of the entity to change from the request body, sends the command and answers with that id.",
+        "where": "src/main/java/com/example/shop/orders/use_cases/cancel_order/CancelOrderAPI.java"
+      }
+    ],
+    "stubTests": [
+      {
+        "path": "src/test/java/com/example/shop/orders/use_cases/cancel_order/CancelOrderIT.java",
+        "covers": []
+      },
+      {
+        "path": "src/test/java/com/example/shop/orders/entities/CancelOrderTest.java",
+        "covers": [
+          "command.idempotent-replay"
+        ]
+      }
     ]
   },
   {
+    "interface": 1,
+    "reportVersion": 1,
     "language": "java",
     "kind": "view",
     "lane": "service-entity",
+    "tier": "service-entity",
+    "slice": "orders.order_list",
+    "tests": "stub",
     "families": [
       "view_service_entity"
     ],
@@ -151,6 +388,22 @@
       "view": "order_list",
       "viewCamel": "orderList"
     },
+    "inputSources": {
+      "Aggregate": "set",
+      "Bc": "derived",
+      "Entity": "derived",
+      "View": "derived",
+      "aggregate": "derived",
+      "apiPath": "derived",
+      "bc": "set",
+      "entity": "derived",
+      "lane": "derived",
+      "owner": "derived",
+      "packagePath": "set",
+      "tier": "derived",
+      "view": "set",
+      "viewCamel": "derived"
+    },
     "written": [
       "src/main/java/com/example/shop/orders/views/order_list/CLAUDE.md",
       "src/main/java/com/example/shop/orders/views/order_list/OrderListAPI.java",
@@ -159,6 +412,37 @@
       "src/main/java/com/example/shop/orders/views/order_list/slice.yaml",
       "src/test/java/com/example/shop/orders/views/order_list/OrderListIT.java"
     ],
+    "files": [
+      {
+        "path": "src/main/java/com/example/shop/orders/views/order_list/CLAUDE.md",
+        "role": "doc"
+      },
+      {
+        "path": "src/main/java/com/example/shop/orders/views/order_list/OrderListAPI.java",
+        "role": "main"
+      },
+      {
+        "path": "src/main/java/com/example/shop/orders/views/order_list/OrderListQueries.java",
+        "role": "main"
+      },
+      {
+        "path": "src/main/java/com/example/shop/orders/views/order_list/OrderListView.java",
+        "role": "main"
+      },
+      {
+        "path": "src/main/java/com/example/shop/orders/views/order_list/slice.yaml",
+        "role": "manifest"
+      },
+      {
+        "path": "src/test/java/com/example/shop/orders/views/order_list/OrderListIT.java",
+        "role": "test"
+      }
+    ],
+    "kept": [],
+    "manifest": {
+      "path": "src/main/java/com/example/shop/orders/views/order_list/slice.yaml",
+      "source": "rendered"
+    },
     "wiring": [],
     "todos": [
       "src/main/java/com/example/shop/orders/views/order_list/CLAUDE.md:7: **Purpose:** TODO one sentence, present tense.",
@@ -168,6 +452,44 @@
       "src/test/java/com/example/shop/orders/views/order_list/OrderListIT.java:26: // TODO: seed one Order row, query it, assert every getter on OrderListView returns the",
       "src/test/java/com/example/shop/orders/views/order_list/OrderListIT.java:32: // TODO: once the slice has a filtering query (findByStatus, …), seed rows that differ on it and",
       "src/test/java/com/example/shop/orders/views/order_list/OrderListIT.java:38: // TODO: send the command that changes the row, then query without waiting."
+    ],
+    "behaviours": [
+      {
+        "id": "view.query-endpoint",
+        "status": "implemented",
+        "summary": "A GET on the view's path returns every entity row, projected onto the view interface.",
+        "where": "src/main/java/com/example/shop/orders/views/order_list/OrderListAPI.java"
+      },
+      {
+        "id": "view.query-by-id",
+        "status": "implemented",
+        "summary": "A GET on the view's path with an id returns that row projected onto the view interface; an unknown id throws NoSuchElementException, which no handler maps to 404.",
+        "where": "src/main/java/com/example/shop/orders/views/order_list/OrderListAPI.java"
+      },
+      {
+        "id": "view.strongly-consistent-read",
+        "status": "implemented",
+        "summary": "The queries read the entity's own table, so a committed write is visible to the next query with no projection lag.",
+        "where": "src/main/java/com/example/shop/orders/views/order_list/OrderListQueries.java"
+      },
+      {
+        "id": "view.served-fields",
+        "status": "placeholder",
+        "summary": "The view interface exposes only the id; the fields this view serves are left to the developer.",
+        "where": "src/main/java/com/example/shop/orders/views/order_list/OrderListView.java"
+      },
+      {
+        "id": "view.filtered-queries",
+        "status": "placeholder",
+        "summary": "Only the find-all and find-by-id queries exist; the filtering queries this view serves are left to the developer.",
+        "where": "src/main/java/com/example/shop/orders/views/order_list/OrderListQueries.java"
+      }
+    ],
+    "stubTests": [
+      {
+        "path": "src/test/java/com/example/shop/orders/views/order_list/OrderListIT.java",
+        "covers": []
+      }
     ]
   }
 ]

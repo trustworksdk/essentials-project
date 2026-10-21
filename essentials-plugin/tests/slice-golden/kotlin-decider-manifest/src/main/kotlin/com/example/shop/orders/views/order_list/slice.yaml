@@ -1,0 +1,39 @@
+schemaVersion: "1.4"
+slice: orders.order_list
+kind: view
+bc: orders
+owner: checkout-team
+status: planned
+summary: Lists a customer's orders.
+generator: essentials
+language: kotlin
+lane: decider
+flow: [checkout, returns]
+requirements: [REQ-ORDERS-7]
+serves: [OrderList]
+endpoints:
+  - { method: GET, path: "/api/orders", auth: user }
+projections:
+  - name: OrderListProjection
+    aggregateTypes: [Orders]
+    from: [OrderPlaced]
+    consistency: eventual
+    store: document-db
+scenarios:
+  - name: an empty list before any order
+    then: { readModel: OrderListView, rows: [] }
+tier: cqrs-es                        # architectureTier vocabulary (cqrs-es | service-entity | …)
+
+# --- Data ---
+reads:
+  - { name: OrderListView }
+
+# --- Boundaries (rules/slice-design.md §R4) ---
+forbidden:
+  - cross-slice-internal:orders
+
+# --- Testing ---
+tests:
+  unit: { present: false }
+  integration: { present: true }
+  contract: { present: false }

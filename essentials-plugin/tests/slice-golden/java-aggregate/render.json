@@ -1,8 +1,13 @@
 [
   {
+    "interface": 1,
+    "reportVersion": 1,
     "language": "java",
     "kind": "command",
     "lane": "aggregate",
+    "tier": "cqrs-es",
+    "slice": "orders.place_order",
+    "tests": "stub",
     "families": [
       "bc-scaffold-aggregate",
       "command_aggregate"
@@ -25,6 +30,24 @@
       "sliceCamel": "placeOrder",
       "tier": "cqrs-es"
     },
+    "inputSources": {
+      "Aggregate": "set",
+      "AggregateType": "set",
+      "Aggregates": "set",
+      "Bc": "derived",
+      "Command": "set",
+      "Event": "set",
+      "Slice": "derived",
+      "aggregate": "derived",
+      "apiPath": "derived",
+      "bc": "set",
+      "lane": "derived",
+      "owner": "derived",
+      "packagePath": "set",
+      "slice": "set",
+      "sliceCamel": "derived",
+      "tier": "derived"
+    },
     "written": [
       "src/main/java/com/example/shop/orders/CLAUDE.md",
       "src/main/java/com/example/shop/orders/aggregates/Order.java",
@@ -41,6 +64,69 @@
       "src/test/java/com/example/shop/orders/use_cases/place_order/PlaceOrderIT.java",
       "src/test/java/com/example/shop/orders/use_cases/place_order/PlaceOrderTest.java"
     ],
+    "files": [
+      {
+        "path": "src/main/java/com/example/shop/orders/CLAUDE.md",
+        "role": "doc"
+      },
+      {
+        "path": "src/main/java/com/example/shop/orders/aggregates/Order.java",
+        "role": "main"
+      },
+      {
+        "path": "src/main/java/com/example/shop/orders/aggregates/Orders.java",
+        "role": "main"
+      },
+      {
+        "path": "src/main/java/com/example/shop/orders/config/OrdersConfiguration.java",
+        "role": "main"
+      },
+      {
+        "path": "src/main/java/com/example/shop/orders/events/OrderEvent.java",
+        "role": "main"
+      },
+      {
+        "path": "src/main/java/com/example/shop/orders/events/OrderPlaced.java",
+        "role": "main"
+      },
+      {
+        "path": "src/main/java/com/example/shop/orders/types/OrderId.java",
+        "role": "main"
+      },
+      {
+        "path": "src/main/java/com/example/shop/orders/use_cases/place_order/CLAUDE.md",
+        "role": "doc"
+      },
+      {
+        "path": "src/main/java/com/example/shop/orders/use_cases/place_order/PlaceOrder.java",
+        "role": "main"
+      },
+      {
+        "path": "src/main/java/com/example/shop/orders/use_cases/place_order/PlaceOrderAPI.java",
+        "role": "main"
+      },
+      {
+        "path": "src/main/java/com/example/shop/orders/use_cases/place_order/PlaceOrderHandler.java",
+        "role": "main"
+      },
+      {
+        "path": "src/main/java/com/example/shop/orders/use_cases/place_order/slice.yaml",
+        "role": "manifest"
+      },
+      {
+        "path": "src/test/java/com/example/shop/orders/use_cases/place_order/PlaceOrderIT.java",
+        "role": "test"
+      },
+      {
+        "path": "src/test/java/com/example/shop/orders/use_cases/place_order/PlaceOrderTest.java",
+        "role": "test"
+      }
+    ],
+    "kept": [],
+    "manifest": {
+      "path": "src/main/java/com/example/shop/orders/use_cases/place_order/slice.yaml",
+      "source": "rendered"
+    },
     "wiring": [
       {
         "path": "src/main/java/com/example/shop/orders/events/OrderEvent.java",
@@ -61,12 +147,97 @@
       "src/main/java/com/example/shop/orders/use_cases/place_order/slice.yaml:32: - { id: INV-1, text: \"TODO the rule this slice enforces\", enforcedBy: \"Order.applyPlaceholder\" }",
       "src/test/java/com/example/shop/orders/use_cases/place_order/PlaceOrderIT.java:33: // TODO: extend the project's IntegrationTestBase (until then nothing is injected), then:",
       "src/test/java/com/example/shop/orders/use_cases/place_order/PlaceOrderTest.java:44: // TODO: replace with this slice's real invariant. The point of the assertion is that the"
+    ],
+    "behaviours": [
+      {
+        "id": "bc.aggregate-creation",
+        "status": "implemented",
+        "summary": "The creating constructor rejects a null value and applies the slice's event, so a new aggregate starts with one event.",
+        "where": "src/main/java/com/example/shop/orders/aggregates/Order.java"
+      },
+      {
+        "id": "bc.aggregate-decision",
+        "status": "implemented",
+        "summary": "applyPlaceholder applies the slice's event and returns true when the value changes, and returns false without applying anything when the aggregate already holds that value.",
+        "where": "src/main/java/com/example/shop/orders/aggregates/Order.java#applyPlaceholder"
+      },
+      {
+        "id": "bc.aggregate-invariant",
+        "status": "placeholder",
+        "summary": "No business invariant is guarded before apply(); only a null value is rejected, and the real guard is left to the developer.",
+        "where": "src/main/java/com/example/shop/orders/aggregates/Order.java#applyPlaceholder"
+      },
+      {
+        "id": "bc.aggregate-state",
+        "status": "placeholder",
+        "summary": "The aggregate holds a single placeholder String; its real state, and the event handlers that write it, are left to the developer.",
+        "where": "src/main/java/com/example/shop/orders/aggregates/Order.java"
+      },
+      {
+        "id": "bc.aggregate-repository",
+        "status": "implemented",
+        "summary": "Loads an aggregate by id rebuilt from its events (failing, or returning empty, when it does not exist), reports whether one exists, and persists a new one.",
+        "where": "src/main/java/com/example/shop/orders/aggregates/Orders.java"
+      },
+      {
+        "id": "bc.event-json-type",
+        "status": "implemented",
+        "summary": "Writes every event variant of the aggregate with an @type discriminator, so the stream's events round-trip through JSON.",
+        "where": "src/main/java/com/example/shop/orders/events/OrderEvent.java"
+      },
+      {
+        "id": "command.emits-event",
+        "status": "implemented",
+        "summary": "The handler loads the aggregate by the command's id and calls its decision method, which applies the slice's event when the value changes.",
+        "where": "src/main/java/com/example/shop/orders/use_cases/place_order/PlaceOrderHandler.java#handle"
+      },
+      {
+        "id": "command.idempotent-replay",
+        "status": "implemented",
+        "summary": "A repeated command finds the aggregate already holding the value, so its decision method applies no second event.",
+        "where": "src/main/java/com/example/shop/orders/use_cases/place_order/PlaceOrderHandler.java#handle"
+      },
+      {
+        "id": "command.invariant",
+        "status": "placeholder",
+        "summary": "The handler calls the scaffold's placeholder decision method; calling the one invariant method this slice's intent maps to is left to the developer.",
+        "where": "src/main/java/com/example/shop/orders/use_cases/place_order/PlaceOrderHandler.java#handle"
+      },
+      {
+        "id": "command.payload",
+        "status": "placeholder",
+        "summary": "The command, the request body and the event carry one placeholder String; the real payload fields are left to the developer.",
+        "where": "src/main/java/com/example/shop/orders/use_cases/place_order/PlaceOrder.java"
+      },
+      {
+        "id": "command.http-endpoint",
+        "status": "implemented",
+        "summary": "A POST to the slice's path with the aggregate id in the path builds the command from the id and the request body and sends it on the CommandBus.",
+        "where": "src/main/java/com/example/shop/orders/use_cases/place_order/PlaceOrderAPI.java"
+      }
+    ],
+    "stubTests": [
+      {
+        "path": "src/test/java/com/example/shop/orders/use_cases/place_order/PlaceOrderIT.java",
+        "covers": []
+      },
+      {
+        "path": "src/test/java/com/example/shop/orders/use_cases/place_order/PlaceOrderTest.java",
+        "covers": [
+          "bc.aggregate-decision"
+        ]
+      }
     ]
   },
   {
+    "interface": 1,
+    "reportVersion": 1,
     "language": "java",
     "kind": "command",
     "lane": "aggregate",
+    "tier": "cqrs-es",
+    "slice": "orders.cancel_order",
+    "tests": "stub",
     "families": [
       "command_aggregate"
     ],
@@ -88,6 +259,24 @@
       "sliceCamel": "cancelOrder",
       "tier": "cqrs-es"
     },
+    "inputSources": {
+      "Aggregate": "set",
+      "AggregateType": "set",
+      "Aggregates": "set",
+      "Bc": "derived",
+      "Command": "set",
+      "Event": "set",
+      "Slice": "derived",
+      "aggregate": "derived",
+      "apiPath": "set",
+      "bc": "set",
+      "lane": "derived",
+      "owner": "derived",
+      "packagePath": "set",
+      "slice": "set",
+      "sliceCamel": "derived",
+      "tier": "derived"
+    },
     "written": [
       "src/main/java/com/example/shop/orders/events/OrderCancelled.java",
       "src/main/java/com/example/shop/orders/use_cases/cancel_order/CLAUDE.md",
@@ -98,6 +287,45 @@
       "src/test/java/com/example/shop/orders/use_cases/cancel_order/CancelOrderIT.java",
       "src/test/java/com/example/shop/orders/use_cases/cancel_order/CancelOrderTest.java"
     ],
+    "files": [
+      {
+        "path": "src/main/java/com/example/shop/orders/events/OrderCancelled.java",
+        "role": "main"
+      },
+      {
+        "path": "src/main/java/com/example/shop/orders/use_cases/cancel_order/CLAUDE.md",
+        "role": "doc"
+      },
+      {
+        "path": "src/main/java/com/example/shop/orders/use_cases/cancel_order/CancelOrder.java",
+        "role": "main"
+      },
+      {
+        "path": "src/main/java/com/example/shop/orders/use_cases/cancel_order/CancelOrderAPI.java",
+        "role": "main"
+      },
+      {
+        "path": "src/main/java/com/example/shop/orders/use_cases/cancel_order/CancelOrderHandler.java",
+        "role": "main"
+      },
+      {
+        "path": "src/main/java/com/example/shop/orders/use_cases/cancel_order/slice.yaml",
+        "role": "manifest"
+      },
+      {
+        "path": "src/test/java/com/example/shop/orders/use_cases/cancel_order/CancelOrderIT.java",
+        "role": "test"
+      },
+      {
+        "path": "src/test/java/com/example/shop/orders/use_cases/cancel_order/CancelOrderTest.java",
+        "role": "test"
+      }
+    ],
+    "kept": [],
+    "manifest": {
+      "path": "src/main/java/com/example/shop/orders/use_cases/cancel_order/slice.yaml",
+      "source": "rendered"
+    },
     "wiring": [
       {
         "path": "src/main/java/com/example/shop/orders/events/OrderEvent.java",
@@ -114,12 +342,61 @@
       "src/main/java/com/example/shop/orders/use_cases/cancel_order/slice.yaml:32: - { id: INV-1, text: \"TODO the rule this slice enforces\", enforcedBy: \"Order.applyPlaceholder\" }",
       "src/test/java/com/example/shop/orders/use_cases/cancel_order/CancelOrderIT.java:33: // TODO: extend the project's IntegrationTestBase (until then nothing is injected), then:",
       "src/test/java/com/example/shop/orders/use_cases/cancel_order/CancelOrderTest.java:44: // TODO: replace with this slice's real invariant. The point of the assertion is that the"
+    ],
+    "behaviours": [
+      {
+        "id": "command.emits-event",
+        "status": "implemented",
+        "summary": "The handler loads the aggregate by the command's id and calls its decision method, which applies the slice's event when the value changes.",
+        "where": "src/main/java/com/example/shop/orders/use_cases/cancel_order/CancelOrderHandler.java#handle"
+      },
+      {
+        "id": "command.idempotent-replay",
+        "status": "implemented",
+        "summary": "A repeated command finds the aggregate already holding the value, so its decision method applies no second event.",
+        "where": "src/main/java/com/example/shop/orders/use_cases/cancel_order/CancelOrderHandler.java#handle"
+      },
+      {
+        "id": "command.invariant",
+        "status": "placeholder",
+        "summary": "The handler calls the scaffold's placeholder decision method; calling the one invariant method this slice's intent maps to is left to the developer.",
+        "where": "src/main/java/com/example/shop/orders/use_cases/cancel_order/CancelOrderHandler.java#handle"
+      },
+      {
+        "id": "command.payload",
+        "status": "placeholder",
+        "summary": "The command, the request body and the event carry one placeholder String; the real payload fields are left to the developer.",
+        "where": "src/main/java/com/example/shop/orders/use_cases/cancel_order/CancelOrder.java"
+      },
+      {
+        "id": "command.http-endpoint",
+        "status": "implemented",
+        "summary": "A POST to the slice's path with the aggregate id in the path builds the command from the id and the request body and sends it on the CommandBus.",
+        "where": "src/main/java/com/example/shop/orders/use_cases/cancel_order/CancelOrderAPI.java"
+      }
+    ],
+    "stubTests": [
+      {
+        "path": "src/test/java/com/example/shop/orders/use_cases/cancel_order/CancelOrderIT.java",
+        "covers": []
+      },
+      {
+        "path": "src/test/java/com/example/shop/orders/use_cases/cancel_order/CancelOrderTest.java",
+        "covers": [
+          "bc.aggregate-decision"
+        ]
+      }
     ]
   },
   {
+    "interface": 1,
+    "reportVersion": 1,
     "language": "java",
     "kind": "view",
     "lane": "aggregate",
+    "tier": "cqrs-es",
+    "slice": "orders.order_list",
+    "tests": "stub",
     "families": [
       "view"
     ],
@@ -140,6 +417,23 @@
       "view": "order_list",
       "viewCamel": "orderList"
     },
+    "inputSources": {
+      "Aggregate": "set",
+      "AggregateType": "set",
+      "Aggregates": "set",
+      "Bc": "derived",
+      "Event": "set",
+      "View": "derived",
+      "aggregate": "derived",
+      "apiPath": "derived",
+      "bc": "set",
+      "lane": "derived",
+      "owner": "derived",
+      "packagePath": "set",
+      "tier": "derived",
+      "view": "set",
+      "viewCamel": "derived"
+    },
     "written": [
       "src/main/java/com/example/shop/orders/views/order_list/CLAUDE.md",
       "src/main/java/com/example/shop/orders/views/order_list/OrderListAPI.java",
@@ -149,6 +443,41 @@
       "src/main/java/com/example/shop/orders/views/order_list/slice.yaml",
       "src/test/java/com/example/shop/orders/views/order_list/OrderListProjectionIT.java"
     ],
+    "files": [
+      {
+        "path": "src/main/java/com/example/shop/orders/views/order_list/CLAUDE.md",
+        "role": "doc"
+      },
+      {
+        "path": "src/main/java/com/example/shop/orders/views/order_list/OrderListAPI.java",
+        "role": "main"
+      },
+      {
+        "path": "src/main/java/com/example/shop/orders/views/order_list/OrderListProjection.java",
+        "role": "main"
+      },
+      {
+        "path": "src/main/java/com/example/shop/orders/views/order_list/OrderListRepositoryConfiguration.java",
+        "role": "main"
+      },
+      {
+        "path": "src/main/java/com/example/shop/orders/views/order_list/OrderListView.java",
+        "role": "main"
+      },
+      {
+        "path": "src/main/java/com/example/shop/orders/views/order_list/slice.yaml",
+        "role": "manifest"
+      },
+      {
+        "path": "src/test/java/com/example/shop/orders/views/order_list/OrderListProjectionIT.java",
+        "role": "test"
+      }
+    ],
+    "kept": [],
+    "manifest": {
+      "path": "src/main/java/com/example/shop/orders/views/order_list/slice.yaml",
+      "source": "rendered"
+    },
     "wiring": [],
     "todos": [
       "src/main/java/com/example/shop/orders/views/order_list/CLAUDE.md:6: **Purpose:** TODO one sentence, present tense.",
@@ -163,12 +492,67 @@
       "src/test/java/com/example/shop/orders/views/order_list/OrderListProjectionIT.java:27: // TODO: append OrderPlaced to the aggregate's stream, await the projection, assert the row.",
       "src/test/java/com/example/shop/orders/views/order_list/OrderListProjectionIT.java:32: // TODO: deliver the same event twice; assert the read model applied it once.",
       "src/test/java/com/example/shop/orders/views/order_list/OrderListProjectionIT.java:38: // TODO: reset the subscription and assert onSubscriptionsReset(aggregateType,"
+    ],
+    "behaviours": [
+      {
+        "id": "view.projects-event",
+        "status": "implemented",
+        "summary": "On the projected event the projection inserts the row keyed by the aggregate id, or updates the existing one, with the event's order as the row's version.",
+        "where": "src/main/java/com/example/shop/orders/views/order_list/OrderListProjection.java#on"
+      },
+      {
+        "id": "view.idempotent-redelivery",
+        "status": "implemented",
+        "summary": "An event whose order is not newer than the row's version is skipped, so a redelivered event changes nothing.",
+        "where": "src/main/java/com/example/shop/orders/views/order_list/OrderListProjection.java#on"
+      },
+      {
+        "id": "view.reset-rebuild",
+        "status": "implemented",
+        "summary": "A subscription reset deletes every row, so the replay that follows rebuilds the read model from the events.",
+        "where": "src/main/java/com/example/shop/orders/views/order_list/OrderListProjection.java#onSubscriptionsReset"
+      },
+      {
+        "id": "view.query-endpoint",
+        "status": "implemented",
+        "summary": "A GET on the view's path returns every row of the read model.",
+        "where": "src/main/java/com/example/shop/orders/views/order_list/OrderListAPI.java"
+      },
+      {
+        "id": "view.served-fields",
+        "status": "placeholder",
+        "summary": "The row's one field is a placeholder status written as the constant \"TODO\"; the fields this view serves, and mapping the event's facts onto them, are left to the developer.",
+        "where": "src/main/java/com/example/shop/orders/views/order_list/OrderListView.java"
+      },
+      {
+        "id": "view.projects-further-events",
+        "status": "placeholder",
+        "summary": "Only the one scaffolded event is projected; a handler for every other event this view needs is left to the developer.",
+        "where": "src/main/java/com/example/shop/orders/views/order_list/OrderListProjection.java"
+      },
+      {
+        "id": "view.filtered-queries",
+        "status": "placeholder",
+        "summary": "The status index and findByStatus helper are examples over the placeholder field and no endpoint uses them; the indexes and finders this view's queries need are left to the developer.",
+        "where": "src/main/java/com/example/shop/orders/views/order_list/OrderListRepositoryConfiguration.java"
+      }
+    ],
+    "stubTests": [
+      {
+        "path": "src/test/java/com/example/shop/orders/views/order_list/OrderListProjectionIT.java",
+        "covers": []
+      }
     ]
   },
   {
+    "interface": 1,
+    "reportVersion": 1,
     "language": "java",
     "kind": "automation",
     "lane": "aggregate",
+    "tier": "cqrs-es",
+    "slice": "orders.fulfillment",
+    "tests": "stub",
     "families": [
       "automation"
     ],
@@ -189,6 +573,23 @@
       "sliceCamel": "fulfillment",
       "tier": "cqrs-es"
     },
+    "inputSources": {
+      "Aggregate": "set",
+      "AggregateType": "set",
+      "Aggregates": "set",
+      "Bc": "derived",
+      "Event": "set",
+      "Slice": "derived",
+      "aggregate": "derived",
+      "apiPath": "derived",
+      "bc": "set",
+      "lane": "derived",
+      "owner": "derived",
+      "packagePath": "set",
+      "slice": "set",
+      "sliceCamel": "derived",
+      "tier": "derived"
+    },
     "written": [
       "src/main/java/com/example/shop/orders/automations/fulfillment/CLAUDE.md",
       "src/main/java/com/example/shop/orders/automations/fulfillment/FulfillmentProcessor.java",
@@ -197,6 +598,37 @@
       "src/main/java/com/example/shop/orders/automations/fulfillment/slice.yaml",
       "src/test/java/com/example/shop/orders/automations/fulfillment/FulfillmentIT.java"
     ],
+    "files": [
+      {
+        "path": "src/main/java/com/example/shop/orders/automations/fulfillment/CLAUDE.md",
+        "role": "doc"
+      },
+      {
+        "path": "src/main/java/com/example/shop/orders/automations/fulfillment/FulfillmentProcessor.java",
+        "role": "main"
+      },
+      {
+        "path": "src/main/java/com/example/shop/orders/automations/fulfillment/FulfillmentRepository.java",
+        "role": "main"
+      },
+      {
+        "path": "src/main/java/com/example/shop/orders/automations/fulfillment/FulfillmentTodoList.java",
+        "role": "main"
+      },
+      {
+        "path": "src/main/java/com/example/shop/orders/automations/fulfillment/slice.yaml",
+        "role": "manifest"
+      },
+      {
+        "path": "src/test/java/com/example/shop/orders/automations/fulfillment/FulfillmentIT.java",
+        "role": "test"
+      }
+    ],
+    "kept": [],
+    "manifest": {
+      "path": "src/main/java/com/example/shop/orders/automations/fulfillment/slice.yaml",
+      "source": "rendered"
+    },
     "wiring": [],
     "todos": [
       "src/main/java/com/example/shop/orders/automations/fulfillment/CLAUDE.md:6: **Purpose:** TODO one sentence, present tense.",
@@ -212,12 +644,55 @@
       "src/main/java/com/example/shop/orders/automations/fulfillment/slice.yaml:27: - { id: INV-1, text: \"TODO the process rule, e.g. at most three payment attempts\", enforcedBy: FulfillmentProcessor }",
       "src/test/java/com/example/shop/orders/automations/fulfillment/FulfillmentIT.java:19: // TODO: append OrderPlaced; assert the TodoList advanced and the command was dispatched.",
       "src/test/java/com/example/shop/orders/automations/fulfillment/FulfillmentIT.java:29: // TODO: drive the failure path; assert attempts stop at the cap and the compensating"
+    ],
+    "behaviours": [
+      {
+        "id": "automation.records-progress",
+        "status": "implemented",
+        "summary": "On the triggering event the processor loads or creates the process's TodoList keyed by the aggregate id, marks it started and saves it.",
+        "where": "src/main/java/com/example/shop/orders/automations/fulfillment/FulfillmentProcessor.java#on"
+      },
+      {
+        "id": "automation.idempotent-redelivery",
+        "status": "implemented",
+        "summary": "A redelivered event finds its TodoList already started and returns before dispatching or saving again.",
+        "where": "src/main/java/com/example/shop/orders/automations/fulfillment/FulfillmentProcessor.java#on"
+      },
+      {
+        "id": "automation.dispatches-command",
+        "status": "placeholder",
+        "summary": "The send of the next command is commented out, so the TodoList is marked dispatched but nothing is sent; the command to dispatch is left to the developer.",
+        "where": "src/main/java/com/example/shop/orders/automations/fulfillment/FulfillmentProcessor.java#on"
+      },
+      {
+        "id": "automation.advances-process",
+        "status": "placeholder",
+        "summary": "No handler exists for the events that advance or complete the process, and the TodoList is never marked completed; they are left to the developer.",
+        "where": "src/main/java/com/example/shop/orders/automations/fulfillment/FulfillmentProcessor.java"
+      },
+      {
+        "id": "automation.compensation",
+        "status": "placeholder",
+        "summary": "Attempts are never counted and no compensating command is issued on terminal failure; bounded retries and compensation are left to the developer.",
+        "where": "src/main/java/com/example/shop/orders/automations/fulfillment/FulfillmentProcessor.java"
+      }
+    ],
+    "stubTests": [
+      {
+        "path": "src/test/java/com/example/shop/orders/automations/fulfillment/FulfillmentIT.java",
+        "covers": []
+      }
     ]
   },
   {
+    "interface": 1,
+    "reportVersion": 1,
     "language": "java",
     "kind": "translation",
     "lane": "aggregate",
+    "tier": "cqrs-es",
+    "slice": "orders.billing",
+    "tests": "stub",
     "families": [
       "translation"
     ],
@@ -238,6 +713,23 @@
       "packagePath": "com.example.shop",
       "tier": "cqrs-es"
     },
+    "inputSources": {
+      "Aggregate": "set",
+      "AggregateType": "set",
+      "Aggregates": "set",
+      "Bc": "derived",
+      "Event": "set",
+      "ExternalEvent": "set",
+      "ExternalSystem": "derived",
+      "aggregate": "derived",
+      "apiPath": "derived",
+      "bc": "set",
+      "externalSystem": "set",
+      "lane": "derived",
+      "owner": "derived",
+      "packagePath": "set",
+      "tier": "derived"
+    },
     "written": [
       "src/main/java/com/example/shop/orders/external_systems/billing/BillingClient.java",
       "src/main/java/com/example/shop/orders/external_systems/billing/BillingClientAdapter.java",
@@ -248,6 +740,45 @@
       "src/main/java/com/example/shop/orders/external_systems/billing/slice.yaml",
       "src/test/java/com/example/shop/orders/external_systems/billing/BillingTranslatorTest.java"
     ],
+    "files": [
+      {
+        "path": "src/main/java/com/example/shop/orders/external_systems/billing/BillingClient.java",
+        "role": "main"
+      },
+      {
+        "path": "src/main/java/com/example/shop/orders/external_systems/billing/BillingClientAdapter.java",
+        "role": "main"
+      },
+      {
+        "path": "src/main/java/com/example/shop/orders/external_systems/billing/BillingPublisher.java",
+        "role": "main"
+      },
+      {
+        "path": "src/main/java/com/example/shop/orders/external_systems/billing/BillingTranslator.java",
+        "role": "main"
+      },
+      {
+        "path": "src/main/java/com/example/shop/orders/external_systems/billing/CLAUDE.md",
+        "role": "doc"
+      },
+      {
+        "path": "src/main/java/com/example/shop/orders/external_systems/billing/OnInvoiceIssued.java",
+        "role": "main"
+      },
+      {
+        "path": "src/main/java/com/example/shop/orders/external_systems/billing/slice.yaml",
+        "role": "manifest"
+      },
+      {
+        "path": "src/test/java/com/example/shop/orders/external_systems/billing/BillingTranslatorTest.java",
+        "role": "test"
+      }
+    ],
+    "kept": [],
+    "manifest": {
+      "path": "src/main/java/com/example/shop/orders/external_systems/billing/slice.yaml",
+      "source": "rendered"
+    },
     "wiring": [],
     "todos": [
       "src/main/java/com/example/shop/orders/external_systems/billing/BillingClientAdapter.java:9: * TODO: implement {@link #send} with the real transport. Until then the context starts, and every",
@@ -257,6 +788,50 @@
       "src/main/java/com/example/shop/orders/external_systems/billing/slice.yaml:29: - { from: InvoiceIssued, to: TODOInternalCommand }",
       "src/test/java/com/example/shop/orders/external_systems/billing/BillingTranslatorTest.java:21: // TODO: assert every field, including the type conversions at the boundary.",
       "src/test/java/com/example/shop/orders/external_systems/billing/BillingTranslatorTest.java:26: // TODO: assert the external contract shape, not our internal one."
+    ],
+    "behaviours": [
+      {
+        "id": "translation.inbound-mapping",
+        "status": "placeholder",
+        "summary": "Mapping the external payload onto an internal command throws UnsupportedOperationException; the mapping and its type conversions are left to the developer.",
+        "where": "src/main/java/com/example/shop/orders/external_systems/billing/BillingTranslator.java#toCommand"
+      },
+      {
+        "id": "translation.rejects-malformed-input",
+        "status": "placeholder",
+        "summary": "No validation rejects a malformed external payload at the boundary; it is left to the developer.",
+        "where": "src/main/java/com/example/shop/orders/external_systems/billing/BillingTranslator.java#toCommand"
+      },
+      {
+        "id": "translation.outbound-mapping",
+        "status": "placeholder",
+        "summary": "Mapping an internal event onto the external request throws UnsupportedOperationException; it is left to the developer.",
+        "where": "src/main/java/com/example/shop/orders/external_systems/billing/BillingTranslator.java#toExternal"
+      },
+      {
+        "id": "translation.external-client",
+        "status": "placeholder",
+        "summary": "The client adapter throws UnsupportedOperationException instead of calling the external system; the call is left to the developer.",
+        "where": "src/main/java/com/example/shop/orders/external_systems/billing/BillingClientAdapter.java#send"
+      },
+      {
+        "id": "translation.webhook-endpoint",
+        "status": "placeholder",
+        "summary": "The webhook POST hands the payload to the translator and sends the result on the CommandBus without waiting, but fails until the inbound mapping is written.",
+        "where": "src/main/java/com/example/shop/orders/external_systems/billing/OnInvoiceIssued.java"
+      },
+      {
+        "id": "translation.publishes-outbound",
+        "status": "placeholder",
+        "summary": "The publisher hands each subscribed event to the translator and the client, but fails until the outbound mapping and the client adapter are written.",
+        "where": "src/main/java/com/example/shop/orders/external_systems/billing/BillingPublisher.java#on"
+      }
+    ],
+    "stubTests": [
+      {
+        "path": "src/test/java/com/example/shop/orders/external_systems/billing/BillingTranslatorTest.java",
+        "covers": []
+      }
     ]
   }
 ]
