@@ -601,6 +601,89 @@ class ShardOwnedLifecycleIT {
     }
 
     /**
+     * A unit a stop kept whose handler has returned, asked to be released on request while the stop's budget thread, which
+     * the stop gave up waiting for, is still flushing the owners the stop ended - the kept one among them, with the handled
+     * message's acknowledgement. The request may neither flush the kept owner nor release its row beside that flush: it
+     * answers {@code BUSY} and leaves the unit kept, its row and fence as they were and the message for the stop's flush to
+     * delete. Released there, the stop's flush of the same acknowledgement would be refused, counted in
+     * {@code fencedOutAcks} and logged as a lost lease. Once that flush has passed the unit, it is handed back.
+     */
+    @Test
+    void a_unit_a_stop_kept_is_not_released_on_request_while_the_stop_is_still_flushing_it() throws Exception {
+        var entries    = new AtomicInteger();
+        var entered    = new CountDownLatch(1);
+        var release    = new CountDownLatch(1);
+        var settings   = settingsWithShedGrace(Duration.ofMillis(300));
+        var instanceId = "kept-released-on-request-while-the-stop-flushes";
+        var holding    = new FlushHoldingDataSource(dataSource, FlushHoldingDataSource.STOP_BUDGET_THREAD);
+        try (var runtime = new ShardRuntime(dataSource, settings)) {
+            var queue = ShardOwnedQueue.builder().setDataSource(holding).setQueueId(QUEUE_ID).setShardCount(SHARD_COUNT)
+                                       .setInstanceId(instanceId).setRuntime(runtime).build();
+            try {
+                queue.startConsumingOrdered((messageId, key, payload, payloadType) -> {
+                    // The first delivery of the key holds its handler; a later one returns at once.
+                    if (entries.incrementAndGet() == 1) {
+                        entered.countDown();
+                        awaitQuietly(release);
+                    }
+                }, settings, SHARD_COUNT);
+                queue.enqueueOrdered(List.of(new ShardOwnedStorage.OrderedPayload("ACC-1", 0, "0".getBytes(StandardCharsets.UTF_8), 1)));
+                assertThat(entered.await(20, TimeUnit.SECONDS)).isTrue();
+
+                holding.holdConnections();
+                queue.stop();
+                assertThat(queue.handBackStillRunning()).as("premise: the stop gave up waiting for its budget thread").isTrue();
+                assertThat(queue.metrics().keptUnitsInHandler()).as("premise: the busy unit is kept").isEqualTo(1);
+                // The budget thread has released nothing yet, so every unit's row still names the instance: the kept one is
+                // the key's.
+                var keptUnit = ShardOwnedSchema.unitForKey("ACC-1", ShardOwnedSchema.ORDERED_UNITS);
+                var kept     = new UnitFence(keptUnit, fenceOf("ordered", keptUnit));
+
+                // The kept handler returns: its acknowledgement waits in the kept owner, which no pump serves any more.
+                release.countDown();
+                Awaitility.await().atMost(Duration.ofSeconds(5))
+                          .untilAsserted(() -> assertThat(queue.metrics().keptUnitsInHandler()).as("premise: the kept handler has returned").isZero());
+                // The budget thread gets its connection and flushes the owners the stop ended, the kept one with that
+                // acknowledgement: held as it deletes the handled message.
+                holding.letConnect();
+                assertThat(holding.awaitAcknowledgementHeld(Duration.ofSeconds(10)))
+                        .as("premise: the stop's budget thread is flushing the kept owner's acknowledgement").isTrue();
+
+                assertThat(queue.releaseKeptOrderedUnit(keptUnit))
+                        .as("a release on request while the stop is still flushing the unit")
+                        .hasValueSatisfying(answer -> {
+                            assertThat(answer.outcome()).as("waits for that flush").isEqualTo(KeptUnitRelease.Outcome.BUSY);
+                            assertThat(answer.unit()).isEqualTo(kept.shard());
+                            assertThat(answer.instanceId()).isEqualTo(instanceId);
+                            assertThat(answer.keysInHandler()).as("the kept handler has returned").isEmpty();
+                        });
+                assertThat(ownerOf("ordered", kept.shard())).as("the request released nothing").isEqualTo(instanceId);
+                assertThat(fenceOf("ordered", kept.shard())).as("nor moved the fence").isEqualTo(kept.fence());
+                assertThat(queue.orderedRemaining()).as("nor flushed the kept owner's acknowledgement beside the stop").isEqualTo(1);
+                assertThat(queue.keptOrderedUnitNotHandedBack()).as("the unit is still kept").isTrue();
+                assertThat(queue.handBackStillRunning()).as("premise: the stop's budget thread is still held").isTrue();
+
+                holding.letAcknowledge();
+                Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+                    assertThat(queue.handBackStillRunning()).as("premise: the stop's budget thread has finished").isFalse();
+                    assertThat(queue.keptOrderedUnitNotHandedBack()).as("handed back once the stop's flush has passed it").isFalse();
+                });
+                assertThat(queue.metrics().fencedOutAcks.sum()).as("the stop's flush of the kept owner was not refused").isZero();
+                assertThat(queue.orderedRemaining()).as("the handled message's acknowledgement was flushed").isZero();
+                assertThat(ownerOf("ordered", kept.shard())).as("the kept unit's row is released").isNull();
+                assertThat(fenceOf("ordered", kept.shard())).as("under the fence it was kept under").isEqualTo(kept.fence());
+                assertThat(queue.releaseKeptOrderedUnit(keptUnit)).as("nothing is left to release on request").isEmpty();
+                assertThat(entries).as("the message the kept handler handled is not delivered again").hasValue(1);
+            } finally {
+                release.countDown();
+                holding.letConnect();
+                holding.letAcknowledge();
+                queue.stop();
+            }
+        }
+    }
+
+    /**
      * A unit a stop kept whose budget thread never finishes flushing the owners the stop ended - its connection hangs, as on
      * a half-open socket with no socket timeout - while the key the unit was kept for stays in its handler. Only that
      * thread lets the unit out of {@code STOP_FLUSHING}, which no hand-back claims, so the unit was never given up past
