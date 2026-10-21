@@ -1125,6 +1125,9 @@ Not published; listed because they are the reference for how to use the framewor
 
 ## 6. Documentation
 
+- **The root `README.md` has a "Claude Code Plugin" section**: what the `essentials` plugin does, how it works,
+  how to install it, and its requirements (macOS or Linux, Python 3.11+, `uv`, and the JDK, Maven and Docker for
+  init's smoke build).
 - **`LLM/LLM-traps.md`** gains `ESS-119`–`ESS-123` for 0.60 upgrade symptoms: `QueuedMessageCounts` equality,
   the removed CDC live-drain stall alert, and three groups of compile errors (Jackson 2 serializers and WAL
   filters, `useOrderedUnorderedQuery`, the removed 0.50 `forRemoval` members) (`e088534c`).
