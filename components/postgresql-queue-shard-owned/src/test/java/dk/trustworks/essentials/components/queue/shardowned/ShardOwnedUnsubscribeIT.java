@@ -1272,6 +1272,167 @@ class ShardOwnedUnsubscribeIT {
     }
 
     /**
+     * A release on request whose release of the kept unit's lease row the database refuses: with no lane of the queue
+     * releasing anything, the request fails with that {@link SQLException}, and the unit is left as it was - kept, its row
+     * still naming the instance under the fence it was kept under, no release reported. Asked again once the database lets
+     * the release through, it is released. A queue that swallowed the failure answered an empty list, as from an instance
+     * that keeps no such unit, for a unit that was still kept; a lane that dropped its kept entry on the failure left the
+     * row naming the instance with nothing left to release it on request.
+     */
+    @Test
+    void a_kept_unit_whose_release_on_request_the_database_refuses_is_left_kept_and_the_request_fails() throws Exception {
+        // Far beyond the test, so the stopped instance's membership row cannot age out and let another id take the unit.
+        var leaseTtl = Duration.ofSeconds(20);
+        var entered  = new CountDownLatch(1);
+        var release  = new CountDownLatch(1);
+        var queueIds = new short[]{QUEUE_ID};
+        try (var queue = newQueue(PostgresqlMessageQueue.LifecycleHook.NONE, settingsWith(Duration.ofMillis(300), leaseTtl))) {
+            try {
+                queue.consume((messageId, key, payload, payloadType) -> {
+                    if (key != null) {
+                        entered.countDown();
+                        awaitQuietly(release, Duration.ofSeconds(60));
+                    }
+                }, ConsumerOptions.defaults());
+                var lanes = queue.registeredConsumers();
+                queue.enqueue(Message.ordered("in-handler".getBytes(StandardCharsets.UTF_8), 1, "ACC-1", 0));
+                assertThat(entered.await(20, TimeUnit.SECONDS)).as("premise: the key is in its handler").isTrue();
+
+                // Stopped, and not started again: nothing but the requests below releases the unit.
+                queue.stop();
+                var kept = keptOrderedFence(INSTANCE_ID);
+                LeaseReleaseRefusals.failLeaseReleasesOf(dataSource, queueIds, "ordered", kept.shard(), true);
+                try {
+                    assertThatThrownBy(() -> queue.releaseKeptOrderedUnit(kept.shard()))
+                            .as("no lane released anything, so the request fails with the lane's failure")
+                            .isInstanceOf(SQLException.class)
+                            .hasMessageContaining("simulated failure releasing")
+                            .satisfies(failure -> assertThat(failure.getSuppressed()).as("one lane failed").isEmpty());
+                    assertThat(LeaseReleaseRefusals.releasesRefused(dataSource, QUEUE_ID, kept.shard()))
+                            .as("premise: the release was attempted and refused by the database").isEqualTo(1);
+                } finally {
+                    LeaseReleaseRefusals.failLeaseReleasesOf(dataSource, queueIds, "ordered", kept.shard(), false);
+                }
+                assertThat(ownerOf(kept.shard())).as("the row still names the instance").isEqualTo(INSTANCE_ID);
+                assertThat(fenceOf(kept.shard())).as("under the fence it was kept under").isEqualTo(kept.fence());
+                assertThat(lanes).as("the unit is still kept").anyMatch(ShardOwnedQueue::keptOrderedUnitNotHandedBack);
+                assertThat(laneWarnings()).as("no release is reported")
+                                          .noneMatch(warning -> warning.contains("released ordered unit " + kept.shard() + " on queue " + QUEUE_ID));
+
+                assertThat(queue.releaseKeptOrderedUnit(kept.shard())).as("asked again, with the database letting it through, the unit is released")
+                                                                      .singleElement()
+                                                                      .satisfies(released -> {
+                                                                          assertThat(released.outcome()).isEqualTo(KeptUnitRelease.Outcome.RELEASED);
+                                                                          assertThat(released.instanceId()).isEqualTo(INSTANCE_ID);
+                                                                          assertThat(released.keysInHandler()).containsExactly("ACC-1");
+                                                                      });
+                assertThat(ownerOf(kept.shard())).as("the row is released").isNull();
+            } finally {
+                release.countDown();
+            }
+        }
+    }
+
+    /**
+     * Two subscriptions of the queue keeping the same ordered unit - an unsubscribed one, whose membership row aged out so
+     * that the next subscription took the unit over under a newer fence, and that next one, stopped while the key's message
+     * delivered again is in its handler too - and a release on request that releases the unit in the stopped one, which
+     * holds its row, while the unsubscribed one's attempt fails, here at the connection for its flush. The request answers
+     * what was released, and logs the failure at WARN, once: the unsubscribed one's entry is left kept, and asked again it
+     * finds the row no longer its own. Thrown instead, the failure would hide the release that happened, and an operator
+     * retrying would be told only that the unit was found taken ({@code ALREADY_TAKEN}), with no record of that release.
+     */
+    @Test
+    void a_release_on_request_that_fails_in_one_subscription_answers_what_another_released_and_logs_the_failure() throws Exception {
+        // A heartbeat every second, and the unsubscribed instance's membership row aged out 3 s after its last one.
+        var leaseTtl     = Duration.ofSeconds(3);
+        var entries      = new AtomicInteger();
+        var entered      = new CountDownLatch(1);
+        var release      = new CountDownLatch(1);
+        var onConnection = new RunBeforeConnectionDataSource(dataSource);
+        MessageHandler holding = (messageId, key, payload, payloadType) -> {
+            // Every delivery of the key holds its handler: the first, and the one the takeover delivers again.
+            if (key != null) {
+                entries.incrementAndGet();
+                entered.countDown();
+                awaitQuietly(release, Duration.ofSeconds(60));
+            }
+        };
+        try (var queue = PostgresqlMessageQueue.builder()
+                                               .setDataSource(onConnection)
+                                               .setQueueId(QUEUE_ID)
+                                               .setShardCount(SHARD_COUNT)
+                                               .setInstanceId(INSTANCE_ID)
+                                               .setSettings(settingsWith(Duration.ofMillis(300), leaseTtl))
+                                               .setLifecycleHook(PostgresqlMessageQueue.LifecycleHook.NONE)
+                                               .build()) {
+            try {
+                var first = queue.consume(holding, ConsumerOptions.defaults());
+                queue.enqueue(Message.ordered("in-handler".getBytes(StandardCharsets.UTF_8), 1, "ACC-1", 0));
+                assertThat(entered.await(20, TimeUnit.SECONDS)).as("premise: the key is in its handler").isTrue();
+
+                first.unsubscribe();
+                var keptFirst = keptOrderedFence(INSTANCE_ID);
+                var second    = queue.consume(holding, ConsumerOptions.defaults());
+                assertThat(registeredInstances()).as("premise: the kept unit keeps the instance id out of use")
+                                                 .contains(INSTANCE_ID + "-1");
+                Awaitility.await().atMost(Duration.ofSeconds(20))
+                          .untilAsserted(() -> {
+                              assertThat(ownerOf(keptFirst.shard())).as("premise: the next subscription took the unit over").isEqualTo(INSTANCE_ID + "-1");
+                              assertThat(fenceOf(keptFirst.shard())).as("premise: under a newer fence").isGreaterThan(keptFirst.fence());
+                              assertThat(entries).as("premise: the key's message delivered again, and held too").hasValue(2);
+                          });
+
+                second.stop();
+                var keptAgain = keptOrderedFence(INSTANCE_ID + "-1");
+                assertThat(keptAgain.shard()).as("premise: the second subscription's stop kept the same unit").isEqualTo(keptFirst.shard());
+
+                // The second connection a release on request asks for its flush is refused: the registered, stopped
+                // subscription is asked first, and flushes and releases; the unsubscribed one's attempt then fails.
+                var flushes = new AtomicInteger();
+                var caller  = Thread.currentThread();
+                onConnection.refuseWhen(() -> Thread.currentThread().equals(caller) && inTheFlushOfAReleaseOnRequest()
+                        && flushes.incrementAndGet() == 2);
+                List<KeptUnitRelease> releases;
+                try {
+                    releases = queue.releaseKeptOrderedUnit(keptAgain.shard());
+                } finally {
+                    onConnection.refuseWhen(() -> false);
+                }
+                assertThat(flushes).as("premise: both subscriptions' entries were claimed and flushed, the second refused").hasValue(2);
+                assertThat(releases).as("the release that happened is answered").singleElement().satisfies(released -> {
+                    assertThat(released.outcome()).isEqualTo(KeptUnitRelease.Outcome.RELEASED);
+                    assertThat(released.instanceId()).isEqualTo(INSTANCE_ID + "-1");
+                    assertThat(released.keysInHandler()).containsExactly("ACC-1");
+                });
+                assertThat(ownerOf(keptAgain.shard())).as("the row is released").isNull();
+                List<ILoggingEvent> failureWarnings;
+                // The appender adds under its own monitor (AppenderBase.doAppend).
+                synchronized (logged) {
+                    failureWarnings = logged.list.stream()
+                                                 .filter(event -> event.getLevel() == WARN
+                                                         && event.getFormattedMessage().contains("released ordered unit " + keptAgain.shard()
+                                                                                                         + " on request in one subscription, but releasing it in another failed"))
+                                                 .toList();
+                }
+                assertThat(failureWarnings).as("the failure is logged at WARN, once")
+                                           .singleElement()
+                                           .satisfies(event -> assertThat(event.getThrowableProxy().getMessage()).isEqualTo(REFUSED_CONNECTION));
+
+                assertThat(queue.releaseKeptOrderedUnit(keptAgain.shard())).as("the failed entry was left kept, and finds its row taken")
+                                                                           .singleElement()
+                                                                           .satisfies(answer -> {
+                                                                               assertThat(answer.outcome()).isEqualTo(KeptUnitRelease.Outcome.ALREADY_TAKEN);
+                                                                               assertThat(answer.instanceId()).isEqualTo(INSTANCE_ID);
+                                                                           });
+                assertThat(queue.releaseKeptOrderedUnit(keptAgain.shard())).as("asked again: the unit is no longer kept").isEmpty();
+            } finally {
+                release.countDown();
+            }
+        }
+    }
+
+    /**
      * {@link #a_subscription_whose_stop_kept_an_ordered_unit_keeps_its_instance_id_out_of_use_while_the_key_is_in_its_handler},
      * with the operator releasing the kept unit through {@link MessageQueue#releaseKeptOrderedUnit} while its handler is
      * still held: the queue asks the unsubscribed subscription's lanes too, as it still keeps their instance id out of
@@ -1937,13 +2098,22 @@ class ShardOwnedUnsubscribeIT {
     }
 
     /**
+     * The message of the {@link SQLException} a {@link RunBeforeConnectionDataSource} answers a refused connection request
+     * with.
+     */
+    private static final String REFUSED_CONNECTION = "Simulated failure: the test refused this connection";
+
+    /**
      * A {@link javax.sql.DataSource} that, told to ({@link #runOnce}), runs an action on one thread as that thread next asks
-     * for a connection, once, before handing it the delegate's. Every other request gets the delegate's connection as it is.
+     * for a connection, once, before handing it the delegate's; and that, told to ({@link #refuseWhen}), refuses every
+     * request for which a condition, asked on the requesting thread, holds, throwing an {@link SQLException}
+     * ({@link #REFUSED_CONNECTION}). Every other request gets the delegate's connection as it is.
      */
     private static final class RunBeforeConnectionDataSource implements javax.sql.DataSource {
-        private final javax.sql.DataSource      delegate;
-        private final AtomicReference<Thread>   onThread = new AtomicReference<>();
-        private final AtomicReference<Runnable> action   = new AtomicReference<>();
+        private final javax.sql.DataSource             delegate;
+        private final AtomicReference<Thread>          onThread   = new AtomicReference<>();
+        private final AtomicReference<Runnable>        action     = new AtomicReference<>();
+        private final AtomicReference<BooleanSupplier> refuseWhen = new AtomicReference<>(() -> false);
 
         RunBeforeConnectionDataSource(javax.sql.DataSource delegate) {
             this.delegate = delegate;
@@ -1954,7 +2124,18 @@ class ShardOwnedUnsubscribeIT {
             onThread.set(thread);
         }
 
-        private void runIfTold() {
+        /**
+         * Refuse each connection request for which {@code condition} holds, from now until the next call; asked once per
+         * request, on the requesting thread, before {@link #runOnce}'s action.
+         */
+        void refuseWhen(BooleanSupplier condition) {
+            refuseWhen.set(condition);
+        }
+
+        private void runIfTold() throws SQLException {
+            if (refuseWhen.get().getAsBoolean()) {
+                throw new SQLException(REFUSED_CONNECTION);
+            }
             if (!Thread.currentThread().equals(onThread.get())) {
                 return;
             }
