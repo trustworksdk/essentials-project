@@ -2609,7 +2609,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      *       message delivered again, with an attempt charged, possibly while the handler still runs.</li>
      *   <li>Before that, once it has been there longer than {@code leaseTtl}, WARN that the unit is held up, naming the
      *       queue, the unit, its keys in a handler, how long the longest has been there and the bound - at most once a
-     *       minute per unit ({@code KeptUnit.warningDue}), the {@code LeaseOverrun} pattern. Before {@code leaseTtl}, the
+     *       minute per unit ({@code KeptUnit.warningDue}, an {@link ErrorWindow}). Before {@code leaseTtl}, the
      *       stop's own WARN said it kept the unit, and the acquire loops say at DEBUG that they skip it.</li>
      * </ul>
      * Called by every heartbeat tick and start, before they acquire anything, by a stop as it ends a run, and by
@@ -3590,9 +3590,9 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         private final LeasedOwner            owner;
         private final AtomicReference<Phase> phase         = new AtomicReference<>(Phase.STOP_FLUSHING);
         /**
-         * The held-up WARN of {@link #reviewStuckKeptUnits()}: at most once a minute for this unit.
+         * The {@link ErrorWindow} of {@link #reviewStuckKeptUnits()}'s held-up WARN for this unit: at most once a minute.
          */
-        private final WarningRateLimit       heldUpWarning = new WarningRateLimit(Duration.ofMinutes(1));
+        private final AtomicLong             heldUpWarning = new AtomicLong(ErrorWindow.NEVER_TAKEN);
 
         /**
          * A unit the stop ending a run keeps, in {@link Phase#STOP_FLUSHING} until that stop's budget thread has flushed it,
@@ -3694,7 +3694,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
          * it when it may, so two callers at once log it once.
          */
         private boolean warningDue() {
-            return heldUpWarning.due(System.nanoTime());
+            return ErrorWindow.take(heldUpWarning, System.nanoTime());
         }
 
         /**

@@ -21,10 +21,13 @@ import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * A once-a-minute log window: the time ({@code System.nanoTime()}, or an injected clock) from which the next
- * stack-trace line may be logged, so a failure that repeats every pass logs one line a minute with the stack trace and
- * the rest at DEBUG. Shared by every rate-limited failure log of the pump: {@link TakeoverStalls}' ERROR, and
- * {@link PumpFailures}' ERROR and batched-read WARN, each on its own field of the owner's {@link ShardOwnerMetrics}, and
- * {@link ShardPump}'s per-pump ERROR for a pass that fails outside its per-shard guards.
+ * rate-limited line may be logged (the pump's failure logs log it with the stack trace and the rest at DEBUG). Shared by
+ * every rate-limited failure log of the pump: {@link TakeoverStalls}' ERROR, and {@link PumpFailures}' ERROR and batched-read WARN, each on its own field of the owner's {@link ShardOwnerMetrics}, and
+ * {@link ShardPump}'s per-pump ERROR for a pass that fails outside its per-shard guards. Also by
+ * {@code ShardOwnedQueue}'s WARN that an ordered unit a stop kept is held up by a handler past {@code leaseTtl}, one
+ * window per kept unit ({@code KeptUnit.warningDue}), taken by {@code ShardOwnedQueue.reviewStuckKeptUnits} rather
+ * than by a pump.
+ * Reuse it for a new once-a-minute log rather than writing the CAS again.
  * <p>
  * Its own class rather than a helper on one of them, so a change to one log's semantics (the takeover window reopening
  * when no shard is stalled, say) cannot silently change the others.
@@ -52,10 +55,10 @@ final class ErrorWindow {
     }
 
     /**
-     * Take a window shared by every pump serving a queue: open per {@link #isOpen}, and taken by whichever pump wins the
-     * CAS, which closes it for {@link #EVERY_NANOS}.
+     * Take a window, which may be asked by several threads at once (every pump serving a queue, say): open per
+     * {@link #isOpen}, and taken by whichever caller wins the CAS, which closes it for {@link #EVERY_NANOS}.
      *
-     * @return whether this caller took it, and so logs the stack-trace line
+     * @return whether this caller took it, and so logs the rate-limited line
      */
     static boolean take(AtomicLong window, long now) {
         var next = window.get();
