@@ -997,17 +997,18 @@ public final class PostgresqlMessageQueue implements MessageQueue {
      * The lowest subscription index no live subscription holds and no ended one still holds for its instance id's use on
      * the database ({@link #heldIndexes}), now reserved ({@link #subscriptionIndexes}).
      * <p>
-     * First, each held index's lanes retry handing back an ordered unit a stop of theirs kept whose key has left its
-     * handler ({@link ShardOwnedQueue#handBackKeptUnits()}): the lanes of an ended subscription never run again, so this
-     * is the only retry of a hand-back that failed as the key left its handler. The index stays held until one succeeds,
-     * or finds the unit taken by another instance once the old instance's liveness lapsed: given back after a failed
-     * hand-back, the next {@code consume()} took the unit as from a crashed owner, charging an attempt and delivering
-     * again the message the handler had handled. Then each reviews its kept units ({@link ShardOwnedQueue#reviewStuckKeptUnits()}),
-     * giving up, for good and with a WARN, one whose key has been in its handler longer than the queue's
+     * First, each held index's lanes review their kept units ({@link ShardOwnedQueue#reviewStuckKeptUnits()}), giving
+     * up, for good and with a WARN, one whose key has been in its handler longer than the queue's
      * {@code stuckHandlerTimeout}, once the stop that kept it has flushed it ({@code ShardOwnedQueue.KeptUnit.Phase.STOP_FLUSHING}),
-     * so {@link HeldIndex#isDue()} below need only read. Both outside {@link #handOver}, which
-     * is held for a few reads and writes only: a hand-back waits for the database, and a review takes each kept owner's
-     * lock and logs.
+     * and one kept that long whose stop has still not flushed it, so {@link HeldIndex#isDue()} below need only read.
+     * Then they retry handing back an ordered unit a stop of theirs kept whose key has left its handler
+     * ({@link ShardOwnedQueue#handBackKeptUnits()}) - one just given up with no key in a handler included: the lanes of an
+     * ended subscription never run again, so this is the only retry of a hand-back that failed as the key left its
+     * handler. The index stays held until one succeeds, or finds the unit taken by another instance once the old
+     * instance's liveness lapsed: given back after a failed hand-back, the next {@code consume()} took the unit as from a
+     * crashed owner, charging an attempt and delivering again the message the handler had handled. Both outside
+     * {@link #handOver}, which is held for a few reads and writes only: a hand-back waits for the database, and a review
+     * takes each kept owner's lock and logs.
      */
     private int reserveSubscriptionIndex() {
         List<HeldIndex> stillHeld;
@@ -1016,8 +1017,8 @@ public final class PostgresqlMessageQueue implements MessageQueue {
         }
         for (var index : stillHeld) {
             for (var lane : index.lanes()) {
-                lane.handBackKeptUnits();
                 lane.reviewStuckKeptUnits();
+                lane.handBackKeptUnits();
             }
         }
         synchronized (handOver) {
@@ -1044,7 +1045,7 @@ public final class PostgresqlMessageQueue implements MessageQueue {
      * {@code stuckHandlerTimeout}, or the unit has been released on request ({@link #releaseKeptOrderedUnit}) - and no
      * lane's hand-back is still running
      * ({@link ShardOwnedQueue#handBackStillRunning()}), which {@link #reserveSubscriptionIndex} asks the lanes each time,
-     * once it has had them retry a hand-back of such a unit that failed and review their kept units. Reviewed here first
+     * once it has had them review their kept units and retry a hand-back of such a unit that failed. Reviewed here first
      * too ({@link ShardOwnedQueue#reviewStuckKeptUnits()}), so a unit whose key is past that bound, once the stop that kept
      * it has flushed it, already does not hold the index.
      *

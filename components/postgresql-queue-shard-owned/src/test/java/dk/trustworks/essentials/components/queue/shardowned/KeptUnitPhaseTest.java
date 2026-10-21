@@ -32,15 +32,16 @@ import static org.assertj.core.api.Assertions.*;
  * A {@link KeptUnit}'s {@link Phase} moves only along the edges of the diagram in {@code Phase}'s javadoc, and the rule
  * lives once, in {@link Phase#canAdvanceTo}: {@link KeptUnit#moveFrom} moves a unit only from where it stands and only
  * along an edge, and {@link KeptUnit#claimHandBack} only from a phase with an edge to {@code HANDING_BACK}. The edges that
- * matter most: nothing hands back or gives up a unit the stop's budget thread is still flushing ({@code STOP_FLUSHING}),
- * and a unit a hand-back is running for is neither claimed again (no edge from {@code HANDING_BACK} to itself) nor given
- * up by a review, which gives up only from {@code AWAITING_HAND_BACK}: the edges back out of {@code HANDING_BACK} are the
- * claiming hand-back's alone ({@link KeptUnit#endHandBack}).
+ * matter most: nothing hands back a unit the stop's budget thread is still flushing ({@code STOP_FLUSHING}), and only a
+ * review gives it up from there, once that flush has outlasted {@code stuckHandlerTimeout} - it may never return; and a
+ * unit a hand-back is running for is neither claimed again (no edge from {@code HANDING_BACK} to itself) nor given up by a
+ * review, which gives up only from {@code AWAITING_HAND_BACK} and {@code STOP_FLUSHING}: the edges back out of
+ * {@code HANDING_BACK} are the claiming hand-back's alone ({@link KeptUnit#endHandBack}).
  */
 class KeptUnitPhaseTest {
 
     private static final Map<Phase, Set<Phase>> EDGES = Map.of(
-            STOP_FLUSHING, EnumSet.of(AWAITING_HAND_BACK),
+            STOP_FLUSHING, EnumSet.of(AWAITING_HAND_BACK, GIVEN_UP),
             AWAITING_HAND_BACK, EnumSet.of(HANDING_BACK, GIVEN_UP),
             HANDING_BACK, EnumSet.of(HANDED_BACK, FORCE_RELEASED, AWAITING_HAND_BACK, GIVEN_UP, TAKEOVER_ASKED),
             HANDED_BACK, EnumSet.noneOf(Phase.class),
@@ -95,16 +96,38 @@ class KeptUnitPhaseTest {
     }
 
     @Test
-    void a_unit_the_stops_budget_thread_is_still_flushing_is_neither_handed_back_nor_given_up() {
+    void a_unit_the_stops_budget_thread_is_still_flushing_is_not_handed_back() {
         var unit = new KeptUnit(owner());
         assertThat(unit.phase()).as("a new kept unit").isEqualTo(STOP_FLUSHING);
 
         assertThat(unit.claimHandBack()).isNull();
-        assertThat(unit.moveFrom(STOP_FLUSHING, GIVEN_UP)).isFalse();
         assertThat(unit.isGivenUp()).isFalse();
 
         assertThat(unit.moveFrom(STOP_FLUSHING, AWAITING_HAND_BACK)).as("the budget thread has flushed it").isTrue();
         assertThat(unit.claimHandBack()).isEqualTo(AWAITING_HAND_BACK);
+    }
+
+    /**
+     * The stop's budget thread lets a unit out of {@code STOP_FLUSHING} only once its flush returns, which a connection
+     * hung with no socket timeout may never do: a review gives the unit up from there once it has been kept longer than
+     * {@code stuckHandlerTimeout} ({@link KeptUnit#keptFor}), and the budget thread's own move out of that phase, should its
+     * flush return after all, then does nothing. Given up, the unit is handed back as any given up on is, its hand-back
+     * claimed from {@code GIVEN_UP}.
+     */
+    @Test
+    void a_unit_whose_stop_flush_does_not_return_is_given_up_and_the_late_flush_moves_it_nowhere() throws InterruptedException {
+        var unit = new KeptUnit(owner());
+        var before = unit.keptFor();
+        Thread.sleep(5);
+        assertThat(unit.keptFor()).as("timed from when the stop kept it").isGreaterThan(before).isPositive();
+
+        assertThat(unit.moveFrom(STOP_FLUSHING, GIVEN_UP)).as("a review past the bound").isTrue();
+        assertThat(unit.isGivenUp()).isTrue();
+        assertThat(unit.nothingWaitsForHandler()).isTrue();
+
+        assertThat(unit.moveFrom(STOP_FLUSHING, AWAITING_HAND_BACK)).as("the budget thread's flush returning late").isFalse();
+        assertThat(unit.phase()).isEqualTo(GIVEN_UP);
+        assertThat(unit.claimHandBack()).as("the hand-back that thread registers").isEqualTo(GIVEN_UP);
     }
 
     @Test
@@ -114,6 +137,7 @@ class KeptUnitPhaseTest {
 
         assertThat(unit.claimHandBack()).as("a second hand-back").isNull();
         assertThat(unit.moveFrom(AWAITING_HAND_BACK, GIVEN_UP)).as("a review giving it up").isFalse();
+        assertThat(unit.moveFrom(STOP_FLUSHING, GIVEN_UP)).as("a review giving it up past the stop's flush").isFalse();
         assertThat(unit.phase()).isEqualTo(HANDING_BACK);
         assertThat(unit.isGivenUp()).isFalse();
     }
