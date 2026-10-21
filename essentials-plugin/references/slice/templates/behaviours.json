@@ -92,7 +92,7 @@
         { "id": "command.idempotent-replay", "status": "implemented", "summary": "When the entity's guard method reports the state was already reached, the handler neither saves nor publishes, so a repeated command changes nothing.", "where": "__Slice__Handler.java#handle" },
         { "id": "command.invariant", "status": "placeholder", "summary": "The handler calls a placeholder guard method on the hand-written entity; calling the one invariant method this slice's intent maps to is left to the developer.", "where": "__Slice__Handler.java#handle" },
         { "id": "command.payload", "status": "placeholder", "summary": "The command, the request body and the event carry one placeholder String; the real payload fields are left to the developer.", "where": "__Slice__.java" },
-        { "id": "command.http-endpoint", "status": "placeholder", "summary": "The POST endpoint generates a fresh id and sends the command, but the handler requires an existing entity and throws for that id, so the request fails until the developer makes this a creation slice or takes the id from the path.", "where": "__Slice__API.java" }
+        { "id": "command.http-endpoint", "status": "implemented", "summary": "The POST endpoint takes the id of the entity to change from the request body, sends the command and answers with that id.", "where": "__Slice__API.java" }
       ],
       "stubTests": [
         { "template": "test/__Slice__IT.java", "covers": [] },
@@ -105,7 +105,7 @@
         { "id": "command.idempotent-replay", "status": "implemented", "summary": "When the entity's guard method reports the state was already reached, the handler neither saves nor publishes, so a repeated command changes nothing.", "where": "__Slice__Handler.kt#handle" },
         { "id": "command.invariant", "status": "placeholder", "summary": "The handler calls a placeholder guard method on the hand-written entity; calling the one invariant method this slice's intent maps to is left to the developer.", "where": "__Slice__Handler.kt#handle" },
         { "id": "command.payload", "status": "placeholder", "summary": "The command, the request body and the event carry one placeholder String; the real payload fields are left to the developer.", "where": "__Slice__.kt" },
-        { "id": "command.http-endpoint", "status": "placeholder", "summary": "The POST endpoint generates a fresh id and sends the command, but the handler requires an existing entity and throws for that id, so the request fails until the developer makes this a creation slice or takes the id from the path.", "where": "__Slice__API.kt" }
+        { "id": "command.http-endpoint", "status": "implemented", "summary": "The POST endpoint takes the id of the entity to change from the request body, sends the command and answers with that id.", "where": "__Slice__API.kt" }
       ],
       "stubTests": [
         { "template": "test/__Slice__IT.kt", "covers": [] },

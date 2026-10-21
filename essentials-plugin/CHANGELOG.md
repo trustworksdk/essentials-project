@@ -85,6 +85,12 @@ targets, with a `-N` suffix for plugin-only releases.
 - **Fixed: a render that failed part-way left files behind.** `render-slice.py` exited 2, documented as
   "writes nothing", even when a write or a `--wire` edit failed after earlier files were written. Every write
   and edit now goes through a transaction, which is undone on any failure, crashes included.
+- **Fixed: a service-entity command slice's endpoint always failed.** The `command_service_entity` API
+  (Java and Kotlin) sent its command with a freshly generated `<Aggregate>Id.random()`, but the handler
+  loads an existing entity by that id, so every POST to a newly scaffolded slice ended in "No <Entity>
+  …" (a 500). The request now carries the id of the entity to change (`<aggregate>Id` in the body),
+  the endpoint keeps its `POST <apiPath>` route, and the manifest is unchanged. A slice scaffolded
+  before keeps the old body: give its request the id field by hand.
 - **Rendering into an existing bounded context reads its names.** `AggregateType`, `Aggregates`,
   `Aggregate` and `Entity` come from the BC's scaffold when they are not passed and it names exactly one
   of each; before, the render refused with "no value for AggregateType". A new BC still needs them passed.

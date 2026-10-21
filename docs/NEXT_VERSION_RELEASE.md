@@ -1056,6 +1056,10 @@ entries are in [`essentials-plugin/CHANGELOG.md`](../essentials-plugin/CHANGELOG
   `--tests none` (no stub tests), `--manifest <slice.yaml>` (render from a manifest a planner wrote, keeping every
   key the render does not own byte for byte) and a report that lists what the skeleton already implements and
   every stub test. Run by hand, every command behaves as before.
+- **Fixed: a scaffolded service-entity command endpoint always failed.** Its API generated a new entity id
+  for every request while the handler loads an existing entity, so every POST returned a 500. The request
+  body now carries the id of the entity to change. Slices scaffolded before keep the old code: add the id
+  field to the request by hand.
 - **Fixed: a slice render that failed part-way left files behind.** `render-slice.py` exited 2 ("nothing written")
   even when a write or a `--wire` edit failed after earlier files were written. It now restores every file it
   created or edited before exiting. Rendering into an existing bounded context also reads `AggregateType`,

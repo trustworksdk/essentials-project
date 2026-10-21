@@ -172,8 +172,8 @@
       },
       {
         "id": "command.http-endpoint",
-        "status": "placeholder",
-        "summary": "The POST endpoint generates a fresh id and sends the command, but the handler requires an existing entity and throws for that id, so the request fails until the developer makes this a creation slice or takes the id from the path.",
+        "status": "implemented",
+        "summary": "The POST endpoint takes the id of the entity to change from the request body, sends the command and answers with that id.",
         "where": "src/main/java/com/example/shop/orders/use_cases/place_order/PlaceOrderAPI.java"
       }
     ],
@@ -342,8 +342,8 @@
       },
       {
         "id": "command.http-endpoint",
-        "status": "placeholder",
-        "summary": "The POST endpoint generates a fresh id and sends the command, but the handler requires an existing entity and throws for that id, so the request fails until the developer makes this a creation slice or takes the id from the path.",
+        "status": "implemented",
+        "summary": "The POST endpoint takes the id of the entity to change from the request body, sends the command and answers with that id.",
         "where": "src/main/java/com/example/shop/orders/use_cases/cancel_order/CancelOrderAPI.java"
       }
     ],
