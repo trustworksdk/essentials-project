@@ -258,8 +258,15 @@ public abstract class ViewEventProcessor extends AbstractEventProcessor {
      * {@link DurableQueues#queueMessage} writes in. A failed SQL statement aborts a Postgres transaction, so without
      * isolation the fallback would fail as well and the event would be skipped. The direct handler therefore runs
      * under a savepoint - see {@link #handleDirectlyUnderSavepoint(OrderedMessage)}.
+     * <p>
+     * An event this processor has no {@link MessageHandler} for is passed over before any of that - see
+     * {@link #hasNoHandlerFor(PersistedEvent)}.
      */
     private void handlePersistedEvent(PersistedEvent event) {
+        if (hasNoHandlerFor(event)) {
+            logger.trace("[{}:{}] No handler for event '{}' - passed over", event.aggregateType(), event.aggregateId(), event.event().getEventTypeOrNamePersistenceValue());
+            return;
+        }
         var             aggregateType = event.aggregateType();
         var             serializer    = resolveAggregateIdSerializer(aggregateType);
         var             key           = serializer.serialize(event.aggregateId());
@@ -285,6 +292,26 @@ public abstract class ViewEventProcessor extends AbstractEventProcessor {
                          aggregateType, key, event.event().getEventTypeOrNamePersistenceValue(), e);
             durableQueues.queueMessage(durableQueueName, new EventReferenceOrderedMessage(
                     aggregateType, key, event.eventOrder(), meta != null ? meta : new MessageMetaData()));
+        }
+    }
+
+    /**
+     * True if no {@link MessageHandler} method matches the event's type, as {@code EventProcessor} decides before it
+     * forwards an event. Such an event would be deserialized, looked for in the queue and run under a savepoint - three
+     * database round trips - only for the handler call to match nothing ({@link PatternMatchingMessageHandler#allowUnmatchedMessages()}).
+     * A projection that handles few of its aggregate type's events paid that for every other event (EF-2,
+     * {@code docs/key-partitioned-event-processing.md} §5). The answer comes from the same method matching the dispatch
+     * uses, so it never passes over an event a handler would have taken.
+     * <p>
+     * An event whose Java type is not known (a named event, or a class that cannot be loaded) takes the full path, as
+     * before.
+     */
+    private boolean hasNoHandlerFor(PersistedEvent event) {
+        try {
+            return event.event().getEventType().isPresent() &&
+                    !patternMatchingMessageHandlerDelegate.handlesMessageWithPayload(event.event().getEventTypeAsJavaClass().get());
+        } catch (RuntimeException unresolvableType) {
+            return false;
         }
     }
 

@@ -485,7 +485,10 @@ event or message:
 | Jdbi `Handle` | `Connection.getTransactionIsolation()` per transaction, a round trip in pgjdbc | 739 559 `SHOW TRANSACTION ISOLATION LEVEL` for 672 087 `BEGIN` |
 | `Inbox:ExchangeOrderRouter`, `Inbox:OrderLedgerProcessor` | One consumer each (`SingleGlobalConsumer`, parallelism 1) | Router inbox to 6 300 while placing; ledger inbox to 4 900 afterwards, draining ~170/s |
 
-The first two are small, local fixes in `postgresql-event-store`. The last one is what EF-2 itself is about. A C1-only
+The first two are small, local fixes in `postgresql-event-store`, both made (2026-10-20/21): the lock is checked in
+memory (`EventProcessor` forward 1.65-2.6x), and a view passes over events it has no handler for (`view_one_of_five`
+4.5x). Neither moves the order flow's end-to-end rate, which the inbox consumers bound. The last row is what EF-2
+itself is about. A C1-only
 JVM (`spring-boot:run`'s default `optimizedLaunch`) made no difference.
 
 Two hazards to watch during M3/M4. Kill the reader's instance with `kill -9` mid-run to see the PK collision in §3.5,

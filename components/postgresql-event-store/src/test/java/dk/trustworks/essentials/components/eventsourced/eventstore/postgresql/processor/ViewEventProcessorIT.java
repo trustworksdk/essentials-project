@@ -45,6 +45,7 @@ import dk.trustworks.essentials.shared.collections.Lists;
 import dk.trustworks.essentials.shared.interceptor.InterceptorChain;
 import org.awaitility.Awaitility;
 import org.jdbi.v3.core.Jdbi;
+import org.jdbi.v3.core.statement.*;
 import org.jdbi.v3.postgres.PostgresPlugin;
 import org.junit.jupiter.api.*;
 import org.testcontainers.postgresql.PostgreSQLContainer;
@@ -256,6 +257,37 @@ public class ViewEventProcessorIT {
             int orderPlacedEventCounter = testProcessor.getOrderPlacedEventCounter().get();
             assert orderPlacedEventCounter == 10_000;
         });
+    }
+
+    /**
+     * The view handles {@code OrderPlacedEvent} but not {@code OrderConfirmedEvent}. An event it has no handler for is
+     * passed over before the queued-for-key check, the deserialization and the savepoint - it used to take all three,
+     * and the handler call then matched nothing (EF-2, {@code docs/key-partitioned-event-processing.md} §5).
+     */
+    @Test
+    public void events_the_view_has_no_handler_for_are_passed_over_without_touching_the_queue() {
+        var queuedForKeyChecks = new AtomicInteger();
+        jdbi.setSqlLogger(new SqlLogger() {
+            @Override
+            public void logAfterExecution(StatementContext context) {
+                var sql = context.getRenderedSql();
+                if (sql != null && sql.contains("delivery_mode = 'IN_ORDER'") && sql.contains("count(*)")) {
+                    queuedForKeyChecks.incrementAndGet();
+                }
+            }
+        });
+        unitOfWorkFactory.usingUnitOfWork(uow -> {
+            IntStream.range(0, 200).forEach(value -> {
+                var orderId = EventProcessorIT.OrderId.random();
+                eventStore.appendToStream(TEST_ORDERS, orderId, List.of(new EventProcessorIT.OrderConfirmedEvent(orderId)));
+            });
+            var orderId = EventProcessorIT.OrderId.random();
+            eventStore.appendToStream(TEST_ORDERS, orderId, List.of(new EventProcessorIT.OrderPlacedEvent(orderId, "Load Order Details")));
+        });
+
+        // The handled event comes last, so once it is handled every event before it has been delivered
+        Awaitility.waitAtMost(Duration.ofSeconds(30)).untilAsserted(() -> assertThat(testProcessor.getOrderPlacedEventCounter().get()).isEqualTo(1));
+        assertThat(queuedForKeyChecks.get()).as("queued-for-key checks for 200 unhandled events and 1 handled one").isEqualTo(1);
     }
 
     @Test
@@ -561,9 +593,13 @@ public class ViewEventProcessorIT {
                   });
         assertThat(durableQueues.getTotalMessagesQueuedFor(queueName)).isEqualTo(0);
 
+        // An event the view has no handler for is passed over, also behind a dead letter: queueing it would only have
+        // the consumer match nothing for it once the dead letter is dealt with
         var eventConfirmed = new EventProcessorIT.OrderConfirmedEvent(orderId);
+        // An event it handles is queued behind the dead letter, so the order's events are still handled in order
+        var laterEventHandled = new EventProcessorIT.OrderPlacedEvent(orderId, "Load order details after the failed one");
         unitOfWorkFactory.usingUnitOfWork(uow -> {
-            eventStore.appendToStream(TEST_ORDERS, orderId, List.of(eventConfirmed));
+            eventStore.appendToStream(TEST_ORDERS, orderId, List.of(eventConfirmed, laterEventHandled));
         });
 
         Awaitility.waitAtMost(Duration.ofSeconds(3))
@@ -577,7 +613,9 @@ public class ViewEventProcessorIT {
         assertThat(queuedMessages.get(0).getPayload()).isInstanceOf(AggregateType.class);
         assertThat(queuedMessages.get(0).getPayload()).isEqualTo(TEST_ORDERS);
         assertThat(((OrderedMessage) queuedMessages.get(0).getMessage()).getKey()).isEqualTo(orderId.toString());
-        assertThat(((OrderedMessage) queuedMessages.get(0).getMessage()).getOrder()).isEqualTo(1);
+        // EventOrder 2: the handled event, not the passed-over OrderConfirmedEvent at 1
+        assertThat(((OrderedMessage) queuedMessages.get(0).getMessage()).getOrder()).isEqualTo(2);
+        assertThat(testProcessor.getOrderPlacedEventCounter().get()).as("handled directly despite the dead letter").isEqualTo(0);
     }
 
     @Test
