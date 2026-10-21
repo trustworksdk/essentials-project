@@ -78,7 +78,12 @@ final class ShardPump implements Runnable {
     static final         int    CONNECTION_VALIDITY_TIMEOUT_SECONDS = 1;
 
     private final ShardOwnedStorage                 storage;
-    private final ShardOwnerSettings                settings;
+    /**
+     * The runtime's settings, and only those: a pump serves every queue on its runtime, so a value it read from the whole
+     * {@link ShardOwnerSettings} record would be one borrower's, applied to every queue without the shared runtime's
+     * WARN comparing it. A value a pump needs is added to {@link ShardOwnerSettings.RuntimeScoped}, which that WARN compares.
+     */
+    private final ShardOwnerSettings.RuntimeScoped  settings;
     private final ShardOwnerMetrics                 metrics;
     private final ShardWakeup                       wakeup = new ShardWakeup();
     private final CopyOnWriteArrayList<LeasedOwner> owners = new CopyOnWriteArrayList<>();
@@ -136,7 +141,7 @@ final class ShardPump implements Runnable {
      */
     private          long                           loopFailures;
 
-    ShardPump(ShardOwnedStorage storage, ShardOwnerSettings settings, ShardOwnerMetrics metrics,
+    ShardPump(ShardOwnedStorage storage, ShardOwnerSettings.RuntimeScoped settings, ShardOwnerMetrics metrics,
               AtomicBoolean running, AtomicBoolean flushOnExit, String name,
               Supplier<Optional<String>> poolExhaustion) {
         this.storage = requireNonNull(storage, "No storage provided");
@@ -947,7 +952,7 @@ final class ShardPump implements Runnable {
         // a fixed query rate under a process however quiet it was; the owners' own deadlines already
         // account for their sweeps, retries and flushes, and a notification wakes this pump
         // immediately regardless of how long it intended to sleep.
-        var wait = Math.max(settings.pollBackstopMillis(), settings.maxSweepIntervalNanos() / 1_000_000L);
+        var wait = Math.max(settings.pollBackstop().toMillis(), settings.maxSweepInterval().toNanos() / 1_000_000L);
         for (var owner : owners) {
             // An owner awaiting its takeover is not pumped, so its own deadlines mean nothing yet - and it has never
             // swept, so its sweep always reads as overdue and its deadline as 0. Folding it in parked the pump 1 ms

@@ -189,7 +189,7 @@ class ShardOwnedTakeoverExhaustionRetryIT {
                                    HandlerDispatch.inline(), false);
         var pumpMetrics = new ShardOwnerMetrics();
         var running     = new AtomicBoolean(true);
-        var pump        = new ShardPump(storage, ShardOwnerSettings.defaults(), pumpMetrics, running, new AtomicBoolean(false),
+        var pump        = new ShardPump(storage, ShardOwnerSettings.defaults().runtimeScoped(), pumpMetrics, running, new AtomicBoolean(false),
                                         "pump-under-test", Optional::empty);
         failDeadLetterInserts(true);
         pump.add(failing);
@@ -251,7 +251,7 @@ class ShardOwnedTakeoverExhaustionRetryIT {
         var otherDeliveries   = new CopyOnWriteArrayList<MessageId>();
         var failingMetrics    = metrics();
         var running           = new AtomicBoolean(true);
-        var pump              = new ShardPump(storage, ShardOwnerSettings.defaults(), new ShardOwnerMetrics(), running,
+        var pump              = new ShardPump(storage, ShardOwnerSettings.defaults().runtimeScoped(), new ShardOwnerMetrics(), running,
                                               new AtomicBoolean(false), "pump-under-test", Optional::empty);
         var otherWakeup       = new ShardWakeup(pump.wakeup());
         var defaults          = ShardOwnerSettings.defaults();
@@ -314,7 +314,7 @@ class ShardOwnedTakeoverExhaustionRetryIT {
                                      RedeliveryPolicy.fixed(Duration.ofSeconds(1), MAX_ATTEMPTS), new ShardWakeup(), OWNER,
                                      HandlerDispatch.inline(), false);
         var running = new AtomicBoolean(true);
-        var pump    = new ShardPump(storage, ShardOwnerSettings.defaults(), new ShardOwnerMetrics(), running, new AtomicBoolean(false),
+        var pump    = new ShardPump(storage, ShardOwnerSettings.defaults().runtimeScoped(), new ShardOwnerMetrics(), running, new AtomicBoolean(false),
                                     "pump-under-test", Optional::empty);
         failDeadLetterInserts(true);
         pump.add(ended);
@@ -370,7 +370,7 @@ class ShardOwnedTakeoverExhaustionRetryIT {
                                          HandlerDispatch.inline(), false);
             var pumpMetrics = new ShardOwnerMetrics();
             var running     = new AtomicBoolean(true);
-            var pump        = new ShardPump(pumpStorage, ShardOwnerSettings.defaults(), pumpMetrics, running, new AtomicBoolean(false),
+            var pump        = new ShardPump(pumpStorage, ShardOwnerSettings.defaults().runtimeScoped(), pumpMetrics, running, new AtomicBoolean(false),
                                             "pump-under-test", Optional::empty);
             failDeadLetterInserts(true);
             pump.add(failing);
@@ -443,7 +443,7 @@ class ShardOwnedTakeoverExhaustionRetryIT {
                                           HandlerDispatch.inline(), false);
         var pumpMetrics = new ShardOwnerMetrics();
         var running     = new AtomicBoolean(true);
-        var pump        = new ShardPump(storage, ShardOwnerSettings.defaults(), pumpMetrics, running, new AtomicBoolean(false),
+        var pump        = new ShardPump(storage, ShardOwnerSettings.defaults().runtimeScoped(), pumpMetrics, running, new AtomicBoolean(false),
                                         "pump-under-test", Optional::empty);
         failDeadLetterInserts(true);
         pump.add(owner);
@@ -501,7 +501,7 @@ class ShardOwnedTakeoverExhaustionRetryIT {
                                    HandlerDispatch.inline(), false);
         var pumpMetrics = new ShardOwnerMetrics();
         var running     = new AtomicBoolean(true);
-        var pump        = new ShardPump(storage, ShardOwnerSettings.defaults(), pumpMetrics, running, new AtomicBoolean(false),
+        var pump        = new ShardPump(storage, ShardOwnerSettings.defaults().runtimeScoped(), pumpMetrics, running, new AtomicBoolean(false),
                                         "pump-under-test", Optional::empty);
         pump.add(throwing);
         pump.add(other);

@@ -1186,7 +1186,7 @@ class ShardPumpExitTest {
 
     private static ShardPump pump(ShardOwnedStorage storage, AtomicBoolean running, ShardOwnerMetrics pumpMetrics,
                                   AtomicBoolean flushOnExit) {
-        return new ShardPump(storage, ShardOwnerSettings.defaults(), pumpMetrics, running, flushOnExit, "pump-0", Optional::empty);
+        return new ShardPump(storage, ShardOwnerSettings.defaults().runtimeScoped(), pumpMetrics, running, flushOnExit, "pump-0", Optional::empty);
     }
 
     private static QueueObserver observer(List<String> told) {

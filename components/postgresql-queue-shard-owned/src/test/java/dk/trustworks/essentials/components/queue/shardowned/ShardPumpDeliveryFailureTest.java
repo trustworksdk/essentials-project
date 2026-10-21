@@ -269,7 +269,7 @@ class ShardPumpDeliveryFailureTest {
     private void runUntil(DataSource dataSource, ShardOwnerSettings settings, Callable<Boolean> done, LeasedOwner... owners)
             throws InterruptedException {
         var running = new AtomicBoolean(true);
-        var pump = new ShardPump(new ShardOwnedStorage(dataSource, PUMP_QUEUE_ID), settings,
+        var pump = new ShardPump(new ShardOwnedStorage(dataSource, PUMP_QUEUE_ID), settings.runtimeScoped(),
                                  new ShardOwnerMetrics(), running, new AtomicBoolean(false), "pump-0", Optional::empty);
         for (var owner : owners) {
             pump.add(owner);

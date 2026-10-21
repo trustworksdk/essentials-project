@@ -259,9 +259,11 @@ public record ShardOwnerSettings(int readBatchSize,
     /**
      * The values a {@link ShardRuntime} reads from these settings: {@code pumpThreads} (how many pumps it starts and the
      * pool connections it reserves for them) and the {@code readBatchSize}, {@code pollBackstop} and
-     * {@code maxSweepInterval} its pumps read with and park by. Every other value is read only by the queue the settings
-     * are given to - its owners are built with them - so a queue sharing a runtime with other queues still gets them as
-     * given.
+     * {@code maxSweepInterval} its pumps read with and park by. A {@code ShardPump} is given only these, so its type holds
+     * it to them; the runtime is built with the whole record and keeps only these, and {@code RuntimeScopedSettingsTest}
+     * fails when it reads any other value. A value either needs is added here - and so to what a shared runtime's WARN
+     * compares ({@code ShardRuntime.acquireShared}). Every other value is read only by the queue the settings are given to - its
+     * owners are built with them - so a queue sharing a runtime with other queues still gets them as given.
      */
     RuntimeScoped runtimeScoped() {
         return new RuntimeScoped(pumpThreads, readBatchSize, pollBackstop, maxSweepInterval);

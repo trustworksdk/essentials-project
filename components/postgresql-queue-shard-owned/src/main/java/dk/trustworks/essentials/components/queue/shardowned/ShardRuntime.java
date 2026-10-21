@@ -99,7 +99,7 @@ public final class ShardRuntime implements Lifecycle, AutoCloseable {
             // borrower's settings (stuckHandlerTimeout, the documented way to bound one queue's
             // handlers, among them) are its own queue's, and warning that they were ignored would be
             // false.
-            var inForce   = existing.runtime().settings.runtimeScoped();
+            var inForce   = existing.runtime().settings;
             var requested = settings.runtimeScoped();
             if (!inForce.equals(requested)) {
                 log.warn("A shared ShardRuntime for this DataSource already exists and was built with a different "
@@ -134,30 +134,35 @@ public final class ShardRuntime implements Lifecycle, AutoCloseable {
         existing.runtime().stop();
     }
 
-    private final DataSource               dataSource;
-    private final ShardOwnerSettings       settings;
-    private final ShardOwnerMetrics        metrics;
-    private final ConnectionPoolMetadata   pool;
-    private final AtomicBoolean            running     = new AtomicBoolean();
+    private final DataSource                       dataSource;
+    /**
+     * Only the values of the settings this runtime was built with that it and its pumps read: what
+     * {@link #acquireShared} compares a later borrower's settings against. Every other value of a borrowing queue's
+     * settings is read only by that borrowing queue.
+     */
+    private final ShardOwnerSettings.RuntimeScoped settings;
+    private final ShardOwnerMetrics                metrics;
+    private final ConnectionPoolMetadata           pool;
+    private final AtomicBoolean                    running     = new AtomicBoolean();
     /**
      * The {@code running} flag handed to this run's pumps: a new one per {@link #start()}, cleared by {@link #stop()}. Not
      * {@link #running} itself, which a restart sets again: a pump that outlived the previous stop's wait would then read it
      * as set when it finally left its loop, and take its orderly exit for a death.
      */
-    private       AtomicBoolean            pumpsRunning;
-    private final AtomicBoolean            flushOnExit = new AtomicBoolean(true);
-    private final List<ShardPump>          pumps       = new ArrayList<>();
-    private final Map<String, ShardWakeup> wakeups     = new ConcurrentHashMap<>();
+    private       AtomicBoolean                    pumpsRunning;
+    private final AtomicBoolean                    flushOnExit = new AtomicBoolean(true);
+    private final List<ShardPump>                  pumps       = new ArrayList<>();
+    private final Map<String, ShardWakeup>         wakeups     = new ConcurrentHashMap<>();
     /**
      * Recreated by every {@link #start()}, because an {@code ExecutorService} cannot be restarted
      * once shut down. This is what makes the runtime genuinely restartable rather than merely
      * stoppable — the same distinction {@code ShardOwnedQueue.stop()} had to make.
      */
-    private       ExecutorService          pumpExecutor;
-    private       ExecutorService          handlerExecutor;
-    private       ScheduledExecutorService heartbeat;
-    private       ShardWakeupListener      listener;
-    private       PoolBudget.Reservation   poolReservation;
+    private       ExecutorService                  pumpExecutor;
+    private       ExecutorService                  handlerExecutor;
+    private       ScheduledExecutorService         heartbeat;
+    private       ShardWakeupListener              listener;
+    private       PoolBudget.Reservation           poolReservation;
 
     public ShardRuntime(DataSource dataSource, ShardOwnerSettings settings) {
         this(dataSource, settings, new ShardOwnerMetrics());
@@ -184,7 +189,7 @@ public final class ShardRuntime implements Lifecycle, AutoCloseable {
     public ShardRuntime(DataSource dataSource, ShardOwnerSettings settings, ShardOwnerMetrics metrics,
                         ConnectionPoolMetadata pool) {
         this.dataSource = requireNonNull(dataSource, "No dataSource provided");
-        this.settings = requireNonNull(settings, "No settings provided");
+        this.settings = requireNonNull(settings, "No settings provided").runtimeScoped();
         this.metrics = requireNonNull(metrics, "No metrics provided");
         this.pool = requireNonNull(pool, "No pool metadata provided");
         start();
