@@ -354,7 +354,8 @@ final class OrderedShardOwner implements BatchReadableOwner {
      */
     private final List<String>        deadLetteredOnRelease = new ArrayList<>();
     /**
-     * The completed answer of {@link #chargeKeysInHandlerBeforeRelease}; {@code null} until a call has completed.
+     * The completed answer of {@link #chargeKeysInHandlerBeforeRelease}; {@code null} until a call has made the charge and
+     * every dead-letter move after it (one whose {@code QueueObserver} then threw included).
      */
     private       ReleaseCharge       releaseCharge;
 
@@ -1585,9 +1586,19 @@ final class OrderedShardOwner implements BatchReadableOwner {
      * an owner being released - a shed or a drain dispatches nothing - so a later call would find no key the first one did
      * not charge. Callers do not run it for one owner at the same time (the queue's heartbeat, or a release on request
      * under its claim); the monitor makes it safe if they do.
+     * <p>
+     * The {@code QueueObserver} told of a message dead-lettered here is told after the move, and what it throws is held
+     * until every move is made and the answer recorded, then thrown: by then nothing is owed ({@link #owesReleaseCharge()}),
+     * so the queue tells that failure from a failed charge and releases the unit all the same.
      *
      * @return what was charged and dead-lettered; nothing when no key is in a handler, or when the row no longer names this
      *         owner
+     * @throws SQLException     when the charge or a dead-letter move fails; {@link #owesReleaseCharge()} then answers
+     *                          {@code true}
+     * @throws RuntimeException what the {@code QueueObserver} threw when told of a dead letter (or a non-critical
+     *                          {@link Error}), thrown once every move is made and the answer recorded, so
+     *                          {@link #owesReleaseCharge()} then answers {@code false} and {@link #releaseCharge()} gives
+     *                          the answer
      */
     ReleaseCharge chargeKeysInHandlerBeforeRelease(Connection connection) throws SQLException {
         synchronized (releaseChargeLock) {
@@ -1607,23 +1618,69 @@ final class OrderedShardOwner implements BatchReadableOwner {
                 chargedOnRelease = charged;
                 keysChargedOnRelease = keyBySeq;
             }
+            Throwable observerFailure = null;
             for (var row : chargedOnRelease.entrySet()) {
                 var key = keysChargedOnRelease.get(row.getKey());
                 if (!redeliveryPolicy.isExhausted(row.getValue()) || deadLetteredOnRelease.contains(key)) {
                     continue;
                 }
-                if (storage.moveToDeadLetterIfOwned(connection, ShardOwnedSchema.ORDERED_TABLE, "ordered", shard, row.getKey(),
-                                                    ShardOwnedStorage.EXHAUSTED_IN_A_RELEASED_HANDLER, instanceId, fence)) {
+                boolean moved;
+                try {
+                    moved = storage.moveToDeadLetterIfOwned(connection, ShardOwnedSchema.ORDERED_TABLE, "ordered", shard, row.getKey(),
+                                                            ShardOwnedStorage.EXHAUSTED_IN_A_RELEASED_HANDLER, instanceId, fence);
+                } catch (SQLException | RuntimeException | Error e) {
+                    if (observerFailure != null) {
+                        e.addSuppressed(observerFailure);
+                    }
+                    throw e;
+                }
+                if (moved) {
                     deadLetteredOnRelease.add(key);
                     // Counted before the observer is told: one that throws leaves the move made and remembered, so no later
                     // call reaches this line for the key again.
                     metrics.deadLettered.increment();
-                    metrics.observer().deadLettered(new MessageId(MessageId.Lane.ORDERED, shard, row.getKey()), row.getValue(),
-                                                    new IllegalStateException(ShardOwnedStorage.EXHAUSTED_IN_A_RELEASED_HANDLER));
+                    try {
+                        metrics.observer().deadLettered(new MessageId(MessageId.Lane.ORDERED, shard, row.getKey()), row.getValue(),
+                                                        new IllegalStateException(ShardOwnedStorage.EXHAUSTED_IN_A_RELEASED_HANDLER));
+                    } catch (RuntimeException | Error e) {
+                        // The other moves are made first, and the answer recorded, and then this is thrown: with nothing left
+                        // owed (owesReleaseCharge), the queue releases the unit all the same.
+                        Exceptions.rethrowIfCriticalError(e);
+                        if (observerFailure == null) {
+                            observerFailure = e;
+                        } else if (!observerFailure.equals(e)) {
+                            observerFailure.addSuppressed(e);
+                        }
+                    }
                 }
             }
             releaseCharge = new ReleaseCharge(chargedOnRelease.size(), List.copyOf(deadLetteredOnRelease));
+            if (observerFailure != null) {
+                Exceptions.sneakyThrow(observerFailure);
+            }
             return releaseCharge;
+        }
+    }
+
+    /**
+     * Whether {@link #chargeKeysInHandlerBeforeRelease} has yet to complete: no call has made the charge and every
+     * dead-letter move after it. {@code false} once one has, the call whose {@code QueueObserver} threw when told of a dead
+     * letter included, as it throws only after those writes. Lets the queue tell a failed charge, after which the unit is
+     * held and the release retried, from a failure that came after the writes, after which it is released.
+     */
+    boolean owesReleaseCharge() {
+        synchronized (releaseChargeLock) {
+            return releaseCharge == null;
+        }
+    }
+
+    /**
+     * What {@link #chargeKeysInHandlerBeforeRelease} has charged and dead-lettered, once a call has made every write;
+     * nothing until then.
+     */
+    ReleaseCharge releaseCharge() {
+        synchronized (releaseChargeLock) {
+            return releaseCharge == null ? ReleaseCharge.NONE : releaseCharge;
         }
     }
 

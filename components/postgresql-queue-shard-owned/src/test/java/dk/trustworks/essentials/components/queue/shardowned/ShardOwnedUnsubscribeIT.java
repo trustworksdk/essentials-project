@@ -1411,6 +1411,71 @@ class ShardOwnedUnsubscribeIT {
     }
 
     /**
+     * A {@code QueueObserver} that throws when told of the message a release on request dead-lettered does not refuse the
+     * release: the charge and the move are made by then, so the unit is released and the answer is
+     * {@link KeptUnitRelease.Outcome#RELEASED}, with one WARN naming what failed. It used to throw the observer's failure
+     * out of {@link MessageQueue#releaseKeptOrderedUnit} with the unit still kept, though its message was charged and moved.
+     */
+    @Test
+    void a_kept_unit_released_on_request_whose_charge_dead_lettered_its_message_is_released_even_when_the_observer_told_of_it_throws() throws Exception {
+        // A heartbeat every second; the bound stays at its 15-minute default, far beyond the test.
+        var leaseTtl = Duration.ofSeconds(3);
+        var entered  = new CountDownLatch(1);
+        var release  = new CountDownLatch(1);
+        var told     = new AtomicInteger();
+        try (var queue = newQueue(PostgresqlMessageQueue.LifecycleHook.NONE, settingsWith(Duration.ofMillis(300), leaseTtl))) {
+            queue.addObserver(new QueueObserver() {
+                @Override
+                public void deadLettered(MessageId id, int attempts, Throwable cause) {
+                    told.incrementAndGet();
+                    throw new IllegalStateException("observer failure");
+                }
+            });
+            try {
+                queue.consume((messageId, key, payload, payloadType) -> {
+                    if (key != null) {
+                        entered.countDown();
+                        awaitQuietly(release, Duration.ofSeconds(90));
+                    }
+                }, new ConsumerOptions(8, Integer.MAX_VALUE, 1, RetryBackoff.fixed(Duration.ofMillis(100))));
+                var metrics = queue.registeredConsumers().getFirst().metrics();
+                queue.enqueue(Message.ordered("hangs".getBytes(StandardCharsets.UTF_8), 1, "ACC-1", 0));
+                var unitOfTheKey = ShardOwnedSchema.unitForKey("ACC-1", ShardOwnedSchema.ORDERED_UNITS);
+                assertThat(entered.await(20, TimeUnit.SECONDS)).as("premise: the key is in its handler").isTrue();
+                queue.stop();
+                assertThat(keptOrderedFence(INSTANCE_ID).shard()).as("premise: the stop kept the unit of the key in its handler")
+                                                                  .isEqualTo(unitOfTheKey);
+                queue.start();
+
+                // Asked until queue.stop()'s budget thread has flushed the kept unit: until then the release answers BUSY.
+                var releases = Awaitility.await().atMost(Duration.ofSeconds(5))
+                                         .until(() -> queue.releaseKeptOrderedUnit(INSTANCE_ID, unitOfTheKey).releases(),
+                                                answer -> answer.stream().noneMatch(entry -> entry.outcome() == KeptUnitRelease.Outcome.BUSY));
+
+                assertThat(releases).as("released, the observer's failure notwithstanding").singleElement().satisfies(released -> {
+                    assertThat(released.outcome()).isEqualTo(KeptUnitRelease.Outcome.RELEASED);
+                    assertThat(released.keysInHandler()).containsExactly("ACC-1");
+                });
+                assertThat(told).as("premise: the observer was told of the dead letter").hasValue(1);
+                assertThat(queue.deadLetters(0, 10)).as("the charge dead-lettered the message").singleElement()
+                                                    .satisfies(deadLetter -> assertThat(deadLetter.lastError()).isEqualTo(ShardOwnedStorage.EXHAUSTED_IN_A_RELEASED_HANDLER));
+                assertThat(metrics.deadLettered.sum()).as("counted once").isEqualTo(1);
+                assertThat(metrics.takeoverAttemptBumps.sum()).as("charged once").isEqualTo(1);
+                assertThat(laneWarnings()).as("the observer's failure is named, after the charge's writes")
+                                          .filteredOn(warning -> warning.contains("has nothing left to charge before releasing ordered unit " + unitOfTheKey
+                                                                                          + " on queue " + QUEUE_ID + " on request"))
+                                          .hasSize(1);
+                assertThat(laneWarnings()).as("the release names the dead letter")
+                                          .filteredOn(warning -> warning.contains("released ordered unit " + unitOfTheKey + " on queue " + QUEUE_ID + " on request"))
+                                          .singleElement()
+                                          .satisfies(warning -> assertThat(warning).contains("1 dead-lettered at their attempt limit [ACC-1]"));
+            } finally {
+                release.countDown();
+            }
+        }
+    }
+
+    /**
      * A unit a stop kept, whose lease row someone else has taken under a newer fence meanwhile - another instance once this
      * one's liveness lapsed, made here by writing the row directly - is not released when asked: the fenced release finds
      * the row no longer this instance's, says so ({@link KeptUnitRelease.Outcome#ALREADY_TAKEN}, naming the key in its

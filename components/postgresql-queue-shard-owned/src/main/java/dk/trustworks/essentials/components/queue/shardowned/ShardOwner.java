@@ -1124,7 +1124,7 @@ final class ShardOwner implements LeasedOwner {
                         Exceptions.rethrowIfCriticalError(e);
                         if (observerFailure == null) {
                             observerFailure = e;
-                        } else if (observerFailure != e) {
+                        } else if (!observerFailure.equals(e)) {
                             observerFailure.addSuppressed(e);
                         }
                     }

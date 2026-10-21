@@ -1551,7 +1551,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         var charges = new HashMap<LeasedOwner, OrderedShardOwner.ReleaseCharge>();
         for (var owner : List.copyOf(stuck.keySet())) {
             try {
-                charges.put(owner, chargeKeysInHandlerBeforeRelease(owner));
+                charges.put(owner, chargeKeysInHandlerBeforeRelease(owner, "from its dead pump"));
             } catch (SQLException | RuntimeException | Error e) {
                 Exceptions.rethrowIfCriticalError(e);
                 warnChargeBeforeReleaseFailed(owner, "from its dead pump", e);
@@ -1903,7 +1903,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                     var charge = OrderedShardOwner.ReleaseCharge.NONE;
                     if (stuck.isPresent()) {
                         try {
-                            charge = chargeKeysInHandlerBeforeRelease(ordered);
+                            charge = chargeKeysInHandlerBeforeRelease(ordered, "in a fair-share shed");
                         } catch (SQLException | RuntimeException | Error e) {
                             // This unit's failure is its own: it stays held, shed-complete, and is retried on the next heartbeat,
                             // while the other units are released. The fair-share comparison below leaves it out, as it does every
@@ -2689,18 +2689,51 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * Charge an attempt to each message still in a handler of {@code owner}, and dead-letter each one that reaches the
      * redelivery limit, before its unit is released without waiting for those handlers: past {@code stuckHandlerTimeout} by
      * a shed or the hand-back from a dead pump, or on request ({@link #releaseKeptOrderedUnit}). See
-     * {@link OrderedShardOwner#chargeKeysInHandlerBeforeRelease}; nothing for an owner that is not ordered.
+     * {@link OrderedShardOwner#chargeKeysInHandlerBeforeRelease}; nothing for an owner that is not ordered. Takes no
+     * connection once a call has made every write.
+     * <p>
+     * What throws once nothing is owed ({@link OrderedShardOwner#owesReleaseCharge()}) - a {@code QueueObserver} told of a
+     * message the charge dead-lettered, or closing the connection - came after the charge and its dead-letter moves, so it
+     * is not a failed charge: it is logged at WARN here ({@link #orderedChargeFailedWithNothingOwed}) and the answer
+     * returned, and the caller releases the unit. Thrown, it was reported as a charge that could not be made, and the unit
+     * held for a heartbeat, or a release on request refused, though its attempts were counted and its messages moved.
      *
+     * @param from where the release comes from, as the WARN names it: {@code "in a fair-share shed"},
+     *             {@code "from its dead pump"} or {@code "on request"}
      * @throws SQLException when the charge or a dead-letter move fails; the caller then does not release this owner's unit,
      *                      and its retry does not charge again
      */
-    private OrderedShardOwner.ReleaseCharge chargeKeysInHandlerBeforeRelease(LeasedOwner owner) throws SQLException {
+    private OrderedShardOwner.ReleaseCharge chargeKeysInHandlerBeforeRelease(LeasedOwner owner, String from) throws SQLException {
         if (!(owner instanceof OrderedShardOwner ordered)) {
             return OrderedShardOwner.ReleaseCharge.NONE;
         }
+        if (!ordered.owesReleaseCharge()) {
+            return ordered.releaseCharge();
+        }
         try (var connection = storage.connection()) {
             return ordered.chargeKeysInHandlerBeforeRelease(connection);
+        } catch (SQLException | RuntimeException | Error e) {
+            Exceptions.rethrowIfCriticalError(e);
+            if (ordered.owesReleaseCharge()) {
+                throw e;
+            }
+            orderedChargeFailedWithNothingOwed(owner, from, e);
+            return ordered.releaseCharge();
         }
+    }
+
+    /**
+     * WARN that the charge before releasing {@code owner}'s ordered unit {@code from} a shed, a dead pump or a request threw
+     * once nothing was owed ({@link OrderedShardOwner#owesReleaseCharge()}): the messages in its handlers are charged and
+     * every dead-letter move is made, so what threw came after those writes - a {@code QueueObserver} told of a message the
+     * charge dead-lettered, or closing the connection. The unit is released all the same: held, it would wait for a charge
+     * already made.
+     */
+    private void orderedChargeFailedWithNothingOwed(LeasedOwner owner, String from, Throwable failure) {
+        log.warn("Instance {} has nothing left to charge before releasing ordered unit {} on queue {} {}, but the charge threw after "
+                         + "its writes: a QueueObserver told of a message it dead-lettered threw, or closing the connection failed. "
+                         + "Its messages are charged and moved, so it goes on to release the unit",
+                 instanceId, owner.shard(), queueId, from, failure);
     }
 
     /**
@@ -2865,7 +2898,9 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
 
     /**
      * WARN that the charge before releasing {@code owner}'s unit past {@code stuckHandlerTimeout} ({@code from} a shed or a
-     * dead pump) failed, so the unit was not released on this heartbeat tick.
+     * dead pump) failed with the charge or a dead-letter move still to be made ({@link OrderedShardOwner#owesReleaseCharge()}),
+     * so the unit was not released on this heartbeat tick. A failure once nothing is owed never gets here
+     * ({@link #orderedChargeFailedWithNothingOwed}).
      */
     private void warnChargeBeforeReleaseFailed(LeasedOwner owner, String from, Throwable failure) {
         log.warn("Instance {} could not charge the messages in a handler of ordered unit {} on queue {} an attempt before releasing "
@@ -3290,7 +3325,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                     // Each message still in a handler is charged its attempt before the release, as the next owner charges
                     // nothing for a released unit. Should it throw, nothing is released, and a later request does not charge again.
                     if (inHandler.isPresent()) {
-                        charge = chargeKeysInHandlerBeforeRelease(owner);
+                        charge = chargeKeysInHandlerBeforeRelease(owner, "on request");
                     }
                     released = releaseLeaseRows(List.of(owner)) > 0;
                 }

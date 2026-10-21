@@ -652,7 +652,10 @@ never reaching the dead-letter table, each time leaving one more handler hung. N
 in `ShardOwnerMetrics.takeoverAttemptBumps` of the releasing queue, and the release's WARN says how many messages were
 charged and which keys were dead-lettered. What to do: nothing, unless a queue's ordered handlers legitimately run past
 its `stuckHandlerTimeout` - then each such shed or release costs that message an attempt, and enough of them
-dead-letter it, so raise the bound as above. (`<!-- fix:U-011 -->`)
+dead-letter it, so raise the bound as above. A `QueueObserver` that throws when told of such a dead letter does not
+hold the release up: the attempt and the move are made by then, so the unit is released all the same - a
+`releaseKeptOrderedUnit` answers that it released it - and a WARN names the observer's failure.
+(`<!-- fix:U-011 -->`, `<!-- fix:U-016 -->`)
 
 **The unordered lane now charges a hung handler's delivery too, past the same bound.** It waits for no handler: a
 fair-share shed and a dead pump's hand-back release an unordered shard at once, and `stop()` once `shedGrace` has run
