@@ -1408,8 +1408,8 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             // whose hand-back as its last key left the handler did not run or failed, is free for an acquire loop - this
             // instance's or another's - once it is handed back. Each unit's failure is its own, and logged there.
             handBackKeptUnits();
-            // Not only when the gauge is read: nothing in production may ever read it, and an owner kept here holds what it
-            // had buffered.
+            // Prune releasedPastStuckHandler here, not only when the keptUnitsInHandler gauge is read: nothing in production
+            // may ever read it, and an owner kept in that set holds what it had buffered.
             pruneReleasedPastStuckHandler();
             // BEFORE the rebalance, so a unit handed back here is free for its acquire loop to take again on a live pump, and
             // so its removeIf, which drops owners whose lease has ended, never drops one whose lease is still to be released.

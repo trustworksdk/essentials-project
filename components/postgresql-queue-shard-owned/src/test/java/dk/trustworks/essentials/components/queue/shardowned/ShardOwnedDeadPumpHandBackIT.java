@@ -280,7 +280,7 @@ class ShardOwnedDeadPumpHandBackIT {
                                                                           .contains("stuckHandlerTimeout (PT3S)");
 
                 release.countDown();
-                // Before any read of the gauge, which prunes the set too: only the heartbeat's prune can empty it here.
+                // Since the handler returned, no read of the gauge, which prunes the set too: only the heartbeat's prune can empty it here.
                 Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(
                         () -> assertThat(queue.releasedPastStuckHandlerSize()).as("pruned by the heartbeat once the handler returned").isZero());
                 Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(
