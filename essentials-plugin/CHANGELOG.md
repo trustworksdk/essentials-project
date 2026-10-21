@@ -163,15 +163,27 @@ targets, with a `-N` suffix for plugin-only releases.
   `start()`, so consuming anew needs an unsubscribe or a close first; the queue's `isStarted()` reads whether the
   queue is marked started, not whether a subscription runs, so a manager that stops only what reports itself started
   (`DefaultLifecycleManager`) skips a partly started queue; a stop that finds an ordered key still in its handler past
-  `shedGrace` keeps that unit, and the subscription's instance id, until the lease TTL runs out; and a new Gotcha
+  `shedGrace` keeps that unit, and the subscription's instance id, until that handler has returned and the unit has
+  been handed back (its acknowledgement flushed, its lease released, so its next owner charges no attempt and
+  delivers nothing again), or for another instance until the lease TTL runs out; an operator can release such a
+  unit sooner on the instance that kept it, with `MessageQueue.releaseKeptOrderedUnit` or the admin API's
+  `POST /shard-owned-queues/{queueName}/ordered-units/{unit}/release-kept`, accepting that the messages still in a
+  handler are delivered again, possibly beside those handlers; and a new Gotcha
   lists what a `QueueObserver` calling the queue back from `shardOwnershipChanged` gets - a `consume()` from a release
   a stop tells, or from one a failed start tells while it stops the lanes it had started, returns a subscription
   registered but not started, now with a WARN; a `Subscription.start()` there starts neither lane and WARNs, even with
   both lanes running, and a queue `start()` starts nothing and WARNs, bar one case: finding the queue marked started
   while a failed `consume()` or `Subscription.start()` stops its lanes, it returns at once, as that call leaves the
-  queue started.
+  queue started. `ShardOwnerSettings` is built with `ShardOwnerSettings.builder()`, which starts from `defaults()`, or
+  `settings.toBuilder()`, which starts from existing settings, so only the settings that differ are named.
   MongoDB (`LLM-springdata-mongo-queue.md`): due-time polling, and the backoff defaults stated correctly (50% of the
   polling interval per empty poll, capped at 20× the polling interval).
+- **Docs: the shard-owned queue's `stuckHandlerTimeout` for Essentials 0.60.1** (`LLM-postgresql-queue-shard-owned.md`).
+  A restarted queue, or the next `consume()` wanting the instance id, no longer takes back at once an ordered unit a
+  stop kept for a key still in its handler: it waits for that handler up to `stuckHandlerTimeout` (default 15
+  minutes, per queue, `essentials.shard-owned-queue.stuck-handler-timeout` and `stuck-handler-timeouts.<queue>`),
+  then takes the unit over under a new fence, and that key may run in two handlers at once. A WARN once the handler
+  outlasts `leaseTtl`, at most once a minute per unit, and `ShardOwnerMetrics.keptUnitsInHandler()`.
 - **Docs: supported PostgreSQL is 15+.** `LLM.md` states the floor (the majors the PostgreSQL community still patches)
   and the fenced-lock and shard-owned docs point at it instead of the old 9.5+ and 13+.
 - **Docs: `shared` helpers for Essentials 0.60.1** (`LLM-shared.md`). § Exceptions lists `ROOT_CAUSE_PREFIX`,
