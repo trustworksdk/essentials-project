@@ -670,7 +670,7 @@ charge is still choosing which messages to charge. Your `QueueObserver` is told 
 charge's database statements, not during them, so a slow `deadLettered` callback does not hold up the unit's handlers
 returning meanwhile, so a handler failing meanwhile may be reported to `deliveryFailed` before its message's
 `deadLettered`.
-(`6337f7d89`, `2fdeb3db0`, `bfa961ec5`, `dbae0986f`, `7dbd517be`, `e699c9d44`, `<!-- fix:U-026 -->`, `<!-- fix:U-027 -->`)
+(`6337f7d89`, `2fdeb3db0`, `bfa961ec5`, `dbae0986f`, `7dbd517be`, `e699c9d44`, `895b1a498`, `52c5e943e`)
 
 **The unordered lane now charges a hung handler's delivery too, past the same bound.** It waits for no handler: a
 fair-share shed and a dead pump's hand-back release an unordered shard at once, and `stop()` once `shedGrace` has run
@@ -697,7 +697,7 @@ return while the charge runs - a message in its handler for less than `stuckHand
 database statements while holding their handler permit, bar one returning while the charge is still choosing which
 messages to charge. Your `QueueObserver` is told of the charge's dead letters after the charge's database statements,
 not during them, as on the ordered lane.
-(`18e423d1d`, `7dbd517be`, `e699c9d44`, `<!-- fix:U-026 -->`, `<!-- fix:U-027 -->`)
+(`18e423d1d`, `7dbd517be`, `e699c9d44`, `895b1a498`, `52c5e943e`)
 
 ---
 
