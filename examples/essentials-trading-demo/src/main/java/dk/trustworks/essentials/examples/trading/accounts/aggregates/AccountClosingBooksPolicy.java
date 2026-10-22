@@ -31,8 +31,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * Decides when an {@link Account} rolls to its next generation, from what {@code @AggregateClosingBooksPolicy} on
  * {@code Account} resolves to: {@code END_OF_DAY} in {@code America/New_York} (design §6).
  * <p>
- * Built once. The frozen {@code brokerage} account builds its evaluator on every call because its settings change at
- * runtime for the benchmarks; this one does not need to, and the evaluator is on every mutating command's path.
+ * Built once: its settings do not change at runtime, and the evaluator is on every mutating command's path.
  * <p>
  * Interim: the wall clock in New York, until EF-1 lets the period follow the exchange's business day (D22, D24). The
  * period id is {@code yyyy-MM-dd} either way, so the switch will migrate nothing.

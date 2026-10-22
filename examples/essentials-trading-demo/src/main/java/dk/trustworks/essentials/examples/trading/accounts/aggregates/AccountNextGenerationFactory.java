@@ -21,9 +21,8 @@ import dk.trustworks.essentials.examples.trading.accounts.types.*;
 import org.springframework.stereotype.Component;
 
 /**
- * Opens the next generation with the whole open state of the current one (design §6): unlike the frozen
- * {@code brokerage} account, which carries only its cash, a ledger with pending trades and open holds must be able to
- * settle and release them in the next period.
+ * Opens the next generation with the whole open state of the current one (design §6): a ledger with pending trades
+ * and open holds must be able to settle and release them in the next period.
  */
 @Component
 public class AccountNextGenerationFactory implements TypedClosingBooksNextGenerationFactory<AccountId, AccountGenerationId, Account, PeriodId> {

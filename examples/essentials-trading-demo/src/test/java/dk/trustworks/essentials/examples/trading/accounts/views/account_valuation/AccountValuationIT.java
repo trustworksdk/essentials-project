@@ -51,8 +51,6 @@ import static org.awaitility.Awaitility.await;
 @Testcontainers
 @EnabledIf("dk.trustworks.essentials.examples.trading.integration.SimulatorImages#exchangeAvailable")
 @SpringBootTest(properties = {
-        "trading-demo.simulation.enabled=false",
-        "trading-demo.load.enabled=false",
         "trading-demo.queue-load.enabled=false",
         "trading-demo.simulators.webhook-secret-file=simulators/secrets/webhook-secret.txt"
 }, webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)

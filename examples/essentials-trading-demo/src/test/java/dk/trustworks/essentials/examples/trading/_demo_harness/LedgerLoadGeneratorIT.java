@@ -36,8 +36,6 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 @Testcontainers
 @SpringBootTest(properties = {
-        "trading-demo.simulation.enabled=false",
-        "trading-demo.load.enabled=false",
         "trading-demo.queue-load.enabled=false"
 })
 @DirtiesContext // close while this class's container is still up; a cached context outlives it and stalls the next context switch

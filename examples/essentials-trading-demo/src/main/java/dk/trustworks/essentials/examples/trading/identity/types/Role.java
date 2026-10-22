@@ -26,7 +26,7 @@ public enum Role {
      */
     CUSTOMER,
     /**
-     * Runs the brokerage: the admin pages, the operator endpoints, the Essentials admin console.
+     * Runs the brokerage: the operator endpoints and the Essentials admin console.
      */
     OPERATOR
 }

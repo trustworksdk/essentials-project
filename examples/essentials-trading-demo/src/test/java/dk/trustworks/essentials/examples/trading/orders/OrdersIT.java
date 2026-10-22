@@ -54,8 +54,6 @@ import static org.awaitility.Awaitility.await;
  */
 @Testcontainers
 @SpringBootTest(properties = {
-        "trading-demo.simulation.enabled=false",
-        "trading-demo.load.enabled=false",
         "trading-demo.queue-load.enabled=false",
         "trading-demo.orders.stub-exchange.resting-instruments=RESTING",
         "trading-demo.orders.stub-exchange.rejected-instruments=HALTED",

@@ -96,13 +96,6 @@ essentials:
       enabled: true
     closing-books:
       enabled: true
-      aggregates:
-        TradingAccounts:
-          # TradingAccount does not implement HasClosingBooksPeriodId - TradingAccountClosingBooksPolicy
-          # builds its BuiltInClosingBooksPolicyEvaluator with an explicit currentPeriodIdProvider
-          # (account -> account.periodId) instead. Opt out of the startup check that would otherwise
-          # reject the time-boundary policy.
-          period-id-provided-externally: true
     cdc:
       # CDC is OFF by default (CdcProperties#enabled = false) — it needs database-side setup the
       # framework won't assume. The demo opts in, and the compose Postgres is started with
@@ -143,13 +136,3 @@ trading-demo:
       exchange-reports: 8
     forwarding:
       batch-size: 100
-  accounts:
-    closing-books:
-      mode: event-count-or-time-boundary
-      event-threshold: 100
-      time-boundary: end-of-month
-      zone-id: Europe/Copenhagen
-  load:
-    enabled: true
-    trade-interval: 2s
-    max-generated-trades: 500

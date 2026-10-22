@@ -8,22 +8,23 @@ What lives here is the machinery that makes the demo demonstrate something:
 
 | Component | What it is |
 |---|---|
-| `TradingSimulationRunner` | One-shot bootstrap that seeds instruments, accounts, trades and settlements so a freshly started app has something to look at. Idempotent — it probes for existing seed data and skips |
-| `TradingLoadGeneratorManager` | Generates continuous runtime traffic, plus on-demand bursts and two benchmark scenarios |
-| `TradingLoadGeneratorController` | The harness's own admin API |
-| `TradingDashboard*` | The lightweight status screen and its SSE stream |
+| `DemoUsersSeeder` | Registers the seeded users (`trading-demo.identity.seed-users`) at startup when absent |
 | `QueueLoadGenerator` | Drives the **shard-owned queue engine** on both lanes at once — sustained trickle plus on-demand spikes — and checks per-key ordering as messages arrive |
-| `OrderFlowLoadGenerator` | Phase 3: simulated customers placing and cancelling orders against the stub exchange; placement vs completion throughput and end-to-end latency |
 | `QueueLoadGeneratorController` | `/api/admin/queue-load` — status, start/stop, `POST /spike?size=N`, `POST /faults?retries=N&poison=M&failures=K`, `POST /faults/blocked-key?behind=N` |
+| `LedgerLoadGenerator`, `LedgerLoadController` | Phase 1: buy cycles on the `accounts` ledger, `/api/admin/ledger-load` |
+| `OrderFlowLoadGenerator`, `OrderFlowLoadController` | Phase 3: simulated customers placing and cancelling orders, against the stub exchange or the exchange-simulator; placement vs completion throughput and end-to-end latency |
+| `NoOpAccounts*Processor`, `BatchedAccountsForwarder` | EF-2 measurement processors, off by default |
 
-**The dashboard's SSE emitters never time out, so `TradingDashboardStreamService` completes them on `ContextClosedEvent`.** Without that an open dashboard tab held Spring Boot's graceful shutdown for the full 30 s phase timeout on every Ctrl-C, ending in `AsyncRequestTimeoutException`.
+The `brokerage` bootstrap runner, its trading load generator, the dashboard and the demo's own admin page went with
+`brokerage` (phase 4 Q-3). The Essentials admin console covers closing books, snapshots, archives and lifecycle for
+every aggregate; a demo page on the new contexts comes with phase 7.
 
 ## Why these are not slices
 
 An automation slice reacts to a domain event and issues a follow-up command; a view slice answers a
 query over a read model it owns. The load generator does neither — it *manufactures* activity that a
 real deployment would receive from users, and the dashboard reports on the harness itself (counters,
-timings, snapshot metrics) as much as on the domain. Classifying them as automations and views would
+timings) as much as on the domain. Classifying them as automations and views would
 put demo scaffolding on the same footing as the domain, which is the bigger lie.
 
 ## Rules that still apply here
@@ -33,43 +34,9 @@ Being outside the boundary check is not permission to reach into the contexts:
 - **Writes go through the command bus.** Every domain mutation is `commandBus.send(new SomeCommand(…))`,
   naming a slice's command type — which is §R4's sanctioned collaboration, not an exception to it.
 - **Reads go through view slices**, never by rehydrating an aggregate. Nothing here reads an aggregate
-  *field*. Two classes hold a repository wrapper, both documented below and for different reasons.
+  *field*.
 - **It may not be imported by a bounded context.** The dependency runs one way. If something here
   looks like the contexts need it, it belongs in a slice instead.
-
-## Exception 1: the bootstrap idempotency probe
-
-`TradingSimulationRunner.seedDataState()` — and nothing else in this package — may inject `TradingAccounts`,
-`Trades`, `Settlements` and `Instruments`, and may call their `findX(…)` methods. It must be **strongly
-consistent**: the brokerage projections are eventually consistent, so on a restart against a populated database
-a projection-backed probe could answer "absent" while the data is there, and the runner would seed a second time
-on top of existing data.
-
-The probe reads *existence*, never a field, and it runs once at startup.
-
-## Exception 2: the closing-books benchmark's read pass
-
-`TradingLoadGeneratorManager.runTradingAccountScenario` injects `TradingAccounts` and calls `getAccount(...)`
-inside its timed read loop, one unit of work per load.
-
-That scenario exists to measure **how expensive it is to rehydrate a trading account** under two rollover
-policies — how far back the replay reaches, and how often a snapshot spares it. Rehydration is a write-model
-operation by definition, so `readElapsedMillis` and the four `snapshot*Delta` figures only mean anything if
-the pass performs one. Routed through `brokerage.account_statement` it would time a single-row `SELECT`
-against a projection and every snapshot delta would read zero — measuring nothing the scenario claims to
-compare.
-
-The load *is* the measurement: the returned aggregate is discarded and no field is read off it.
-
-## Everything else reads a view slice
-
-Two of those reads are eventually consistent and knowingly so: the dashboard's account balances and the load
-generator's seed-data check both come from `brokerage.account_statement`. The dashboard can therefore show
-fewer accounts than are configured for a moment after bootstrap.
-
-The brokerage trade lifecycle's execution price comes from `market_data`'s published `MarketQuotes` seam (the best
-ask), falling back to the instrument's seed price (`TradingSimulationIds.seedPrice`) when the feed has no fresh quote.
-The synthetic feed's default instruments are the seed instruments at those same prices.
 
 ## The shard-owned queue exercise
 
@@ -80,7 +47,7 @@ misuse rather than engine defects — which is the point of an integration demo.
 
 - **`@Scheduled` is inert here.** The demo has no `@EnableScheduling`, so the annotation binds,
   validates and never fires. A load generator that generates no load is the quietest possible
-  failure. Own a `ScheduledExecutorService`, as `TradingLoadGeneratorManager` does.
+  failure. Own a `ScheduledExecutorService`, as `QueueLoadGenerator` does.
 - **`MessageQueue.consume` covers BOTH lanes.** The lane is chosen by the message — `Message.of` is
   unordered, `Message.ordered` carries a key — not by the consumer. A second `consume()` on the same
   queue is therefore a *competing consumer with its own instance identity*, not "the other lane":
@@ -179,7 +146,8 @@ InstrumentDetailsProjection:queue | TradingAccountStatementProjection:queue | tr
 ```
 
 (That list is from before phase 3. `Inbox:TradeValuationProjection` went with `brokerage.trade_valuation` and the
-`InstrumentPrice` aggregate (D19); the order core added its own processors' inboxes and `Orders:ExchangeReports`.)
+`InstrumentPrice` aggregate (D19), the rest of the `brokerage` queues with `brokerage` itself (phase 4); the order core
+added its own processors' inboxes and `Orders:ExchangeReports`.)
 
 What this caught that the engine's own tests and the synthetic generator could not:
 

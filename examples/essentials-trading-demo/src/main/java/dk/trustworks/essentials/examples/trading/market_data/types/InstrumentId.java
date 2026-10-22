@@ -23,9 +23,9 @@ import java.util.UUID;
 /**
  * Identifier for an instrument.
  *
- * <p>This is the one type the {@code brokerage} bounded context imports from {@code market_data} -- a trade names the
- * instrument it was placed against. It lives in {@code types/}, which together with {@code events/} is the only
- * importable surface of this context, so that import is legal and deliberate.
+ * <p>Other contexts import it from {@code market_data} -- an order, a position and a settlement name the instrument they
+ * concern. It lives in {@code types/}, which together with {@code events/} is the only importable surface of this
+ * context, so that import is legal and deliberate.
  *
  * <p>It is also the aggregate id of {@code Instrument}, and the key of the latest quote in {@code views/market_quotes}.
  */

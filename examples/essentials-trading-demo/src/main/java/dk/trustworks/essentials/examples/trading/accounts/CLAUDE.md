@@ -1,8 +1,8 @@
 # Bounded context: accounts
 
 The trading account ledger: cash buckets, positions, holds, reservations, and the figures customers see. Design:
-`docs/design/phase-1-account-core.md`. Lives **beside** the frozen `brokerage` context (its own `Accounts` stream,
-not `TradingAccounts`) until phase 4 deletes `brokerage` (design Q-1).
+`docs/design/phase-1-account-core.md`. Its own `Accounts` stream; it replaced the `brokerage` context's
+`TradingAccount`, and `brokerage` was deleted in phase 4 (generation archival moved here).
 
 **Write style: aggregate (§R5)** — `Account` behind `Accounts` (a `ClosingBooksLogicalAggregateRepository`), closing
 books `END_OF_DAY` in New York until EF-1, snapshots every 100 events.
@@ -25,8 +25,9 @@ books `END_OF_DAY` in New York until EF-1, snapshots every 100 events.
 - **The two balance projections apply deltas, so they are versioned** (generation + last `EventOrder`, the event-store
   docs' "Version = EventOrder" pattern). A `ViewEventProcessor` may redeliver; an unguarded delta is wrong money.
   `account_activity` is insert-only on `(stream, event order)` instead.
-- **Simple-name clashes with `brokerage` break Spring**: bean names are simple class names, so a new class may not be
-  named like one of `brokerage`'s (hence `ReleaseHold`, `RollAccountBooks`).
+- **Simple-name clashes break Spring**: bean names are simple class names, so two contexts may not both have, say, a
+  `SettleTradeHandler` (hence `ReleaseHold`, `RollAccountBooks` from when `brokerage` existed, and
+  `FundingAccountOwnersProjection` beside `orders`' `AccountOwnersProjection`).
 - **`Money` in a request body is `{"amount": 100.50, "currency": "USD"}` with a JSON *number*.** Essentials' deserializer
   refuses a string amount (`400`, `cannot coerce value "100.50"`).
 - **`Account` implements `HasClosingBooksPeriodId`, and must.** With `essentials.eventstore.closing-books.enabled`

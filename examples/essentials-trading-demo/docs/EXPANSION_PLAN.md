@@ -42,6 +42,8 @@ This file records decisions as they are taken. § Open questions lists what is s
 | D23 | **Trades carry their trade date and settlement date from the exchange** (SR-29). The demo books a trade by its `tradeDate` and never derives a business date itself. The current business date is *not* added to `GET /api/clock`: on a cold start the catch-up reader replays the latest `BusinessDayClosed`. | Real exchanges send both with the execution (FIX 75, 64). Needed for booking, settlement dates and reconciliation, independent of closing books — the test for any simulator change is "does the domain need it and would a real exchange do it", not "does Essentials want it". |
 | D24 | **EF-1 shape.** A `ClosingBooksBusinessCalendar` SPI behind the existing `END_OF_DAY` boundary, selected by a new annotation member and enum (`periodSource`) — acceptable in a minor release. The library ships **only the SPI and an in-memory implementation**; the demo stores its calendar itself (a table fed by `BusinessDayClosed`). An unknown business date means **no rollover**, with a warning and a metric. The scheduled-scan gaps are a separate **EF-1b**. Design: `docs/closing-books-business-day-boundary.md` at the repository root. | Small library surface; calendar sources differ between users. Promoting the demo's store into the library later is additive, the reverse is not. A broker keeps trading on unknown bookkeeping metadata and lets end-of-day reconciliation catch the rest. |
 | D25 | **Phase 1 design decided** — [`design/phase-1-account-core.md`](design/phase-1-account-core.md) §10. A new `accounts` context beside a frozen `brokerage` (deleted in phase 4); `User` is an event-sourced aggregate with credentials in a separate `user_credentials` table; the whole ledger is built in phase 1; deposit return window 3 business days, configurable. | |
+| D26 | **Phase 2 design decided** — [`design/phase-2-funding.md`](design/phase-2-funding.md) §9. A `funding` context (`BankAccountLink`, `Deposit`, `Withdrawal`); one linked bank account per trading account; a withdrawal and its hold in one unit of work; the value date of a payment from the gateway (SR-33); a returned withdrawal as a ledger fact; deposits clear on a business calendar fed by `BusinessDayClosed`; a first bank-statement reconciliation (breaks view only). | |
+| D27 | **Phase 4 design decided** — [`design/phase-4-settlement.md`](design/phase-4-settlement.md) §8. A `settlement` context per execution; a failed, cancelled or rejected settlement reverses the booking and is an operator case; a corrected amount is a ledger fact; closing prices value the accounts; `brokerage` deleted, with its dashboard and admin page (generation archival moved to `accounts`). | |
 
 ---
 
@@ -50,7 +52,7 @@ This file records decisions as they are taken. § Open questions lists what is s
 | Context | Aggregates | Responsibility |
 |---|---|---|
 | `identity` | `User` | Users, credentials, roles `CUSTOMER` and `OPERATOR`. |
-| `accounts` | `TradingAccount` | The core ledger. Cash buckets: settled, unsettled in/out, holds. Positions per instrument: settled, pending, reserved for open sells. Derived buying power and withdrawable cash. Keeps snapshots and closing books. |
+| `accounts` | `Account` | The core ledger. Cash buckets: settled, unsettled in/out, holds. Positions per instrument: settled, pending, reserved for open sells. Derived buying power and withdrawable cash. Keeps snapshots and closing books. |
 | `orders` | `Order` | Lifecycle NEW → HELD → SUBMITTED → ACCEPTED → PARTIALLY_FILLED → FILLED, or CANCELLED / REJECTED. Fills by `executionId`, average price. |
 | *(no context)* `integration/` | — | Shared receiving mechanics for both simulators, like `config/`: signature check, dedupe per `(consumer, eventId)` into the consumer's Inbox, catch-up read of `/api/events`. Each consuming context owns its own translation slice under `external_systems/<system>/` (its subscription, endpoint, Inbox, payload validator); the outbound order client lives in `orders/external_systems/exchange/`. *Replaces the earlier `exchange_gateway` context: the slice law puts translation slices inside the context that consumes them.* |
 | `funding` | `Deposit`, `Withdrawal` | Payments through the gateway. A withdrawal holds funds before initiating. `PaymentReturned` reverses a completed payment. |
@@ -63,7 +65,7 @@ This file records decisions as they are taken. § Open questions lists what is s
 
 Every account-scoped message is keyed by `accountId` on the shard-owned ordered queues. One account is processed
 serially, cluster-wide, by whichever instance owns its shard; different accounts run in parallel. This removes
-optimistic-concurrency conflicts on the hot account stream, and is why positions live inside `TradingAccount`: the
+optimistic-concurrency conflicts on the hot account stream, and is why positions live inside `Account`: the
 buying-power and sell checks stay consistent without cross-aggregate coordination.
 
 ---
@@ -80,8 +82,11 @@ Each phase ends with a load scenario and before/after measurements. Performance 
 1. **Identity and account core.** `User`, login, account opening, the cash-bucket and position ledger, a buying-power
    view.
 2. **Funding.** Deposits and withdrawals, returns, withdrawable-cash rules, a first bank-statement reconciliation.
+   *Built (D26); completions against the real gateway wait for SR-33; the funding load scenario with it.*
 3. **Orders and execution.** Order lifecycle, holds, fills, cancels, market data.
+   *Built, against the exchange-simulator (SR-30–SR-32 consumed).*
 4. **Settlement.** Simulated T+N, pending → settled, failures and corrections.
+   *Built (D27): settlement, closing-price valuation, `brokerage` deleted.*
 5. **Reconciliation.** Clearing and bank breaks, checked one-for-one against the simulators' `/test/*/breaks`; operator
    case workflow.
 6. **Realistic load.** User-session load model, market-open burst, multiple instances, benchmarks against `main`.

@@ -65,22 +65,6 @@ trading-demo:
     key-count: 200
     handler-delay: 1ms
     parallel-consumers: 8
-  accounts:
-    closing-books:
-      mode: event-count-or-time-boundary
-      event-threshold: 100
-      time-boundary: end-of-month
-      zone-id: Europe/Copenhagen
-  simulation:
-    enabled: true
-    account-count: 3
-    deposits-per-account: 2
-    settlements-per-account: 1
-    instrument-count: 2
-    # The accounts' opening period is derived from the configured closing-books time boundary, not configured
-    # here: a hardcoded period id ages into the past and makes every later evaluation report skipped periods.
-    # ACC-DEMO-001 is rolled by the policy, ACC-DEMO-002 by an explicit command, ACC-DEMO-003 not at all.
-    max-policy-driven-events: 500
   risk-approval:
     # How long the stubbed risk service blocks the message handler that calls it. The handler is declared
     # @MessageHandler(unitOfWork = UnitOfWorkMode.NONE), so it holds no database connection while it waits — raise this
@@ -89,14 +73,11 @@ trading-demo:
     # It must stay well below essentials.durable-queues.message-handling-timeout (30s by default): past that
     # the in-flight message is reset as stuck and redelivered while the first attempt is still blocked.
     latency: 500ms
-    # Symbols the stub refuses, so the rejection path is demonstrable without a random outcome. MSFT is the second
-    # instrument the bootstrap seeds, so a freshly started demo shows one approved and one rejected instrument.
+    # Symbols the stub refuses, so the rejection path is demonstrable without a random outcome. MSFT is one of the
+    # instruments the exchange lists (simulators/exchange.yaml), so a demo on the simulators shows it rejected and the
+    # others approved.
     rejected-symbols:
       - MSFT
-  load:
-    enabled: false
-    trade-interval: 2s
-    max-generated-trades: 500
 
 essentials:
   # The shard-owned queue engine is off by default in its starter; the demo always runs it, since

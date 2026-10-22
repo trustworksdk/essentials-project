@@ -21,7 +21,7 @@ import dk.trustworks.essentials.types.CharSequenceType;
 /**
  * The stream id of one closing-books generation of an account: {@code <AccountId>#<generation>}. The convention lives
  * here, and only here, so the writer ({@code AccountsConfiguration}'s stream id generator) and every reader that parses
- * it back cannot drift apart — the same arrangement as {@code brokerage}'s {@code TradingAccountGenerationId}.
+ * it back cannot drift apart.
  */
 public class AccountGenerationId extends CharSequenceType<AccountGenerationId> {
     public static final char GENERATION_SEPARATOR = '#';

@@ -19,9 +19,8 @@ package dk.trustworks.essentials.examples.trading.accounts.types;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 
 /**
- * The stream name of the new account. Deliberately not {@code TradingAccounts}, which is the frozen {@code brokerage}
- * account's: the two live side by side until phase 4 (design §1), and must never share streams, snapshots or
- * closing-books settings.
+ * The stream name of the ledger's account. Not {@code TradingAccounts}: that was the deleted {@code brokerage}
+ * context's account, whose streams an old database may still hold.
  */
 public final class AccountsAggregateTypes {
     public static final AggregateType ACCOUNTS = AggregateType.of("Accounts");

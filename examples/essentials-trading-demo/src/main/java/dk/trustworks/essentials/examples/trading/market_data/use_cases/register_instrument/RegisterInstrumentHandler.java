@@ -50,6 +50,10 @@ public class RegisterInstrumentHandler extends AnnotatedCommandHandler {
     @CmdHandler
     public void handle(RegisterInstrument cmd) {
         requireNonNull(cmd, "No cmd provided");
+        if (instruments.findInstrument(cmd.instrumentId()).isPresent()) {
+            // Idempotent, like every mutating method here: the exchange lists an instrument again after a reset
+            return;
+        }
         log.debug("===> Registering Instrument '{}' ({})", cmd.instrumentId(), cmd.symbol());
         // A newly constructed aggregate is the one case that goes through the repository - an already-loaded one is
         // persisted by the UnitOfWork on commit.

@@ -53,8 +53,6 @@ import static org.awaitility.Awaitility.await;
  */
 @Testcontainers
 @SpringBootTest(properties = {
-        "trading-demo.simulation.enabled=false",
-        "trading-demo.load.enabled=false",
         // Long enough that the handler genuinely blocks for a measurable stretch, short enough to keep the test quick.
         // Two orders of magnitude below the 30s DurableQueues message-handling timeout, so nothing is treated as stuck.
         "trading-demo.risk-approval.latency=1s",

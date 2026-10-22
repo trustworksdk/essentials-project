@@ -16,48 +16,22 @@
 
 package dk.trustworks.essentials.examples.trading;
 
-import dk.trustworks.essentials.components.eventsourced.aggregates.api.AggregateLifecycleApi;
-import dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks.ClosingBooksGenerationRepository;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.EventStoreUnitOfWork;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.EventStoreUnitOfWorkFactory;
 import dk.trustworks.essentials.examples.trading._demo_harness.QueueLoadGeneratorProperties;
-import dk.trustworks.essentials.examples.trading._demo_harness.TradingDashboardStreamService;
-import dk.trustworks.essentials.examples.trading._demo_harness.TradingDemoLoadGeneratorProperties;
-import dk.trustworks.essentials.examples.trading._demo_harness.TradingDemoSimulationProperties;
-import dk.trustworks.essentials.examples.trading._demo_harness.TradingLoadGeneratorManager;
-import dk.trustworks.essentials.examples.trading._demo_harness.TradingSimulationRunner;
-import dk.trustworks.essentials.examples.trading.brokerage.aggregates.Settlements;
-import dk.trustworks.essentials.examples.trading.brokerage.views.trade_settlement_status.TradeSettlementStatusQuery;
-import dk.trustworks.essentials.examples.trading.brokerage.aggregates.TradingAccountClosingBooksPolicy;
-import dk.trustworks.essentials.examples.trading.brokerage.aggregates.TradingAccounts;
-import dk.trustworks.essentials.examples.trading.brokerage.aggregates.Trades;
-import dk.trustworks.essentials.examples.trading.brokerage.types.TradingAccountId;
-import dk.trustworks.essentials.examples.trading.brokerage.views.account_statement.AccountStatementQuery;
-import dk.trustworks.essentials.examples.trading.market_data.aggregates.Instruments;
-import dk.trustworks.essentials.examples.trading.market_data.types.MarketQuotes;
-import dk.trustworks.essentials.reactive.command.CommandBus;
-import io.micrometer.core.instrument.MeterRegistry;
 import dk.trustworks.essentials.shared.security.EssentialsAuthenticatedUser;
 import dk.trustworks.essentials.shared.security.EssentialsSecurityProvider;
-
-import java.time.Clock;
-import org.springframework.boot.ApplicationRunner;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
-import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Bean;
 
+import java.time.Clock;
+
 /**
- * Entry point for the headless trading demo application.
- * <p>
- * Only the two {@code _demo_harness} properties classes are registered here. {@code TradingAccountClosingBooksProperties}
- * belongs to the {@code brokerage} context and is registered by its own {@code BrokerageConfiguration}.
+ * Entry point for the headless trading demo application. Each bounded context registers its own configuration
+ * properties; only the harness's queue load generator is registered here.
  */
 @SpringBootApplication
-@EnableConfigurationProperties({TradingDemoSimulationProperties.class,
-        TradingDemoLoadGeneratorProperties.class,
-        QueueLoadGeneratorProperties.class})
+@EnableConfigurationProperties(QueueLoadGeneratorProperties.class)
 public class TradingDemoApplication {
     public static void main(String[] args) {
         SpringApplication.run(TradingDemoApplication.class, args);
@@ -83,64 +57,5 @@ public class TradingDemoApplication {
     @Bean
     public Clock tradingDemoClock() {
         return Clock.systemDefaultZone();
-    }
-
-    /**
-     * The bootstrap seeder. It writes through the {@link CommandBus} like everything else in the harness; the four
-     * repository wrappers are here only for its strongly-consistent idempotency probe — see
-     * {@code TradingSimulationRunner.seedDataState()}.
-     */
-    @Bean
-    public ApplicationRunner tradingSimulationRunner(TradingDemoSimulationProperties properties,
-                                                     CommandBus commandBus,
-                                                     TradingAccountClosingBooksPolicy closingBooksPolicy,
-                                                     AggregateLifecycleApi aggregateLifecycleApi,
-                                                     EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory,
-                                                     TradingAccounts tradingAccounts,
-                                                     Trades trades,
-                                                     Settlements settlements,
-                                                     Instruments instruments,
-                                                     TradeSettlementStatusQuery tradeSettlementStatusQuery) {
-        return new TradingSimulationRunner(properties,
-                                           commandBus,
-                                           closingBooksPolicy,
-                                           aggregateLifecycleApi,
-                                           unitOfWorkFactory,
-                                           tradingAccounts,
-                                           trades,
-                                           settlements,
-                                           instruments,
-                                           tradeSettlementStatusQuery);
-    }
-
-    @Bean
-    public TradingLoadGeneratorManager tradingLoadGeneratorManager(TradingDemoSimulationProperties simulationProperties,
-                                                                   TradingDemoLoadGeneratorProperties loadProperties,
-                                                                   CommandBus commandBus,
-                                                                   TradingAccountClosingBooksPolicy tradingAccountClosingBooksPolicy,
-                                                                   ClosingBooksGenerationRepository<TradingAccountId> tradingAccountGenerationRepository,
-                                                                   AccountStatementQuery accountStatementQuery,
-                                                                   MarketQuotes marketQuotes,
-                                                                   TradingAccounts tradingAccounts,
-                                                                   EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory,
-                                                                   ObjectProvider<MeterRegistry> meterRegistryProvider,
-                                                                   ObjectProvider<TradingDashboardStreamService> tradingDashboardStreamServiceProvider) {
-        var manager = new TradingLoadGeneratorManager(simulationProperties,
-                                                      loadProperties,
-                                                      commandBus,
-                                                      tradingAccountClosingBooksPolicy,
-                                                      tradingAccountGenerationRepository,
-                                                      accountStatementQuery,
-                                                      marketQuotes,
-                                                      tradingAccounts,
-                                                      unitOfWorkFactory,
-                                                      meterRegistryProvider.stream().findFirst());
-        manager.addStatusListener(ignored -> {
-            var streamService = tradingDashboardStreamServiceProvider.getIfAvailable();
-            if (streamService != null) {
-                streamService.broadcastSummaryThrottled();
-            }
-        });
-        return manager;
     }
 }

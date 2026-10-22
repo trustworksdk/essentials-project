@@ -1,0 +1,25 @@
+schemaVersion: "1.1"
+slice: market_data.exchange
+kind: external_system
+bc: market_data
+owner: market-data-team
+status: live
+summary: "Registers the instruments the exchange lists, and suspends the ones it disables."
+generator: essentials
+language: java
+
+reactsTo: [InstrumentListed, InstrumentUpdated]
+sends: [RegisterInstrument, SuspendInstrument]
+endpoints:
+  # The exchange's signed webhook (subscription demo-instruments); its event log is read as well
+  - { method: POST, path: "/webhooks/exchange/instruments", auth: service }
+invariants:
+  - id: INV-MDX-1
+    text: "An instrument listed again registers nothing"
+    enforcedBy: RegisterInstrumentHandler
+forbidden:
+  - cross-slice-internal:market_data
+tests:
+  unit: { present: false }
+  integration: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/market_data/external_systems/exchange/InstrumentListingsIT.java" }
+  contract: { present: false }

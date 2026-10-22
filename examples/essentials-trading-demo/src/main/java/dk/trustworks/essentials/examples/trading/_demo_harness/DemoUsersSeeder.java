@@ -28,9 +28,8 @@ import org.springframework.stereotype.Component;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * Registers the configured demo users at startup, so there is an operator to log in as on a fresh database. Runs before
- * the trading bootstrap and regardless of {@code trading-demo.simulation.enabled}: without it nothing behind the login
- * is reachable at all, tests included.
+ * Registers the configured demo users at startup, so there is an operator to log in as on a fresh database: without it
+ * nothing behind the login is reachable at all, tests included.
  * <p>
  * Idempotent without reading anything: a user whose email is already registered fails the registration's uniqueness
  * guard ({@link EmailAlreadyRegisteredException}), and that is taken as "already seeded".

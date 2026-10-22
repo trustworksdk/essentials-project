@@ -14,7 +14,8 @@ everything else: their command type, their one API file, their handler and their
 
 | Slice | Kind | Role |
 |---|---|---|
-| `use_cases/register_instrument` | command | Registers an instrument with its symbol and display name |
+| `use_cases/register_instrument` | command | Registers an instrument with its symbol and display name; idempotent |
+| `external_systems/exchange` | external system | The exchange's `InstrumentListed` → register, `InstrumentUpdated` disabled → suspend (D18, SR-28); simulators profile only - otherwise instruments come only through `POST /api/admin/instruments` |
 | `use_cases/rename_instrument` | command | Changes an instrument's display name |
 | `use_cases/suspend_instrument` | command | Suspends an instrument, with a reason. One-way |
 | `use_cases/risk_approve_instrument` | automation | Runs a newly registered instrument through an external risk assessment and records the answer. The demo's `UnitOfWorkMode.NONE` example |
@@ -83,9 +84,8 @@ never cleared, a suspension says a cleared one was stopped.
 The importable surface of this context is `events/` and `types/`, and nothing else. `aggregates/` is
 BC-private.
 
-`brokerage` imports one thing from here: `types/InstrumentId` — a trade names the instrument it was placed
-against. `orders` imports `types/InstrumentId` and the `types/MarketQuotes` seam; `accounts`' valuation the
-`types/ClosingPrices` seam. Nothing imports an aggregate.
+`orders`, `accounts` and `settlement` import `types/InstrumentId`; `orders` also the `types/MarketQuotes` seam,
+`accounts`' valuation the `types/ClosingPrices` seam. Nothing imports an aggregate.
 
 The stream name lives in `types/MarketDataAggregateTypes` rather than on the repository wrapper, because a
 foreign context that subscribes to these events has to name the stream — and `aggregates/` is not on its

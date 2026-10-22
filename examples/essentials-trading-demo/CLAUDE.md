@@ -1,7 +1,8 @@
 # essentials-trading-demo
 
-Spring Boot demo for the PostgreSQL EventStore: snapshots, closing books, generation archival, and an order flow
-against a stub exchange, or the exchange-simulator under the `simulators` profile. Not part of the release.
+Spring Boot demo for the PostgreSQL EventStore, growing into a retail brokerage (`docs/EXPANSION_PLAN.md`): an
+account ledger with snapshots, closing books and generation archival, orders, funding, settlement and reconciliation,
+against stubs or - under the `simulators` profile - the exchange-simulator and payment-gateway. Not part of the release.
 
 Packaged by **vertical slice**, following the same law as `postgresql-cqrs` — see that module's
 `CLAUDE.md` and the essentials plugin's `rules/slice-design.md`. `REFACTORING_PLAN.md` records the
@@ -16,22 +17,23 @@ mvn spring-boot:run -pl :essentials-trading-demo        # after `docker compose 
 
 | BC | Aggregates | Slices |
 |---|---|---|
-| `brokerage` | `TradingAccount`, `Trade`, `Settlement` | 19 command, 1 automation, 5 view |
-| `market_data` | `Instrument` (+ in-memory `market_quotes`) | 3 command, 1 automation, 2 view |
+| `market_data` | `Instrument` (+ in-memory `market_quotes`, stored `closing_prices`) | 3 command, 1 external system, 1 automation, 3 view |
 | `identity` | `User` (+ `user_credentials` table) | 3 command, 1 view |
-| `accounts` | `Account` (the new ledger, stream `Accounts`) | 14 command, 3 view |
+| `accounts` | `Account` (the ledger, stream `Accounts`) | 17 command, 1 automation, 7 view |
 | `orders` | `Order` (stream `Orders`), `UnknownExchangeOrder` (operator cases) | 7 command, 1 external system, 1 automation, 4 view |
 | `funding` | `BankAccountLink`, `Deposit`, `Withdrawal` | 4 command, 1 external system, 1 automation, 2 view |
 | `reconciliation` | — (bank statements stored as reference data) | 1 external system, 2 view |
 | `settlement` | `TradeSettlement` (stream `TradeSettlements`) | 1 command, 1 external system, 1 automation, 2 view |
 
-`brokerage` is **frozen** (expansion design Q-1): `accounts` replaces its account, and phase 4 deletes it once
-`orders` and `settlement` replace its last users. Do not extend it.
+The original showcase context, `brokerage` (`TradingAccount`, trades, settlements, its bootstrap, load generator,
+dashboard and admin page), was deleted in phase 4 (`docs/design/phase-4-settlement.md` Q-3): `accounts`, `orders` and
+`settlement` replaced it, and generation archival moved to `accounts`. The Essentials admin console shows closing
+books, snapshots, archives and lifecycle for every aggregate; a demo page on the new contexts comes with phase 7.
 
-Both on the **aggregate write style** (§R5) — `AggregateRoot` + `StatefulAggregateRepository`. Sanctioned
+All on the **aggregate write style** (§R5) — `AggregateRoot` + `StatefulAggregateRepository`. Sanctioned
 lane. Do **not** convert to `Decider`s.
 
-`_demo_harness/` is not a slice — load generator, bootstrap runner, dashboard, benchmark price store.
+`_demo_harness/` is not a slice — load generators (queue, ledger, order flow), demo users, EF-2 measurement processors.
 `_`-prefixed, excluded from slice enumeration. Has its own `CLAUDE.md`.
 
 ## Gotchas
@@ -39,42 +41,22 @@ lane. Do **not** convert to `Decider`s.
 - **Event-type FQCNs changed in the slice refactor.** Essentials persists the concrete class name; no
   upcasting is provided. An existing demo database is unreadable — `docker compose down -v` first.
 - **A policy annotation only takes effect if the aggregate is declared.** Each context has one
-  `EssentialsAggregateDeclarations` bean (`brokerageAggregates`, `marketDataAggregates`); the starter's registrar reads
+  `EssentialsAggregateDeclarations` bean (`accountsAggregates`, `ordersAggregates`, ...); the starter's registrar reads
   `@AggregateSnapshotPolicy` / `@AggregateClosingBooksPolicy` off the declared classes. Undeclared → the annotation is
   inert, the admin console shows no policy, and nothing errors. This replaced two hand-written `InitializingBean`s.
-- **`BrokerageConfiguration` sets an explicit `setStreamIdGenerator(...)` on purpose.** `ClosingBooksSetup`'s default
-  would concatenate `#` itself and produce the same string, but the convention lives on
-  `TradingAccountGenerationId` so the projection that parses it back cannot drift from the writer.
-- **`TradingAccount` has two ids.** `TradingAccountGenerationId` is the *stream* id and the aggregate id;
-  `TradingAccountId` is the logical business id spanning generations. Reached through
-  `ClosingBooksLogicalAggregateRepository`, not a plain `StatefulAggregateRepository`.
-- **Stream-id convention `<logicalId>#<generation>` lives on `TradingAccountGenerationId`** (`of(id, gen)` /
-  `generation()`). It used to be written in the coordinator lambda and re-parsed in the projection with
-  nothing tying the two together.
-- **`TradingAccounts.getAccountForMutation` is the ON_ACCESS closing-books trigger.** Every mutating account
-  command goes through it; `close_books` and `close_books_and_open_next_period` deliberately do not, or one
-  requested rollover would become two.
-- **`TradingAccountClosingBooksPolicy` holds one immutable `ClosingBooksSettings` behind a lock.** Use
-  `update(...)` or `withTemporarySettings(...)` — never reintroduce per-field setters. Four independent
-  mutators are what let the benchmark scenario silently revert an admin change.
-- **Aggregate state fields are private**, including on the snapshotted `TradingAccount` —
+- **`Account` has two ids.** `AccountGenerationId` (`<AccountId>#<generation>`, convention on that type only) is the
+  *stream* id; `AccountId` the logical id spanning generations. Reached through `Accounts.getAccountForMutation`, the
+  ON_ACCESS closing-books trigger; `roll_account_books` deliberately is not, or one roll would become two.
+- **Aggregate state fields are private**, including on the snapshotted `Account` —
   `EssentialsObjectMappers` sets `withFieldVisibility(ANY)` / `withGetterVisibility(NONE)`, so snapshots
   round-trip fine. The `protected` no-arg constructors are load-bearing: without them Jackson 3 would pick a
   public constructor as an implicit properties creator and half-populate a snapshot.
-- **Two projections are eventually consistent** (`account_statement`, `trade_settlement_status`). Tests must
-  await them.
-- **`brokerage.settle_trade` drives the trade lifecycle by default** (`trading-demo.simulation.trade-lifecycle=automated`):
-  the harness only places and executes trades, and the automation issues every settlement step from the previous
-  step's event, so a trade's settlement is one causation tree in the admin console's *Event causation* page. `scripted`
-  turns it off and makes the harness send every step itself, as the benchmark scenarios assume. Tests that send the
-  settlement commands themselves must pin `scripted`, or the automation races them. See that slice's `CLAUDE.md`.
-  The automation test runs twice — `SettleTradeAutomationTest` on `PostgresqlDurableQueues`, `…OnShardOwnedQueuesTest` on the
-  shard-owned engine the `compose` profile uses; only the latter caught the adapter delivering every event reference as order 0.
+- **Every projection is eventually consistent.** Tests must await them.
 - **Every `@SpringBootTest` here carries `@DirtiesContext`.** Each class owns a static Postgres container, so a cached
   context outlives its database; on the next context switch Spring pauses it, and every event-processor subscription's
   lock release waits out a Hikari connection timeout. Three such classes turned a 30s suite into 25+ minutes.
 - **`market_data.risk_approve_instrument` is the demo's worked example of a `UnitOfWorkMode.NONE` handler**
-  (`brokerage.settle_trade`'s clearing step is a second one). It blocks on a stubbed external risk service with no `UnitOfWork` — hence no pooled
+  (`orders`' `ExchangeOrderRouter` and `funding`'s `PaymentRouter` follow it). It blocks on a stubbed external risk service with no `UnitOfWork` — hence no pooled
   connection — and wraps its transactional tail in `usingUnitOfWork(...)`. Three constraints travel with the
   mode: the handler must be idempotent (the aggregate's risk methods no-op once a decision exists), the
   blocking call must finish well inside `essentials.durable-queues.message-handling-timeout`
@@ -104,15 +86,11 @@ open for health, login and `/webhooks/**` (signed instead). Seeded users are in 
 
 ## Running more than one instance
 
-`./run-instance.sh 1` and `./run-instance.sh 2` — ports 8080/8081, instance ids `demo-1`/`demo-2`,
-trading load generator on the first only. This is the configuration the shard-owned engine exists
+`./run-instance.sh 1` and `./run-instance.sh 2` — ports 8080/8081, instance ids `demo-1`/`demo-2`. This is the configuration the shard-owned engine exists
 for; one instance exercises none of its ownership, rebalancing or fencing.
 
-- **Two generators, two prefixes, and the script gates only one.** `--trading-demo.load.enabled`
-  is `TradingLoadGeneratorManager`; the queue load generator is `trading-demo.queue-load.enabled`
-  and runs on **every** instance by design — it is also the queue's consumer, so disabling it on
-  instance 2 would take that instance out of the exercise entirely. It is safe to run everywhere
-  because each instance produces under its own ordered key prefix; see `_demo_harness/CLAUDE.md`.
+- **The queue load generator runs on every instance** (`trading-demo.queue-load.enabled`) by design — it is also the
+  queue's consumer. Safe because each instance produces under its own ordered key prefix; see `_demo_harness/CLAUDE.md`.
 
 - **A distinct `instance-id` is not optional.** The engine defaults it to the hostname — right on a
   container platform, wrong for two processes on one machine. They would register as *one* instance,
@@ -203,10 +181,3 @@ Grafana from `compose.yml`'s `observability` compose profile; config and dashboa
   `CdcEffectivenessMonitor`'s opt-in recreate-on-stuck. Keep all of these in both compose copies.
 - **Dashboards query OTLP names** (`..._milliseconds_bucket`, `..._total`), not the Prometheus registry's
   `_seconds`. Queue gauges are cluster-wide and reported by every instance: `max by (queue)`, never `sum`.
-
-## Admin UI
-
-`src/main/resources/static/admin/index.html`, vanilla JS, no build step. Its select values are enum
-constants (`END_OF_MONTH`), converted from the dashboard's hyphenated display form on load. Closing-books
-settings are one atomic `POST /api/admin/trading-accounts/closing-books` with a JSON body; null field means
-unchanged.

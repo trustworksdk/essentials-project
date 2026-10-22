@@ -32,7 +32,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * The repository for {@link Account}s, reached by logical {@link AccountId} across generations. Every mutating slice
  * goes through {@link #getAccountForMutation}, which is the {@code ON_ACCESS} closing-books trigger: the first command
  * of a new business day rolls the account before it is applied. The close-books slices do not, or one requested
- * rollover would become two — the same rule as {@code brokerage}'s {@code TradingAccounts}.
+ * rollover would become two.
  */
 @Component
 public class Accounts {

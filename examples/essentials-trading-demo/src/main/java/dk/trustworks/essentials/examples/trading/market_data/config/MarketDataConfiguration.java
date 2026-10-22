@@ -29,8 +29,7 @@ import org.springframework.context.annotation.Configuration;
  * Spring wiring for the {@code market_data} bounded context.
  *
  * <p>{@link RiskApprovalProperties} and {@link MarketQuotesProperties} are registered here rather than on the
- * application class, because they belong to slices of this context — the same split as {@code brokerage}'s
- * closing-books properties.
+ * application class, because they belong to slices of this context.
  */
 @Configuration
 @EnableConfigurationProperties({RiskApprovalProperties.class, MarketQuotesProperties.class})

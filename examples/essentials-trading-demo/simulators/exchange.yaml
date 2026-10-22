@@ -23,6 +23,11 @@ webhooks:
       url: http://host.docker.internal:8080/webhooks/exchange/closing-prices
       event_types: [ClosingPriceIssued]
       secret_file: /run/secrets/webhook_secret
+    # market_data/external_systems/exchange (InstrumentListings): the instruments the exchange lists (D18, SR-28)
+    - name: demo-instruments
+      url: http://host.docker.internal:8080/webhooks/exchange/instruments
+      event_types: [InstrumentListed, InstrumentUpdated]
+      secret_file: /run/secrets/webhook_secret
     # integration/BusinessCalendar: the business days as the exchange closes them (D10, SR-26)
     - name: demo-business-calendar
       url: http://host.docker.internal:8080/webhooks/exchange/business-days

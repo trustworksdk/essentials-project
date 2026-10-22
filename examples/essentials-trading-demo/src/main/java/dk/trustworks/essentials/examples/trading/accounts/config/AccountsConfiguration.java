@@ -34,9 +34,8 @@ import org.springframework.context.annotation.*;
 import java.util.Optional;
 
 /**
- * Spring wiring for the {@code accounts} bounded context: closing books and snapshots for {@link Account}, the same
- * shape as {@code BrokerageConfiguration} for the frozen {@code TradingAccount}, under its own {@code Accounts}
- * aggregate type.
+ * Spring wiring for the {@code accounts} bounded context: closing books and snapshots for {@link Account}, under its
+ * own {@code Accounts} aggregate type.
  */
 @Configuration
 @EnableConfigurationProperties(AccountsProperties.class)

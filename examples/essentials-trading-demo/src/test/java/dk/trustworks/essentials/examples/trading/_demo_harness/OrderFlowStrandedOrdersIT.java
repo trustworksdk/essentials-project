@@ -36,8 +36,6 @@ import static org.awaitility.Awaitility.await;
  */
 @Testcontainers
 @SpringBootTest(properties = {
-        "trading-demo.simulation.enabled=false",
-        "trading-demo.load.enabled=false",
         "trading-demo.queue-load.enabled=false",
         "trading-demo.market-data.synthetic.tick-interval=200ms",
         "trading-demo.orders.stub-exchange.resting-instruments=ACME"

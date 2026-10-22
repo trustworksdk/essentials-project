@@ -19,8 +19,7 @@ package dk.trustworks.essentials.examples.trading.accounts.config;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 /**
- * {@code trading-demo.accounts.*} for the new ledger. (The frozen {@code brokerage} account's settings are under
- * {@code trading-demo.accounts.closing-books}, a separate class; the two do not overlap.)
+ * {@code trading-demo.accounts.*} for the ledger.
  */
 @ConfigurationProperties(prefix = "trading-demo.accounts")
 public class AccountsProperties {

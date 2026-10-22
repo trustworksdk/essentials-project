@@ -61,5 +61,5 @@ JAVA_HOME="${JAVA_HOME:-/usr/lib/jvm/temurin-25-jdk-arm64}" \
 exec ./mvnw -o -pl examples/essentials-trading-demo -DskipDependencyCheck=true \
     -Dspring-boot.run.profiles="${PROFILES}" \
     -Dspring-boot.run.jvmArguments="-Dserver.port=${PORT}" \
-    -Dspring-boot.run.arguments="--essentials.shard-owned-queue.instance-id=demo-${N} --trading-demo.load.enabled=$([ "$N" = 1 ] && echo true || echo false)${COMPOSE_PROFILES:+ --spring.docker.compose.profiles.active=${COMPOSE_PROFILES}}" \
+    -Dspring-boot.run.arguments="--essentials.shard-owned-queue.instance-id=demo-${N}${COMPOSE_PROFILES:+ --spring.docker.compose.profiles.active=${COMPOSE_PROFILES}}" \
     spring-boot:run
