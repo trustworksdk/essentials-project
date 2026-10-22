@@ -1,0 +1,32 @@
+schemaVersion: "1.1"
+slice: funding.request_withdrawal
+kind: command
+bc: funding
+owner: funding-team
+status: live
+summary: "The customer asks to withdraw to the linked bank account."
+generator: essentials
+language: java
+
+handles: [RequestWithdrawal]
+publishes: [WithdrawalRequested]
+sends: [HoldFunds]
+writes: [Withdrawal]
+reads:
+  - { name: BankAccountLink }
+  - { name: AccountOwner, via: FundingAccountOwnersQuery }
+endpoints:
+  - { method: POST, path: "/api/accounts/{accountId}/withdrawals", auth: customer }
+invariants:
+  - id: INV-RW-1
+    text: "A withdrawal needs a linked bank account and takes the one linked when it is requested"
+    enforcedBy: RequestWithdrawalHandler
+  - id: INV-RW-2
+    text: "No withdrawal exists without its hold: both are one unit of work, and the ledger refuses more than is withdrawable"
+    enforcedBy: RequestWithdrawalHandler
+forbidden:
+  - cross-slice-internal:funding
+tests:
+  unit: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/funding/aggregates/FundingAggregatesTest.java" }
+  integration: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/funding/FundingIT.java" }
+  contract: { present: false }

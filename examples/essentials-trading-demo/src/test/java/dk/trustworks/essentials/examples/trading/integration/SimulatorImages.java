@@ -63,6 +63,33 @@ public final class SimulatorImages {
     }
 
     /**
+     * The payment gateway with the demo's own configuration ({@code simulators/gateway.yaml}), test control on and
+     * in-memory persistence, on a virtual clock of its own, frozen: the demo's configuration follows the exchange's
+     * clock, which a test of the gateway alone does not have. A test moves it on to make due payments happen - a forced
+     * outcome (SR-22) still waits for the payment's delay.
+     */
+    @SuppressWarnings("resource")
+    public static GenericContainer<?> paymentGatewayAsTheDemoRunsIt() {
+        return new GenericContainer<>(PAYMENT_GATEWAY)
+                .withExposedPorts(8081)
+                .withCopyFileToContainer(MountableFile.forHostPath("simulators/gateway.yaml"), "/etc/gateway/gateway.yaml")
+                .withCopyFileToContainer(MountableFile.forHostPath("simulators/secrets/webhook-secret.txt"), "/run/secrets/webhook_secret")
+                .withEnv("GATEWAY_CONFIG", "/etc/gateway/gateway.yaml")
+                .withEnv("GATEWAY__CLOCK__MODE", "virtual")
+                .withEnv("GATEWAY__CLOCK__RUNNING", "false")
+                .withEnv("GATEWAY__TEST_CONTROL__ENABLED", "true")
+                .withEnv("GATEWAY__DATABASE__MODE", "memory")
+                .waitingFor(Wait.forHttp("/health").forStatusCode(200).withStartupTimeout(Duration.ofSeconds(60)));
+    }
+
+    /**
+     * For JUnit's {@code @EnabledIf}: whether the payment gateway image exists locally.
+     */
+    public static boolean paymentGatewayAvailable() {
+        return imageExists(PAYMENT_GATEWAY);
+    }
+
+    /**
      * For JUnit's {@code @EnabledIf}: whether the exchange image exists locally.
      */
     public static boolean exchangeAvailable() {
