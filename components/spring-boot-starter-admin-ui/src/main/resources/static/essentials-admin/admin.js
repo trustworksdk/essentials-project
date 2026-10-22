@@ -1539,6 +1539,12 @@ const keptReleaseNotice = (release) => `<div class="notice">
             lease row of instance <span class="mono">${esc(r.instanceId)}</span>${r.keysInHandler.length
                 ? `; key(s) still in a handler: <span class="mono">${r.keysInHandler.map(esc).join(', ')}</span>,
                    the longest there for ${millis(r.longestInHandlerMillis)}`
+                : ''}${r.charged
+                ? `; ${num(r.charged)} message(s) in a handler charged an attempt`
+                : ''}${(r.deadLetteredKeys ?? []).length
+                ? `; ${num(r.deadLetteredKeys.length)} key(s) dead-lettered at their attempt limit:
+                   <span class="mono">${r.deadLetteredKeys.map(esc).join(', ')}</span> - each is blocked behind its dead letters
+                   until every dead letter of the key is resurrected (Resurrect key, under Dead-letter messages below) or deleted`
                 : ''}`).join('')
         : `that process kept no such unit under that instance id with its lease row still held, so nothing was released.
            A kept unit lives in the memory of the process whose stop kept it: use the console of the instance named in

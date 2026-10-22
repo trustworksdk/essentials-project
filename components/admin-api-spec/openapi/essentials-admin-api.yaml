@@ -3937,6 +3937,7 @@ components:
           nullable: true
     ApiShardOwnedKeptUnitRelease:
       required:
+      - charged
       - longestInHandlerMillis
       - unit
       type: object
@@ -3957,6 +3958,13 @@ components:
         longestInHandlerMillis:
           type: integer
           format: int64
+        charged:
+          type: integer
+          format: int32
+        deadLetteredKeys:
+          type: array
+          items:
+            type: string
     ApiShardOwnedKeptUnitReleases:
       type: object
       properties:

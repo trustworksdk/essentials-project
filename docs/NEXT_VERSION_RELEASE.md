@@ -893,10 +893,12 @@ shard while one runs costs that message an attempt, so raise the bound as above.
   acknowledged), `ALREADY_TAKEN` or `BUSY`
   (ask again) - `BUSY` too while the stop that kept the unit is still flushing it, except once the unit has been kept
   past the bound that gives such a unit up (§1.1.24): the call reviews the kept units first, so it then releases the
-  unit rather than answering `BUSY`. A `default` method on both `MessageQueue` and `ShardOwnedQueuesApi` that releases nothing, so an
+  unit rather than answering `BUSY`. Each entry also says how many messages in a handler the release charged an
+  attempt (`charged`) and which keys that charge dead-lettered (`deadLetteredKeys`; zero and empty on `BUSY`): such a
+  key is blocked behind its dead letter until its dead letters are resurrected or deleted, so these are the keys that need a follow-up. A `default` method on both `MessageQueue` and `ShardOwnedQueuesApi` that releases nothing, so an
   implementation of your own of either still compiles. The admin console's Shard-owned queues page offers it as
   **Release kept unit**, which asks for the instance id and the unit, acts on the instance that takes the request and
-  shows its answer, naming the instance ids that answered. (`e23164f9e`, `7eaa0c7ef`, `97a4795ed`, `3da91face`, `597a510f4`, `6fd885d93`, `66b907912`)
+  shows its answer, naming the instance ids that answered and the keys the release dead-lettered. (`e23164f9e`, `7eaa0c7ef`, `97a4795ed`, `3da91face`, `597a510f4`, `6fd885d93`, `66b907912`, `<!-- fix:U-003 -->`)
 - **Shard-owned engine: `spi.RedeliveryRequested(delay)`.** A handler throws it to ask for redelivery after `delay`
   without it counting as an attempt, being reported as a failure or leading to a dead letter (§1.1.18).
   (`a4f541e4`, `f9fdd99b`)

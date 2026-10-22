@@ -319,7 +319,10 @@ public interface MessageQueue extends Lifecycle, AutoCloseable {
      * dead-lettered: a message whose handler hangs on every delivery, released this way each time, reaches the
      * dead-letter table. <b>Whoever takes it delivers the messages still in a handler again, bar those dead-lettered,
      * possibly while those handlers still run them</b> - the reordering and duplicate delivery the wait exists to prevent. A unit whose handler
-     * has returned meanwhile is simply handed back, as it would have been, and nothing is charged.
+     * has returned meanwhile is simply handed back, as it would have been, and nothing is charged. The answer names what
+     * was charged and which keys were dead-lettered ({@link KeptUnitRelease#charged()},
+     * {@link KeptUnitRelease#deadLetteredKeys()}): such a key is blocked behind its dead letter until it is resurrected
+     * ({@link #resurrectKey}) or deleted.
      * <p>
      * Only a unit a stop of a subscription running under {@code instanceId} kept, and whose lease row still names that
      * instance id under that fence, is touched; every other unit, this process's included - one a subscription under

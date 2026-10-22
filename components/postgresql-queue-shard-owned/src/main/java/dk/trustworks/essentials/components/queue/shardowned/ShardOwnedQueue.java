@@ -3284,8 +3284,11 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * charges nothing, so without it a message whose handler hung on every delivery, released on request each time, never
      * reached the dead-letter table. That next owner delivers the key's message again, unless it was dead-lettered, as it
      * was never acknowledged, possibly while the handler still runs it; the handler's acknowledgement, once it returns, is
-     * not flushed, as the owner no longer holds the row. One WARN says so, naming the keys. Released with none in a handler,
-     * it is an ordinary hand-back ({@link KeptUnit.Phase#HANDED_BACK}), and nothing is charged. A {@code BUSY} entry, not
+     * not flushed, as the owner no longer holds the row. One WARN says so, naming the keys, and the answer names the charge
+     * ({@link KeptUnitRelease#charged()}, {@link KeptUnitRelease#deadLetteredKeys()}). Released with none in a handler,
+     * it is an ordinary hand-back ({@link KeptUnit.Phase#HANDED_BACK}), and nothing is charged; the answer still names a
+     * charge an earlier attempt to release it completed (a request whose release was refused once its charge had
+     * committed, its handler having returned since). A {@code BUSY} entry, not
      * claimed, names the keys as they stand when asked. Not counted as a release ({@link #countRelease}): the stop that
      * kept the unit counted it.
      * <p>
@@ -3319,7 +3322,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             if (claimedFrom == null) {
                 // Not claimed, so read as the keys stand now: approximate, as a handler may return before the stop's flush
                 // or the hand-back working on the unit does.
-                busy = keptUnitRelease(unit, KeptUnitRelease.Outcome.BUSY, kept.keysInHandler());
+                busy = keptUnitRelease(unit, KeptUnitRelease.Outcome.BUSY, kept.keysInHandler(), OrderedShardOwner.ReleaseCharge.NONE);
                 continue;
             }
             var released  = false;
@@ -3348,6 +3351,10 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                     // nothing for a released unit. Should it throw, nothing is released, and a later request does not charge again.
                     if (inHandler.isPresent()) {
                         charge = chargeKeysInHandlerBeforeRelease(owner, "on request");
+                    } else if (owner instanceof OrderedShardOwner ordered) {
+                        // No key in a handler now, but an earlier request may have charged one before its release was
+                        // refused, and dead-lettered it: the answer names that charge, which the refused request, having thrown, never answered with.
+                        charge = ordered.releaseCharge();
                     }
                     released = releaseLeaseRows(List.of(owner)) > 0;
                 }
@@ -3357,7 +3364,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             if (released) {
                 return Optional.of(reportReleasedOnRequest(unit, inHandler, charge));
             }
-            taken = keptUnitRelease(unit, KeptUnitRelease.Outcome.ALREADY_TAKEN, inHandler);
+            taken = keptUnitRelease(unit, KeptUnitRelease.Outcome.ALREADY_TAKEN, inHandler, charge);
         }
         // Nothing released. Busy before taken: an entry that could not be claimed may still hold the row, while one found
         // taken holds nothing any more.
@@ -3379,21 +3386,26 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
 
     /**
      * The answer of {@link #releaseKeptOrderedUnit} for one kept entry of {@code unit}, naming the keys {@code inHandler}
-     * read.
+     * read and what {@code charge} charged and dead-lettered before the release ({@link OrderedShardOwner.ReleaseCharge#NONE}
+     * when no charge was made).
      */
-    private KeptUnitRelease keptUnitRelease(int unit, KeptUnitRelease.Outcome outcome, Optional<OrderedShardOwner.KeysInHandler> inHandler) {
+    private KeptUnitRelease keptUnitRelease(int unit, KeptUnitRelease.Outcome outcome, Optional<OrderedShardOwner.KeysInHandler> inHandler,
+                                            OrderedShardOwner.ReleaseCharge charge) {
         return new KeptUnitRelease(unit, instanceId, outcome,
                                    inHandler.map(OrderedShardOwner.KeysInHandler::keys).orElse(List.of()),
-                                   inHandler.map(OrderedShardOwner.KeysInHandler::longest).orElse(Duration.ZERO));
+                                   inHandler.map(OrderedShardOwner.KeysInHandler::longest).orElse(Duration.ZERO),
+                                   charge.charged(),
+                                   charge.deadLetteredKeys());
     }
 
     /**
      * Log what {@link #releaseKeptOrderedUnit} did with {@code unit}, released with the keys {@code inHandler} read under
      * its claim still in a handler - a WARN when there are any, naming the attempts {@code charge} made on their messages,
-     * as whoever takes the unit next delivers those not dead-lettered again - and give the answer.
+     * as whoever takes the unit next delivers those not dead-lettered again - and give the answer, which names that charge
+     * too: the keys it dead-lettered are blocked behind their dead letters until an operator resurrects or deletes them.
      */
     private KeptUnitRelease reportReleasedOnRequest(int unit, Optional<OrderedShardOwner.KeysInHandler> inHandler, OrderedShardOwner.ReleaseCharge charge) {
-        var answer = keptUnitRelease(unit, KeptUnitRelease.Outcome.RELEASED, inHandler);
+        var answer = keptUnitRelease(unit, KeptUnitRelease.Outcome.RELEASED, inHandler, charge);
         inHandler.ifPresentOrElse(
                 held -> log.warn("Instance {} released ordered unit {} on queue {} on request, which a stop kept while {} key(s) {} were in "
                                          + "a handler, the longest there {} ms: its acknowledgements are flushed and its lease released "

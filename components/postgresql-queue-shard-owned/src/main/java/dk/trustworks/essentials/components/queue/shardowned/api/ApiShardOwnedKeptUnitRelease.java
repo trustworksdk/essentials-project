@@ -45,30 +45,45 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  *                               {@code RELEASED}, whoever takes the unit next delivers their messages again, possibly
  *                               while these handlers still run them
  * @param longestInHandlerMillis how long the key handed to its handler first had been there; zero when none was
+ * @param charged                how many messages in a handler were charged an attempt before the release, as
+ *                               {@link KeptUnitRelease#charged()} counts them; zero on {@code BUSY}, and when no key was in a
+ *                               handler and no earlier attempt to release the unit completed a charge
+ * @param deadLetteredKeys       the keys whose message that charge brought to {@code maxAttempts} and dead-lettered, as
+ *                               {@link KeptUnitRelease#deadLetteredKeys()} names them; empty when none was. Each is blocked
+ *                               behind its dead letter until its dead letters are resurrected or deleted
  */
 public record ApiShardOwnedKeptUnitRelease(QueueName queueName,
                                            int unit,
                                            String instanceId,
                                            String outcome,
                                            List<String> keysInHandler,
-                                           long longestInHandlerMillis) {
+                                           long longestInHandlerMillis,
+                                           int charged,
+                                           List<String> deadLetteredKeys) {
 
     /**
-     * Keeps an unmodifiable copy of {@code keysInHandler}, so neither the list given here nor the one
-     * {@link #keysInHandler()} returns can change this record. A {@code null} key in it is refused.
+     * Keeps unmodifiable copies of {@code keysInHandler} and {@code deadLetteredKeys}, so neither the lists given here
+     * nor the ones {@link #keysInHandler()} and {@link #deadLetteredKeys()} return can change this record. A {@code null}
+     * key in either is refused.
      * <p>
      * A {@code null} list becomes an empty one, unlike {@link KeptUnitRelease}, which refuses it: this is the admin
      * API's shape, which a client may build from a JSON answer that lacks the field (as {@code ApiTableStatistics}
-     * does for its indexes), and an absent list is read as no key in a handler. {@link #from} never passes
-     * {@code null}, since {@link KeptUnitRelease} refuses it; build this record through {@link #from}, so an empty
-     * {@link #keysInHandler()} means the engine found no key in a handler.
+     * does for its indexes), and an absent list is read as no key in a handler, or none dead-lettered. {@link #from}
+     * never passes {@code null}, since {@link KeptUnitRelease} refuses it; build this record through {@link #from}, so
+     * an empty {@link #keysInHandler()} means the engine found no key in a handler, and an empty
+     * {@link #deadLetteredKeys()} that the release dead-lettered none.
      */
     public ApiShardOwnedKeptUnitRelease {
-        keysInHandler = keysInHandler == null
-                        ? List.of()
-                        : keysInHandler.stream()
-                                       .map(key -> requireNonNull(key, "keysInHandler holds a null key"))
-                                       .toList();
+        keysInHandler = copyRefusingNullKeys(keysInHandler, "keysInHandler holds a null key");
+        deadLetteredKeys = copyRefusingNullKeys(deadLetteredKeys, "deadLetteredKeys holds a null key");
+    }
+
+    private static List<String> copyRefusingNullKeys(List<String> keys, String nullKeyMessage) {
+        return keys == null
+               ? List.of()
+               : keys.stream()
+                     .map(key -> requireNonNull(key, nullKeyMessage))
+                     .toList();
     }
 
     public static ApiShardOwnedKeptUnitRelease from(QueueName queueName, KeptUnitRelease release) {
@@ -79,6 +94,8 @@ public record ApiShardOwnedKeptUnitRelease(QueueName queueName,
                                                 release.instanceId(),
                                                 release.outcome().name(),
                                                 release.keysInHandler(),
-                                                release.longestInHandler().toMillis());
+                                                release.longestInHandler().toMillis(),
+                                                release.charged(),
+                                                release.deadLetteredKeys());
     }
 }

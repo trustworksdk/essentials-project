@@ -1298,6 +1298,8 @@ class ShardOwnedUnsubscribeIT {
                     assertThat(released.outcome()).isEqualTo(KeptUnitRelease.Outcome.RELEASED);
                     assertThat(released.keysInHandler()).containsExactly("ACC-1");
                     assertThat(released.longestInHandler()).isPositive();
+                    assertThat(released.charged()).as("the message in the held handler charged an attempt").isEqualTo(1);
+                    assertThat(released.deadLetteredKeys()).as("below maxAttempts: nothing dead-lettered").isEmpty();
                 });
                 assertThat(laneWarnings()).as("one WARN names the unit, its key and what the release costs")
                                           .filteredOn(warning -> warning.contains("released ordered unit " + kept.shard() + " on queue " + QUEUE_ID + " on request"))
@@ -1377,9 +1379,16 @@ class ShardOwnedUnsubscribeIT {
                     var releases = Awaitility.await().atMost(Duration.ofSeconds(5))
                                              .until(() -> queue.releaseKeptOrderedUnit(INSTANCE_ID, unitOfTheKey).releases(),
                                                     answer -> answer.stream().noneMatch(entry -> entry.outcome() == KeptUnitRelease.Outcome.BUSY));
+                    var lastRelease = delivery == 2;
                     assertThat(releases).as("release " + delivery).singleElement().satisfies(released -> {
                         assertThat(released.outcome()).isEqualTo(KeptUnitRelease.Outcome.RELEASED);
                         assertThat(released.keysInHandler()).containsExactly("ACC-1");
+                        assertThat(released.charged()).as("the message in the hung handler charged an attempt").isEqualTo(1);
+                        if (lastRelease) {
+                            assertThat(released.deadLetteredKeys()).as("the release that brought it to maxAttempts names it").containsExactly("ACC-1");
+                        } else {
+                            assertThat(released.deadLetteredKeys()).as("below maxAttempts: nothing dead-lettered").isEmpty();
+                        }
                     });
                     assertThat(metrics.takeoverAttemptBumps.sum()).as("each release charges the delivery in the hung handler once")
                                                                   .isEqualTo(delivery);
@@ -1455,6 +1464,8 @@ class ShardOwnedUnsubscribeIT {
                 assertThat(releases).as("released, the observer's failure notwithstanding").singleElement().satisfies(released -> {
                     assertThat(released.outcome()).isEqualTo(KeptUnitRelease.Outcome.RELEASED);
                     assertThat(released.keysInHandler()).containsExactly("ACC-1");
+                    assertThat(released.charged()).as("the answer names the charge").isEqualTo(1);
+                    assertThat(released.deadLetteredKeys()).as("and the key it dead-lettered, now blocked behind its dead letter").containsExactly("ACC-1");
                 });
                 assertThat(told).as("premise: the observer was told of the dead letter").hasValue(1);
                 assertThat(queue.deadLetters(0, 10)).as("the charge dead-lettered the message").singleElement()
@@ -1510,6 +1521,8 @@ class ShardOwnedUnsubscribeIT {
                     assertThat(answer.instanceId()).isEqualTo(INSTANCE_ID);
                     assertThat(answer.outcome()).isEqualTo(KeptUnitRelease.Outcome.ALREADY_TAKEN);
                     assertThat(answer.keysInHandler()).containsExactly("ACC-1");
+                    assertThat(answer.charged()).as("the fenced charge refused: the row was taken before it").isZero();
+                    assertThat(answer.deadLetteredKeys()).isEmpty();
                 });
                 assertThat(ownerOf(kept.shard())).as("the new owner keeps the row").isEqualTo("other");
                 assertThat(fenceOf(kept.shard())).as("under its fence").isEqualTo(kept.fence() + 1);
@@ -1579,6 +1592,8 @@ class ShardOwnedUnsubscribeIT {
                     assertThat(answer.outcome()).isEqualTo(KeptUnitRelease.Outcome.RELEASED);
                     assertThat(answer.keysInHandler()).isEmpty();
                     assertThat(answer.longestInHandler()).isZero();
+                    assertThat(answer.charged()).as("a hand-back charges nothing").isZero();
+                    assertThat(answer.deadLetteredKeys()).isEmpty();
                 });
                 assertThat(orderedMessagesLeft()).as("the release's flush acknowledged the handled message").isZero();
                 assertThat(ownerOf(kept.shard())).as("the row is released").isNull();
@@ -1818,12 +1833,92 @@ class ShardOwnedUnsubscribeIT {
                                                                           assertThat(released.outcome()).isEqualTo(KeptUnitRelease.Outcome.RELEASED);
                                                                           assertThat(released.instanceId()).isEqualTo(INSTANCE_ID);
                                                                           assertThat(released.keysInHandler()).containsExactly("ACC-1");
+                                                                          assertThat(released.charged()).as("the retry reports the charge the refused request made").isEqualTo(1);
+                                                                          assertThat(released.deadLetteredKeys()).as("below maxAttempts: nothing dead-lettered").isEmpty();
                                                                       });
                 assertThat(ownerOf(kept.shard())).as("the row is released").isNull();
                 // The retried release charges nothing again: the charge is made once per owner. Charged on every request, the
                 // message would reach the dead-letter table after fewer hangs than maxAttempts.
                 assertThat(lanes.getFirst().metrics().takeoverAttemptBumps.sum()).as("the retried release did not charge again").isEqualTo(1);
                 assertThat(storedAttemptsOfOrderedKey("ACC-1")).as("the message, never acknowledged, is stored with the one charge").isEqualTo(1);
+            } finally {
+                release.countDown();
+            }
+        }
+    }
+
+    /**
+     * A release on request the database refuses after its charge dead-lettered the message in the handler, asked again once
+     * that handler has returned: the request asked again finds no key in a handler, yet its answer still names the charge
+     * the refused request made and the key it dead-lettered. The refused request threw, so it gave no answer, so only the
+     * request asked again names, in its answer, the key now blocked behind its dead letter. It used to read the
+     * charge only with a key still in a handler, and answered {@code charged} 0 with no {@code deadLetteredKeys}.
+     */
+    @Test
+    void a_kept_unit_asked_again_after_a_refused_release_once_its_handler_returned_reports_the_charge_the_refused_request_made() throws Exception {
+        // Far beyond the test, so the stopped instance's membership row cannot age out and let another id take the unit.
+        var leaseTtl        = Duration.ofSeconds(20);
+        var entered         = new CountDownLatch(1);
+        var release         = new CountDownLatch(1);
+        var handlerReturned = new CountDownLatch(1);
+        var queueIds        = new short[]{QUEUE_ID};
+        try (var queue = newQueue(PostgresqlMessageQueue.LifecycleHook.NONE, settingsWith(Duration.ofMillis(300), leaseTtl))) {
+            try {
+                // maxAttempts 1: the refused request's charge brings the message in the handler to its limit.
+                queue.consume((messageId, key, payload, payloadType) -> {
+                    if (key != null) {
+                        entered.countDown();
+                        try {
+                            awaitQuietly(release, Duration.ofSeconds(60));
+                        } finally {
+                            handlerReturned.countDown();
+                        }
+                    }
+                }, new ConsumerOptions(8, Integer.MAX_VALUE, 1, RetryBackoff.fixed(Duration.ofMillis(100))));
+                var lanes = queue.registeredConsumers();
+                queue.enqueue(Message.ordered("in-handler".getBytes(StandardCharsets.UTF_8), 1, "ACC-1", 0));
+                assertThat(entered.await(20, TimeUnit.SECONDS)).as("premise: the key is in its handler").isTrue();
+
+                // Stopped, and not started again: nothing but the requests below and the kept unit's own hand-back release it.
+                queue.stop();
+                var kept = keptOrderedFence(INSTANCE_ID);
+                Awaitility.await().atMost(Duration.ofSeconds(5))
+                          .untilAsserted(() -> assertThat(lanes).as("premise: queue.stop()'s budget thread has flushed the kept unit")
+                                                                .noneMatch(ShardOwnedQueue::handBackStillRunning));
+                LeaseReleaseRefusals.failLeaseReleasesOf(dataSource, queueIds, "ordered", kept.shard(), true);
+                try {
+                    assertThatThrownBy(() -> queue.releaseKeptOrderedUnit(INSTANCE_ID, kept.shard()).releases())
+                            .as("the request fails with the lane's failure")
+                            .isInstanceOf(SQLException.class)
+                            .hasMessageContaining("simulated failure releasing");
+                    assertThat(queue.deadLetters(0, 10)).as("premise: the refused request's charge dead-lettered the message in the handler")
+                                                        .singleElement()
+                                                        .satisfies(deadLetter -> assertThat(deadLetter.lastError()).isEqualTo(ShardOwnedStorage.EXHAUSTED_IN_A_RELEASED_HANDLER));
+
+                    // The handler returns; the kept unit's own hand-back runs and its release is refused too, so the unit
+                    // is still kept, with no key in a handler, for the request below.
+                    release.countDown();
+                    assertThat(handlerReturned.await(10, TimeUnit.SECONDS)).as("premise: the handler returned").isTrue();
+                    Awaitility.await().atMost(Duration.ofSeconds(10))
+                              .untilAsserted(() -> assertThat(LeaseReleaseRefusals.releasesRefused(dataSource, QUEUE_ID, kept.shard()))
+                                      .as("premise: the kept unit's own hand-back was attempted and refused").isEqualTo(2));
+                } finally {
+                    LeaseReleaseRefusals.failLeaseReleasesOf(dataSource, queueIds, "ordered", kept.shard(), false);
+                }
+                assertThat(ownerOf(kept.shard())).as("premise: the row still names the instance").isEqualTo(INSTANCE_ID);
+
+                // Asked until the refused hand-back has let go of its claim: until then the release answers BUSY.
+                var releases = Awaitility.await().atMost(Duration.ofSeconds(5))
+                                         .until(() -> queue.releaseKeptOrderedUnit(INSTANCE_ID, kept.shard()).releases(),
+                                                answer -> answer.stream().noneMatch(entry -> entry.outcome() == KeptUnitRelease.Outcome.BUSY));
+                assertThat(releases).as("asked again, with the database letting it through, the unit is released").singleElement().satisfies(released -> {
+                    assertThat(released.outcome()).isEqualTo(KeptUnitRelease.Outcome.RELEASED);
+                    assertThat(released.keysInHandler()).as("premise: the handler has returned").isEmpty();
+                    assertThat(released.charged()).as("the answer names the charge the refused request made").isEqualTo(1);
+                    assertThat(released.deadLetteredKeys()).as("and the key it dead-lettered, now blocked behind its dead letter").containsExactly("ACC-1");
+                });
+                assertThat(ownerOf(kept.shard())).as("the row is released").isNull();
+                assertThat(lanes.getFirst().metrics().takeoverAttemptBumps.sum()).as("charged once").isEqualTo(1);
             } finally {
                 release.countDown();
             }

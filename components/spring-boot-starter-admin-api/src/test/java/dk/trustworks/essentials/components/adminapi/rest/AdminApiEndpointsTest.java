@@ -225,7 +225,7 @@ class AdminApiEndpointsTest {
                     .thenReturn(new dk.trustworks.essentials.components.queue.shardowned.api.ApiShardOwnedKeptUnitReleases(
                             List.of("node-1"),
                             List.of(new dk.trustworks.essentials.components.queue.shardowned.api.ApiShardOwnedKeptUnitRelease(
-                                    orders, 7, "node-1", "RELEASED", List.of("ACC-1"), 90_000L))));
+                                    orders, 7, "node-1", "RELEASED", List.of("ACC-1"), 90_000L, 1, List.of("ACC-1")))));
 
             mockMvc.perform(post(BASE + "/shard-owned-queues/orders/ordered-units/7/release-kept").param("instanceId", "node-1"))
                    .andExpect(status().isOk())
@@ -234,7 +234,9 @@ class AdminApiEndpointsTest {
                    .andExpect(jsonPath("$.releases[0].instanceId").value("node-1"))
                    .andExpect(jsonPath("$.releases[0].outcome").value("RELEASED"))
                    .andExpect(jsonPath("$.releases[0].keysInHandler[0]").value("ACC-1"))
-                   .andExpect(jsonPath("$.releases[0].longestInHandlerMillis").value(90_000));
+                   .andExpect(jsonPath("$.releases[0].longestInHandlerMillis").value(90_000))
+                   .andExpect(jsonPath("$.releases[0].charged").value(1))
+                   .andExpect(jsonPath("$.releases[0].deadLetteredKeys[0]").value("ACC-1"));
         }
 
         @Test

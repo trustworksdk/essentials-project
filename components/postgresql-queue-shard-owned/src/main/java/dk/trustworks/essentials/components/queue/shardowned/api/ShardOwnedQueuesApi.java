@@ -172,7 +172,9 @@ public interface ShardOwnedQueuesApi {
      * <p>
      * <b>Accepts reordering and duplicate delivery for that key</b>: each message still in a handler is charged an
      * attempt before the release, and dead-lettered if that brings it to {@code maxAttempts}, and whoever takes the unit
-     * next delivers the rest again, possibly while those handlers still run them. Only a unit a stop of a subscription
+     * next delivers the rest again, possibly while those handlers still run them. Each entry of the answer names how many
+     * messages were charged ({@code charged}) and the keys dead-lettered ({@code deadLetteredKeys}): such a key is blocked
+     * behind its dead letter until it is resurrected ({@link #resurrectDeadLettersForKey}) or deleted. Only a unit a stop of a subscription
      * running under {@code instanceId} kept, and whose lease row still names that instance id, is touched; every other
      * unit - one of the same number a subscription under another instance id kept included - is left alone. Kept units
      * live in the memory of the process whose stop kept them, so call the instance named in the WARN that reported the

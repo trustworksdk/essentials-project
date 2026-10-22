@@ -41,14 +41,34 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  *                         takes the unit next, possibly while these handlers still run them
  * @param longestInHandler how long the key handed to its handler first had been there, {@link Duration#ZERO} when no key
  *                         was in a handler
+ * @param charged          how many messages in a handler were charged an attempt before the release, as a takeover
+ *                         would charge one. Charged once per kept entry, under the fence the unit was kept under: a
+ *                         request asked again after a release that failed reports the charge the earlier request made,
+ *                         also once the handler has returned, provided that charge completed, its dead-letter moves
+ *                         included; asked again while a key is still in its handler, the request completes it.
+ *                         {@code 0} on {@link Outcome#BUSY}, and when no key was in a handler and no earlier attempt to
+ *                         release the unit completed a charge. On
+ *                         {@link Outcome#ALREADY_TAKEN} what was charged before the release found the row taken - nothing
+ *                         when the row was already taken when the charge was made, as the charge is fenced too
+ * @param deadLetteredKeys the keys whose message that charge brought to {@code maxAttempts}, and which were dead-lettered
+ *                         by it, empty when none was (and on {@link Outcome#BUSY}). A key named here is blocked behind
+ *                         its dead letter - its later messages are dead-lettered behind it rather than delivered - until
+ *                         its dead letters are resurrected ({@link MessageQueue#resurrectKey}) or deleted
  */
-public record KeptUnitRelease(int unit, String instanceId, Outcome outcome, List<String> keysInHandler, Duration longestInHandler) {
+public record KeptUnitRelease(int unit,
+                              String instanceId,
+                              Outcome outcome,
+                              List<String> keysInHandler,
+                              Duration longestInHandler,
+                              int charged,
+                              List<String> deadLetteredKeys) {
 
     public KeptUnitRelease {
         requireNonNull(instanceId, "No instanceId provided");
         requireNonNull(outcome, "No outcome provided");
         keysInHandler = List.copyOf(requireNonNull(keysInHandler, "No keysInHandler provided"));
         requireNonNull(longestInHandler, "No longestInHandler provided");
+        deadLetteredKeys = List.copyOf(requireNonNull(deadLetteredKeys, "No deadLetteredKeys provided"));
     }
 
     /**
