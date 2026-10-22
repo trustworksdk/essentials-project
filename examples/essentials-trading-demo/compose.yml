@@ -39,6 +39,12 @@ services:
       - "18080:8080"
     environment:
       EXCHANGE_CONFIG: /etc/exchange/exchange.yaml
+    # The Finnhub API key for live prices (FINNHUB_API_KEY), kept out of the repository: copy
+    # simulators/secrets/finnhub.env.example to finnhub.env (gitignored) and fill it in. Optional - without
+    # the file the exchange starts as before, with no live price feed.
+    env_file:
+      - path: ./simulators/secrets/finnhub.env
+        required: false
     volumes:
       - ./simulators/exchange.yaml:/etc/exchange/exchange.yaml:ro
       - exchange-data:/var/lib/exchange

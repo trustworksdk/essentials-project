@@ -1,14 +1,13 @@
 # The payment-gateway as the trading demo runs it. Mounted at /etc/gateway/gateway.yaml, layered over the gateway's
 # built-in defaults.
 clock:
-  # Same start and speed as the exchange. The two clocks are separate and drift apart by the length of any restart
-  # until SR-27 (the gateway follows the exchange's clock) exists.
-  mode: virtual
-  start: "2030-01-07T13:00:00Z"
-  running: true
-  speed: 1440
+  # Follows the exchange's clock (SR-27): its reading, speed and running state, polled from GET /api/clock. One
+  # business time for both simulators, also across restarts. A following clock refuses changes of its own - change
+  # the exchange's.
+  mode: follow
+  follow: { url: "http://exchange:8080", poll_interval_ms: 250 }
 payments:
-  currencies: [USD]
+  currencies: { USD: 2 }
   deposit: { fail_probability: 0.0, min_delay_seconds: 60, max_delay_seconds: 1800 }
   withdrawal: { fail_probability: 0.0, min_delay_seconds: 600, max_delay_seconds: 14400 }
   return_probability: 0.0

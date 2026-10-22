@@ -150,6 +150,11 @@ must add in `docs/SIMULATOR_REQUIREMENTS.md`. Shared receiving mechanics in `int
 - **`spring.docker.compose.profiles.active` is a list, and Spring profiles replace it rather than merge it.** With
   `observability,simulators` the last profile's YAML wins and one stack never starts. `run-instance.sh` passes the
   union on the command line; an IDE run configuration combining both must do the same.
+- **The Finnhub API key is never committed.** It lives in `simulators/secrets/finnhub.env` (gitignored; template
+  `finnhub.env.example`), which both compose files load as an optional `env_file` for the exchange, so a run without
+  it still starts - with no live price feed (D15, D16).
+- **The gateway's clock follows the exchange's** (`clock.mode: follow`, SR-27), so it refuses clock changes of its
+  own: move the exchange's clock, and the gateway follows within its poll interval.
 - **One webhook secret for both simulators**, `simulators/secrets/webhook-secret.txt`, a demo value. Docker secret
   for the containers, `trading-demo.simulators.webhook-secret-file` for the app.
 - **Business dates come from the simulators' events**, never the app's clock: they run a virtual clock, a simulated
