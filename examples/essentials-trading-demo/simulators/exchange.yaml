@@ -36,8 +36,8 @@ instruments:
   - { id: SAP, symbol: SAP, mic: XNYS, currency: USD, currency_scale: 2, reference_symbol: SAP, price_source: { initial_price: "571.00" } }
   - { id: NOVO-B, symbol: NOVO-B, mic: XNYS, currency: USD, currency_scale: 2, reference_symbol: NVO, price_source: { initial_price: "583.00" } }
 # Reference prices: synthetic (seeded, D15) unless live prices are switched on. The starting prices are the ones the
-# demo's own synthetic quote feed starts from (market_data's MarketQuotesProperties), so the two stay close until the
-# demo reads the exchange's market data instead. For live Finnhub prices set EXCHANGE__PRICE_SOURCES__DEFAULT__KIND=finnhub
+# demo's synthetic quote feed uses when it runs without the simulators. For live Finnhub prices set
+# EXCHANGE__PRICE_SOURCES__DEFAULT__KIND=finnhub
 # next to the key in simulators/secrets/finnhub.env.
 price_sources:
   default: { kind: synthetic }

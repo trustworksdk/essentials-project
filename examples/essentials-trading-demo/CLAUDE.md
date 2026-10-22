@@ -151,10 +151,8 @@ must add in `docs/SIMULATOR_REQUIREMENTS.md`. Shared receiving mechanics in `int
   `observability,simulators` the last profile's YAML wins and one stack never starts. `run-instance.sh` passes the
   union on the command line; an IDE run configuration combining both must do the same.
 - **The exchange lists the demo's instruments itself** (`simulators/exchange.yaml`, D18): the ten seed instruments,
-  synthetic prices starting where the demo's own quote feed starts, and the liquidity provider quoting them. No
-  trading sessions - with sessions the accelerated clock would reject most orders `MARKET_CLOSED`. Until the demo
-  reads the exchange's market data (simulator step 4), the app's quotes and the exchange's prices wander apart, so a
-  market buy can fill above its hold; it is booked anyway.
+  synthetic prices, and the liquidity provider quoting them. No trading sessions - with sessions the accelerated
+  clock would reject most orders `MARKET_CLOSED`. The app's quotes are the exchange's own (`market_data/CLAUDE.md`).
 - **Under this profile orders go to the exchange-simulator**, not the stub (`orders/CLAUDE.md`, "Exchange-simulator
   adapter").
 - **Reset the demo's database and the exchange together.** The exchange keeps its state in the `exchange-data`

@@ -19,7 +19,7 @@ everything else: their command type, their one API file, their handler and their
 | `use_cases/suspend_instrument` | command | Suspends an instrument, with a reason. One-way |
 | `use_cases/risk_approve_instrument` | automation | Runs a newly registered instrument through an external risk assessment and records the answer. The demo's `UnitOfWorkMode.NONE` example |
 | `views/instrument_details` | view | Lists instruments and serves one by id, from a projection. Includes risk status |
-| `views/market_quotes` | view | Latest quote per instrument from the exchange's market-data feed, in memory. Implements the `MarketQuotes` seam |
+| `views/market_quotes` | view | Latest quote per instrument from the exchange's market-data stream (synthetic without the simulators), in memory. Implements the `MarketQuotes` seam |
 
 ## `views/market_quotes` — the market as the exchange's feed reports it (D14, D19)
 
@@ -28,9 +28,15 @@ everything else: their command type, their one API file, their handler and their
 - **`types/MarketQuotes` is a published read seam** (`rules/slice-design.md`, § The published read seam): `orders`
   sizes a market buy's hold on `bestAsk`, and the stub exchange prices its fills on it. It answers only from a fresh
   quote — stale (`trading-demo.market-data.stale-after`, 10s) is empty, so a hold is never sized on a vanished price.
-- **The feed is `SyntheticMarketQuoteFeed` until the exchange-simulator's stream (SR-12/SR-13) exists**: a random walk
-  per configured instrument (`trading-demo.market-data.synthetic.*`; `volatility: 0` holds quotes still, for tests).
-  The real consumer implements `MarketQuoteFeed` in this slice and resynchronises from the snapshot on a gap.
+- **Two feeds behind `MarketQuoteFeed`.** Under the `simulators` profile `ExchangeMarketQuoteFeed` reads the exchange's
+  SSE stream (`/api/marketdata/stream`, SR-13) and resynchronises from its snapshot after every (re)subscription;
+  otherwise `SyntheticMarketQuoteFeed`, a random walk per configured instrument (`trading-demo.market-data.synthetic.*`;
+  `volatility: 0` holds quotes still, for tests). Both conditional on `trading-demo.simulators.exchange.base-url`.
+- **The exchange quotes only on change, so the feed re-reads the snapshot every half `stale-after`**, and
+  `LatestMarketQuotes` lets an *equal* `mdSequence` refresh a quote. Stale means "the exchange stopped confirming it",
+  not "the price did not move" - otherwise a quiet book (a closed market, live prices) refuses every market buy `422`.
+- **An empty side (`bestBid`/`bestAsk` null) publishes nothing**; the last quote goes stale rather than be trusted.
+  `reference` messages are not quoted - the price source's price is not the market's.
 - **It replaced the `InstrumentPrice` aggregate** (D19, removed in phase 3), together with its `initialize_price`
   and `update_price` slices, `views/latest_price` and the harness's price-path benchmark. Prices are a high-rate
   feed, not decisions; the aggregate was an exercise.

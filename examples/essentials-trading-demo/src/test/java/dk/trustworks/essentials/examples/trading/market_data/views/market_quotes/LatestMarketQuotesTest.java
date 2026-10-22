@@ -59,4 +59,13 @@ class LatestMarketQuotesTest {
         assertThat(quotes.find(ACME)).hasValueSatisfying(quote -> assertThat(quote.stale()).isTrue());
         assertThat(quotes.bestAsk(InstrumentId.of("UNQUOTED"))).isEmpty();
     }
+
+    @Test
+    void the_same_sequence_again_keeps_an_unchanged_quote_fresh() {
+        var quotes = quotes(Clock.fixed(NOW, ZoneOffset.UTC));
+        quotes.received(quote("100.10", 3, NOW.minusSeconds(11)));
+        quotes.received(quote("100.10", 3, NOW)); // the exchange's snapshot confirming it
+
+        assertThat(quotes.bestAsk(ACME)).contains(Money.of("100.10", CurrencyCode.USD));
+    }
 }

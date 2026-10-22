@@ -23,7 +23,8 @@ import java.util.function.Consumer;
  * messages resynchronises from the snapshot, it never replays. Every instance subscribes on its own, as every
  * instance of a broker's gateway would; there is nothing to share and nothing to persist.
  * <p>
- * {@link SyntheticMarketQuoteFeed} stands in until the exchange-simulator's stream exists.
+ * {@link ExchangeMarketQuoteFeed} reads the exchange-simulator's stream under the {@code simulators} profile;
+ * {@link SyntheticMarketQuoteFeed} stands in without it.
  */
 public interface MarketQuoteFeed {
     void subscribe(Consumer<MarketQuote> listener);

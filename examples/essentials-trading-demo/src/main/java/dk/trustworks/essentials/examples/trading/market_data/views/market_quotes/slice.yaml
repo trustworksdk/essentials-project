@@ -20,11 +20,12 @@ invariants:
     text: "A stale quote is shown as stale and never answers the MarketQuotes seam"
     enforcedBy: LatestMarketQuotes
   - id: INV-MQ-2
-    text: "An older mdSequence never replaces a newer quote"
+    text: "An older mdSequence never replaces a newer quote; the same one refreshes it (the exchange confirming a quiet book)"
     enforcedBy: LatestMarketQuotes
 forbidden:
   - cross-slice-internal:market_data
 tests:
   unit: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/market_data/views/market_quotes/LatestMarketQuotesTest.java" }
   integration: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/orders/OrdersIT.java" }
-  contract: { present: false }
+  # Against the real exchange-simulator image; skips when the image is not built locally
+  contract: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/market_data/views/market_quotes/ExchangeMarketQuoteFeedIT.java" }

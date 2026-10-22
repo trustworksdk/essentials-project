@@ -18,6 +18,7 @@ package dk.trustworks.essentials.examples.trading.market_data.views.market_quote
 
 import dk.trustworks.essentials.examples.trading.market_data.types.InstrumentId;
 import dk.trustworks.essentials.types.*;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.context.SmartLifecycle;
 import org.springframework.stereotype.Component;
 
@@ -30,14 +31,18 @@ import java.util.function.Consumer;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * A stand-in for the exchange's market-data stream: every {@code tick-interval}, each configured instrument's mid
+ * A stand-in for the exchange's market-data stream, for runs without the exchange-simulator: every {@code tick-interval}, each configured instrument's mid
  * moves by a random step of at most {@code volatility}, and a quote {@code half-spread-bps} either side of it is
  * published. The first quote is published at start, so a fresh application can price a market order at once.
  * <p>
  * Per instance, like the real stream: two instances quote independently, and that is fine — a quote sizes a hold,
  * the fill price comes from the exchange.
+ * <p>
+ * Active when no exchange-simulator is configured; with one, {@link ExchangeMarketQuoteFeed} reads the exchange's own
+ * stream instead.
  */
 @Component
+@ConditionalOnExpression("'${trading-demo.simulators.exchange.base-url:}'.isBlank()")
 public class SyntheticMarketQuoteFeed implements MarketQuoteFeed, SmartLifecycle {
     private static final BigDecimal BPS = new BigDecimal("10000");
 

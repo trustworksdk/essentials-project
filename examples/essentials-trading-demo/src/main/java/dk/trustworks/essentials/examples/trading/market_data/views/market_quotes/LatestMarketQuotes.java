@@ -51,8 +51,12 @@ public class LatestMarketQuotes implements MarketQuotes {
         feed.subscribe(this::received);
     }
 
+    /**
+     * An older {@code mdSequence} never replaces a newer one. The same one does: it is the feed confirming a quote that
+     * has not changed, which keeps a quiet book fresh ({@link ExchangeMarketQuoteFeed} re-reads the exchange's snapshot).
+     */
     void received(MarketQuote quote) {
-        quotes.merge(quote.instrumentId(), quote, (current, offered) -> offered.mdSequence() > current.mdSequence() ? offered : current);
+        quotes.merge(quote.instrumentId(), quote, (current, offered) -> offered.mdSequence() >= current.mdSequence() ? offered : current);
     }
 
     @Override
