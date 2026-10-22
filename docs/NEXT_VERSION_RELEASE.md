@@ -642,34 +642,34 @@ run longer. The hand-back of a dead pump's unit, new in this release, is bounded
 **Every one of these releases counts the delivery in the handler it stops waiting for as an attempt**, as the takeover
 of a kept unit at the bound does: before a shed or a dead pump's hand-back releases a unit past `stuckHandlerTimeout`,
 each message in a handler longer than `stuckHandlerTimeout` is charged one attempt, and a message in a handler for
-less - another key of the unit that entered its handler just before - is released uncharged, as the unordered lane
-does; before `MessageQueue.releaseKeptOrderedUnit` releases one with a key still in its handler (§2), each message
-still in a handler is charged one attempt. A release retried on a later tick does not charge a message it already
-charged. When the release is refused after the charge and the owner keeps the unit, a failure its handler then reports
-counts on from the charged attempt instead of undoing the charge. A message that reaches its `maxAttempts` by the charge is dead-lettered then, with an error saying its
-unit was released while it was still in a handler. The next owner finds the unit released and charges nothing itself. Before this, those releases charged nothing either, and a handler that never returns records no
-failure, so a message whose ordered handler hangs on every delivery - a deadlock on its own data, a remote call with
+less - another key of the unit that entered its handler just before - is released uncharged, as the unordered lane does;
+before `MessageQueue.releaseKeptOrderedUnit` releases one with a key still in its handler (§2), each message still in a
+handler is charged one attempt. A release retried on a later tick does not charge a message it already charged. When the
+release is refused after the charge and the owner keeps the unit, a failure its handler then reports counts on from the
+charged attempt instead of undoing the charge. A message that reaches its `maxAttempts` by the charge is dead-lettered
+then, with an error saying its unit was released while it was still in a handler. The next owner finds the unit released
+and charges nothing itself. Before this, those releases charged nothing either, and a handler that never returns records
+no failure, so a message whose ordered handler hangs on every delivery - a deadlock on its own data, a remote call with
 no timeout - was handed from owner to owner with its attempt count unchanged and delivered again after every release,
 never reaching the dead-letter table, each time leaving one more handler hung. Now it is dead-lettered after
-`maxAttempts` such releases, and its key is blocked behind the dead letter as after any other. The charge is counted
-in `ShardOwnerMetrics.takeoverAttemptBumps` of the releasing queue, and the release's WARN says how many messages were
+`maxAttempts` such releases, and its key is blocked behind the dead letter as after any other. The charge is counted in
+`ShardOwnerMetrics.takeoverAttemptBumps` of the releasing queue, and the release's WARN says how many messages were
 charged and which keys were dead-lettered. What to do: nothing, unless a queue's ordered handlers legitimately run past
-its `stuckHandlerTimeout` - then each such shed or release costs that message an attempt, and enough of them
-dead-letter it, so raise the bound as above. A `QueueObserver` that throws when told of such a dead letter does not
-hold the release up: the attempt and the move are made by then, so the unit is released all the same - a
-`releaseKeptOrderedUnit` answers that it released it - and a WARN names the observer's failure. A message deleted
-through the admin API while in its handler is not charged and is not asked for again, so it does not hold such a
-release up either. A handler that
-returns after the charge has dead-lettered its message is neither acknowledged nor counted in `delivered`: one that
-completes logs a WARN saying that resurrecting the dead letter delivers the message again, and one that throws logs a
-WARN with its exception and is told to `QueueObserver.deliveryFailed` with the charged count (not for a requested
-redelivery). A handler that returns before the charge has taken its message has its outcome recorded as usual
-(acknowledged when it completed, its failure recorded when it threw), and the charge neither charges nor dead-letters
-that message; the unit's other handlers that return while the charge runs do not wait for its database statements,
-bar one returning while the charge is still choosing which messages to charge. Your `QueueObserver` is told of the
-charge's dead letters after the charge's database statements, not during them, so a slow `deadLettered` callback does not hold up
-the unit's handlers returning meanwhile, so a handler failing meanwhile may be reported to `deliveryFailed` before its
-message's `deadLettered`.
+its `stuckHandlerTimeout` - then each such shed or release costs that message an attempt, and enough of them dead-letter
+it, so raise the bound as above. A `QueueObserver` that throws when told of such a dead letter does not hold the release
+up: the attempt and the move are made by then, so the unit is released all the same - a `releaseKeptOrderedUnit` answers
+that it released it - and a WARN names the observer's failure. A message deleted through the admin API while in its
+handler is not charged and is not asked for again, so it does not hold such a release up either. A handler that returns
+after the charge has dead-lettered its message is neither acknowledged nor counted in `delivered`: one that completes
+logs a WARN saying that resurrecting the dead letter delivers the message again, and one that throws logs a WARN with
+its exception and is told to `QueueObserver.deliveryFailed` with the charged count (not for a requested redelivery). A
+handler that returns before the charge has taken its message has its outcome recorded as usual (acknowledged when it
+completed, its failure recorded when it threw), and the charge neither charges nor dead-letters that message; the unit's
+other handlers that return while the charge runs do not wait for its database statements, bar one returning while the
+charge is still choosing which messages to charge. Your `QueueObserver` is told of the charge's dead letters after the
+charge's database statements, not during them, so a slow `deadLettered` callback does not hold up the unit's handlers
+returning meanwhile, so a handler failing meanwhile may be reported to `deliveryFailed` before its message's
+`deadLettered`.
 (`6337f7d89`, `2fdeb3db0`, `bfa961ec5`, `dbae0986f`, `7dbd517be`, `e699c9d44`, `<!-- fix:U-026 -->`, `<!-- fix:U-027 -->`)
 
 **The unordered lane now charges a hung handler's delivery too, past the same bound.** It waits for no handler: a
@@ -677,27 +677,27 @@ fair-share shed and a dead pump's hand-back release an unordered shard at once, 
 out, with whatever is still in its handlers, and the next owner, finding the shard released, charges nothing. With a
 clean handover now charging nothing (§1.1.18), a message whose unordered handler hangs on every delivery would be
 delivered again after every rebalance or restart - and, with the dead-pump hand-back new in this release (§2), after
-every dead pump - with its attempt count unchanged, never reaching the dead-letter table, each delivery leaving one
-more handler thread hung and holding a handler permit; in 0.60.0 takeovers raised its stored count, but nothing ever
-dead-lettered it. Now, before such a release, each message that has been in its handler longer
-than `stuckHandlerTimeout` is charged one attempt, and dead-lettered at its `maxAttempts` with the same error; a
-message in its handler for less is released uncharged, as before - a slow handler is not taken for a hung one. The
-charge is counted in `ShardOwnerMetrics.takeoverAttemptBumps` of the releasing queue, and a release that charged logs
-one WARN naming the shard, how many messages it charged and which it dead-lettered. What to do: nothing, unless a
-queue's unordered handlers legitimately run past its `stuckHandlerTimeout` - then a rebalance or stop that releases a
-shard while one runs costs that message an attempt, so raise the bound as above. A message deleted through the admin
-API while in its handler is not charged, and a `QueueObserver` that throws when told of another message's dead letter
-then still leaves the shard released. A handler that returns after the
-charge before a shed, a dead pump's hand-back or a `stop()` has dead-lettered its message is neither acknowledged nor
-counted in `delivered`: one that completes logs a WARN saying that resurrecting the dead letter delivers the message
-again, and one that throws logs a WARN with its exception and is told to `QueueObserver.deliveryFailed` with the
-charged count (not for a requested redelivery). A handler that returns before the charge has taken its message has
-its outcome recorded as usual (acknowledged when it completed, its failure recorded when it threw), and the charge
-neither charges nor dead-letters that message; the shard's other handlers that return while the charge runs - a
-message in its handler for less than `stuckHandlerTimeout`, say - do not wait for its database statements while
-holding their handler permit, bar one returning while the charge is still choosing which messages to charge. Your
-`QueueObserver` is told of the charge's dead letters after the charge's database statements, not during them, as on the ordered
-lane. (`18e423d1d`, `7dbd517be`, `e699c9d44`, `<!-- fix:U-026 -->`, `<!-- fix:U-027 -->`)
+every dead pump - with its attempt count unchanged, never reaching the dead-letter table, each delivery leaving one more
+handler thread hung and holding a handler permit; in 0.60.0 takeovers raised its stored count, but nothing ever
+dead-lettered it. Now, before such a release, each message that has been in its handler longer than
+`stuckHandlerTimeout` is charged one attempt, and dead-lettered at its `maxAttempts` with the same error; a message in
+its handler for less is released uncharged, as before - a slow handler is not taken for a hung one. The charge is
+counted in `ShardOwnerMetrics.takeoverAttemptBumps` of the releasing queue, and a release that charged logs one WARN
+naming the shard, how many messages it charged and which it dead-lettered. What to do: nothing, unless a queue's
+unordered handlers legitimately run past its `stuckHandlerTimeout` - then a rebalance or stop that releases a shard
+while one runs costs that message an attempt, so raise the bound as above. A message deleted through the admin API while
+in its handler is not charged, and a `QueueObserver` that throws when told of another message's dead letter then still
+leaves the shard released. A handler that returns after the charge before a shed, a dead pump's hand-back or a `stop()`
+has dead-lettered its message is neither acknowledged nor counted in `delivered`: one that completes logs a WARN saying
+that resurrecting the dead letter delivers the message again, and one that throws logs a WARN with its exception and is
+told to `QueueObserver.deliveryFailed` with the charged count (not for a requested redelivery). A handler that returns
+before the charge has taken its message has its outcome recorded as usual (acknowledged when it completed, its failure
+recorded when it threw), and the charge neither charges nor dead-letters that message; the shard's other handlers that
+return while the charge runs - a message in its handler for less than `stuckHandlerTimeout`, say - do not wait for its
+database statements while holding their handler permit, bar one returning while the charge is still choosing which
+messages to charge. Your `QueueObserver` is told of the charge's dead letters after the charge's database statements,
+not during them, as on the ordered lane.
+(`18e423d1d`, `7dbd517be`, `e699c9d44`, `<!-- fix:U-026 -->`, `<!-- fix:U-027 -->`)
 
 ---
 
