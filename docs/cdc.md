@@ -142,6 +142,14 @@ dispatcher polls that table, decodes, and publishes. The inbox decouples WAL ing
 from event conversion — the tailer never blocks on a slow subscriber, and decode
 failures stay contained to a single row.
 
+Both sides of the inbox work in batches. The tailer writes what it has received in one
+transaction - up to `inboxWriteBatchSize` (500) messages, whatever the stream has ready when
+it runs dry, or what has waited `inboxWriteMaxDelay` (50 ms) - and acknowledges the
+replication stream only once that transaction has committed. The dispatcher acknowledges the
+rows of a batch it has published in one statement. Both used to commit once per message,
+which capped CDC at about 1 500 events/s on a laptop: a burst of 22 000 events took ~15 s to
+reach the bus, while polling read the same events in batches and kept up.
+
 In **DIRECT mode** the tailer decodes inline and pushes straight to the bus. Lower
 latency, no inbox table, but no durable buffer between WAL ingestion and dispatch:
 backpressure on the bus directly throttles WAL acks.
@@ -733,10 +741,12 @@ back. For us that means: **only the live WalReplicationTailer advances the slot.
 
 Three mechanisms in [`WalReplicationTailer`](../components/postgresql-event-store/src/main/java/dk/trustworks/essentials/components/eventsourced/eventstore/postgresql/cdc/WalReplicationTailer.java):
 
-1. **Per-message ack** ([`acknowledge`](WalReplicationTailer.java:1096)): every WAL
-   message that's successfully written to the inbox (or, in DIRECT mode, handed to
-   the bus) is followed by `stream.setFlushedLSN(lsn)` + `forceUpdateStatus()`. The
-   server moves `confirmed_flush_lsn` forward immediately.
+1. **Ack after write** ([`acknowledge`](../components/postgresql-event-store/src/main/java/dk/trustworks/essentials/components/eventsourced/eventstore/postgresql/cdc/WalReplicationTailer.java)):
+   once a batch of WAL messages has been written to the inbox (in DIRECT mode, once a
+   message has been handed to the bus), the tailer sends `stream.setFlushedLSN(lsn)` +
+   `forceUpdateStatus()` for the highest LSN in it. The server moves
+   `confirmed_flush_lsn` forward at once; a batch never written is never acknowledged,
+   so it is streamed again after a reconnect or a crash.
 
 2. **Idle LSN push** ([`forceIdleLsnPush`](../components/postgresql-event-store/src/main/java/dk/trustworks/essentials/components/eventsourced/eventstore/postgresql/cdc/WalReplicationTailer.java)): every
    `cdc.walReplicationTailer.idleLsnPushInterval` (default 30s), if the stream
@@ -949,6 +959,8 @@ All keys live under `cdc.*` in [`CdcProperties`](../components/postgresql-event-
 | `cdc.walReplicationTailer.backOffFactor`                  | `2`              | Exponential factor.                                                                                  |
 | `cdc.walReplicationTailer.maxIdleDuration`                | `5min`           | Force reconnect if no message arrives in this window. `Duration.ZERO` disables.                      |
 | `cdc.walReplicationTailer.idleLsnPushInterval`            | `30s`            | Cadence at which the tailer force-acks the current receive LSN on an idle stream so `confirmed_flush_lsn` keeps advancing. Tighten only if `wal_sender_timeout` is below 60s; cannot be disabled. |
+| `cdc.walReplicationTailer.inboxWriteBatchSize`            | `500`            | WAL messages written to the inbox per transaction (INBOX mode); the stream is acknowledged after it commits. `1` restores per-message writes. |
+| `cdc.walReplicationTailer.inboxWriteMaxDelay`             | `50ms`           | Longest a received message waits for its batch to fill while the stream keeps delivering; a stream that runs dry is written at once. |
 | `cdc.walReplicationTailer.includeXids` / `Timestamp` / `Lsn` / `prettyPrint` | (varies) | wal2json slot options.                                                                          |
 
 ### 7.5 `cdc.cdcDispatcher` ([`CdcDispatcherProperties`](../components/postgresql-event-store/src/main/java/dk/trustworks/essentials/components/eventsourced/eventstore/postgresql/cdc/CdcProperties.java)) — INBOX mode only

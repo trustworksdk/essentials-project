@@ -229,6 +229,66 @@ public class CdcInboxRepository implements EssentialsSchemaContributor {
     }
 
     /**
+     * One WAL message to write to the inbox, for {@link #insertAllIfAbsent}
+     *
+     * @param lsn          the inbox's dedup key for the message (see {@code LogicalDecodingPlugin#inboxDedupKey})
+     * @param payloadBytes the raw WAL payload
+     */
+    public record InboxInsert(String lsn, byte[] payloadBytes) {
+        public InboxInsert {
+            requireNonNull(lsn, "No lsn provided");
+        }
+    }
+
+    /**
+     * {@link #insertIfAbsent(String, String, byte[])} for many messages in ONE unit of work - one commit, rather than
+     * one per message. The WAL tailer writes what it has received as a batch: one commit per message capped CDC at
+     * about 1 500 events/s, so a burst reached subscribers seconds late while polling read the same events in batches.
+     * All or nothing: the caller acknowledges the replication stream only after this returns. The tailer writes through
+     * this method and falls back to {@link #insertIfAbsent(String, String, byte[])} per message only when it throws, so
+     * a subclass that changes how a message is written must override both.
+     *
+     * @return per message, in order, whether it was inserted ({@code false}: the inbox already held it)
+     */
+    public boolean[] insertAllIfAbsent(String slotName, List<InboxInsert> messages) {
+        requireNonNull(slotName, "No slotName provided");
+        requireNonNull(messages, "No messages provided");
+        if (messages.isEmpty()) {
+            return new boolean[0];
+        }
+        long startNs = System.nanoTime();
+        int[] updateCounts = unitOfWorkFactory.withUnitOfWork(uow -> {
+            var batch = uow.handle().prepareBatch(sql("""
+                                                      insert into {:table}(slot_name, lsn, payload_bytes, status)
+                                                      values (:slot, :lsn, :payloadBytes, 'RECEIVED')
+                                                      on conflict (slot_name, lsn) do nothing
+                                                      """));
+            for (var message : messages) {
+                batch.bind("slot", slotName)
+                     .bind("lsn", message.lsn())
+                     .bind("payloadBytes", message.payloadBytes())
+                     .add();
+            }
+            return batch.execute();
+        });
+        var inserted = new boolean[messages.size()];
+        for (var i = 0; i < inserted.length; i++) {
+            inserted[i] = updateCounts[i] == 1;
+        }
+        if (meterRegistry != null) {
+            insertLatencyTimer.record(System.nanoTime() - startNs, java.util.concurrent.TimeUnit.NANOSECONDS);
+            for (var wasInserted : inserted) {
+                if (wasInserted) {
+                    insertSuccessCounter.increment();
+                } else {
+                    insertDuplicateCounter.increment();
+                }
+            }
+        }
+        return inserted;
+    }
+
+    /**
      * Marks an event as "POISON" in the CDC inbox table by updating its status and recording the associated error.
      *
      * @param slotName the name of the slot associated with the event
@@ -306,6 +366,48 @@ public class CdcInboxRepository implements EssentialsSchemaContributor {
                                                     .execute());
         if (meterRegistry != null) {
             deleteDispatchedCounter.increment();
+        }
+    }
+
+    /**
+     * {@link #markDispatched(long)} for many rows in one statement and one commit - what the dispatcher does with the
+     * rows of a batch it has published, rather than one commit per row
+     */
+    public void markAllDispatched(Collection<Long> inboxIds) {
+        requireNonNull(inboxIds, "No inboxIds provided");
+        if (inboxIds.isEmpty()) {
+            return;
+        }
+        long startNs = System.nanoTime();
+        unitOfWorkFactory.usingUnitOfWork(uow -> uow.handle().createUpdate(sql("""
+                                                                           update {:table}
+                                                                           set status='DISPATCHED'
+                                                                           where inbox_id = any(:ids)
+                                                                           """))
+                                                    .bindArray("ids", Long.class, inboxIds)
+                                                    .execute());
+        if (meterRegistry != null) {
+            markDispatchedLatencyTimer.record(System.nanoTime() - startNs, java.util.concurrent.TimeUnit.NANOSECONDS);
+            markDispatchedCounter.increment(inboxIds.size());
+        }
+    }
+
+    /**
+     * {@link #deleteDispatched(long)} for many rows in one statement and one commit
+     */
+    public void deleteAllDispatched(Collection<Long> inboxIds) {
+        requireNonNull(inboxIds, "No inboxIds provided");
+        if (inboxIds.isEmpty()) {
+            return;
+        }
+        unitOfWorkFactory.usingUnitOfWork(uow -> uow.handle().createUpdate(sql("""
+                                                                           delete from {:table}
+                                                                           where inbox_id = any(:ids)
+                                                                           """))
+                                                    .bindArray("ids", Long.class, inboxIds)
+                                                    .execute());
+        if (meterRegistry != null) {
+            deleteDispatchedCounter.increment(inboxIds.size());
         }
     }
 

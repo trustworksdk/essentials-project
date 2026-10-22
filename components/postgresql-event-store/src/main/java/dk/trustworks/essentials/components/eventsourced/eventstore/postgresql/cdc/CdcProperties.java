@@ -386,6 +386,22 @@ public class CdcProperties {
          */
         private Duration idleLsnPushInterval        = Duration.ofSeconds(30);
 
+        /**
+         * How many received WAL messages the tailer writes to the CDC inbox in one transaction ({@code INBOX} delivery
+         * mode). It writes what has arrived - a full batch, whatever the stream has ready when it runs dry, or what has
+         * waited {@link #inboxWriteMaxDelay} - and acknowledges the replication stream only once that transaction has
+         * committed, so a crash re-streams an unwritten batch rather than losing it. One transaction per message capped
+         * CDC at about 1 500 events/s on a laptop, and a burst reached subscribers seconds late. {@code 1} restores
+         * per-message writes. Default {@code 500}, the dispatcher's batch size.
+         */
+        private int      inboxWriteBatchSize        = 500;
+
+        /**
+         * The longest a received WAL message waits for its batch to fill while the stream keeps delivering; a stream
+         * that runs dry is written at once. Bounds the latency batching adds under a steady trickle. Default {@code 50ms}.
+         */
+        private Duration inboxWriteMaxDelay         = Duration.ofMillis(50);
+
 
         public static WalReplicationTailerProperties defaults(Duration pollInterval,
                                                               Duration pollBackoffInterval,
@@ -621,6 +637,22 @@ public class CdcProperties {
 
         public void setIdleLsnPushInterval(Duration idleLsnPushInterval) {
             this.idleLsnPushInterval = idleLsnPushInterval;
+        }
+
+        public int getInboxWriteBatchSize() {
+            return inboxWriteBatchSize;
+        }
+
+        public void setInboxWriteBatchSize(int inboxWriteBatchSize) {
+            this.inboxWriteBatchSize = inboxWriteBatchSize;
+        }
+
+        public Duration getInboxWriteMaxDelay() {
+            return inboxWriteMaxDelay;
+        }
+
+        public void setInboxWriteMaxDelay(Duration inboxWriteMaxDelay) {
+            this.inboxWriteMaxDelay = inboxWriteMaxDelay;
         }
     }
 

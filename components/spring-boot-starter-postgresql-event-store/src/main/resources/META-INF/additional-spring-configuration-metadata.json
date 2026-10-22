@@ -101,6 +101,16 @@
       "defaultValue": "30s"
     },
     {
+      "name": "essentials.eventstore.cdc.wal-replication-tailer.inbox-write-batch-size",
+      "description": "How many received WAL messages the tailer writes to the CDC inbox in one transaction (INBOX delivery mode); the replication stream is acknowledged only after the transaction commits. 1 restores per-message writes.",
+      "defaultValue": 500
+    },
+    {
+      "name": "essentials.eventstore.cdc.wal-replication-tailer.inbox-write-max-delay",
+      "description": "The longest a received WAL message waits for its inbox batch to fill while the stream keeps delivering. A stream that runs dry is written at once.",
+      "defaultValue": "50ms"
+    },
+    {
       "name": "essentials.eventstore.cdc.pg-output.publication-name",
       "description": "Name of the pgoutput publication the replication slot reads from.",
       "defaultValue": "essentials_cdc_publication"

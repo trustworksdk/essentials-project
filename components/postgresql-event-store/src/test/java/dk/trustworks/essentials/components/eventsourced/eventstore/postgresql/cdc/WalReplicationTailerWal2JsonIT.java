@@ -152,6 +152,49 @@ public class WalReplicationTailerWal2JsonIT extends AbstractLogicalReplicationPo
 
 
     @Test
+    void writes_a_burst_of_messages_to_the_inbox_in_batches() {
+        // One transaction per message capped CDC at ~1 500 events/s; a burst must be written a batch at a time
+        String slotName = "slot_" + UUID.randomUUID().toString().replace("-", "");
+        var batchSizes = new CopyOnWriteArrayList<Integer>();
+        var recordingInbox = new CdcInboxRepository(unitOfWorkFactory) {
+            @Override
+            public boolean[] insertAllIfAbsent(String slot, List<InboxInsert> messages) {
+                batchSizes.add(messages.size());
+                return inboxRepository.insertAllIfAbsent(slot, messages);
+            }
+        };
+
+        var tailer = inboxTailer(slotName,
+                                 recordingInbox,
+                                 WalReplicationTailerProperties.defaults(Duration.ofMillis(20), Duration.ofMillis(50), Duration.ofSeconds(2), Duration.ofMillis(100)),
+                                 PgSlotMode.CREATE_IF_MISSING,
+                                 new CdcAvailability(),
+                                 Optional.empty(),
+                                 Optional.empty());
+        tailer.startAndAwaitReady(Duration.ofSeconds(10));
+
+        var messages = 300;
+        // Separate transactions - wal2json emits one message per transaction
+        jdbi.useHandle(h -> {
+            for (var i = 0; i < messages; i++) {
+                h.execute("insert into " + TEST_TABLE + "(payload) values(?)", "burst-" + i);
+            }
+        });
+
+        Awaitility.await()
+                  .atMost(Duration.ofSeconds(15))
+                  .pollInterval(Duration.ofMillis(100))
+                  .untilAsserted(() -> assertThat(batchSizes.stream().mapToInt(Integer::intValue).sum()).isGreaterThanOrEqualTo(messages));
+        assertThat(anyInboxPayloadContains(slotName, "burst-" + (messages - 1))).isTrue();
+        assertThat(inboxRepository.countByStatus(slotName, CdcInboxRepository.InboxStatus.RECEIVED.name())).isGreaterThanOrEqualTo(messages);
+        assertThat(batchSizes).as("written a batch at a time, not one transaction per message: %s", batchSizes)
+                              .hasSizeLessThan(messages / 2);
+        assertThat(Collections.max(batchSizes)).isGreaterThan(1);
+
+        tailer.stop();
+    }
+
+    @Test
     void stops_and_does_not_persist_after_stop() {
         String slotName = "slot_" + UUID.randomUUID().toString().replace("-", "");
 
@@ -205,6 +248,15 @@ public class WalReplicationTailerWal2JsonIT extends AbstractLogicalReplicationPo
                     throw new RuntimeException("Simulated inbox write failure");
                 }
                 return inboxRepository.insertIfAbsent(slot, lsn, payloadBytes);
+            }
+
+            // The tailer writes batches; a failed batch is written again message by message, through the override above
+            @Override
+            public boolean[] insertAllIfAbsent(String slot, List<InboxInsert> messages) {
+                if (failuresLeft.get() > 0) {
+                    throw new RuntimeException("Simulated inbox batch write failure");
+                }
+                return inboxRepository.insertAllIfAbsent(slot, messages);
             }
 
             @Override
@@ -274,6 +326,15 @@ public class WalReplicationTailerWal2JsonIT extends AbstractLogicalReplicationPo
                 }
                 return inboxRepository.insertIfAbsent(slot, lsn, payloadBytes);
             }
+
+            // The tailer writes batches; a failed batch is written again message by message, through the override above
+            @Override
+            public boolean[] insertAllIfAbsent(String slot, List<InboxInsert> messages) {
+                if (failuresLeft.get() > 0) {
+                    throw new RuntimeException("Simulated inbox batch write failure");
+                }
+                return inboxRepository.insertAllIfAbsent(slot, messages);
+            }
         };
 
         var handler = new WalReplicationTailerErrorHandler() {
@@ -329,6 +390,11 @@ public class WalReplicationTailerWal2JsonIT extends AbstractLogicalReplicationPo
             @Override
             public boolean insertIfAbsent(String slot, String lsn, byte[] payloadBytes) {
                 throw new RuntimeException("Simulated fatal inbox write failure");
+            }
+
+            @Override
+            public boolean[] insertAllIfAbsent(String slot, List<InboxInsert> messages) {
+                throw new RuntimeException("Simulated fatal inbox batch write failure");
             }
         };
 

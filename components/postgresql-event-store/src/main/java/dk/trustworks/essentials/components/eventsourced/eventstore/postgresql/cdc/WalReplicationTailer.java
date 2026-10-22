@@ -112,6 +112,15 @@ public class WalReplicationTailer implements Lifecycle {
      * when unset or non-positive (defensive — this is a load-bearing safety mechanism).
      */
     private final long                                                          idleLsnPushIntervalNanos;
+    /**
+     * Received messages not yet written to the inbox, and the highest LSN received with them - filtered messages
+     * included. Written as one transaction ({@link #flushInbox}); the stream is acknowledged only after it commits.
+     * Touched only by the tailer thread, and reset per replication session: what a dropped session left unwritten was
+     * never acknowledged, so the next session streams it again.
+     */
+    private final List<PendingInboxMessage>                                     pendingInbox = new ArrayList<>();
+    private org.postgresql.replication.LogSequenceNumber                        pendingAckLsn;
+    private long                                                                pendingSinceNanos;
 
     /**
      * How often the tailer emits a "CDC heartbeat" INFO log from inside the streamOnce inner
@@ -474,6 +483,8 @@ public class WalReplicationTailer implements Lifecycle {
                                  .start()) {
 
                 onStreamStarted();
+                pendingInbox.clear();
+                pendingAckLsn = null;
 
                 // Track timing for three independent watchdogs:
                 //  - Connected-heartbeat log every HEARTBEAT_INTERVAL_NANOS so operators can see
@@ -497,6 +508,8 @@ public class WalReplicationTailer implements Lifecycle {
                     ByteBuffer msg   = stream.readPending();
                     long       nowNs = System.nanoTime();
                     if (msg == null) {
+                        // The stream has nothing more right now: write what has arrived before waiting for more
+                        flushInbox(stream);
                         handleNullPoll();
                         if (nowNs - lastHeartbeatNs >= HEARTBEAT_INTERVAL_NANOS) {
                             logConnectedHeartbeat();
@@ -530,6 +543,11 @@ public class WalReplicationTailer implements Lifecycle {
                         if(log.isTraceEnabled()) {
                             log.trace("Message not handled");
                         }
+                    }
+                    if (!pendingInbox.isEmpty()
+                            && (pendingInbox.size() >= inboxWriteBatchSize()
+                                || nowNs - pendingSinceNanos >= tailerProperties.getInboxWriteMaxDelay().toNanos())) {
+                        flushInbox(stream);
                     }
                 }
             }
@@ -1098,11 +1116,24 @@ public class WalReplicationTailer implements Lifecycle {
         if (logicalDecodingPlugin.preFiltersRawPayloads()
                 && !walMessageFilter.shouldPersist(payload.bytes())) {
             logFilteredMessage(payload, lsnStr);
-            acknowledge(stream, lsn);
+            if (pendingInbox.isEmpty()) {
+                acknowledge(stream, lsn);
+            } else {
+                // Acknowledging it now would confirm the batch received before it, which is not written yet
+                pendingAckLsn = lsn;
+            }
             return false;
         }
 
         recordReceivedMessage(payload, lsnStr);
+        if (batchesInboxWrites() && lsn != null) {
+            if (pendingInbox.isEmpty()) {
+                pendingSinceNanos = System.nanoTime();
+            }
+            pendingInbox.add(new PendingInboxMessage(payload, lsnStr, logicalDecodingPlugin.inboxDedupKey(payload.bytes(), lsnStr)));
+            pendingAckLsn = lsn;
+            return true;
+        }
         try {
             persistMessage(payload, lsnStr);
         } catch (ContinueStreamingException | StopStreamingException ignored) {
@@ -1110,6 +1141,61 @@ public class WalReplicationTailer implements Lifecycle {
         }
         acknowledge(stream, lsn);
         return true;
+    }
+
+    private boolean batchesInboxWrites() {
+        return deliveryMode != CdcDeliveryMode.DIRECT && inboxWriteBatchSize() > 1;
+    }
+
+    private int inboxWriteBatchSize() {
+        return Math.max(1, tailerProperties.getInboxWriteBatchSize());
+    }
+
+    /**
+     * Writes the received messages to the inbox in one transaction, then acknowledges the highest LSN received with
+     * them. Should the batch fail, it is written again message by message through {@link #persistMessage}, so the
+     * error handler decides per message exactly as it does for an unbatched write: {@code CONTINUE} skips the message,
+     * {@code STOP} ends streaming with the rest unacknowledged, {@code RETRY_CONNECTION} rethrows to reconnect.
+     */
+    private void flushInbox(PGReplicationStream stream) throws Exception {
+        if (pendingInbox.isEmpty()) {
+            if (pendingAckLsn != null) {
+                acknowledge(stream, pendingAckLsn);
+                pendingAckLsn = null;
+            }
+            return;
+        }
+        var batch = List.copyOf(pendingInbox);
+        var ackLsn = pendingAckLsn;
+        pendingInbox.clear();
+        pendingAckLsn = null;
+        boolean[] inserted;
+        try {
+            inserted = inboxRepository.insertAllIfAbsent(slotName, batch.stream()
+                                                                        .map(message -> new CdcInboxRepository.InboxInsert(message.dedupKey(), message.payload().bytes()))
+                                                                        .toList());
+        } catch (Exception batchFailure) {
+            log.warn("[{}] Writing {} WAL messages to the CDC inbox as one batch failed - writing them one by one: {}",
+                     slotName, batch.size(), batchFailure.getMessage());
+            for (var message : batch) {
+                try {
+                    persistMessage(message.payload(), message.lsn());
+                } catch (ContinueStreamingException ignored) {
+                    // Skipped, as an unbatched write the error handler continues past is
+                } catch (StopStreamingException stop) {
+                    return;
+                }
+            }
+            acknowledge(stream, ackLsn);
+            return;
+        }
+        for (var i = 0; i < batch.size(); i++) {
+            recordPersistenceOutcome(inserted[i], batch.get(i).dedupKey());
+        }
+        acknowledge(stream, ackLsn);
+    }
+
+    private record PendingInboxMessage(WalPayload payload, String lsn, String dedupKey) {
     }
 
     private void logFilteredMessage(WalPayload payload, String lsnStr) {

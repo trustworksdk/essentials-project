@@ -327,6 +327,16 @@ public final class CdcDispatcher implements Lifecycle {
 
         schemaRePrimedThisTick = false;
 
+        // Acknowledged together once the loop ends, however it ends - one commit per batch, not per row
+        var dispatched = new ArrayList<CdcInboxRepository.InboxRow>(batch.size());
+        try {
+            dispatchRows(batch, dispatched);
+        } finally {
+            acknowledgeDispatchedRows(dispatched);
+        }
+    }
+
+    private void dispatchRows(List<CdcInboxRepository.InboxRow> batch, List<CdcInboxRepository.InboxRow> dispatched) {
         for (var row : batch) {
             if (stopping.get()) return;
             var payloadBytes = row.payloadJsonBytes();
@@ -347,7 +357,7 @@ public final class CdcDispatcher implements Lifecycle {
                     // plugin's diagnostic summary to distinguish benign from buggy.
                     inboxRowsWithEmptyDecodeCount.incrementAndGet();
                 }
-                acknowledgeDispatchedRow(row);
+                dispatched.add(row);
             } catch (CdcTransientEmitException transientEmit) {
                 // Transient emit failure — NOT a conversion failure. The event decoded fine; the CDC
                 // bus couldn't accept it right now, either because subscribers are behind producers
@@ -494,14 +504,33 @@ public final class CdcDispatcher implements Lifecycle {
         return msg.length() > 2000 ? msg.substring(0, 2000) : msg;
     }
 
-    private void acknowledgeDispatchedRow(CdcInboxRepository.InboxRow row) {
+    /**
+     * The rows this tick published, in one statement per policy. Should it fail they stay {@code RECEIVED} and the next
+     * tick publishes them again - at-least-once, as a failed single-row acknowledgement always was; a subscription's
+     * delivery gate drops what it has seen. Not thrown: the tick may already be unwinding from its own failure.
+     */
+    private void acknowledgeDispatchedRows(List<CdcInboxRepository.InboxRow> rows) {
+        if (rows.isEmpty()) {
+            return;
+        }
         // Schema rows are exempt from DELETE: they are the only record of a relation's layout between
         // replication sessions, and deleting them leaves nothing to prime the decoder from after a
         // restart. There is at most one per relation, so retaining them costs nothing.
-        if (dispatchedRowPolicy == DispatchedRowPolicy.DELETE && !isSchemaRow(row)) {
-            inbox.deleteDispatched(row.inboxId());
-        } else {
-            inbox.markDispatched(row.inboxId());
+        var toDelete = new ArrayList<Long>();
+        var toMark   = new ArrayList<Long>();
+        for (var row : rows) {
+            if (dispatchedRowPolicy == DispatchedRowPolicy.DELETE && !isSchemaRow(row)) {
+                toDelete.add(row.inboxId());
+            } else {
+                toMark.add(row.inboxId());
+            }
+        }
+        try {
+            inbox.deleteAllDispatched(toDelete);
+            inbox.markAllDispatched(toMark);
+        } catch (RuntimeException e) {
+            log.warn("[{}] Could not acknowledge {} dispatched CDC inbox rows - the next tick publishes them again: {}",
+                     slotName, rows.size(), e.getMessage(), e);
         }
     }
 
