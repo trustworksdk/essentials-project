@@ -45,6 +45,13 @@ import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
  * And a handler returning mid-charge, its message charged below the limit, finishes with the charge on both lanes: it asks
  * the ledger before it takes its owner's {@code stateLock}, which the charge takes under the ledger's monitor
  * ({@code ReleaseChargeLedger}'s <b>Locking</b>).
+ * <p>
+ * The trade this makes, pinned by the {@code ..._recording_its_failure_is_not_taken_by_a_charge_that_starts_meanwhile}
+ * tests: a handler that failed is left out of the charge while it records its failure too, and that record is a fenced
+ * write. When the release commits before it, the write is refused and the next owner, finding the unit released, charges
+ * nothing, so that delivery's attempt is not counted. Accepted, as the window runs only until that write commits, and
+ * charged in it, the delivery would be counted twice (by the charge and by its own failure write) or dead-lettered by the
+ * charge while its handler schedules a retry of it; a change to it should fail these tests.
  */
 class ReleaseChargeHandlerReturnTest {
 
@@ -140,6 +147,7 @@ class ReleaseChargeHandlerReturnTest {
 
         assertThat(charge.get(10, TimeUnit.SECONDS)).as("the message whose handler threw is not charged while its failure is recorded").isZero();
         assertThat(database.moved).as("nor dead-lettered").isEmpty();
+        assertThat(database.chargesAsked).as("no charge statement was issued: the attempt is left to the failure write alone").isEmpty();
     }
 
     @Test
@@ -156,6 +164,7 @@ class ReleaseChargeHandlerReturnTest {
 
         assertThat(charge.get(10, TimeUnit.SECONDS)).as("the message whose handler threw is not charged while its failure is recorded").isZero();
         assertThat(database.moved).as("nor dead-lettered").isEmpty();
+        assertThat(database.chargesAsked).as("no charge statement was issued: the attempt is left to the failure write alone").isEmpty();
     }
 
     /**

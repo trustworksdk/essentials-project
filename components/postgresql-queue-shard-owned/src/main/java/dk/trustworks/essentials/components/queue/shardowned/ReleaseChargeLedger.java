@@ -57,7 +57,12 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  *     unless a running charge may move the message or its move is still to be made, when they wait for that charge: a
  *     move commits before its write here, so a handler returning in between would otherwise take its message for one
  *     still in the table. A charge takes its candidates once it is running, and the owner leaves out a message whose
- *     handler has returned, so a handler that finds no charge running is never a candidate of one still to start.</li>
+ *     handler has returned, so a handler that finds no charge running is never a candidate of one still to start. One
+ *     that failed is left out too while it records its failure, and that record is a fenced write: when the release
+ *     commits before it, the write is refused, and the next owner, finding the shard or unit released, charges nothing - that
+ *     delivery's attempt is not counted. Accepted: the window runs only from the mark until that write commits, and
+ *     charged in it, the delivery would be counted twice (by the charge and by its own failure write) or dead-lettered by
+ *     the charge while its handler schedules a retry of it.</li>
  * </ul>
  * A {@code QueueObserver} told of a message dead-lettered here is told after the move, once {@link #charge} has let go of
  * the monitor, and what it throws is held until every move is made, then thrown: by then nothing is owed ({@link #owes}),
@@ -290,7 +295,8 @@ final class ReleaseChargeLedger {
      * out of them by the owner, which marks a handler returned before it asks {@link #deadLetteredWhileInHandler} and
      * leaves such messages out of {@code candidates}. Taken before the call ran, a handler returning in between found no
      * charge running and no record, queued its acknowledgement, and the charge then dead-lettered the message it had
-     * handled.
+     * handled. A handler that failed and is still recording its failure is left out the same way, so a release committing
+     * before that fenced write leaves that delivery's attempt uncounted (the class javadoc).
      *
      * @param candidates the messages in a handler to charge, by sequence value, each as the owner knows it (its key and
      *                   {@code key_order} go into its {@link ChargedRow}); asked once, under the monitor, so it may take the

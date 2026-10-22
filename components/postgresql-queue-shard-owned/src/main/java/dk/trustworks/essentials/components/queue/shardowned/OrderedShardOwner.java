@@ -151,6 +151,12 @@ final class OrderedShardOwner implements BatchReadableOwner {
      * thread asks {@link ReleaseChargeLedger#deadLetteredWhileInHandler}, so a charge that takes its candidates after that
      * leaves the message to the outcome its handler records, and one that took them before is seen running and waited for.
      * Charged regardless, a message whose handler had completed was acknowledged and dead-lettered both.
+     * <p>
+     * A handler that failed is left out too while it records its failure, and that record is a fenced write: when the
+     * release commits before it, the write is refused (the lease is no longer this owner's), and the next owner, finding
+     * the unit released, charges nothing - that delivery's attempt is not counted. Accepted: the window runs only from the
+     * mark until that write commits, and charged in it, the delivery would be counted twice (by the charge and by its own
+     * failure write) or dead-lettered by the charge while its handler schedules a retry of it.
      */
     private final Set<Long>                                                returnedFromHandler   = new HashSet<>();
     /**
