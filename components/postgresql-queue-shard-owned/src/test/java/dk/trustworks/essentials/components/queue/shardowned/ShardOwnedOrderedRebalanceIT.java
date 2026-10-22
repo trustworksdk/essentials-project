@@ -20,7 +20,7 @@ import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.zaxxer.hikari.*;
-import dk.trustworks.essentials.components.queue.shardowned.spi.QueueObserver;
+import dk.trustworks.essentials.components.queue.shardowned.spi.*;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.*;
 import org.slf4j.LoggerFactory;
@@ -491,6 +491,97 @@ class ShardOwnedOrderedRebalanceIT {
         } finally {
             release.countDown();
             ShardOwnedRebalanceIT.releaseQueueLog(logged);
+            first.close();
+            second.close();
+        }
+    }
+
+    /**
+     * One owner, both charge scopes: a fair-share shed past {@code stuckHandlerTimeout} charges the stuck key's message and
+     * spares a young key of the same unit, and its release is refused; a stop then keeps the unit, both keys still in their
+     * handlers, and a release on request charges the young key's message - every key in a handler is in its scope - but not
+     * the stuck key's again, which the shed charged under the other scope. The answer's {@code charged} counts both: what
+     * this owner has charged, the shed's charge included ({@link KeptUnitRelease#charged()}).
+     * <p>
+     * The joining instance stops before the incumbent does, so nothing takes the kept unit once the incumbent's liveness
+     * lapses; the young key stays under the bound until the stop has ended the run, so no retried shed charges it first.
+     */
+    @Test
+    void a_kept_unit_released_on_request_after_its_shed_charged_the_stuck_key_charges_only_the_young_key_and_answers_both_charges() throws Exception {
+        var stuckUnit           = ShardOwnedSchema.ORDERED_UNITS - 1;
+        var stuckKey            = keyOnUnit(stuckUnit);
+        var youngKey            = otherKeyOnUnit(stuckUnit, stuckKey);
+        // Room for the young key to stay under the bound through the join, the shed, its refused release and the stop.
+        var stuckHandlerTimeout = Duration.ofSeconds(8);
+        var stuckEntered        = new CountDownLatch(1);
+        var youngEntered        = new CountDownLatch(1);
+        var release             = new CountDownLatch(1);
+        var seqByKey            = new ConcurrentHashMap<String, Long>();
+        var settings            = fast(Duration.ofMillis(500), Duration.ofMillis(1000), stuckHandlerTimeout);
+        var maxAttemptsThree    = RedeliveryPolicy.fixed(Duration.ofMillis(100), 3);
+        var queueIds            = new short[]{QUEUE_ID};
+
+        var first  = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "ord-mixed-a");
+        var second = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "ord-mixed-b");
+        try {
+            first.startConsumingOrdered((messageId, key, payload, payloadType) -> {
+                var held = stuckKey.equals(key) ? stuckEntered : youngKey.equals(key) ? youngEntered : null;
+                if (held != null && seqByKey.putIfAbsent(key, messageId.sequence()) == null) {
+                    held.countDown();
+                    awaitQuietly(release);
+                }
+            }, settings, SHARD_COUNT, maxAttemptsThree);
+            Awaitility.await().atMost(Duration.ofSeconds(10))
+                      .untilAsserted(() -> assertThat(first.shardsHeld()).isEqualTo(ShardOwnedSchema.ORDERED_UNITS));
+            first.enqueueOrdered(List.of(new ShardOwnedStorage.OrderedPayload(stuckKey, 0, "stuck".getBytes(StandardCharsets.UTF_8), 1)));
+            assertThat(stuckEntered.await(15, TimeUnit.SECONDS)).as("premise: the stuck key is in its handler").isTrue();
+            var fenceBefore = fenceOf(stuckUnit);
+            Thread.sleep(stuckHandlerTimeout.toMillis() + 500);
+            first.enqueueOrdered(List.of(new ShardOwnedStorage.OrderedPayload(youngKey, 0, "young".getBytes(StandardCharsets.UTF_8), 1)));
+            assertThat(youngEntered.await(15, TimeUnit.SECONDS)).as("premise: the young key is in its handler, in the same unit").isTrue();
+            var youngEnteredAtNanos = System.nanoTime();
+
+            LeaseReleaseRefusals.failLeaseReleasesOf(dataSource, queueIds, "ordered", stuckUnit, true);
+            try {
+                second.startConsumingOrdered((messageId, key, payload, payloadType) -> { }, settings, SHARD_COUNT, maxAttemptsThree);
+
+                // Each refusal follows a charge that went through: the trigger refuses the lease row's release, not the charge.
+                Awaitility.await("the shed's release refused").atMost(Duration.ofSeconds(30))
+                          .until(() -> LeaseReleaseRefusals.releasesRefused(dataSource, QUEUE_ID, stuckUnit) > 0);
+                second.stop();
+                first.stop();
+                assertThat(Duration.ofNanos(System.nanoTime() - youngEnteredAtNanos))
+                        .as("premise: the young key was under the bound until the stop ended the run, so no shed charged it")
+                        .isLessThan(stuckHandlerTimeout);
+            } finally {
+                LeaseReleaseRefusals.failLeaseReleasesOf(dataSource, queueIds, "ordered", stuckUnit, false);
+            }
+            assertThat(ownerOf(stuckUnit)).as("premise: the stop kept the unit, its release refused").isEqualTo("ord-mixed-a");
+            assertThat(fenceOf(stuckUnit)).as("premise: and nothing took it").isEqualTo(fenceBefore);
+            assertThat(first.metrics().takeoverAttemptBumps.sum()).as("premise: the shed charged the stuck key's message, and only that").isEqualTo(1);
+            assertThat(attemptsOf(seqByKey.get(stuckKey))).as("premise: the stuck key's stored attempts").isEqualTo(1);
+            assertThat(attemptsOf(seqByKey.get(youngKey))).as("premise: the young key's stored attempts").isZero();
+
+            // BUSY while the stop's budget thread still flushes the kept unit; a BUSY answer charges nothing.
+            var answer = new AtomicReference<KeptUnitRelease>();
+            Awaitility.await("the kept unit released on request").atMost(Duration.ofSeconds(10)).until(() -> {
+                var released = first.releaseKeptOrderedUnit("ord-mixed-a", stuckUnit);
+                released.ifPresent(answer::set);
+                return released.isPresent() && released.get().outcome() != KeptUnitRelease.Outcome.BUSY;
+            });
+
+            assertThat(answer.get().outcome()).isEqualTo(KeptUnitRelease.Outcome.RELEASED);
+            assertThat(answer.get().keysInHandler()).as("premise: both keys still in their handlers").containsExactlyInAnyOrder(stuckKey, youngKey);
+            assertThat(release.getCount()).as("premise: both handlers are still held").isEqualTo(1);
+            assertThat(first.metrics().takeoverAttemptBumps.sum()).as("the request charged the young key's message, not the stuck key's again").isEqualTo(2);
+            assertThat(attemptsOf(seqByKey.get(stuckKey))).as("the stuck key's stored attempts, charged once by the shed").isEqualTo(1);
+            assertThat(attemptsOf(seqByKey.get(youngKey))).as("the young key's stored attempts, charged once by the request").isEqualTo(1);
+            assertThat(answer.get().charged()).as("the answer counts every message this owner charged, the shed's included").isEqualTo(2);
+            assertThat(answer.get().deadLetteredKeys()).as("nothing reached its attempt limit").isEmpty();
+            assertThat(ownerOf(stuckUnit)).as("released").isNull();
+        } finally {
+            release.countDown();
+            LeaseReleaseRefusals.failLeaseReleasesOf(dataSource, queueIds, "ordered", stuckUnit, false);
             first.close();
             second.close();
         }
