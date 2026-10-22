@@ -81,7 +81,9 @@ SMOKE_BUILD = ("passed", "compiled-only", "failed", "not-run")
 FILE_KEY = "(preset)"
 
 # A complete, valid answer set: one key at a time is swapped in and run through the renderer's own
-# normalize_answers, so a preset value is usable exactly when the renderer would accept it.
+# normalize_answers, so a preset value is usable exactly when the renderer would accept it. Its explicit
+# packagePath keeps that per-key pass from deriving a package; _derived_package_reason checks the one
+# pair the renderer combines, groupId and artifactId, when the preset names no usable packagePath.
 _PROBE = {
     **{key: values[0] for key, values in ir.ENUMS.items()},
     "projectName": "Probe",
@@ -106,6 +108,28 @@ def _answer_reason(key: str, value) -> str | None:
         if key in ir.ENUMS:  # the renderer's message is Python repr; the reader of a report reads JSON
             return f"{key}={json.dumps(value)} is not one of {json.dumps(list(ir.ENUMS[key]))}"
         return str(exc)
+    return None
+
+
+def _derived_package_reason(usable: dict) -> str | None:
+    """Why the renderer would refuse the package it derives from the usable artifactId, or None.
+
+    Only without a usable packagePath: normalize_answers then derives the package from groupId and
+    artifactId (the probe's groupId when the preset has none). Each passed the per-key check, so a groupId
+    is a valid package already and the segment the artifactId adds is what the renderer can refuse — a
+    Java/Kotlin keyword such as `class`.
+    """
+    if "packagePath" in usable or "artifactId" not in usable:
+        return None
+    answers = {key: value for key, value in _PROBE.items() if key != "packagePath"}
+    answers.update({key: usable[key] for key in ("groupId", "artifactId") if key in usable})
+    try:
+        ir.normalize_answers(answers)
+    except ir.RenderError:
+        segment = ir.derive_package(answers["groupId"], answers["artifactId"]).rsplit(".", 1)[-1]
+        return (f"with no packagePath the package is derived from artifactId {json.dumps(answers['artifactId'])}, "
+                f"and its segment {segment!r} is not a valid Java/Kotlin identifier; preset a packagePath to keep "
+                f"this artifactId")
     return None
 
 
@@ -144,6 +168,11 @@ def read_preset(path: Path | None, workspace: Path) -> tuple[dict, dict]:
             usable[key] = value
         else:
             ignored[key] = reason
+    reason = _derived_package_reason(usable)
+    if reason is not None:
+        del usable["artifactId"]
+        ignored["artifactId"] = reason
+        ignored = {key: ignored[key] for key in PRESET_KEYS if key in ignored}
     if "targetDir" in usable and "targetMode" in usable:
         del usable["targetMode"]
         ignored["targetMode"] = "superseded by targetDir"

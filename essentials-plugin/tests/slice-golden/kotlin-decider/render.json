@@ -634,14 +634,14 @@
     "behaviours": [
       {
         "id": "automation.records-progress",
-        "status": "implemented",
-        "summary": "On the triggering event the processor loads or creates the process's TodoList keyed by the aggregate id, marks it started and saves it.",
+        "status": "placeholder",
+        "summary": "On the triggering event the processor loads or creates the process's TodoList keyed by the aggregate id and marks it started, but sends the placeholder Any() before saving it; no handler accepts that, so the send throws and the TodoList is never saved until the command to dispatch is written.",
         "where": "src/main/kotlin/com/example/shop/orders/automations/fulfillment/FulfillmentProcessor.kt#on"
       },
       {
         "id": "automation.idempotent-redelivery",
-        "status": "implemented",
-        "summary": "A redelivered event finds its TodoList already started and returns before dispatching or saving again.",
+        "status": "placeholder",
+        "summary": "A redelivered event that finds its TodoList already started returns before dispatching or saving again, but no TodoList is saved until the placeholder send is replaced (automation.records-progress), so a redelivery finds none and runs the handler again.",
         "where": "src/main/kotlin/com/example/shop/orders/automations/fulfillment/FulfillmentProcessor.kt#on"
       },
       {

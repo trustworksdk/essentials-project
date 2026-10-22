@@ -43,7 +43,7 @@ The renderer the four kind skills use (`slice/slice-authoring.md` §4b). Interfa
 and report fields below. Within it an option or a report field is only ever added; removing or
 renaming one, or changing what an exit code means, is interface `2` (`INTERFACE` in the script).
 
-```
+```text
 python3 <plugin>/scripts/render-slice.py render --lang java|kotlin
     --kind command|view|automation|translation --lane decider|aggregate|service-entity
     --main-root DIR --test-root DIR [--project-root DIR] [--new-bc] [--with-state] [--wire]
@@ -74,7 +74,7 @@ read, so they are passed. `--new-bc` is accepted with `--kind command` only.
 - `--json` prints exactly one JSON document on stdout. Diagnostics go to stderr.
 - `0` — rendered.
 - `2` — nothing was rendered and nothing is left behind, wiring included. The first stderr line starts
-  `render-slice: ` and says why: a bad or missing input, a refused combination, an existing target, a
+  `render-slice:` and a space, and says why: a bad or missing input, a refused combination, an existing target, a
   manifest that contradicts the flags. A failure part-way through the writes or the wiring edits
   restores every file it created or edited before exiting `2`.
 - Any other code is a crash. The render restores what it touched before the error propagates.
@@ -152,7 +152,10 @@ Renders from a `slice.yaml` that someone wrote before any code, then updates it 
 
 Paths are relative to `--project-root`. `behaviours` and `stubTests` come from
 `slice/templates/behaviours.json`; `tests/scripts/test_behaviours_catalog.py` keeps it complete for
-every family and every stub test.
+every family and every stub test, and fails an `implemented` behaviour that no test under
+`tests/slice-compile/behaviours/` names. Those tests run in the plugin's CI slices build against the
+rendered, untouched skeleton of every composition that renders the family
+(`tests/slice-compile/README.md` § Behaviour checks).
 
 ## 3. `init.preset` — `/essentials:init --preset FILE --report FILE`
 

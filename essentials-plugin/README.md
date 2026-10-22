@@ -267,7 +267,7 @@ essentials-plugin/
 │   ├── init-overlay/            (CI-only wiring tests added to the nine cells)
 │   ├── slice-golden/            (rendered slice compositions, byte-diffed by render-slice.py check)
 │   ├── slice-compile/           (which composition or fixture builds on which host; the two-BC
-│   │                             boot test)
+│   │                             boot test; the behaviour checks of behaviours.json)
 │   ├── slice-source/, slice-index/, slice-atlas-layout/, slice-enrich/, slice-law/, stack-lint/
 │   │                            (each script's cases and goldens)
 │   ├── review/                  (review-scan's signature diffs; judgement patches over two fixtures)

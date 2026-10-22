@@ -100,6 +100,39 @@ class PresetTest(Workspace):
         self.assertIn("packagePath", ignored["packagePath"])
         self.assertEqual(result["ask"], ["targetMode", *rep.ANSWER_KEYS])
 
+    def test_artifact_id_that_derives_a_keyword_segment_is_ignored_without_a_package_path(self):
+        # Alone each key is valid; with no packagePath the renderer derives `<groupId>.class` and refuses it,
+        # so the preset artifactId is asked rather than taken.
+        for preset in ({"artifactId": "class"},
+                       {"groupId": "dk.trustworks.orders", "artifactId": "class"},
+                       {"groupId": "dk.trustworks.orders", "artifactId": "class-"},
+                       {"groupId": "dk.trustworks.orders", "artifactId": "class", "packagePath": ""}):
+            with self.subTest(preset=preset):
+                with self.assertRaises(ir.RenderError):
+                    ir.normalize_answers({**ANSWERS, **preset, "packagePath": ""})
+                result = self.preset(preset)
+                self.assertNotIn("artifactId", result["preset"])
+                self.assertIn("'class'", result["ignored"]["artifactId"])
+                self.assertIn("packagePath", result["ignored"]["artifactId"])
+                self.assertIn("artifactId", result["ask"])
+                self.assertEqual(result["preset"], {k: v for k, v in preset.items() if k == "groupId"})
+
+    def test_artifact_id_with_a_keyword_segment_stays_usable_with_a_package_path(self):
+        preset = {"groupId": "dk.trustworks.orders", "artifactId": "class", "packagePath": "dk.trustworks.orders.api"}
+        ir.normalize_answers({**ANSWERS, **preset})
+        result = self.preset(preset)
+        self.assertEqual(result["preset"], preset)
+        self.assertEqual(result["ignored"], {})
+
+    def test_artifact_id_that_derives_a_valid_package_stays_usable(self):
+        for preset in ({"artifactId": "orders-service"},
+                       {"groupId": "dk.trustworks.orders", "artifactId": "orders"},
+                       {"groupId": "dk.trustworks.orders", "artifactId": "class-api"}):
+            with self.subTest(preset=preset):
+                result = self.preset(preset)
+                self.assertEqual(result["preset"], preset)
+                self.assertEqual(result["ignored"], {})
+
     def test_wrong_json_type_is_ignored(self):
         result = self.preset({"compose": 1, "lintGate": ["hook"], "groupId": 7, "packagePath": 3})
         self.assertEqual(result["preset"], {})

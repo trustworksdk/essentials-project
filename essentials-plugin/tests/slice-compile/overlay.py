@@ -10,7 +10,8 @@ A case is one host build:
   - each composition in `tests/slice-golden/compositions.json`, on the host that composition names, `verify`: the
     host's ApplicationContextIT and OpenApiContractIT start the context with the slices in it, and the slices' own
     tests run. The `*-decider-two-bc` compositions also get the boot overlay (`boot/<lang>/src/`), because the defect
-    they guard (a second decider configurator) is runtime-only;
+    they guard (a second decider configurator) is runtime-only. The compositions in BEHAVIOUR_OVERLAYS also get their
+    behaviour checks (`behaviours/<dir>/src/`): an integration test per `implemented` behaviour of the catalog;
   - the fixtures that are Essentials applications. Only `.java`/`.kt` files are copied. `fixture-worked-example`
     (`{{packagePath}}` rendered to the host's packagePath, plus a test-only adapter for its outbound port from
     `stubs/worked-example/`) runs `verify`; `fixture-multi-lane` and `fixture-aggregate-lane` live outside the host's
@@ -47,8 +48,22 @@ FIXTURES = PLUGIN / "tests" / "fixtures"
 HOSTS = PLUGIN / "tests" / "golden" / "init" / "hosts.json"
 BOOT = HERE / "boot"
 STUBS = HERE / "stubs"
+BEHAVIOURS = HERE / "behaviours"
 
 SOURCE_SUFFIXES = {".java", ".kt"}
+
+# The behaviour checks: directories under behaviours/, each a src/ tree of integration tests asserting the
+# `implemented` entries of references/slice/templates/behaviours.json against the rendered, untouched skeleton. Each
+# test carries a `// behaviour: <language>/<family> <id>` line above its @Test; tests/scripts/test_behaviours_catalog.py
+# fails an `implemented` entry no such line names. One directory may serve several compositions: the Java view and
+# automation templates are the same on the decider and the aggregate lane, so `java-event-processors` goes on both.
+BEHAVIOUR_OVERLAYS = {
+    "java-decider": ("java-decider", "java-event-processors"),
+    "java-aggregate": ("java-aggregate", "java-event-processors"),
+    "java-service-entity": ("java-service-entity",),
+    "kotlin-decider": ("kotlin-decider",),
+    "kotlin-service-entity": ("kotlin-service-entity",),
+}
 
 # Fixture directories that are deliberately not compiled, and why. `check` fails on a fixture in neither list.
 NOT_COMPILED = {
@@ -110,6 +125,8 @@ def cases() -> dict[str, Case]:
                     [Part("composition", "tree", GOLDEN / name / "src")])
         if name.endswith("-decider-two-bc"):
             case.parts.append(Part("boot", "tree", BOOT / language / "src"))
+        for directory in BEHAVIOUR_OVERLAYS.get(name, ()):
+            case.parts.append(Part(f"behaviours-{directory}", "tree", BEHAVIOURS / directory / "src"))
         result[name] = case
     result["fixture-multi-lane"] = Case(
         "fixture-multi-lane", "java-pg-event-sourced", "test-compile", "tests/fixtures/multi-lane",
@@ -195,6 +212,14 @@ def check() -> list[str]:
         for part in case.parts:
             if not part.source.is_dir():
                 problems.append(f"{case.name}: {part.source.relative_to(PLUGIN)} does not exist")
+    for name in BEHAVIOUR_OVERLAYS:
+        if name not in all_cases:
+            problems.append(f"BEHAVIOUR_OVERLAYS names {name!r}, which is not a case")
+    used = {d for dirs in BEHAVIOUR_OVERLAYS.values() for d in dirs}
+    if BEHAVIOURS.is_dir():
+        for directory in sorted(p.name for p in BEHAVIOURS.iterdir() if p.is_dir()):
+            if directory not in used:
+                problems.append(f"behaviours/{directory}: no case in BEHAVIOUR_OVERLAYS uses it, so nothing builds it")
     covered = {c.origin.removeprefix("tests/fixtures/") for c in all_cases.values() if c.origin.startswith("tests/fixtures/")}
     # A fixture is a directory with a TEST-GUIDE.md; anything else there (__pycache__, editor dirs) is not one.
     for fixture in sorted(p.name for p in FIXTURES.iterdir() if (p / "TEST-GUIDE.md").is_file()):

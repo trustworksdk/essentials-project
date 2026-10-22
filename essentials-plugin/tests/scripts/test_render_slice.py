@@ -105,6 +105,20 @@ class GoldenTest(unittest.TestCase):
                len({s["inputs"].get("bc", c["inputs"].get("bc")) for s in c["steps"] if s.get("newBc")}) >= 2]
         self.assertEqual(len(two), 2, "a two-BC decider composition per language")
 
+    def test_a_seed_or_orientation_step_refuses_to_overwrite_a_file(self):
+        for key in ("seed", "orientation"):
+            with self.subTest(key=key), tempfile.TemporaryDirectory() as tmp:
+                golden, out = Path(tmp) / "golden", Path(tmp) / "out"
+                (golden / "_seeds" / "files" / "docs").mkdir(parents=True)
+                (golden / "_seeds" / "files" / "docs" / "plan.md").write_text("seeded\n")
+                (out / "docs").mkdir(parents=True)
+                (out / "docs" / "plan.md").write_text("already here\n")
+                comp = {"language": "kotlin", "lane": "decider", "steps": [{key: "_seeds/files"}]}
+                with self.assertRaises(rs.RenderError) as caught:
+                    rs.render_composition(comp, out, golden)
+                self.assertEqual(str(caught.exception), f"{key} _seeds/files would overwrite docs/plan.md")
+                self.assertEqual((out / "docs" / "plan.md").read_text(), "already here\n")
+
 
 class PlaceholderContractTest(unittest.TestCase):
     def test_every_template_placeholder_is_known(self):

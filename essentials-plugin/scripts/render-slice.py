@@ -1150,12 +1150,13 @@ def render_composition(comp: dict, out: Path, golden: Path) -> None:
         if "seed" in step or "orientation" in step:
             # Files the user writes by hand between two slices (the service-entity entity), or a
             # planner's orientation files written before any code (--manifest).
-            seed = golden / step.get("seed", step.get("orientation", ""))
+            key = "seed" if "seed" in step else "orientation"
+            seed = golden / step[key]
             clashes = [p for p in tree(seed) if (out / p).exists()]
             if clashes:
-                raise RenderError(f"seed {step['seed']} would overwrite {', '.join(clashes)}")
+                raise RenderError(f"{key} {step[key]} would overwrite {', '.join(clashes)}")
             shutil.copytree(seed, out, dirs_exist_ok=True)
-            reports.append({"seed": step.get("seed", step.get("orientation")), "written": sorted(tree(seed))})
+            reports.append({"seed": step[key], "written": sorted(tree(seed))})
             continue
         values = {**comp.get("inputs", {}), **step.get("inputs", {})}
         rep = render(lang, step["kind"], lane, values, out, main_root, test_root,

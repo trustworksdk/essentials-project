@@ -130,7 +130,7 @@
       "src/main/kotlin/com/example/shop/orders/use_cases/place_order/CLAUDE.md:7: **Purpose:** TODO one sentence, present tense.",
       "src/main/kotlin/com/example/shop/orders/use_cases/place_order/CLAUDE.md:10: - TODO the rule this slice enforces. It lives on `Order`, not in the handler — the entity is the",
       "src/main/kotlin/com/example/shop/orders/use_cases/place_order/PlaceOrder.kt:27: // TODO: replace with this command's real payload",
-      "src/main/kotlin/com/example/shop/orders/use_cases/place_order/PlaceOrderHandler.kt:38: // TODO: call the ONE invariant method this slice's intent maps to. The Boolean-returning",
+      "src/main/kotlin/com/example/shop/orders/use_cases/place_order/PlaceOrderHandler.kt:43: // TODO: call the ONE invariant method this slice's intent maps to. The Boolean-returning",
       "src/main/kotlin/com/example/shop/orders/use_cases/place_order/slice.yaml:9: summary: TODO one sentence, present tense.",
       "src/main/kotlin/com/example/shop/orders/use_cases/place_order/slice.yaml:28: - { id: INV-1, text: \"TODO the rule this slice enforces\", enforcedBy: \"Order.applyPlaceholder\" }",
       "src/test/kotlin/com/example/shop/orders/entities/PlaceOrderTest.kt:24: // TODO: assert the resulting state through the entity's own read path",
@@ -294,7 +294,7 @@
       "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/CLAUDE.md:7: **Purpose:** TODO one sentence, present tense.",
       "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/CLAUDE.md:10: - TODO the rule this slice enforces. It lives on `Order`, not in the handler — the entity is the",
       "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/CancelOrder.kt:27: // TODO: replace with this command's real payload",
-      "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/CancelOrderHandler.kt:38: // TODO: call the ONE invariant method this slice's intent maps to. The Boolean-returning",
+      "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/CancelOrderHandler.kt:43: // TODO: call the ONE invariant method this slice's intent maps to. The Boolean-returning",
       "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/slice.yaml:9: summary: TODO one sentence, present tense.",
       "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/slice.yaml:28: - { id: INV-1, text: \"TODO the rule this slice enforces\", enforcedBy: \"Order.applyPlaceholder\" }",
       "src/test/kotlin/com/example/shop/orders/entities/CancelOrderTest.kt:24: // TODO: assert the resulting state through the entity's own read path",
@@ -444,20 +444,20 @@
     "behaviours": [
       {
         "id": "view.query-endpoint",
-        "status": "implemented",
-        "summary": "A GET on the view's path returns every entity row, projected onto the view interface.",
+        "status": "placeholder",
+        "summary": "A GET on the view's path is mapped to findAllBy, but projecting onto the closed view interface makes Spring Data Mongo build the entity through its constructor from the selected id alone, so the GET fails with a server error for an entity whose constructor takes a non-null property the view does not expose, the scaffold's own entity included; widening the view or letting the entity be built from its id is left to the developer.",
         "where": "src/main/kotlin/com/example/shop/orders/views/order_list/OrderListAPI.kt"
       },
       {
         "id": "view.query-by-id",
-        "status": "implemented",
-        "summary": "A GET on the view's path with an id returns that row projected onto the view interface; an unknown id throws NoSuchElementException, which no handler maps to 404.",
+        "status": "placeholder",
+        "summary": "A GET on the view's path with an id is mapped to the find-by-id query, which fails as the find-all one does (view.query-endpoint) until the view can be built from what it selects; an unknown id throws NoSuchElementException, which no handler maps to 404.",
         "where": "src/main/kotlin/com/example/shop/orders/views/order_list/OrderListAPI.kt"
       },
       {
         "id": "view.strongly-consistent-read",
-        "status": "implemented",
-        "summary": "The queries read the entity's own table, so a committed write is visible to the next query with no projection lag.",
+        "status": "placeholder",
+        "summary": "The queries read the entity's own collection, so they would see a committed write with no projection lag, but they fail as view.query-endpoint does until the view can be built from what it selects.",
         "where": "src/main/kotlin/com/example/shop/orders/views/order_list/OrderListQueries.kt"
       },
       {

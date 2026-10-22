@@ -87,10 +87,23 @@ targets, with a `-N` suffix for plugin-only releases.
   and edit now goes through a transaction, which is undone on any failure, crashes included.
 - **Fixed: a service-entity command slice's endpoint always failed.** The `command_service_entity` API
   (Java and Kotlin) sent its command with a freshly generated `<Aggregate>Id.random()`, but the handler
-  loads an existing entity by that id, so every POST to a newly scaffolded slice ended in "No <Entity>
-  …" (a 500). The request now carries the id of the entity to change (`<aggregate>Id` in the body),
+  loads an existing entity by that id, so every POST to a newly scaffolded slice ended in
+  `No <Entity> …` (a 500). The request now carries the id of the entity to change (`<aggregate>Id` in the body),
   the endpoint keeps its `POST <apiPath>` route, and the manifest is unchanged. A slice scaffolded
   before keeps the old body: give its request the id field by hand.
+- **Fixed: every command of a service-entity command slice failed with a `NullPointerException`.** The
+  handler template (Java and Kotlin) was `@Transactional`, so Spring proxied it, and the `CommandBus` called
+  the final `AnnotatedCommandHandler.handle` on the uninitialised proxy. The annotation is gone: the bus
+  already runs the handler inside a unit of work that is a Spring-managed transaction. A slice scaffolded
+  before keeps the annotation: delete `@Transactional` and its import from the handler by hand.
+- **`behaviours.json` statuses are tested.** Every `implemented` behaviour now has an integration test
+  under `tests/slice-compile/behaviours/` that the CI slices build runs against the rendered, untouched
+  skeleton, and `test_behaviours_catalog.py` fails an `implemented` entry without one. Five Kotlin entries
+  the tests showed false are `placeholder` now, so sdd's test author writes failing tests for them:
+  `automation.records-progress` and `automation.idempotent-redelivery` (the placeholder `Any()` command
+  throws before the TodoList is saved), and the service-entity view's `view.query-endpoint`,
+  `view.query-by-id` and `view.strongly-consistent-read` (the closed projection cannot build an entity
+  whose constructor takes a property the view does not select, the scaffold's own entity included).
 - **Rendering into an existing bounded context reads its names.** `AggregateType`, `Aggregates`,
   `Aggregate` and `Entity` come from the BC's scaffold when they are not passed and it names exactly one
   of each; before, the render refused with "no value for AggregateType". A new BC still needs them passed.
@@ -206,7 +219,9 @@ targets, with a `-N` suffix for plugin-only releases.
   unit sooner on the instance that kept it, with `MessageQueue.releaseKeptOrderedUnit(instanceId, unit)` or the
   admin API's `POST /shard-owned-queues/{queueName}/ordered-units/{unit}/release-kept?instanceId=…`, naming the
   instance id the kept-unit WARN printed - only a unit a subscription under that id kept is released, and the answer's
-  `answeredBy` names the instance ids of the process that answered - accepting that the messages still in a
+  `answeredBy` names the instance ids of the process that answered; nothing passes the request on to another
+  process, so behind a load balancer it goes to that process's own address (a pod address, `kubectl port-forward`) -
+  accepting that the messages still in a
   handler are delivered again, possibly beside those handlers; and a new Gotcha
   lists what a `QueueObserver` calling the queue back from `shardOwnershipChanged` gets - a `consume()` from a release
   a stop tells, or from one a failed start tells while it stops the lanes it had started, returns a subscription
@@ -226,7 +241,9 @@ targets, with a `-N` suffix for plugin-only releases.
   unit released with a message still in a handler that has not returned - by a fair-share shed or a dead pump's
   hand-back past `stuckHandlerTimeout`, or on request with `MessageQueue.releaseKeptOrderedUnit` - charges that
   message an attempt before the release and dead-letters it at `maxAttempts`, so a message whose handler hangs on
-  every delivery reaches the dead-letter table once the queue has stopped waiting for it `maxAttempts` times. An
+  every delivery reaches the dead-letter table once the queue has stopped waiting for it `maxAttempts` times. The
+  shed and the hand-back charge only a message in a handler longer than `stuckHandlerTimeout`, and release a younger
+  one uncharged; a release on request charges every message in a handler. An
   unordered shard, released without waiting for its handlers - by a fair-share shed, a dead pump's hand-back or a
   `stop()` once `shedGrace` has run out - charges each message in a handler longer than `stuckHandlerTimeout` the same
   way and dead-letters it at `maxAttempts`; a message in a handler for less is released uncharged.
@@ -281,7 +298,7 @@ targets, with a `-N` suffix for plugin-only releases.
 - **Refreshing the lint gate no longer turns CI red unannounced** — `slice-lint.py --baseline <json>`
   reports only the findings a previous `--json` run did not. `/essentials:slice-check` gate 12 and
   `/essentials:upgrade` measure what a refreshed copy would add before offering it, say "the refresh
-  adds N findings in <files>", and offer the manifest fixes first; a committed baseline also works as
+  adds N findings in `<files>`", and offer the manifest fixes first; a committed baseline also works as
   a CI ratchet. The gate-14 hint no longer suggests a `tier` value it cannot know: `cqrs-es` when the
   bounded context is event-sourced, otherwise remove `tier`.
 - **The pre-commit hook works in a project below the repository root** — it assumed git root =
