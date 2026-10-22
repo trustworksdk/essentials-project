@@ -2078,11 +2078,8 @@ class ShardOwnedLifecycleIT {
         var bytes    = payload.getBytes(StandardCharsets.UTF_8);
         try (var connection = dataSource.getConnection()) {
             if ("ordered".equals(lane)) {
-                var key = 0;
-                while (ShardOwnedSchema.unitForKey("key-" + key, ShardOwnedSchema.ORDERED_UNITS) != unit) {
-                    key++;
-                }
-                producer.enqueueOrderedBatch(connection, unit, List.of(new ShardOwnedStorage.OrderedPayload("key-" + key, 0, bytes, 1)));
+                var key = OrderedUnitKeys.keyInUnit("key-", unit, ShardOwnedSchema.ORDERED_UNITS);
+                producer.enqueueOrderedBatch(connection, unit, List.of(new ShardOwnedStorage.OrderedPayload(key, 0, bytes, 1)));
             } else {
                 producer.enqueueBatch(connection, unit, List.of(bytes), 1);
             }

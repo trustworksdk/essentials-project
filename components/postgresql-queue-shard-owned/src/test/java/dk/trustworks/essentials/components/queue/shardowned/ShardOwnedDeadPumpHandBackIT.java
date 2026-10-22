@@ -351,7 +351,7 @@ class ShardOwnedDeadPumpHandBackIT {
                 // The stuck key past the bound before the young key enters its handler, and the pump killed at once after:
                 // the first hand-back after the death finds the one past the bound and the other in its handler for well under it.
                 Thread.sleep(stuckHandlerTimeout.toMillis() + 500);
-                youngKey.complete(keyInUnit(unit, "HOLD"));
+                youngKey.complete(OrderedUnitKeys.keyInUnit("YOUNG-", unit, ShardOwnedSchema.ORDERED_UNITS, "HOLD"));
                 queue.enqueueOrdered(List.of(new ShardOwnedStorage.OrderedPayload(youngKey.get(), 0, "YOUNG-0".getBytes(StandardCharsets.UTF_8), 1)));
                 assertThat(youngEntered.await(20, TimeUnit.SECONDS)).as("premise: the young key is in its handler, in the same unit").isTrue();
                 var youngEnteredAtNanos = System.nanoTime();
@@ -435,7 +435,7 @@ class ShardOwnedDeadPumpHandBackIT {
                 var fenceBefore = fenceOf("ordered", unit);
                 // The stuck key past the bound before the young key enters its handler, as in the test above.
                 Thread.sleep(stuckHandlerTimeout.toMillis() + 500);
-                youngKey.complete(keyInUnit(unit, "HOLD"));
+                youngKey.complete(OrderedUnitKeys.keyInUnit("YOUNG-", unit, ShardOwnedSchema.ORDERED_UNITS, "HOLD"));
                 queue.enqueueOrdered(List.of(new ShardOwnedStorage.OrderedPayload(youngKey.get(), 0, "YOUNG-0".getBytes(StandardCharsets.UTF_8), 1)));
                 assertThat(youngEntered.await(20, TimeUnit.SECONDS)).as("premise: the young key is in its handler, in the same unit").isTrue();
                 var youngEnteredAtNanos = System.nanoTime();
@@ -1803,18 +1803,6 @@ class ShardOwnedDeadPumpHandBackIT {
                                "SELECT attempts FROM " + ShardOwnedSchema.ORDERED_TABLE + " WHERE queue_id = ? AND seq = ?", QUEUE_ID, seq);
         } catch (java.sql.SQLException e) {
             throw new IllegalStateException(e);
-        }
-    }
-
-    /**
-     * A key other than {@code other} that routes to ordered {@code unit}, so its message is served by the same owner.
-     */
-    private static String keyInUnit(int unit, String other) {
-        for (var index = 0; ; index++) {
-            var candidate = "YOUNG-" + index;
-            if (!candidate.equals(other) && ShardOwnedSchema.unitForKey(candidate, ShardOwnedSchema.ORDERED_UNITS) == unit) {
-                return candidate;
-            }
         }
     }
 

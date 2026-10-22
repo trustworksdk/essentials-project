@@ -802,24 +802,14 @@ class ShardOwnedOrderedRebalanceIT {
      * A key the ordered lane routes to {@code unit}.
      */
     private static String keyOnUnit(int unit) {
-        for (var index = 0; ; index++) {
-            var key = "STUCK-" + index;
-            if (ShardOwnedSchema.unitForKey(key, ShardOwnedSchema.ORDERED_UNITS) == unit) {
-                return key;
-            }
-        }
+        return OrderedUnitKeys.keyInUnit("STUCK-", unit, ShardOwnedSchema.ORDERED_UNITS);
     }
 
     /**
      * A key other than {@code other} that routes to {@code unit}, so its message is served by the same owner.
      */
     private static String otherKeyOnUnit(int unit, String other) {
-        for (var index = 0; ; index++) {
-            var key = "YOUNG-" + index;
-            if (!key.equals(other) && ShardOwnedSchema.unitForKey(key, ShardOwnedSchema.ORDERED_UNITS) == unit) {
-                return key;
-            }
-        }
+        return OrderedUnitKeys.keyInUnit("YOUNG-", unit, ShardOwnedSchema.ORDERED_UNITS, other);
     }
 
     private long fenceOf(int unit) throws Exception {

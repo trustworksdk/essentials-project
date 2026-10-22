@@ -114,7 +114,7 @@ class ShardOwnedWatermarkXidWindowIT {
         var storage   = new ShardOwnedStorage(dataSource, QUEUE_ID);
         var units     = storage.orderedUnits();
         var unit      = ShardOwnedSchema.unitForKey(HELD_KEY, units);
-        var neighbour = keyInUnit(unit, units);
+        var neighbour = OrderedUnitKeys.keyInUnit("neighbour-", unit, units);
         var received  = new CopyOnWriteArrayList<String>();
 
         try (var queue = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "instance-1")) {
@@ -146,15 +146,6 @@ class ShardOwnedWatermarkXidWindowIT {
     private boolean writerIsPausedInTrigger() throws Exception {
         return queryForInt(dataSource, "Counting the backends sleeping in pg_sleep",
                            "SELECT count(*) FROM pg_stat_activity WHERE wait_event = 'PgSleep'") == 1;
-    }
-
-    private static String keyInUnit(int unit, int units) {
-        for (var index = 0; ; index++) {
-            var candidate = "neighbour-" + index;
-            if (ShardOwnedSchema.unitForKey(candidate, units) == unit) {
-                return candidate;
-            }
-        }
     }
 
     private static void enqueue(ShardOwnedQueue queue, String key, long keyOrder) {
