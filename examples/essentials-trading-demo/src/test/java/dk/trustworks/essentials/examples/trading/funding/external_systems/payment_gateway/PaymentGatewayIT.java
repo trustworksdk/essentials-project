@@ -183,7 +183,7 @@ class PaymentGatewayIT {
     }
 
     private void linkBankAccount(String accountId) {
-        alice().put("/api/accounts/" + accountId + "/bank-account", Map.of("accountId", accountId, "bankAccount", Map.of("iban", "DK5000400440116243", "holderName", "Alice Customer")));
+        alice().put("/api/accounts/" + accountId + "/bank-account", Map.of("accountId", accountId, "bankAccount", Map.of("iban", "GB82WEST12345698765432", "holderName", "Alice Customer")));
     }
 
     private ResponseEntity<String> requestDeposit(String accountId, String depositId, String amount) {

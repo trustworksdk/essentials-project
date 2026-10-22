@@ -1,0 +1,25 @@
+schemaVersion: "1.1"
+slice: reconciliation.bank
+kind: external_system
+bc: reconciliation
+owner: reconciliation-team
+status: live
+summary: "Receives the bank's end-of-day statements of the firm's client-money account."
+generator: essentials
+language: java
+
+reactsTo: [BankStatementIssued]
+sends: []
+endpoints:
+  # The gateway's signed webhook (subscription demo-reconciliation); its event log is read as well
+  - { method: POST, path: "/webhooks/payment-gateway/bank-statements", auth: service }
+invariants:
+  - id: INV-BK-1
+    text: "A statement is stored once, as the bank issued it; breaks are worked out when read, never at intake"
+    enforcedBy: BankStatements
+forbidden:
+  - cross-slice-internal:reconciliation
+tests:
+  unit: { present: false }
+  integration: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/reconciliation/BankStatementReconciliationIT.java" }
+  contract: { present: false }

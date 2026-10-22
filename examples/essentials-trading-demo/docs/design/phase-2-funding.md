@@ -104,7 +104,8 @@ question, and the only source of business days is the exchange's `BusinessDayClo
 `BankStatementIssued` (one per currency per business day, from the gateway's `bank` source) lists every booked
 movement with its `endToEndId` (our id), kind and amount. `reconciliation` matches each entry against `funding`'s
 payments and records, per statement, the entries that match, the entries with no payment or a different amount, and
-the completed payments missing from the statement. A view and an operator page list them. Nothing is corrected
+the completed payments missing from the statement. An entry is ours only if its `paymentId` is the one the gateway
+took our payment under, too: the gateway's phantom entries copy a real entry's reference and amount. A view and an operator page list them. Nothing is corrected
 automatically and there is no case workflow yet (phase 5); the gateway's seeded breaks (`statement.breaks.*`,
 `/test/statements/breaks`) are what the tests check the matching against, one for one.
 
