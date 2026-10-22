@@ -140,9 +140,9 @@ final class OrderedShardOwner implements BatchReadableOwner {
      */
     private final Map<String, TreeMap<Long, ShardOwnedStorage.OrderedRow>> readyByKey            = new HashMap<>();
     /**
-     * Keys with a message currently in a handler, each with that message's sequence value and when it was handed to the
-     * handler executor, by {@link System#nanoTime()} - which {@link #keysInHandler()} times the longest of from. At most
-     * one per key, which is what enforces FIFO.
+     * Keys with a message currently in a handler, each with that message's sequence value, its {@code key_order}, and when
+     * it was handed to the handler executor, by {@link System#nanoTime()} - which {@link #keysInHandler()} times the longest
+     * of from. At most one per key, which is what enforces FIFO.
      */
     private final Map<String, InHandler>                                   keysInFlight          = new LinkedHashMap<>();
     /**
@@ -346,6 +346,24 @@ final class OrderedShardOwner implements BatchReadableOwner {
     private final ReleaseChargeLedger releaseChargeLedger;
 
     /**
+     * The key and {@code key_order} of each message {@link #chargeKeysInHandlerBeforeRelease} has asked the ledger to charge,
+     * by sequence value, dropped once its dead-letter move is made: the move may be made by a later call, after its handler
+     * has returned and its key has left {@link #keysInFlight}, and a move that moved the row blocks the key at that
+     * {@code key_order} ({@link #blockKeyChargedBeforeRelease}). One entry per message in a handler when a release of this
+     * owner charged, so a handful. Guarded by {@link #stateLock}.
+     */
+    private final Map<Long, ReleaseChargeCandidate> chargeCandidateBySeq = new HashMap<>();
+
+    /**
+     * A message in a handler that {@link #chargeKeysInHandlerBeforeRelease} charges.
+     *
+     * @param key      its key
+     * @param keyOrder its {@code key_order}
+     */
+    private record ReleaseChargeCandidate(String key, long keyOrder) {
+    }
+
+    /**
      * What to run once no key is in a handler ({@link #whenNoKeyInHandler}); {@code null} unless this owner's queue kept
      * it on stop.
      */
@@ -382,8 +400,10 @@ final class OrderedShardOwner implements BatchReadableOwner {
 
             @Override
             public boolean moveToDeadLetterIfOwned(Connection connection, long seq) throws SQLException {
-                return storage.moveToDeadLetterIfOwned(connection, ShardOwnedSchema.ORDERED_TABLE, "ordered", shard, seq,
-                                                       ShardOwnedStorage.EXHAUSTED_IN_A_RELEASED_HANDLER, instanceId, fence);
+                var moved = storage.moveToDeadLetterIfOwned(connection, ShardOwnedSchema.ORDERED_TABLE, "ordered", shard, seq,
+                                                            ShardOwnedStorage.EXHAUSTED_IN_A_RELEASED_HANDLER, instanceId, fence);
+                blockKeyChargedBeforeRelease(seq, moved);
+                return moved;
             }
 
             @Override
@@ -808,7 +828,7 @@ final class OrderedShardOwner implements BatchReadableOwner {
                 }
                 highestDeliveredOrder.merge(key, next.getKey(), Math::max);
 
-                keysInFlight.put(key, new InHandler(next.getValue().seq(), System.nanoTime()));
+                keysInFlight.put(key, new InHandler(next.getValue().seq(), next.getKey(), System.nanoTime()));
                 activeKeys.incrementAndGet();
                 metrics.maxConcurrentKeys.accumulateAndGet(activeKeys.get(), Math::max);
                 submitted++;
@@ -909,7 +929,7 @@ final class OrderedShardOwner implements BatchReadableOwner {
         if (deadLettered.isPresent()) {
             // Dead-lettered while this handler ran, by the charge before a release (chargeKeysInHandlerBeforeRelease): the row
             // is gone, so there is no attempt to count and nothing to retry - whether the release then succeeded, or failed
-            // and left this owner holding the unit.
+            // and left this owner holding the unit. Its key was blocked when the move was made (blockKeyChargedBeforeRelease).
             failedAfterItsDeadLetter(key, deadLettered.get(), cause);
             return;
         }
@@ -1076,19 +1096,57 @@ final class OrderedShardOwner implements BatchReadableOwner {
      * Caller holds {@link #stateLock}.
      */
     private void blockKey(String key, long keyOrder) {
-        var previous = deadLetterBlocks.merge(key, keyOrder, Math::min);
-        var held     = readyByKey.get(key);
-        if (held != null) {
-            var above = held.tailMap(previous, false);
-            above.values().forEach(row -> pendingPoison.add(new PoisonCandidate(row, key, row.keyOrder())));
-            above.clear();
-        }
+        var previous = recordBlock(key, keyOrder);
         if (reportedBlocks.add(key)) {
             // Once per key, and further limited per consumer by BlockedKeyReport: a handler failing for
             // everything blocks every key with traffic, which was a WARN per key without end.
             BlockedKeyReport.keyBlocked(metrics, storage.queueId(), shard, key, previous);
         }
         metrics.keysBlockedByDeadLetter.increment();
+    }
+
+    /**
+     * Block {@code key} at {@code keyOrder} - or at a lower block it already has - and queue everything already held above
+     * the block for the dead-letter table.
+     * <p>
+     * Caller holds {@link #stateLock}.
+     *
+     * @return the {@code key_order} the key is now blocked at
+     */
+    private long recordBlock(String key, long keyOrder) {
+        var blockedAt = deadLetterBlocks.merge(key, keyOrder, Math::min);
+        var held      = readyByKey.get(key);
+        if (held != null) {
+            var above = held.tailMap(blockedAt, false);
+            above.values().forEach(row -> pendingPoison.add(new PoisonCandidate(row, key, row.keyOrder())));
+            above.clear();
+        }
+        return blockedAt;
+    }
+
+    /**
+     * The dead-letter move of {@code seq} that {@link #chargeKeysInHandlerBeforeRelease} owed has been made: when it moved
+     * the row, block its key here at its {@code key_order}, as {@link #onFailure} does for a message it dead-letters, so
+     * this owner never dispatches a later {@code key_order} of that key past the dead letter - not even before its next
+     * pass re-reads the blocks from the table, which already holds the dead letter ({@link #refreshDeadLetterBlocks}).
+     * Not reported to {@link BlockedKeyReport} nor counted in {@code keysBlockedByDeadLetter}, as before this block was
+     * recorded: the dead-lettered keys reach the queue through {@link ReleaseCharge#deadLetteredKeys()}. On the thread
+     * making the charge, under the ledger's monitor, as {@link #recordChargedAttempts} is.
+     */
+    private void blockKeyChargedBeforeRelease(long seq, boolean moved) {
+        synchronized (stateLock) {
+            var candidate = chargeCandidateBySeq.remove(seq);
+            if (!moved) {
+                return;
+            }
+            if (candidate != null) {
+                recordBlock(candidate.key(), candidate.keyOrder());
+            } else {
+                // Every message the ledger charges came through chargeKeysInHandlerBeforeRelease, which records it first; were
+                // one ever missed, re-derive the blocks from the table, which holds the dead letter, before the next dispatch
+                blockRefreshRequested = true;
+            }
+        }
     }
 
     /**
@@ -1629,9 +1687,11 @@ final class OrderedShardOwner implements BatchReadableOwner {
      * The message of a key in a handler ({@link #keysInFlight}).
      *
      * @param seq        the message's sequence value
+     * @param keyOrder   the message's {@code key_order}: where its key is blocked if the charge before a release
+     *                   dead-letters it ({@link #chargeKeysInHandlerBeforeRelease})
      * @param sinceNanos when it was handed to the handler executor, by {@link System#nanoTime()}
      */
-    record InHandler(long seq, long sinceNanos) {
+    record InHandler(long seq, long keyOrder, long sinceNanos) {
     }
 
     /**
@@ -1680,6 +1740,12 @@ final class OrderedShardOwner implements BatchReadableOwner {
      * unit; that owner then finds the key blocked behind the dead letter ({@link #refreshDeadLetterBlocks}). The handler may
      * still be running the message when it is dead-lettered.
      * <p>
+     * This owner blocks the key at the dead letter's {@code key_order} too, as soon as the move is made
+     * ({@link #blockKeyChargedBeforeRelease}), as it does for a message its own failure dead-letters. No key enters a
+     * handler of an owner this runs on - a completed shed's pump pass returns at once, and a dead pump's owner or one a
+     * stop kept is draining - and a release that fails leaves it so; the block is recorded all the same, so a change that
+     * lets such an owner dispatch again cannot deliver a later {@code key_order} of the key past its dead letter.
+     * <p>
      * Fenced, as the release after it is: the row must still name this instance under this owner's fence, which releasing
      * does not bump. Each message is charged once per owner: recorded as soon as the charge has committed, so a release that
      * failed and is retried does not charge it again, and a message that has gone past the bound since - or a release on
@@ -1707,7 +1773,11 @@ final class OrderedShardOwner implements BatchReadableOwner {
      */
     ReleaseCharge chargeKeysInHandlerBeforeRelease(Connection connection, ReleaseChargeScope scope) throws SQLException {
         requireNonNull(scope, "No scope provided");
-        return toReleaseCharge(releaseChargeLedger.charge(connection, releaseChargeCandidates(scope)));
+        var candidates = releaseChargeCandidates(scope);
+        synchronized (stateLock) {
+            candidates.forEach(chargeCandidateBySeq::putIfAbsent);
+        }
+        return toReleaseCharge(releaseChargeLedger.charge(connection, keysBySeq(candidates)));
     }
 
     /**
@@ -1720,7 +1790,7 @@ final class OrderedShardOwner implements BatchReadableOwner {
      */
     boolean owesReleaseCharge(ReleaseChargeScope scope) {
         requireNonNull(scope, "No scope provided");
-        return releaseChargeLedger.owes(releaseChargeCandidates(scope));
+        return releaseChargeLedger.owes(keysBySeq(releaseChargeCandidates(scope)));
     }
 
     /**
@@ -1748,20 +1818,29 @@ final class OrderedShardOwner implements BatchReadableOwner {
     }
 
     /**
-     * The message (by seq) of each key in a handler that {@code scope} names, with its key, in the order the keys entered
-     * their handlers: the candidates of {@link #chargeKeysInHandlerBeforeRelease}.
+     * The message (by seq) of each key in a handler that {@code scope} names, with its key and {@code key_order}, in the
+     * order the keys entered their handlers: the candidates of {@link #chargeKeysInHandlerBeforeRelease}.
      */
-    private Map<Long, String> releaseChargeCandidates(ReleaseChargeScope scope) {
-        var now      = System.nanoTime();
-        var bound    = settings.stuckHandlerTimeout().toNanos();
-        var keyBySeq = new LinkedHashMap<Long, String>();
+    private Map<Long, ReleaseChargeCandidate> releaseChargeCandidates(ReleaseChargeScope scope) {
+        var now        = System.nanoTime();
+        var bound      = settings.stuckHandlerTimeout().toNanos();
+        var candidates = new LinkedHashMap<Long, ReleaseChargeCandidate>();
         synchronized (stateLock) {
             keysInFlight.forEach((key, inHandler) -> {
                 if (scope == ReleaseChargeScope.EVERY_KEY_IN_HANDLER || now - inHandler.sinceNanos() >= bound) {
-                    keyBySeq.put(inHandler.seq(), key);
+                    candidates.put(inHandler.seq(), new ReleaseChargeCandidate(key, inHandler.keyOrder()));
                 }
             });
         }
+        return candidates;
+    }
+
+    /**
+     * {@code candidates} as the ledger takes them: each message's key by its seq, in their order.
+     */
+    private static Map<Long, String> keysBySeq(Map<Long, ReleaseChargeCandidate> candidates) {
+        var keyBySeq = new LinkedHashMap<Long, String>();
+        candidates.forEach((seq, candidate) -> keyBySeq.put(seq, candidate.key()));
         return keyBySeq;
     }
 

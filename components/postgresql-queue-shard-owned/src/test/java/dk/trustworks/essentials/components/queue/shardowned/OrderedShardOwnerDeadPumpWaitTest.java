@@ -40,7 +40,7 @@ class OrderedShardOwnerDeadPumpWaitTest {
     @Test
     void the_wait_is_timed_from_the_death_not_from_the_first_heartbeat_that_asks() throws Exception {
         var owner = owner();
-        keysInFlight(owner).put("HOLD", new OrderedShardOwner.InHandler(1L, System.nanoTime()));
+        keysInFlight(owner).put("HOLD", new OrderedShardOwner.InHandler(1L, 1L, System.nanoTime()));
 
         // The pump ends the owner as it dies.
         owner.beginDraining();
@@ -60,7 +60,7 @@ class OrderedShardOwnerDeadPumpWaitTest {
     @Test
     void within_the_grace_since_the_death_nothing_is_reported() throws Exception {
         var owner = owner();
-        keysInFlight(owner).put("HOLD", new OrderedShardOwner.InHandler(1L, System.nanoTime()));
+        keysInFlight(owner).put("HOLD", new OrderedShardOwner.InHandler(1L, 1L, System.nanoTime()));
 
         owner.beginDraining();
 
@@ -70,7 +70,7 @@ class OrderedShardOwnerDeadPumpWaitTest {
     @Test
     void an_owner_that_never_began_draining_is_timed_from_the_first_ask() throws Exception {
         var owner = owner();
-        keysInFlight(owner).put("HOLD", new OrderedShardOwner.InHandler(1L, System.nanoTime()));
+        keysInFlight(owner).put("HOLD", new OrderedShardOwner.InHandler(1L, 1L, System.nanoTime()));
 
         var beforeFirstAsk = System.nanoTime();
         assertThat(owner.stuckOnDeadPump()).as("the first ask starts the clock").isEmpty();

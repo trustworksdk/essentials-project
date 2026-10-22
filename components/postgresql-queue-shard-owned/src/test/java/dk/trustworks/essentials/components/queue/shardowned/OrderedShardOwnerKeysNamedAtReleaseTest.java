@@ -110,7 +110,7 @@ class OrderedShardOwnerKeysNamedAtReleaseTest {
      */
     private static void enterHandler(OrderedShardOwner owner, String key, long seq, Duration inHandlerFor) throws Exception {
         synchronized (stateLock(owner)) {
-            keysInFlight(owner).put(key, new OrderedShardOwner.InHandler(seq, System.nanoTime() - inHandlerFor.toNanos()));
+            keysInFlight(owner).put(key, new OrderedShardOwner.InHandler(seq, seq, System.nanoTime() - inHandlerFor.toNanos()));
         }
     }
 
