@@ -12,6 +12,11 @@ webhooks:
       event_types: [OrderAccepted, OrderRejected, OrderPartiallyFilled, OrderFilled, OrderCancelled, OrderExpired]
       secret_file: /run/secrets/webhook_secret
       participants: [DEMO-BROKER]
+    # integration/BusinessCalendar: the business days as the exchange closes them (D10, SR-26)
+    - name: demo-business-calendar
+      url: http://host.docker.internal:8080/webhooks/exchange/business-days
+      event_types: [BusinessDayClosed]
+      secret_file: /run/secrets/webhook_secret
 clock:
   # A simulated day per real minute, starting on a Monday morning. Business dates always come from the exchange's
   # events, never from the demo's own clock (EXPANSION_PLAN.md D10). `mode: system` turns the virtual clock off.

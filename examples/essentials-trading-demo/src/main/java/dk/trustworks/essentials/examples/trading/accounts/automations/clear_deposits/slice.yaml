@@ -1,0 +1,28 @@
+schemaVersion: "1.1"
+slice: accounts.clear_deposits
+kind: automation
+bc: accounts
+owner: accounts-team
+status: live
+summary: "Clears every deposit whose return window has passed when the exchange closes a business day."
+generator: essentials
+language: java
+
+reactsTo: [BusinessDayClosedNotice]
+sends: [ClearDeposit]
+reads:
+  - { name: UnclearedDeposit, via: UnclearedDepositsProjection }
+endpoints: []
+invariants:
+  - id: INV-CD-1
+    text: "A deposit clears on the exchange's business day, never on this application's clock"
+    enforcedBy: DepositClearing
+  - id: INV-CD-2
+    text: "A missed or repeated close clears nothing twice and nothing late beyond the next close or start"
+    enforcedBy: DepositClearing
+forbidden:
+  - cross-slice-internal:accounts
+tests:
+  unit: { present: false }
+  integration: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/accounts/automations/clear_deposits/ClearDepositsIT.java" }
+  contract: { present: false }

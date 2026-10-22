@@ -15,6 +15,7 @@ simulators' receiver guide ("A correct receiver, in five rules").
 | `ExternalEventIntake` | Deduplicates per `(consumer, eventId)` and queues to the consumer's `Inbox`, in one unit of work |
 | `ExternalEventLogCatchUp` | Reads the source's `/api/events` log behind a fenced lock and feeds the same intake |
 | `SimulatorProperties`, `SimulatorIntegrationConfiguration` | `trading-demo.simulators.*` (set by the `simulators` profile), the shared `WebhookSignatureVerifier` bean, which exists only when a secret file is configured, and the exchange's generated `ApiClient`, which exists only when its base URL is |
+| `BusinessCalendar` | The business days as the exchange closes them: table `business_day_closed`, fed by `BusinessDayClosed` (subscription `demo-business-calendar` + catch-up), announced in process as `BusinessDayClosedNotice`; `latestClosedBusinessDate()`. Reference data, not a context's state; the store D24 plans for EF-1. Simulators profile only |
 | `exchange_simulator/client` (generated) | The exchange-simulator's client, generated at build time from `src/main/openapi/exchange-simulator/openapi-3.0.json` (Spring `RestClient`, Jackson 3). Contract only - adapters in each context's `external_systems/` use it, and no generated type leaves them |
 
 **The simulators' OpenAPI documents are copied into `src/main/openapi`**, so the build needs nothing outside this

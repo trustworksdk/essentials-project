@@ -32,6 +32,12 @@ books `END_OF_DAY` in New York until EF-1, snapshots every 100 events.
 - **`Account` implements `HasClosingBooksPeriodId`, and must.** With `essentials.eventstore.closing-books.enabled`
   (the `compose` profile, not the tests) the starter refuses to start a time-boundary aggregate without it. The tests
   never enable it, so only a real run catches its absence.
+- **Deposits clear on the exchange's business days**, never on a clock (D10): `DepositClearing` clears what
+  `uncleared_deposits` lists as due when `BusinessCalendar` announces a close, and at startup from the latest closed day
+  (a notice can be missed). Without the simulators nothing drives it; the operator endpoint still clears.
+- **Do not send commands from a `@TransactionalEventListener(AFTER_COMMIT)` directly.** Spring's synchronization is
+  inactive in the after-commit callback, and `SpringTransactionAwareUnitOfWorkFactory` fails to open a unit of work
+  (`Transaction synchronization is not active`). `DepositClearing` hands the work to its own thread.
 - **Snapshots**: test a change to `Account`'s state through `DefaultAggregateSnapshotStateAdapter` (see `AccountTest`),
   not a plain serializer — the adapter is what leaves the `AggregateRoot` base fields out.
 
@@ -47,3 +53,5 @@ books `END_OF_DAY` in New York until EF-1, snapshots every 100 events.
 | `book_trade`, `settle_trade`, `reverse_trade_booking` | command | operator now; exchange (3), settlement (4) |
 | `roll_account_books` | command | operator; end of day (EF-1) |
 | `account_overview`, `positions`, `account_activity` | view | customer (own accounts) and operator |
+| `uncleared_deposits` | view | `clear_deposits` |
+| `automations/clear_deposits` | automation | the exchange's business days (`integration/BusinessCalendar`), simulators profile only (2) |
