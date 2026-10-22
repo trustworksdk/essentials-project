@@ -15,5 +15,10 @@
   "MD033": { "allowed_elements": ["a"] },
 
   // The house emphasis style is *asterisk*.
-  "MD049": { "style": "asterisk" }
+  "MD049": { "style": "asterisk" },
+
+  // Tables put a bare `|---|---|` delimiter under a spaced `| Key | Meaning |` header, in
+  // essentials-plugin/ and LLM/ alike. MD060 reads that as mixed column style, and none of its
+  // styles (aligned, compact, tight) accepts it.
+  "MD060": false
 }
