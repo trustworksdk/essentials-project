@@ -19,6 +19,7 @@ package dk.trustworks.essentials.components.queue.shardowned;
 import org.junit.jupiter.api.Test;
 
 import javax.sql.DataSource;
+import java.lang.management.ManagementFactory;
 import java.lang.reflect.Proxy;
 import java.sql.SQLException;
 import java.time.Duration;
@@ -81,9 +82,10 @@ class ReleaseChargeHandlerReturnTest {
     void an_ordered_handler_returning_while_the_charge_holds_its_message_waits_and_is_not_acknowledged() throws Exception {
         var handler  = new HeldHandler();
         var owner    = orderedOwner(handler);
+        var ledger   = field(owner, OrderedShardOwner.class, "releaseChargeLedger");
         var waited   = new AtomicReference<Boolean>();
         var database = new ChargingConnection(ShardOwnedSchema.ORDERED_TABLE, Map.of(SEQ, MAX_ATTEMPTS))
-                .onCharge(() -> waited.set(handlerWaits(handler, owner)));
+                .onCharge(() -> waited.set(handlerWaits(handler, owner, ledger)));
         dispatchOrdered(owner);
 
         var charge = owner.chargeKeysInHandlerBeforeRelease(database.connection(), OrderedShardOwner.ReleaseChargeScope.EVERY_KEY_IN_HANDLER);
@@ -117,9 +119,10 @@ class ReleaseChargeHandlerReturnTest {
     void an_unordered_handler_returning_while_the_charge_holds_its_message_waits_and_is_not_acknowledged() throws Exception {
         var handler  = new HeldHandler();
         var owner    = unorderedOwner(handler);
+        var ledger   = field(owner, ShardOwner.class, "releaseChargeLedger");
         var waited   = new AtomicReference<Boolean>();
         var database = new ChargingConnection(ShardOwnedSchema.UNORDERED_TABLE, Map.of(SEQ, MAX_ATTEMPTS))
-                .onCharge(() -> waited.set(handlerWaits(handler, owner)));
+                .onCharge(() -> waited.set(handlerWaits(handler, owner, ledger)));
         deliverUnordered(owner);
 
         var charge = owner.chargeInHandlerBeforeRelease(database.connection());
@@ -274,21 +277,44 @@ class ReleaseChargeHandlerReturnTest {
     }
 
     /**
-     * Let the handler return, from inside the running charge, and tell whether it is still in its handler 300 ms after it
-     * returned: waiting for the charge.
+     * Let the handler return, from inside the running charge - which holds the ledger's monitor - and tell whether it waits
+     * for that charge: its thread seen blocked entering that very monitor within 10 s, its message still in flight then.
+     * Observed, not timed: a handler that does not wait is never blocked on the monitor, however slowly it leaves.
      */
-    private static boolean handlerWaits(HeldHandler handler, LeasedOwner owner) {
+    private static boolean handlerWaits(HeldHandler handler, LeasedOwner owner, Object ledger) {
+        Object monitor;
+        try {
+            monitor = field(ledger, ReleaseChargeLedger.class, "monitor");
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException(e);
+        }
         handler.mayReturn.countDown();
         try {
             if (!handler.returned.await(10, TimeUnit.SECONDS)) {
                 return false;
             }
-            Thread.sleep(300);
+            var deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+            while (System.nanoTime() < deadline) {
+                if (isBlockedEntering(handler.thread, monitor)) {
+                    return owner.inFlight() == 1;
+                }
+                Thread.sleep(5);
+            }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            return false;
         }
-        return owner.inFlight() == 1;
+        return false;
+    }
+
+    /**
+     * Whether {@code thread} is blocked entering {@code monitor}'s {@code synchronized} block, as the JVM reports it.
+     */
+    private static boolean isBlockedEntering(Thread thread, Object monitor) {
+        var info = ManagementFactory.getThreadMXBean().getThreadInfo(thread.threadId());
+        return info != null
+                && info.getThreadState() == Thread.State.BLOCKED
+                && info.getLockInfo() != null
+                && info.getLockInfo().getIdentityHashCode() == System.identityHashCode(monitor);
     }
 
     /**
