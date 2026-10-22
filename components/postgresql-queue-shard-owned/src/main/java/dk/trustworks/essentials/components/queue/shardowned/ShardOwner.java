@@ -227,6 +227,11 @@ final class ShardOwner implements LeasedOwner {
                 return storage.moveToDeadLetterIfOwned(connection, ShardOwnedSchema.UNORDERED_TABLE, "unordered", shard, seq,
                                                        ShardOwnedStorage.EXHAUSTED_IN_A_RELEASED_HANDLER, instanceId, fence);
             }
+
+            @Override
+            public boolean stillOwns(Connection connection) throws SQLException {
+                return storage.stillOwns(connection, "unordered", shard, instanceId, fence);
+            }
         }, redeliveryPolicy, metrics, this::recordChargedAttempts);
     }
 
@@ -1092,7 +1097,7 @@ final class ShardOwner implements LeasedOwner {
 
     /**
      * Whether {@link #chargeInHandlerBeforeRelease} has anything to write: a message in a handler longer than
-     * {@code stuckHandlerTimeout} it has not charged yet, or a charged one at the redelivery limit whose dead-letter move is
+     * {@code stuckHandlerTimeout} it has not charged yet, nor found gone from the table (deleted while in its handler), or a charged one at the redelivery limit whose dead-letter move is
      * still to be made. Lets the queue skip the connection that call needs for an owner it would find nothing to do for.
      */
     boolean owesReleaseCharge() {
@@ -1129,7 +1134,7 @@ final class ShardOwner implements LeasedOwner {
      *
      * @return what this owner has charged and dead-lettered so far, this call included; nothing when no message is in a
      *         handler past the bound, or when the row no longer names this owner
-     * @throws SQLException when the charge or a dead-letter move fails
+     * @throws SQLException when the charge, the lease lookup after a charge that left a row out, or a dead-letter move fails
      * @throws RuntimeException what the {@code QueueObserver} threw when told of a dead letter (or a non-critical
      *                          {@link Error}), thrown once every move is made, so {@link #owesReleaseCharge()} then answers
      *                          as after a call that returned

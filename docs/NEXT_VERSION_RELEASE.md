@@ -656,11 +656,13 @@ charged and which keys were dead-lettered. What to do: nothing, unless a queue's
 its `stuckHandlerTimeout` - then each such shed or release costs that message an attempt, and enough of them
 dead-letter it, so raise the bound as above. A `QueueObserver` that throws when told of such a dead letter does not
 hold the release up: the attempt and the move are made by then, so the unit is released all the same - a
-`releaseKeptOrderedUnit` answers that it released it - and a WARN names the observer's failure. A handler that
+`releaseKeptOrderedUnit` answers that it released it - and a WARN names the observer's failure. A message deleted
+through the admin API while in its handler is not charged and is not asked for again, so it does not hold such a
+release up either. A handler that
 returns after the charge has dead-lettered its message is neither acknowledged nor counted in `delivered`: one that
 completes logs a WARN saying that resurrecting the dead letter delivers the message again, and one that throws logs a
 WARN with its exception and is told to `QueueObserver.deliveryFailed` with the charged count (not for a requested
-redelivery). (`6337f7d89`, `2fdeb3db0`, `dbae0986f`, `<!-- fix:U-017 -->`)
+redelivery). (`6337f7d89`, `2fdeb3db0`, `dbae0986f`, `<!-- fix:U-017 -->`, `<!-- fix:U-018 -->`)
 
 **The unordered lane now charges a hung handler's delivery too, past the same bound.** It waits for no handler: a
 fair-share shed and a dead pump's hand-back release an unordered shard at once, and `stop()` once `shedGrace` has run
@@ -675,11 +677,13 @@ message in its handler for less is released uncharged, as before - a slow handle
 charge is counted in `ShardOwnerMetrics.takeoverAttemptBumps` of the releasing queue, and a release that charged logs
 one WARN naming the shard, how many messages it charged and which it dead-lettered. What to do: nothing, unless a
 queue's unordered handlers legitimately run past its `stuckHandlerTimeout` - then a rebalance or stop that releases a
-shard while one runs costs that message an attempt, so raise the bound as above. A handler that returns after the
+shard while one runs costs that message an attempt, so raise the bound as above. A message deleted through the admin
+API while in its handler is not charged, and a `QueueObserver` that throws when told of another message's dead letter
+then still leaves the shard released. A handler that returns after the
 charge before a shed, a dead pump's hand-back or a `stop()` has dead-lettered its message is neither acknowledged nor
 counted in `delivered`: one that completes logs a WARN saying that resurrecting the dead letter delivers the message
 again, and one that throws logs a WARN with its exception and is told to `QueueObserver.deliveryFailed` with the
-charged count (not for a requested redelivery). (`18e423d1d`, `<!-- fix:U-017 -->`)
+charged count (not for a requested redelivery). (`18e423d1d`, `<!-- fix:U-017 -->`, `<!-- fix:U-018 -->`)
 
 ---
 

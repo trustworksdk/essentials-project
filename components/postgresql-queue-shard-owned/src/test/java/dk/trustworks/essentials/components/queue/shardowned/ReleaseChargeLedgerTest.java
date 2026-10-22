@@ -60,14 +60,72 @@ class ReleaseChargeLedgerTest {
         assertThat(ledger.owes(candidates(1L, 2L, 3L))).as("nothing is owed once charged").isFalse();
     }
 
+    /**
+     * A message whose row the charge did not find while the owner still holds its lease - deleted through the admin API
+     * while its handler ran - is settled: not counted as charged, not owed, and not asked for again. Left a candidate, every
+     * later call re-issued the charge for it and {@link ReleaseChargeLedger#owes} stayed true.
+     */
     @Test
-    void a_row_the_charge_leaves_out_is_not_recorded_and_is_charged_by_a_later_call() throws Exception {
+    void a_row_the_charge_finds_gone_while_the_lease_is_held_is_settled_uncharged_and_not_asked_for_again() throws Exception {
         var writes = new FakeWrites(Map.of(1L, 1));
         writes.leaveOut.add(2L);
+        var metrics = new ShardOwnerMetrics();
+        var ledger  = ledger(writes, 3, metrics, new ArrayList<>());
+
+        assertThat(ledger.charge(null, candidates(1L, 2L)).charged()).as("only the row found is charged").isEqualTo(1);
+        assertThat(writes.stillOwnsCalls).as("premise: a row left out is asked about").isEqualTo(1);
+        assertThat(ledger.owes(candidates(1L, 2L))).as("a row gone is not owed").isFalse();
+
+        var again = ledger.charge(null, candidates(1L, 2L));
+
+        assertThat(writes.chargeCalls).as("the row gone is not asked for again").containsExactly(Set.of(1L, 2L));
+        assertThat(again.charged()).as("nor counted as charged").isEqualTo(1);
+        assertThat(metrics.takeoverAttemptBumps.sum()).isEqualTo(1);
+    }
+
+    /**
+     * A charge that leaves rows out because the owner's lease is lost - the fenced charge then charges nothing - keeps them
+     * owed: the release after it finds the unit no longer the owner's.
+     */
+    @Test
+    void a_row_the_charge_leaves_out_once_the_lease_is_lost_stays_owed_and_is_asked_for_by_a_later_call() throws Exception {
+        var writes = new FakeWrites(Map.of(1L, 1));
+        writes.leaveOut.add(1L);
+        writes.owns = false;
         var ledger = ledger(writes, 3, new ShardOwnerMetrics(), new ArrayList<>());
 
-        assertThat(ledger.charge(null, candidates(1L, 2L)).charged()).isEqualTo(1);
-        assertThat(ledger.owes(candidates(1L, 2L))).as("a row gone or no longer the owner's at the charge is still a candidate").isTrue();
+        assertThat(ledger.charge(null, candidates(1L)).charged()).isZero();
+        assertThat(ledger.owes(candidates(1L))).as("a row left out with the lease lost is still owed").isTrue();
+
+        writes.leaveOut.clear();
+        writes.owns = true;
+        assertThat(ledger.charge(null, candidates(1L)).charged()).as("charged by a later call").isEqualTo(1);
+        assertThat(writes.chargeCalls).containsExactly(Set.of(1L), Set.of(1L));
+    }
+
+    /**
+     * A {@code QueueObserver} that throws when told of a dead letter, in a charge that also asked for a row no longer in the
+     * table, leaves nothing owed, so the queue releases the unit as after any observer failure. With the row gone still owed,
+     * the queue read the observer's failure as a failed charge and held the unit, retrying a release it should have made.
+     */
+    @Test
+    void an_observer_that_throws_in_a_charge_that_found_a_row_gone_leaves_nothing_owed() throws Exception {
+        var writes = new FakeWrites(Map.of(1L, 1));
+        writes.leaveOut.add(2L);
+        var metrics = new ShardOwnerMetrics(new QueueObserver() {
+            @Override
+            public void deadLettered(MessageId id, int attempts, Throwable cause) {
+                throw new IllegalStateException("observer failure");
+            }
+        });
+        var ledger = new ReleaseChargeLedger(MessageId.Lane.ORDERED, SHARD, writes, RedeliveryPolicy.fixed(Duration.ofSeconds(1), 1), metrics, charged -> { });
+
+        assertThatThrownBy(() -> ledger.charge(null, candidates(Map.of(1L, "A", 2L, "B")))).hasMessage("observer failure");
+
+        assertThat(writes.moveCalls).as("premise: the charged message was moved").containsExactly(1L);
+        assertThat(ledger.owes(candidates(Map.of(1L, "A", 2L, "B")))).as("nothing owed: the observer's failure is not a failed charge").isFalse();
+        assertThat(ledger.answer().charged()).isEqualTo(1);
+        assertThat(ledger.answer().deadLettered()).extracting(ReleaseChargeLedger.ChargedRow::key).containsExactly("A");
     }
 
     @Test
@@ -260,6 +318,8 @@ class ReleaseChargeLedgerTest {
         final CountDownLatch     moving      = new CountDownLatch(1);
         final CountDownLatch     proceed     = new CountDownLatch(1);
         int                      failMoves;
+        int                      stillOwnsCalls;
+        boolean                  owns        = true;
         boolean                  holdCharges;
         boolean                  holdMoves;
 
@@ -306,6 +366,12 @@ class ReleaseChargeLedgerTest {
                 throw new SQLException("move refused");
             }
             return !rowsGone.contains(seq);
+        }
+
+        @Override
+        public boolean stillOwns(Connection connection) {
+            stillOwnsCalls++;
+            return owns;
         }
 
         private void awaitProceed() {

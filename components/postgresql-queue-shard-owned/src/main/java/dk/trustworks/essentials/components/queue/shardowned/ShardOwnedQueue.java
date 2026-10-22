@@ -2737,15 +2737,15 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
 
     /**
      * WARN that the charge before releasing {@code owner}'s ordered unit {@code from} a shed, a dead pump or a request threw
-     * once nothing was owed ({@link OrderedShardOwner#owesReleaseCharge}): every message in a handler it was to charge is
-     * charged and every dead-letter move is made, so what threw came after those writes - a {@code QueueObserver} told of a message the
+     * once nothing was owed ({@link OrderedShardOwner#owesReleaseCharge}): every message it was to charge is charged, or was
+     * found no longer in the table, and every dead-letter move is made, so what threw came after those writes - a {@code QueueObserver} told of a message the
      * charge dead-lettered, or closing the connection. The unit is released all the same: held, it would wait for a charge
      * already made.
      */
     private void orderedChargeFailedWithNothingOwed(LeasedOwner owner, String from, Throwable failure) {
         log.warn("Instance {} has nothing left to charge before releasing ordered unit {} on queue {} {}, but the charge threw after "
                          + "its writes: a QueueObserver told of a message it dead-lettered threw, or closing the connection failed. "
-                         + "Its messages are charged and moved, so it goes on to release the unit",
+                         + "Its messages still in the table are charged and moved, so it goes on to release the unit",
                  instanceId, owner.shard(), queueId, from, failure);
     }
 
@@ -2799,8 +2799,8 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
 
     /**
      * WARN that the charge before releasing {@code owner}'s shard {@code from} a shed, a dead pump or a stop threw, yet left
-     * nothing owed ({@link ShardOwner#owesReleaseCharge()}): every message it was to charge is charged and every dead-letter
-     * move made, so what threw came after those writes - a {@code QueueObserver} told of a message the charge dead-lettered,
+     * nothing owed ({@link ShardOwner#owesReleaseCharge()}): every message it was to charge is charged, or was found no
+     * longer in the table, and every dead-letter move is made, so what threw came after those writes - a {@code QueueObserver} told of a message the charge dead-lettered,
      * or closing the connection - or the handlers it was to charge have returned since. The shard is released all the same:
      * held, it would wait for a charge already made, or, on a stop, for an unclean takeover that charges again what this
      * one charged.

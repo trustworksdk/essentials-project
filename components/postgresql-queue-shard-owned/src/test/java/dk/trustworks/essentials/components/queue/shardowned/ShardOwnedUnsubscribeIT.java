@@ -1487,6 +1487,77 @@ class ShardOwnedUnsubscribeIT {
     }
 
     /**
+     * A key in a handler whose message was deleted through the admin API ({@link MessageQueue#deleteMessage}) while its
+     * handler ran has nothing left to charge: the release on request's charge does not find its row, settles it and charges
+     * the other key alone, so a {@code QueueObserver} that throws when told of the other key's dead letter still finds
+     * nothing owed and the unit is released. The message not found used to stay owed for as long as its handler ran, so the
+     * queue read the observer's failure as a failed charge: {@link MessageQueue#releaseKeptOrderedUnit} threw it with the
+     * unit still kept, and the next request asked the database for the deleted message again before releasing it.
+     */
+    @Test
+    void a_kept_unit_released_on_request_whose_message_was_deleted_while_in_its_handler_is_released_even_when_the_observer_told_of_the_other_dead_letter_throws() throws Exception {
+        var leaseTtl = Duration.ofSeconds(3);
+        var deleted  = "ACC-1";
+        var unit     = ShardOwnedSchema.unitForKey(deleted, ShardOwnedSchema.ORDERED_UNITS);
+        var other    = java.util.stream.IntStream.range(2, 100_000).mapToObj(i -> "ACC-" + i)
+                                                 .filter(key -> ShardOwnedSchema.unitForKey(key, ShardOwnedSchema.ORDERED_UNITS) == unit)
+                                                 .findFirst().orElseThrow();
+        var entered  = new CountDownLatch(2);
+        var release  = new CountDownLatch(1);
+        var told     = new AtomicInteger();
+        var idOf     = new ConcurrentHashMap<String, MessageId>();
+        try (var queue = newQueue(PostgresqlMessageQueue.LifecycleHook.NONE, settingsWith(Duration.ofMillis(300), leaseTtl))) {
+            queue.addObserver(new QueueObserver() {
+                @Override
+                public void deadLettered(MessageId id, int attempts, Throwable cause) {
+                    told.incrementAndGet();
+                    throw new IllegalStateException("observer failure");
+                }
+            });
+            try {
+                queue.consume((messageId, key, payload, payloadType) -> {
+                    if (key != null) {
+                        idOf.put(key, messageId);
+                        entered.countDown();
+                        awaitQuietly(release, Duration.ofSeconds(90));
+                    }
+                }, new ConsumerOptions(8, Integer.MAX_VALUE, 1, RetryBackoff.fixed(Duration.ofMillis(100))));
+                var metrics = queue.registeredConsumers().getFirst().metrics();
+                for (var key : List.of(deleted, other)) {
+                    queue.enqueue(Message.ordered(key.getBytes(StandardCharsets.UTF_8), 1, key, 0));
+                }
+                assertThat(entered.await(20, TimeUnit.SECONDS)).as("premise: both keys of one unit are in their handlers").isTrue();
+
+                // Stopped, and not started again: nothing but the release below touches the unit.
+                queue.stop();
+                assertThat(keptOrderedFence(INSTANCE_ID).shard()).as("premise: the stop kept the unit of the keys in their handlers").isEqualTo(unit);
+                assertThat(queue.deleteMessage(idOf.get(deleted))).as("premise: the message in its handler is deleted").isTrue();
+
+                // Asked until queue.stop()'s budget thread has flushed the kept unit: until then the release answers BUSY.
+                var releases = Awaitility.await().atMost(Duration.ofSeconds(5))
+                                         .until(() -> queue.releaseKeptOrderedUnit(INSTANCE_ID, unit).releases(),
+                                                answer -> answer.stream().noneMatch(entry -> entry.outcome() == KeptUnitRelease.Outcome.BUSY));
+
+                assertThat(releases).as("released, the deleted message and the observer's failure notwithstanding").singleElement().satisfies(released -> {
+                    assertThat(released.outcome()).isEqualTo(KeptUnitRelease.Outcome.RELEASED);
+                    assertThat(released.keysInHandler()).containsExactlyInAnyOrder(deleted, other);
+                    assertThat(released.charged()).as("only the message still in the table is charged").isEqualTo(1);
+                    assertThat(released.deadLetteredKeys()).containsExactly(other);
+                });
+                assertThat(told).as("premise: the observer was told of the other key's dead letter").hasValue(1);
+                assertThat(metrics.takeoverAttemptBumps.sum()).as("charged once").isEqualTo(1);
+                assertThat(ownerOf(unit)).as("the row is released").isNull();
+                assertThat(laneWarnings()).as("the observer's failure is named, after the charge's writes")
+                                          .filteredOn(warning -> warning.contains("has nothing left to charge before releasing ordered unit " + unit
+                                                                                          + " on queue " + QUEUE_ID + " on request"))
+                                          .hasSize(1);
+            } finally {
+                release.countDown();
+            }
+        }
+    }
+
+    /**
      * A unit a stop kept, whose lease row someone else has taken under a newer fence meanwhile - another instance once this
      * one's liveness lapsed, made here by writing the row directly - is not released when asked: the fenced release finds
      * the row no longer this instance's, says so ({@link KeptUnitRelease.Outcome#ALREADY_TAKEN}, naming the key in its

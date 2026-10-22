@@ -457,8 +457,18 @@ public final class ShardOwnedStorage {
      * had in flight is redelivered. Asking is one primary-key lookup, and only on the ambiguous path.
      */
     public boolean stillOwns(String lane, int shard, String owner, long fence) throws SQLException {
-        try (var connection = open();
-             var statement = connection.prepareStatement(
+        try (var connection = open()) {
+            return stillOwns(connection, lane, shard, owner, fence);
+        }
+    }
+
+    /**
+     * {@link #stillOwns(String, int, String, long)}, asked over {@code connection}: for a caller that already holds one, as
+     * the charge before a release does ({@link #chargeRowsInHandler}), so the question takes no second pool connection.
+     */
+    boolean stillOwns(Connection connection, String lane, int shard, String owner, long fence) throws SQLException {
+        requireNonNull(connection, "No connection provided");
+        try (var statement = connection.prepareStatement(
                      "SELECT 1 FROM " + LEASE_TABLE + " WHERE queue_id = ? AND lane = ? AND shard = ?"
                              + " AND owner = ? AND fence = ?")) {
             statement.setShort(1, queueId);
@@ -1740,7 +1750,8 @@ public final class ShardOwnedStorage {
      * @param owner the instance releasing the unit
      * @param fence the fence it holds the unit under
      * @return each charged row's sequence value with its attempt count after the charge, in sequence order; empty when
-     *         {@code owner} no longer holds the lease under {@code fence}, or none of the rows is left
+     *         {@code owner} no longer holds the lease under {@code fence}, or none of the rows is left -
+     *         {@link #stillOwns(Connection, String, int, String, long)} tells the two apart
      */
     Map<Long, Integer> chargeRowsInHandler(Connection connection, String table, int shard, Collection<Long> seqs, String owner, long fence)
             throws SQLException {

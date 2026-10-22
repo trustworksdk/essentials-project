@@ -528,6 +528,64 @@ class ShardOwnedUnorderedReleaseChargeIT {
     }
 
     /**
+     * A message deleted while in its handler - as the admin API's delete does - has nothing left to charge: the stop's charge
+     * does not find its row, settles it and charges the other message in a handler of that shard alone, so a
+     * {@code QueueObserver} that throws when told of that other message's dead letter still finds nothing owed and the shard
+     * is released. The message not found used to stay owed for as long as its handler ran, so the stop read the observer's
+     * failure as a failed charge and left the shard unreleased, for an unclean takeover to charge again.
+     */
+    @Test
+    void a_stop_releases_a_shard_whose_message_was_deleted_while_in_its_handler_even_when_the_observer_told_of_the_other_dead_letter_throws() throws Exception {
+        var settings  = settings(STUCK_HANDLER_TIMEOUT);
+        var messages  = SHARD_COUNT + 1;
+        var entered   = new CountDownLatch(messages);
+        var release   = new CountDownLatch(1);
+        var seqsBy    = new ConcurrentHashMap<Integer, Set<Long>>();
+        var told      = new AtomicInteger();
+        var logged    = captureQueueLog();
+        var observer = new dk.trustworks.essentials.components.queue.shardowned.spi.QueueObserver() {
+            @Override
+            public void deadLettered(dk.trustworks.essentials.components.queue.shardowned.spi.MessageId id, int attempts, Throwable cause) {
+                told.incrementAndGet();
+                throw new IllegalStateException("observer failure");
+            }
+        };
+        try (var runtime = new ShardRuntime(dataSource, settings)) {
+            var queue = ShardOwnedQueue.builder().setDataSource(dataSource).setQueueId(QUEUE_ID).setShardCount(SHARD_COUNT)
+                                       .setInstanceId("deleted-in-handler").setRuntime(runtime)
+                                       .setMetrics(new ShardOwnerMetrics(observer)).build();
+            try {
+                queue.startConsuming((messageId, payload, payloadType) -> {
+                    seqsBy.computeIfAbsent(messageId.shard(), shard -> new ConcurrentSkipListSet<>()).add(messageId.sequence());
+                    entered.countDown();
+                    awaitQuietly(release);
+                }, settings, SHARD_COUNT, RedeliveryPolicy.fixed(Duration.ofMillis(100), 1));
+                for (var message = 0; message < messages; message++) {
+                    queue.enqueue(List.of(("hangs-" + message).getBytes(StandardCharsets.UTF_8)), 1);
+                }
+                assertThat(entered.await(20, TimeUnit.SECONDS)).as("premise: every message is in its handler").isTrue();
+                // More messages than shards: a shard has two or more in a handler.
+                var shard = seqsBy.entrySet().stream().filter(entry -> entry.getValue().size() >= 2).map(Map.Entry::getKey).findFirst().orElseThrow();
+                var deletedSeq = seqsBy.get(shard).iterator().next();
+                deleteUnorderedMessage(shard, deletedSeq);
+                Thread.sleep(STUCK_HANDLER_TIMEOUT.toMillis() + 300);
+
+                queue.stop();
+
+                assertThat(told).as("premise: the observer was told of every dead letter but the deleted message's").hasValue(messages - 1);
+                assertThat(queue.metrics().takeoverAttemptBumps.sum()).as("only the messages still in the table are charged").isEqualTo(messages - 1);
+                assertThat(ownerOf(shard)).as("the shard whose message was deleted is released all the same").isNull();
+                assertThat(chargeFailuresOf(logged, shard, "as the queue stopped")).as("not reported as a failed charge").isEmpty();
+            } finally {
+                release.countDown();
+                queue.stop();
+            }
+        } finally {
+            releaseQueueLog(logged);
+        }
+    }
+
+    /**
      * Each message is charged once per owner, however often the release after the charge is retried: a shed shard whose
      * release the database refuses is shed again on every heartbeat, and its message - charged by the first try - is not
      * charged again by the retries, so it is delivered again with one attempt counted once the release goes through.
@@ -785,6 +843,20 @@ class ShardOwnedUnorderedReleaseChargeIT {
                                                                                              .filter(event -> Integer.valueOf(shard).equals(event.getArgumentArray()[1]))
                                                                                              .filter(event -> event.getFormattedMessage().contains(from))
                                                                                              .toList();
+    }
+
+    /**
+     * Delete unordered message {@code seq} of {@code shard}, as {@code ShardOwnedStorage.deleteMessage} - the admin API's
+     * delete - does.
+     */
+    private void deleteUnorderedMessage(int shard, long seq) throws SQLException {
+        try (var connection = dataSource.getConnection();
+             var statement = connection.prepareStatement("DELETE FROM " + ShardOwnedSchema.UNORDERED_TABLE + " WHERE queue_id = ? AND shard = ? AND seq = ?")) {
+            statement.setShort(1, QUEUE_ID);
+            statement.setInt(2, shard);
+            statement.setLong(3, seq);
+            assertThat(statement.executeUpdate()).as("premise: the message in its handler is deleted").isEqualTo(1);
+        }
     }
 
     private String ownerOf(int shard) throws SQLException {

@@ -385,6 +385,11 @@ final class OrderedShardOwner implements BatchReadableOwner {
                 return storage.moveToDeadLetterIfOwned(connection, ShardOwnedSchema.ORDERED_TABLE, "ordered", shard, seq,
                                                        ShardOwnedStorage.EXHAUSTED_IN_A_RELEASED_HANDLER, instanceId, fence);
             }
+
+            @Override
+            public boolean stillOwns(Connection connection) throws SQLException {
+                return storage.stillOwns(connection, "ordered", shard, instanceId, fence);
+            }
         }, redeliveryPolicy, metrics, this::recordChargedAttempts);
     }
 
@@ -1693,7 +1698,8 @@ final class OrderedShardOwner implements BatchReadableOwner {
      * @param scope which messages in a handler to charge
      * @return what this owner has charged and dead-lettered so far, this call included; nothing when no message in a
      *         handler is in {@code scope}, or when the row no longer names this owner
-     * @throws SQLException     when the charge or a dead-letter move fails; {@link #owesReleaseCharge} then answers
+     * @throws SQLException     when the charge, the lease lookup after a charge that left a row out, or a dead-letter move
+     *                          fails; {@link #owesReleaseCharge} then answers
      *                          {@code true}
      * @throws RuntimeException what the {@code QueueObserver} threw when told of a dead letter (or a non-critical
      *                          {@link Error}), thrown once every move is made, so {@link #owesReleaseCharge} then answers
@@ -1706,8 +1712,8 @@ final class OrderedShardOwner implements BatchReadableOwner {
 
     /**
      * Whether {@link #chargeKeysInHandlerBeforeRelease} has anything to write for {@code scope}: a message in a handler
-     * that {@code scope} names and this owner has not charged yet, or a charged one at the redelivery limit whose
-     * dead-letter move is still to be made. {@code false} after a call whose {@code QueueObserver} threw when told of a dead
+     * that {@code scope} names and this owner has not charged yet, nor found gone from the table (deleted while in its
+     * handler), or a charged one at the redelivery limit whose dead-letter move is still to be made. {@code false} after a call whose {@code QueueObserver} threw when told of a dead
      * letter, as it throws only after those writes, unless another message has come into {@code scope} since. Lets the
      * queue tell a failed charge, after which the unit is held and the release retried, from a failure that came after the
      * writes, after which it is released; and skip the connection that call needs when there is nothing to write.
