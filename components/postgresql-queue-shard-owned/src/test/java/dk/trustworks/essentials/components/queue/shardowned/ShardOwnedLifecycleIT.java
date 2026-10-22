@@ -3227,6 +3227,86 @@ class ShardOwnedLifecycleIT {
     }
 
     /**
+     * The hand-back of an ordered unit a stop kept, once its handler has returned, waits for each answer from the database
+     * no longer than the queue's {@code leaseTtl}, on the thread the key leaving its handler starts and on any other that
+     * retries it. A test transaction holds the kept unit's lease row and never lets go while the test watches, so the
+     * hand-back's release waits on it as on a connection that never answers: it throws once it has waited that long, the
+     * thread ends and lets go of its claim of the unit, the row still naming this instance. A retry on another thread - the
+     * test's, standing for a heartbeat tick, a start or a {@code consume()} - claims the unit again and ends the same way;
+     * once the row is let go, a retry hands the unit back. The hand-back used to wait until the row was let go - on a
+     * half-open socket with no {@code socketTimeout}, for the life of the process - holding the claim, so the instance's
+     * membership row stayed needed and every other hand-back of the unit found it already claimed.
+     */
+    @Test
+    void a_hand_back_of_a_kept_unit_the_database_never_answers_lets_go_of_the_unit_once_a_statement_has_waited_the_lease_ttl() throws Exception {
+        var entries    = new AtomicInteger();
+        var entered    = new CountDownLatch(1);
+        var release    = new CountDownLatch(1);
+        var leaseTtl   = Duration.ofSeconds(4);
+        var settings   = settingsWith(Duration.ofMillis(300), leaseTtl);
+        var instanceId = "kept-hand-back-never-answered";
+        try (var runtime = new ShardRuntime(dataSource, settings);
+             var locking = dataSource.getConnection()) {
+            var queue = ShardOwnedQueue.builder().setDataSource(dataSource).setQueueId(QUEUE_ID).setShardCount(SHARD_COUNT)
+                                       .setInstanceId(instanceId).setRuntime(runtime).build();
+            var retrying = new FutureTask<>(queue::reviewAndHandBackKeptUnits, null);
+            try {
+                queue.startConsumingOrdered((messageId, key, payload, payloadType) -> {
+                    // The first delivery of the key holds its handler; a later one returns at once.
+                    if (entries.incrementAndGet() == 1) {
+                        entered.countDown();
+                        awaitQuietly(release);
+                    }
+                }, settings, SHARD_COUNT);
+                queue.enqueueOrdered(List.of(new ShardOwnedStorage.OrderedPayload("ACC-1", 0, "0".getBytes(StandardCharsets.UTF_8), 1)));
+                assertThat(entered.await(20, TimeUnit.SECONDS)).isTrue();
+
+                queue.stop();
+                assertThat(orderedUnitsOwnedBy(instanceId)).as("premise: the busy unit is kept").isEqualTo(1);
+                var kept = keptOrderedFence(instanceId);
+                Awaitility.await().atMost(Duration.ofSeconds(10)).until(() -> !queue.handBackStillRunning());
+                var handBackThread = "shard-queue-kept-unit-" + QUEUE_ID + "-" + kept.shard();
+                assertThat(threadsNamed(handBackThread)).as("premise: no hand-back of the unit runs yet").isZero();
+
+                locking.setAutoCommit(false);
+                try {
+                    assertThat(lockLeaseRowOf(locking, "ordered", kept.shard())).as("premise: the test holds the kept unit's lease row").isTrue();
+                    var returned = System.nanoTime();
+                    release.countDown();
+                    Awaitility.await().atMost(Duration.ofSeconds(2)).until(() -> threadsNamed(handBackThread) == 1);
+
+                    Awaitility.await().atMost(leaseTtl.plusSeconds(5)).until(() -> threadsNamed(handBackThread) == 0);
+                    assertThat(Duration.ofNanos(System.nanoTime() - returned)).as("the release waited for its answer up to the bound, not less")
+                                                                              .isGreaterThanOrEqualTo(leaseTtl.minusMillis(500));
+                    assertThat(fenceOf("ordered", kept.shard())).as("premise: the release behind the held row never got through")
+                                                                .isEqualTo(kept.fence());
+                    assertThat(queue.keptOrderedUnitNotHandedBack()).as("a hand-back that failed is not a hand-back").isTrue();
+
+                    // The claim is let go: a retry on another thread claims the unit again, and is bounded there too.
+                    var retried = System.nanoTime();
+                    Thread.ofPlatform().daemon().name("kept-hand-back-retry").start(retrying);
+                    retrying.get(leaseTtl.plusSeconds(5).toMillis(), TimeUnit.MILLISECONDS);
+                    assertThat(Duration.ofNanos(System.nanoTime() - retried)).as("the retry claimed the unit and waited for its answer up to the bound")
+                                                                             .isGreaterThanOrEqualTo(leaseTtl.minusMillis(500));
+                    assertThat(queue.keptOrderedUnitNotHandedBack()).as("the retry behind the held row failed too").isTrue();
+                } finally {
+                    locking.rollback();
+                    locking.setAutoCommit(true);
+                }
+
+                queue.reviewAndHandBackKeptUnits();
+                assertThat(queue.keptOrderedUnitNotHandedBack()).as("once the row is let go, a retry hands the unit back").isFalse();
+                assertThat(orderedUnitsOwnedBy(instanceId)).as("its lease row released").isZero();
+                assertThat(entries).as("the message the kept handler handled is delivered once").hasValue(1);
+            } finally {
+                release.countDown();
+                retrying.cancel(true);
+                queue.stop();
+            }
+        }
+    }
+
+    /**
      * A {@code start()} made while the hand-back of the {@code stop()} before it is deleting the instance's membership row -
      * the deletion under way when the start began, here behind a row lock a test transaction holds on the row - waits for
      * that deletion before it registers the instance, at most the 2 s budget, and then says once that it goes on without

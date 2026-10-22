@@ -3082,7 +3082,8 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * The network timeout the stop's budget thread sets on each connection it borrows ({@link #withinShutdownBudget},
      * {@link NetworkWaitBound}): the queue's {@code leaseTtl}, or {@link #SHUTDOWN_BUDGET} when that is longer. A connection
      * whose own network timeout is shorter keeps its own, so no wait of that thread for the database lasts longer than
-     * this. Package-private for tests.
+     * this. The hand-back of a unit a stop kept sets the same on the connections it borrows, on whichever thread it runs
+     * ({@link #handBackKeptUnit}). Package-private for tests.
      */
     Duration stopNetworkWaitBound() {
         return Duration.ofMillis(Math.max(leaseTtlMillis, SHUTDOWN_BUDGET.toMillis()));
@@ -3139,7 +3140,9 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * kept owner's last key leaving its handler runs ({@link OrderedShardOwner#whenNoKeyInHandler}), so the unit is handed
      * back whether or not this queue runs by then - an unsubscribed {@link PostgresqlMessageQueue} subscription's lanes
      * never run again. Not on the handler's thread: that thread belongs to the runtime's handler executor, and the
-     * hand-back waits for the database.
+     * hand-back waits for the database - each of those waits for an answer bounded ({@link #handBackKeptUnit},
+     * {@link #stopNetworkWaitBound()}), so a connection that does not answer ends the thread, and its claim of the unit,
+     * rather than holding both for the life of the process.
      */
     private void handBackKeptUnitOnItsOwnThread(KeptUnit kept) {
         try {
@@ -3179,8 +3182,27 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * <p>
      * Not counted as a release ({@link #countRelease}): the stop that kept the unit counted it, as the unit left its run.
      * A failure is logged and leaves the row as it is; {@link #handBackKeptUnits()} retries it, and a later run's stop.
+     * <p>
+     * Each wait of the hand-back for an answer from the database is bounded as the stop's budget thread bounds its own
+     * ({@link #stopNetworkWaitBound()}, {@link NetworkWaitBound}), whichever thread runs it: a statement on a connection
+     * that does not answer - a half-open socket, with no {@code socketTimeout} on the {@code DataSource} - throws once it
+     * has waited that long, unless the connection's own network timeout is shorter, and the hand-back fails as on any
+     * other database error: the unit goes back where it was claimed from for a later hand-back to retry. As far as this
+     * queue knows its row still names this instance, though a statement the driver stopped waiting for may still complete
+     * on the server, and the retry's fenced flush and release then change nothing. The wait for a pool connection is the
+     * pool's own. Unbounded, it held its claim ({@link KeptUnit.Phase#HANDING_BACK}) for as long as that connection hung, and with it the instance's membership row
+     * ({@link #needsMembership()}), and every later hand-back of the unit found it already claimed. Bounded on every
+     * caller's thread, not only on the one a key leaving its handler starts: a heartbeat tick, a start or a
+     * {@code consume()} holding the claim on a hung connection pins the unit the same way.
      */
     private void handBackKeptUnit(KeptUnit kept) {
+        NetworkWaitBound.during(stopNetworkWaitBound(), () -> handBackKeptUnitWithinNetworkWaitBound(kept));
+    }
+
+    /**
+     * {@link #handBackKeptUnit}, on a thread whose waits for the database that method has bounded.
+     */
+    private void handBackKeptUnitWithinNetworkWaitBound(KeptUnit kept) {
         var owner = kept.owner();
         if (owner.inFlight() > 0 || !owner.holdsLeaseRow()) {
             return;

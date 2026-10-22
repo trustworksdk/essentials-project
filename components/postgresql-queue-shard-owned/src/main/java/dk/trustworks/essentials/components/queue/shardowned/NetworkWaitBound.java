@@ -36,7 +36,9 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  * For the database work a stop leaves running on a thread it stops waiting for ({@code ShardOwnedQueue}'s
  * {@code withinShutdownBudget}). On a connection that hangs - a half-open socket, with no {@code socketTimeout} on the
  * {@code DataSource} - a statement there otherwise never returns, and that thread holds its pool connection for the life
- * of the process. Past the bound the driver stops waiting and throws, as on a socket timeout. The bound applies to each
+ * of the process. Also for the hand-back of an ordered unit a stop kept ({@code ShardOwnedQueue}'s {@code handBackKeptUnit}),
+ * on whichever thread runs it: hung there, it held its claim of the unit, and the instance's membership row, for as long.
+ * Past the bound the driver stops waiting and throws, as on a socket timeout. The bound applies to each
  * wait for an answer, not to the work as a whole.
  * <p>
  * A connection on which the bound cannot be read or set - a driver without it ({@link SQLFeatureNotSupportedException}),

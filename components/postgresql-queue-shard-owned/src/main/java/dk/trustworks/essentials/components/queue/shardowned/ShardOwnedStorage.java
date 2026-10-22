@@ -133,7 +133,8 @@ public final class ShardOwnedStorage {
 
     /**
      * Every connection this handle uses or hands out comes from here: the {@code DataSource}'s, bounded when the calling
-     * thread runs inside {@link NetworkWaitBound#during} - a stop's database work on the thread it may abandon.
+     * thread runs inside {@link NetworkWaitBound#during} - a stop's database work on the thread it may abandon, and the
+     * hand-back of an ordered unit a stop kept.
      */
     private Connection open() throws SQLException {
         return NetworkWaitBound.bound(dataSource.getConnection());
