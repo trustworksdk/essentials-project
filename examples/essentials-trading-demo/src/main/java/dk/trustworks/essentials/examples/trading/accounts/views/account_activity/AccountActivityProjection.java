@@ -110,6 +110,11 @@ public class AccountActivityProjection extends ViewEventProcessor {
     }
 
     @MessageHandler
+    void handle(WithdrawalReturnCredited e, OrderedMessage m) {
+        record(e, m, "WITHDRAWAL_RETURNED", e.withdrawalId().toString(), "Withdrawal returned by the bank", e.amount().getAmount().value());
+    }
+
+    @MessageHandler
     void handle(SharesReserved e, OrderedMessage m) {
         record(e, m, "RESERVATION", e.reservationId().toString(), e.quantity() + " " + e.instrumentId() + " reserved", null);
     }

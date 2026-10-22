@@ -53,6 +53,7 @@
         <simulator-api-specs.version>0.3.0</simulator-api-specs.version>
         <openapi-generator.version>7.25.0</openapi-generator.version>
         <simulator.client.package>dk.trustworks.essentials.examples.trading.integration.exchange_simulator.client</simulator.client.package>
+        <payment-gateway.client.package>dk.trustworks.essentials.examples.trading.integration.payment_gateway.client</payment-gateway.client.package>
     </properties>
 
     <dependencies>
@@ -262,8 +263,8 @@
                 <artifactId>spring-boot-maven-plugin</artifactId>
                 <version>${spring-boot.version}</version>
             </plugin>
-            <!-- The exchange-simulator's client, generated at build time from its OpenAPI document (the 3.0 rendition,
-                 which is the one meant for client generators). Spring RestClient on Jackson 3, so it stays clear of the
+            <!-- The simulators' clients, generated at build time from their OpenAPI documents (the 3.0 renditions,
+                 which are the ones meant for client generators). Spring RestClient on Jackson 3, so it stays clear of the
                  root POM's ban on Jackson 2. Only the integration's adapters use it; the domain sees ExchangeGateway. -->
             <plugin>
                 <groupId>org.openapitools</groupId>
@@ -283,6 +284,33 @@
                             <invokerPackage>${simulator.client.package}</invokerPackage>
                             <apiPackage>${simulator.client.package}.api</apiPackage>
                             <modelPackage>${simulator.client.package}.model</modelPackage>
+                            <generateApiTests>false</generateApiTests>
+                            <generateModelTests>false</generateModelTests>
+                            <generateApiDocumentation>false</generateApiDocumentation>
+                            <generateModelDocumentation>false</generateModelDocumentation>
+                            <configOptions>
+                                <useSpringBoot4>true</useSpringBoot4>
+                                <useJackson3>true</useJackson3>
+                                <useJakartaEe>true</useJakartaEe>
+                                <openApiNullable>false</openApiNullable>
+                                <dateLibrary>java8</dateLibrary>
+                                <hideGenerationTimestamp>true</hideGenerationTimestamp>
+                            </configOptions>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>generate-payment-gateway-client</id>
+                        <phase>generate-sources</phase>
+                        <goals>
+                            <goal>generate</goal>
+                        </goals>
+                        <configuration>
+                            <inputSpec>${project.basedir}/src/main/openapi/payment-gateway/openapi-3.0.json</inputSpec>
+                            <generatorName>java</generatorName>
+                            <library>restclient</library>
+                            <invokerPackage>${payment-gateway.client.package}</invokerPackage>
+                            <apiPackage>${payment-gateway.client.package}.api</apiPackage>
+                            <modelPackage>${payment-gateway.client.package}.model</modelPackage>
                             <generateApiTests>false</generateApiTests>
                             <generateModelTests>false</generateModelTests>
                             <generateApiDocumentation>false</generateApiDocumentation>

@@ -200,6 +200,19 @@ public class Account extends AggregateRoot<AccountGenerationId, AccountEvent, Ac
         apply(new CashWithdrawn(aggregateId(), accountId, withdrawalId, holdId, amount, holdConsumed));
     }
 
+    /**
+     * The bank sent a completed withdrawal back: settled cash again. A fact - never refused, also on a restricted account.
+     */
+    public void creditWithdrawalReturn(WithdrawalId withdrawalId, Money amount) {
+        assertBooksOpen();
+        requireNonNull(withdrawalId, "No withdrawalId provided");
+        requireCurrency(amount);
+        if (handledReferences.contains(ref("WRET", withdrawalId))) {
+            return;
+        }
+        apply(new WithdrawalReturnCredited(aggregateId(), accountId, withdrawalId, amount));
+    }
+
     // ------------------------------------------------------------------------------------------------ Shares
 
     public void reserveShares(ReservationId reservationId, InstrumentId instrumentId, Quantity quantity) {
@@ -550,6 +563,12 @@ public class Account extends AggregateRoot<AccountGenerationId, AccountEvent, Ac
             }
         }
         handledReferences.add(ref("WDR", e.withdrawalId()));
+    }
+
+    @EventHandler
+    private void on(WithdrawalReturnCredited e) {
+        settledCash = settledCash.add(e.amount());
+        handledReferences.add(ref("WRET", e.withdrawalId()));
     }
 
     @EventHandler

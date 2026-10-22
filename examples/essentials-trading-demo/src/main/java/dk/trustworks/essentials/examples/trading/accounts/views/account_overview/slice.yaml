@@ -16,7 +16,7 @@ reads:
   - { name: AccountOverview }
 projections:
   - name: AccountOverviewProjection
-    from: [AccountOpened, CashAdjusted, DepositCredited, DepositCleared, DepositReturned, FundsHeld, FundsReleased, CashWithdrawn,
+    from: [AccountOpened, CashAdjusted, DepositCredited, DepositCleared, DepositReturned, FundsHeld, FundsReleased, CashWithdrawn, WithdrawalReturnCredited,
            TradeBooked, TradeSettled, TradeBookingReversed, AccountBooksClosed, SharesReserved, SharesReleased]
     consistency: eventual
     store: postgresql

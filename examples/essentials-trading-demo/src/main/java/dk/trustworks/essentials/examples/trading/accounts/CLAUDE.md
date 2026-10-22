@@ -49,6 +49,7 @@ books `END_OF_DAY` in New York until EF-1, snapshots every 100 events.
 | `adjust_cash` | command | operator; reconciliation (5) |
 | `credit_deposit`, `clear_deposit`, `return_deposit` | command | operator now; payment gateway (2) |
 | `hold_funds`, `release_hold`, `withdraw_cash` | command | operator now; orders (3), withdrawals (2) |
+| `credit_withdrawal_return` | command | operator; `funding`, a withdrawal the bank returned (2) |
 | `reserve_shares`, `release_shares` | command | operator now; orders (3) |
 | `book_trade`, `settle_trade`, `reverse_trade_booking` | command | operator now; exchange (3), settlement (4) |
 | `roll_account_books` | command | operator; end of day (EF-1) |

@@ -56,12 +56,27 @@ public class SimulatorIntegrationConfiguration {
     @Bean
     @ConditionalOnProperty(prefix = "trading-demo.simulators.exchange", name = "base-url")
     public ApiClient exchangeSimulatorApiClient(RestClient.Builder restClientBuilder, SimulatorProperties properties) {
+        var apiClient = new ApiClient(simulatorRestClient(restClientBuilder, properties));
+        apiClient.setBasePath(properties.getExchange().getBaseUrl());
+        return apiClient;
+    }
+
+    /**
+     * The payment gateway's generated client ({@code src/main/openapi/payment-gateway}), configured like the exchange's.
+     */
+    @Bean
+    @ConditionalOnProperty(prefix = "trading-demo.simulators.payment-gateway", name = "base-url")
+    public dk.trustworks.essentials.examples.trading.integration.payment_gateway.client.ApiClient paymentGatewayApiClient(RestClient.Builder restClientBuilder, SimulatorProperties properties) {
+        var apiClient = new dk.trustworks.essentials.examples.trading.integration.payment_gateway.client.ApiClient(simulatorRestClient(restClientBuilder, properties));
+        apiClient.setBasePath(properties.getPaymentGateway().getBaseUrl());
+        return apiClient;
+    }
+
+    private static RestClient simulatorRestClient(RestClient.Builder restClientBuilder, SimulatorProperties properties) {
         var requestFactory = new JdkClientHttpRequestFactory(HttpClient.newBuilder()
                                                                        .connectTimeout(properties.getConnectTimeout())
                                                                        .build());
         requestFactory.setReadTimeout(properties.getReadTimeout());
-        var apiClient = new ApiClient(restClientBuilder.clone().requestFactory(requestFactory).build());
-        apiClient.setBasePath(properties.getExchange().getBaseUrl());
-        return apiClient;
+        return restClientBuilder.clone().requestFactory(requestFactory).build();
     }
 }

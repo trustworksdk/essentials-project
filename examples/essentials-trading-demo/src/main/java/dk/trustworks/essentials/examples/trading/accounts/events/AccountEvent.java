@@ -24,7 +24,7 @@ import dk.trustworks.essentials.types.Money;
  * and the logical account id, and carries its own effect, so a projection never needs the aggregate's private state.
  */
 public sealed interface AccountEvent permits AccountOpened, CashAdjusted, DepositCredited, DepositCleared, DepositReturned,
-                                             FundsHeld, FundsReleased, CashWithdrawn, SharesReserved, SharesReleased,
+                                             FundsHeld, FundsReleased, CashWithdrawn, WithdrawalReturnCredited, SharesReserved, SharesReleased,
                                              TradeBooked, TradeSettled, TradeBookingReversed, AccountBooksClosed,
                                              UnknownReferenceIgnored {
 

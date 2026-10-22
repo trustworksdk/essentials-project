@@ -15,7 +15,7 @@ reads:
   - { name: ActivityEntry }
 projections:
   - name: AccountActivityProjection
-    from: [AccountOpened, CashAdjusted, DepositCredited, DepositCleared, DepositReturned, FundsHeld, FundsReleased, CashWithdrawn,
+    from: [AccountOpened, CashAdjusted, DepositCredited, DepositCleared, DepositReturned, FundsHeld, FundsReleased, CashWithdrawn, WithdrawalReturnCredited,
            SharesReserved, SharesReleased, TradeBooked, TradeSettled, TradeBookingReversed, AccountBooksClosed,
            UnknownReferenceIgnored]
     consistency: eventual

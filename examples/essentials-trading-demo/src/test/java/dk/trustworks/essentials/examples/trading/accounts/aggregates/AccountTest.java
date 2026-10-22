@@ -197,6 +197,23 @@ class AccountTest {
     }
 
     @Test
+    void a_returned_withdrawal_is_settled_cash_again_once() {
+        var account = openAccount();
+        account.creditDeposit(DepositId.of("DEP-1"), usd("1000"), TRADE_DATE, TRADE_DATE.plusDays(3));
+        account.clearDeposit(DepositId.of("DEP-1"));
+        account.holdFunds(HoldId.of("WDR-1"), HoldPurpose.WITHDRAWAL, usd("400"));
+        account.withdrawCash(WithdrawalId.of("WDR-1"), HoldId.of("WDR-1"), usd("400"));
+        assertMoney(account.withdrawable(), "600");
+
+        account.creditWithdrawalReturn(WithdrawalId.of("WDR-1"), usd("400"));
+        account.creditWithdrawalReturn(WithdrawalId.of("WDR-1"), usd("400")); // redelivered: nothing
+
+        assertMoney(account.settledCash(), "1000");
+        assertMoney(account.withdrawable(), "1000");
+        assertThat(account.getUncommittedChanges().events).filteredOn(WithdrawalReturnCredited.class::isInstance).hasSize(1);
+    }
+
+    @Test
     void another_currency_is_refused() {
         var account = openAccount();
         assertThatThrownBy(() -> account.adjustCash(AdjustmentId.of("ADJ-1"), Money.of("1", CurrencyCode.EUR), "wrong", "operator"))

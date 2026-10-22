@@ -147,6 +147,11 @@ public class AccountOverviewProjection extends ViewEventProcessor {
     }
 
     @MessageHandler
+    void handle(WithdrawalReturnCredited event, OrderedMessage message) {
+        delta(event, message, value(event.amount()), ZERO, ZERO, ZERO, ZERO, ZERO);
+    }
+
+    @MessageHandler
     void handle(TradeBooked event, OrderedMessage message) {
         var trade = event.trade();
         if (trade.side() == TradeSide.BUY) {
