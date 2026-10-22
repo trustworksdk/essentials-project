@@ -54,6 +54,8 @@ books `END_OF_DAY` in New York until EF-1, snapshots every 100 events.
 | `book_trade`, `settle_trade`, `reverse_trade_booking` | command | operator now; exchange (3), settlement (4) |
 | `correct_settlement_amount` | command | operator; `settlement`, a corrected settlement (4) |
 | `roll_account_books` | command | operator; end of day (EF-1) |
+| `archive_account_generation` | command | operator (`POST /api/admin/accounts/{accountId}/generations/{generation}/archive`); needs `essentials.eventstore.archives.enabled` (moved from `brokerage`, 4) |
+| `account_generation_archives`, `account_generation_events` | view | operator: archived generations and their content; a sealed generation's raw events (moved from `brokerage`, 4) |
 | `account_overview`, `positions`, `account_activity` | view | customer (own accounts) and operator |
 | `account_valuation` | view | customer (`GET /api/accounts/{accountId}/valuation`): current positions at the latest closing prices (`market_data`'s `ClosingPrices` seam), worked out when asked, not kept per day (4) |
 | `uncleared_deposits` | view | `clear_deposits` |
