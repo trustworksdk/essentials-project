@@ -51,6 +51,11 @@ class ShardOwnedOrderedRebalanceIT {
 
     private static final short QUEUE_ID    = 1;
     private static final int   SHARD_COUNT = 8;
+    /**
+     * How long a held handler waits to be let go ({@link #holdUntil}): far longer than any test here runs, so a held handler
+     * returns when its test lets it go, never on its own while the test still counts on it being held.
+     */
+    private static final Duration HANDLER_HOLD = Duration.ofMinutes(5);
 
     /** Short lease, so several heartbeat-and-rebalance ticks happen inside the test window. */
     private static ShardOwnerSettings fast(Duration shedGrace) {
@@ -338,6 +343,7 @@ class ShardOwnedOrderedRebalanceIT {
         var stuckKey  = keyOnUnit(stuckUnit);
         var entered   = new CountDownLatch(1);
         var release   = new CountDownLatch(1);
+        var holdsCutShort = new AtomicInteger();
         var entries   = new java.util.concurrent.atomic.AtomicInteger();
         var attemptsOnRedelivery = new CompletableFuture<Integer>();
         var logged    = ShardOwnedRebalanceIT.captureQueueLog();
@@ -349,11 +355,7 @@ class ShardOwnedOrderedRebalanceIT {
             first.startConsumingOrdered((messageId, key, payload, payloadType) -> {
                 if (stuckKey.equals(key) && entries.incrementAndGet() == 1) {
                     entered.countDown();
-                    try {
-                        release.await(60, TimeUnit.SECONDS);
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                    }
+                    holdUntil(release, holdsCutShort);
                 }
             }, settings, SHARD_COUNT);
             Awaitility.await().atMost(Duration.ofSeconds(10))
@@ -374,7 +376,7 @@ class ShardOwnedOrderedRebalanceIT {
                 assertThat(fenceOf(stuckUnit)).as("taken under a new fence").isGreaterThan(fenceBefore);
                 assertThat(entries.get()).as("the stuck key's message delivered again beside the hung handler").isEqualTo(2);
             });
-            assertThat(release.getCount()).as("premise: the first handler is still held").isEqualTo(1);
+            assertThat(holdsCutShort.get()).as("premise: the first handler is still held").isZero();
             assertThat(first.metrics().keptUnitsInHandler()).as("counted while the stuck handler runs on").isEqualTo(1);
             // The delivery in the hung handler is an attempt: the shed charges it before it releases the row, as the joining
             // instance finds the row released and charges nothing. Uncharged, a message whose handler hung on every delivery
@@ -429,6 +431,7 @@ class ShardOwnedOrderedRebalanceIT {
         var stuckEntered        = new CountDownLatch(1);
         var youngEntered        = new CountDownLatch(1);
         var release             = new CountDownLatch(1);
+        var holdsCutShort       = new AtomicInteger();
         var youngEntries        = new AtomicInteger();
         var youngAttemptsOnRedelivery = new CompletableFuture<Integer>();
         var logged              = ShardOwnedRebalanceIT.captureQueueLog();
@@ -442,11 +445,7 @@ class ShardOwnedOrderedRebalanceIT {
                 var held = stuckKey.equals(key) ? stuckEntered : youngKey.equals(key) ? youngEntered : null;
                 if (held != null && held.getCount() == 1) {
                     held.countDown();
-                    try {
-                        release.await(60, TimeUnit.SECONDS);
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                    }
+                    holdUntil(release, holdsCutShort);
                 }
             }, settings, SHARD_COUNT, maxAttemptsOne);
             Awaitility.await().atMost(Duration.ofSeconds(10))
@@ -490,7 +489,7 @@ class ShardOwnedOrderedRebalanceIT {
                                                          .contains("1 message(s) in a handler longer than stuckHandlerTimeout were charged an attempt",
                                                                    "1 dead-lettered at their attempt limit [" + stuckKey + "]");
             });
-            assertThat(release.getCount()).as("premise: both handlers are still held").isEqualTo(1);
+            assertThat(holdsCutShort.get()).as("premise: both handlers are still held").isZero();
             assertThat(first.metrics().takeoverAttemptBumps.sum()).as("only the message in a handler past the bound was charged").isEqualTo(1);
             assertThat(second.metrics().takeoverAttemptBumps.sum()).as("released, not taken over: the joining instance charges nothing").isZero();
             assertThat(first.deadLetters()).as("only that message reached its attempt limit").singleElement()
@@ -529,6 +528,7 @@ class ShardOwnedOrderedRebalanceIT {
         var stuckEntered        = new CountDownLatch(1);
         var youngEntered        = new CountDownLatch(1);
         var release             = new CountDownLatch(1);
+        var holdsCutShort       = new AtomicInteger();
         var seqByKey            = new ConcurrentHashMap<String, Long>();
         var settings            = fast(Duration.ofMillis(500), Duration.ofMillis(1000), stuckHandlerTimeout);
         var maxAttemptsThree    = RedeliveryPolicy.fixed(Duration.ofMillis(100), 3);
@@ -541,7 +541,7 @@ class ShardOwnedOrderedRebalanceIT {
                 var held = stuckKey.equals(key) ? stuckEntered : youngKey.equals(key) ? youngEntered : null;
                 if (held != null && seqByKey.putIfAbsent(key, messageId.sequence()) == null) {
                     held.countDown();
-                    awaitQuietly(release);
+                    holdUntil(release, holdsCutShort);
                 }
             }, settings, SHARD_COUNT, maxAttemptsThree);
             Awaitility.await().atMost(Duration.ofSeconds(10))
@@ -589,7 +589,7 @@ class ShardOwnedOrderedRebalanceIT {
 
             assertThat(answer.get().outcome()).isEqualTo(KeptUnitRelease.Outcome.RELEASED);
             assertThat(answer.get().keysInHandler()).as("premise: both keys still in their handlers").containsExactlyInAnyOrder(stuckKey, youngKey);
-            assertThat(release.getCount()).as("premise: both handlers are still held").isEqualTo(1);
+            assertThat(holdsCutShort.get()).as("premise: both handlers are still held").isZero();
             assertThat(first.metrics().takeoverAttemptBumps.sum()).as("the request charged the young key's message, not the stuck key's again").isEqualTo(2);
             assertThat(attemptsOf(seqByKey.get(stuckKey))).as("the stuck key's stored attempts, charged once by the shed").isEqualTo(1);
             assertThat(attemptsOf(seqByKey.get(youngKey))).as("the young key's stored attempts, charged once by the request").isEqualTo(1);
@@ -627,6 +627,7 @@ class ShardOwnedOrderedRebalanceIT {
         var laterEntered  = new CountDownLatch(1);
         var releaseLater  = new CountDownLatch(1);
         var release       = new CountDownLatch(1);
+        var holdsCutShort = new AtomicInteger();
         var entries       = new java.util.concurrent.atomic.AtomicInteger();
         var attemptsOnRedelivery = new CompletableFuture<Integer>();
         var logged        = ShardOwnedRebalanceIT.captureQueueLog();
@@ -638,10 +639,10 @@ class ShardOwnedOrderedRebalanceIT {
             first.startConsumingOrdered((messageId, key, payload, payloadType) -> {
                 if (failingKey.equals(key) && entries.incrementAndGet() == 1) {
                     failingEntered.countDown();
-                    awaitQuietly(release);
+                    holdUntil(release, holdsCutShort);
                 } else if (laterKey.equals(key)) {
                     laterEntered.countDown();
-                    awaitQuietly(releaseLater);
+                    holdUntil(releaseLater, holdsCutShort);
                 }
             }, settings, SHARD_COUNT);
             Awaitility.await().atMost(Duration.ofSeconds(10))
@@ -678,6 +679,7 @@ class ShardOwnedOrderedRebalanceIT {
                 assertThat(ownerOf(failingUnit)).as("the unit whose charge failed is still leased to the incumbent").isEqualTo("ord-charge-a");
                 assertThat(fenceOf(failingUnit)).as("and not taken").isEqualTo(failingFence);
                 assertThat(first.metrics().takeoverAttemptBumps.sum()).as("nothing charged while the database refuses it").isZero();
+                assertThat(holdsCutShort.get()).as("premise: the failing unit's handler is still held, the later one let go by the test").isZero();
             } finally {
                 failOrderedAttemptChargesOn(failingUnit, false);
             }
@@ -719,6 +721,7 @@ class ShardOwnedOrderedRebalanceIT {
         var keptEntered   = new CountDownLatch(1);
         var failingEntered = new CountDownLatch(1);
         var release       = new CountDownLatch(1);
+        var holdsCutShort = new AtomicInteger();
         var keptEntries   = new java.util.concurrent.atomic.AtomicInteger();
         var failingEntries = new java.util.concurrent.atomic.AtomicInteger();
         var logged        = ShardOwnedRebalanceIT.captureQueueLog();
@@ -731,10 +734,10 @@ class ShardOwnedOrderedRebalanceIT {
             first.startConsumingOrdered((messageId, key, payload, payloadType) -> {
                 if (keptKey.equals(key) && keptEntries.incrementAndGet() == 1) {
                     keptEntered.countDown();
-                    awaitQuietly(release);
+                    holdUntil(release, holdsCutShort);
                 } else if (failingKey.equals(key) && failingEntries.incrementAndGet() == 1) {
                     failingEntered.countDown();
-                    awaitQuietly(release);
+                    holdUntil(release, holdsCutShort);
                 }
             }, settings, SHARD_COUNT);
             Awaitility.await().atMost(Duration.ofSeconds(10))
@@ -766,7 +769,7 @@ class ShardOwnedOrderedRebalanceIT {
                 });
                 assertThat(ownerOf(failingUnit)).as("the unit whose charge failed is still leased to the incumbent").isEqualTo("ord-kept-a");
                 assertThat(fenceOf(failingUnit)).as("and not taken").isEqualTo(failingFence);
-                assertThat(release.getCount()).as("premise: both handlers are still held").isEqualTo(1);
+                assertThat(holdsCutShort.get()).as("premise: both handlers are still held").isZero();
             } finally {
                 failOrderedAttemptChargesOn(failingUnit, false);
             }
@@ -807,10 +810,19 @@ class ShardOwnedOrderedRebalanceIT {
                                                                                                .toList();
     }
 
-    private static void awaitQuietly(CountDownLatch latch) {
+    /**
+     * Hold a handler until {@code release} is counted down, at most {@link #HANDLER_HOLD}, and count in {@code cutShort} a hold
+     * that ended without being let go - its wait ran out, or the handler thread was interrupted. Such a handler has returned on its
+     * own while {@code release} still reads as not counted down, so a premise that the handlers are still held asserts
+     * {@code cutShort} is zero rather than reading {@code release}.
+     */
+    private static void holdUntil(CountDownLatch release, AtomicInteger cutShort) {
         try {
-            latch.await(90, TimeUnit.SECONDS);
+            if (!release.await(HANDLER_HOLD.toMillis(), TimeUnit.MILLISECONDS)) {
+                cutShort.incrementAndGet();
+            }
         } catch (InterruptedException e) {
+            cutShort.incrementAndGet();
             Thread.currentThread().interrupt();
         }
     }
