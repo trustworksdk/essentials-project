@@ -333,6 +333,13 @@ public interface MessageQueue extends Lifecycle, AutoCloseable {
      * which process answered. Each subscription registered with this queue is asked, and each that a {@code consume()}
      * is still starting; and each that has ended - unsubscribed, or a {@code consume()} that failed - while its lanes'
      * stops are still under way, or while this queue still keeps its instance id out of use because of a unit it kept.
+     * <p>
+     * Nothing passes the request on to another process, through the database or otherwise, deliberately: the kept owner,
+     * its fence and the keys in its handler exist only in the memory of the process whose stop kept the unit, the lane
+     * whose stop kept it runs no heartbeat while it stays stopped - and an ended subscription's lanes never run again -
+     * so nothing would pick up a recorded request, and the answer is what the caller's
+     * follow-up is decided from, so it is given at once. A caller behind a load balancer therefore sends the request to
+     * that process directly. Design notes: {@code docs/durable-queue-shard-owned.md} §13.7 and §18.3.
      *
      * @param instanceId the instance id the stop's WARN names - the subscription's, which may carry a suffix
      * @param unit       the ordered unit, as the stop's WARN names it; from {@code 0} to the queue's ordered unit count,

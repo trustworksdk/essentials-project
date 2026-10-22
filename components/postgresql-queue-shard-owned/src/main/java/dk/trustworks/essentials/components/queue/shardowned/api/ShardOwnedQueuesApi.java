@@ -181,6 +181,14 @@ public interface ShardOwnedQueuesApi {
      * unit kept, with the instance id that WARN names: any other process, or another instance id, releases nothing, and
      * the answer's {@code answeredBy} names the instance ids the answering process has for the queue.
      * <p>
+     * The request is not passed on to that process through the database, deliberately: the kept owner, its fence and the
+     * keys in its handler exist only in that process's memory, the lane whose stop kept the unit runs no heartbeat while
+     * it stays stopped - and an ended subscription's lanes never run again - so nothing would pick up a recorded request,
+     * and the answer - outcome, keys in a handler, keys the charge dead-lettered - is
+     * what the operator's follow-up is decided from, so it is given at once. Behind a load balancer, send the request to
+     * that process's own address (a pod address, or a tunnel such as {@code kubectl port-forward}) rather than the
+     * balancer's. Design notes: {@code docs/durable-queue-shard-owned.md} §13.7 and §18.3.
+     * <p>
      * A default method, so an implementation of this interface written before it existed still compiles: the default
      * releases nothing and answers {@link ApiShardOwnedKeptUnitReleases#NONE}. {@link DefaultShardOwnedQueuesApi}
      * implements it.

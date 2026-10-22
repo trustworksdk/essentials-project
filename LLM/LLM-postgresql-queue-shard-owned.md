@@ -147,7 +147,12 @@ instance whose WARN named the unit, with the instance id that WARN names (requir
 process's memory, and only a unit a subscription under that instance id kept is touched - one of the same
 number kept under another id is left alone. The answer is `{answeredBy, releases}`: `answeredBy` names the
 instance ids the answering process has for the queue, so an empty `releases` from another process, or for
-another instance id, says which process answered. It flushes the unit's acknowledgements under the fence it was kept under and releases its
+another instance id, says which process answered. The request is never passed on to another process (the kept
+owner, its fence and its keys in a handler exist only in that process's memory, and the stopped lane runs no
+heartbeat that could pick up a request recorded in the database), so behind a load balancer send it to that
+process's own address - a pod address, or a tunnel such as `kubectl port-forward` - not the balancer's; under the
+Spring starter's default instance id, `<hostname>:<pid>`, the host part names the host (in Kubernetes, by default,
+the pod). It flushes the unit's acknowledgements under the fence it was kept under and releases its
 lease row, so any instance below its fair share takes it under a new fence - and **delivers the messages
 still in a handler again, possibly beside those handlers** (the cost the wait exists to avoid). Before the
 release each of those messages is charged an attempt, and one that reaches `maxAttempts` by it is

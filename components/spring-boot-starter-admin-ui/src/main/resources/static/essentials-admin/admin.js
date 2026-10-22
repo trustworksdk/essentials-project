@@ -1062,7 +1062,10 @@ const actions = {
            <p><strong>Acts on the instance serving this console only</strong> - the one that takes this request, which
            behind a load balancer is not necessarily the one that rendered this page. A kept unit lives in the memory
            of the process whose stop kept it, so use the console of the instance named in the WARN that reported the
-           unit kept; any other releases nothing. The answer names the instance ids of the process that gave it.</p>
+           unit kept; any other releases nothing. The request is not passed on to that instance, so behind a load
+           balancer open this console on that instance's own address - its pod address, or a tunnel to it such as
+           <code>kubectl port-forward</code> - rather than the balancer's. The answer names the instance ids of the
+           process that gave it, so it shows whether the request reached the right one.</p>
            <label for="keptInstanceId">Instance id, as that WARN names it</label>
            <input type="text" id="keptInstanceId" autocomplete="off" spellcheck="false">
            <label for="keptUnit">Ordered unit, as that WARN names it</label>

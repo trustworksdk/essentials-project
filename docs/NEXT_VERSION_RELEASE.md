@@ -885,7 +885,10 @@ shard while one runs costs that message an attempt, so raise the bound as above.
   one that reaches `maxAttempts` by it is dead-lettered instead (§1.1.24). It takes the instance id the WARN
   that reported the unit kept names, required, and touches only a unit a subscription running under that instance
   id kept whose row still names it - a unit of the same number kept under another instance id is left alone - and
-  answers from that process's memory: call the instance whose WARN named the unit. The answer is
+  answers from that process's memory: call the instance whose WARN named the unit. Nothing passes the request on to
+  another process, so behind a load balancer send it to that instance's own address - a pod address, or a tunnel such
+  as `kubectl port-forward` - not the balancer's (why the request is not passed on through the database:
+  `docs/durable-queue-shard-owned.md` §18.3). The answer is
   `{answeredBy, releases}` (`KeptUnitReleases`, `ApiShardOwnedKeptUnitReleases`): `answeredBy` names the instance ids
   the answering process has for the queue, so an empty `releases` from another process, or for another instance id,
   still says which process answered. Each entry of `releases` says `RELEASED` (with the keys in a handler when the release's flush took its batch
@@ -898,7 +901,7 @@ shard while one runs costs that message an attempt, so raise the bound as above.
   key is blocked behind its dead letter until its dead letters are resurrected or deleted, so these are the keys that need a follow-up. A `default` method on both `MessageQueue` and `ShardOwnedQueuesApi` that releases nothing, so an
   implementation of your own of either still compiles. The admin console's Shard-owned queues page offers it as
   **Release kept unit**, which asks for the instance id and the unit, acts on the instance that takes the request and
-  shows its answer, naming the instance ids that answered and the keys the release dead-lettered. (`e23164f9e`, `7eaa0c7ef`, `97a4795ed`, `3da91face`, `597a510f4`, `6fd885d93`, `66b907912`, `<!-- fix:U-003 -->`)
+  shows its answer, naming the instance ids that answered and the keys the release dead-lettered. (`e23164f9e`, `7eaa0c7ef`, `97a4795ed`, `3da91face`, `597a510f4`, `6fd885d93`, `66b907912`, `<!-- fix:U-003 -->`, `<!-- fix:U-006 -->`)
 - **Shard-owned engine: `spi.RedeliveryRequested(delay)`.** A handler throws it to ask for redelivery after `delay`
   without it counting as an attempt, being reported as a failure or leading to a dead letter (§1.1.18).
   (`a4f541e4`, `f9fdd99b`)
