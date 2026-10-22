@@ -1479,11 +1479,12 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * bounded by {@code stuckHandlerTimeout} ({@link ShardOwnerSettings}): once the key handed to its handler first has
      * been there longer ({@link OrderedShardOwner#keysInHandler()}), the handler counts as stuck and the unit is handed back
      * with every key still in a handler - that one and any other still running - with one WARN naming the keys and the wait
-     * ({@link #releasedPastStuckHandler}). Each of those messages is charged an attempt first, and one the charge brings to
-     * the redelivery limit is dead-lettered ({@link #chargeKeysInHandlerBeforeRelease}): the next owner finds the unit
-     * released and charges nothing, so a message whose handler hung on every delivery would otherwise never reach the
-     * dead-letter table. Whoever takes the unit next delivers each of those messages not dead-lettered again, possibly
-     * beside its handler.
+     * ({@link #releasedPastStuckHandler}). Each of those messages in a handler longer than {@code stuckHandlerTimeout} is
+     * charged an attempt first, and one the charge brings to the redelivery limit is dead-lettered
+     * ({@link #chargeKeysInHandlerBeforeRelease}): the next owner finds the unit released and charges nothing, so a message
+     * whose handler hung on every delivery would otherwise never reach the dead-letter table. One in a handler for less is
+     * taken to be slow, not hung, and released uncharged. Whoever takes the unit next delivers each of those messages not
+     * dead-lettered again, possibly beside its handler.
      * Unbounded, a handler that never returned kept the unit leased and unserved until the runtime was restarted.
      * <p>
      * With no live pump left in the runtime this instance acquires nothing, so the units are released for other instances
@@ -1544,14 +1545,16 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         if (ready.isEmpty()) {
             return;
         }
-        // Each message still in a handler of a unit handed back past stuckHandlerTimeout is charged its attempt first, as the
-        // next owner charges nothing for a released unit. Charged once per owner, so a retry after a failure below charges
-        // nothing again. A unit whose charge fails is left out of this hand-back, held and retried on the next heartbeat; the
+        // Each message in a handler longer than stuckHandlerTimeout, of a unit handed back past it, is charged its attempt
+        // first, as the next owner charges nothing for a released unit; one in a handler for less is released uncharged.
+        // Charged once per message per owner, so a retry after a failure below charges again only what has gone past the
+        // bound since. A unit whose charge fails is left out of this hand-back, held and retried on the next heartbeat; the
         // other units are handed back all the same.
         var charges = new HashMap<LeasedOwner, OrderedShardOwner.ReleaseCharge>();
         for (var owner : List.copyOf(stuck.keySet())) {
             try {
-                charges.put(owner, chargeKeysInHandlerBeforeRelease(owner, "from its dead pump"));
+                charges.put(owner, chargeKeysInHandlerBeforeRelease(owner, OrderedShardOwner.ReleaseChargeScope.PAST_STUCK_HANDLER_TIMEOUT,
+                                                                    "from its dead pump"));
             } catch (SQLException | RuntimeException | Error e) {
                 Exceptions.rethrowIfCriticalError(e);
                 warnChargeBeforeReleaseFailed(owner, "from its dead pump", e);
@@ -1882,9 +1885,10 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * <p>
      * Bounded by {@code stuckHandlerTimeout} ({@link ShardOwnerSettings}): a shed whose grace runs out with a key in its
      * handler longer than that completes without it ({@link OrderedShardOwner#shedPastStuckHandler()}), and the unit is
-     * released with the handler still running, with one WARN ({@link #releasedPastStuckHandler}). Each message still in a
-     * handler is charged an attempt before the release, and one the charge brings to the redelivery limit is dead-lettered
-     * ({@link #chargeKeysInHandlerBeforeRelease}), as the next owner charges nothing for a released unit. Unbounded, a hung
+     * released with the handler still running, with one WARN ({@link #releasedPastStuckHandler}). Each message in a handler
+     * longer than {@code stuckHandlerTimeout} is charged an attempt before the release, and one the charge brings to the
+     * redelivery limit is dead-lettered ({@link #chargeKeysInHandlerBeforeRelease}), as the next owner charges nothing for a
+     * released unit; one in a handler for less is taken to be slow, not hung, and released uncharged. Unbounded, a hung
      * handler kept the unit here, the cluster unbalanced and the unit's other keys unserved, until a restart.
      */
     private void shedOrAcquireOrderedShards(Run run, int fairShare, ShardRuntime shardRuntime) throws SQLException {
@@ -1897,13 +1901,15 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         try {
             for (var owner : List.copyOf(run.owners)) {
                 if (owner instanceof OrderedShardOwner ordered && ordered.shedComplete()) {
-                    // A shed completed past stuckHandlerTimeout did not drain: a key was still in its handler. Each such
-                    // message is charged its attempt before the release, as the next owner charges nothing for a released unit.
+                    // A shed completed past stuckHandlerTimeout did not drain: a key was still in its handler. Each message in
+                    // a handler longer than stuckHandlerTimeout is charged its attempt before the release, as the next owner
+                    // charges nothing for a released unit; one in a handler for less is released uncharged.
                     var stuck  = ordered.shedPastStuckHandler();
                     var charge = OrderedShardOwner.ReleaseCharge.NONE;
                     if (stuck.isPresent()) {
                         try {
-                            charge = chargeKeysInHandlerBeforeRelease(ordered, "in a fair-share shed");
+                            charge = chargeKeysInHandlerBeforeRelease(ordered, OrderedShardOwner.ReleaseChargeScope.PAST_STUCK_HANDLER_TIMEOUT,
+                                                                      "in a fair-share shed");
                         } catch (SQLException | RuntimeException | Error e) {
                             // This unit's failure is its own: it stays held, shed-complete, and is retried on the next heartbeat,
                             // while the other units are released. The fair-share comparison below leaves it out, as it does every
@@ -2660,8 +2666,9 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
     /**
      * WARN that {@code owner}'s unit was released with keys still in a handler, the longest there longer than
      * {@code stuckHandlerTimeout}, and have {@link #keptUnitsInHandler()} count it while one is: by a shed, or by the
-     * hand-back from a dead pump ({@code from}), with the attempts {@code charge} made on the messages in those handlers
-     * before the release ({@link #chargeKeysInHandlerBeforeRelease}). Called once the release has run, so the row named
+     * hand-back from a dead pump ({@code from}), with the attempts {@code charge} made before the release on the messages in
+     * a handler longer than {@code stuckHandlerTimeout} ({@link #chargeKeysInHandlerBeforeRelease}); any in a handler for
+     * less is released uncharged. Called once the release has run, so the row named
      * this instance under the owner's fence until then; the release does not bump the fence, but whoever takes the unit
      * next does.
      */
@@ -2674,8 +2681,9 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             countKeptUnitsInHandlerInMetrics();
         }
         log.warn("Instance {} released ordered unit {} on queue {} {} with {} key(s) {} still in a handler, the longest there {} ms, "
-                         + "longer than stuckHandlerTimeout ({}), so those handlers were not waited for. {} message(s) in those "
-                         + "handlers were charged an attempt, as a takeover charges one, and {} dead-lettered at their attempt limit {}. "
+                         + "longer than stuckHandlerTimeout ({}), so those handlers were not waited for. {} message(s) in a handler "
+                         + "longer than stuckHandlerTimeout were charged an attempt, as a takeover charges one, and {} dead-lettered at "
+                         + "their attempt limit {}; any message in a handler for less is released uncharged. "
                          + "Whoever takes the unit next does so under a new fence and delivers the messages in those handlers again, "
                          + "bar those dead-lettered, possibly while those handlers still run them; nothing they do is acknowledged under the "
                          + "old fence. Counted in ShardOwnerMetrics.keptUnitsInHandler while one runs. Raise stuckHandlerTimeout if handlers of this "
@@ -2686,35 +2694,40 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
     }
 
     /**
-     * Charge an attempt to each message still in a handler of {@code owner}, and dead-letter each one that reaches the
-     * redelivery limit, before its unit is released without waiting for those handlers: past {@code stuckHandlerTimeout} by
-     * a shed or the hand-back from a dead pump, or on request ({@link #releaseKeptOrderedUnit}). See
-     * {@link OrderedShardOwner#chargeKeysInHandlerBeforeRelease}; nothing for an owner that is not ordered. Takes no
-     * connection once a call has made every write.
+     * Charge an attempt to each message in a handler of {@code owner} that {@code scope} names, and dead-letter each one that
+     * reaches the redelivery limit, before its unit is released without waiting for those handlers: past
+     * {@code stuckHandlerTimeout} by a shed or the hand-back from a dead pump, which charge only the messages in a handler
+     * longer than {@code stuckHandlerTimeout}, or on request ({@link #releaseKeptOrderedUnit}), which charges every message
+     * in a handler. See {@link OrderedShardOwner#chargeKeysInHandlerBeforeRelease}; nothing for an owner that is not
+     * ordered. Takes no connection when the owner has nothing to write.
      * <p>
-     * What throws once nothing is owed ({@link OrderedShardOwner#owesReleaseCharge()}) - a {@code QueueObserver} told of a
+     * What throws once nothing is owed ({@link OrderedShardOwner#owesReleaseCharge}) - a {@code QueueObserver} told of a
      * message the charge dead-lettered, or closing the connection - came after the charge and its dead-letter moves, so it
      * is not a failed charge: it is logged at WARN here ({@link #orderedChargeFailedWithNothingOwed}) and the answer
      * returned, and the caller releases the unit. Thrown, it was reported as a charge that could not be made, and the unit
      * held for a heartbeat, or a release on request refused, though its attempts were counted and its messages moved.
      *
-     * @param from where the release comes from, as the WARN names it: {@code "in a fair-share shed"},
-     *             {@code "from its dead pump"} or {@code "on request"}
+     * @param scope which messages in a handler to charge: {@code PAST_STUCK_HANDLER_TIMEOUT} for a shed or a dead-pump
+     *              hand-back, {@code EVERY_KEY_IN_HANDLER} for a release on request
+     * @param from  where the release comes from, as the WARN names it: {@code "in a fair-share shed"},
+     *              {@code "from its dead pump"} or {@code "on request"}
+     * @return what the owner has charged and dead-lettered so far, this call included
      * @throws SQLException when the charge or a dead-letter move fails; the caller then does not release this owner's unit,
-     *                      and its retry does not charge again
+     *                      and its retry does not charge again what this call charged
      */
-    private OrderedShardOwner.ReleaseCharge chargeKeysInHandlerBeforeRelease(LeasedOwner owner, String from) throws SQLException {
+    private OrderedShardOwner.ReleaseCharge chargeKeysInHandlerBeforeRelease(LeasedOwner owner, OrderedShardOwner.ReleaseChargeScope scope,
+                                                                             String from) throws SQLException {
         if (!(owner instanceof OrderedShardOwner ordered)) {
             return OrderedShardOwner.ReleaseCharge.NONE;
         }
-        if (!ordered.owesReleaseCharge()) {
+        if (!ordered.owesReleaseCharge(scope)) {
             return ordered.releaseCharge();
         }
         try (var connection = storage.connection()) {
-            return ordered.chargeKeysInHandlerBeforeRelease(connection);
+            return ordered.chargeKeysInHandlerBeforeRelease(connection, scope);
         } catch (SQLException | RuntimeException | Error e) {
             Exceptions.rethrowIfCriticalError(e);
-            if (ordered.owesReleaseCharge()) {
+            if (ordered.owesReleaseCharge(scope)) {
                 throw e;
             }
             orderedChargeFailedWithNothingOwed(owner, from, e);
@@ -2724,8 +2737,8 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
 
     /**
      * WARN that the charge before releasing {@code owner}'s ordered unit {@code from} a shed, a dead pump or a request threw
-     * once nothing was owed ({@link OrderedShardOwner#owesReleaseCharge()}): the messages in its handlers are charged and
-     * every dead-letter move is made, so what threw came after those writes - a {@code QueueObserver} told of a message the
+     * once nothing was owed ({@link OrderedShardOwner#owesReleaseCharge}): every message in a handler it was to charge is
+     * charged and every dead-letter move is made, so what threw came after those writes - a {@code QueueObserver} told of a message the
      * charge dead-lettered, or closing the connection. The unit is released all the same: held, it would wait for a charge
      * already made.
      */
@@ -2898,7 +2911,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
 
     /**
      * WARN that the charge before releasing {@code owner}'s unit past {@code stuckHandlerTimeout} ({@code from} a shed or a
-     * dead pump) failed with the charge or a dead-letter move still to be made ({@link OrderedShardOwner#owesReleaseCharge()}),
+     * dead pump) failed with the charge or a dead-letter move still to be made ({@link OrderedShardOwner#owesReleaseCharge}),
      * so the unit was not released on this heartbeat tick. A failure once nothing is owed never gets here
      * ({@link #orderedChargeFailedWithNothingOwed}).
      */
@@ -3280,7 +3293,9 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * the log line, the keys in the answer and the phase the unit ends in. Released with a key still in its handler, the
      * unit moves to {@link KeptUnit.Phase#FORCE_RELEASED}: nothing waits for that handler any more. Before the row is
      * released, the key's message is charged an attempt, under the kept fence, and dead-lettered if that brings it to the
-     * redelivery limit ({@link #chargeKeysInHandlerBeforeRelease}): whoever takes the unit next finds it released and
+     * redelivery limit ({@link #chargeKeysInHandlerBeforeRelease}) - every message in a handler, however long it has been
+     * there, unlike a shed's or a dead-pump hand-back's charge, which spares one in a handler for less than
+     * {@code stuckHandlerTimeout}: whoever takes the unit next finds it released and
      * charges nothing, so without it a message whose handler hung on every delivery, released on request each time, never
      * reached the dead-letter table. That next owner delivers the key's message again, unless it was dead-lettered, as it
      * was never acknowledged, possibly while the handler still runs it; the handler's acknowledgement, once it returns, is
@@ -3350,7 +3365,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                     // Each message still in a handler is charged its attempt before the release, as the next owner charges
                     // nothing for a released unit. Should it throw, nothing is released, and a later request does not charge again.
                     if (inHandler.isPresent()) {
-                        charge = chargeKeysInHandlerBeforeRelease(owner, "on request");
+                        charge = chargeKeysInHandlerBeforeRelease(owner, OrderedShardOwner.ReleaseChargeScope.EVERY_KEY_IN_HANDLER, "on request");
                     } else if (owner instanceof OrderedShardOwner ordered) {
                         // No key in a handler now, but an earlier request may have charged one before its release was
                         // refused, and dead-lettered it: the answer names that charge, which the refused request, having thrown, never answered with.

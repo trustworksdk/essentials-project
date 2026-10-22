@@ -31,7 +31,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.*;
 import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -408,6 +408,95 @@ class ShardOwnedOrderedRebalanceIT {
     }
 
     /**
+     * A shed released past {@code stuckHandlerTimeout} charges only the messages in a handler longer than that bound, as the
+     * unordered lane does: another key of the unit that entered its handler moments before the shed is taken to be slow,
+     * not hung, and released uncharged. It used to be charged too, so with that key's message at its last attempt but one -
+     * a fresh message with {@code maxAttempts} 1 here - the release dead-lettered it with
+     * {@code EXHAUSTED_IN_A_RELEASED_HANDLER} though its handler was healthy, and blocked the key behind the dead letter.
+     * <p>
+     * Both keys route to the last unit the incumbent adopted, so it is among those its shed asks to drain.
+     */
+    @Test
+    void a_shed_released_past_the_stuck_handler_timeout_does_not_charge_a_key_that_entered_its_handler_just_before() throws Exception {
+        var stuckUnit           = ShardOwnedSchema.ORDERED_UNITS - 1;
+        var stuckKey            = keyOnUnit(stuckUnit);
+        var youngKey            = otherKeyOnUnit(stuckUnit, stuckKey);
+        // Room for the young key to stay under the bound through the second instance's join, a heartbeat and the shed grace.
+        var stuckHandlerTimeout = Duration.ofSeconds(5);
+        var stuckEntered        = new CountDownLatch(1);
+        var youngEntered        = new CountDownLatch(1);
+        var release             = new CountDownLatch(1);
+        var youngEntries        = new AtomicInteger();
+        var youngAttemptsOnRedelivery = new CompletableFuture<Integer>();
+        var logged              = ShardOwnedRebalanceIT.captureQueueLog();
+        var settings            = fast(Duration.ofMillis(500), Duration.ofMillis(1000), stuckHandlerTimeout);
+        var maxAttemptsOne      = RedeliveryPolicy.fixed(Duration.ofMillis(100), 1);
+
+        var first  = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "ord-young-a");
+        var second = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "ord-young-b");
+        try {
+            first.startConsumingOrdered((messageId, key, payload, payloadType) -> {
+                var held = stuckKey.equals(key) ? stuckEntered : youngKey.equals(key) ? youngEntered : null;
+                if (held != null && held.getCount() == 1) {
+                    held.countDown();
+                    try {
+                        release.await(60, TimeUnit.SECONDS);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
+            }, settings, SHARD_COUNT, maxAttemptsOne);
+            Awaitility.await().atMost(Duration.ofSeconds(10))
+                      .untilAsserted(() -> assertThat(first.shardsHeld()).isEqualTo(ShardOwnedSchema.ORDERED_UNITS));
+            first.enqueueOrdered(List.of(new ShardOwnedStorage.OrderedPayload(stuckKey, 0, "stuck".getBytes(StandardCharsets.UTF_8), 1)));
+            assertThat(stuckEntered.await(15, TimeUnit.SECONDS)).as("premise: the stuck key is in its handler").isTrue();
+            var fenceBefore = fenceOf(stuckUnit);
+            // The stuck key past the bound before the young key enters its handler, and the shed asked for at once after: it
+            // completes once its grace has run out, with the one past the bound and the other in its handler for well under it.
+            Thread.sleep(stuckHandlerTimeout.toMillis() + 500);
+            first.enqueueOrdered(List.of(new ShardOwnedStorage.OrderedPayload(youngKey, 0, "young".getBytes(StandardCharsets.UTF_8), 1)));
+            assertThat(youngEntered.await(15, TimeUnit.SECONDS)).as("premise: the young key is in its handler, in the same unit").isTrue();
+            var youngEnteredAtNanos = System.nanoTime();
+
+            second.startConsumingOrdered((messageId, key, payload, payloadType) -> {
+                if (youngKey.equals(key)) {
+                    youngAttemptsOnRedelivery.complete(attemptsOf(messageId.sequence()));
+                    youngEntries.incrementAndGet();
+                }
+            }, settings, SHARD_COUNT, maxAttemptsOne);
+
+            Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> {
+                assertThat(ownerOf(stuckUnit)).as("the unit moved to the joining instance").isEqualTo("ord-young-b");
+                assertThat(fenceOf(stuckUnit)).as("taken under a new fence").isGreaterThan(fenceBefore);
+                assertThat(youngEntries.get()).as("the young key's message delivered again by the joining instance").isEqualTo(1);
+            });
+            var stuckWarnings = queueWarnings(logged, "so those handlers were not waited for");
+            assertThat(stuckWarnings).as("one WARN for the release").singleElement().satisfies(warning -> {
+                assertThat(warning.getArgumentArray()[1]).as("the unit").isEqualTo(stuckUnit);
+                assertThat(warning.getFormattedMessage()).contains("in a fair-share shed with 2 key(s)")
+                                                         .contains("1 message(s) in a handler longer than stuckHandlerTimeout were charged an attempt",
+                                                                   "1 dead-lettered at their attempt limit [" + stuckKey + "]");
+            });
+            assertThat(Duration.ofNanos(System.nanoTime() - youngEnteredAtNanos)).as("premise: the young key was still under the bound at the release")
+                                                                               .isLessThan(stuckHandlerTimeout);
+            assertThat(release.getCount()).as("premise: both handlers are still held").isEqualTo(1);
+            assertThat(first.metrics().takeoverAttemptBumps.sum()).as("only the message in a handler past the bound was charged").isEqualTo(1);
+            assertThat(second.metrics().takeoverAttemptBumps.sum()).as("released, not taken over: the joining instance charges nothing").isZero();
+            assertThat(first.deadLetters()).as("only that message reached its attempt limit").singleElement()
+                                           .satisfies(deadLetter -> {
+                                               assertThat(deadLetter.key()).isEqualTo(stuckKey);
+                                               assertThat(deadLetter.error()).isEqualTo(ShardOwnedStorage.EXHAUSTED_IN_A_RELEASED_HANDLER);
+                                           });
+            assertThat(youngAttemptsOnRedelivery.get(5, TimeUnit.SECONDS)).as("the young key's message is redelivered uncharged").isZero();
+        } finally {
+            release.countDown();
+            ShardOwnedRebalanceIT.releaseQueueLog(logged);
+            first.close();
+            second.close();
+        }
+    }
+
+    /**
      * The shed loop's charge failure is its own unit's: a shed unit whose charge before its release past
      * {@code stuckHandlerTimeout} fails - refused by the database here - stays leased to the incumbent, with one WARN per
      * attempt naming it, while a unit after it in the run's owners whose shed completes later, while that charge still
@@ -625,6 +714,18 @@ class ShardOwnedOrderedRebalanceIT {
         for (var index = 0; ; index++) {
             var key = "STUCK-" + index;
             if (ShardOwnedSchema.unitForKey(key, ShardOwnedSchema.ORDERED_UNITS) == unit) {
+                return key;
+            }
+        }
+    }
+
+    /**
+     * A key other than {@code other} that routes to {@code unit}, so its message is served by the same owner.
+     */
+    private static String otherKeyOnUnit(int unit, String other) {
+        for (var index = 0; ; index++) {
+            var key = "YOUNG-" + index;
+            if (!key.equals(other) && ShardOwnedSchema.unitForKey(key, ShardOwnedSchema.ORDERED_UNITS) == unit) {
                 return key;
             }
         }

@@ -115,10 +115,15 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  *                         </ul>
  *                         Each time the queue stops waiting it logs one WARN naming the queue, the unit, the keys and
  *                         how long the longest has been in its handler. Every one of the three counts the delivery in
- *                         that handler as an attempt: the takeover of the first charges it, and the shed and the
- *                         hand-back, which release the unit, so its next owner charges nothing, charge it themselves
- *                         before the release, as {@code MessageQueue.releaseKeptOrderedUnit} does - dead-lettering a
- *                         message the charge brings to its {@code maxAttempts}. A message whose handler hangs on every
+ *                         the handler past this bound as an attempt: the takeover of the first charges it, and the shed
+ *                         and the hand-back, which release the unit, so its next owner charges nothing, charge it
+ *                         themselves before the release - dead-lettering a message the charge brings to its
+ *                         {@code maxAttempts}. The shed and the hand-back charge each message in a handler longer than
+ *                         this, and release one in a handler for less uncharged, its handler taken to be slow, not hung,
+ *                         as the unordered lane does (below): either fires once one key has been in its handler this
+ *                         long, and the unit's other keys may have entered theirs moments before.
+ *                         {@code MessageQueue.releaseKeptOrderedUnit} charges every message in a handler, whatever its
+ *                         age. A message whose handler hangs on every
  *                         delivery therefore reaches the dead-letter table once the queue has stopped waiting for it
  *                         {@code maxAttempts} times; a hang in a handler of an owner that goes on serving its unit is not
  *                         bounded by this. Released uncharged, it was handed from owner to owner for good. The unit's

@@ -42,12 +42,13 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * @param longestInHandler how long the key handed to its handler first had been there, {@link Duration#ZERO} when no key
  *                         was in a handler
  * @param charged          how many messages in a handler were charged an attempt before the release, as a takeover
- *                         would charge one. Charged once per kept entry, under the fence the unit was kept under: a
- *                         request asked again after a release that failed reports the charge the earlier request made,
- *                         also once the handler has returned, provided that charge completed, its dead-letter moves
- *                         included; asked again while a key is still in its handler, the request completes it.
- *                         {@code 0} on {@link Outcome#BUSY}, and when no key was in a handler and no earlier attempt to
- *                         release the unit completed a charge. On
+ *                         would charge one: every message in a handler, however long it had been there. Each message is
+ *                         charged once per kept entry, under the fence the unit was kept under, and counted here with
+ *                         every other this entry has charged: a request asked again after a release that failed reports
+ *                         the charge the earlier request committed, also once the handler has returned; asked again
+ *                         while a key is still in its handler, the request makes the dead-letter moves that charge left
+ *                         to make. {@code 0} on {@link Outcome#BUSY}, and when no key was in a handler and no earlier
+ *                         attempt to release the unit committed a charge. On
  *                         {@link Outcome#ALREADY_TAKEN} what was charged before the release found the row taken - nothing
  *                         when the row was already taken when the charge was made, as the charge is fenced too
  * @param deadLetteredKeys the keys whose message that charge brought to {@code maxAttempts}, and which were dead-lettered

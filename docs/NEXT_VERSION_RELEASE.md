@@ -641,10 +641,12 @@ run longer. The hand-back of a dead pump's unit, new in this release, is bounded
 
 **Every one of these releases counts the delivery in the handler it stops waiting for as an attempt**, as the takeover
 of a kept unit at the bound does: before a shed or a dead pump's hand-back releases a unit past `stuckHandlerTimeout`,
-and before `MessageQueue.releaseKeptOrderedUnit` releases one with a key still in its handler (§2), each message still
-in a handler is charged one attempt, and a message that reaches its `maxAttempts` by it is dead-lettered then, with an
-error saying its unit was released while it was still in a handler. The next owner finds the unit released and charges
-nothing itself. Before this, those releases charged nothing either, and a handler that never returns records no
+each message in a handler longer than `stuckHandlerTimeout` is charged one attempt, and a message in a handler for
+less - another key of the unit that entered its handler just before - is released uncharged, as the unordered lane
+does; before `MessageQueue.releaseKeptOrderedUnit` releases one with a key still in its handler (§2), each message
+still in a handler is charged one attempt. A release retried on a later tick does not charge a message it already
+charged. A message that reaches its `maxAttempts` by the charge is dead-lettered then, with an error saying its
+unit was released while it was still in a handler. The next owner finds the unit released and charges nothing itself. Before this, those releases charged nothing either, and a handler that never returns records no
 failure, so a message whose ordered handler hangs on every delivery - a deadlock on its own data, a remote call with
 no timeout - was handed from owner to owner with its attempt count unchanged and delivered again after every release,
 never reaching the dead-letter table, each time leaving one more handler hung. Now it is dead-lettered after
@@ -655,7 +657,7 @@ its `stuckHandlerTimeout` - then each such shed or release costs that message an
 dead-letter it, so raise the bound as above. A `QueueObserver` that throws when told of such a dead letter does not
 hold the release up: the attempt and the move are made by then, so the unit is released all the same - a
 `releaseKeptOrderedUnit` answers that it released it - and a WARN names the observer's failure.
-(`6337f7d89`, `2fdeb3db0`)
+(`6337f7d89`, `2fdeb3db0`, `<!-- fix:U-013 -->`)
 
 **The unordered lane now charges a hung handler's delivery too, past the same bound.** It waits for no handler: a
 fair-share shed and a dead pump's hand-back release an unordered shard at once, and `stop()` once `shedGrace` has run

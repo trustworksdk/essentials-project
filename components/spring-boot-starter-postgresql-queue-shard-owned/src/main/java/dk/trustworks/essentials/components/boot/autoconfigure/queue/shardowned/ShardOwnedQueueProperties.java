@@ -188,8 +188,8 @@ public class ShardOwnedQueueProperties {
      * handler's acknowledgement refused. A fair-share shed of an ordered unit, and the hand-back of an ordered unit whose
      * pump died, which wait for the keys in their handlers: past the bound each releases the unit with every key still in a
      * handler - the one past the bound and any other still running. Each time the queue stops waiting it logs one WARN,
-     * and the message in that handler is charged an attempt, and dead-lettered if that brings it to its maximum attempts;
-     * otherwise the unit's next owner delivers the message of each key still in a handler again, possibly beside its
+     * and the message in that handler is charged an attempt, and dead-lettered if that brings it to its maximum attempts
+     * (a shed or a hand-back releases a message in a handler for less than this bound uncharged); otherwise the unit's next owner delivers the message of each key still in a handler again, possibly beside its
      * handler, so those keys may run in two handlers at once.
      * <p>
      * The unordered lane waits for no handler - a fair-share shed and a dead pump's hand-back release a shard at once, a

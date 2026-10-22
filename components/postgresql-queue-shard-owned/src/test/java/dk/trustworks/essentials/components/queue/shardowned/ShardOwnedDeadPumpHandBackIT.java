@@ -308,6 +308,183 @@ class ShardOwnedDeadPumpHandBackIT {
     }
 
     /**
+     * The hand-back past {@code stuckHandlerTimeout} charges only the messages in a handler longer than that bound, as the
+     * unordered lane does: another key of the unit that entered its handler moments before the hand-back is taken to be
+     * slow, not hung, and released uncharged. It used to be charged too, so with that key's message at its last attempt but
+     * one - a fresh message with {@code maxAttempts} 1 here - the release dead-lettered it with
+     * {@code EXHAUSTED_IN_A_RELEASED_HANDLER} though its handler was healthy, and blocked the key behind the dead letter.
+     */
+    @Test
+    void a_dead_pumps_unit_handed_back_past_the_stuck_handler_timeout_does_not_charge_a_key_that_entered_its_handler_just_before() throws Exception {
+        // Room for the young key to stay under the bound through the pump's death and the heartbeat tick that hands the unit back.
+        var stuckHandlerTimeout = Duration.ofSeconds(5);
+        var settings            = settings(2, Duration.ofMillis(300), Duration.ofSeconds(1), stuckHandlerTimeout);
+        var stuckEntered        = new CountDownLatch(1);
+        var youngEntered        = new CountDownLatch(1);
+        var release             = new CountDownLatch(1);
+        var heldUnit            = new CompletableFuture<Integer>();
+        var youngKey            = new CompletableFuture<String>();
+        var youngEntries        = new AtomicInteger();
+        var youngAttemptsOnRedelivery = new CompletableFuture<Integer>();
+        var logged              = captureQueueLog();
+        try (var runtime = new ShardRuntime(dataSource, settings)) {
+            var queue = queue(runtime, "dead-pump-young");
+            try {
+                queue.startConsumingOrdered((messageId, key, payload, payloadType) -> {
+                    if ("HOLD".equals(key) && heldUnit.complete(messageId.shard())) {
+                        stuckEntered.countDown();
+                        awaitQuietly(release);
+                    } else if (youngKey.isDone() && youngKey.getNow(null).equals(key)) {
+                        if (youngEntries.incrementAndGet() == 1) {
+                            youngEntered.countDown();
+                            awaitQuietly(release);
+                        } else {
+                            youngAttemptsOnRedelivery.complete(attemptsOf(messageId.sequence()));
+                        }
+                    }
+                }, settings, SHARD_COUNT, RedeliveryPolicy.fixed(Duration.ofMillis(100), 1));
+                queue.enqueueOrdered(List.of(new ShardOwnedStorage.OrderedPayload("HOLD", 0, "HOLD-0".getBytes(StandardCharsets.UTF_8), 1)));
+                assertThat(stuckEntered.await(20, TimeUnit.SECONDS)).as("premise: the stuck key is in its handler").isTrue();
+                int unit        = heldUnit.get();
+                var doomed      = runtime.pumpFor(QUEUE_ID, "ordered", unit);
+                var fenceBefore = fenceOf("ordered", unit);
+                // The stuck key past the bound before the young key enters its handler, and the pump killed at once after:
+                // the first hand-back after the death finds the one past the bound and the other in its handler for well under it.
+                Thread.sleep(stuckHandlerTimeout.toMillis() + 500);
+                youngKey.complete(keyInUnit(unit, "HOLD"));
+                queue.enqueueOrdered(List.of(new ShardOwnedStorage.OrderedPayload(youngKey.get(), 0, "YOUNG-0".getBytes(StandardCharsets.UTF_8), 1)));
+                assertThat(youngEntered.await(20, TimeUnit.SECONDS)).as("premise: the young key is in its handler, in the same unit").isTrue();
+                var youngEnteredAtNanos = System.nanoTime();
+
+                kill(doomed);
+
+                Awaitility.await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
+                    assertThat(fenceOf("ordered", unit)).as("handed back past the bound and taken again").isGreaterThan(fenceBefore);
+                    assertThat(youngEntries.get()).as("the young key's message delivered again by the next owner").isEqualTo(2);
+                });
+                var stuckWarnings = warnings(logged, "so those handlers were not waited for");
+                assertThat(stuckWarnings).as("one WARN for the hand-back").singleElement().satisfies(warning -> {
+                    assertThat(warning.getArgumentArray()[1]).as("the unit").isEqualTo(unit);
+                    assertThat(warning.getFormattedMessage()).contains("from its dead pump with 2 key(s)")
+                                                             .contains("1 message(s) in a handler longer than stuckHandlerTimeout were charged an attempt",
+                                                                       "1 dead-lettered at their attempt limit [HOLD]");
+                });
+                assertThat(Duration.ofNanos(System.nanoTime() - youngEnteredAtNanos)).as("premise: the young key was still under the bound at the hand-back")
+                                                                                   .isLessThan(stuckHandlerTimeout);
+                assertThat(release.getCount()).as("premise: both handlers are still held").isEqualTo(1);
+                assertThat(queue.metrics().takeoverAttemptBumps.sum()).as("only the message in a handler past the bound was charged").isEqualTo(1);
+                assertThat(queue.deadLetters()).as("only that message reached its attempt limit").singleElement()
+                                               .satisfies(deadLetter -> {
+                                                   assertThat(deadLetter.key()).isEqualTo("HOLD");
+                                                   assertThat(deadLetter.error()).isEqualTo(ShardOwnedStorage.EXHAUSTED_IN_A_RELEASED_HANDLER);
+                                               });
+                assertThat(youngAttemptsOnRedelivery.get(5, TimeUnit.SECONDS)).as("the young key's message is redelivered uncharged").isZero();
+            } finally {
+                release.countDown();
+                queue.stop();
+            }
+        } finally {
+            releaseQueueLog(logged);
+        }
+    }
+
+    /**
+     * A dead pump's hand-back past {@code stuckHandlerTimeout} whose release is refused, and retried on every heartbeat,
+     * charges each message in a handler once per owner: the retries do not charge the stuck key's message again, and the
+     * one that runs after the young key has passed the bound too charges that key's message, which the first hand-back
+     * left uncharged. Both rows reach the next owner with one attempt each. With a charge made only once per owner, the
+     * young key's message was released uncharged however long its handler had then run; with no memo, every retry
+     * charged the stuck key's message again.
+     */
+    @Test
+    void a_dead_pumps_unit_whose_release_is_refused_charges_on_a_retry_a_key_that_has_passed_the_stuck_handler_timeout_since_and_not_the_one_charged_before() throws Exception {
+        var stuckHandlerTimeout = Duration.ofSeconds(5);
+        var settings            = settings(2, Duration.ofMillis(300), Duration.ofSeconds(1), stuckHandlerTimeout);
+        var stuckEntered        = new CountDownLatch(1);
+        var youngEntered        = new CountDownLatch(1);
+        var release             = new CountDownLatch(1);
+        var heldUnit            = new CompletableFuture<Integer>();
+        var youngKey            = new CompletableFuture<String>();
+        var seqByKey            = new ConcurrentHashMap<String, Long>();
+        var attemptsOnRedelivery = new ConcurrentHashMap<String, Integer>();
+        var logged              = captureQueueLog();
+        try (var runtime = new ShardRuntime(dataSource, settings)) {
+            var queue = queue(runtime, "dead-pump-retry-charge");
+            try {
+                queue.startConsumingOrdered((messageId, key, payload, payloadType) -> {
+                    var young = youngKey.isDone() && youngKey.getNow(null).equals(key);
+                    if (!"HOLD".equals(key) && !young) {
+                        return;
+                    }
+                    if (seqByKey.putIfAbsent(key, messageId.sequence()) == null) {
+                        if (young) {
+                            youngEntered.countDown();
+                        } else {
+                            heldUnit.complete(messageId.shard());
+                            stuckEntered.countDown();
+                        }
+                        awaitQuietly(release);
+                    } else {
+                        attemptsOnRedelivery.putIfAbsent(key, attemptsOf(messageId.sequence()));
+                    }
+                }, settings, SHARD_COUNT, RedeliveryPolicy.fixed(Duration.ofMillis(100), 3));
+                queue.enqueueOrdered(List.of(new ShardOwnedStorage.OrderedPayload("HOLD", 0, "HOLD-0".getBytes(StandardCharsets.UTF_8), 1)));
+                assertThat(stuckEntered.await(20, TimeUnit.SECONDS)).as("premise: the stuck key is in its handler").isTrue();
+                int unit        = heldUnit.get();
+                var doomed      = runtime.pumpFor(QUEUE_ID, "ordered", unit);
+                var fenceBefore = fenceOf("ordered", unit);
+                // The stuck key past the bound before the young key enters its handler, as in the test above.
+                Thread.sleep(stuckHandlerTimeout.toMillis() + 500);
+                youngKey.complete(keyInUnit(unit, "HOLD"));
+                queue.enqueueOrdered(List.of(new ShardOwnedStorage.OrderedPayload(youngKey.get(), 0, "YOUNG-0".getBytes(StandardCharsets.UTF_8), 1)));
+                assertThat(youngEntered.await(20, TimeUnit.SECONDS)).as("premise: the young key is in its handler, in the same unit").isTrue();
+                var youngEnteredAtNanos = System.nanoTime();
+
+                failLeaseReleases("ordered", true);
+                try {
+                    kill(doomed);
+
+                    // Each refusal follows a charge that went through: the trigger refuses the lease row's release, not the charge.
+                    awaitReleasesRefused(QUEUE_ID, List.of(unit), "while the young key is under the bound");
+                    assertThat(Duration.ofNanos(System.nanoTime() - youngEnteredAtNanos)).as("premise: the young key was still under the bound at those hand-backs")
+                                                                                       .isLessThan(stuckHandlerTimeout);
+                    assertThat(queue.metrics().takeoverAttemptBumps.sum()).as("the stuck key's message charged once, not on every retry, the young one's not yet")
+                                                                         .isEqualTo(1);
+                    assertThat(attemptsOf(seqByKey.get("HOLD"))).as("the stuck key's stored attempts").isEqualTo(1);
+                    assertThat(attemptsOf(seqByKey.get(youngKey.get()))).as("the young key's stored attempts").isZero();
+
+                    Awaitility.await("the young key's message charged by a retry once past the bound").atMost(Duration.ofSeconds(20))
+                              .until(() -> queue.metrics().takeoverAttemptBumps.sum() >= 2);
+                    assertThat(fenceOf("ordered", unit)).as("premise: still held, every release refused").isEqualTo(fenceBefore);
+                } finally {
+                    failLeaseReleases("ordered", false);
+                }
+
+                Awaitility.await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
+                    assertThat(fenceOf("ordered", unit)).as("handed back once the release went through, and taken again").isGreaterThan(fenceBefore);
+                    assertThat(attemptsOnRedelivery).as("both messages delivered again by the next owner").containsOnlyKeys("HOLD", youngKey.get());
+                });
+                assertThat(release.getCount()).as("premise: both handlers are still held").isEqualTo(1);
+                assertThat(queue.metrics().takeoverAttemptBumps.sum()).as("each message charged once across the refused releases").isEqualTo(2);
+                assertThat(attemptsOnRedelivery).as("each row reaches the next owner with one attempt, the stuck key's not two")
+                                                .containsEntry("HOLD", 1)
+                                                .containsEntry(youngKey.get(), 1);
+                assertThat(queue.deadLetters()).as("nothing reached its attempt limit").isEmpty();
+                assertThat(warnings(logged, "so those handlers were not waited for")).as("one WARN, for the release that went through").singleElement()
+                                                                                    .satisfies(warning -> assertThat(warning.getFormattedMessage())
+                                                                                            .contains("from its dead pump with 2 key(s)")
+                                                                                            .contains("2 message(s) in a handler longer than stuckHandlerTimeout were charged an attempt"));
+            } finally {
+                release.countDown();
+                failLeaseReleases("ordered", false);
+                queue.stop();
+            }
+        } finally {
+            releaseQueueLog(logged);
+        }
+    }
+
+    /**
      * A dead pump's ordered unit whose charge before its release past {@code stuckHandlerTimeout} fails - refused by the
      * database here - is left held, with one WARN per attempt naming it, and retried on the next heartbeat, while the dead
      * pump's other units are handed back all the same. A failed charge used to end the whole hand-back: no unit of the dead
@@ -443,7 +620,7 @@ class ShardOwnedDeadPumpHandBackIT {
                 });
                 assertThat(warnings(logged, "so those handlers were not waited for")).as("one WARN for the hand-back").singleElement()
                                                                                     .satisfies(warning -> assertThat(warning.getFormattedMessage())
-                                                                                            .contains("1 message(s) in those handlers were charged an attempt",
+                                                                                            .contains("1 message(s) in a handler longer than stuckHandlerTimeout were charged an attempt",
                                                                                                       "1 dead-lettered at their attempt limit [HOLD]"));
             } finally {
                 release.countDown();
@@ -1626,6 +1803,18 @@ class ShardOwnedDeadPumpHandBackIT {
                                "SELECT attempts FROM " + ShardOwnedSchema.ORDERED_TABLE + " WHERE queue_id = ? AND seq = ?", QUEUE_ID, seq);
         } catch (java.sql.SQLException e) {
             throw new IllegalStateException(e);
+        }
+    }
+
+    /**
+     * A key other than {@code other} that routes to ordered {@code unit}, so its message is served by the same owner.
+     */
+    private static String keyInUnit(int unit, String other) {
+        for (var index = 0; ; index++) {
+            var candidate = "YOUNG-" + index;
+            if (!candidate.equals(other) && ShardOwnedSchema.unitForKey(candidate, ShardOwnedSchema.ORDERED_UNITS) == unit) {
+                return candidate;
+            }
         }
     }
 

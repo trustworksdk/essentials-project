@@ -47,7 +47,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * @param longestInHandlerMillis how long the key handed to its handler first had been there; zero when none was
  * @param charged                how many messages in a handler were charged an attempt before the release, as
  *                               {@link KeptUnitRelease#charged()} counts them; zero on {@code BUSY}, and when no key was in a
- *                               handler and no earlier attempt to release the unit completed a charge
+ *                               handler and no earlier attempt to release the unit committed a charge
  * @param deadLetteredKeys       the keys whose message that charge brought to {@code maxAttempts} and dead-lettered, as
  *                               {@link KeptUnitRelease#deadLetteredKeys()} names them; empty when none was. Each is blocked
  *                               behind its dead letter until its dead letters are resurrected or deleted
