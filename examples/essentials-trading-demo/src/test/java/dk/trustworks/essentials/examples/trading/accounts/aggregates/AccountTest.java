@@ -214,6 +214,30 @@ class AccountTest {
     }
 
     @Test
+    void a_corrected_settlement_changes_cash_and_the_cost_basis_of_a_held_buy_or_the_pnl_of_a_sell() {
+        var account = openAccount();
+        account.creditDeposit(DepositId.of("DEP-1"), usd("10000"), TRADE_DATE, TRADE_DATE.plusDays(3));
+        account.bookTrade(ExecutionId.of("EX-BUY"), ACME, TradeSide.BUY, Quantity.of(10), usd("100"), TRADE_DATE, SETTLES_ON, null, null);
+        account.settleTrade(ExecutionId.of("EX-BUY"));
+        assertMoney(account.settledCash(), "9000");
+
+        // The buy's settlement amount went up a cent: it costs a cent more, and the shares are still held
+        account.correctSettlementAmount(ExecutionId.of("EX-BUY"), ACME, TradeSide.BUY, usd("0.01"));
+        account.correctSettlementAmount(ExecutionId.of("EX-BUY"), ACME, TradeSide.BUY, usd("0.01")); // redelivered: nothing
+        assertMoney(account.settledCash(), "8999.99");
+        assertThat(account.positionOf(ACME)).hasValueSatisfying(position -> assertMoney(position.costBasis(), "1000.01"));
+
+        account.bookTrade(ExecutionId.of("EX-SELL"), ACME, TradeSide.SELL, Quantity.of(10), usd("110"), TRADE_DATE, SETTLES_ON, null, null);
+        account.settleTrade(ExecutionId.of("EX-SELL"));
+        var pnlBefore = account.realizedPnl();
+
+        // The sell's proceeds went down a cent
+        account.correctSettlementAmount(ExecutionId.of("EX-SELL"), ACME, TradeSide.SELL, usd("-0.01"));
+        assertMoney(account.realizedPnl(), pnlBefore.subtract(usd("0.01")).getAmount().value().toPlainString());
+        assertThat(account.getUncommittedChanges().events).filteredOn(SettlementAmountCorrected.class::isInstance).hasSize(2);
+    }
+
+    @Test
     void another_currency_is_refused() {
         var account = openAccount();
         assertThatThrownBy(() -> account.adjustCash(AdjustmentId.of("ADJ-1"), Money.of("1", CurrencyCode.EUR), "wrong", "operator"))

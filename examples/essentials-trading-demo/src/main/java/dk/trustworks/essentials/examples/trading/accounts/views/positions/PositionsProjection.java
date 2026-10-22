@@ -148,6 +148,16 @@ public class PositionsProjection extends ViewEventProcessor {
     }
 
     @MessageHandler
+    void handle(SettlementAmountCorrected event, OrderedMessage message) {
+        if (!advance(event, message)) {
+            return;
+        }
+        if (event.costBasisChange().signum() != 0) {
+            change(event, event.instrumentId(), 0, 0, 0, 0, event.costBasisChange().getAmount().value());
+        }
+    }
+
+    @MessageHandler
     void handle(TradeBookingReversed event, OrderedMessage message) {
         if (!advance(event, message)) {
             return;

@@ -15,7 +15,7 @@ reads:
   - { name: PositionView }
 projections:
   - name: PositionsProjection
-    from: [AccountOpened, SharesReserved, SharesReleased, TradeBooked, TradeSettled, TradeBookingReversed]
+    from: [AccountOpened, SharesReserved, SharesReleased, TradeBooked, TradeSettled, SettlementAmountCorrected, TradeBookingReversed]
     consistency: eventual
     store: postgresql
 invariants:

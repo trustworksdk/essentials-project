@@ -147,6 +147,11 @@ public class AccountOverviewProjection extends ViewEventProcessor {
     }
 
     @MessageHandler
+    void handle(SettlementAmountCorrected event, OrderedMessage message) {
+        delta(event, message, value(event.cashChange()), ZERO, ZERO, ZERO, ZERO, value(event.realizedPnlChange()));
+    }
+
+    @MessageHandler
     void handle(WithdrawalReturnCredited event, OrderedMessage message) {
         delta(event, message, value(event.amount()), ZERO, ZERO, ZERO, ZERO, ZERO);
     }

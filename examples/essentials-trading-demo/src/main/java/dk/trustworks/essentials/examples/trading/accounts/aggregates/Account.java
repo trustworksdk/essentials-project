@@ -306,6 +306,34 @@ public class Account extends AggregateRoot<AccountGenerationId, AccountEvent, Ac
         apply(new TradeSettled(aggregateId(), accountId, trade));
     }
 
+    /**
+     * The settlement of a trade was corrected after it settled: its settlement amount changed by {@code amountChange}
+     * (new minus previous). A fact - never refused. A buy pays the change; while its shares are still held it changes
+     * their cost basis, else the period's realized P&L. A sell receives it, as realized P&L.
+     */
+    public void correctSettlementAmount(ExecutionId executionId, InstrumentId instrumentId, TradeSide side, Money amountChange) {
+        assertBooksOpen();
+        requireNonNull(executionId, "No executionId provided");
+        requireNonNull(instrumentId, "No instrumentId provided");
+        requireNonNull(side, "No side provided");
+        requireCurrency(amountChange);
+        if (handledReferences.contains(ref("CORR", executionId)) || amountChange.signum() == 0) {
+            return;
+        }
+        Money cashChange, costBasisChange, realizedPnlChange;
+        if (side == TradeSide.BUY) {
+            cashChange = amountChange.negate();
+            var stillHeld = position(instrumentId).held().isPositive();
+            costBasisChange = stillHeld ? amountChange : zero();
+            realizedPnlChange = stillHeld ? zero() : amountChange.negate();
+        } else {
+            cashChange = amountChange;
+            costBasisChange = zero();
+            realizedPnlChange = amountChange;
+        }
+        apply(new SettlementAmountCorrected(aggregateId(), accountId, executionId, instrumentId, side, cashChange, costBasisChange, realizedPnlChange));
+    }
+
     public void reverseTradeBooking(ExecutionId executionId, String reason) {
         assertBooksOpen();
         requireNonNull(executionId, "No executionId provided");
@@ -626,6 +654,18 @@ public class Account extends AggregateRoot<AccountGenerationId, AccountEvent, Ac
         }
         storePosition(position);
         openTrades.remove(trade.executionId());
+    }
+
+    @EventHandler
+    private void on(SettlementAmountCorrected e) {
+        settledCash = settledCash.add(e.cashChange());
+        realizedPnl = realizedPnl.add(e.realizedPnlChange());
+        if (e.costBasisChange().signum() != 0) {
+            var position = position(e.instrumentId());
+            storePosition(new PositionBalance(position.instrumentId(), position.settled(), position.pendingIn(), position.pendingOut(),
+                                              position.costBasis().add(e.costBasisChange())));
+        }
+        handledReferences.add(ref("CORR", e.executionId()));
     }
 
     @EventHandler
