@@ -30,8 +30,9 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * The charge an owner makes before its shard or ordered unit is released past handlers that have not returned, kept once
  * for both lanes: {@code ShardOwner.chargeInHandlerBeforeRelease} and {@code OrderedShardOwner.chargeKeysInHandlerBeforeRelease}
  * each compose one, and supply only what differs - which messages in a handler are candidates (unordered: those in a
- * handler longer than {@code stuckHandlerTimeout}; ordered: by {@code OrderedShardOwner.ReleaseChargeScope}), the writes
- * against their own table under their own fence ({@link Writes}), their lane, and where the charged counts go.
+ * handler longer than {@code stuckHandlerTimeout}; ordered: by {@code OrderedShardOwner.ReleaseChargeScope}), each with
+ * what the lane knows of it ({@link Candidate}), the writes against their own table under their own fence ({@link Writes}),
+ * their lane, where the charged counts go, and what to do once a message is dead-lettered (the ordered lane blocks its key).
  * <p>
  * Whoever takes a released unit next charges nothing ({@link ShardOwnedStorage.LeaseGrant#previousOwnerReleased()}), and a
  * handler that hangs never returns to record its attempt, so without the charge a message whose handler hung on every
@@ -40,7 +41,8 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * limit with {@link ShardOwnedStorage#EXHAUSTED_IN_A_RELEASED_HANDLER}, as the next owner runs no exhaustion pass for a
  * released unit.
  * <p>
- * One map holds what was charged, a {@link ChargedRow} per message charged, keyed by sequence value:
+ * One map holds what was charged, a {@link ChargedRow} per message charged, keyed by sequence value, carrying the key and
+ * {@code key_order} its {@link Candidate} gave, so an owner keeps no record of its own beside it:
  * <ul>
  *     <li>recorded as soon as the charge has committed, so a release that failed and is retried does not charge a message
  *     again, and a message that has come into the candidates since is charged by the retry. A message the charge asked
@@ -48,8 +50,9 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  *     charged, not counted, not asked for again;</li>
  *     <li>its {@link DeadLetterMove}: {@link DeadLetterMove#PENDING} at the redelivery limit until the move is made, then
  *     {@link DeadLetterMove#MOVED} or {@link DeadLetterMove#ROW_GONE}, each in one write, so what was dead-lettered - the
- *     sequence values and keys {@link #answer()} reports, and {@link #deadLetteredWhileInHandler} - is derived from that
- *     write and cannot be seen half-made;</li>
+ *     sequence values and keys {@link #answer()} reports, {@link #deadLetteredWhileInHandler}, and the row the owner is
+ *     handed once it is {@link DeadLetterMove#MOVED} (the constructor's {@code onMoved}) - is derived from that write and
+ *     cannot be seen half-made;</li>
  *     <li>written only under the monitor; read by the handler threads ({@link #deadLetteredWhileInHandler}) without it
  *     unless a charge is running or the message's move is still to be made, when they wait for that charge: a move commits
  *     before its write here, so a handler returning in between would otherwise take its message for one still in the
@@ -63,8 +66,10 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 final class ReleaseChargeLedger {
 
     /**
-     * The two writes the charge makes, each fenced by the owner as the release after it is: the row must still name the
-     * owner's instance under its fence, which releasing does not bump.
+     * The owner's fenced statements the charge runs - the two writes it makes and the lease lookup that explains a row the
+     * charge left out - each fenced by the owner as the release after it is: the row must still name the owner's instance
+     * under its fence, which releasing does not bump. Statements only: what the owner does once a message is dead-lettered
+     * is the constructor's {@code onMoved}.
      */
     interface Writes {
         /**
@@ -114,20 +119,34 @@ final class ReleaseChargeLedger {
     }
 
     /**
+     * A message in a handler an owner asks {@link #charge} to charge, as the owner knows it.
+     *
+     * @param key      its key; {@code null} on the unordered lane, which has none
+     * @param keyOrder its {@code key_order}; {@code 0} on the unordered lane, as {@code Message.of} stores
+     */
+    record Candidate(String key, long keyOrder) {
+        /**
+         * A message of the unordered lane: no key, {@code key_order} {@code 0}.
+         */
+        static final Candidate UNORDERED = new Candidate(null, 0L);
+    }
+
+    /**
      * A message charged before a release.
      *
      * @param seq                 its sequence value
      * @param key                 its key; {@code null} on the unordered lane, which has none
+     * @param keyOrder            its {@code key_order}; {@code 0} on the unordered lane
      * @param attemptsAfterCharge its attempt count after the charge
      * @param move                where its dead-letter move stands
      */
-    record ChargedRow(long seq, String key, int attemptsAfterCharge, DeadLetterMove move) {
+    record ChargedRow(long seq, String key, long keyOrder, int attemptsAfterCharge, DeadLetterMove move) {
         ChargedRow {
             requireNonNull(move, "No move provided");
         }
 
         ChargedRow moved(boolean moved) {
-            return new ChargedRow(seq, key, attemptsAfterCharge, moved ? DeadLetterMove.MOVED : DeadLetterMove.ROW_GONE);
+            return new ChargedRow(seq, key, keyOrder, attemptsAfterCharge, moved ? DeadLetterMove.MOVED : DeadLetterMove.ROW_GONE);
         }
     }
 
@@ -147,6 +166,7 @@ final class ReleaseChargeLedger {
     private final RedeliveryPolicy              redeliveryPolicy;
     private final ShardOwnerMetrics             metrics;
     private final Consumer<Map<Long, Integer>>  onCharged;
+    private final Consumer<ChargedRow>          onMoved;
     /**
      * Guards every write to {@link #rows}, and every read but {@link #deadLetteredWhileInHandler}'s, which takes it only to
      * wait for a running charge.
@@ -180,19 +200,25 @@ final class ReleaseChargeLedger {
      *                         the charge has committed: the owner records them as its own counts, so a failure the
      *                         handler reports later - the release having failed, and the owner serving on - counts on from
      *                         the charge rather than writing an older count over it
+     * @param onMoved          told the row of each message dead-lettered, under the monitor, as soon as its move to the
+     *                         dead-letter table is recorded here, before the {@code QueueObserver} is: the ordered lane blocks
+     *                         the key at the row's {@code key_order}. Never told of a move that moved nothing
+     *                         ({@link DeadLetterMove#ROW_GONE}): there is no dead letter to block a key behind
      */
     ReleaseChargeLedger(MessageId.Lane lane,
                         int shard,
                         Writes writes,
                         RedeliveryPolicy redeliveryPolicy,
                         ShardOwnerMetrics metrics,
-                        Consumer<Map<Long, Integer>> onCharged) {
+                        Consumer<Map<Long, Integer>> onCharged,
+                        Consumer<ChargedRow> onMoved) {
         this.lane = requireNonNull(lane, "No lane provided");
         this.shard = shard;
         this.writes = requireNonNull(writes, "No writes provided");
         this.redeliveryPolicy = requireNonNull(redeliveryPolicy, "No redeliveryPolicy provided");
         this.metrics = requireNonNull(metrics, "No metrics provided");
         this.onCharged = requireNonNull(onCharged, "No onCharged provided");
+        this.onMoved = requireNonNull(onMoved, "No onMoved provided");
     }
 
     /**
@@ -202,10 +228,9 @@ final class ReleaseChargeLedger {
      * writes, unless a candidate has come in since. Lets the queue tell a failed charge, after which the unit is held and the release retried, from a
      * failure that came after the writes, after which it is released; and skip the connection {@link #charge} needs.
      *
-     * @param candidates the messages in a handler the owner would charge, by sequence value, each with its key
-     *                   ({@code null} on the unordered lane)
+     * @param candidates the messages in a handler the owner would charge, by sequence value, each as the owner knows it
      */
-    boolean owes(Map<Long, String> candidates) {
+    boolean owes(Map<Long, Candidate> candidates) {
         requireNonNull(candidates, "No candidates provided");
         synchronized (monitor) {
             return !notChargedYet(candidates).isEmpty() || rows.values().stream().anyMatch(row -> row.move() == DeadLetterMove.PENDING);
@@ -215,8 +240,8 @@ final class ReleaseChargeLedger {
     /**
      * Charge one attempt to each of {@code candidates} not charged yet, then make every dead-letter move still owed.
      *
-     * @param candidates the messages in a handler to charge, by sequence value, each with its key ({@code null} on the
-     *                   unordered lane)
+     * @param candidates the messages in a handler to charge, by sequence value, each as the owner knows it: its key and
+     *                   {@code key_order} go into its {@link ChargedRow}
      * @return what this ledger has charged and dead-lettered so far, this call included
      * @throws SQLException     when the charge, the lease lookup after a charge that left a row out, or a dead-letter move
      *                          fails; {@link #owes} then answers {@code true}
@@ -224,7 +249,7 @@ final class ReleaseChargeLedger {
      *                          {@link Error}), thrown once every move is made, so {@link #owes} then answers as after a call
      *                          that returned, and {@link #answer()} gives the answer
      */
-    Answer charge(Connection connection, Map<Long, String> candidates) throws SQLException {
+    Answer charge(Connection connection, Map<Long, Candidate> candidates) throws SQLException {
         requireNonNull(candidates, "No candidates provided");
         synchronized (monitor) {
             charging = true;
@@ -239,14 +264,17 @@ final class ReleaseChargeLedger {
     /**
      * {@link #charge}'s work. Called under {@link #monitor}.
      */
-    private Answer chargeAndMove(Connection connection, Map<Long, String> candidates) throws SQLException {
+    private Answer chargeAndMove(Connection connection, Map<Long, Candidate> candidates) throws SQLException {
         var toCharge = notChargedYet(candidates);
         if (!toCharge.isEmpty()) {
             var charged = writes.chargeRowsInHandler(connection, toCharge.keySet());
             metrics.takeoverAttemptBumps.add(charged.size());
             // The charge has committed: recorded before anything else can fail, or a retried release charges again
-            charged.forEach((seq, attempts) -> rows.put(seq, new ChargedRow(seq, toCharge.get(seq), attempts,
-                                                                            redeliveryPolicy.isExhausted(attempts) ? DeadLetterMove.PENDING : DeadLetterMove.NONE_OWED)));
+            charged.forEach((seq, attempts) -> {
+                var candidate = toCharge.get(seq);
+                rows.put(seq, new ChargedRow(seq, candidate.key(), candidate.keyOrder(), attempts,
+                                             redeliveryPolicy.isExhausted(attempts) ? DeadLetterMove.PENDING : DeadLetterMove.NONE_OWED));
+            });
             onCharged.accept(charged);
             // A row the fenced charge left out is gone from the table, or the lease is lost. Gone, there is nothing to charge:
             // left a candidate, every later call asked for it again and owes() stayed true, which the queue reads as a failed
@@ -272,10 +300,12 @@ final class ReleaseChargeLedger {
                 }
                 throw e;
             }
-            rows.put(row.seq(), row.moved(moved));
+            var made = row.moved(moved);
+            rows.put(row.seq(), made);
             if (moved) {
-                // Counted before the observer is told: one that throws leaves the move made and remembered, so no later
-                // call reaches this line for the message again.
+                // Handed to the owner and counted before the observer is told: an observer that throws leaves the move made
+                // and remembered, so no later call reaches this line for the message again.
+                onMoved.accept(made);
                 metrics.deadLettered.increment();
                 try {
                     metrics.observer().deadLettered(new MessageId(lane, shard, row.seq()), row.attemptsAfterCharge(),
@@ -343,7 +373,7 @@ final class ReleaseChargeLedger {
      * {@code candidates} less those charged already and those a charge found {@link #gone}, in their order. Called under
      * {@link #monitor}.
      */
-    private Map<Long, String> notChargedYet(Map<Long, String> candidates) {
+    private Map<Long, Candidate> notChargedYet(Map<Long, Candidate> candidates) {
         var notCharged = new LinkedHashMap<>(candidates);
         notCharged.keySet().removeAll(rows.keySet());
         notCharged.keySet().removeAll(gone);

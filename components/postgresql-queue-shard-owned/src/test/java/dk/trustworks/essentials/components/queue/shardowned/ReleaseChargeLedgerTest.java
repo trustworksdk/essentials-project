@@ -23,6 +23,7 @@ import java.sql.*;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.*;
 
@@ -118,7 +119,8 @@ class ReleaseChargeLedgerTest {
                 throw new IllegalStateException("observer failure");
             }
         });
-        var ledger = new ReleaseChargeLedger(MessageId.Lane.ORDERED, SHARD, writes, RedeliveryPolicy.fixed(Duration.ofSeconds(1), 1), metrics, charged -> { });
+        var ledger = new ReleaseChargeLedger(MessageId.Lane.ORDERED, SHARD, writes, RedeliveryPolicy.fixed(Duration.ofSeconds(1), 1), metrics, charged -> { },
+                                             deadLettered -> { });
 
         assertThatThrownBy(() -> ledger.charge(null, candidates(Map.of(1L, "A", 2L, "B")))).hasMessage("observer failure");
 
@@ -169,7 +171,8 @@ class ReleaseChargeLedgerTest {
                 throw new IllegalStateException("observer of " + id.sequence());
             }
         });
-        var ledger = new ReleaseChargeLedger(MessageId.Lane.ORDERED, SHARD, writes, RedeliveryPolicy.fixed(Duration.ofSeconds(1), 1), metrics, charged -> { });
+        var ledger = new ReleaseChargeLedger(MessageId.Lane.ORDERED, SHARD, writes, RedeliveryPolicy.fixed(Duration.ofSeconds(1), 1), metrics, charged -> { },
+                                             deadLettered -> { });
 
         assertThatThrownBy(() -> ledger.charge(null, candidates(Map.of(1L, "A", 2L, "B"))))
                 .isInstanceOf(IllegalStateException.class)
@@ -183,6 +186,52 @@ class ReleaseChargeLedgerTest {
         assertThat(ledger.answer().deadLettered()).extracting(ReleaseChargeLedger.ChargedRow::key).containsExactly("A", "B");
         assertThat(ledger.deadLetteredWhileInHandler(1L)).isPresent();
         assertThat(ledger.deadLetteredWhileInHandler(2L)).isPresent();
+    }
+
+    /**
+     * The owner is handed the row of each message the charge moved to the dead-letter table, with the key and
+     * {@code key_order} its candidate gave - after the move is recorded and before the {@code QueueObserver} is told - and
+     * of no other: not one charged below the limit, not one whose move found the row gone, not one whose move failed until
+     * a later call makes it. The ordered lane blocks the key from that row, and keeps no record of its own beside the
+     * ledger's.
+     */
+    @Test
+    void the_owner_is_handed_the_row_of_each_message_moved_with_its_key_and_key_order_and_of_no_other() throws Exception {
+        var writes = new FakeWrites(Map.of(1L, 3, 2L, 3, 3L, 1, 4L, 3));
+        writes.rowsGone.add(2L);
+        writes.failMoves = 1;
+        var handed = new ArrayList<ReleaseChargeLedger.ChargedRow>();
+        var told   = new ArrayList<Long>();
+        var metrics = new ShardOwnerMetrics(new QueueObserver() {
+            @Override
+            public void deadLettered(MessageId id, int attempts, Throwable cause) {
+                assertThat(handed).as("the owner is handed the row before the observer is told").extracting(ReleaseChargeLedger.ChargedRow::seq)
+                                  .contains(id.sequence());
+                told.add(id.sequence());
+            }
+        });
+        var self   = new AtomicReference<ReleaseChargeLedger>();
+        var ledger = new ReleaseChargeLedger(MessageId.Lane.ORDERED, SHARD, writes, RedeliveryPolicy.fixed(Duration.ofSeconds(1), 3), metrics, charged -> { },
+                                             deadLettered -> {
+                                                 assertThat(self.get().deadLetteredWhileInHandler(deadLettered.seq())).as("the move is recorded before the owner is handed it")
+                                                                                                                   .isPresent();
+                                                 handed.add(deadLettered);
+                                             });
+        self.set(ledger);
+
+        assertThatThrownBy(() -> ledger.charge(null, candidates(Map.of(1L, "A", 2L, "B", 3L, "C", 4L, "D")))).isInstanceOf(SQLException.class);
+        assertThat(handed).as("a move that failed hands nothing over").isEmpty();
+
+        ledger.charge(null, candidates(Map.of(1L, "A", 2L, "B", 3L, "C", 4L, "D")));
+        ledger.charge(null, candidates(Map.of(1L, "A", 2L, "B", 3L, "C", 4L, "D")));
+
+        assertThat(writes.moveCalls).as("premise: 1 failed then moved, 2 found gone, 4 moved; 3 below the limit is not moved").containsExactly(1L, 1L, 2L, 4L);
+        assertThat(handed).as("only the rows moved, each once, with the key and key_order of its candidate")
+                          .extracting(ReleaseChargeLedger.ChargedRow::seq, ReleaseChargeLedger.ChargedRow::key, ReleaseChargeLedger.ChargedRow::keyOrder,
+                                      ReleaseChargeLedger.ChargedRow::move)
+                          .containsExactly(tuple(1L, "A", 10L, ReleaseChargeLedger.DeadLetterMove.MOVED),
+                                           tuple(4L, "D", 40L, ReleaseChargeLedger.DeadLetterMove.MOVED));
+        assertThat(told).containsExactly(1L, 4L);
     }
 
     @Test
@@ -282,10 +331,10 @@ class ReleaseChargeLedgerTest {
 
     private static ReleaseChargeLedger ledger(FakeWrites writes, int maxAttempts, ShardOwnerMetrics metrics, List<Map<Long, Integer>> counts) {
         return new ReleaseChargeLedger(MessageId.Lane.UNORDERED, SHARD, writes, RedeliveryPolicy.fixed(Duration.ofSeconds(1), maxAttempts), metrics,
-                                       charged -> counts.add(Map.copyOf(charged)));
+                                       charged -> counts.add(Map.copyOf(charged)), deadLettered -> { });
     }
 
-    private static ReleaseChargeLedger.Answer charge(ReleaseChargeLedger ledger, Map<Long, String> candidates) {
+    private static ReleaseChargeLedger.Answer charge(ReleaseChargeLedger ledger, Map<Long, ReleaseChargeLedger.Candidate> candidates) {
         try {
             return ledger.charge(null, candidates);
         } catch (SQLException e) {
@@ -293,16 +342,24 @@ class ReleaseChargeLedgerTest {
         }
     }
 
-    private static Map<Long, String> candidates(Long... seqs) {
-        var candidates = new TreeMap<Long, String>();
+    /**
+     * Unordered candidates: no key, {@code key_order} 0.
+     */
+    private static Map<Long, ReleaseChargeLedger.Candidate> candidates(Long... seqs) {
+        var candidates = new TreeMap<Long, ReleaseChargeLedger.Candidate>();
         for (var seq : seqs) {
-            candidates.put(seq, null);
+            candidates.put(seq, ReleaseChargeLedger.Candidate.UNORDERED);
         }
         return candidates;
     }
 
-    private static Map<Long, String> candidates(Map<Long, String> keyBySeq) {
-        return new TreeMap<>(keyBySeq);
+    /**
+     * Ordered candidates, each message's key as given and its {@code key_order} ten times its seq.
+     */
+    private static Map<Long, ReleaseChargeLedger.Candidate> candidates(Map<Long, String> keyBySeq) {
+        var candidates = new TreeMap<Long, ReleaseChargeLedger.Candidate>();
+        keyBySeq.forEach((seq, key) -> candidates.put(seq, new ReleaseChargeLedger.Candidate(key, seq * 10)));
+        return candidates;
     }
 
     /**

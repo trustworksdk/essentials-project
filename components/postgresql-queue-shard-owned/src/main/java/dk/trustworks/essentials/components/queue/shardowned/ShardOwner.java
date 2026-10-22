@@ -232,7 +232,9 @@ final class ShardOwner implements LeasedOwner {
             public boolean stillOwns(Connection connection) throws SQLException {
                 return storage.stillOwns(connection, "unordered", shard, instanceId, fence);
             }
-        }, redeliveryPolicy, metrics, this::recordChargedAttempts);
+        }, redeliveryPolicy, metrics, this::recordChargedAttempts, deadLettered -> {
+            // No key to block: a dead letter holds nothing back on this lane
+        });
     }
 
     /**
@@ -1168,17 +1170,17 @@ final class ShardOwner implements LeasedOwner {
     }
 
     /**
-     * The messages in a handler since longer than {@code stuckHandlerTimeout} ago, in sequence order, each with no key: the
-     * candidates of {@link #chargeInHandlerBeforeRelease}.
+     * The messages in a handler since longer than {@code stuckHandlerTimeout} ago, in sequence order, each with no key
+     * ({@link ReleaseChargeLedger.Candidate#UNORDERED}): the candidates of {@link #chargeInHandlerBeforeRelease}.
      */
-    private Map<Long, String> inHandlerPastStuckHandlerTimeout() {
+    private Map<Long, ReleaseChargeLedger.Candidate> inHandlerPastStuckHandlerTimeout() {
         var now   = System.nanoTime();
         var bound = settings.stuckHandlerTimeout().toNanos();
-        var stuck = new TreeMap<Long, String>();
+        var stuck = new TreeMap<Long, ReleaseChargeLedger.Candidate>();
         synchronized (stateLock) {
             inFlight.forEach((seq, sinceNanos) -> {
                 if (now - sinceNanos >= bound) {
-                    stuck.put(seq, null);
+                    stuck.put(seq, ReleaseChargeLedger.Candidate.UNORDERED);
                 }
             });
         }

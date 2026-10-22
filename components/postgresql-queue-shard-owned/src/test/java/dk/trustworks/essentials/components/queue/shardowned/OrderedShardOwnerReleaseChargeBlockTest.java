@@ -71,6 +71,29 @@ class OrderedShardOwnerReleaseChargeBlockTest {
         assertThat(pendingPoisonSeqs(owner)).as("it is queued for the dead-letter table").containsExactly(11L);
     }
 
+    /**
+     * A move owed by the charge that moves nothing - the row no longer in the table, or no longer this owner's - makes no
+     * dead letter, so the key is not blocked: blocked, this owner would hold a later {@code key_order} of that key behind a
+     * dead letter that does not exist, and queue it for the dead-letter table.
+     */
+    @Test
+    void a_key_whose_message_the_charge_brought_to_the_limit_is_not_blocked_when_its_move_finds_the_row_gone() throws Exception {
+        var owner = owner();
+        enterHandler(owner, "ROW-GONE", 7L, 5L);
+        hold(owner, new ShardOwnedStorage.OrderedRow(8L, "ROW-GONE", 6L, new byte[0], 0));
+        var database = new ChargingConnection(Map.of(7L, MAX_ATTEMPTS), Set.of(7L));
+
+        var charge = owner.chargeKeysInHandlerBeforeRelease(database.connection(), OrderedShardOwner.ReleaseChargeScope.EVERY_KEY_IN_HANDLER);
+
+        assertThat(charge.charged()).as("premise: the message was charged to the limit").isEqualTo(1);
+        assertThat(charge.deadLetteredKeys()).as("premise: the move found the row gone and dead-lettered nothing").isEmpty();
+        assertThat(database.moved).as("premise: nothing was moved").isEmpty();
+        assertThat(owner.owesReleaseCharge(OrderedShardOwner.ReleaseChargeScope.EVERY_KEY_IN_HANDLER)).as("premise: the move was made").isFalse();
+        assertThat(deadLetterBlocks(owner)).as("no dead letter, so the key is not blocked").isEmpty();
+        assertThat(readyByKey(owner).get("ROW-GONE")).as("the message held above it is kept for dispatch").containsOnlyKeys(6L);
+        assertThat(pendingPoisonSeqs(owner)).as("nothing is queued for the dead-letter table").isEmpty();
+    }
+
     // DataSource's own loader, not the thread's context loader: a proxy class must be defined in a loader that sees
     // its interface, which the context loader need not.
     @SuppressWarnings("PMD.UseProperClassLoader")
@@ -148,14 +171,21 @@ class OrderedShardOwnerReleaseChargeBlockTest {
     /**
      * A connection that answers the charge's {@code UPDATE ... RETURNING} with {@code chargedAttempts} - the attempt count
      * after the charge of each row named - and the dead-letter move's {@code INSERT} and {@code DELETE} as if each moved the
-     * row, recording its sequence value. Any other statement fails the test.
+     * row, recording its sequence value; the move's {@code INSERT} of a row in {@code rowsGone} inserts nothing, as for a
+     * row no longer in the table or no longer the owner's. Any other statement fails the test.
      */
     private static final class ChargingConnection {
         private final Map<Long, Integer> chargedAttempts;
+        private final Set<Long>          rowsGone;
         private final List<Long>         moved = new ArrayList<>();
 
         ChargingConnection(Map<Long, Integer> chargedAttempts) {
+            this(chargedAttempts, Set.of());
+        }
+
+        ChargingConnection(Map<Long, Integer> chargedAttempts, Set<Long> rowsGone) {
             this.chargedAttempts = chargedAttempts;
+            this.rowsGone = rowsGone;
         }
 
         // Connection's own loader, not the thread's context loader: a proxy class must be defined in a loader that sees
@@ -203,6 +233,9 @@ class OrderedShardOwnerReleaseChargeBlockTest {
                                                                   }
                                                                   if ("executeUpdate".equals(name) && !charge) {
                                                                       if (sql.startsWith("INSERT INTO ")) {
+                                                                          if (rowsGone.contains(seq[0])) {
+                                                                              return 0;
+                                                                          }
                                                                           moved.add(seq[0]);
                                                                       }
                                                                       return 1;

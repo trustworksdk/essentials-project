@@ -338,30 +338,13 @@ final class OrderedShardOwner implements BatchReadableOwner {
 
     /**
      * The charge {@link #chargeKeysInHandlerBeforeRelease} makes, shared with the unordered lane: the rows charged before a
-     * release past their handlers, each with its key, and their dead-letter moves. The handler of a message it dead-lettered
+     * release past their handlers, each with its key and {@code key_order}, and their dead-letter moves; a move that moved
+     * the row blocks its key here ({@link #blockKeyChargedBeforeRelease}). The handler of a message it dead-lettered
      * that completes or throws later records nothing against the row, which is gone: no acknowledgement, no attempt, no
      * retry - a WARN instead (an interrupted one is counted in {@code abandonedOnInterrupt} only)
      * ({@link #returnedAfterItsDeadLetter}, {@link #failedAfterItsDeadLetter}).
      */
     private final ReleaseChargeLedger releaseChargeLedger;
-
-    /**
-     * The key and {@code key_order} of each message {@link #chargeKeysInHandlerBeforeRelease} has asked the ledger to charge,
-     * by sequence value, dropped once its dead-letter move is made: the move may be made by a later call, after its handler
-     * has returned and its key has left {@link #keysInFlight}, and a move that moved the row blocks the key at that
-     * {@code key_order} ({@link #blockKeyChargedBeforeRelease}). One entry per message in a handler when a release of this
-     * owner charged, so a handful. Guarded by {@link #stateLock}.
-     */
-    private final Map<Long, ReleaseChargeCandidate> chargeCandidateBySeq = new HashMap<>();
-
-    /**
-     * A message in a handler that {@link #chargeKeysInHandlerBeforeRelease} charges.
-     *
-     * @param key      its key
-     * @param keyOrder its {@code key_order}
-     */
-    private record ReleaseChargeCandidate(String key, long keyOrder) {
-    }
 
     /**
      * What to run once no key is in a handler ({@link #whenNoKeyInHandler}); {@code null} unless this owner's queue kept
@@ -400,17 +383,15 @@ final class OrderedShardOwner implements BatchReadableOwner {
 
             @Override
             public boolean moveToDeadLetterIfOwned(Connection connection, long seq) throws SQLException {
-                var moved = storage.moveToDeadLetterIfOwned(connection, ShardOwnedSchema.ORDERED_TABLE, "ordered", shard, seq,
-                                                            ShardOwnedStorage.EXHAUSTED_IN_A_RELEASED_HANDLER, instanceId, fence);
-                blockKeyChargedBeforeRelease(seq, moved);
-                return moved;
+                return storage.moveToDeadLetterIfOwned(connection, ShardOwnedSchema.ORDERED_TABLE, "ordered", shard, seq,
+                                                       ShardOwnedStorage.EXHAUSTED_IN_A_RELEASED_HANDLER, instanceId, fence);
             }
 
             @Override
             public boolean stillOwns(Connection connection) throws SQLException {
                 return storage.stillOwns(connection, "ordered", shard, instanceId, fence);
             }
-        }, redeliveryPolicy, metrics, this::recordChargedAttempts);
+        }, redeliveryPolicy, metrics, this::recordChargedAttempts, this::blockKeyChargedBeforeRelease);
     }
 
     @Override
@@ -1125,27 +1106,19 @@ final class OrderedShardOwner implements BatchReadableOwner {
     }
 
     /**
-     * The dead-letter move of {@code seq} that {@link #chargeKeysInHandlerBeforeRelease} owed has been made: when it moved
-     * the row, block its key here at its {@code key_order}, as {@link #onFailure} does for a message it dead-letters, so
-     * this owner never dispatches a later {@code key_order} of that key past the dead letter - not even before its next
-     * pass re-reads the blocks from the table, which already holds the dead letter ({@link #refreshDeadLetterBlocks}).
-     * Not reported to {@link BlockedKeyReport} nor counted in {@code keysBlockedByDeadLetter}, as before this block was
-     * recorded: the dead-lettered keys reach the queue through {@link ReleaseCharge#deadLetteredKeys()}. On the thread
-     * making the charge, under the ledger's monitor, as {@link #recordChargedAttempts} is.
+     * The ledger has moved a message {@link #chargeKeysInHandlerBeforeRelease} charged to the dead-letter table
+     * ({@code deadLettered}; it is never told of a move that found the row gone): block its key here at its
+     * {@code key_order}, as {@link #onFailure} does for a message it dead-letters, so this owner never dispatches a later
+     * {@code key_order} of that key past the dead letter - not even before its next pass re-reads the blocks from the table,
+     * which already holds the dead letter ({@link #refreshDeadLetterBlocks}). The key and {@code key_order} are the ledger's
+     * own record of the message: the move may be made by a later call, after its handler has returned and its key has left
+     * {@link #keysInFlight}. Not reported to {@link BlockedKeyReport} nor counted in {@code keysBlockedByDeadLetter}, as
+     * before this block was recorded: the dead-lettered keys reach the queue through {@link ReleaseCharge#deadLetteredKeys()}.
+     * On the thread making the charge, under the ledger's monitor, as {@link #recordChargedAttempts} is.
      */
-    private void blockKeyChargedBeforeRelease(long seq, boolean moved) {
+    private void blockKeyChargedBeforeRelease(ReleaseChargeLedger.ChargedRow deadLettered) {
         synchronized (stateLock) {
-            var candidate = chargeCandidateBySeq.remove(seq);
-            if (!moved) {
-                return;
-            }
-            if (candidate != null) {
-                recordBlock(candidate.key(), candidate.keyOrder());
-            } else {
-                // Every message the ledger charges came through chargeKeysInHandlerBeforeRelease, which records it first; were
-                // one ever missed, re-derive the blocks from the table, which holds the dead letter, before the next dispatch
-                blockRefreshRequested = true;
-            }
+            recordBlock(deadLettered.key(), deadLettered.keyOrder());
         }
     }
 
@@ -1759,7 +1732,9 @@ final class OrderedShardOwner implements BatchReadableOwner {
      * <p>
      * The charge itself is {@link ReleaseChargeLedger}'s, which the unordered lane composes too
      * ({@code ShardOwner.chargeInHandlerBeforeRelease}); this owner supplies only its candidates - the message of each key
-     * in a handler that {@code scope} names - and its table. The dead-lettered keys it reports are in sequence order.
+     * in a handler that {@code scope} names, with its key and {@code key_order}, which the ledger keeps with what it
+     * charged - its table, and the block it records once a move is made. The dead-lettered keys it reports are in sequence
+     * order.
      *
      * @param scope which messages in a handler to charge
      * @return what this owner has charged and dead-lettered so far, this call included; nothing when no message in a
@@ -1773,11 +1748,7 @@ final class OrderedShardOwner implements BatchReadableOwner {
      */
     ReleaseCharge chargeKeysInHandlerBeforeRelease(Connection connection, ReleaseChargeScope scope) throws SQLException {
         requireNonNull(scope, "No scope provided");
-        var candidates = releaseChargeCandidates(scope);
-        synchronized (stateLock) {
-            candidates.forEach(chargeCandidateBySeq::putIfAbsent);
-        }
-        return toReleaseCharge(releaseChargeLedger.charge(connection, keysBySeq(candidates)));
+        return toReleaseCharge(releaseChargeLedger.charge(connection, releaseChargeCandidates(scope)));
     }
 
     /**
@@ -1790,7 +1761,7 @@ final class OrderedShardOwner implements BatchReadableOwner {
      */
     boolean owesReleaseCharge(ReleaseChargeScope scope) {
         requireNonNull(scope, "No scope provided");
-        return releaseChargeLedger.owes(keysBySeq(releaseChargeCandidates(scope)));
+        return releaseChargeLedger.owes(releaseChargeCandidates(scope));
     }
 
     /**
@@ -1821,27 +1792,18 @@ final class OrderedShardOwner implements BatchReadableOwner {
      * The message (by seq) of each key in a handler that {@code scope} names, with its key and {@code key_order}, in the
      * order the keys entered their handlers: the candidates of {@link #chargeKeysInHandlerBeforeRelease}.
      */
-    private Map<Long, ReleaseChargeCandidate> releaseChargeCandidates(ReleaseChargeScope scope) {
+    private Map<Long, ReleaseChargeLedger.Candidate> releaseChargeCandidates(ReleaseChargeScope scope) {
         var now        = System.nanoTime();
         var bound      = settings.stuckHandlerTimeout().toNanos();
-        var candidates = new LinkedHashMap<Long, ReleaseChargeCandidate>();
+        var candidates = new LinkedHashMap<Long, ReleaseChargeLedger.Candidate>();
         synchronized (stateLock) {
             keysInFlight.forEach((key, inHandler) -> {
                 if (scope == ReleaseChargeScope.EVERY_KEY_IN_HANDLER || now - inHandler.sinceNanos() >= bound) {
-                    candidates.put(inHandler.seq(), new ReleaseChargeCandidate(key, inHandler.keyOrder()));
+                    candidates.put(inHandler.seq(), new ReleaseChargeLedger.Candidate(key, inHandler.keyOrder()));
                 }
             });
         }
         return candidates;
-    }
-
-    /**
-     * {@code candidates} as the ledger takes them: each message's key by its seq, in their order.
-     */
-    private static Map<Long, String> keysBySeq(Map<Long, ReleaseChargeCandidate> candidates) {
-        var keyBySeq = new LinkedHashMap<Long, String>();
-        candidates.forEach((seq, candidate) -> keyBySeq.put(seq, candidate.key()));
-        return keyBySeq;
     }
 
     /**
