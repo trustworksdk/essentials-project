@@ -645,7 +645,8 @@ each message in a handler longer than `stuckHandlerTimeout` is charged one attem
 less - another key of the unit that entered its handler just before - is released uncharged, as the unordered lane
 does; before `MessageQueue.releaseKeptOrderedUnit` releases one with a key still in its handler (§2), each message
 still in a handler is charged one attempt. A release retried on a later tick does not charge a message it already
-charged. A message that reaches its `maxAttempts` by the charge is dead-lettered then, with an error saying its
+charged. When the release is refused after the charge and the owner keeps the unit, a failure its handler then reports
+counts on from the charged attempt instead of undoing the charge. A message that reaches its `maxAttempts` by the charge is dead-lettered then, with an error saying its
 unit was released while it was still in a handler. The next owner finds the unit released and charges nothing itself. Before this, those releases charged nothing either, and a handler that never returns records no
 failure, so a message whose ordered handler hangs on every delivery - a deadlock on its own data, a remote call with
 no timeout - was handed from owner to owner with its attempt count unchanged and delivered again after every release,
@@ -662,7 +663,7 @@ release up either. A handler that
 returns after the charge has dead-lettered its message is neither acknowledged nor counted in `delivered`: one that
 completes logs a WARN saying that resurrecting the dead letter delivers the message again, and one that throws logs a
 WARN with its exception and is told to `QueueObserver.deliveryFailed` with the charged count (not for a requested
-redelivery). (`6337f7d89`, `2fdeb3db0`, `dbae0986f`, `<!-- fix:U-017 -->`, `<!-- fix:U-018 -->`)
+redelivery). (`6337f7d89`, `2fdeb3db0`, `bfa961ec5`, `dbae0986f`, `<!-- fix:U-017 -->`, `<!-- fix:U-018 -->`)
 
 **The unordered lane now charges a hung handler's delivery too, past the same bound.** It waits for no handler: a
 fair-share shed and a dead pump's hand-back release an unordered shard at once, and `stop()` once `shedGrace` has run
