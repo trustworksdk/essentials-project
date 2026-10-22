@@ -234,6 +234,46 @@ class ReleaseChargeLedgerTest {
         assertThat(told).containsExactly(1L, 4L);
     }
 
+    /**
+     * An owner callback ({@code onMoved}) that throws when handed a moved row leaves that move counted and the
+     * {@code QueueObserver} told of it: the move has committed, and no later call makes it again. Counted and queued for the
+     * observer only after the callback returned, the move was neither. The moves after it are left owed, for a later call.
+     */
+    @Test
+    void an_owner_callback_that_throws_when_handed_a_moved_row_leaves_the_move_counted_and_the_observer_told_of_it() throws Exception {
+        var writes = new FakeWrites(Map.of(1L, 1, 2L, 1));
+        var told   = new CopyOnWriteArrayList<Long>();
+        var metrics = new ShardOwnerMetrics(new QueueObserver() {
+            @Override
+            public void deadLettered(MessageId id, int attempts, Throwable cause) {
+                told.add(id.sequence());
+            }
+        });
+        var handed = new ArrayList<Long>();
+        var ledger = new ReleaseChargeLedger(MessageId.Lane.ORDERED, SHARD, writes, RedeliveryPolicy.fixed(Duration.ofSeconds(1), 1), metrics, charged -> { },
+                                             deadLettered -> {
+                                                 handed.add(deadLettered.seq());
+                                                 if (deadLettered.seq() == 1L) {
+                                                     throw new IllegalStateException("owner callback of 1");
+                                                 }
+                                             });
+
+        assertThatThrownBy(() -> ledger.charge(null, () -> candidates(Map.of(1L, "A", 2L, "B")))).hasMessage("owner callback of 1");
+
+        assertThat(writes.moveCalls).as("premise: the move of 1 was made before its callback threw").containsExactly(1L);
+        assertThat(metrics.deadLettered.sum()).as("the move made is counted").isEqualTo(1);
+        assertThat(told).as("the observer is told of the move made").containsExactly(1L);
+        assertThat(ledger.answer().deadLettered()).extracting(ReleaseChargeLedger.ChargedRow::seq).containsExactly(1L);
+        assertThat(ledger.owes(candidates(Map.of(1L, "A", 2L, "B")))).as("the move of 2 is still owed").isTrue();
+
+        ledger.charge(null, () -> candidates(Map.of(1L, "A", 2L, "B")));
+
+        assertThat(writes.moveCalls).as("the made move is not made again").containsExactly(1L, 2L);
+        assertThat(handed).containsExactly(1L, 2L);
+        assertThat(metrics.deadLettered.sum()).isEqualTo(2);
+        assertThat(told).as("the retry tells the observer of its own move alone").containsExactly(1L, 2L);
+    }
+
     @Test
     void a_move_that_finds_the_row_gone_is_made_and_dead_letters_nothing() throws Exception {
         var writes = new FakeWrites(Map.of(1L, 2));

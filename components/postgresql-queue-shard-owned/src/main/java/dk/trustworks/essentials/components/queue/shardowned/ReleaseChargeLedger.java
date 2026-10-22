@@ -241,8 +241,11 @@ final class ReleaseChargeLedger {
      *                         the charge rather than writing an older count over it. Under the monitor, so it may take the
      *                         owner's state lock and must never wait for the monitor (class javadoc, <b>Locking</b>)
      * @param onMoved          told the row of each message dead-lettered, under the monitor, as soon as its move to the
-     *                         dead-letter table is recorded here, before the {@code QueueObserver} is: the ordered lane blocks
-     *                         the key at the row's {@code key_order}. Never told of a move that moved nothing
+     *                         dead-letter table is recorded here and counted in {@code deadLettered}, before the
+     *                         {@code QueueObserver} is: the ordered lane blocks the key at the row's {@code key_order}. What it
+     *                         throws ends the call with that move counted and the moves after it left owed for a later call;
+     *                         the {@code QueueObserver} is still told of that move, bar a critical error, which is rethrown at
+     *                         once with the observer untold. Never told of a move that moved nothing
      *                         ({@link DeadLetterMove#ROW_GONE}): there is no dead letter to block a key behind. Under the
      *                         monitor, so it may take the owner's state lock and must never wait for the monitor (class
      *                         javadoc, <b>Locking</b>)
@@ -298,7 +301,10 @@ final class ReleaseChargeLedger {
      *                          move made before the failure, and what it threw is added to this as suppressed
      * @throws RuntimeException what the {@code QueueObserver} threw when told of a dead letter (or a non-critical
      *                          {@link Error}), thrown once every move is made, so {@link #owes} then answers as after a call
-     *                          that returned, and {@link #answer()} gives the answer
+     *                          that returned, and {@link #answer()} gives the answer. Or what the candidates {@code Supplier},
+     *                          {@code onCharged} or {@code onMoved} threw, at once: the {@code QueueObserver} is still told of
+     *                          each move made before it, that of the row {@code onMoved} was handed included, and what it threw
+     *                          is added as suppressed
      */
     Answer charge(Connection connection, Supplier<Map<Long, Candidate>> candidates) throws SQLException {
         requireNonNull(candidates, "No candidates provided");
@@ -395,12 +401,13 @@ final class ReleaseChargeLedger {
             var made = row.moved(writes.moveToDeadLetterIfOwned(connection, row.seq()));
             rows.put(row.seq(), made);
             if (made.move() == DeadLetterMove.MOVED) {
-                // Handed to the owner and counted before the observer is told, which charge() does once it has let go of the
-                // monitor: an observer that throws leaves the move made and remembered, so no later call reaches this line
-                // for the message again.
-                onMoved.accept(made);
+                // Counted and queued for the observer before the owner is handed it: the move has committed and no later call
+                // reaches this line for the message again, so an onMoved that throws must not leave it uncounted and
+                // unreported. The observer is told once charge() has let go of the monitor; an observer that throws leaves the
+                // move made and remembered all the same.
                 metrics.deadLettered.increment();
                 moved.add(made);
+                onMoved.accept(made);
             }
         }
         return currentAnswer();
