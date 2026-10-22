@@ -66,6 +66,14 @@ final class NetworkWaitBound {
      * {@code connection} as it is outside {@link #during}, and inside it when its own network timeout is already no
      * longer than the bound; otherwise (none, or a longer one) with its network timeout set to the bound, and set back to
      * what it was when it is closed.
+     * <p>
+     * When it is bounded (the network timeout set here), only a close of the connection returned here sets the timeout
+     * back. {@link Connection#unwrap} to {@link Connection} (or {@link Wrapper}) then returns that same connection, but one
+     * reached any other way is a connection under it, whose close does not: one
+     * unwrapped to a driver's own type ({@code PGConnection}) or from a {@link Statement#getConnection()} of a statement
+     * it made (statements are not wrapped). The caller closes the connection it was handed, never one of those: with a
+     * pool that does not reset the network timeout itself, the bound may otherwise stay on the connection when it goes
+     * back to its pool.
      */
     // This class's own loader, not the thread's context loader: a proxy class must be defined in a loader that sees its
     // interface, which the context loader of the thread asking need not.
@@ -108,6 +116,19 @@ final class NetworkWaitBound {
             case "close" -> {
                 if (method.getParameterCount() == 0) {
                     restore(connection, previous);
+                }
+            }
+            // Unwrapped to a type the proxy is (Connection, Wrapper, AutoCloseable), the caller gets the proxy, whose close
+            // sets the timeout back; the connection's own unwrap would hand out itself or a connection under it, and a close
+            // of either would not. A driver's own type (pgjdbc's PGConnection) still goes to the connection.
+            case "unwrap" -> {
+                if (method.getParameterCount() == 1 && args[0] instanceof Class<?> iface && iface.isInstance(proxy)) {
+                    return proxy;
+                }
+            }
+            case "isWrapperFor" -> {
+                if (method.getParameterCount() == 1 && args[0] instanceof Class<?> iface && iface.isInstance(proxy)) {
+                    return true;
                 }
             }
             default -> {

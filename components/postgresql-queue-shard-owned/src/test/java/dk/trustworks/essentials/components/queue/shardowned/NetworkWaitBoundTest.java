@@ -32,7 +32,8 @@ import static org.assertj.core.api.Assertions.*;
  * set back as the connection is closed, before the connection's own close - what a pool that does not reset the timeout
  * itself relies on, which the ITs' Hikari pool (it does reset it) cannot show. A connection whose own timeout is already
  * no longer than the bound (a {@code socketTimeout} on the {@code DataSource}) is handed over untouched: the bound only
- * ever tightens.
+ * ever tightens. Unwrapped to {@link Connection} (or {@link Wrapper}), the bound connection gives itself, so a close of
+ * what came back still sets the timeout back; unwrapped to a driver's own type it reaches the driver, as before.
  */
 // This test class's own loader, not the thread's context loader: a proxy class must be defined in a loader that sees its
 // interface, which the context loader need not. The connections the tests take are fakes holding nothing to close; a test
@@ -137,6 +138,35 @@ class NetworkWaitBoundTest {
         assertThat(connection.hashCode()).isEqualTo(System.identityHashCode(connection));
     }
 
+    @Test
+    void unwrapping_the_bound_connection_to_connection_gives_the_bound_connection_whose_close_sets_the_timeout_back() throws SQLException {
+        var fake       = new FakeConnection(0);
+        var connection = boundDuring(fake);
+
+        var unwrapped = connection.unwrap(Connection.class);
+
+        assertThat(unwrapped).isSameAs(connection);
+        assertThat(connection.unwrap(Wrapper.class)).isSameAs(connection);
+        assertThat(connection.unwrap(AutoCloseable.class)).isSameAs(connection);
+        assertThat(connection.isWrapperFor(Connection.class)).isTrue();
+        unwrapped.close();
+        assertThat(fake.calls).containsExactly("getNetworkTimeout", "setNetworkTimeout(30000)",
+                                               "isClosed", "setNetworkTimeout(0)", "close");
+        assertThat(fake.networkTimeout).isZero();
+    }
+
+    @Test
+    void unwrapping_the_bound_connection_to_a_driver_type_still_reaches_the_driver() throws SQLException {
+        var fake       = new FakeConnection(0);
+        var connection = boundDuring(fake);
+
+        assertThat(connection.isWrapperFor(DriverConnection.class)).isTrue();
+        assertThat(connection.unwrap(DriverConnection.class)).isSameAs(fake.connection);
+        assertThat(connection.isWrapperFor(Runnable.class)).isFalse();
+        assertThat(fake.calls).containsExactly("getNetworkTimeout", "setNetworkTimeout(30000)",
+                                               "isWrapperFor(DriverConnection)", "unwrap(DriverConnection)", "isWrapperFor(Runnable)");
+    }
+
     private static Connection boundDuring(FakeConnection fake) {
         var bound = new AtomicReference<Connection>();
         NetworkWaitBound.during(BOUND, () -> bound.set(NetworkWaitBound.bound(fake.connection)));
@@ -144,8 +174,15 @@ class NetworkWaitBoundTest {
     }
 
     /**
-     * A {@link Connection} that only knows its network timeout and whether it is closed, and records every call made to
-     * it other than {@code equals}, {@code hashCode} and {@code toString}.
+     * A driver's own connection type, which a caller reaches with {@link Connection#unwrap} (pgjdbc's {@code PGConnection}).
+     */
+    interface DriverConnection {
+    }
+
+    /**
+     * A {@link Connection} (and a {@link DriverConnection}) that only knows its network timeout, whether it is closed and
+     * what it wraps - itself - and records every call made to it other than {@code equals}, {@code hashCode} and
+     * {@code toString}.
      */
     private static final class FakeConnection {
         final List<String> calls = new ArrayList<>();
@@ -156,17 +193,31 @@ class NetworkWaitBoundTest {
 
         FakeConnection(int networkTimeout) {
             this.networkTimeout = networkTimeout;
-            this.connection = (Connection) Proxy.newProxyInstance(NetworkWaitBoundTest.class.getClassLoader(), new Class<?>[]{Connection.class},
+            this.connection = (Connection) Proxy.newProxyInstance(NetworkWaitBoundTest.class.getClassLoader(),
+                                                                  new Class<?>[]{Connection.class, DriverConnection.class},
                                                                   (proxy, method, args) -> switch (method.getName()) {
                                                                       case "equals" -> proxy == args[0];
                                                                       case "hashCode" -> System.identityHashCode(proxy);
                                                                       case "toString" -> "FakeConnection";
-                                                                      default -> answer(method.getName(), args);
+                                                                      default -> answer(proxy, method.getName(), args);
                                                                   });
         }
 
-        private Object answer(String method, Object... args) throws SQLException {
+        private Object answer(Object proxy, String method, Object... args) throws SQLException {
             switch (method) {
+                case "unwrap" -> {
+                    var iface = (Class<?>) args[0];
+                    calls.add(method + "(" + iface.getSimpleName() + ")");
+                    if (!iface.isInstance(proxy)) {
+                        throw new SQLException("Not a wrapper for " + iface.getName());
+                    }
+                    return proxy;
+                }
+                case "isWrapperFor" -> {
+                    var iface = (Class<?>) args[0];
+                    calls.add(method + "(" + iface.getSimpleName() + ")");
+                    return iface.isInstance(proxy);
+                }
                 case "getNetworkTimeout" -> {
                     calls.add(method);
                     if (getNetworkTimeoutFailure != null) {

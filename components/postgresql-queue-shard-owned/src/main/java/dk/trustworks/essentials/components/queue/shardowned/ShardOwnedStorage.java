@@ -127,6 +127,12 @@ public final class ShardOwnedStorage {
         return queueId;
     }
 
+    /**
+     * A connection from the {@code DataSource}, bounded as {@link #open()} says. Close the connection this returns, never
+     * one unwrapped from it to a driver's own type nor one a statement's {@link Statement#getConnection()} gives: inside
+     * {@link NetworkWaitBound#during} only a close of the returned one sets its network timeout back (see
+     * {@link NetworkWaitBound#bound}).
+     */
     public Connection connection() throws SQLException {
         return open();
     }
