@@ -1,6 +1,6 @@
 # Phase 5 design — reconciliation
 
-**Status:** proposal (2026-10-22). Decisions this note asks for are marked **(Q-n)** and collected in §7.
+**Status:** decided (§7, 2026-10-22). Decisions are marked **(Q-n)** in the text.
 **Plan:** [`../EXPANSION_PLAN.md`](../EXPANSION_PLAN.md) phase 5; decisions D8, D10, D11; simulator requirements
 SR-11, SR-35.
 **Builds on:** phase 2's first reconciliation ([`phase-2-funding.md`](phase-2-funding.md) §7): the bank's statements
@@ -94,7 +94,9 @@ invented. A third runs the order flow and funding scenarios with breaks off and 
 
 ## 7. Decisions
 
-| | Question | Proposed |
+All four proposals accepted (2026-10-22).
+
+| | Question | Decided |
 |---|---|---|
 | **Q-1** | When a break becomes a case | When it is still there at the next business day's close; cleared if it goes before it is resolved (§4) |
 | **Q-2** | Does resolving a case book anything? | Never by itself: the operator posts any correction (`AdjustCash`, case id as reason) and the case records it (§4) |
