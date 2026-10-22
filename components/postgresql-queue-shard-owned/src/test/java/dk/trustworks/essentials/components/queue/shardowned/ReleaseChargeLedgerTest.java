@@ -387,6 +387,61 @@ class ReleaseChargeLedgerTest {
         assertThat(charge.get(10, TimeUnit.SECONDS).deadLettered()).extracting(ReleaseChargeLedger.ChargedRow::seq).containsExactly(1L);
     }
 
+    /**
+     * The {@code QueueObserver} told of a dead letter is not called under the ledger's monitor: handler threads wait on that
+     * monitor ({@link ReleaseChargeLedger#deadLetteredWhileInHandler}), so an observer doing I/O there held every handler
+     * waiting on that monitor - one whose message the charge may move - while it ran.
+     */
+    @Test
+    void the_observer_is_told_of_each_dead_letter_once_the_ledger_has_let_go_of_its_monitor() throws Exception {
+        var writes       = new FakeWrites(Map.of(1L, 1, 2L, 1));
+        var self         = new AtomicReference<ReleaseChargeLedger>();
+        var underMonitor = new CopyOnWriteArrayList<Boolean>();
+        var metrics = new ShardOwnerMetrics(new QueueObserver() {
+            @Override
+            public void deadLettered(MessageId id, int attempts, Throwable cause) {
+                underMonitor.add(Thread.holdsLock(monitorOf(self.get())));
+            }
+        });
+        var ledger = new ReleaseChargeLedger(MessageId.Lane.ORDERED, SHARD, writes, RedeliveryPolicy.fixed(Duration.ofSeconds(1), 1), metrics, charged -> { },
+                                             deadLettered -> { });
+        self.set(ledger);
+
+        ledger.charge(null, () -> candidates(Map.of(1L, "A", 2L, "B")));
+
+        assertThat(underMonitor).as("told of both dead letters, neither under the ledger's monitor").containsExactly(false, false);
+    }
+
+    /**
+     * A dead-letter move that fails after an earlier one was made still has the observer told of the earlier one - no later
+     * call makes that move again - and its failure carries what the observer threw.
+     */
+    @Test
+    void a_move_that_fails_after_an_earlier_move_still_has_the_observer_told_of_the_earlier_one() throws Exception {
+        var writes = new FakeWrites(Map.of(1L, 1, 2L, 1));
+        writes.failMoveOf = 2L;
+        var told = new CopyOnWriteArrayList<Long>();
+        var metrics = new ShardOwnerMetrics(new QueueObserver() {
+            @Override
+            public void deadLettered(MessageId id, int attempts, Throwable cause) {
+                told.add(id.sequence());
+                throw new IllegalStateException("observer of " + id.sequence());
+            }
+        });
+        var ledger = new ReleaseChargeLedger(MessageId.Lane.ORDERED, SHARD, writes, RedeliveryPolicy.fixed(Duration.ofSeconds(1), 1), metrics, charged -> { },
+                                             deadLettered -> { });
+
+        assertThatThrownBy(() -> ledger.charge(null, () -> candidates(Map.of(1L, "A", 2L, "B"))))
+                .isInstanceOf(SQLException.class)
+                .satisfies(e -> assertThat(e.getSuppressed()).extracting(Throwable::getMessage).containsExactly("observer of 1"));
+
+        assertThat(told).as("told of the move made before the failing one").containsExactly(1L);
+        assertThat(ledger.owes(candidates(Map.of(1L, "A", 2L, "B")))).as("the failed move is still owed").isTrue();
+
+        assertThatThrownBy(() -> ledger.charge(null, () -> candidates(Map.of(1L, "A", 2L, "B")))).hasMessage("observer of 2");
+        assertThat(told).as("the retry tells the observer of its own move alone").containsExactly(1L, 2L);
+    }
+
     @Test
     void nothing_charged_answers_none() {
         var ledger = ledger(new FakeWrites(Map.of()), 3, new ShardOwnerMetrics(), new ArrayList<>());
@@ -404,6 +459,16 @@ class ReleaseChargeLedgerTest {
         try {
             return ledger.charge(null, () -> candidates);
         } catch (SQLException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    private static Object monitorOf(ReleaseChargeLedger ledger) {
+        try {
+            var field = ReleaseChargeLedger.class.getDeclaredField("monitor");
+            field.setAccessible(true);
+            return field.get(ledger);
+        } catch (ReflectiveOperationException e) {
             throw new IllegalStateException(e);
         }
     }
@@ -452,6 +517,10 @@ class ReleaseChargeLedgerTest {
         final CountDownLatch     moving      = new CountDownLatch(1);
         final CountDownLatch     proceed     = new CountDownLatch(1);
         int                      failMoves;
+        /**
+         * The seq whose next move fails, once, whatever moves come before it; {@code -1}: none.
+         */
+        long                     failMoveOf  = -1;
         int                      stillOwnsCalls;
         boolean                  owns        = true;
         boolean                  holdCharges;
@@ -498,6 +567,10 @@ class ReleaseChargeLedgerTest {
             if (failMoves > 0) {
                 failMoves--;
                 throw new SQLException("move refused");
+            }
+            if (seq == failMoveOf) {
+                failMoveOf = -1;
+                throw new SQLException("move of " + seq + " refused");
             }
             return !rowsGone.contains(seq);
         }

@@ -28,6 +28,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 
 /**
  * A handler that returns around the charge before a release ({@code ShardOwner.chargeInHandlerBeforeRelease},
@@ -40,6 +41,10 @@ import static org.awaitility.Awaitility.await;
  * running and no record, queued its acknowledgement and was counted delivered, and the charge then charged the row - still
  * in the table, the acknowledgement not flushed - and dead-lettered it, so resurrecting that dead letter delivered a
  * handled message again.
+ * <p>
+ * And a handler returning mid-charge, its message charged below the limit, finishes with the charge on both lanes: it asks
+ * the ledger before it takes its owner's {@code stateLock}, which the charge takes under the ledger's monitor
+ * ({@code ReleaseChargeLedger}'s <b>Locking</b>).
  */
 class ReleaseChargeHandlerReturnTest {
 
@@ -154,6 +159,65 @@ class ReleaseChargeHandlerReturnTest {
     }
 
     /**
+     * The ledger's monitor is taken before the owner's {@code stateLock}: a charge holds the monitor across its statements and
+     * takes {@code stateLock} in {@code onCharged}. A handler of the same owner returning while that charge runs, its message
+     * charged below the limit, waits for the charge on the monitor and must hold no {@code stateLock} while it does - asked
+     * from inside {@code synchronized (stateLock)}, handler and charge would each wait for the other's lock for good. Once the
+     * charge ends, the handler's message is acknowledged as usual.
+     */
+    @Test
+    void an_ordered_handler_returning_while_a_charge_holds_the_ledger_finishes_with_it_and_is_acknowledged() throws Exception {
+        var handler  = new HeldHandler();
+        var owner    = orderedOwner(handler::handle, noDatabase(), 3);
+        var waited   = new AtomicReference<Boolean>();
+        var database = new ChargingConnection(ShardOwnedSchema.ORDERED_TABLE, Map.of(SEQ, 1))
+                .onCharge(() -> waited.set(handlerBlocksOnTheCharge(handler)));
+        dispatchOrdered(owner);
+
+        var charge = assertTimeoutPreemptively(Duration.ofSeconds(5), () -> {
+            var answer = owner.chargeKeysInHandlerBeforeRelease(database.connection(), OrderedShardOwner.ReleaseChargeScope.EVERY_KEY_IN_HANDLER);
+            await().atMost(Duration.ofSeconds(5)).until(() -> owner.inFlight() == 0);
+            return answer;
+        }, "the charge and the handler returning during it both finish");
+
+        assertThat(waited.get()).as("premise: the handler returned during the charge and waited for it").isTrue();
+        assertThat(charge.charged()).as("premise: the charge charged the message").isEqualTo(1);
+        assertThat(charge.deadLetteredKeys()).as("below the limit: not dead-lettered").isEmpty();
+        assertThat(database.moved).isEmpty();
+        assertThat(pendingAcks(owner, OrderedShardOwner.class)).as("the handler's message is acknowledged").contains(SEQ);
+        assertThat(metrics(owner, OrderedShardOwner.class).delivered.sum()).isEqualTo(1);
+    }
+
+    /**
+     * The unordered twin, through the failure path: a handler that throws while a charge holds the ledger asks the ledger on
+     * its way to recording the failure, waits for the charge, which takes {@code stateLock} in {@code onCharged}, and then
+     * goes on to record the failure. Asked from inside {@code synchronized (stateLock)}, it would deadlock with that charge.
+     */
+    @Test
+    void an_unordered_handler_failing_while_a_charge_holds_the_ledger_finishes_with_it_and_records_its_failure() throws Exception {
+        var handler         = new HeldHandler(true);
+        var failureRecorded = new CountDownLatch(1);
+        var owner           = unorderedOwner(handler::handle, refusingConnectionsAfter(failureRecorded::countDown), 3);
+        var waited          = new AtomicReference<Boolean>();
+        var database = new ChargingConnection(ShardOwnedSchema.UNORDERED_TABLE, Map.of(SEQ, 1))
+                .onCharge(() -> waited.set(handlerBlocksOnTheCharge(handler)));
+        deliverUnordered(owner);
+
+        var charge = assertTimeoutPreemptively(Duration.ofSeconds(5), () -> {
+            var answer = owner.chargeInHandlerBeforeRelease(database.connection());
+            await().atMost(Duration.ofSeconds(5)).until(() -> owner.inFlight() == 0);
+            return answer;
+        }, "the charge and the handler failing during it both finish");
+
+        assertThat(waited.get()).as("premise: the handler threw during the charge and waited for it").isTrue();
+        assertThat(charge.charged()).as("premise: the charge charged the message").isEqualTo(1);
+        assertThat(charge.deadLetteredSeqs()).as("below the limit: not dead-lettered").isEmpty();
+        assertThat(database.moved).isEmpty();
+        assertThat(failureRecorded.getCount()).as("the handler went on to record its failure").isZero();
+        assertThat(metrics(owner, ShardOwner.class).handlerFailures.sum()).isEqualTo(1);
+    }
+
+    /**
      * Run {@code charge} on a thread of its own and wait for it: called from the handler thread while it records the
      * handler's failure, its message still in its handler.
      */
@@ -219,13 +283,50 @@ class ReleaseChargeHandlerReturnTest {
     }
 
     /**
-     * A handler that returns once {@link #mayReturn} counts down, and counts {@link #returned} down as it returns.
+     * Let the handler return, from inside the running charge - which holds the ledger's monitor - and wait until its thread
+     * is blocked on a monitor: the handler is waiting for the charge.
+     *
+     * @return whether it was seen blocked within 5 s
+     */
+    private static boolean handlerBlocksOnTheCharge(HeldHandler handler) {
+        handler.mayReturn.countDown();
+        try {
+            if (!handler.returned.await(5, TimeUnit.SECONDS)) {
+                return false;
+            }
+            var deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            while (System.nanoTime() < deadline) {
+                if (handler.thread.getState() == Thread.State.BLOCKED) {
+                    return true;
+                }
+                Thread.sleep(5);
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        return false;
+    }
+
+    /**
+     * A handler that returns once {@link #mayReturn} counts down - or throws then, when built {@code failing} - and counts
+     * {@link #returned} down as it returns. {@link #thread} is the thread it runs on.
      */
     private static final class HeldHandler {
-        final CountDownLatch mayReturn = new CountDownLatch(1);
-        final CountDownLatch returned  = new CountDownLatch(1);
+        final    CountDownLatch mayReturn = new CountDownLatch(1);
+        final    CountDownLatch returned  = new CountDownLatch(1);
+        final    boolean        failing;
+        volatile Thread         thread;
+
+        HeldHandler() {
+            this(false);
+        }
+
+        HeldHandler(boolean failing) {
+            this.failing = failing;
+        }
 
         void handle() {
+            thread = Thread.currentThread();
             try {
                 if (!mayReturn.await(10, TimeUnit.SECONDS)) {
                     throw new IllegalStateException("not let return");
@@ -234,6 +335,9 @@ class ReleaseChargeHandlerReturnTest {
                 throw new IllegalStateException(e);
             }
             returned.countDown();
+            if (failing) {
+                throw new IllegalStateException("handler failed");
+            }
         }
     }
 
@@ -242,9 +346,13 @@ class ReleaseChargeHandlerReturnTest {
     }
 
     private static OrderedShardOwner orderedOwner(Runnable handler, DataSource dataSource) {
+        return orderedOwner(handler, dataSource, MAX_ATTEMPTS);
+    }
+
+    private static OrderedShardOwner orderedOwner(Runnable handler, DataSource dataSource, int maxAttempts) {
         return new OrderedShardOwner(new ShardOwnedStorage(dataSource, (short) 1), 3, 1L, ShardOwnerSettings.builder().build(),
                                      (id, key, payload, type) -> handler.run(), new ShardOwnerMetrics(),
-                                     RedeliveryPolicy.fixed(Duration.ofSeconds(1), MAX_ATTEMPTS), "instance-under-test", new ShardWakeup(),
+                                     RedeliveryPolicy.fixed(Duration.ofSeconds(1), maxAttempts), "instance-under-test", new ShardWakeup(),
                                      handlerThreads(), false);
     }
 
@@ -253,10 +361,14 @@ class ReleaseChargeHandlerReturnTest {
     }
 
     private static ShardOwner unorderedOwner(Runnable handler, DataSource dataSource) {
+        return unorderedOwner(handler, dataSource, MAX_ATTEMPTS);
+    }
+
+    private static ShardOwner unorderedOwner(Runnable handler, DataSource dataSource, int maxAttempts) {
         // A bound of a nanosecond: the message in its handler is past it by the time the charge asks
         var settings = ShardOwnerSettings.builder().build().withStuckHandlerTimeout(Duration.ofNanos(1));
         return new ShardOwner(new ShardOwnedStorage(dataSource, (short) 1), 3, 1L, settings, (id, payload, type) -> handler.run(),
-                              new ShardOwnerMetrics(), RedeliveryPolicy.fixed(Duration.ofSeconds(1), MAX_ATTEMPTS), new ShardWakeup(),
+                              new ShardOwnerMetrics(), RedeliveryPolicy.fixed(Duration.ofSeconds(1), maxAttempts), new ShardWakeup(),
                               "instance-under-test", handlerThreads(), false);
     }
 

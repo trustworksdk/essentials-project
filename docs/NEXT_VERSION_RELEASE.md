@@ -666,8 +666,11 @@ WARN with its exception and is told to `QueueObserver.deliveryFailed` with the c
 redelivery). A handler that returns before the charge has taken its message has its outcome recorded as usual
 (acknowledged when it completed, its failure recorded when it threw), and the charge neither charges nor dead-letters
 that message; the unit's other handlers that return while the charge runs do not wait for its database statements,
-bar one returning while the charge is still choosing which messages to charge.
-(`6337f7d89`, `2fdeb3db0`, `bfa961ec5`, `dbae0986f`, `7dbd517be`, `e699c9d44`, `<!-- fix:U-026 -->`)
+bar one returning while the charge is still choosing which messages to charge. Your `QueueObserver` is told of the
+charge's dead letters after the charge's database statements, not during them, so a slow `deadLettered` callback does not hold up
+the unit's handlers returning meanwhile, so a handler failing meanwhile may be reported to `deliveryFailed` before its
+message's `deadLettered`.
+(`6337f7d89`, `2fdeb3db0`, `bfa961ec5`, `dbae0986f`, `7dbd517be`, `e699c9d44`, `<!-- fix:U-026 -->`, `<!-- fix:U-027 -->`)
 
 **The unordered lane now charges a hung handler's delivery too, past the same bound.** It waits for no handler: a
 fair-share shed and a dead pump's hand-back release an unordered shard at once, and `stop()` once `shedGrace` has run
@@ -692,7 +695,9 @@ charged count (not for a requested redelivery). A handler that returns before th
 its outcome recorded as usual (acknowledged when it completed, its failure recorded when it threw), and the charge
 neither charges nor dead-letters that message; the shard's other handlers that return while the charge runs - a
 message in its handler for less than `stuckHandlerTimeout`, say - do not wait for its database statements while
-holding their handler permit, bar one returning while the charge is still choosing which messages to charge. (`18e423d1d`, `7dbd517be`, `e699c9d44`, `<!-- fix:U-026 -->`)
+holding their handler permit, bar one returning while the charge is still choosing which messages to charge. Your
+`QueueObserver` is told of the charge's dead letters after the charge's database statements, not during them, as on the ordered
+lane. (`18e423d1d`, `7dbd517be`, `e699c9d44`, `<!-- fix:U-026 -->`, `<!-- fix:U-027 -->`)
 
 ---
 
