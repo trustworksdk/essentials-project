@@ -328,7 +328,13 @@ owner keeps the unit or shard, a failure its handler then reports counts on from
 returns after the charge has dead-lettered its message is neither acknowledged nor counted in `delivered`: one that
 completes logs a WARN saying that resurrecting the dead letter delivers the message again, and one that throws logs a
 WARN with its exception and is reported to `QueueObserver.deliveryFailed` at the charged count (not for a requested
-redelivery). A hang in a handler of an owner that goes on serving its unit is not bounded by this.
+redelivery). A hang in a handler of an owner that goes on serving its unit is not bounded by this. A handler that
+returns before the charge has taken its message is left alone by it: the charge neither charges nor dead-letters that
+message, and the handler's acknowledgement or failure is recorded as usual, if written while the owner still holds the
+unit or shard, otherwise the next owner delivers the message again. The `QueueObserver` is told of the charge's dead
+letters after the charge's database statements, not during them, so a slow `deadLettered` callback does not hold up
+the handlers returning meanwhile. As a result, a handler failing meanwhile may be reported to `deliveryFailed` before
+its message's `deadLettered`; an observer must not assume the reverse order.
 
 ### What a handler is given
 

@@ -930,7 +930,11 @@ to `QueueObserver.deliveryFailed` at the charged count (not for a requested rede
 returns before the charge has taken its message is left alone by it: the charge neither charges nor
 dead-letters that message, and the handler's acknowledgement or failure goes the way it would without
 the charge - recorded only if written while this owner still holds the unit or shard, otherwise the
-next owner delivers the message again, as after any release.
+next owner delivers the message again, as after any release. The `QueueObserver` is told of the
+charge's dead letters after the charge's database statements, not during them, so a slow
+`deadLettered` callback does not hold up the handlers returning meanwhile. As a result, a handler
+failing meanwhile may be reported to `deliveryFailed` before its message's `deadLettered`; an observer
+must not assume the reverse order.
 
 `keptUnitsInHandler()` (also in `snapshot()`) counts the kept units whose key is in its handler now:
 normally zero, so alert on it staying above zero. A unit taken over at the bound still counts while

@@ -668,8 +668,8 @@ completed, its failure recorded when it threw), and the charge neither charges n
 other handlers that return while the charge runs do not wait for its database statements, bar one returning while the
 charge is still choosing which messages to charge. Your `QueueObserver` is told of the charge's dead letters after the
 charge's database statements, not during them, so a slow `deadLettered` callback does not hold up the unit's handlers
-returning meanwhile, so a handler failing meanwhile may be reported to `deliveryFailed` before its message's
-`deadLettered`.
+returning meanwhile. As a result, a handler failing meanwhile may be reported to `deliveryFailed` before its message's
+`deadLettered`; an observer must not assume the reverse order.
 (`6337f7d89`, `2fdeb3db0`, `bfa961ec5`, `dbae0986f`, `7dbd517be`, `e699c9d44`, `895b1a498`, `52c5e943e`)
 
 **The unordered lane now charges a hung handler's delivery too, past the same bound.** It waits for no handler: a
