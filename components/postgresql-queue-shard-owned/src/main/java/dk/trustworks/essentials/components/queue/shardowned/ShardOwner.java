@@ -102,7 +102,7 @@ final class ShardOwner implements LeasedOwner {
      * sweep is what still delivers the message, filtered by the owner's own in-memory dedup. Making
      * the sweep exclude them would turn a lost hand-off into a permanently stuck message.
      */
-    private final    ConcurrentLinkedQueue<ShardOwnedStorage.Row> localHandoffs = new ConcurrentLinkedQueue<>();
+    private final    Queue<ShardOwnedStorage.Row> localHandoffs = new ConcurrentLinkedQueue<>();
 
     /**
      * The in-memory retry schedule — §4.6's timer wheel at the scale one shard needs.
@@ -112,7 +112,7 @@ final class ShardOwner implements LeasedOwner {
      * the table with {@code visible_at} in the future, where the head sweep will find it if this
      * owner dies. Retries therefore cost the read path nothing at all.
      */
-    private final PriorityQueue<Retry> retrySchedule = new PriorityQueue<>(Comparator.comparingLong(Retry::dueNanos));
+    private final Queue<Retry>         retrySchedule = new PriorityQueue<>(Comparator.comparingLong(Retry::dueNanos));
     private final Map<Long, Integer>   attemptsBySeq = new HashMap<>();
 
     /**
@@ -134,17 +134,17 @@ final class ShardOwner implements LeasedOwner {
     /**
      * Sequence values the cursor stepped over, mapped to when they were first missed.
      */
-    private final TreeMap<Long, Long> pendingHoles = new TreeMap<>();
+    private final NavigableMap<Long, Long> pendingHoles = new TreeMap<>();
     /**
      * In a handler: delivered and not yet returned, so a sweep does not deliver them twice. Each with when it was handed to
      * the handler executor, by {@link System#nanoTime()}, which {@link #chargeInHandlerBeforeRelease} times
      * {@code stuckHandlerTimeout} from.
      */
-    private final TreeMap<Long, Long> inFlight     = new TreeMap<>();
+    private final NavigableMap<Long, Long> inFlight     = new TreeMap<>();
     /**
      * Handled and awaiting the next ack flush.
      */
-    private final TreeSet<Long>       pendingAcks  = new TreeSet<>();
+    private final NavigableSet<Long>       pendingAcks  = new TreeSet<>();
 
     private long lastChaseNanos;
     private long lastSweepNanos;
@@ -1149,7 +1149,7 @@ final class ShardOwner implements LeasedOwner {
     /**
      * The messages in a handler since longer than {@code stuckHandlerTimeout} ago, in sequence order.
      */
-    private TreeSet<Long> inHandlerPastStuckHandlerTimeout() {
+    private NavigableSet<Long> inHandlerPastStuckHandlerTimeout() {
         var now   = System.nanoTime();
         var bound = settings.stuckHandlerTimeout().toNanos();
         var stuck = new TreeSet<Long>();
