@@ -527,6 +527,27 @@ public class ShippingKafkaPublisher extends EventProcessor {
 
 **Features**: Exclusive (`FencedLock`), ordered per-aggregate (`OrderedMessage` via `Inbox`), redelivery (`RedeliveryPolicy`), command handling (`@CmdHandler` via `DurableLocalCommandBus`).
 
+#### Throughput: inbox consumers and the batched forward
+
+Two knobs, and they only pay together. `getNumberOfParallelInboxMessageConsumers()` (default 1) sets how many threads
+handle the inbox; with `MessageConsumptionMode.SingleGlobalConsumer` (the default) one aggregate's messages still stay
+in order on any number of them. `getForwardBatchSize()` (default 1, event by event) lets the processor's exclusive
+subscription hand events over in batches and forward each batch to the inbox in one unit of work, together with the
+resume point, instead of committing per event; `getForwardMaxLatency()` (default 20 ms) bounds how long a partial batch
+waits. Batching alone does not shorten the drain while one consumer handles the inbox - it only fills the inbox faster;
+more consumers alone leave the forward as the limit. Measured (`EventProcessorForwardBenchmarkIT`, 10 000 events, every
+one handled): one consumer 5.3 s either way, 8 consumers 1.9 s, 8 consumers and batches of 100 1.1 s. Each consumer
+holds a pooled connection while it handles a message - size the pool for it.
+
+```java
+@Override protected int getNumberOfParallelInboxMessageConsumers() { return 8; }
+@Override protected int getForwardBatchSize() { return 100; }
+```
+
+Switching either way keeps the processor's resume point and fenced lock (same subscriber id). With a batch, the
+`SubscriptionErrorPolicy` applies to the batch as a whole, and an override of `forwardEventToInbox` still applies to
+each event in it.
+
 #### Blocking I/O in a handler: `UnitOfWorkMode.NONE`
 
 A `@MessageHandler` method runs inside a `UnitOfWork` by default — i.e. holding a pooled connection with an open transaction. For a handler that blocks on an external system (HTTP, SOAP, SFTP, a slow gRPC call) that connection sits in `idle in transaction` for the whole round trip, one per parallel consumer, writing nothing. Declare such a handler `UnitOfWorkMode.NONE` and wrap only the database work that follows it:

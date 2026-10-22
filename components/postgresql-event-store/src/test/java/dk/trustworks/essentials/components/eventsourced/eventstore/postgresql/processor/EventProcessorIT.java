@@ -19,7 +19,7 @@ package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.p
 import dk.trustworks.essentials.components.foundation.json.EssentialsObjectMappers;
 import tools.jackson.databind.*;
 import dk.trustworks.essentials.components.distributed.fencedlock.postgresql.PostgresqlFencedLockManager;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.PostgresqlEventStore;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.PostgresqlEventStreamGapHandler;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.EventStoreSubscriptionObserver;
@@ -263,6 +263,46 @@ public class EventProcessorIT {
         assertThat(deadLetterMessages.get(0).getPayload()).isInstanceOf(FailingCommandSentViaInbox.class);
     }
 
+    /**
+     * A processor switched to the batched forward - same name, so the same lock and resume point - picks up where the
+     * event-by-event one stopped, forwards in batches, and every event still reaches its handler exactly as before
+     */
+    @Test
+    void a_processor_switched_to_forwarding_in_batches_continues_from_its_resume_point() {
+        var subscriberId = AbstractEventProcessor.resolveSubscriberId(TEST_ORDERS, testProcessor.getProcessorName());
+        IntStream.range(0, 5).forEach(i -> commandBus.send(new PlaceOrderCommand(OrderId.random(), "before the switch")));
+        Awaitility.waitAtMost(Duration.ofSeconds(5)).untilAsserted(() ->
+            assertThat(eventStoreSubscriptionManager.getCurrentEventOrder(subscriberId, TEST_ORDERS))
+                    .hasValueSatisfying(order -> assertThat(order.longValue()).isEqualTo(11L)));
+        // As a restart would: the event-by-event processor's subscription and command handlers go away, its resume point stays
+        testProcessor.shutDownForTesting(eventStoreSubscriptionManager);
+
+        // A fresh Inboxes, as after a restart: the one in use caches the stopped inbox, wired to the old processor
+        var batched = new BatchedTestOrderEventProcessor(new EventProcessorDependencies(eventStoreSubscriptionManager,
+                                                                                        new Inboxes.DurableQueueBasedInboxes(durableQueues, fencedLockManager),
+                                                                                        commandBus,
+                                                                                        List.of()),
+                                                         eventStore);
+        testProcessor = batched;
+        batched.start();
+        var orders = IntStream.range(0, 40).mapToObj(i -> OrderId.random()).toList();
+        orders.forEach(orderId -> commandBus.send(new PlaceOrderCommand(orderId, "after the switch")));
+
+        // Every order placed after the switch is confirmed: its OrderPlacedEvent was forwarded and handled once
+        Awaitility.waitAtMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+            assertThat(batched.getOrderPlacedEventCounter().get()).isEqualTo(orders.size());
+            assertThat(eventStoreSubscriptionManager.getCurrentEventOrder(subscriberId, TEST_ORDERS))
+                    .hasValueSatisfying(order -> assertThat(order.longValue()).isEqualTo(11L + orders.size() * 2L));
+        });
+        orders.forEach(orderId -> assertThat(unitOfWorkFactory.withUnitOfWork(() -> eventStore.fetchStream(TEST_ORDERS, orderId).get().eventList()))
+                .extracting(event -> (Object) event.event().getEventTypeAsJavaClass().get())
+                .containsExactly(OrderPlacedEvent.class, OrderConfirmedEvent.class));
+        assertThat(batched.subscriptionsForTesting()).singleElement().isInstanceOf(ExclusiveBatchedAsynchronousSubscription.class);
+        assertThat(batched.forwardedInBatches.get()).as("forwarded through the batched subscription").isGreaterThanOrEqualTo(orders.size());
+        var queueName = batched.getInboxForTesting().name().asQueueName();
+        assertThat(durableQueues.getTotalDeadLetterMessagesQueuedFor(queueName)).isZero();
+    }
+
     @Test
     public void testResetAllSubscriptions() {
         IntStream.range(0, 5).forEach(i -> {
@@ -492,6 +532,16 @@ public class EventProcessorIT {
             return super.getInbox();
         }
 
+        /**
+         * What a process shutting down leaves behind: no subscription in the manager and no command handler on the bus -
+         * only the durable resume point
+         */
+        public void shutDownForTesting(EventStoreSubscriptionManager eventStoreSubscriptionManager) {
+            stop();
+            eventStoreSubscriptions.forEach(eventStoreSubscriptionManager::unsubscribe);
+            getCommandBus().removeCommandHandler(commandBusHandlerDelegate);
+        }
+
         @Override
         protected RedeliveryPolicy getInboxRedeliveryPolicy() {
             return RedeliveryPolicy.fixedBackoff(Duration.ofMillis(200), 3);
@@ -557,6 +607,32 @@ public class EventProcessorIT {
         }
     }
 
+
+    /**
+     * {@link TestOrderEventProcessor} forwarding in batches of up to 10, counting what goes through the batched forward
+     */
+    public static class BatchedTestOrderEventProcessor extends TestOrderEventProcessor {
+        final AtomicInteger forwardedInBatches = new AtomicInteger();
+
+        public BatchedTestOrderEventProcessor(EventProcessorDependencies eventProcessorDependencies, PostgresqlEventStore<?> eventStore) {
+            super(eventProcessorDependencies, eventStore);
+        }
+
+        @Override
+        protected int getForwardBatchSize() {
+            return 10;
+        }
+
+        List<EventStoreSubscription> subscriptionsForTesting() {
+            return eventStoreSubscriptions;
+        }
+
+        @Override
+        protected void forwardEventToInbox(PersistedEvent event, Inbox forwardToInbox) {
+            forwardedInBatches.incrementAndGet();
+            super.forwardEventToInbox(event, forwardToInbox);
+        }
+    }
 
     // -------------------------------------------------------------------------------------------------------------------
 

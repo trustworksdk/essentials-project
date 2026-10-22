@@ -61,7 +61,11 @@ import static org.assertj.core.api.Assertions.assertThat;
  * and <b>drain</b> until every one of them was handled, which adds the single inbox consumer. {@code view_all_five} is
  * a {@link ViewEventProcessor} handling all five on the reader's thread, so its forward and drain are one number: the
  * reader's rate is what a projection gets end to end. {@code view_one_of_five} is a view handling one of them, as a
- * projection of a few event types of a busy aggregate type does.
+ * projection of a few event types of a busy aggregate type does. The {@code *_batched} shapes are {@code two_of_five}
+ * and {@code all_five} forwarding in batches ({@code EventProcessor#getForwardBatchSize()},
+ * {@code -Dbenchmark.forward.batch-size}, default 100). The {@code *_8_consumers} shapes add inbox consumers
+ * ({@code -Dbenchmark.forward.inbox-consumers}, default 8), with and without the batched forward, so forward and drain
+ * can be told apart.
  * <p>
  * Each repeat uses its own aggregate type and processor name, so its event table, resume point and inbox queue are
  * fresh. {@code mvn verify -pl components/postgresql-event-store -Dbenchmark.run=true -Dit.test=EventProcessorForwardBenchmarkIT}
@@ -73,6 +77,15 @@ class EventProcessorForwardBenchmarkIT {
     private static final int      ORDERS   = Integer.getInteger("benchmark.forward.orders", 2_000);
     private static final int      REPEATS  = Integer.getInteger("benchmark.forward.repeats", 3);
     private static final Duration TIME_OUT = Duration.ofMinutes(5);
+    /**
+     * {@code EventProcessor#getForwardBatchSize()} for the {@code *_batched} shapes, which forward a batch per unit of
+     * work rather than an event
+     */
+    private static final int      FORWARD_BATCH_SIZE = Integer.getInteger("benchmark.forward.batch-size", 100);
+    /**
+     * Inbox consumers for the {@code *_8_consumers} shapes; the others keep the default single consumer
+     */
+    private static final int      INBOX_CONSUMERS    = Integer.getInteger("benchmark.forward.inbox-consumers", 8);
 
     @Container
     private final PostgreSQLContainer postgreSQLContainer = new PostgreSQLContainer("postgres:18.4")
@@ -183,6 +196,76 @@ class EventProcessorForwardBenchmarkIT {
     @Test
     void all_five() {
         measure("all_five", aggregateType -> new AllFiveProcessor(dependencies, aggregateType), 5);
+    }
+
+    @Test
+    void two_of_five_batched() {
+        measure("two_of_five_batched", aggregateType -> new TwoOfFiveProcessor(dependencies, aggregateType) {
+            @Override
+            protected int getForwardBatchSize() {
+                return FORWARD_BATCH_SIZE;
+            }
+        }, 2);
+    }
+
+    @Test
+    void all_five_batched() {
+        measure("all_five_batched", aggregateType -> new AllFiveProcessor(dependencies, aggregateType) {
+            @Override
+            protected int getForwardBatchSize() {
+                return FORWARD_BATCH_SIZE;
+            }
+        }, 5);
+    }
+
+    @Test
+    void two_of_five_8_consumers() {
+        measure("two_of_five_8_consumers", aggregateType -> new TwoOfFiveProcessor(dependencies, aggregateType) {
+            @Override
+            protected int getNumberOfParallelInboxMessageConsumers() {
+                return INBOX_CONSUMERS;
+            }
+        }, 2);
+    }
+
+    @Test
+    void two_of_five_batched_8_consumers() {
+        measure("two_of_five_batched_8_consumers", aggregateType -> new TwoOfFiveProcessor(dependencies, aggregateType) {
+            @Override
+            protected int getForwardBatchSize() {
+                return FORWARD_BATCH_SIZE;
+            }
+
+            @Override
+            protected int getNumberOfParallelInboxMessageConsumers() {
+                return INBOX_CONSUMERS;
+            }
+        }, 2);
+    }
+
+    @Test
+    void all_five_8_consumers() {
+        measure("all_five_8_consumers", aggregateType -> new AllFiveProcessor(dependencies, aggregateType) {
+            @Override
+            protected int getNumberOfParallelInboxMessageConsumers() {
+                return INBOX_CONSUMERS;
+            }
+        }, 5);
+    }
+
+    @Test
+    void all_five_batched_8_consumers() {
+        measure("all_five_batched_8_consumers", aggregateType -> new AllFiveProcessor(dependencies, aggregateType) {
+            @Override
+            protected int getForwardBatchSize() {
+                return FORWARD_BATCH_SIZE;
+            }
+
+            @Override
+            protected int getNumberOfParallelInboxMessageConsumers() {
+                return INBOX_CONSUMERS;
+            }
+        }, 5);
     }
 
     @Test

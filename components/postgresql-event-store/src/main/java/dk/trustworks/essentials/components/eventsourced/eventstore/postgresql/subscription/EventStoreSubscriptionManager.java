@@ -301,6 +301,39 @@ public interface EventStoreSubscriptionManager extends Lifecycle {
                                                                                PersistedEventHandler eventHandler);
 
     /**
+     * Create an exclusive asynchronous subscription, as
+     * {@link #exclusivelySubscribeToAggregateEventsAsynchronously(SubscriberId, AggregateType, Function, Optional, FencedLockAwareSubscriber, PersistedEventHandler)},
+     * that delivers its events in batches: each batch is handled in ONE unit of work, which also advances the resume
+     * point, instead of one unit of work per event. The same fenced lock - one subscriber per <code>subscriberId</code>
+     * across the cluster - so a subscriber can switch between the two without moving its resume point.
+     * <p>
+     * Added after the interface shipped, so it has a default that refuses: an implementation other than
+     * {@link DefaultEventStoreSubscriptionManager} keeps compiling and does not have to offer batching.
+     *
+     * @param subscriberId                                            the unique id for the subscriber
+     * @param forAggregateType                                        the type of aggregate that we're subscribing for {@link PersistedEvent}'s related to
+     * @param onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder If it's the first time the given <code>subscriberId</code> is subscribing then the subscription will be using the returned {@link GlobalEventOrder} as the starting point in the
+     *                                                                EventStream associated with the <code>aggregateType</code>
+     * @param onlyIncludeEventsForTenant                              if {@link Optional#isPresent()} then only include events that belong to the specified {@link Tenant}, otherwise all Events matching the criteria are returned
+     * @param maxBatchSize                                            the maximum number of events in a batch
+     * @param maxLatency                                              the longest a partial batch waits for more events before it is handled
+     * @param fencedLockAwareSubscriber                               Callback interface that will be called when the exclusive/fenced lock is acquired or released
+     * @param eventHandler                                            the handler receiving the batches. Exceptions it throws are handled according to the
+     *                                                                {@link SubscriptionErrorPolicy}, applied to the batch as a whole
+     * @return the subscription handle
+     */
+    default EventStoreSubscription exclusivelyBatchSubscribeToAggregateEventsAsynchronously(SubscriberId subscriberId,
+                                                                                            AggregateType forAggregateType,
+                                                                                            Function<AggregateType, GlobalEventOrder> onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder,
+                                                                                            Optional<Tenant> onlyIncludeEventsForTenant,
+                                                                                            int maxBatchSize,
+                                                                                            Duration maxLatency,
+                                                                                            FencedLockAwareSubscriber fencedLockAwareSubscriber,
+                                                                                            BatchedPersistedEventHandler eventHandler) {
+        throw new UnsupportedOperationException(getClass().getName() + " does not support exclusive batched subscriptions");
+    }
+
+    /**
      * Create an exclusive asynchronous subscription that will receive {@link PersistedEvent} after they have been committed to the {@link EventStore}<br>
      * This ensures that the handling of events can occur in a separate transaction, than the one that persisted the events, thereby avoiding the dual write problem<br>
      * An exclusive subscription means that the {@link EventStoreSubscriptionManager} will acquire a distributed {@link FencedLock} to ensure that only one active subscriber in a cluster,

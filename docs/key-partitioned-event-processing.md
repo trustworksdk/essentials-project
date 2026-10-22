@@ -552,6 +552,26 @@ stays mostly idle; every stage is still serial round trips. That points the same
 per-event work per batch - a batched forward for `EventProcessor`s, and batched handling (one unit of work and one
 queued-for-key check per batch) for views - not in the reader or the delivery path.
 
+**Batched forward, built and measured** (2026-10-22). `EventProcessor.getForwardBatchSize()` (opt-in, default 1) reads
+through an exclusive batched subscription (`ExclusiveBatchedAsynchronousSubscription`, same fenced lock and resume point)
+and forwards each batch to the inbox in one unit of work - M4's prototype moved into the library, still one processor
+per node, nothing cross-instance. It pays only together with more inbox consumers:
+
+| `EventProcessorForwardBenchmarkIT`, 2 000 orders x 5 events, drain (median of 3) | 1 consumer | 1 consumer, batch 100 | 8 consumers | 8 consumers, batch 100 |
+|---|---|---|---|---|
+| two of five handled | 2 022 ms | 2 040 ms | 820 ms | **472 ms** |
+| all five handled | 5 310 ms | 5 065 ms | 1 942 ms | **1 099 ms** |
+
+| Trading demo order flow, CDC, 4 runs each, alternating | forward per event | forward batch 100 |
+|---|---|---|
+| 1 / 1 / 2 consumers, pool 20 | ~180 orders/s | ~180 orders/s |
+| 8 / 8 / 8 consumers, pool 40 | ~298 orders/s, p50 20 s | **~366 orders/s, p50 15.6 s** |
+
+With one consumer the batch only fills the inbox faster; with eight the consumers keep up and the forward is the limit
+again, which the batch then removes. The demo now runs 8 / 8 / 8, pool 40, batch 100 (`compose` profile). Against the
+decision rule above this is the single-instance half of (a1) - batched forwarding - on its own; the cross-instance half
+still cannot be measured here.
+
 Two hazards to watch during M3/M4. Kill the reader's instance with `kill -9` mid-run to see the PK collision in §3.5,
 or show that it does not happen. And compare per-key order against the exact `EventOrder` sequence, not `isSorted()`
 (the trap recorded in adapter `CLAUDE.md`, first gotcha).

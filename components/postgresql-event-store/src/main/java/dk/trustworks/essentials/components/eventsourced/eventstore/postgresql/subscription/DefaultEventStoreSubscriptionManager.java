@@ -554,6 +554,28 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
     }
 
     @Override
+    public EventStoreSubscription exclusivelyBatchSubscribeToAggregateEventsAsynchronously(SubscriberId subscriberId,
+                                                                                           AggregateType forAggregateType,
+                                                                                           Function<AggregateType, GlobalEventOrder> onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder,
+                                                                                           Optional<Tenant> onlyIncludeEventsForTenant,
+                                                                                           int maxBatchSize,
+                                                                                           Duration maxLatency,
+                                                                                           FencedLockAwareSubscriber fencedLockAwareSubscriber,
+                                                                                           BatchedPersistedEventHandler eventHandler) {
+        requireNonNull(onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder, "No onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder provided");
+        requireNonNull(onlyIncludeEventsForTenant, "No onlyIncludeEventsForTenant option provided");
+        return addEventStoreSubscription(subscriberId,
+                                         forAggregateType,
+                                         new ExclusiveBatchedAsynchronousSubscription(subscriptionContext(subscriberId, forAggregateType, onlyIncludeEventsForTenant),
+                                                                                      new DurableSubscriptionContext(durableSubscriptionRepository,
+                                                                                                                     onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder,
+                                                                                                                     eventStoreSubscriptionManagerSettings),
+                                                                                      fencedLockManager,
+                                                                                      fencedLockAwareSubscriber,
+                                                                                      new ExclusiveBatchedAsynchronousSubscription.BatchedDelivery(maxBatchSize, maxLatency, eventHandler)));
+    }
+
+    @Override
     public EventStoreSubscription exclusivelySubscribeToAggregateEventsInTransaction(SubscriberId subscriberId,
                                                                                      AggregateType forAggregateType,
                                                                                      Optional<Tenant> onlyIncludeEventsForTenant,

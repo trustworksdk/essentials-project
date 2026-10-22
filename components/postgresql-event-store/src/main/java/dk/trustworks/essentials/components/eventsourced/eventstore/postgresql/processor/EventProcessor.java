@@ -28,6 +28,7 @@ import dk.trustworks.essentials.components.foundation.messaging.eip.store_and_fo
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
 import dk.trustworks.essentials.components.foundation.reactive.command.*;
 import dk.trustworks.essentials.components.foundation.transaction.*;
+import dk.trustworks.essentials.components.foundation.types.SubscriberId;
 import dk.trustworks.essentials.reactive.Handler;
 import dk.trustworks.essentials.reactive.command.*;
 import org.slf4j.*;
@@ -311,47 +312,52 @@ public abstract class EventProcessor extends AbstractEventProcessor {
             eventStoreSubscriptions = subscribeToEventsRelatedTo.stream()
                                                                 .map(aggregateType -> {
                                                                     var subscriberId = resolveSubscriberId(aggregateType, processorName);
-                                                                    var subscription = eventStoreSubscriptionManager.exclusivelySubscribeToAggregateEventsAsynchronously(
-                                                                            subscriberId,
-                                                                            aggregateType,
-                                                                            resolveStartSubscriptionFromGlobalEventOrder(),
-                                                                            Optional.empty(),
-                                                                            new FencedLockAwareSubscriber() {
-                                                                                @Override
-                                                                                public void onLockAcquired(FencedLock fencedLock, SubscriptionResumePoint resumeFromAndIncluding) {
-                                                                                    log.info("⚙️ [{}] Subscriber '{}' acquired lock. Will resumeFromAndIncluding: {}",
-                                                                                             processorName,
-                                                                                             subscriberId,
-                                                                                             resumeFromAndIncluding);
-                                                                                }
+                                                                    var lockAwareSubscriber = new FencedLockAwareSubscriber() {
+                                                                        @Override
+                                                                        public void onLockAcquired(FencedLock fencedLock, SubscriptionResumePoint resumeFromAndIncluding) {
+                                                                            log.info("⚙️ [{}] Subscriber '{}' acquired lock. Will resumeFromAndIncluding: {}",
+                                                                                     processorName,
+                                                                                     subscriberId,
+                                                                                     resumeFromAndIncluding);
+                                                                        }
 
-                                                                                @Override
-                                                                                public void onLockReleased(FencedLock fencedLock) {
-                                                                                    log.info("⚙️ [{}] Subscriber '{}''s lock was released",
-                                                                                             processorName,
-                                                                                             subscriberId);
+                                                                        @Override
+                                                                        public void onLockReleased(FencedLock fencedLock) {
+                                                                            log.info("⚙️ [{}] Subscriber '{}''s lock was released",
+                                                                                     processorName,
+                                                                                     subscriberId);
 
-                                                                                }
-                                                                            },
-                                                                            new PersistedEventHandler() {
-                                                                                @Override
-                                                                                public void handle(PersistedEvent event) {
-                                                                                    forwardEventToInbox(event, inbox);
-                                                                                }
+                                                                        }
+                                                                    };
+                                                                    var forwardBatchSize = getForwardBatchSize();
+                                                                    var subscription = forwardBatchSize > 1
+                                                                                       ? subscribeForwardingInBatches(subscriberId, aggregateType, forwardBatchSize, lockAwareSubscriber, processorName)
+                                                                                       : eventStoreSubscriptionManager.exclusivelySubscribeToAggregateEventsAsynchronously(
+                                                                                               subscriberId,
+                                                                                               aggregateType,
+                                                                                               resolveStartSubscriptionFromGlobalEventOrder(),
+                                                                                               Optional.empty(),
+                                                                                               lockAwareSubscriber,
+                                                                                               new PersistedEventHandler() {
+                                                                                                   @Override
+                                                                                                   public void handle(PersistedEvent event) {
+                                                                                                       forwardEventToInbox(event, inbox);
+                                                                                                   }
 
-                                                                                @Override
-                                                                                public Optional<SubscriptionErrorPolicy> subscriptionErrorPolicy() {
-                                                                                    return getSubscriptionErrorPolicy();
-                                                                                }
+                                                                                                   @Override
+                                                                                                   public Optional<SubscriptionErrorPolicy> subscriptionErrorPolicy() {
+                                                                                                       return getSubscriptionErrorPolicy();
+                                                                                                   }
 
-                                                                                @Override
-                                                                                public String toString() {
-                                                                                    return processorName;
-                                                                                }
-                                                                            });
-                                                                    log.info("⚙️ [{}] Created exclusive '{}' subscription: {}",
+                                                                                                   @Override
+                                                                                                   public String toString() {
+                                                                                                       return processorName;
+                                                                                                   }
+                                                                                               });
+                                                                    log.info("⚙️ [{}] Created exclusive '{}' subscription{}: {}",
                                                                              processorName,
                                                                              aggregateType,
+                                                                             forwardBatchSize > 1 ? " forwarding in batches of up to " + forwardBatchSize : "",
                                                                              subscription);
                                                                     return subscription;
                                                                 })
@@ -396,6 +402,72 @@ public abstract class EventProcessor extends AbstractEventProcessor {
                                     boolean resetInbox) {
 
         doResetSubscription(eventStoreSubscription, resubscribeFromAndIncluding, resetInbox, queueName -> inbox.deleteAllMessages());
+    }
+
+    /**
+     * The batched forward: each batch's events are forwarded with {@link #forwardEventToInbox} - an override still
+     * applies - inside the one unit of work the batch is handled in, which also advances the resume point. A batch that
+     * fails rolls back whole, forwards included, and is retried as the {@link SubscriptionErrorPolicy} says.
+     */
+    private EventStoreSubscription subscribeForwardingInBatches(SubscriberId subscriberId,
+                                                                AggregateType aggregateType,
+                                                                int forwardBatchSize,
+                                                                FencedLockAwareSubscriber lockAwareSubscriber,
+                                                                String processorName) {
+        return eventStoreSubscriptionManager.exclusivelyBatchSubscribeToAggregateEventsAsynchronously(
+                subscriberId,
+                aggregateType,
+                resolveStartSubscriptionFromGlobalEventOrder(),
+                Optional.empty(),
+                forwardBatchSize,
+                requireNonNull(getForwardMaxLatency(), "getForwardMaxLatency() returned null"),
+                lockAwareSubscriber,
+                new BatchedPersistedEventHandler() {
+                    @Override
+                    public int handleBatch(List<PersistedEvent> events) {
+                        for (var event : events) {
+                            forwardEventToInbox(event, inbox);
+                        }
+                        return forwardBatchSize;
+                    }
+
+                    @Override
+                    public Optional<SubscriptionErrorPolicy> subscriptionErrorPolicy() {
+                        return getSubscriptionErrorPolicy();
+                    }
+
+                    @Override
+                    public String toString() {
+                        return processorName;
+                    }
+                });
+    }
+
+    /**
+     * How many events the processor's exclusive subscription hands over at a time to be forwarded to the {@link Inbox}
+     * in one unit of work. Default {@code 1}: event by event, a unit of work - and a commit - each, as always.
+     * <p>
+     * Above {@code 1} the subscription is an {@link ExclusiveBatchedAsynchronousSubscription}: the same fenced lock and
+     * resume point, so a processor can switch either way without losing its place, but one commit per batch. Forwarding
+     * event by event bounded a forwarding processor at about 850 events/s, and a chain of them - the trading demo's order
+     * flow - at the slowest one's commit rate (EF-2, {@code docs/key-partitioned-event-processing.md} §5). What a batch
+     * changes: the {@link SubscriptionErrorPolicy} applies to the batch as a whole, and an event is forwarded only once
+     * its batch is full or {@link #getForwardMaxLatency()} has passed.
+     *
+     * @return the most events forwarded in one unit of work; values below {@code 2} forward event by event
+     */
+    protected int getForwardBatchSize() {
+        return 1;
+    }
+
+    /**
+     * The longest a partial batch waits for more events before it is forwarded, when {@link #getForwardBatchSize()} is
+     * above {@code 1}. Default 20 ms.
+     *
+     * @return the maximum time a partial batch waits
+     */
+    protected Duration getForwardMaxLatency() {
+        return Duration.ofMillis(20);
     }
 
     /**
