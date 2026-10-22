@@ -350,7 +350,7 @@ documented contract (`essentials-plugin/capabilities.json`, `essentials-plugin/r
 
 ### Install
 
-```
+```text
 /plugin marketplace add trustworksdk/essentials-project
 /plugin install essentials@essentials-marketplace
 ```
