@@ -186,8 +186,10 @@ final class ShardOwner implements LeasedOwner {
 
     /**
      * The charge {@link #chargeInHandlerBeforeRelease} makes, shared with the ordered lane: the messages charged before a
-     * release past their handlers, and their dead-letter moves. A failure the handler of a message it dead-lettered reports
-     * later records nothing, as the row is gone ({@link #onFailure(Connection, ShardOwnedStorage.Row, Throwable)}).
+     * release past their handlers, and their dead-letter moves. The handler of a message it dead-lettered that completes or
+     * throws later records nothing against the row, which is gone: no acknowledgement, no attempt, no retry - a WARN instead
+     * (an interrupted one is counted in {@code abandonedOnInterrupt} only)
+     * ({@link #completedAfterItsDeadLetter}, {@link #failedAfterItsDeadLetter}).
      */
     private final ReleaseChargeLedger releaseChargeLedger;
 
@@ -682,6 +684,7 @@ final class ShardOwner implements LeasedOwner {
 
     private void runHandler(ShardOwnedStorage.Row row) {
         var handled      = false;
+        var interrupted  = false;
         var startedNanos = System.nanoTime();
         try {
             try {
@@ -695,6 +698,7 @@ final class ShardOwner implements LeasedOwner {
                 // everything it had dispatched, leaving the incoming owner nothing to redeliver.
                 if (Thread.currentThread().isInterrupted()) {
                     metrics.abandonedOnInterrupt.increment();
+                    interrupted = true;
                 } else {
                     handled = true;
                 }
@@ -712,6 +716,20 @@ final class ShardOwner implements LeasedOwner {
                 // burned two attempts for one failure and was dead-lettered where the policy said
                 // retry. It cost exactly one message of forty, every run.
                 onFailure(row, e);
+            }
+            if (handled) {
+                // Still inside the in-flight slot, and before stateLock is taken: this may wait for a running charge, which
+                // takes stateLock itself
+                var deadLettered = releaseChargeLedger.deadLetteredWhileInHandler(row.seq());
+                if (deadLettered.isPresent()) {
+                    handled = false;
+                    completedAfterItsDeadLetter(deadLettered.get());
+                }
+            } else if (interrupted) {
+                // Not finished, so nothing to log; but a row the charge dead-lettered is gone and will not be read again,
+                // so its seq is forgotten here, as the ordered lane does
+                releaseChargeLedger.deadLetteredWhileInHandler(row.seq())
+                                   .ifPresent(deadLettered -> forgetDeadLettered(deadLettered.seq()));
             }
         } finally {
             LeaseOverrun.check(metrics, settings, "unordered", shard, startedNanos);
@@ -740,6 +758,14 @@ final class ShardOwner implements LeasedOwner {
      * Failure path. Rare, so it is allowed to be expensive — one row update (and its index entry), or a dead-letter move.
      */
     private void onFailure(ShardOwnedStorage.Row row, Throwable cause) {
+        // Asked before a connection is taken: it may wait for a running charge
+        var deadLettered = releaseChargeLedger.deadLetteredWhileInHandler(row.seq());
+        if (deadLettered.isPresent()) {
+            // Dead-lettered while this handler ran, by the charge before a release (chargeInHandlerBeforeRelease): the row is
+            // gone, so there is no attempt to count and nothing to retry.
+            failedAfterItsDeadLetter(deadLettered.get(), cause);
+            return;
+        }
         try (var connection = storage.connection()) {
             onFailure(connection, row, cause);
         } catch (SQLException e) {
@@ -775,16 +801,53 @@ final class ShardOwner implements LeasedOwner {
         return counted != null ? counted : storage.storedAttempts(connection, ShardOwnedSchema.UNORDERED_TABLE, shard, seq);
     }
 
-    private void onFailure(Connection connection, ShardOwnedStorage.Row row, Throwable cause) throws SQLException {
-        if (releaseChargeLedger.deadLetteredWhileInHandler(row.seq())) {
-            // Dead-lettered while this handler ran (chargeInHandlerBeforeRelease) by a release that then failed, leaving this
-            // owner serving: the row is gone, so there is no attempt to count and nothing to retry.
-            synchronized (stateLock) {
-                attemptsBySeq.remove(row.seq());
-                seenAcked(row.seq());
-            }
+    /**
+     * The handler of a message the charge before a release dead-lettered while it ran
+     * ({@link ReleaseChargeLedger#deadLetteredWhileInHandler}) has returned without an exception: its row is gone, so there
+     * is nothing to acknowledge, and it is not counted delivered. The message has been handled and is dead-lettered all the
+     * same, so it is logged at WARN: resurrecting that dead letter delivers it again.
+     */
+    private void completedAfterItsDeadLetter(ReleaseChargeLedger.ChargedRow deadLettered) {
+        forgetDeadLettered(deadLettered.seq());
+        log.warn("Shard {} of queue {}: the handler of seq {} completed after the charge before a release of the shard had "
+                 + "dead-lettered its message at {} attempts. The message is not acknowledged and stays dead-lettered: "
+                 + "resurrecting that dead letter delivers it again", shard, storage.queueId(), deadLettered.seq(),
+                 deadLettered.attemptsAfterCharge());
+    }
+
+    /**
+     * The handler of a message the charge before a release dead-lettered while it ran
+     * ({@link ReleaseChargeLedger#deadLetteredWhileInHandler}) has thrown: its row is gone, so there is no attempt to count
+     * and nothing to retry. The dead letter carries {@link ShardOwnedStorage#EXHAUSTED_IN_A_RELEASED_HANDLER}, not what the
+     * handler threw - often why it hung - so that is logged at WARN with the throwable, and a failure (not a requested
+     * redelivery) is told to the {@code QueueObserver} as the attempt the charge counted.
+     */
+    private void failedAfterItsDeadLetter(ReleaseChargeLedger.ChargedRow deadLettered, Throwable cause) {
+        forgetDeadLettered(deadLettered.seq());
+        log.warn("Shard {} of queue {}: the handler of seq {} threw after the charge before a release of the shard had "
+                 + "dead-lettered its message at {} attempts; that dead letter does not carry this exception", shard,
+                 storage.queueId(), deadLettered.seq(), deadLettered.attemptsAfterCharge(), cause);
+        if (cause instanceof RedeliveryRequested) {
             return;
         }
+        try {
+            metrics.observer().deliveryFailed(null, deadLettered.attemptsAfterCharge(), cause);
+        } catch (RuntimeException | Error e) {
+            // On the handler thread, after the outcome is settled: nothing is left for a throwing observer to fail
+            Exceptions.rethrowIfCriticalError(e);
+            log.warn("Shard {} of queue {}: the QueueObserver told of the failure of seq {} threw", shard, storage.queueId(),
+                     deadLettered.seq(), e);
+        }
+    }
+
+    private void forgetDeadLettered(long seq) {
+        synchronized (stateLock) {
+            attemptsBySeq.remove(seq);
+            seenAcked(seq);
+        }
+    }
+
+    private void onFailure(Connection connection, ShardOwnedStorage.Row row, Throwable cause) throws SQLException {
         if (cause instanceof RedeliveryRequested request) {
             onRedeliveryRequested(connection, row, request);
             return;

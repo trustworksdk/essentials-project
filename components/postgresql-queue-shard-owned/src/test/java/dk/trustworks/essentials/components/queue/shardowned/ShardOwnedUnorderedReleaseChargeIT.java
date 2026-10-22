@@ -590,52 +590,82 @@ class ShardOwnedUnorderedReleaseChargeIT {
      */
     @Test
     void a_failure_reported_after_a_refused_release_counts_on_from_the_attempt_the_release_charged() throws Exception {
-        var outcome = failAfterARefusedRelease(5);
+        var outcome = failAfterARefusedRelease(5, true);
         assertThat(outcome.attemptsOnNextDelivery().get(20, TimeUnit.SECONDS))
                 .as("the first failure, the charge and the second failure").isEqualTo(3);
     }
 
     /**
      * A message the shed charge dead-lettered at the redelivery limit, whose release the database then refuses, stays in its
-     * handler under the incumbent; a failure that handler reports later records nothing - the row is gone - and is not
-     * reported as a delivery failure or as a dead letter that could not be moved.
+     * handler under the incumbent; a failure that handler reports later records nothing against the row - it is gone - and
+     * is not reported as a dead letter that could not be moved. What it threw is logged at WARN with the exception and told
+     * to the {@code QueueObserver} as the attempt the charge counted, as the dead letter carries the release's text, not it:
+     * it used to be dropped without a trace.
      */
     @Test
-    void a_failure_reported_by_the_handler_of_a_message_dead_lettered_before_a_refused_release_records_nothing() throws Exception {
-        var outcome = failAfterARefusedRelease(2);
+    void a_failure_reported_by_the_handler_of_a_message_dead_lettered_before_a_refused_release_records_nothing_but_reports_the_exception() throws Exception {
+        var outcome = failAfterARefusedRelease(2, true);
         assertThat(outcome.queue().deadLetters()).as("dead-lettered by the charge").singleElement().satisfies(deadLetter -> {
             assertThat(deadLetter.attempts()).isEqualTo(2);
             assertThat(deadLetter.error()).isEqualTo(ShardOwnedStorage.EXHAUSTED_IN_A_RELEASED_HANDLER);
         });
-        assertThat(outcome.deliveryFailures()).as("only the first failure reported").hasValue(1);
+        assertThat(outcome.failedAttempts()).as("the first failure, then the second as the attempt the charge counted").containsExactly(1, 2);
         assertThat(outcome.queue().metrics().deadLettered.sum()).isEqualTo(1);
         assertThat(outcome.ownerWarnings().stream().map(ILoggingEvent::getFormattedMessage))
                 .as("no dead-letter move attempted for it").noneMatch(message -> message.contains("was not dead-lettered"));
+        assertThat(outcome.ownerWarnings()).as("what the handler threw is logged, with the exception")
+                                           .filteredOn(event -> event.getFormattedMessage().contains("threw after the charge before a release"))
+                                           .singleElement()
+                                           .satisfies(warning -> assertThat(warning.getThrowableProxy().getMessage()).isEqualTo("second failure"));
     }
 
-    private record RefusedReleaseOutcome(ShardOwnedQueue queue, CompletableFuture<Integer> attemptsOnNextDelivery, AtomicInteger deliveryFailures,
+    /**
+     * A message the shed charge dead-lettered at the redelivery limit, whose release the database then refuses, stays in its
+     * handler under the incumbent; when that handler then completes, the message is not acknowledged and not counted
+     * delivered - the row is gone, and its dead letter stays - and a WARN says so: resurrecting it delivers the message
+     * again. Before, the message was counted as delivered and as dead-lettered.
+     */
+    @Test
+    void a_handler_completing_a_message_dead_lettered_before_a_refused_release_is_not_counted_delivered() throws Exception {
+        var outcome = failAfterARefusedRelease(2, false);
+        assertThat(outcome.queue().deadLetters()).as("the dead letter stays").singleElement().satisfies(deadLetter -> {
+            assertThat(deadLetter.attempts()).isEqualTo(2);
+            assertThat(deadLetter.error()).isEqualTo(ShardOwnedStorage.EXHAUSTED_IN_A_RELEASED_HANDLER);
+        });
+        assertThat(outcome.queue().metrics().delivered.sum()).as("every other shard's message delivered; this one not counted")
+                                                           .isEqualTo(SHARD_COUNT - 1);
+        assertThat(outcome.queue().metrics().deadLettered.sum()).isEqualTo(1);
+        assertThat(outcome.failedAttempts()).as("only the first delivery failed").containsExactly(1);
+        assertThat(outcome.ownerWarnings().stream().map(ILoggingEvent::getFormattedMessage))
+                .as("the handler completing a dead-lettered message is logged")
+                .filteredOn(message -> message.contains("completed after the charge before a release"))
+                .singleElement()
+                .satisfies(message -> assertThat(message).contains("resurrecting that dead letter delivers it again"));
+    }
+
+    private record RefusedReleaseOutcome(ShardOwnedQueue queue, CompletableFuture<Integer> attemptsOnNextDelivery, List<Integer> failedAttempts,
                                          List<ILoggingEvent> ownerWarnings) {
     }
 
     /**
      * The message of the last shed shard fails its first delivery and hangs in its second past {@code stuckHandlerTimeout};
      * a second instance joins, the shed charges the message, and its release is refused. Its handler is then let go with a
-     * failure, and the delivery after it under the incumbent, if any, reads the stored count. The release is refused until
-     * the incumbent has been told of the second failure and has delivered again, or for two seconds after that failure.
+     * failure ({@code fails}) or returns, and the delivery after it under the incumbent, if any, reads the stored count.
+     * The release is refused until the incumbent has delivered again, or for two seconds after the handler was let go.
      */
-    private RefusedReleaseOutcome failAfterARefusedRelease(int maxAttempts) throws Exception {
+    private RefusedReleaseOutcome failAfterARefusedRelease(int maxAttempts, boolean fails) throws Exception {
         var settings         = settings(STUCK_HANDLER_TIMEOUT);
         var refusedShard     = SHARD_COUNT - 1;
         var deliveries       = new AtomicInteger();
         var entered          = new CountDownLatch(1);
         var letGo            = new CountDownLatch(1);
         var nextDelivery     = new CompletableFuture<Integer>();
-        var deliveryFailures = new AtomicInteger();
+        var failedAttempts   = new CopyOnWriteArrayList<Integer>();
         var secondFailureTold = new CountDownLatch(1);
         var observer = new dk.trustworks.essentials.components.queue.shardowned.spi.QueueObserver() {
             @Override
             public void deliveryFailed(String key, int attempt, Throwable cause) {
-                deliveryFailures.incrementAndGet();
+                failedAttempts.add(attempt);
             }
         };
         var ownerLog = new ListAppender<ILoggingEvent>();
@@ -658,7 +688,9 @@ class ShardOwnedUnorderedReleaseChargeIT {
                             entered.countDown();
                             awaitQuietly(letGo);
                             secondFailureTold.countDown();
-                            throw new IllegalStateException("second failure");
+                            if (fails) {
+                                throw new IllegalStateException("second failure");
+                            }
                         }
                         default -> nextDelivery.complete(attemptsOf(messageId.shard(), messageId.sequence()));
                     }
@@ -691,7 +723,7 @@ class ShardOwnedUnorderedReleaseChargeIT {
                 synchronized (ownerLog) {
                     ownerWarnings = ownerLog.list.stream().filter(event -> event.getLevel() == Level.WARN).toList();
                 }
-                return new RefusedReleaseOutcome(first, nextDelivery, deliveryFailures, ownerWarnings);
+                return new RefusedReleaseOutcome(first, nextDelivery, List.copyOf(failedAttempts), ownerWarnings);
             } finally {
                 letGo.countDown();
                 second.stop();

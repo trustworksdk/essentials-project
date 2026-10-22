@@ -48,7 +48,10 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  *     {@link DeadLetterMove#MOVED} or {@link DeadLetterMove#ROW_GONE}, each in one write, so what was dead-lettered - the
  *     sequence values and keys {@link #answer()} reports, and {@link #deadLetteredWhileInHandler} - is derived from that
  *     write and cannot be seen half-made;</li>
- *     <li>read without the monitor by the handler threads ({@link #deadLetteredWhileInHandler}), written only under it.</li>
+ *     <li>written only under the monitor; read by the handler threads ({@link #deadLetteredWhileInHandler}) without it
+ *     unless a charge is running or the message's move is still to be made, when they wait for that charge: a move commits
+ *     before its write here, so a handler returning in between would otherwise take its message for one still in the
+ *     table.</li>
  * </ul>
  * A {@code QueueObserver} told of a message dead-lettered here is told after the move, and what it throws is held until
  * every move is made, then thrown: by then nothing is owed ({@link #owes}), so the queue tells that failure from a failed
@@ -135,13 +138,19 @@ final class ReleaseChargeLedger {
     private final ShardOwnerMetrics             metrics;
     private final Consumer<Map<Long, Integer>>  onCharged;
     /**
-     * Guards every write to {@link #rows}, and every read but {@link #deadLetteredWhileInHandler}'s.
+     * Guards every write to {@link #rows}, and every read but {@link #deadLetteredWhileInHandler}'s, which takes it only to
+     * wait for a running charge.
      */
     private final Object                        monitor = new Object();
     /**
      * Every message charged, by sequence value. Concurrent so the handler threads read it without the monitor.
      */
     private final NavigableMap<Long, ChargedRow> rows    = new ConcurrentSkipListMap<>();
+    /**
+     * Whether {@link #charge} is running: set and cleared under {@link #monitor}, read without it by
+     * {@link #deadLetteredWhileInHandler}, which then waits for that charge.
+     */
+    private volatile boolean                     charging;
 
     /**
      * @param lane             the owner's lane, for the {@link MessageId} the {@code QueueObserver} is told of
@@ -200,54 +209,66 @@ final class ReleaseChargeLedger {
     Answer charge(Connection connection, Map<Long, String> candidates) throws SQLException {
         requireNonNull(candidates, "No candidates provided");
         synchronized (monitor) {
-            var toCharge = notChargedYet(candidates);
-            if (!toCharge.isEmpty()) {
-                var charged = writes.chargeRowsInHandler(connection, toCharge.keySet());
-                metrics.takeoverAttemptBumps.add(charged.size());
-                // The charge has committed: recorded before anything else can fail, or a retried release charges again
-                charged.forEach((seq, attempts) -> rows.put(seq, new ChargedRow(seq, toCharge.get(seq), attempts,
-                                                                                redeliveryPolicy.isExhausted(attempts) ? DeadLetterMove.PENDING : DeadLetterMove.NONE_OWED)));
-                onCharged.accept(charged);
+            charging = true;
+            try {
+                return chargeAndMove(connection, candidates);
+            } finally {
+                charging = false;
             }
-            Throwable observerFailure = null;
-            for (var row : rows.values()) {
-                if (row.move() != DeadLetterMove.PENDING) {
-                    continue;
-                }
-                boolean moved;
-                try {
-                    moved = writes.moveToDeadLetterIfOwned(connection, row.seq());
-                } catch (SQLException | RuntimeException | Error e) {
-                    if (observerFailure != null) {
-                        e.addSuppressed(observerFailure);
-                    }
-                    throw e;
-                }
-                rows.put(row.seq(), row.moved(moved));
-                if (moved) {
-                    // Counted before the observer is told: one that throws leaves the move made and remembered, so no later
-                    // call reaches this line for the message again.
-                    metrics.deadLettered.increment();
-                    try {
-                        metrics.observer().deadLettered(new MessageId(lane, shard, row.seq()), row.attemptsAfterCharge(),
-                                                        new IllegalStateException(ShardOwnedStorage.EXHAUSTED_IN_A_RELEASED_HANDLER));
-                    } catch (RuntimeException | Error e) {
-                        // The other moves are made first, and then this is thrown: with nothing left owed (owes), the queue
-                        // releases the unit all the same.
-                        Exceptions.rethrowIfCriticalError(e);
-                        if (observerFailure == null) {
-                            observerFailure = e;
-                        } else if (!observerFailure.equals(e)) {
-                            observerFailure.addSuppressed(e);
-                        }
-                    }
-                }
-            }
-            if (observerFailure != null) {
-                Exceptions.sneakyThrow(observerFailure);
-            }
-            return currentAnswer();
         }
+    }
+
+    /**
+     * {@link #charge}'s work. Called under {@link #monitor}.
+     */
+    private Answer chargeAndMove(Connection connection, Map<Long, String> candidates) throws SQLException {
+        var toCharge = notChargedYet(candidates);
+        if (!toCharge.isEmpty()) {
+            var charged = writes.chargeRowsInHandler(connection, toCharge.keySet());
+            metrics.takeoverAttemptBumps.add(charged.size());
+            // The charge has committed: recorded before anything else can fail, or a retried release charges again
+            charged.forEach((seq, attempts) -> rows.put(seq, new ChargedRow(seq, toCharge.get(seq), attempts,
+                                                                            redeliveryPolicy.isExhausted(attempts) ? DeadLetterMove.PENDING : DeadLetterMove.NONE_OWED)));
+            onCharged.accept(charged);
+        }
+        Throwable observerFailure = null;
+        for (var row : rows.values()) {
+            if (row.move() != DeadLetterMove.PENDING) {
+                continue;
+            }
+            boolean moved;
+            try {
+                moved = writes.moveToDeadLetterIfOwned(connection, row.seq());
+            } catch (SQLException | RuntimeException | Error e) {
+                if (observerFailure != null) {
+                    e.addSuppressed(observerFailure);
+                }
+                throw e;
+            }
+            rows.put(row.seq(), row.moved(moved));
+            if (moved) {
+                // Counted before the observer is told: one that throws leaves the move made and remembered, so no later
+                // call reaches this line for the message again.
+                metrics.deadLettered.increment();
+                try {
+                    metrics.observer().deadLettered(new MessageId(lane, shard, row.seq()), row.attemptsAfterCharge(),
+                                                    new IllegalStateException(ShardOwnedStorage.EXHAUSTED_IN_A_RELEASED_HANDLER));
+                } catch (RuntimeException | Error e) {
+                    // The other moves are made first, and then this is thrown: with nothing left owed (owes), the queue
+                    // releases the unit all the same.
+                    Exceptions.rethrowIfCriticalError(e);
+                    if (observerFailure == null) {
+                        observerFailure = e;
+                    } else if (!observerFailure.equals(e)) {
+                        observerFailure.addSuppressed(e);
+                    }
+                }
+            }
+        }
+        if (observerFailure != null) {
+            Exceptions.sneakyThrow(observerFailure);
+        }
+        return currentAnswer();
     }
 
     /**
@@ -260,12 +281,25 @@ final class ReleaseChargeLedger {
     }
 
     /**
-     * Whether {@link #charge} dead-lettered the message of {@code seq}: its row is gone, so a failure its handler reports
-     * later has no attempt to count and nothing to retry. Read by the handler threads without the monitor.
+     * The message of {@code seq} as {@link #charge} dead-lettered it, if it did: its row is gone, so whatever its handler
+     * reports later has nothing to acknowledge, no attempt to count and nothing to retry, and its dead letter carries
+     * {@link ShardOwnedStorage#EXHAUSTED_IN_A_RELEASED_HANDLER}, not the handler's outcome.
+     * <p>
+     * Asked by a handler thread once its handler has returned, before the owner records the outcome. Answered without the
+     * monitor while no charge is running and the message has no dead-letter move still to be made; otherwise it waits for
+     * the running charge to finish, so a move that has committed but is not recorded here yet is not missed. A charge that
+     * starts after this call is not waited for.
      */
-    boolean deadLetteredWhileInHandler(long seq) {
-        var row = rows.get(seq);
-        return row != null && row.move() == DeadLetterMove.MOVED;
+    Optional<ChargedRow> deadLetteredWhileInHandler(long seq) {
+        // Read before the row: a charge that was running is then either seen running, or its record is read below
+        var chargeRunning = charging;
+        var row           = rows.get(seq);
+        if (chargeRunning || (row != null && row.move() == DeadLetterMove.PENDING)) {
+            synchronized (monitor) {
+                row = rows.get(seq);
+            }
+        }
+        return row != null && row.move() == DeadLetterMove.MOVED ? Optional.of(row) : Optional.empty();
     }
 
     /**

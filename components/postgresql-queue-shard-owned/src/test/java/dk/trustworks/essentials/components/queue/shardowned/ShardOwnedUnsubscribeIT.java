@@ -1934,7 +1934,7 @@ class ShardOwnedUnsubscribeIT {
      */
     @Test
     void a_failure_reported_after_a_refused_release_on_request_counts_on_from_the_attempt_the_release_charged() throws Throwable {
-        failTheHandlerAfterARefusedReleaseOnRequest(5, queue -> {
+        failTheHandlerAfterARefusedReleaseOnRequest(5, true, queue -> {
             assertThat(storedAttemptsOfOrderedKey("ACC-1")).as("premise: one failure, and the release's charge, are stored").isEqualTo(2);
         }, queue -> {
             assertThat(storedAttemptsOfOrderedKey("ACC-1")).as("the failure is counted on from the charge, not written over it").isEqualTo(3);
@@ -1944,19 +1944,20 @@ class ShardOwnedUnsubscribeIT {
 
     /**
      * A handler that fails after a release on request has dead-lettered its message at {@code maxAttempts} and then been
-     * refused by the database records nothing: the row is gone, so there is no attempt to count, nothing to retry and
-     * nothing to dead-letter again. Before, the failure was counted from the owner's older count, reached the limit again,
-     * and the move it then tried found no row and WARNed that the message "was no longer in the table", for a message the
-     * release had dead-lettered as it should.
+     * refused by the database records nothing against the row: it is gone, so there is no attempt to count, nothing to retry
+     * and nothing to dead-letter again. Before, the failure was counted from the owner's older count, reached the limit
+     * again, and the move it then tried found no row and WARNed that the message "was no longer in the table", for a message
+     * the release had dead-lettered as it should. What the handler threw is logged at WARN with the exception, as the dead
+     * letter carries the release's text, not it: it used to be dropped without a trace.
      */
     @Test
-    void a_failure_reported_after_a_refused_release_on_request_whose_charge_dead_lettered_its_message_records_nothing() throws Throwable {
+    void a_failure_reported_after_a_refused_release_on_request_whose_charge_dead_lettered_its_message_records_nothing_but_logs_the_exception() throws Throwable {
         var ownerLogged = new ListAppender<ILoggingEvent>();
         ownerLogged.start();
         var ownerLogger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(OrderedShardOwner.class);
         ownerLogger.addAppender(ownerLogged);
         try {
-            failTheHandlerAfterARefusedReleaseOnRequest(2, queue -> {
+            failTheHandlerAfterARefusedReleaseOnRequest(2, true, queue -> {
                 assertThat(queue.deadLetters(0, 10)).as("premise: the release's charge dead-lettered the message").singleElement().satisfies(deadLetter -> {
                     assertThat(deadLetter.attempts()).isEqualTo(2);
                     assertThat(deadLetter.lastError()).isEqualTo(ShardOwnedStorage.EXHAUSTED_IN_A_RELEASED_HANDLER);
@@ -1973,6 +1974,49 @@ class ShardOwnedUnsubscribeIT {
                                                 .filteredOn(event -> event.getLevel() == WARN)
                                                 .extracting(ILoggingEvent::getFormattedMessage)
                                                 .noneMatch(warning -> warning.contains("no longer in the table"));
+                    assertThat(ownerLogged.list).as("what the handler threw is logged, with the exception")
+                                                .filteredOn(event -> event.getLevel() == WARN)
+                                                .filteredOn(event -> event.getFormattedMessage().contains("of key 'ACC-1' threw after the charge before a release"))
+                                                .singleElement()
+                                                .satisfies(warning -> assertThat(warning.getThrowableProxy().getMessage())
+                                                        .isEqualTo("fails once the release on request was refused"));
+                }
+            });
+        } finally {
+            ownerLogger.detachAppender(ownerLogged);
+        }
+    }
+
+    /**
+     * A handler that completes after a release on request has dead-lettered its message at {@code maxAttempts} and then been
+     * refused by the database is not acknowledged and not counted delivered: the row is gone, and its dead letter stays,
+     * which a WARN says - resurrecting it delivers the message again. Before, the message was counted as delivered and as
+     * dead-lettered.
+     */
+    @Test
+    void a_handler_completing_after_a_refused_release_on_request_whose_charge_dead_lettered_its_message_is_not_counted_delivered() throws Throwable {
+        var ownerLogged = new ListAppender<ILoggingEvent>();
+        ownerLogged.start();
+        var ownerLogger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(OrderedShardOwner.class);
+        ownerLogger.addAppender(ownerLogged);
+        try {
+            failTheHandlerAfterARefusedReleaseOnRequest(2, false, queue -> {
+                assertThat(queue.deadLetters(0, 10)).as("premise: the release's charge dead-lettered the message").hasSize(1);
+            }, queue -> {
+                assertThat(queue.deadLetters(0, 10)).as("the dead letter stays").singleElement().satisfies(deadLetter -> {
+                    assertThat(deadLetter.attempts()).isEqualTo(2);
+                    assertThat(deadLetter.lastError()).isEqualTo(ShardOwnedStorage.EXHAUSTED_IN_A_RELEASED_HANDLER);
+                });
+                var metrics = queue.registeredConsumers().getFirst().metrics();
+                assertThat(metrics.delivered.sum()).as("not counted delivered: its first delivery failed, and the second was dead-lettered").isZero();
+                assertThat(metrics.deadLettered.sum()).as("dead-lettered once").isEqualTo(1);
+                synchronized (ownerLogged) {
+                    assertThat(ownerLogged.list).as("the handler completing a dead-lettered message is logged")
+                                                .filteredOn(event -> event.getLevel() == WARN)
+                                                .extracting(ILoggingEvent::getFormattedMessage)
+                                                .filteredOn(warning -> warning.contains("of key 'ACC-1' completed after the charge before a release"))
+                                                .singleElement()
+                                                .satisfies(warning -> assertThat(warning).contains("resurrecting that dead letter delivers it again"));
                 }
             });
         } finally {
@@ -1985,9 +2029,11 @@ class ShardOwnedUnsubscribeIT {
      * hangs, and {@code queue.stop()} keeps the unit. A release on request then charges the message an attempt (and
      * dead-letters it when that reaches {@code maxAttempts}) before the database refuses the release, leaving the unit
      * kept, its row naming the instance under the fence it was kept under. {@code afterTheRefusedRelease} runs then; the
-     * handler is then let go and fails, the kept unit is handed back once it has returned, and {@code afterTheFailure} runs.
+     * handler is then let go and fails ({@code fails}) or returns, the kept unit is handed back once it has returned, and
+     * {@code afterTheFailure} runs.
      */
     private void failTheHandlerAfterARefusedReleaseOnRequest(int maxAttempts,
+                                                            boolean fails,
                                                             ThrowingConsumer<PostgresqlMessageQueue> afterTheRefusedRelease,
                                                             ThrowingConsumer<PostgresqlMessageQueue> afterTheFailure) throws Throwable {
         // Far beyond the test, so the stopped instance's membership row cannot age out and let another id take the unit.
@@ -2007,7 +2053,9 @@ class ShardOwnedUnsubscribeIT {
                     }
                     entered.countDown();
                     awaitQuietly(release, Duration.ofSeconds(60));
-                    throw new IllegalStateException("fails once the release on request was refused");
+                    if (fails) {
+                        throw new IllegalStateException("fails once the release on request was refused");
+                    }
                 }, new ConsumerOptions(8, Integer.MAX_VALUE, maxAttempts, RetryBackoff.fixed(Duration.ofMillis(100))));
                 var lanes = queue.registeredConsumers();
                 queue.enqueue(Message.ordered("fails-then-hangs".getBytes(StandardCharsets.UTF_8), 1, "ACC-1", 0));

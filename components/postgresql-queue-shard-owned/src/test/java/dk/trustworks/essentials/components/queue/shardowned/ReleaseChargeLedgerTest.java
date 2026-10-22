@@ -22,6 +22,7 @@ import org.junit.jupiter.api.Test;
 import java.sql.*;
 import java.time.Duration;
 import java.util.*;
+import java.util.concurrent.*;
 
 import static org.assertj.core.api.Assertions.*;
 
@@ -84,14 +85,14 @@ class ReleaseChargeLedgerTest {
         assertThat(ledger.owes(candidates(1L))).as("the move is still owed").isTrue();
         assertThat(ledger.answer().charged()).isEqualTo(1);
         assertThat(ledger.answer().deadLettered()).isEmpty();
-        assertThat(ledger.deadLetteredWhileInHandler(1L)).isFalse();
+        assertThat(ledger.deadLetteredWhileInHandler(1L)).isEmpty();
 
         var answer = ledger.charge(null, candidates(1L));
 
         assertThat(writes.chargeCalls).as("the retry does not charge again").containsExactly(Set.of(1L));
         assertThat(writes.moveCalls).as("the move is retried").containsExactly(1L, 1L);
         assertThat(answer.deadLettered()).extracting(ReleaseChargeLedger.ChargedRow::seq).containsExactly(1L);
-        assertThat(ledger.deadLetteredWhileInHandler(1L)).isTrue();
+        assertThat(ledger.deadLetteredWhileInHandler(1L)).isPresent();
         assertThat(ledger.owes(candidates(1L))).as("nothing is owed once the move is made").isFalse();
         assertThat(metrics.deadLettered.sum()).isEqualTo(1);
 
@@ -122,8 +123,8 @@ class ReleaseChargeLedgerTest {
         assertThat(metrics.deadLettered.sum()).as("each dead letter counted before the observer is told").isEqualTo(2);
         assertThat(ledger.owes(candidates(Map.of(1L, "A", 2L, "B")))).as("a throwing observer is not a failed charge").isFalse();
         assertThat(ledger.answer().deadLettered()).extracting(ReleaseChargeLedger.ChargedRow::key).containsExactly("A", "B");
-        assertThat(ledger.deadLetteredWhileInHandler(1L)).isTrue();
-        assertThat(ledger.deadLetteredWhileInHandler(2L)).isTrue();
+        assertThat(ledger.deadLetteredWhileInHandler(1L)).isPresent();
+        assertThat(ledger.deadLetteredWhileInHandler(2L)).isPresent();
     }
 
     @Test
@@ -138,9 +139,79 @@ class ReleaseChargeLedgerTest {
         assertThat(writes.moveCalls).containsExactly(1L);
         assertThat(answer.charged()).isEqualTo(1);
         assertThat(answer.deadLettered()).isEmpty();
-        assertThat(ledger.deadLetteredWhileInHandler(1L)).isFalse();
+        assertThat(ledger.deadLetteredWhileInHandler(1L)).isEmpty();
         assertThat(ledger.owes(candidates(1L))).isFalse();
         assertThat(metrics.deadLettered.sum()).isZero();
+    }
+
+    /**
+     * A handler that returns while the charge is moving its message to the dead-letter table - the move committed in the
+     * database, not yet recorded here - is told its message was dead-lettered, once the charge has recorded the move: it
+     * waits for the running charge rather than reading the record half-way. Answered from the record alone, it read "not
+     * dead-lettered", and the handler's outcome was recorded against a row that was gone.
+     */
+    @Test
+    void a_handler_returning_while_its_message_is_being_dead_lettered_waits_for_the_move_and_is_told_of_it() throws Exception {
+        var writes = new FakeWrites(Map.of(1L, 1));
+        writes.holdMoves();
+        var ledger = ledger(writes, 1, new ShardOwnerMetrics(), new ArrayList<>());
+
+        var charge = CompletableFuture.supplyAsync(() -> charge(ledger, candidates(Map.of(1L, "A"))));
+        assertThat(writes.moving.await(10, TimeUnit.SECONDS)).as("premise: the charge is moving the message").isTrue();
+        var handlerAsks = CompletableFuture.supplyAsync(() -> ledger.deadLetteredWhileInHandler(1L));
+
+        assertThatThrownBy(() -> handlerAsks.get(300, TimeUnit.MILLISECONDS)).as("the handler waits for the running charge")
+                                                                              .isInstanceOf(TimeoutException.class);
+        writes.proceed.countDown();
+
+        assertThat(handlerAsks.get(10, TimeUnit.SECONDS)).as("told of the dead letter the charge made")
+                                                         .hasValueSatisfying(row -> {
+                                                             assertThat(row.seq()).isEqualTo(1L);
+                                                             assertThat(row.key()).isEqualTo("A");
+                                                             assertThat(row.attemptsAfterCharge()).isEqualTo(1);
+                                                         });
+        assertThat(charge.get(10, TimeUnit.SECONDS).deadLettered()).extracting(ReleaseChargeLedger.ChargedRow::seq).containsExactly(1L);
+    }
+
+    /**
+     * A handler that returns while the charge is running, its message not recorded yet, waits for that charge too: the
+     * message is recorded and moved by it, and the handler is told so. A charge that dead-letters nothing - the move
+     * failing, or finding the row gone - leaves the handler's outcome to be recorded as usual.
+     */
+    @Test
+    void a_handler_returning_while_a_charge_runs_is_told_only_of_a_move_the_charge_made() throws Exception {
+        var moved = new FakeWrites(Map.of(1L, 1));
+        moved.holdCharges();
+        var movedLedger = ledger(moved, 1, new ShardOwnerMetrics(), new ArrayList<>());
+        var charge      = CompletableFuture.supplyAsync(() -> charge(movedLedger, candidates(1L)));
+        assertThat(moved.charging.await(10, TimeUnit.SECONDS)).as("premise: the charge is running").isTrue();
+        var handlerAsks = CompletableFuture.supplyAsync(() -> movedLedger.deadLetteredWhileInHandler(1L));
+        assertThatThrownBy(() -> handlerAsks.get(300, TimeUnit.MILLISECONDS)).isInstanceOf(TimeoutException.class);
+        moved.proceed.countDown();
+        assertThat(handlerAsks.get(10, TimeUnit.SECONDS)).as("recorded and moved by the charge it waited for").isPresent();
+        charge.get(10, TimeUnit.SECONDS);
+
+        var refused = new FakeWrites(Map.of(1L, 1));
+        refused.holdMoves();
+        refused.failMoves = 1;
+        var refusedLedger = ledger(refused, 1, new ShardOwnerMetrics(), new ArrayList<>());
+        var refusedCharge = CompletableFuture.runAsync(() -> assertThatThrownBy(() -> refusedLedger.charge(null, candidates(1L))).isInstanceOf(SQLException.class));
+        assertThat(refused.moving.await(10, TimeUnit.SECONDS)).isTrue();
+        var askedDuringARefusedMove = CompletableFuture.supplyAsync(() -> refusedLedger.deadLetteredWhileInHandler(1L));
+        refused.proceed.countDown();
+        assertThat(askedDuringARefusedMove.get(10, TimeUnit.SECONDS)).as("a move that failed dead-lettered nothing").isEmpty();
+        refusedCharge.get(10, TimeUnit.SECONDS);
+
+        var gone = new FakeWrites(Map.of(1L, 1));
+        gone.holdMoves();
+        gone.rowsGone.add(1L);
+        var goneLedger = ledger(gone, 1, new ShardOwnerMetrics(), new ArrayList<>());
+        var goneCharge = CompletableFuture.supplyAsync(() -> charge(goneLedger, candidates(1L)));
+        assertThat(gone.moving.await(10, TimeUnit.SECONDS)).isTrue();
+        var askedDuringAMoveOfNothing = CompletableFuture.supplyAsync(() -> goneLedger.deadLetteredWhileInHandler(1L));
+        gone.proceed.countDown();
+        assertThat(askedDuringAMoveOfNothing.get(10, TimeUnit.SECONDS)).as("a move that found the row gone dead-lettered nothing").isEmpty();
+        goneCharge.get(10, TimeUnit.SECONDS);
     }
 
     @Test
@@ -154,6 +225,14 @@ class ReleaseChargeLedgerTest {
     private static ReleaseChargeLedger ledger(FakeWrites writes, int maxAttempts, ShardOwnerMetrics metrics, List<Map<Long, Integer>> counts) {
         return new ReleaseChargeLedger(MessageId.Lane.UNORDERED, SHARD, writes, RedeliveryPolicy.fixed(Duration.ofSeconds(1), maxAttempts), metrics,
                                        charged -> counts.add(Map.copyOf(charged)));
+    }
+
+    private static ReleaseChargeLedger.Answer charge(ReleaseChargeLedger ledger, Map<Long, String> candidates) {
+        try {
+            return ledger.charge(null, candidates);
+        } catch (SQLException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     private static Map<Long, String> candidates(Long... seqs) {
@@ -177,14 +256,38 @@ class ReleaseChargeLedgerTest {
         final Set<Long>          rowsGone    = new HashSet<>();
         final List<Set<Long>>    chargeCalls = new ArrayList<>();
         final List<Long>         moveCalls   = new ArrayList<>();
+        final CountDownLatch     charging    = new CountDownLatch(1);
+        final CountDownLatch     moving      = new CountDownLatch(1);
+        final CountDownLatch     proceed     = new CountDownLatch(1);
         int                      failMoves;
+        boolean                  holdCharges;
+        boolean                  holdMoves;
 
         FakeWrites(Map<Long, Integer> countAfterCharge) {
             this.countAfterCharge = countAfterCharge;
         }
 
+        /**
+         * Hold each charge, once {@link #charging} counts down, until {@link #proceed} does.
+         */
+        void holdCharges() {
+            holdCharges = true;
+        }
+
+        /**
+         * Hold each move, as if it had committed and not returned yet, once {@link #moving} counts down, until {@link #proceed}
+         * does.
+         */
+        void holdMoves() {
+            holdMoves = true;
+        }
+
         @Override
         public Map<Long, Integer> chargeRowsInHandler(Connection connection, Collection<Long> seqs) {
+            if (holdCharges) {
+                charging.countDown();
+                awaitProceed();
+            }
             chargeCalls.add(Set.copyOf(seqs));
             var charged = new TreeMap<Long, Integer>();
             seqs.stream().filter(seq -> !leaveOut.contains(seq)).forEach(seq -> charged.put(seq, countAfterCharge.get(seq)));
@@ -194,11 +297,26 @@ class ReleaseChargeLedgerTest {
         @Override
         public boolean moveToDeadLetterIfOwned(Connection connection, long seq) throws SQLException {
             moveCalls.add(seq);
+            if (holdMoves) {
+                moving.countDown();
+                awaitProceed();
+            }
             if (failMoves > 0) {
                 failMoves--;
                 throw new SQLException("move refused");
             }
             return !rowsGone.contains(seq);
+        }
+
+        private void awaitProceed() {
+            try {
+                if (!proceed.await(10, TimeUnit.SECONDS)) {
+                    throw new IllegalStateException("not let proceed");
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException(e);
+            }
         }
     }
 }

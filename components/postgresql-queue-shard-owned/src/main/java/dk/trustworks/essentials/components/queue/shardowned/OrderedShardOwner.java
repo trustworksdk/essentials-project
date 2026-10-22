@@ -338,8 +338,10 @@ final class OrderedShardOwner implements BatchReadableOwner {
 
     /**
      * The charge {@link #chargeKeysInHandlerBeforeRelease} makes, shared with the unordered lane: the rows charged before a
-     * release past their handlers, each with its key, and their dead-letter moves. A failure the handler of a message it
-     * dead-lettered reports later records nothing, as the row is gone ({@link #onFailure}).
+     * release past their handlers, each with its key, and their dead-letter moves. The handler of a message it dead-lettered
+     * that completes or throws later records nothing against the row, which is gone: no acknowledgement, no attempt, no
+     * retry - a WARN instead (an interrupted one is counted in {@code abandonedOnInterrupt} only)
+     * ({@link #returnedAfterItsDeadLetter}, {@link #failedAfterItsDeadLetter}).
      */
     private final ReleaseChargeLedger releaseChargeLedger;
 
@@ -817,6 +819,12 @@ final class OrderedShardOwner implements BatchReadableOwner {
         try {
             handler.handle(new MessageId(MessageId.Lane.ORDERED, shard, row.seq()),
                            key, keyOrder, row.payload(), row.payloadType());
+            // Asked before stateLock is taken: it may wait for a running charge, which takes stateLock itself
+            var deadLettered = releaseChargeLedger.deadLetteredWhileInHandler(row.seq());
+            if (deadLettered.isPresent()) {
+                returnedAfterItsDeadLetter(key, deadLettered.get(), Thread.currentThread().isInterrupted());
+                return;
+            }
             synchronized (stateLock) {
                 if (Thread.currentThread().isInterrupted()) {
                     metrics.abandonedOnInterrupt.increment();
@@ -892,14 +900,12 @@ final class OrderedShardOwner implements BatchReadableOwner {
      * resurrected or deleted.
      */
     private void onFailure(String key, long keyOrder, ShardOwnedStorage.OrderedRow row, Throwable cause) {
-        if (releaseChargeLedger.deadLetteredWhileInHandler(row.seq())) {
+        var deadLettered = releaseChargeLedger.deadLetteredWhileInHandler(row.seq());
+        if (deadLettered.isPresent()) {
             // Dead-lettered while this handler ran, by the charge before a release (chargeKeysInHandlerBeforeRelease): the row
             // is gone, so there is no attempt to count and nothing to retry - whether the release then succeeded, or failed
             // and left this owner holding the unit.
-            synchronized (stateLock) {
-                attemptsBySeq.remove(row.seq());
-                seen.remove(row.seq());
-            }
+            failedAfterItsDeadLetter(key, deadLettered.get(), cause);
             return;
         }
         try (var connection = storage.connection()) {
@@ -954,6 +960,59 @@ final class OrderedShardOwner implements BatchReadableOwner {
             synchronized (stateLock) {
                 requeue(key, keyOrder, row);
             }
+        }
+    }
+
+    /**
+     * The handler of a message the charge before a release dead-lettered while it ran
+     * ({@link ReleaseChargeLedger#deadLetteredWhileInHandler}) has returned: its row is gone, so there is nothing to
+     * acknowledge, and it is not counted delivered. Completed, the message has been handled and is dead-lettered all the
+     * same, so it is logged at WARN: resurrecting that dead letter delivers it again. Interrupted, it was not finished, and
+     * its dead letter is where it belongs.
+     */
+    private void returnedAfterItsDeadLetter(String key, ReleaseChargeLedger.ChargedRow deadLettered, boolean interrupted) {
+        forgetDeadLettered(deadLettered.seq());
+        if (interrupted) {
+            metrics.abandonedOnInterrupt.increment();
+            return;
+        }
+        log.warn("Ordered unit {} of queue {}: the handler of seq {} of key '{}' completed after the charge before a release of "
+                 + "the unit had dead-lettered its message at {} attempts. The message is not acknowledged and stays dead-lettered: "
+                 + "resurrecting that dead letter delivers it again. To move on, delete it, then resurrect the key's other "
+                 + "dead letters, if any (resurrectKey): the key stays blocked until every dead letter of it is resurrected "
+                 + "or deleted", shard,
+                 storage.queueId(), deadLettered.seq(), key, deadLettered.attemptsAfterCharge());
+    }
+
+    /**
+     * The handler of a message the charge before a release dead-lettered while it ran
+     * ({@link ReleaseChargeLedger#deadLetteredWhileInHandler}) has thrown: its row is gone, so there is no attempt to count
+     * and nothing to retry. The dead letter carries {@link ShardOwnedStorage#EXHAUSTED_IN_A_RELEASED_HANDLER}, not what the
+     * handler threw - often why it hung - so that is logged at WARN with the throwable, and a failure (not a requested
+     * redelivery) is told to the {@code QueueObserver} as the attempt the charge counted.
+     */
+    private void failedAfterItsDeadLetter(String key, ReleaseChargeLedger.ChargedRow deadLettered, Throwable cause) {
+        forgetDeadLettered(deadLettered.seq());
+        log.warn("Ordered unit {} of queue {}: the handler of seq {} of key '{}' threw after the charge before a release of the "
+                 + "unit had dead-lettered its message at {} attempts; that dead letter does not carry this exception",
+                 shard, storage.queueId(), deadLettered.seq(), key, deadLettered.attemptsAfterCharge(), cause);
+        if (cause instanceof RedeliveryRequested) {
+            return;
+        }
+        try {
+            metrics.observer().deliveryFailed(key, deadLettered.attemptsAfterCharge(), cause);
+        } catch (RuntimeException | Error e) {
+            // On the handler thread, after the outcome is settled: nothing is left for a throwing observer to fail
+            Exceptions.rethrowIfCriticalError(e);
+            log.warn("Ordered unit {} of queue {}: the QueueObserver told of the failure of seq {} of key '{}' threw", shard,
+                     storage.queueId(), deadLettered.seq(), key, e);
+        }
+    }
+
+    private void forgetDeadLettered(long seq) {
+        synchronized (stateLock) {
+            attemptsBySeq.remove(seq);
+            seen.remove(seq);
         }
     }
 
