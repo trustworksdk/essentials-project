@@ -125,7 +125,11 @@ contention (15 % retries at a 50 % hot share); order placement is far below that
   `OrderCancelled`, `OrderRejected`, `OrderExpired`) through the `integration/` receiver (signature, validation,
   dedupe, catch-up), keyed by `clientOrderId`.
 - **The fill comes from the order event, not from `TradeExecuted`** (Q-4). Order events carry `clientOrderId` and the
-  `executionId`, so routing to our `Order` needs no lookup. `TradeExecuted` names exchange order ids and both
+  `executionId`, so routing to our `Order` needs no lookup. **Needs SR-31** (found 2026-10-22, simulators 0.2.0): the
+  fill events carry neither the execution's quantity and price nor, except on a resting order, its `executionId`.
+  Until SR-31 lands the adapter books fills from the submit answer only, and a resting order's later fills are not
+  booked; deriving them from `filledQuantity` deltas or routing `TradeExecuted` through a map of exchange order ids
+  was considered and rejected. `TradeExecuted` names exchange order ids and both
   participants; it is what settlement and clearing reconciliation consume (phases 4–5).
 - **Out-of-order tolerance.** Subscriptions are unordered (D11). A fill may arrive before `OrderAccepted`: the order
   accepts the fill (and implies acceptance) rather than refusing it. Every inbound command is idempotent on the

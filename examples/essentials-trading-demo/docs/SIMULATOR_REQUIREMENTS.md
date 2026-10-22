@@ -414,6 +414,53 @@ Without it the demo's adapter resolves the id by resubmitting the order, which t
 **Accept when** an order submitted with `clientOrderId` `C` is cancelled by `C`, and a second cancel by `C` answers as
 a second cancel by id does.
 
+### SR-31 — The execution on every fill event (MUST) [phase 3]
+
+A member books its fills from its execution reports. A FIX `ExecutionReport` for a fill names the execution
+(`ExecID`, tag 17) and says what it filled: `LastQty` (32) and `LastPx` (31), next to the order's running totals
+(`CumQty`, `LeavesQty`). The simulator's `OrderPartiallyFilled` and `OrderFilled` carry only the running totals:
+`filledQuantity`, `remainingQuantity`, and `price`, which is the order's own limit price (null on a market order).
+`executionId` is set only when a resting order fills. Measured on 0.2.0: a market order's `OrderFilled` has
+`executionId` and `price` both null.
+
+So the trading demo cannot book a fill from the order events, which is what its design rests on (phase 3 Q-4: the
+order events carry `clientOrderId`, so a fill reaches the member's order with no lookup). `TradeExecuted` has the
+execution, but names the exchange's order ids. A member would have to keep its own map from those back to its orders
+and wait for it to be written, and that is the mapping execution reports exist to spare it. Deriving the quantity from
+the change in `filledQuantity` breaks on out-of-order deliveries, and the price would be a guess.
+
+**Fields.** On `OrderPartiallyFilled` and `OrderFilled`, for every fill - the resting order's and the incoming
+order's:
+
+| Field | Type | FIX | Meaning |
+|---|---|---|---|
+| `executionId` | uuid, required | 17 `ExecID` | the execution this event reports; the same id as on `TradeExecuted` and `OrderResult.executions[]` |
+| `lastQuantity` | integer, required | 32 `LastQty` | what this execution filled |
+| `lastPriceTicks` | integer, required | 31 `LastPx` | the execution's price, in ticks |
+| `lastPrice` | decimal string, required | 31 `LastPx` | the same, in major currency units, like `price` elsewhere |
+
+`tradeDate` and `intendedSettlementDate` (SR-29) stay, and are the execution's.
+
+**Rules.**
+
+- **One fill event per execution, per side.** An incoming order that trades against several resting orders gets one
+  `OrderPartiallyFilled` per execution and a final `OrderFilled`, each naming its own execution, in the order the
+  executions happened. Its running totals (`filledQuantity`, `remainingQuantity`) are those after that execution, so
+  the last event's equal the order's final state.
+- **Consistent with the trade.** For a given `executionId`, `lastQuantity` and `lastPriceTicks` equal
+  `TradeExecuted`'s `quantity` and `priceTicks`, and the synchronous `OrderResult.executions[]` entry.
+- **Additive.** New fields on existing payloads, and `executionId` goes from sometimes present to always present.
+  Bump the events' `schemaVersion` if the simulator's versioning policy asks for it.
+
+**Accept when:**
+
+- a market buy of 300 against three resting asks of 100 at 10.00, 10.01 and 10.02 emits, for the buy, two
+  `OrderPartiallyFilled` and one `OrderFilled` with `lastQuantity` 100 each and `lastPrice` 10.00, 10.01 and 10.02 in
+  that order, each with the `executionId` of its `TradeExecuted`;
+- each resting ask's `OrderFilled` names the same execution as the buy's event for it;
+- for a sample of executions, `executionId`, `lastQuantity` and `lastPriceTicks` agree across the fill events,
+  `TradeExecuted` and `OrderResult.executions[]`.
+
 ---
 
 ## Summary by demo phase
@@ -423,7 +470,7 @@ a second cancel by id does.
 | 0 Foundation | SR-1, SR-3, SR-5, SR-28 (MUST); SR-19 (SHOULD) |
 | 1 Identity and account core | SR-24, SR-25, SR-26 (MUST) |
 | 2 Funding | SR-21 (MUST); SR-22, SR-27 (SHOULD) |
-| 3 Orders and execution | SR-2, SR-6–SR-10, SR-12, SR-13, SR-29 (MUST); SR-16, SR-17, SR-30 (SHOULD) |
+| 3 Orders and execution | SR-2, SR-6–SR-10, SR-12, SR-13, SR-29, SR-31 (MUST); SR-16, SR-17, SR-30 (SHOULD) |
 | 4 Settlement | SR-14 (MUST) |
 | 5 Reconciliation | SR-11 (SHOULD) |
 | 6 Realistic load | SR-4, SR-15, SR-20, SR-23 (SHOULD) |
