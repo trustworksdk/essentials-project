@@ -167,6 +167,37 @@ class NetworkWaitBoundTest {
                                                "isWrapperFor(DriverConnection)", "unwrap(DriverConnection)", "isWrapperFor(Runnable)");
     }
 
+    @Test
+    void inside_call_a_connection_gets_the_bound_and_the_work_returns_its_value() throws SQLException {
+        var fake = new FakeConnection(0);
+
+        var connection = NetworkWaitBound.call(BOUND, () -> NetworkWaitBound.bound(fake.connection));
+
+        assertThat(connection).isNotSameAs(fake.connection);
+        assertThat(fake.networkTimeout).isEqualTo(BOUND_MILLIS);
+        connection.close();
+        assertThat(fake.networkTimeout).isZero();
+        assertThat(NetworkWaitBound.bound(fake.connection)).as("no bound once call returned").isSameAs(fake.connection);
+    }
+
+    @Test
+    void call_throws_the_works_checked_exception_as_it_is_and_leaves_no_bound_behind() {
+        var fake    = new FakeConnection(0);
+        var failure = new SQLException("the database did not answer");
+
+        assertThatThrownBy(() -> NetworkWaitBound.call(BOUND, () -> {
+            NetworkWaitBound.bound(fake.connection);
+            throw failure;
+        })).isSameAs(failure);
+        assertThat(fake.networkTimeout).as("bound inside the work").isEqualTo(BOUND_MILLIS);
+        assertThat(NetworkWaitBound.bound(fake.connection)).as("no bound once call threw").isSameAs(fake.connection);
+    }
+
+    @Test
+    void call_refuses_a_bound_that_is_not_positive() {
+        assertThatThrownBy(() -> NetworkWaitBound.call(Duration.ZERO, () -> "work")).isInstanceOf(IllegalArgumentException.class);
+    }
+
     private static Connection boundDuring(FakeConnection fake) {
         var bound = new AtomicReference<Connection>();
         NetworkWaitBound.during(BOUND, () -> bound.set(NetworkWaitBound.bound(fake.connection)));

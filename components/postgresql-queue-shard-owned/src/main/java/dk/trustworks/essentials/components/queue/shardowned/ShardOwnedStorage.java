@@ -130,8 +130,8 @@ public final class ShardOwnedStorage {
     /**
      * A connection from the {@code DataSource}, bounded as {@link #open()} says. Close the connection this returns, never
      * one unwrapped from it to a driver's own type nor one a statement's {@link Statement#getConnection()} gives: inside
-     * {@link NetworkWaitBound#during} only a close of the returned one sets its network timeout back (see
-     * {@link NetworkWaitBound#bound}).
+     * {@link NetworkWaitBound#during} or {@link NetworkWaitBound#call} only a close of the returned one sets its network
+     * timeout back (see {@link NetworkWaitBound#bound}).
      */
     public Connection connection() throws SQLException {
         return open();
@@ -139,8 +139,8 @@ public final class ShardOwnedStorage {
 
     /**
      * Every connection this handle uses or hands out comes from here: the {@code DataSource}'s, bounded when the calling
-     * thread runs inside {@link NetworkWaitBound#during} - a stop's database work on the thread it may abandon, and the
-     * hand-back of an ordered unit a stop kept.
+     * thread runs inside {@link NetworkWaitBound#during} or {@link NetworkWaitBound#call} - a stop's database work on the
+     * thread it may abandon, the hand-back of an ordered unit a stop kept, and a release of such a unit on request.
      */
     private Connection open() throws SQLException {
         return NetworkWaitBound.bound(dataSource.getConnection());

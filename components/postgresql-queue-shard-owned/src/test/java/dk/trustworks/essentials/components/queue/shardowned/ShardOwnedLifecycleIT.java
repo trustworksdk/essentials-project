@@ -3304,6 +3304,82 @@ class ShardOwnedLifecycleIT {
     }
 
     /**
+     * A release on request of an ordered unit a stop kept ({@code releaseKeptOrderedUnit}, what the admin API's
+     * {@code release-kept} calls) waits for each answer from the database no longer than the queue's {@code leaseTtl}, on
+     * the caller's thread. A test transaction holds the kept unit's lease row and never lets go while the test watches, so
+     * the request's release waits on it as on a connection that never answers: it throws once it has waited that long and
+     * lets go of its claim of the unit. A second request, made while the row is still held, claims the unit again - it is
+     * not answered {@code BUSY} - and ends the same way. Once the row is let go, the release the driver stopped waiting
+     * for goes through on the server - the abandoned statements are queued on the row's lock before any later one - so
+     * the row no longer names the instance, and a later request answers {@code ALREADY_TAKEN} rather than {@code BUSY}.
+     * The request used to wait until the row was let go - on a half-open socket with no
+     * {@code socketTimeout}, for the life of the process - holding the caller's thread and the claim, so every later
+     * hand-back or request of the unit found it already claimed.
+     */
+    @Test
+    void a_release_on_request_of_a_kept_unit_the_database_never_answers_lets_go_of_the_unit_once_a_statement_has_waited_the_lease_ttl() throws Exception {
+        var entered    = new CountDownLatch(1);
+        var release    = new CountDownLatch(1);
+        var leaseTtl   = Duration.ofSeconds(4);
+        var settings   = settingsWith(Duration.ofMillis(300), leaseTtl);
+        var instanceId = "kept-release-on-request-never-answered";
+        try (var runtime = new ShardRuntime(dataSource, settings);
+             var locking = dataSource.getConnection()) {
+            var queue = ShardOwnedQueue.builder().setDataSource(dataSource).setQueueId(QUEUE_ID).setShardCount(SHARD_COUNT)
+                                       .setInstanceId(instanceId).setRuntime(runtime).build();
+            try {
+                queue.startConsumingOrdered((messageId, key, payload, payloadType) -> {
+                    entered.countDown();
+                    awaitQuietly(release);
+                }, settings, SHARD_COUNT);
+                queue.enqueueOrdered(List.of(new ShardOwnedStorage.OrderedPayload("ACC-1", 0, "0".getBytes(StandardCharsets.UTF_8), 1)));
+                assertThat(entered.await(20, TimeUnit.SECONDS)).isTrue();
+
+                queue.stop();
+                assertThat(orderedUnitsOwnedBy(instanceId)).as("premise: the busy unit is kept").isEqualTo(1);
+                var kept = keptOrderedFence(instanceId);
+                Awaitility.await().atMost(Duration.ofSeconds(10)).until(() -> !queue.handBackStillRunning());
+
+                locking.setAutoCommit(false);
+                try {
+                    assertThat(lockLeaseRowOf(locking, "ordered", kept.shard())).as("premise: the test holds the kept unit's lease row").isTrue();
+                    for (var attempt = 1; attempt <= 2; attempt++) {
+                        // On a thread of its own, so an unbounded request fails the test rather than hanging it.
+                        var requesting = new FutureTask<>(() -> queue.releaseKeptOrderedUnit(instanceId, kept.shard()));
+                        var requested  = System.nanoTime();
+                        Thread.ofPlatform().daemon().name("kept-release-on-request-" + attempt).start(requesting);
+                        assertThatThrownBy(() -> requesting.get(leaseTtl.plusSeconds(5).toMillis(), TimeUnit.MILLISECONDS))
+                                .as("request %d: the release behind the held row throws once it has waited the bound", attempt)
+                                .isInstanceOf(ExecutionException.class)
+                                .hasCauseInstanceOf(SQLException.class);
+                        assertThat(Duration.ofNanos(System.nanoTime() - requested))
+                                .as("request %d claimed the unit - not answered BUSY - and waited for its answer up to the bound, not less", attempt)
+                                .isGreaterThanOrEqualTo(leaseTtl.minusMillis(500));
+                        assertThat(orderedUnitsOwnedBy(instanceId)).as("premise: the release behind the held row never got through")
+                                                                   .isEqualTo(1);
+                        assertThat(fenceOf("ordered", kept.shard())).as("premise: nobody took the unit under a newer fence")
+                                                                    .isEqualTo(kept.fence());
+                    }
+                } finally {
+                    locking.rollback();
+                    locking.setAutoCommit(true);
+                }
+
+                var answer = queue.releaseKeptOrderedUnit(instanceId, kept.shard());
+                assertThat(answer).as("once the row is let go, a request is answered").isPresent();
+                assertThat(answer.get().outcome())
+                        .as("the unit is claimed again - not BUSY - and its row found released by the first request's abandoned "
+                                    + "statement, queued on the row's lock before this request's own")
+                        .isEqualTo(KeptUnitRelease.Outcome.ALREADY_TAKEN);
+                assertThat(orderedUnitsOwnedBy(instanceId)).as("its lease row no longer names this instance").isZero();
+            } finally {
+                release.countDown();
+                queue.stop();
+            }
+        }
+    }
+
+    /**
      * A {@code start()} made while the hand-back of the {@code stop()} before it is deleting the instance's membership row -
      * the deletion under way when the start began, here behind a row lock a test transaction holds on the row - waits for
      * that deletion before it registers the instance, at most the 2 s budget, and then says once that it goes on without

@@ -31,15 +31,16 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * @param instanceId             the instance id whose lease row it was
  * @param outcome                {@code RELEASED} - its acknowledgements flushed and its lease row released, so any
  *                               instance below its fair share may take it under a new fence; {@code ALREADY_TAKEN} - the
- *                               row had been taken under a newer fence meanwhile, nothing released; {@code BUSY} - the stop
- *                               that kept it is still flushing it, or another hand-back or release of it is running, nothing
- *                               done, ask again
+ *                               row no longer named the instance under the fence it was kept under - taken under a newer
+ *                               fence meanwhile, or released by an earlier hand-back or release whose answer the instance
+ *                               stopped waiting for; nothing released; {@code BUSY} - the stop that kept it is still
+ *                               flushing it, or another hand-back or release of it is running, nothing done, ask again
  * @param keysInHandler          the unit's keys still in a handler, as {@link KeptUnitRelease#keysInHandler()} reads them:
  *                               on {@code RELEASED} when the release's flush took its batch of acknowledgements, so a
  *                               handler that returned before that had its acknowledgement flushed and is not named, and
  *                               no named key's acknowledgement was flushed; on {@code ALREADY_TAKEN} when that flush took
- *                               its batch, or without a flush when the row was already found taken, and as the row had
- *                               been taken under a newer fence, that flush may have been refused and acknowledged
+ *                               its batch, or without a flush when the row was already found taken, and as the row was
+ *                               no longer held under that fence, that flush may have been refused and acknowledged
  *                               nothing, so these keys do not say which messages are delivered again; on {@code BUSY} as
  *                               they stood when asked. After
  *                               {@code RELEASED}, whoever takes the unit next delivers their messages again, possibly

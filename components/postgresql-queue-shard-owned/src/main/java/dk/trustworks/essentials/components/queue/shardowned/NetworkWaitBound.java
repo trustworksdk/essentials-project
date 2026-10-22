@@ -26,18 +26,20 @@ import static dk.trustworks.essentials.shared.FailFast.*;
 
 /**
  * A bound on how long one thread waits for the database to answer, set on every connection {@link ShardOwnedStorage}
- * hands that thread while it runs the work given to {@link #during}: {@link Connection#setNetworkTimeout} (JDBC 4.1),
- * the connection's own value read first and set back as the connection is closed, so a pooled connection goes back to
- * its pool as it came out. Set back here rather than left to the pool: the engine knows no pool, and not every pool
- * resets it. Only ever tightened: a connection whose own network timeout is already no longer than the bound - the
- * {@code socketTimeout} a deployer set on the {@code DataSource}, which the driver reports as it - is handed over
- * untouched.
+ * hands that thread while it runs the work given to {@link #during} or {@link #call}:
+ * {@link Connection#setNetworkTimeout} (JDBC 4.1), the connection's own value read first and set back as the connection
+ * is closed, so a pooled connection goes back to its pool as it came out. Set back here rather than left to the pool:
+ * the engine knows no pool, and not every pool resets it. Only ever tightened: a connection whose own network timeout
+ * is already no longer than the bound - the {@code socketTimeout} a deployer set on the {@code DataSource}, which the
+ * driver reports as it - is handed over untouched.
  * <p>
  * For the database work a stop leaves running on a thread it stops waiting for ({@code ShardOwnedQueue}'s
  * {@code withinShutdownBudget}). On a connection that hangs - a half-open socket, with no {@code socketTimeout} on the
  * {@code DataSource} - a statement there otherwise never returns, and that thread holds its pool connection for the life
  * of the process. Also for the hand-back of an ordered unit a stop kept ({@code ShardOwnedQueue}'s {@code handBackKeptUnit}),
  * on whichever thread runs it: hung there, it held its claim of the unit, and the instance's membership row, for as long.
+ * And for a release on request of such a unit ({@code ShardOwnedQueue}'s {@code releaseKeptOrderedUnit}), which takes
+ * the same claim on the caller's thread - an admin request's among them - and held it, and that thread, the same way.
  * Past the bound the driver stops waiting and throws, as on a socket timeout. The bound applies to each
  * wait for an answer, not to the work as a whole.
  * <p>
@@ -63,9 +65,21 @@ final class NetworkWaitBound {
     }
 
     /**
-     * {@code connection} as it is outside {@link #during}, and inside it when its own network timeout is already no
-     * longer than the bound; otherwise (none, or a longer one) with its network timeout set to the bound, and set back to
-     * what it was when it is closed.
+     * {@link #during}, for work that returns a value and may throw a checked exception: run {@code work} on the calling
+     * thread, every connection {@link ShardOwnedStorage} hands it meanwhile bounded by {@code bound}, and return what it
+     * returns, or throw what it throws, as it is. Not inherited by a thread {@code work} starts.
+     */
+    static <T, X extends Throwable> T call(Duration bound, ScopedValue.CallableOp<? extends T, X> work) throws X {
+        requireNonNull(bound, "No bound provided");
+        requireNonNull(work, "No work provided");
+        requireTrue(bound.isPositive(), "The bound must be positive");
+        return ScopedValue.where(BOUND, bound).call(work);
+    }
+
+    /**
+     * {@code connection} as it is outside {@link #during} and {@link #call}, and inside either when its own network
+     * timeout is already no longer than the bound; otherwise (none, or a longer one) with its network timeout set to
+     * the bound, and set back to what it was when it is closed.
      * <p>
      * When it is bounded (the network timeout set here), only a close of the connection returned here sets the timeout
      * back. {@link Connection#unwrap} to {@link Connection} (or {@link Wrapper}) then returns that same connection, but one

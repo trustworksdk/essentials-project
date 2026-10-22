@@ -3096,7 +3096,8 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * {@link NetworkWaitBound}): the queue's {@code leaseTtl}, or {@link #SHUTDOWN_BUDGET} when that is longer. A connection
      * whose own network timeout is shorter keeps its own, so no wait of that thread for the database lasts longer than
      * this. The hand-back of a unit a stop kept sets the same on the connections it borrows, on whichever thread it runs
-     * ({@link #handBackKeptUnit}). Package-private for tests.
+     * ({@link #handBackKeptUnit}), and so does a release of such a unit on request, on the caller's thread
+     * ({@link #releaseKeptOrderedUnit}). Package-private for tests.
      */
     Duration stopNetworkWaitBound() {
         return Duration.ofMillis(Math.max(leaseTtlMillis, SHUTDOWN_BUDGET.toMillis()));
@@ -3247,10 +3248,11 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                              instanceId, owner.shard(), queueId);
                 }
             } else {
-                log.info("Instance {} found ordered unit {} on queue {}, which a stop kept while a key was in its handler, taken "
-                                 + "over meanwhile - by another instance, or, once this queue had stopped waiting for it past "
-                                 + "stuckHandlerTimeout, "
-                                 + "under this instance id - when the handler returned; nothing left to hand back",
+                log.info("Instance {} found ordered unit {} on queue {}, which a stop kept while a key was in its handler, no "
+                                 + "longer held by this instance when the handler returned: taken over meanwhile - by another "
+                                 + "instance, or, once this queue had stopped waiting for it past stuckHandlerTimeout, under this "
+                                 + "instance id - or released by an earlier hand-back or release of it, whose answer this instance "
+                                 + "stopped waiting for, that went through on the server after all; nothing left to hand back",
                          instanceId, owner.shard(), queueId);
             }
         } catch (SQLException | RuntimeException | Error e) {
@@ -3283,45 +3285,72 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * tried in turn until one is released; with none released, the answer is {@code BUSY} when any entry was, else
      * {@code ALREADY_TAKEN}.
      * <p>
-     * Which keys are in a handler is read once per entry, under the claim, together with the batch of acknowledgements the
-     * flush takes, and before the row is released ({@link OrderedShardOwner#flushAcksNamingKeysInHandler}), or without a
-     * flush when the row is already found taken. Released, a handler that returned before that had its acknowledgement
-     * flushed and is not named, and a named key's acknowledgement is not flushed, as nothing flushes the owner between that
-     * flush and the release. Found taken ({@link KeptUnitRelease.Outcome#ALREADY_TAKEN}), the flush may have been refused
-     * by the newer fence and acknowledged nothing, so the keys named do not say which messages are delivered again. That
-     * one reading decides
-     * the log line, the keys in the answer and the phase the unit ends in. Released with a key still in its handler, the
-     * unit moves to {@link KeptUnit.Phase#FORCE_RELEASED}: nothing waits for that handler any more. Before the row is
-     * released, the key's message is charged an attempt, under the kept fence, and dead-lettered if that brings it to the
-     * redelivery limit ({@link #chargeKeysInHandlerBeforeRelease}) - every message in a handler, however long it has been
-     * there, unlike a shed's or a dead-pump hand-back's charge, which spares one in a handler for less than
-     * {@code stuckHandlerTimeout}: whoever takes the unit next finds it released and
-     * charges nothing, so without it a message whose handler hung on every delivery, released on request each time, never
-     * reached the dead-letter table. That next owner delivers the key's message again, unless it was dead-lettered, as it
-     * was never acknowledged, possibly while the handler still runs it; the handler's acknowledgement, once it returns, is
-     * not flushed, as the owner no longer holds the row. One WARN says so, naming the keys, and the answer names the charge
+     * Which keys are in a handler is read once per entry, under the claim, together with the batch of acknowledgements
+     * the flush takes, and before the row is released ({@link OrderedShardOwner#flushAcksNamingKeysInHandler}), or
+     * without a flush when the row is already found taken. Released, a handler that returned before that had its
+     * acknowledgement flushed and is not named, and a named key's acknowledgement is not flushed, as nothing flushes
+     * the owner between that flush and the release. Found taken ({@link KeptUnitRelease.Outcome#ALREADY_TAKEN}), the
+     * flush may have been refused - the row no longer named this instance under the kept fence - and acknowledged
+     * nothing, so the keys named do not say which messages are delivered again. That one reading decides the log line,
+     * the keys in the answer and the phase the unit ends in. Released with a key still in its handler, the unit moves
+     * to {@link KeptUnit.Phase#FORCE_RELEASED}: nothing waits for that handler any more. Before the row is released,
+     * the key's message is charged an attempt, under the kept fence, and dead-lettered if that brings it to the
+     * redelivery limit ({@link #chargeKeysInHandlerBeforeRelease}) - every message in a handler, however long it has
+     * been there, unlike a shed's or a dead-pump hand-back's charge, which spares one in a handler for less than
+     * {@code stuckHandlerTimeout}: whoever takes the unit next finds it released and charges nothing, so without it a
+     * message whose handler hung on every delivery, released on request each time, never reached the dead-letter table.
+     * That next owner delivers the key's message again, unless it was dead-lettered, as it was never acknowledged,
+     * possibly while the handler still runs it; the handler's acknowledgement, once it returns, is not flushed, as the
+     * owner no longer holds the row. One WARN says so, naming the keys, and the answer names the charge
      * ({@link KeptUnitRelease#charged()}, {@link KeptUnitRelease#deadLetteredKeys()}). Released with none in a handler,
-     * it is an ordinary hand-back ({@link KeptUnit.Phase#HANDED_BACK}), and nothing is charged; the answer still names a
-     * charge an earlier attempt to release it completed (a request whose release was refused once its charge had
-     * committed, its handler having returned since). A {@code BUSY} entry, not
-     * claimed, names the keys as they stand when asked. Not counted as a release ({@link #countRelease}): the stop that
-     * kept the unit counted it.
+     * it is an ordinary hand-back ({@link KeptUnit.Phase#HANDED_BACK}), and nothing is charged; the answer still names
+     * a charge an earlier attempt to release it completed (a request whose release was refused once its charge had
+     * committed, its handler having returned since). A {@code BUSY} entry, not claimed, names the keys as they stand
+     * when asked. Not counted as a release ({@link #countRelease}): the stop that kept the unit counted it.
      * <p>
      * Asked for another instance id than this queue's ({@code requestedInstanceId}), this touches nothing - not even the
      * review - and answers empty: the operator named the instance whose WARN reported the unit kept, and a unit of the
      * same number this queue kept is not the one diagnosed.
+     * <p>
+     * Each wait of the release for an answer from the database - the flush, the charge, the release of the row - is
+     * bounded as the hand-back bounds its own ({@link #handBackKeptUnit}, {@link #stopNetworkWaitBound()},
+     * {@link NetworkWaitBound}), on the caller's thread: a statement on a connection that does not answer - a half-open
+     * socket, with no {@code socketTimeout} on the {@code DataSource} - throws once it has waited that long, unless the
+     * connection's own network timeout is shorter, and this throws that {@link SQLException}, the unit back where it
+     * was claimed from, for a later hand-back or request - as far as this queue knows, its row still naming this
+     * instance, though a statement the driver stopped waiting for may still go through on the server: a charge that
+     * does leaves its message charged, and a later request may charge it again; a release of the row that does leaves
+     * the row released by the earlier request's own statement, and a later request finds nothing left to release: it
+     * answers {@code ALREADY_TAKEN}, or, once a hand-back of the unit has found the row released first, nothing for the
+     * unit. The wait for a pool connection is the pool's own. Unbounded, a request - an admin API call's thread among
+     * them - held its claim ({@link KeptUnit.Phase#HANDING_BACK}) for as long as that connection hung, and every later
+     * hand-back or request of the unit found it claimed: the hand-back did nothing, the request answered {@code BUSY}.
      *
      * @param requestedInstanceId the instance id the caller asks for, as the stop's WARN names it
      * @return what was done, empty when this queue keeps no such unit with its row still held, or runs under another
      * instance id than {@code requestedInstanceId}
-     * @throws SQLException when the flush, the charge or the release fails; the unit is then left as it was, kept, for a
-     *                      later hand-back or request, and a later request does not charge again
+     * @throws SQLException when the flush, the charge or the release fails, or waits for an answer longer than
+     *                      {@link #stopNetworkWaitBound()}; the unit is then left as it was, kept, for a later hand-back
+     *                      or request, and a later request does not charge again what this one's charge was seen to
+     *                      commit. Past the bound, a statement the driver stopped waiting for may still go through on the
+     *                      server: a charge that does leaves its message charged, and a later request may charge it
+     *                      again; a release that does leaves the row released by this request's own statement, and a
+     *                      later request then finds nothing to release ({@code ALREADY_TAKEN}, or nothing once a
+     *                      hand-back has found the row released first)
      */
     Optional<KeptUnitRelease> releaseKeptOrderedUnit(String requestedInstanceId, int unit) throws SQLException {
         requireNonNull(requestedInstanceId, "No requestedInstanceId provided");
         if (!instanceId.equals(requestedInstanceId)) {
             return Optional.empty();
         }
+        return NetworkWaitBound.call(stopNetworkWaitBound(), () -> releaseKeptOrderedUnitWithinNetworkWaitBound(unit));
+    }
+
+    /**
+     * {@link #releaseKeptOrderedUnit}, for this queue's own instance id, on a thread whose waits for the database that
+     * method has bounded.
+     */
+    private Optional<KeptUnitRelease> releaseKeptOrderedUnitWithinNetworkWaitBound(int unit) throws SQLException {
         reviewStuckKeptUnits();
         // More than one kept entry can name the unit: a run of this queue that took it over past stuckHandlerTimeout, and
         // whose stop kept it again, lists its own entry after the earlier one, which still reads as holding its row until a
@@ -3390,9 +3419,11 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             return Optional.of(busy);
         }
         if (taken != null) {
-            log.info("Instance {} found ordered unit {} on queue {}, which a stop kept, taken over under a newer fence when asked to "
-                             + "release it - by another instance once this one's liveness lapsed, or under this instance id once "
-                             + "this queue had stopped waiting for it past stuckHandlerTimeout; nothing released",
+            log.info("Instance {} found ordered unit {} on queue {}, which a stop kept, no longer held under the fence it was kept "
+                             + "under when asked to release it: taken over under a newer fence - by another instance once this "
+                             + "one's liveness lapsed, or under this instance id once this queue had stopped waiting for it past "
+                             + "stuckHandlerTimeout - or an earlier hand-back or release of it, whose answer this instance stopped "
+                             + "waiting for, went through on the server after all; nothing released",
                      instanceId, unit, queueId);
             return Optional.of(taken);
         }

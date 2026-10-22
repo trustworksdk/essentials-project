@@ -35,11 +35,11 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  *                         release's flush took its batch of acknowledgements, before the row was released: a handler
  *                         that returned before that had its acknowledgement flushed and is not named, and no named
  *                         key's acknowledgement was flushed. On {@link Outcome#ALREADY_TAKEN} read when the release's
- *                         flush took its batch, or without a flush when the row was already found taken; as the row had
- *                         been taken under a newer fence, that flush may have been refused and acknowledged nothing, so
- *                         these keys do not say which messages are delivered again. On {@link Outcome#BUSY} as they
- *                         stood when asked. On {@link Outcome#RELEASED} their messages are delivered again by whoever
- *                         takes the unit next, possibly while these handlers still run them
+ *                         flush took its batch, or without a flush when the row was already found taken; as the row no
+ *                         longer named the instance under the fence it was kept under, that flush may have been refused
+ *                         and acknowledged nothing, so these keys do not say which messages are delivered again. On
+ *                         {@link Outcome#BUSY} as they stood when asked. On {@link Outcome#RELEASED} their messages are
+ *                         delivered again by whoever takes the unit next, possibly while these handlers still run them
  * @param longestInHandler how long the key handed to its handler first had been there, {@link Duration#ZERO} when no key
  *                         was in a handler
  * @param charged          how many messages in a handler were charged an attempt before the release, as a takeover
@@ -92,8 +92,9 @@ public record KeptUnitRelease(int unit,
         RELEASED,
         /**
          * Its lease row no longer named the instance under the fence it was kept under: another instance had taken the
-         * unit once this one's liveness lapsed, or a run under the same instance id had taken it over past
-         * {@code stuckHandlerTimeout}. Nothing was released, and nothing waits for its handler any more.
+         * unit once this one's liveness lapsed, a run under the same instance id had taken it over past
+         * {@code stuckHandlerTimeout}, or an earlier hand-back or release of it, whose answer the instance stopped waiting
+         * for, went through on the server after all. Nothing was released, and nothing waits for its handler any more.
          */
         ALREADY_TAKEN,
         /**

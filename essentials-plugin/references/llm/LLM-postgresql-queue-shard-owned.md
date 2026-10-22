@@ -159,11 +159,13 @@ release each of those messages is charged an attempt, and one that reaches `maxA
 dead-lettered instead of delivered again, so a message whose handler hangs on every delivery reaches the
 dead-letter table once the queue has stopped waiting for it `maxAttempts` times (a hang an owner goes on
 serving its unit through is not bounded by this). Only a unit a stop kept whose row still names the requested instance id
-is touched. Each entry of `releases` reports `RELEASED` (with the keys in a handler), `ALREADY_TAKEN` (taken under a newer
-fence meanwhile, nothing released) or `BUSY` (the stop is still flushing it or another hand-back or release
-of it runs; ask again), and how many messages the release charged an attempt (`charged`) and which keys that charge
-dead-lettered (`deadLetteredKeys`; zero and empty on `BUSY`). A key in `deadLetteredKeys` is blocked behind its dead
-letter until its dead letters are resurrected (`resurrectKey`) or deleted - follow up on those keys.
+is touched. Each entry of `releases` reports `RELEASED` (with the keys in a handler), `ALREADY_TAKEN` (the row no longer
+named the instance under the fence it was kept under - taken under a newer fence meanwhile, or released by an earlier
+hand-back or release whose answer the instance stopped waiting for; nothing released) or `BUSY` (the stop is still
+flushing it or another hand-back or release of it runs; ask again), and how many messages the release charged an
+attempt (`charged`) and which keys that charge dead-lettered (`deadLetteredKeys`; zero and empty on `BUSY`). A key in
+`deadLetteredKeys` is blocked behind its dead letter until its dead letters are resurrected (`resurrectKey`) or
+deleted - follow up on those keys.
 Once released the unit no longer keeps an unsubscribed subscription's id out of use. The same
 bound covers a fair-share shed of an ordered unit and the hand-back of a unit whose pump died, which wait
 for the keys in their handlers: past it each releases the unit with every key still in a handler — the one
