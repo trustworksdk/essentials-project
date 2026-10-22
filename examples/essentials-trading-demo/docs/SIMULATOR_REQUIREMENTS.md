@@ -461,6 +461,27 @@ order's:
 - for a sample of executions, `executionId`, `lastQuantity` and `lastPriceTicks` agree across the fill events,
   `TradeExecuted` and `OrderResult.executions[]`.
 
+### SR-32 — The business day on `OrderExpired` (SHOULD) [phase 3]
+
+A `DAY` order expires at the end of its business day (SR-17), and a member records which day that was: the order
+belongs to that day's books and statements. The exchange's `OrderExpired` carries the order's state but no date. The
+envelope's `occurredAt` does not settle it: turning a timestamp into a business day takes the cutoff, its time zone,
+weekends and the session times, which is the exchange's calendar (D10 rules out a member keeping its own copy of it).
+
+**Fields.** On `OrderExpired`'s payload:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `businessDate` | date, required | the business day whose end expired the order: the date `BusinessDayClosed` names for that close, or, on a market with a session (SR-16), the day whose session closed |
+
+**Rules.**
+
+- **One calendar.** An order expired at a cutoff has the same `businessDate` as that cutoff's `BusinessDayClosed`.
+- **Additive.** A new field on an existing payload.
+
+**Accept when** a `DAY` order resting at Tuesday's cutoff is expired with `businessDate` Tuesday, equal to the
+`businessDate` of the `BusinessDayClosed` emitted at the same cutoff.
+
 ---
 
 ## Summary by demo phase
@@ -470,7 +491,7 @@ order's:
 | 0 Foundation | SR-1, SR-3, SR-5, SR-28 (MUST); SR-19 (SHOULD) |
 | 1 Identity and account core | SR-24, SR-25, SR-26 (MUST) |
 | 2 Funding | SR-21 (MUST); SR-22, SR-27 (SHOULD) |
-| 3 Orders and execution | SR-2, SR-6–SR-10, SR-12, SR-13, SR-29, SR-31 (MUST); SR-16, SR-17, SR-30 (SHOULD) |
+| 3 Orders and execution | SR-2, SR-6–SR-10, SR-12, SR-13, SR-29, SR-31 (MUST); SR-16, SR-17, SR-30, SR-32 (SHOULD) |
 | 4 Settlement | SR-14 (MUST) |
 | 5 Reconciliation | SR-11 (SHOULD) |
 | 6 Realistic load | SR-4, SR-15, SR-20, SR-23 (SHOULD) |
