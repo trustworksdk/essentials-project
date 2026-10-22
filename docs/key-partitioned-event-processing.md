@@ -520,9 +520,37 @@ READ COMMITTED, as a database whose default differs would otherwise lose the gua
 for the consumers, three rounds alternating: ~623 000 isolation queries per run and 144 / 163 completed orders/s with
 the explicit level (a third run stalled - see below), none and 168 / 183 / 185 without. The demo opts in.
 
-**An intermittent stall, not yet explained**: some runs never complete because a few orders never close (53 in one
-run, 1 in another; no dead letters). Seen with and without each of the fixes above. A C1-only
-JVM (`spring-boot:run`'s default `optimizedLaunch`) made no difference.
+**The intermittent stall was the load generator** (explained 2026-10-21): some runs never completed because a few
+orders never closed (53 in one run, 1 in another, 319 in a pure-polling run; no dead letters). No event was lost. The
+generator priced an ordinary limit order at ask x 1.01 when placing it, while the stub exchange matches a limit once, on
+arrival, against the ask of that moment; under a slow pipeline (60 s from placement to submission under pure polling)
+the synthetic feed moved past late orders, they rested at the exchange for good, and the run waited for bookings that
+could not come. In the 319-order run every stuck order's limit lay inside the ask's band at its submission second.
+Fixed in the harness (`47c23cc8`): a 5 % margin, and a run that stands still for 10 s cancels such orders and reports
+them as `restedUnexpectedly` instead of hanging.
+
+**Two speeds, and where the ceiling sits now** (2026-10-21/22, one instance, same setup, 8 / 8 / 8 consumers on a
+40-connection pool, 200 x 50 orders). After the fixes above, runs still came out at one of two speeds, polling and CDC
+alike (CDC ~117 or ~178 completed orders/s, pure polling ~124 or ~200). Three causes, each fixed and measured:
+
+| Cause | Where | Fix | Effect on the order flow |
+|---|---|---|---|
+| CDC subscriptions polled for 60 s after every start: the first `INACTIVE -> ACTIVE` was debounced by `activeCutbackDebounce` like a recovery | `CdcEventStore.buildAdaptiveLiveSource` | debounce an `ACTIVE` only after an interruption (`96ba391a`) | CDC: one speed, ~155/s |
+| A shard-owned pump's cached generic plan, made while the queue table was vacuumed empty, scanned the table once per unit (70 ms instead of 0.4 ms per read) until auto-analyze, 30-40 s later; whether autovacuum ran just before the flow decided the run | `ShardOwnedStorage`, all 12 pump statements | plan each execution afresh, `setPrepareThreshold(0)` (`0e7e5c5b`) | polling: 8 of 8 runs at 193-199/s |
+| The CDC tailer and dispatcher committed once per WAL message: ~1 500 events/s, so a 22 000-event burst reached the bus ~15 s late | `WalReplicationTailer`, `CdcDispatcher` | write and acknowledge the inbox in batches (`4f1bd5fc`) | CDC: ~152 -> ~184/s, end to end p50 42 -> 30 s |
+
+So the order flow now completes at **~196/s on polling and ~184/s on CDC**, against 109/s on 2026-10-19 and 75/s in
+the first profile. CDC's remaining gap is small and only partly its own: the bus path records each gap an
+out-of-commit-order event opens in a transaction of its own (12 300 per run, 1-3 % of a subscriber's samples), and the
+runs vary by about as much.
+
+**What bounds both paths now is per-event handling.** Sampling every subscription's delivery thread during the burst
+(CDC, batched inbox), the busy ones spend their time on the unit of work per event: its commit (15-22 of 60 samples),
+and for a `ViewEventProcessor` the savepoint and the `hasOrderedMessageQueuedForKey` check against the queue (7-14),
+then the handler's own SQL. `ExchangeOrderRouter` spends it enqueueing each forwarded event into its inbox. The CPU
+stays mostly idle; every stage is still serial round trips. That points the same way as M4: the gain left is in doing
+per-event work per batch - a batched forward for `EventProcessor`s, and batched handling (one unit of work and one
+queued-for-key check per batch) for views - not in the reader or the delivery path.
 
 Two hazards to watch during M3/M4. Kill the reader's instance with `kill -9` mid-run to see the PK collision in §3.5,
 or show that it does not happen. And compare per-key order against the exact `EventOrder` sequence, not `isSorted()`

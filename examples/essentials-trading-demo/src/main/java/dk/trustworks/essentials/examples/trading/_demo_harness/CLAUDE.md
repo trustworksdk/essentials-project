@@ -325,6 +325,12 @@ quotes `ACME` by default). Done when every order released its hold and every fil
 | 50 × 20, 16 at once | 1 000 | 1 408/s | 71/s | 7.6 s / 13.5 s |
 | 200 × 50, 32 at once | 10 000 | 3 174/s, p99 67 ms | 109/s | 59 s / 89 s |
 
+**2026-10-22**, same 200 × 50 run with `trading-demo.orders.consumers` 8 / 8 / 8 on a 40-connection pool and the
+fixes since (CDC warm-up, shard-owned read plans, batched CDC inbox): **~196 completed orders/s on polling, ~184 on
+CDC**, end to end p50 ~30 s on CDC, every run alike. What bounds it now is per-event handling; see
+`docs/key-partitioned-event-processing.md` §5, "Two speeds, and where the ceiling sits now". The paragraph below is
+the 2026-10-19 reading.
+
 No conflicts and no refusals in either. The cap is the `EventProcessor` forward: the router reaches `OrderPlaced`
 45 s late (p50) and the ledger processor adds 15 s, while the stub and the reports' inbox add nothing measurable.
 Each processor forwards all five `Orders` events of an order, one per unit of work. Analysis and what it means for
