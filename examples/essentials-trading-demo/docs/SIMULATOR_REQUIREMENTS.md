@@ -486,6 +486,129 @@ weekends and the session times, which is the exchange's calendar (D10 rules out 
 **Accept when** a `DAY` order resting at Tuesday's cutoff is expired with `businessDate` Tuesday, equal to the
 `businessDate` of the `BusinessDayClosed` emitted at the same cutoff.
 
+
+---
+
+## 9. The bundle after 0.3.0
+
+Found by checking every remaining demo phase against simulators 0.3.0 (2026-10-22). SR-33 to SR-35 are needed by the
+phases named; SR-36 to SR-38 are the plan's "later" features, specified now so they can be built in the same round.
+
+### SR-33 — The value date on completed and returned payments (MUST) [phase 2]
+
+A bank tells the account holder which day a movement is booked for - its value date - with the confirmation, not
+only on the statement. The gateway's statement entries carry `valueDate`; its `PaymentCompleted` and
+`PaymentReturned` carry only timestamps. The trading demo credits a deposit for a business date (its return window
+counts business days from it, phase 1 Q-7) and cannot derive one from `completedAt` without keeping the bank's
+calendar itself (D10).
+
+**Fields.** On the payment payload (`PaymentFields`):
+
+| Field | Type | Meaning |
+|---|---|---|
+| `valueDate` | date | On `PaymentCompleted`: the value date of the payment's booking. On `PaymentReturned`: the value date of the return's booking. Absent (or `null`) on `PaymentPending` and `PaymentFailed` |
+
+Also on `GET /api/payments` and `GET /api/payments/{id}`, as the latest booking's value date.
+
+**Rules.**
+
+- **One calendar.** For a booking, the event's `valueDate` equals the `valueDate` of that booking's statement entry,
+  and the statement's `businessDate` is that value date.
+- **Required** on the two events it applies to; additive otherwise.
+
+**Accept when** a deposit completed after Tuesday's statement cutoff has `valueDate` Wednesday, equal to its entry on
+Wednesday's statement, and its later return has the return's own value date, equal to the return entry's.
+
+### SR-34 — Event-log reads filtered by several event types (SHOULD) [phase 6]
+
+`GET /api/events?eventType=` takes one type. A consumer that wants several - the demo's orders consumer wants six -
+reads the whole log and drops the rest, and with every consuming slice running its own catch-up reader (the receiver
+guide's guarantee), each pages through every event at load-test volume.
+
+- `eventType` accepts several types: repeated (`eventType=A&eventType=B`) and comma-separated (`eventType=A,B`), on
+  both services. An unknown type is a `400`, as today.
+- A filtered read can return few or no events from a long stretch of the log. So that a reader does not scan that
+  stretch again, every `GET /api/events` answer carries the highest sequence it looked at, as a response header
+  `Event-Log-Scanned-Through: <sequence>`; a reader may continue from there. Without a filter it equals the last
+  returned event's sequence, or the log's head when none is returned.
+
+**Accept when** a read with two event types returns exactly the events of those types in sequence order, and a read
+past the last matching event returns none with `Event-Log-Scanned-Through` at the log's head.
+
+### SR-35 — Market holidays, one business calendar for both simulators (SHOULD) [phase 4]
+
+Business days are weekdays in both simulators; there are no holidays. So nothing exercises what holidays do to a
+broker: T+1 settlement across a holiday, a deposit return window that spans one, a `DAY` order resting over a long
+weekend, closing books on a day that is not a business day (EF-1's "unknown business date"). And the gateway keeps
+its own business calendar (`statement.cutoff`, `time_zone`): it matches the exchange's only because both are
+configured alike, and a holiday on one side would split them.
+
+**The exchange.**
+
+- `clearing.holidays`: a list of dates that are not business days. On a holiday no `BusinessDayClosed` is emitted, a
+  trade belongs to the next business day (`tradeDate`), settlement dates (`intendedSettlementDate`, `settlementDays`)
+  skip it, clearing issues no statement, and no `ClosingPriceIssued` is issued.
+- `sessions.<MIC>.holidays`, optionally: a market closed for its session on those dates (orders `MARKET_CLOSED`, `DAY`
+  orders do not expire that day). Defaults to `clearing.holidays`.
+- `GET /api/calendar?from=&to=`: the business days and holidays in a range, with each business day's cutoff - the
+  exchange's calendar as reference data, for a member's planning (the current business date still comes from
+  `BusinessDayClosed`, D23).
+
+**The gateway** gains `calendar.mode: follow` (with `follow.url`), as its clock follows the exchange's (SR-27): its
+statements, value dates (SR-33) and return delays in business days use the exchange's calendar, read from
+`GET /api/calendar`. `calendar.mode: own` keeps today's behaviour.
+
+**Accept when**, with Thursday a holiday and T+1: a trade on Wednesday settles on Friday; no `BusinessDayClosed`,
+clearing statement or bank statement is issued for Thursday; a deposit completed on Wednesday has `valueDate`
+Wednesday on the gateway, and a return 1 business day later is booked on Friday.
+
+### SR-36 — Trade corrections and busts (LATER) [after phase 5]
+
+An exchange corrects an execution's price or quantity, or cancels ("busts") it, after the fact, and tells both
+members with an execution report (FIX `ExecType` `G` Trade Correct and `H` Trade Cancel, `ExecRefID` naming the
+execution). The simulator has `SettlementCorrected`, which changes a settlement amount, but no correction of the trade
+itself. The demo's plan lists booking such a correction - reverse and rebook, and what it does to average cost and
+realized P&L - as a later feature.
+
+- **Events.** `TradeCorrected` (`executionId`, previous and new `quantity`, `priceTicks`, `price`, `reason`) and
+  `TradeBusted` (`executionId`, `reason`), and on each affected order `OrderFillCorrected` / `OrderFillBusted` with the
+  order's new running totals, its `clientOrderId` and the execution's fields as in SR-31.
+- **Effects.** The settlement instruction follows (`SettlementCorrected` / `SettlementCancelled`, as today); a clearing
+  statement issued after the correction shows the corrected trade, one issued before it is not reissued.
+- **Triggers.** An operator call, `POST /api/trades/{executionId}/correction` and `.../bust`, and seeded probabilities
+  (`trades.correct_probability`, `trades.bust_probability`, within `trades.max_correction_days` business days).
+
+**Accept when** a busted execution's order shows its filled quantity reduced, both members receive the bust, and its
+settlement is cancelled; a corrected price shows on `TradeCorrected`, the fill correction and the settlement amount.
+
+### SR-37 — Exchange fees (LATER) [after phase 5]
+
+A member pays the exchange per execution, and the fee is on the execution report (FIX `Commission`/`MiscFees`) and on
+the clearing statement. The simulator charges nothing, so the demo cannot show fees on a statement or reconcile them.
+
+- `fees`: `maker_bps`, `taker_bps` and `minimum` per execution, per participant (the liquidity provider may be
+  exempt).
+- `fee` (amount, currency) per side on `TradeExecuted` (`buyerFee`, `sellerFee`), `lastFee` on the fill events (SR-31),
+  `fee` on `OrderResult.executions[]`, and `feesNet` per obligation on the clearing statement.
+
+**Accept when** an execution's fees appear on the fill event, `TradeExecuted` and the clearing statement, and sum to
+the statement's `feesNet`.
+
+### SR-38 — Corporate actions (LATER) [after phase 5]
+
+A broker books dividends and adjusts positions for splits from the market's announcements. The simulator has neither.
+
+- **Cash dividend.** `CorporateActionAnnounced` (`kind: CASH_DIVIDEND`, `instrumentId`, `exDate`, `recordDate`,
+  `payDate`, amount per share); on the pay date a `DividendPaid` per participant with settled shares at the record date
+  (quantity, amount).
+- **Split.** `CorporateActionAnnounced` (`kind: SPLIT`, ratio, `effectiveDate`); at the start of the effective date the
+  reference price and resting orders are adjusted (quantity × ratio, price ÷ ratio, rounded to ticks), and a
+  `SplitApplied` per participant with its settled shares before and after.
+- **Triggers.** Configuration (`corporate_actions: [...]`) and an operator call to announce one.
+
+**Accept when** a participant holding 100 settled shares at the record date receives `DividendPaid` for 100 × the
+amount on the pay date, and a 2:1 split doubles a resting order's quantity and halves its price.
+
 ---
 
 ## Summary by demo phase
@@ -494,9 +617,10 @@ weekends and the session times, which is the exchange's calendar (D10 rules out 
 |---|---|
 | 0 Foundation | SR-1, SR-3, SR-5, SR-28 (MUST); SR-19 (SHOULD) |
 | 1 Identity and account core | SR-24, SR-25, SR-26 (MUST) |
-| 2 Funding | SR-21 (MUST); SR-22, SR-27 (SHOULD) |
+| 2 Funding | SR-21, SR-33 (MUST); SR-22, SR-27 (SHOULD) |
 | 3 Orders and execution | SR-2, SR-6–SR-10, SR-12, SR-13, SR-29, SR-31 (MUST); SR-16, SR-17, SR-30, SR-32 (SHOULD) |
-| 4 Settlement | SR-14 (MUST) |
+| 4 Settlement | SR-14 (MUST); SR-35 (SHOULD) |
 | 5 Reconciliation | SR-11 (SHOULD) |
-| 6 Realistic load | SR-4, SR-15, SR-20, SR-23 (SHOULD) |
+| 6 Realistic load | SR-4, SR-15, SR-20, SR-23, SR-34 (SHOULD) |
 | FX | SR-18 (LATER) |
+| Later (corrections, fees, corporate actions) | SR-36, SR-37, SR-38 (LATER) |

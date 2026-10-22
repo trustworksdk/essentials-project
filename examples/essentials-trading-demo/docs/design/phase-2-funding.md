@@ -1,6 +1,6 @@
 # Phase 2 design — funding
 
-**Status:** proposal (2026-10-22). Decisions this note asks for are marked **(Q-n)** and collected in §9.
+**Status:** decided (§9, 2026-10-22). Decisions are marked **(Q-n)** in the text.
 **Plan:** [`../EXPANSION_PLAN.md`](../EXPANSION_PLAN.md) phase 2; decisions D3, D4, D10, D11, D23, D24; simulator
 requirements SR-21, SR-22, SR-26, SR-27.
 **Builds on:** the account ledger of phase 1 ([`phase-1-account-core.md`](phase-1-account-core.md)), whose funding
@@ -131,10 +131,15 @@ reconciliation IT against seeded statement breaks.
 
 ## 9. Decisions
 
-| | Question | Proposed |
+All five proposals accepted (2026-10-22).
+
+| | Question | Decided |
 |---|---|---|
-| **Q-1** | The business date of a completed or returned payment: the gateway's events carry timestamps only. | A new simulator requirement, **SR-33**: `valueDate` on `PaymentCompleted` and `PaymentReturned` (the bank's value date, which the statement entry already has). Deriving it from `completedAt` is the own-calendar mistake D10 rules out. |
-| **Q-2** | Bank accounts: named on every deposit and withdrawal, or linked to the trading account first? | Linked first: a customer links one bank account to a trading account (`link_bank_account`, `funding`), deposits come from it and withdrawals go only to it - the usual anti-fraud rule, and it keeps IBANs out of every request. |
-| **Q-3** | A returned withdrawal in the ledger | A new fact `CreditWithdrawalReturn` (§5), not an operator `AdjustCash`. |
-| **Q-4** | Where the business calendar lives | `integration/`, fed by the exchange's `BusinessDayClosed`; built now, reused by EF-1 (§6). |
-| **Q-5** | Reconciliation in phase 2 | Matching and a breaks view only; corrections and the case workflow stay in phase 5 (§7). |
+| **Q-1** | The business date of a completed or returned payment: the gateway's events carry timestamps only | A new simulator requirement, **SR-33**: `valueDate` on `PaymentCompleted` and `PaymentReturned`. Never derived from `completedAt` (D10) |
+| **Q-2** | Bank accounts: named on every deposit and withdrawal, or linked to the trading account first? | Linked first: one bank account per trading account (`link_bank_account`, `funding`); deposits come from it, withdrawals go only to it |
+| **Q-3** | A returned withdrawal in the ledger | A new fact `CreditWithdrawalReturn` (§5) |
+| **Q-4** | Where the business calendar lives | `integration/BusinessCalendar`, fed by the exchange's `BusinessDayClosed`; reused by EF-1 (§6). Built (`e9b7db43`) |
+| **Q-5** | Reconciliation in phase 2 | Matching and a breaks view only; corrections and the case workflow stay in phase 5 (§7) |
+
+The simulator changes found while checking every remaining phase against 0.3.0 are bundled as SR-33 to SR-38 in
+`SIMULATOR_REQUIREMENTS.md` § 9.
