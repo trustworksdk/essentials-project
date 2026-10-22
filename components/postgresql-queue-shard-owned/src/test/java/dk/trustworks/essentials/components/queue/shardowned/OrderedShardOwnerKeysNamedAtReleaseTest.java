@@ -202,7 +202,9 @@ class OrderedShardOwnerKeysNamedAtReleaseTest {
                                                               (proxy, method, args) -> {
                                                                   var name = method.getName();
                                                                   if ("executeUpdate".equals(name)) {
-                                                                      if (writes++ == 0) {
+                                                                      var firstWrite = writes == 0;
+                                                                      writes++;
+                                                                      if (firstWrite) {
                                                                           duringFirstWrite.run();
                                                                       }
                                                                       acknowledged.addAll(lastBatch);
