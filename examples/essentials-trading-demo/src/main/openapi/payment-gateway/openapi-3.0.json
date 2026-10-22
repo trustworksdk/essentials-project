@@ -348,6 +348,14 @@
           }
         }
       },
+      "Booked": {
+        "description": "A payment event that books a movement carries the booking's value date.",
+        "properties": {
+          "valueDate": {
+            "$ref": "#/components/schemas/Date"
+          }
+        }
+      },
       "BookingKind": {
         "enum": [
           "DEPOSIT",
@@ -807,6 +815,9 @@
             "allOf": [
               {
                 "$ref": "#/components/schemas/PaymentFields"
+              },
+              {
+                "$ref": "#/components/schemas/Booked"
               }
             ]
           },
@@ -907,6 +918,12 @@
           },
           "updatedAt": {
             "$ref": "#/components/schemas/Timestamp"
+          },
+          "valueDate": {
+            "description": "The value date of the latest booking: the completion's, then the return's. The business date the booking falls in, and the date of the bank statement that lists it. `null` until the payment completes.",
+            "format": "date",
+            "nullable": true,
+            "type": "string"
           }
         },
         "required": [
@@ -927,6 +944,7 @@
           "completedAt",
           "failedAt",
           "returnedAt",
+          "valueDate",
           "updatedAt"
         ],
         "type": "object"
@@ -1024,6 +1042,9 @@
             "allOf": [
               {
                 "$ref": "#/components/schemas/PaymentFields"
+              },
+              {
+                "$ref": "#/components/schemas/Booked"
               }
             ]
           },
@@ -1443,7 +1464,7 @@
       "name": "Apache-2.0"
     },
     "title": "Payment gateway simulator API",
-    "version": "0.2.0"
+    "version": "0.4.0"
   },
   "openapi": "3.0.3",
   "paths": {
@@ -1570,11 +1591,17 @@
             "$ref": "#/components/parameters/Limit"
           },
           {
+            "description": "The event types to return; every type when absent. Repeat the parameter (`eventType=A&eventType=B`) or separate types by commas (`eventType=A,B`). An unknown type is a `400`.",
+            "explode": true,
             "in": "query",
             "name": "eventType",
             "schema": {
-              "$ref": "#/components/schemas/EventType"
-            }
+              "items": {
+                "$ref": "#/components/schemas/EventType"
+              },
+              "type": "array"
+            },
+            "style": "form"
           }
         ],
         "responses": {
@@ -1589,7 +1616,17 @@
                 }
               }
             },
-            "description": "Events."
+            "description": "Events.",
+            "headers": {
+              "Event-Log-Scanned-Through": {
+                "description": "The highest sequence the read looked at; continue with `after` set to it. A filtered read can return few or no events from a long stretch of the log, and this spares scanning that stretch again: it is the last returned event's sequence when the page is full, else the log's head when the read began.",
+                "required": true,
+                "schema": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"

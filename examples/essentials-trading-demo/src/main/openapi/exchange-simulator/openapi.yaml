@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Exchange simulator API
-  version: 0.3.0
+  version: 0.4.0
   summary: A stock exchange simulator with price-time matching, settlement and clearing simulation, and signed webhooks.
   description: |
     Commands are answered after they are committed to SQLite. Field names are camelCase, enums use their upper-case
@@ -38,6 +38,8 @@ tags:
     description: The settlement simulator's instructions and externally reported outcomes.
   - name: clearing
     description: End-of-day clearing statements.
+  - name: calendar
+    description: The business-day calendar, as reference data.
   - name: clock
     description: Simulated time, readable always; speed, freeze and resume with `clock.operator_control`.
   - name: webhooks
@@ -426,10 +428,25 @@ paths:
       parameters:
         - { name: after, in: query, description: Events with a sequence greater than this; default 0., schema: { type: integer, minimum: 0 } }
         - { $ref: "#/components/parameters/Limit" }
-        - { name: eventType, in: query, schema: { $ref: "#/components/schemas/EventType" } }
+        - name: eventType
+          in: query
+          description: >-
+            The event types to return; every type when absent. Repeat the parameter (`eventType=A&eventType=B`) or
+            separate types by commas (`eventType=A,B`). An unknown type is a `400`.
+          style: form
+          explode: true
+          schema: { type: array, items: { $ref: "#/components/schemas/EventType" } }
       responses:
         "200":
           description: Events.
+          headers:
+            Event-Log-Scanned-Through:
+              description: >-
+                The highest sequence the read looked at; continue with `after` set to it. A filtered read can return
+                few or no events from a long stretch of the log, and this spares scanning that stretch again: it is the
+                last returned event's sequence when the page is full, else the log's head when the read began.
+              required: true
+              schema: { type: integer, minimum: 0 }
           content:
             application/json:
               schema:
@@ -501,6 +518,27 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
         "503": { $ref: "#/components/responses/Unavailable" }
+
+  /api/calendar:
+    get:
+      tags: [calendar]
+      operationId: getCalendar
+      summary: Business days and holidays in a range
+      description: >-
+        The exchange's business-day calendar from `from` to `to`, both included: every business day with its cutoff
+        instant, and the configured holidays (`clearing.holidays`). Reference data for planning, and what the payment
+        gateway's `calendar.mode: follow` reads. The current business date comes from `BusinessDayClosed`, not from
+        here. At most 3700 days.
+      parameters:
+        - { name: from, in: query, required: true, schema: { $ref: "#/components/schemas/Date" } }
+        - { name: to, in: query, required: true, schema: { $ref: "#/components/schemas/Date" } }
+      responses:
+        "200":
+          description: The calendar.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BusinessCalendar" }
+        "400": { $ref: "#/components/responses/BadRequest" }
 
   /api/clearing/statements:
     get:
@@ -1257,6 +1295,29 @@ components:
     Date:
       type: string
       format: date
+    BusinessCalendar:
+      type: object
+      additionalProperties: false
+      required: [from, to, cutoff, timeZone, businessDays, holidays]
+      properties:
+        from: { $ref: "#/components/schemas/Date" }
+        to: { $ref: "#/components/schemas/Date" }
+        cutoff: { type: string, description: "The daily cutoff, `HH:MM` local time (`HH:MM:SS` if it has seconds)." }
+        timeZone: { type: string, description: The IANA time zone of the cutoff. }
+        businessDays:
+          type: array
+          description: Weekdays that are not holidays, in date order.
+          items:
+            type: object
+            additionalProperties: false
+            required: [date, cutoffAt]
+            properties:
+              date: { $ref: "#/components/schemas/Date" }
+              cutoffAt: { $ref: "#/components/schemas/Timestamp" }
+        holidays:
+          type: array
+          description: The configured holidays in the range, in date order.
+          items: { $ref: "#/components/schemas/Date" }
     Timestamp:
       type: string
       format: date-time

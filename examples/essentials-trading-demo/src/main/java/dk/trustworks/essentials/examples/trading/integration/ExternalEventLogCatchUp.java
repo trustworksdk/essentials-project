@@ -40,8 +40,11 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  * <p>
  * One instance in the cluster reads each log, behind a {@link FencedLock}; the cursor is stored, so a takeover or a
  * restart continues where the last reader committed. The cursor is stored after each page; a crash between a page's
- * intake and its cursor re-reads that page, which the deduplication absorbs. Note that the log's {@code sequence} is source-wide, so the cursor also passes over event
- * types this consumer does not want; that is the price of not needing one cursor per event type.
+ * intake and its cursor re-reads that page, which the deduplication absorbs.
+ * <p>
+ * The read asks for the consumer's event types only, and the cursor moves on to the sequence the source says it looked
+ * at ({@code Event-Log-Scanned-Through}, SR-34), so a consumer of a few event types does not page through every other
+ * consumer's events. The log's {@code sequence} is source-wide, so one cursor per consumer is enough.
  * <p>
  * Spring's {@code @Scheduled} is not used: this application has no {@code @EnableScheduling}, where it would bind and
  * never fire (see {@code _demo_harness/CLAUDE.md}).
@@ -169,20 +172,28 @@ public final class ExternalEventLogCatchUp implements SmartLifecycle {
     }
 
     private Page readPage() {
-        var after = cursor();
-        var body = settings.sourceClient()
-                           .get()
-                           .uri(uri -> uri.path("/api/events")
-                                          .queryParam("after", after)
-                                          .queryParam("limit", settings.pageSize())
-                                          .build())
-                           .retrieve()
-                           .body(byte[].class);
+        var after  = cursor();
+        var target = settings.target();
+        var response = settings.sourceClient()
+                               .get()
+                               .uri(uri -> uri.path("/api/events")
+                                              .queryParam("after", after)
+                                              .queryParam("limit", settings.pageSize())
+                                              .queryParam("eventType", target.eventTypes().stream().sorted().toArray())
+                                              .build())
+                               .retrieve()
+                               .toEntity(byte[].class);
+        var body   = response.getBody();
         var events = objectMapper.readTree(body == null ? "[]".getBytes() : body);
+        // How far the source looked (SR-34): a filtered read may skip a long stretch of other consumers' events, and
+        // continuing from here spares reading it again. Absent from a source without the header.
+        var scannedThrough = scannedThrough(response.getHeaders().getFirst("Event-Log-Scanned-Through"));
         if (!events.isArray() || events.isEmpty()) {
+            if (scannedThrough > after) {
+                storeCursor(scannedThrough);
+            }
             return new Page(0, 0);
         }
-        var target   = settings.target();
         var accepted = 0;
         var last     = after;
         for (var i = 0; i < events.size(); i++) {
@@ -208,12 +219,20 @@ public final class ExternalEventLogCatchUp implements SmartLifecycle {
                 accepted++;
             }
         }
-        storeCursor(last);
+        storeCursor(Math.max(last, scannedThrough));
         eventsAccepted.addAndGet(accepted);
         if (accepted > 0) {
             log.info("[{}] Caught up {} event(s) the webhook had not delivered, up to sequence {}", settings.name(), accepted, last);
         }
         return new Page(events.size(), accepted);
+    }
+
+    private static long scannedThrough(String header) {
+        try {
+            return header == null ? 0 : Long.parseLong(header.trim());
+        } catch (NumberFormatException e) {
+            return 0;
+        }
     }
 
     private void storeCursor(long lastSequence) {

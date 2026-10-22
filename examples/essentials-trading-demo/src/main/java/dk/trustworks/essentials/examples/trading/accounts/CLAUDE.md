@@ -33,6 +33,9 @@ books `END_OF_DAY` in New York until EF-1, snapshots every 100 events.
 - **`Account` implements `HasClosingBooksPeriodId`, and must.** With `essentials.eventstore.closing-books.enabled`
   (the `compose` profile, not the tests) the starter refuses to start a time-boundary aggregate without it. The tests
   never enable it, so only a real run catches its absence.
+- **A deposit's `clearsOn` is that many of the exchange's business days on, holidays included**
+  (`BusinessCalendar.businessDaysAfter`, SR-35); without the simulators, or with the calendar unreadable, weekdays
+  (`BusinessDays.add`).
 - **Deposits clear on the exchange's business days**, never on a clock (D10): `DepositClearing` clears what
   `uncleared_deposits` lists as due when `BusinessCalendar` announces a close, and at startup from the latest closed day
   (a notice can be missed). Without the simulators nothing drives it; the operator endpoint still clears.

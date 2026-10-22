@@ -112,6 +112,21 @@ class ClearDepositsIT {
         });
     }
 
+    @Test
+    void the_return_window_counts_the_exchanges_business_days_holidays_excluded() {
+        var account = "ACC-CLEAR-HOLIDAY";
+        assertThat(alice().postForEntity("/api/accounts", Map.of("accountId", account, "ownerId", "USR-ALICE", "currency", "USD"), Void.class)
+                          .getStatusCode()).isEqualTo(HttpStatus.CREATED);
+        // Friday 2030-01-18; Monday the 21st is a holiday (simulators/exchange.yaml), so 3 business days end Thursday the
+        // 24th - weekdays alone would end them Wednesday the 23rd
+        assertThat(operator().postForEntity("/api/admin/accounts/" + account + "/deposits",
+                                            Map.of("accountId", account, "depositId", "DEP-CLEAR-HOLIDAY", "amount", usd("100.00"), "businessDate", "2030-01-18"),
+                                            String.class).getStatusCode()).isEqualTo(HttpStatus.OK);
+
+        await().atMost(TIMEOUT).untilAsserted(() -> assertThat(alice().getForEntity("/api/accounts/" + account + "/activity", String.class).getBody())
+                .contains("withdrawable from 2030-01-24"));
+    }
+
     private static void advanceExchangeClock(int days) {
         var apiClient = new ApiClient(RestClient.builder().build());
         apiClient.setBasePath("http://" + exchange.getHost() + ":" + exchange.getMappedPort(8080));

@@ -77,6 +77,10 @@ clearing:
   enabled: true
   cutoff: "16:30"
   time_zone: America/New_York
+  # The US market holidays of 2030 (SR-35): no business day, no close, markets shut. On the accelerated clock the demo
+  # meets one every few real minutes, with T+1 settlement, deposit return windows and DAY orders spanning it.
+  holidays: ["2030-01-01", "2030-01-21", "2030-02-18", "2030-04-19", "2030-05-27", "2030-06-19", "2030-07-04",
+             "2030-09-02", "2030-11-28", "2030-12-25"]
 # Mounts /test: clock control, reset, fault injection and the reconciliation break lists. A demo environment only.
 test_control:
   enabled: true

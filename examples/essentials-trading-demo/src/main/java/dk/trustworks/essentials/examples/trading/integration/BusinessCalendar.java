@@ -70,6 +70,11 @@ public class BusinessCalendar {
     private final RestClient                exchange;
     private volatile SignedWebhookReceiver   receiver;
     private volatile ExternalEventLogCatchUp catchUp;
+    private final    NavigableSet<LocalDate> businessDays = new java.util.concurrent.ConcurrentSkipListSet<>();
+    /**
+     * {@code [from, to]} the cached {@link #businessDays} cover; {@code null} before the first fetch.
+     */
+    private volatile LocalDate[]             calendarRange;
 
     /**
      * A business day the exchange has closed.
@@ -127,6 +132,56 @@ public class BusinessCalendar {
      */
     public Optional<LocalDate> latestClosedBusinessDate() {
         return Optional.ofNullable(dependencies.jdbcTemplate().queryForObject("SELECT max(business_date) FROM business_day_closed", LocalDate.class));
+    }
+
+    /**
+     * The {@code n}th business day after {@code date} on the exchange's calendar, holidays included (SR-35,
+     * {@code GET /api/calendar}) - for a date ahead, such as a deposit's return window, which no close has named yet.
+     * The calendar is fetched a year at a time and cached; the exchange's holidays change only with its configuration.
+     *
+     * @return empty if the exchange's calendar cannot be read; the caller decides what to fall back to
+     */
+    public Optional<LocalDate> businessDaysAfter(LocalDate date, int n) {
+        requireNonNull(date, "No date provided");
+        if (n < 0) {
+            throw new IllegalArgumentException("n must be >= 0, was " + n);
+        }
+        if (n == 0) {
+            return Optional.of(date);
+        }
+        var found = nthBusinessDayAfter(date, n);
+        if (found.isPresent()) {
+            return found;
+        }
+        try {
+            loadCalendar(date, date.plusDays(400L + n * 2L));
+        } catch (RuntimeException e) {
+            log.warn("Cannot read the exchange's business-day calendar: {}", e.toString());
+            return Optional.empty();
+        }
+        return nthBusinessDayAfter(date, n);
+    }
+
+    private Optional<LocalDate> nthBusinessDayAfter(LocalDate date, int n) {
+        var range = calendarRange;
+        if (range == null || date.isBefore(range[0])) {
+            return Optional.empty();
+        }
+        var after = businessDays.tailSet(date, false).stream().skip(n - 1L).findFirst();
+        return after.filter(day -> !day.isAfter(range[1]));
+    }
+
+    private synchronized void loadCalendar(LocalDate from, LocalDate to) {
+        var calendar = exchange.get()
+                               .uri(uri -> uri.path("/api/calendar").queryParam("from", from).queryParam("to", to).build())
+                               .retrieve()
+                               .body(JsonNode.class);
+        for (var day : Objects.requireNonNull(calendar, "No calendar returned").get("businessDays")) {
+            businessDays.add(LocalDate.parse(day.get("date").asString()));
+        }
+        var range = calendarRange;
+        calendarRange = range == null ? new LocalDate[]{from, to}
+                                      : new LocalDate[]{from.isBefore(range[0]) ? from : range[0], to.isAfter(range[1]) ? to : range[1]};
     }
 
     @EventListener(ApplicationReadyEvent.class)

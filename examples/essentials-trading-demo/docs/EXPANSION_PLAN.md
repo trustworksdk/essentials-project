@@ -82,7 +82,7 @@ Each phase ends with a load scenario and before/after measurements. Performance 
 1. **Identity and account core.** `User`, login, account opening, the cash-bucket and position ledger, a buying-power
    view.
 2. **Funding.** Deposits and withdrawals, returns, withdrawable-cash rules, a first bank-statement reconciliation.
-   *Built (D26); completions against the real gateway wait for SR-33; the funding load scenario with it.*
+   *Built (D26), against the payment gateway (SR-33–SR-35 consumed, simulators 0.4.0). The funding load scenario is open.*
 3. **Orders and execution.** Order lifecycle, holds, fills, cancels, market data.
    *Built, against the exchange-simulator (SR-30–SR-32 consumed).*
 4. **Settlement.** Simulated T+N, pending → settled, failures and corrections.

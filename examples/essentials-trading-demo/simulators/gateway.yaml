@@ -20,6 +20,11 @@ clock:
   # the exchange's.
   mode: follow
   follow: { url: "http://exchange:8080", poll_interval_ms: 250 }
+# The exchange's business-day calendar, holidays included (SR-35), read from its GET /api/calendar at startup - the
+# clock's follow URL. Statements, value dates and return delays then fall on the exchange's business days. Restart the
+# gateway after changing the exchange's holidays.
+calendar:
+  mode: follow
 payments:
   currencies: { USD: 2 }
   deposit: { fail_probability: 0.0, min_delay_seconds: 60, max_delay_seconds: 1800 }

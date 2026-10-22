@@ -19,8 +19,13 @@ package dk.trustworks.essentials.examples.trading.accounts.use_cases.credit_depo
 import dk.trustworks.essentials.examples.trading.accounts.aggregates.Accounts;
 import dk.trustworks.essentials.examples.trading.accounts.config.AccountsProperties;
 import dk.trustworks.essentials.examples.trading.accounts.types.BusinessDays;
+import dk.trustworks.essentials.examples.trading.integration.BusinessCalendar;
 import dk.trustworks.essentials.reactive.command.*;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
+
+import java.time.LocalDate;
+import java.util.Optional;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
@@ -30,18 +35,32 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  */
 @Service
 public class CreditDepositHandler extends AnnotatedCommandHandler {
-    private final Accounts           accounts;
-    private final AccountsProperties properties;
+    private final Accounts                         accounts;
+    private final AccountsProperties               properties;
+    private final ObjectProvider<BusinessCalendar> calendar;
 
-    public CreditDepositHandler(Accounts accounts, AccountsProperties properties) {
+    public CreditDepositHandler(Accounts accounts, AccountsProperties properties, ObjectProvider<BusinessCalendar> calendar) {
         this.accounts = requireNonNull(accounts, "No accounts provided");
         this.properties = requireNonNull(properties, "No properties provided");
+        this.calendar = requireNonNull(calendar, "No calendar provided");
     }
 
     @CmdHandler
     public void handle(CreditDeposit cmd) {
         requireNonNull(cmd, "No cmd provided");
         var account = accounts.getAccountForMutation(cmd.accountId());
-        account.creditDeposit(cmd.depositId(), cmd.amount(), cmd.businessDate(), BusinessDays.add(cmd.businessDate(), properties.getDepositReturnWindowBusinessDays()));
+        account.creditDeposit(cmd.depositId(), cmd.amount(), cmd.businessDate(), clearsOn(cmd.businessDate()));
+    }
+
+    /**
+     * The return window's last day: that many business days on, on the exchange's calendar (holidays included, D10,
+     * SR-35) under the {@code simulators} profile. Without it - or with the exchange's calendar unreadable - weekdays.
+     */
+    private LocalDate clearsOn(LocalDate businessDate) {
+        var window = properties.getDepositReturnWindowBusinessDays();
+        var exchangeCalendar = calendar.getIfAvailable();
+        return Optional.ofNullable(exchangeCalendar)
+                       .flatMap(businessCalendar -> businessCalendar.businessDaysAfter(businessDate, window))
+                       .orElseGet(() -> BusinessDays.add(businessDate, window));
     }
 }

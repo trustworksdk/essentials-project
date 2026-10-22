@@ -149,6 +149,9 @@ must add in `docs/SIMULATOR_REQUIREMENTS.md`. Shared receiving mechanics in `int
   own: move the exchange's clock, and the gateway follows within its poll interval.
 - **One webhook secret for both simulators**, `simulators/secrets/webhook-secret.txt`, a demo value. Docker secret
   for the containers, `trading-demo.simulators.webhook-secret-file` for the app.
+- **The exchange has the 2030 US market holidays** (`clearing.holidays`, SR-35) and the gateway follows its calendar
+  (`calendar.mode: follow`): no close, no statement, markets shut on a holiday, and T+1, return windows and `DAY` orders
+  span it. The gateway reads the calendar at startup - restart it after changing the holidays.
 - **Business dates come from the simulators' events**, never the app's clock: they run a virtual clock, a simulated
   day per real minute (`simulators/*.yaml`, `clock.mode: system` turns it off).
 

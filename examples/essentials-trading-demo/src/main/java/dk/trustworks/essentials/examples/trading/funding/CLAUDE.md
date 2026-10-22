@@ -22,9 +22,9 @@ at once; no simulator configured) and `SimulatorPaymentGateway` (the payment-gat
   completion throws `PaymentNotYetRecordable` (not an `IllegalArgumentException`, so the inbox redelivers instead of
   dead-lettering) until the completion is in; and a completion after a *failure* is recorded - the gateway's own
   failures are final, so it can only follow our `GATEWAY_UNAVAILABLE`, given up on a payment the gateway took anyway.
-- **The value date comes from the gateway (SR-33)**, never from `completedAt` (D10). A `PaymentCompleted` or
-  `PaymentReturned` without it is incomplete (`422`, the gateway retries). Until the simulators ship SR-33 no deposit or
-  withdrawal completes against the real gateway; `PaymentGatewayIT`'s completion case skips itself until then.
+- **The value date comes from the gateway (SR-33, simulators 0.4.0)**, never from `completedAt` (D10). A
+  `PaymentCompleted` or `PaymentReturned` without it is incomplete (`422`, the gateway retries). `PaymentGatewayIT`'s
+  completion case still checks the gateway's spec first and skips against an older image.
 - **Every gateway report goes through `Funding:PaymentReports`**, the initiation's answer and the gateway's events
   (envelopes, translated as consumed by `PaymentEventTranslation`) alike - as `orders`' `ExchangeReports`.
 - **`PaymentRouter`'s handlers are `UnitOfWorkMode.NONE`**; the retry budget (`trading-demo.funding.payment-submission.*`)

@@ -496,6 +496,8 @@ phases named; SR-36 to SR-38 are the plan's "later" features, specified now so t
 
 ### SR-33 — The value date on completed and returned payments (MUST) [phase 2]
 
+**Implemented in simulators 0.4.0**; the demo consumes it.
+
 A bank tells the account holder which day a movement is booked for - its value date - with the confirmation, not
 only on the statement. The gateway's statement entries carry `valueDate`; its `PaymentCompleted` and
 `PaymentReturned` carry only timestamps. The trading demo credits a deposit for a business date (its return window
@@ -521,6 +523,8 @@ Wednesday's statement, and its later return has the return's own value date, equ
 
 ### SR-34 — Event-log reads filtered by several event types (SHOULD) [phase 6]
 
+**Implemented in simulators 0.4.0**; the demo consumes it.
+
 `GET /api/events?eventType=` takes one type. A consumer that wants several - the demo's orders consumer wants six -
 reads the whole log and drops the rest, and with every consuming slice running its own catch-up reader (the receiver
 guide's guarantee), each pages through every event at load-test volume.
@@ -536,6 +540,8 @@ guide's guarantee), each pages through every event at load-test volume.
 past the last matching event returns none with `Event-Log-Scanned-Through` at the log's head.
 
 ### SR-35 — Market holidays, one business calendar for both simulators (SHOULD) [phase 4]
+
+**Implemented in simulators 0.4.0**; the demo consumes it.
 
 Business days are weekdays in both simulators; there are no holidays. So nothing exercises what holidays do to a
 broker: T+1 settlement across a holiday, a deposit return window that spans one, a `DAY` order resting over a long

@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Payment gateway simulator API
-  version: 0.2.0
+  version: 0.4.0
   summary: Deposits and withdrawals with seeded outcomes, signed webhooks, and end-of-day bank statements.
   description: |
     The payment provider and bank for the trading demo. Amounts are decimal strings in major currency units on the
@@ -148,10 +148,25 @@ paths:
       parameters:
         - { name: after, in: query, description: Events with a sequence greater than this; default 0., schema: { type: integer, minimum: 0 } }
         - { $ref: "#/components/parameters/Limit" }
-        - { name: eventType, in: query, schema: { $ref: "#/components/schemas/EventType" } }
+        - name: eventType
+          in: query
+          description: >-
+            The event types to return; every type when absent. Repeat the parameter (`eventType=A&eventType=B`) or
+            separate types by commas (`eventType=A,B`). An unknown type is a `400`.
+          style: form
+          explode: true
+          schema: { type: array, items: { $ref: "#/components/schemas/EventType" } }
       responses:
         "200":
           description: Events.
+          headers:
+            Event-Log-Scanned-Through:
+              description: >-
+                The highest sequence the read looked at; continue with `after` set to it. A filtered read can return
+                few or no events from a long stretch of the log, and this spares scanning that stretch again: it is the
+                last returned event's sequence when the page is full, else the log's head when the read began.
+              required: true
+              schema: { type: integer, minimum: 0 }
           content:
             application/json:
               schema:
@@ -807,7 +822,8 @@ components:
     PaymentFields:
       type: object
       required: [paymentId, sequence, idempotencyKey, type, accountId, bankAccount, amount, amountMinor, currency,
-                 currencyScale, reference, status, reason, createdAt, completedAt, failedAt, returnedAt, updatedAt]
+                 currencyScale, reference, status, reason, createdAt, completedAt, failedAt, returnedAt, valueDate,
+                 updatedAt]
       properties:
         paymentId: { type: string, format: uuid }
         sequence: { type: integer, minimum: 1 }
@@ -828,7 +844,17 @@ components:
         completedAt: { $ref: "#/components/schemas/NullableTimestamp" }
         failedAt: { $ref: "#/components/schemas/NullableTimestamp" }
         returnedAt: { $ref: "#/components/schemas/NullableTimestamp" }
+        valueDate:
+          type: [string, "null"]
+          format: date
+          description: >-
+            The value date of the latest booking: the completion's, then the return's. The business date the booking
+            falls in, and the date of the bank statement that lists it. `null` until the payment completes.
         updatedAt: { $ref: "#/components/schemas/Timestamp" }
+    Booked:
+      description: A payment event that books a movement carries the booking's value date.
+      properties:
+        valueDate: { $ref: "#/components/schemas/Date" }
     Payment:
       allOf: [{ $ref: "#/components/schemas/PaymentFields" }]
       properties:
@@ -911,7 +937,9 @@ components:
       properties:
         eventType: { const: PaymentCompleted }
         source: { const: payment-gateway }
-        payload: { allOf: [{ $ref: "#/components/schemas/PaymentFields" }], unevaluatedProperties: false }
+        payload:
+          allOf: [{ $ref: "#/components/schemas/PaymentFields" }, { $ref: "#/components/schemas/Booked" }]
+          unevaluatedProperties: false
     PaymentFailedEvent:
       allOf: [{ $ref: "#/components/schemas/EventEnvelope" }]
       properties:
@@ -923,7 +951,9 @@ components:
       properties:
         eventType: { const: PaymentReturned }
         source: { const: payment-gateway }
-        payload: { allOf: [{ $ref: "#/components/schemas/PaymentFields" }], unevaluatedProperties: false }
+        payload:
+          allOf: [{ $ref: "#/components/schemas/PaymentFields" }, { $ref: "#/components/schemas/Booked" }]
+          unevaluatedProperties: false
     ClockChangedPayload:
       type: object
       additionalProperties: false
