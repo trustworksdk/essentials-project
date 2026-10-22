@@ -13,6 +13,7 @@ What lives here is the machinery that makes the demo demonstrate something:
 | `QueueLoadGeneratorController` | `/api/admin/queue-load` — status, start/stop, `POST /spike?size=N`, `POST /faults?retries=N&poison=M&failures=K`, `POST /faults/blocked-key?behind=N` |
 | `LedgerLoadGenerator`, `LedgerLoadController` | Phase 1: buy cycles on the `accounts` ledger, `/api/admin/ledger-load` |
 | `OrderFlowLoadGenerator`, `OrderFlowLoadController` | Phase 3: simulated customers placing and cancelling orders, against the stub exchange or the exchange-simulator; placement vs completion throughput and end-to-end latency |
+| `FundingLoadGenerator`, `FundingLoadController` | Phase 2: simulated customers depositing and withdrawing, against the stub or the payment gateway, `/api/admin/funding-load` |
 | `NoOpAccounts*Processor`, `BatchedAccountsForwarder` | EF-2 measurement processors, off by default |
 
 The `brokerage` bootstrap runner, its trading load generator, the dashboard and the demo's own admin page went with
@@ -305,6 +306,31 @@ No conflicts and no refusals in either. The cap is the `EventProcessor` forward:
 45 s late (p50) and the ledger processor adds 15 s, while the stub and the reports' inbox add nothing measurable.
 Each processor forwards all five `Orders` events of an order, one per unit of work. Analysis and what it means for
 EF-2: `docs/key-partitioned-event-processing.md` §5, "Field evidence".
+
+## The funding scenario (phase 2)
+
+`FundingLoadGenerator`, `POST /api/admin/funding-load/start?customers&depositsPerCustomer&withdrawalsPerCustomer&threads`
+(`GET /api/admin/funding-load`). Fresh `FL-<run>-<n>` accounts, each with a linked bank account and 1 000 000 of
+seeded withdrawable cash (credited and cleared through the ledger's operator commands, so withdrawals need not wait out
+a return window); each customer requests its deposits, then its withdrawals, `threads` customers at once. Done when
+every payment has an outcome on `Deposits`/`Withdrawals` and every completed one is booked (`DepositCredited` /
+`CashWithdrawn`, the seed deposit discounted); end to end is that booking's timestamp minus the request's return.
+
+### Measured, 2026-10-22, devcontainer, `compose,simulators`, simulators 0.4.0, one instance, one sample
+
+200 customers × (5 deposits + 5 withdrawals), 32 at once, fresh database and simulators:
+
+| | |
+|---|---|
+| requested | 2 000 in 0.57 s - 3 527/s, p50 7 ms, p99 25 ms; 0 refused, 0 conflicts |
+| drained | 19.7 s - 102 completed payments/s; 2 000 completed, 0 failed, 2 000 booked, 0 dead letters |
+| deposit, request → ledger | p50 5.9 s, p99 10.2 s |
+| withdrawal, request → ledger | p50 10.4 s, p99 18.2 s |
+| reconciliation | the next bank statement: 2 000 entries, 0 breaks |
+
+End to end is mostly the gateway's own simulated delays on the 1440× clock: a deposit 60-1 800 domain seconds (0.04-1.25
+real s), a withdrawal 600-14 400 (0.4-10 s). The brokerage's side is the request (ms) and the two hops - gateway event
+into `Funding:PaymentReports`, outcome into the ledger.
 
 ## EF-2 measurement processors
 
