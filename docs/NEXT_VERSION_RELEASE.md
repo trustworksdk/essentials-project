@@ -663,7 +663,7 @@ release up either. A handler that
 returns after the charge has dead-lettered its message is neither acknowledged nor counted in `delivered`: one that
 completes logs a WARN saying that resurrecting the dead letter delivers the message again, and one that throws logs a
 WARN with its exception and is told to `QueueObserver.deliveryFailed` with the charged count (not for a requested
-redelivery). (`6337f7d89`, `2fdeb3db0`, `bfa961ec5`, `dbae0986f`, `<!-- fix:U-017 -->`, `<!-- fix:U-018 -->`)
+redelivery). (`6337f7d89`, `2fdeb3db0`, `bfa961ec5`, `dbae0986f`, `7dbd517be`, `e699c9d44`)
 
 **The unordered lane now charges a hung handler's delivery too, past the same bound.** It waits for no handler: a
 fair-share shed and a dead pump's hand-back release an unordered shard at once, and `stop()` once `shedGrace` has run
@@ -684,7 +684,7 @@ then still leaves the shard released. A handler that returns after the
 charge before a shed, a dead pump's hand-back or a `stop()` has dead-lettered its message is neither acknowledged nor
 counted in `delivered`: one that completes logs a WARN saying that resurrecting the dead letter delivers the message
 again, and one that throws logs a WARN with its exception and is told to `QueueObserver.deliveryFailed` with the
-charged count (not for a requested redelivery). (`18e423d1d`, `<!-- fix:U-017 -->`, `<!-- fix:U-018 -->`)
+charged count (not for a requested redelivery). (`18e423d1d`, `7dbd517be`, `e699c9d44`)
 
 ---
 
