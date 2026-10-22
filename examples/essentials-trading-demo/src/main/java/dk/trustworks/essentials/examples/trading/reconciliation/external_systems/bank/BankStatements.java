@@ -63,6 +63,7 @@ public class BankStatements {
     private final RestClient               gateway;
     private volatile SignedWebhookReceiver   receiver;
     private volatile ExternalEventLogCatchUp catchUp;
+    private volatile Inbox                   inbox;
 
     @Component
     @ConditionalOnProperty(prefix = "trading-demo.simulators", name = {"payment-gateway.base-url", "webhook-secret-file"})
@@ -86,35 +87,11 @@ public class BankStatements {
         this.intake = requireNonNull(intake, "No intake provided");
         this.dependencies = requireNonNull(dependencies, "No dependencies provided");
         this.gateway = dependencies.restClientBuilder().clone().baseUrl(dependencies.properties().getPaymentGateway().getBaseUrl()).build();
-        var jdbc = dependencies.jdbcTemplate();
-        jdbc.execute("""
-                             CREATE TABLE IF NOT EXISTS bank_statement (
-                                 statement_id VARCHAR PRIMARY KEY,
-                                 business_date DATE NOT NULL,
-                                 currency VARCHAR NOT NULL,
-                                 opening_balance NUMERIC(24, 6) NOT NULL,
-                                 closing_balance NUMERIC(24, 6) NOT NULL,
-                                 issued_at TIMESTAMPTZ NOT NULL,
-                                 received_at TIMESTAMPTZ NOT NULL
-                             )
-                             """);
-        jdbc.execute("""
-                             CREATE TABLE IF NOT EXISTS bank_statement_entry (
-                                 entry_id VARCHAR PRIMARY KEY,
-                                 statement_id VARCHAR NOT NULL,
-                                 end_to_end_id VARCHAR NOT NULL,
-                                 payment_id VARCHAR NOT NULL,
-                                 kind VARCHAR NOT NULL,
-                                 amount NUMERIC(24, 6) NOT NULL,
-                                 value_date DATE NOT NULL
-                             )
-                             """);
-        jdbc.execute("CREATE INDEX IF NOT EXISTS bank_statement_entry_statement ON bank_statement_entry (statement_id)");
     }
 
     @EventListener(ApplicationReadyEvent.class)
     public void startReceiving() {
-        var inbox = inboxes.getOrCreateInbox(InboxConfig.builder()
+        inbox = inboxes.getOrCreateInbox(InboxConfig.builder()
                                                         .inboxName(INBOX_NAME)
                                                         .messageConsumptionMode(MessageConsumptionMode.GlobalCompetingConsumers)
                                                         .numberOfParallelMessageConsumers(1)
@@ -129,6 +106,36 @@ public class BankStatements {
                                               dependencies.jdbcTemplate(),
                                               dependencies.objectMapper());
         catchUp.start();
+    }
+
+    /**
+     * Reads the payment gateway's event log to its end and waits, up to {@code timeout}, until every statement found there is
+     * stored. For a caller about to decide that a statement is missing: the business calendar reads the same source with
+     * a reader of its own, so a close can be seen before the statement issued just ahead of it.
+     *
+     * @return whether everything read was stored in time; {@code false} before receiving has started
+     */
+    public boolean catchUp(Duration timeout) {
+        requireNonNull(timeout, "No timeout provided");
+        var currentCatchUp = catchUp;
+        var currentInbox   = inbox;
+        if (currentCatchUp == null || currentInbox == null) {
+            return false;
+        }
+        currentCatchUp.readUntilCaughtUp();
+        var deadline = System.nanoTime() + timeout.toNanos();
+        while (currentInbox.getNumberOfUndeliveredMessages() > 0) {
+            if (System.nanoTime() > deadline) {
+                return false;
+            }
+            try {
+                Thread.sleep(100);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        }
+        return true;
     }
 
     @PreDestroy

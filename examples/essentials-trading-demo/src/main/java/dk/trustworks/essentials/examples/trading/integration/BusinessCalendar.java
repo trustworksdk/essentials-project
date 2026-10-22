@@ -135,6 +135,23 @@ public class BusinessCalendar {
     }
 
     /**
+     * The exchange's time now ({@code GET /api/clock}), for a deadline measured in business time - such as a
+     * statement's grace after a cutoff, which a cutoff in {@code business_day_closed} is compared with. The simulators
+     * run a virtual clock, so this application's clock cannot answer it (D10).
+     *
+     * @return empty if the exchange's clock cannot be read
+     */
+    public Optional<Instant> businessNow() {
+        try {
+            var clock = exchange.get().uri("/api/clock").retrieve().body(JsonNode.class);
+            return Optional.of(OffsetDateTime.parse(Objects.requireNonNull(clock, "No clock returned").get("now").asString()).toInstant());
+        } catch (RuntimeException e) {
+            log.warn("Cannot read the exchange's clock: {}", e.toString());
+            return Optional.empty();
+        }
+    }
+
+    /**
      * The {@code n}th business day after {@code date} on the exchange's calendar, holidays included (SR-35,
      * {@code GET /api/calendar}) - for a date ahead, such as a deposit's return window, which no close has named yet.
      * The calendar is fetched a year at a time and cached; the exchange's holidays change only with its configuration.

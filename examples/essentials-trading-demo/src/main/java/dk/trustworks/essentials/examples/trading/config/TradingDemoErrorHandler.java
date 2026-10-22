@@ -19,6 +19,7 @@ package dk.trustworks.essentials.examples.trading.config;
 import dk.trustworks.essentials.examples.trading.accounts.types.LedgerRuleViolation;
 import dk.trustworks.essentials.examples.trading.funding.types.FundingRuleViolation;
 import dk.trustworks.essentials.examples.trading.orders.types.OrderRuleViolation;
+import dk.trustworks.essentials.examples.trading.reconciliation.types.CaseRuleViolation;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -67,6 +68,15 @@ public class TradingDemoErrorHandler {
 
     @ExceptionHandler(FundingRuleViolation.class)
     public ResponseEntity<Map<String, Object>> handleFundingRuleViolation(FundingRuleViolation e) {
+        return ResponseEntity.status(HttpStatus.UNPROCESSABLE_CONTENT)
+                             .body(Map.of("timestamp", OffsetDateTime.now().toString(),
+                                          "status", HttpStatus.UNPROCESSABLE_CONTENT.value(),
+                                          "error", HttpStatus.UNPROCESSABLE_CONTENT.getReasonPhrase(),
+                                          "message", e.getMessage()));
+    }
+
+    @ExceptionHandler(CaseRuleViolation.class)
+    public ResponseEntity<Map<String, Object>> handleCaseRuleViolation(CaseRuleViolation e) {
         return ResponseEntity.status(HttpStatus.UNPROCESSABLE_CONTENT)
                              .body(Map.of("timestamp", OffsetDateTime.now().toString(),
                                           "status", HttpStatus.UNPROCESSABLE_CONTENT.value(),

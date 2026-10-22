@@ -44,6 +44,7 @@ This file records decisions as they are taken. § Open questions lists what is s
 | D25 | **Phase 1 design decided** — [`design/phase-1-account-core.md`](design/phase-1-account-core.md) §10. A new `accounts` context beside a frozen `brokerage` (deleted in phase 4); `User` is an event-sourced aggregate with credentials in a separate `user_credentials` table; the whole ledger is built in phase 1; deposit return window 3 business days, configurable. | |
 | D26 | **Phase 2 design decided** — [`design/phase-2-funding.md`](design/phase-2-funding.md) §9. A `funding` context (`BankAccountLink`, `Deposit`, `Withdrawal`); one linked bank account per trading account; a withdrawal and its hold in one unit of work; the value date of a payment from the gateway (SR-33); a returned withdrawal as a ledger fact; deposits clear on a business calendar fed by `BusinessDayClosed`; a first bank-statement reconciliation (breaks view only). | |
 | D27 | **Phase 4 design decided** — [`design/phase-4-settlement.md`](design/phase-4-settlement.md) §8. A `settlement` context per execution; a failed, cancelled or rejected settlement reverses the booking and is an operator case; a corrected amount is a ledger fact; closing prices value the accounts; `brokerage` deleted, with its dashboard and admin page (generation archival moved to `accounts`). | |
+| D28 | **Phase 5 design decided** — [`design/phase-5-reconciliation.md`](design/phase-5-reconciliation.md) §7. Clearing statements stored as reference data with read-time breaks, as the bank's; a `ReconciliationCase` per break that is still there at the next business day's close, cleared if it goes first; resolving never books (the operator posts any `AdjustCash`, which the case records); a statement missing 2 business hours after the cutoff, configurable. | |
 
 ---
 
@@ -57,7 +58,7 @@ This file records decisions as they are taken. § Open questions lists what is s
 | *(no context)* `integration/` | — | Shared receiving mechanics for both simulators, like `config/`: signature check, dedupe per `(consumer, eventId)` into the consumer's Inbox, catch-up read of `/api/events`. Each consuming context owns its own translation slice under `external_systems/<system>/` (its subscription, endpoint, Inbox, payload validator); the outbound order client lives in `orders/external_systems/exchange/`. *Replaces the earlier `exchange_gateway` context: the slice law puts translation slices inside the context that consumes them.* |
 | `funding` | `Deposit`, `Withdrawal` | Payments through the gateway. A withdrawal holds funds before initiating. `PaymentReturned` reverses a completed payment. |
 | `settlement` | `TradeSettlement` | One per execution, driven by the simulator's settlement events. Pending → settled; failed, delayed, corrected. |
-| `reconciliation` | `Break` | Clearing statements vs. our bookings, bank statements vs. our payments. Operator case workflow. |
+| `reconciliation` | `ReconciliationCase` | Clearing statements vs. our executions, bank statements vs. our payments, missing statements. Operator case workflow. |
 | `market_data` | `Instrument` | Instruments. Consumes the exchange's market data (SR-12, SR-13) into a latest-price view, and `ClosingPriceIssued` (SR-14) for end-of-day valuation. |
 | `_demo_harness` | — | Simulated users, scenarios (market-open burst, faults), clock control, dashboard. |
 
@@ -89,6 +90,7 @@ Each phase ends with a load scenario and before/after measurements. Performance 
    *Built (D27): settlement, closing-price valuation, `brokerage` deleted.*
 5. **Reconciliation.** Clearing and bank breaks, checked one-for-one against the simulators' `/test/*/breaks`; operator
    case workflow.
+   *Built (D28): clearing and bank breaks one for one, missing statements, cases opened at the next close.*
 6. **Realistic load.** User-session load model, market-open burst, multiple instances, benchmarks against `main`.
 7. **Customer UI.** Portfolio, order ticket, funding.
 

@@ -22,7 +22,7 @@ mvn spring-boot:run -pl :essentials-trading-demo        # after `docker compose 
 | `accounts` | `Account` (the ledger, stream `Accounts`) | 17 command, 1 automation, 7 view |
 | `orders` | `Order` (stream `Orders`), `UnknownExchangeOrder` (operator cases) | 7 command, 1 external system, 1 automation, 4 view |
 | `funding` | `BankAccountLink`, `Deposit`, `Withdrawal` | 4 command, 1 external system, 1 automation, 2 view |
-| `reconciliation` | — (bank statements stored as reference data) | 1 external system, 2 view |
+| `reconciliation` | `ReconciliationCase` (operator cases; statements stored as reference data) | 3 command, 2 external system, 1 automation, 6 view |
 | `settlement` | `TradeSettlement` (stream `TradeSettlements`) | 1 command, 1 external system, 1 automation, 2 view |
 
 The original showcase context, `brokerage` (`TradingAccount`, trades, settlements, its bootstrap, load generator,
@@ -140,8 +140,8 @@ must add in `docs/SIMULATOR_REQUIREMENTS.md`. Shared receiving mechanics in `int
   volume, and every consumer's catch-up reader reads the exchange's event log from the start on a fresh database. A
   fresh database against an exchange that remembers turns the old run's events into reports for orders this database
   never had; acceptances and cancellations for an unknown order end as dead letters in `Inbox:Orders:ExchangeReports`
-  (seen: 100 after one earlier run). `docker compose --profile simulators down -v`, or `POST /test/reset` on the
-  exchange, next to dropping the database.
+  (seen: 100 after one earlier run). `POST /test/reset` on the exchange, or remove only the
+  simulators' own volumes, next to dropping the database - `docker compose down -v` also deletes the demo's PostgreSQL data.
 - **The Finnhub API key is never committed.** It lives in `simulators/secrets/finnhub.env` (gitignored; template
   `finnhub.env.example`), which both compose files load as an optional `env_file` for the exchange, so a run without
   it still starts - with no live price feed (D15, D16).

@@ -56,6 +56,24 @@ public class BankStatementBreaksQuery {
                                   (rs, row) -> new StatementSummary(rs.getString(1), rs.getDate(2).toLocalDate(), rs.getString(3), rs.getInt(4), breaksOf(rs.getString(1)).size()));
     }
 
+    /**
+     * The statements of business days on or after {@code from}, by id.
+     */
+    public Map<String, LocalDate> statementsFrom(LocalDate from) {
+        requireNonNull(from, "No from provided");
+        var statements = new LinkedHashMap<String, LocalDate>();
+        jdbcTemplate.query("SELECT statement_id, business_date FROM bank_statement WHERE business_date >= ? ORDER BY business_date",
+                           rs -> {
+                               statements.put(rs.getString(1), rs.getDate(2).toLocalDate());
+                           },
+                           java.sql.Date.valueOf(from));
+        return statements;
+    }
+
+    public Optional<LocalDate> businessDateOf(String statementId) {
+        return jdbcTemplate.query("SELECT business_date FROM bank_statement WHERE statement_id = ?", (rs, row) -> rs.getDate(1).toLocalDate(), statementId).stream().findFirst();
+    }
+
     public List<StatementBreak> breaksOf(String statementId) {
         requireNonNull(statementId, "No statementId provided");
         var breaks = new ArrayList<StatementBreak>();

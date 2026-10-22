@@ -23,7 +23,9 @@ import dk.trustworks.essentials.examples.trading.integration.payment_gateway.cli
 import dk.trustworks.essentials.examples.trading.integration.payment_gateway.client.model.ClockAdvance;
 import dk.trustworks.essentials.examples.trading.integration.payment_gateway.client.model.ForcePaymentOutcomeRequest;
 import dk.trustworks.essentials.examples.trading.funding.views.payments.PaymentView;
+import dk.trustworks.essentials.examples.trading.reconciliation.automations.open_cases.CaseOpening;
 import dk.trustworks.essentials.examples.trading.reconciliation.views.bank_statement_breaks.*;
+import dk.trustworks.essentials.examples.trading.reconciliation.views.cases.CaseView;
 import dk.trustworks.essentials.examples.trading.integration.payment_gateway.client.model.StatementBreaks;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.condition.EnabledIf;
@@ -50,7 +52,8 @@ import static org.awaitility.Awaitility.await;
  * The first reconciliation against the real payment-gateway simulator, with its seeded statement breaks on: every
  * entry's amount altered by one minor unit and one phantom entry per statement. A deposit is completed at the gateway
  * and its business day closed there; the statement then shows both breaks, and they match the gateway's own list of
- * what it seeded, one for one.
+ * what it seeded, one for one. At the next close each becomes a case - driven here directly, since there is no
+ * exchange to close the day.
  * <p>
  * Skipped unless the {@code payment-gateway:dev} image exists locally (see {@link SimulatorImages}).
  */
@@ -87,6 +90,8 @@ class BankStatementReconciliationIT {
 
     @Autowired
     private TestRestTemplate restTemplate;
+    @Autowired
+    private CaseOpening      caseOpening;
 
     @Test
     void the_seeded_statement_breaks_are_found_one_for_one() {
@@ -129,6 +134,17 @@ class BankStatementReconciliationIT {
                                     .toList();
             assertThat(ours).as("breaks of %s", statement.statementId()).containsExactlyInAnyOrderElementsOf(seeded);
         }
+
+        var expectedCases = statements().stream()
+                                        .flatMap(statement -> breaksOf(statement.statementId()).stream().map(b -> statement.statementId() + ":" + b.kind() + ":" + b.reference()))
+                                        .toList();
+        var latest = statements().stream().map(BankStatementBreaksQuery.StatementSummary::businessDate).max(Comparator.naturalOrder()).orElseThrow();
+        caseOpening.reconcile(latest.plusDays(1));
+        await().atMost(TIMEOUT).untilAsserted(() -> assertThat(cases()).extracting(CaseView::caseId).containsExactlyInAnyOrderElementsOf(expectedCases));
+    }
+
+    private List<CaseView> cases() {
+        return Arrays.asList(Objects.requireNonNull(operator().getForEntity("/api/admin/reconciliation/cases", CaseView[].class).getBody()));
     }
 
     private List<BankStatementBreaksQuery.StatementSummary> statements() {

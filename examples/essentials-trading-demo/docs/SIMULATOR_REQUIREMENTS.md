@@ -617,6 +617,21 @@ amount on the pay date, and a 2:1 split doubles a resting order's quantity and h
 
 ---
 
+### SR-39 — Participant filter on the event log (SHOULD) [phase 6]
+
+A webhook subscription delivers only the events of its listed participants (SR-19), but `GET /api/events` returns
+every participant's. A member's catch-up reader therefore reads, and must drop, the other members' clearing statements
+and settlement instructions - the liquidity provider's among them, which under load are most of the log. Found in
+phase 5: the demo's clearing intake received `CS:<date>:LP` from the log and now filters it itself.
+
+- **Parameter.** `participant` on `GET /api/events` (repeatable, as `eventType`), with the same rule as a
+  subscription's `participants`: an event is returned when any participant it names is listed; an event that names no
+  participant (`BusinessDayClosed`, `InstrumentListed`, ...) is returned as without the filter.
+- **Cursor.** `Event-Log-Scanned-Through` (SR-34) covers the filtered read, as it does for `eventType`.
+
+**Accept when** a read with `participant=DEMO-BROKER&eventType=ClearingStatementIssued` returns the firm's statements
+and none of the liquidity provider's, and the scanned-through header lets the next read skip what was filtered out.
+
 ## Summary by demo phase
 
 | Demo phase | Requirements |
@@ -627,6 +642,6 @@ amount on the pay date, and a 2:1 split doubles a resting order's quantity and h
 | 3 Orders and execution | SR-2, SR-6–SR-10, SR-12, SR-13, SR-29, SR-31 (MUST); SR-16, SR-17, SR-30, SR-32 (SHOULD) |
 | 4 Settlement | SR-14 (MUST); SR-35 (SHOULD) |
 | 5 Reconciliation | SR-11 (SHOULD) |
-| 6 Realistic load | SR-4, SR-15, SR-20, SR-23, SR-34 (SHOULD) |
+| 6 Realistic load | SR-4, SR-15, SR-20, SR-23, SR-34, SR-39 (SHOULD) |
 | FX | SR-18 (LATER) |
 | Later (corrections, fees, corporate actions) | SR-36, SR-37, SR-38 (LATER) |

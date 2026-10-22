@@ -28,6 +28,12 @@ webhooks:
       url: http://host.docker.internal:8080/webhooks/exchange/instruments
       event_types: [InstrumentListed, InstrumentUpdated]
       secret_file: /run/secrets/webhook_secret
+    # reconciliation/external_systems/clearinghouse (ClearingStatements): the firm's clearing statements
+    - name: demo-clearing
+      url: http://host.docker.internal:8080/webhooks/exchange/clearing-statements
+      event_types: [ClearingStatementIssued]
+      secret_file: /run/secrets/webhook_secret
+      participants: [DEMO-BROKER]
     # integration/BusinessCalendar: the business days as the exchange closes them (D10, SR-26)
     - name: demo-business-calendar
       url: http://host.docker.internal:8080/webhooks/exchange/business-days

@@ -1,6 +1,6 @@
 # Phase 5 design — reconciliation
 
-**Status:** decided (§7, 2026-10-22). Decisions are marked **(Q-n)** in the text.
+**Status:** decided (§7, 2026-10-22), built (§8). Decisions are marked **(Q-n)** in the text.
 **Plan:** [`../EXPANSION_PLAN.md`](../EXPANSION_PLAN.md) phase 5; decisions D8, D10, D11; simulator requirements
 SR-11, SR-35.
 **Builds on:** phase 2's first reconciliation ([`phase-2-funding.md`](phase-2-funding.md) §7): the bank's statements
@@ -102,3 +102,32 @@ All four proposals accepted (2026-10-22).
 | **Q-2** | Does resolving a case book anything? | Never by itself: the operator posts any correction (`AdjustCash`, case id as reason) and the case records it (§4) |
 | **Q-3** | Grace before a statement counts as missing | 2 business hours after the cutoff, configurable (§3) |
 | **Q-4** | Clearing statements stored as reference data with read-time breaks, as the bank's | Yes (§2) |
+
+---
+
+## 8. As built
+
+Where the build differs from the text above, or fills in what it left open:
+
+- **Obligations are checked against the statement's own lines, not our executions** (§2's last row). The
+  clearinghouse nets each obligation from the lines it reports, the altered and phantom ones included, so comparing it
+  with our executions would report every line break a second time. `OBLIGATION_MISMATCH` is an obligation that does
+  not add up to its own lines; the simulator seeds none.
+- **A changed price shows as a changed amount**: lines are compared by side, then quantity, then amount.
+- **The event log is not participant-filtered**; the webhook subscription is. The clearing intake drops another
+  participant's statement itself (the liquidity provider's). A `participant` filter on `/api/events` is proposed as
+  SR-39.
+- **Missing statements (§3)** compare the day's cutoff (`business_day_closed`) plus the grace with the exchange's
+  clock (`GET /api/clock`); the bank's statement day is taken to end at the exchange's cutoff, since the gateway follows
+  its calendar.
+- **Opening (Q-1)** runs per instance on `BusinessDayClosedNotice`, as deposit clearing does, over the statements of the
+  last `trading-demo.reconciliation.case-lookback-days` (7) before the closed day and those of open cases. Before it
+  counts a statement missing it reads both statement sources to their end and waits for their inboxes: the calendar's
+  own reader of the exchange's log can be ahead of the statements' readers, which a clock jump of several days made
+  visible as a case opened and then cleared for a statement that had been issued.
+- **Slices**: opening and clearing are commands of their own, `track_breaks` (`OpenCase`, `ClearCase`, no endpoint),
+  sent by `open_cases`. A case that was cleared is not reopened if its break comes back; its id is taken.
+- **Tests (§5)**: `ClearingReconciliationIT` (omit and alter at 0.3, phantom at 1.0), `BankStatementReconciliationIT`
+  (cases driven directly; no exchange to close the day), `LateStatementIT` (grace 0, late at 1.0) and
+  `CleanReconciliationIT` (no breaks, no case). The clean run covers clearing only; a run of both simulators together
+  is phase 6's.
