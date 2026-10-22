@@ -29,7 +29,8 @@ import static org.assertj.core.api.Assertions.*;
 /**
  * {@link ApiShardOwnedKeptUnitRelease#from} carries every field of the engine's {@link KeptUnitRelease} into the admin
  * shape, for each {@link KeptUnitRelease.Outcome}: the outcome by its name, the time in a handler in milliseconds, and
- * what the release charged and dead-lettered.
+ * what the release charged and dead-lettered. The engine record refuses a charge that cannot be: a negative count, or
+ * more dead-lettered keys than messages charged.
  */
 class ApiShardOwnedKeptUnitReleaseTest {
 
@@ -76,6 +77,26 @@ class ApiShardOwnedKeptUnitReleaseTest {
         assertThatThrownBy(() -> new KeptUnitRelease(3, "node-1", KeptUnitRelease.Outcome.RELEASED, List.of(), Duration.ZERO, 0, null))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("deadLetteredKeys");
+    }
+
+    @Test
+    void the_engine_record_refuses_a_negative_charge() {
+        assertThatThrownBy(() -> new KeptUnitRelease(3, "node-1", KeptUnitRelease.Outcome.RELEASED, List.of(), Duration.ZERO, -1, List.of()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("charged");
+    }
+
+    @Test
+    void the_engine_record_refuses_more_dead_lettered_keys_than_messages_charged() {
+        assertThatThrownBy(() -> new KeptUnitRelease(3, "node-1", KeptUnitRelease.Outcome.RELEASED, List.of("ACC-1", "ACC-2"), Duration.ZERO, 1,
+                                                     List.of("ACC-1", "ACC-2")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("deadLetteredKeys")
+                .hasMessageContaining("charged");
+        assertThat(new KeptUnitRelease(3, "node-1", KeptUnitRelease.Outcome.RELEASED, List.of("ACC-1", "ACC-2"), Duration.ZERO, 2,
+                                       List.of("ACC-1", "ACC-2")).deadLetteredKeys())
+                .as("as many dead-lettered keys as messages charged")
+                .containsExactly("ACC-1", "ACC-2");
     }
 
     @Test

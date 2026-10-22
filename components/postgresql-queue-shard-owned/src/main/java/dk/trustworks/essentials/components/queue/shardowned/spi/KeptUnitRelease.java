@@ -19,7 +19,8 @@ package dk.trustworks.essentials.components.queue.shardowned.spi;
 import java.time.Duration;
 import java.util.List;
 
-import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
+import static dk.trustworks.essentials.shared.FailFast.*;
+import static dk.trustworks.essentials.shared.MessageFormatter.msg;
 
 /**
  * What {@link MessageQueue#releaseKeptOrderedUnit} did with one ordered unit a stop kept: a stop keeps a unit, its
@@ -64,12 +65,20 @@ public record KeptUnitRelease(int unit,
                               int charged,
                               List<String> deadLetteredKeys) {
 
+    /**
+     * Keeps unmodifiable copies of {@code keysInHandler} and {@code deadLetteredKeys}, and refuses a charge that cannot
+     * be: a negative {@code charged}, or more {@code deadLetteredKeys} than {@code charged} - each dead-lettered key's
+     * message is one of those charged.
+     */
     public KeptUnitRelease {
         requireNonNull(instanceId, "No instanceId provided");
         requireNonNull(outcome, "No outcome provided");
         keysInHandler = List.copyOf(requireNonNull(keysInHandler, "No keysInHandler provided"));
         requireNonNull(longestInHandler, "No longestInHandler provided");
+        requireTrue(charged >= 0, msg("charged must not be negative, was {}", charged));
         deadLetteredKeys = List.copyOf(requireNonNull(deadLetteredKeys, "No deadLetteredKeys provided"));
+        requireTrue(deadLetteredKeys.size() <= charged,
+                    msg("deadLetteredKeys names {} key(s), more than the {} message(s) charged", deadLetteredKeys.size(), charged));
     }
 
     /**
