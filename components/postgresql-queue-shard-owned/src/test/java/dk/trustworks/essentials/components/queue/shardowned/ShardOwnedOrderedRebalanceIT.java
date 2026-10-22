@@ -421,8 +421,11 @@ class ShardOwnedOrderedRebalanceIT {
         var stuckUnit           = ShardOwnedSchema.ORDERED_UNITS - 1;
         var stuckKey            = keyOnUnit(stuckUnit);
         var youngKey            = otherKeyOnUnit(stuckUnit, stuckKey);
-        // Room for the young key to stay under the bound through the second instance's join, a heartbeat and the shed grace.
-        var stuckHandlerTimeout = Duration.ofSeconds(5);
+        // Room for the young key to stay under the bound through the second instance's join, a heartbeat and the shed grace, on
+        // a loaded build too: the wait for the release below is cut to what is left of the bound, so a run too slow for it fails
+        // on that premise, never on the young key charged by a shed completing past the bound. The stuck key's wait past the
+        // bound grows with it.
+        var stuckHandlerTimeout = Duration.ofSeconds(20);
         var stuckEntered        = new CountDownLatch(1);
         var youngEntered        = new CountDownLatch(1);
         var release             = new CountDownLatch(1);
@@ -465,6 +468,16 @@ class ShardOwnedOrderedRebalanceIT {
                 }
             }, settings, SHARD_COUNT, maxAttemptsOne);
 
+            // The release WARN follows the charge, so seen while the young key is under the bound, the charge was made under it.
+            var youngKeyUnderTheBoundFor = stuckHandlerTimeout.minus(Duration.ofNanos(System.nanoTime() - youngEnteredAtNanos));
+            assertThat(youngKeyUnderTheBoundFor).as("premise: the young key is still under the bound once the joining instance has started")
+                                                .isPositive();
+            Awaitility.await("premise: the shed released the unit while the young key is still under the bound")
+                      .atMost(youngKeyUnderTheBoundFor)
+                      .until(() -> !queueWarnings(logged, "so those handlers were not waited for").isEmpty());
+            assertThat(Duration.ofNanos(System.nanoTime() - youngEnteredAtNanos)).as("premise: the young key was still under the bound at the release")
+                                                                               .isLessThan(stuckHandlerTimeout);
+
             Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> {
                 assertThat(ownerOf(stuckUnit)).as("the unit moved to the joining instance").isEqualTo("ord-young-b");
                 assertThat(fenceOf(stuckUnit)).as("taken under a new fence").isGreaterThan(fenceBefore);
@@ -477,8 +490,6 @@ class ShardOwnedOrderedRebalanceIT {
                                                          .contains("1 message(s) in a handler longer than stuckHandlerTimeout were charged an attempt",
                                                                    "1 dead-lettered at their attempt limit [" + stuckKey + "]");
             });
-            assertThat(Duration.ofNanos(System.nanoTime() - youngEnteredAtNanos)).as("premise: the young key was still under the bound at the release")
-                                                                               .isLessThan(stuckHandlerTimeout);
             assertThat(release.getCount()).as("premise: both handlers are still held").isEqualTo(1);
             assertThat(first.metrics().takeoverAttemptBumps.sum()).as("only the message in a handler past the bound was charged").isEqualTo(1);
             assertThat(second.metrics().takeoverAttemptBumps.sum()).as("released, not taken over: the joining instance charges nothing").isZero();
@@ -511,8 +522,10 @@ class ShardOwnedOrderedRebalanceIT {
         var stuckUnit           = ShardOwnedSchema.ORDERED_UNITS - 1;
         var stuckKey            = keyOnUnit(stuckUnit);
         var youngKey            = otherKeyOnUnit(stuckUnit, stuckKey);
-        // Room for the young key to stay under the bound through the join, the shed, its refused release and the stop.
-        var stuckHandlerTimeout = Duration.ofSeconds(8);
+        // Room for the young key to stay under the bound through the join, the shed, its refused release and the stops, on a
+        // loaded build too: the wait for the refusal below is cut to what is left of the bound, so a run too slow for it fails
+        // on that premise, never on a retried shed charging the young key. The stuck key's wait past the bound grows with it.
+        var stuckHandlerTimeout = Duration.ofSeconds(20);
         var stuckEntered        = new CountDownLatch(1);
         var youngEntered        = new CountDownLatch(1);
         var release             = new CountDownLatch(1);
@@ -546,7 +559,11 @@ class ShardOwnedOrderedRebalanceIT {
                 second.startConsumingOrdered((messageId, key, payload, payloadType) -> { }, settings, SHARD_COUNT, maxAttemptsThree);
 
                 // Each refusal follows a charge that went through: the trigger refuses the lease row's release, not the charge.
-                Awaitility.await("the shed's release refused").atMost(Duration.ofSeconds(30))
+                var youngKeyUnderTheBoundFor = stuckHandlerTimeout.minus(Duration.ofNanos(System.nanoTime() - youngEnteredAtNanos));
+                assertThat(youngKeyUnderTheBoundFor).as("premise: the young key is still under the bound once the joining instance has started")
+                                                    .isPositive();
+                Awaitility.await("premise: the shed's release refused while the young key is still under the bound")
+                          .atMost(youngKeyUnderTheBoundFor)
                           .until(() -> LeaseReleaseRefusals.releasesRefused(dataSource, QUEUE_ID, stuckUnit) > 0);
                 second.stop();
                 first.stop();
