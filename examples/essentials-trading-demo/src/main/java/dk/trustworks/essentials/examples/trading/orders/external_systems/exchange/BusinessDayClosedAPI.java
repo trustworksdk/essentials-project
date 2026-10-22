@@ -18,6 +18,7 @@ package dk.trustworks.essentials.examples.trading.orders.external_systems.exchan
 import dk.trustworks.essentials.examples.trading.orders.use_cases.expire_order.ExpireOrder;
 import dk.trustworks.essentials.examples.trading.orders.views.orders.OrdersQuery;
 import org.slf4j.*;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -27,17 +28,17 @@ import java.util.Map;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * Operator only (under {@code /api/admin}): the end of a business day, standing in for the exchange's
- * {@code BusinessDayClosed} (SR-26) until the exchange-simulator adapter receives it. Every {@code DAY} order still open
- * is expired — one {@link ExpireOrder} per order, queued in {@link ExchangeReports}, so that a fill racing the expiry on
- * the same order is redelivered rather than lost.
+ * Operator only (under {@code /api/admin}), and only with the stub exchange: the end of a business day, which the stub
+ * has no notion of. Every {@code DAY} order still open is expired — one {@link ExpireOrder} per order, queued in
+ * {@link ExchangeReports}, so that a fill racing the expiry on the same order is redelivered rather than lost. Under the
+ * {@code simulators} profile the exchange expires its own {@code DAY} orders (SR-17) and this endpoint does not exist.
  * <p>
- * A stopgap in two ways, both gone once the exchange expires its own {@code DAY} orders (SR-17): the open orders come
- * from the eventually consistent {@code orders} view, so an order placed a moment before the close may be missed and
- * stays open into the next day; and one placed after the exchange's cutoff but before this call is expired with the day
- * that just closed.
+ * A stopgap in two ways: the open orders come from the eventually consistent {@code orders} view, so an order placed a
+ * moment before the close may be missed and stays open into the next day; and one placed after the close but before
+ * this call is expired with the day that just closed.
  */
 @RestController
+@ConditionalOnExpression("'${trading-demo.simulators.exchange.base-url:}'.isBlank()")
 @RequestMapping("/api/admin/orders")
 public class BusinessDayClosedAPI {
     private static final Logger log = LoggerFactory.getLogger(BusinessDayClosedAPI.class);

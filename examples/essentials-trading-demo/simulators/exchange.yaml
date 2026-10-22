@@ -7,10 +7,10 @@
 webhooks:
   subscriptions:
     # orders/external_systems/exchange (ExchangeOrderEvents). Fill events are left out until they carry the execution
-    # (SR-31), OrderExpired until the exchange's own DAY expiry replaces the brokerage's.
+    # (SR-31).
     - name: demo-orders
       url: http://host.docker.internal:8080/webhooks/exchange/orders
-      event_types: [OrderAccepted, OrderRejected, OrderCancelled]
+      event_types: [OrderAccepted, OrderRejected, OrderCancelled, OrderExpired]
       secret_file: /run/secrets/webhook_secret
       participants: [DEMO-BROKER]
 clock:

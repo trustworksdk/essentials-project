@@ -135,7 +135,7 @@ public class OrdersProjection extends ViewEventProcessor {
 
     @MessageHandler
     void handle(OrderExpired e, OrderedMessage message) {
-        update(e, message, "status = ?, reason = ?", OrderStatus.EXPIRED.name(), "END_OF_DAY " + e.businessDate());
+        update(e, message, "status = ?, reason = ?", OrderStatus.EXPIRED.name(), e.businessDate() != null ? "END_OF_DAY " + e.businessDate() : "END_OF_DAY");
     }
 
     /**

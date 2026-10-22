@@ -19,6 +19,7 @@ package dk.trustworks.essentials.examples.trading.orders.external_systems.exchan
 import dk.trustworks.essentials.examples.trading.integration.SimulatorImages;
 import dk.trustworks.essentials.examples.trading.integration.exchange_simulator.client.ApiClient;
 import dk.trustworks.essentials.examples.trading.integration.exchange_simulator.client.api.*;
+import dk.trustworks.essentials.examples.trading.integration.exchange_simulator.client.model.ClockAdvance;
 import dk.trustworks.essentials.examples.trading.integration.exchange_simulator.client.model.DeliveryStatus;
 import dk.trustworks.essentials.examples.trading.integration.exchange_simulator.client.model.WebhookRequest;
 import dk.trustworks.essentials.examples.trading.orders.types.OrderStatus;
@@ -50,7 +51,8 @@ import static org.awaitility.Awaitility.await;
 /**
  * The inbound half of the exchange adapter against the real exchange-simulator: an order cancelled <em>at the exchange</em>,
  * not through the brokerage, so that only the exchange's {@code OrderCancelled} event can close it here. Once through the
- * event-log catch-up reader alone (no webhook reaches this test's application yet), once through a signed webhook.
+ * event-log catch-up reader alone (no webhook reaches this test's application yet), once through a signed webhook. And a
+ * {@code DAY} order the exchange expires itself when its clock passes the business day's end.
  * <p>
  * Skipped unless the {@code exchange-simulator:dev} image exists locally (see {@link SimulatorImages}).
  */
@@ -118,7 +120,7 @@ class ExchangeOrderEventsIT {
     void an_order_cancelled_at_the_exchange_is_closed_from_its_signed_webhook() throws IOException {
         openFundedAccountOnce();
         var subscription = new WebhooksApi(apiClient()).registerWebhook(new WebhookRequest().url(java.net.URI.create("http://host.testcontainers.internal:" + APPLICATION_PORT + "/webhooks/exchange/orders"))
-                                                                                        .eventTypes(List.of("OrderAccepted", "OrderRejected", "OrderCancelled"))
+                                                                                        .eventTypes(List.of("OrderAccepted", "OrderRejected", "OrderCancelled", "OrderExpired"))
                                                                                         .participants(List.of("DEMO-BROKER"))
                                                                                         .secret(Files.readString(Path.of("simulators/secrets/webhook-secret.txt")).trim()));
         var orderId = "ORD-EXCHANGE-CANCEL-WEBHOOK";
@@ -131,6 +133,25 @@ class ExchangeOrderEventsIT {
                 .as("the webhook delivered the events, signature verified and accepted")
                 .isNotEmpty()
                 .allSatisfy(delivery -> assertThat(delivery.getStatus()).isEqualTo(DeliveryStatus.DELIVERED)));
+    }
+
+    @Test
+    @Order(3)
+    void a_day_order_the_exchange_expires_at_the_end_of_its_business_day_is_closed_expired() {
+        openFundedAccountOnce();
+        var orderId = "ORD-EXCHANGE-EXPIRY";
+        placeRestingOrder(orderId, "DAY");
+
+        new TestControlApi(apiClient()).advanceClock(new ClockAdvance().days(1).hours(0).minutes(0).seconds(0));
+
+        await().atMost(TIMEOUT).untilAsserted(() -> {
+            var order = projectedOrder(orderId);
+            assertThat(order.status()).isEqualTo(OrderStatus.EXPIRED);
+            assertThat(order.reason()).as("no business date until the exchange sends one (SR-32)").isEqualTo("END_OF_DAY");
+        });
+        assertThat(operator().postForEntity("/api/admin/orders/business-day-closed", Map.of("businessDate", "2030-01-07"), String.class).getStatusCode())
+                .as("the brokerage's end-of-day stopgap exists for the stub exchange only")
+                .isEqualTo(HttpStatus.NOT_FOUND);
     }
 
     private boolean accountOpened;
@@ -155,9 +176,13 @@ class ExchangeOrderEventsIT {
      * A buy far below the exchange's prices, so it rests there until it is cancelled.
      */
     private void placeRestingOrder(String orderId) {
+        placeRestingOrder(orderId, "GTC");
+    }
+
+    private void placeRestingOrder(String orderId, String timeInForce) {
         var placed = alice().postForEntity("/api/accounts/" + ACCOUNT + "/orders",
                                            Map.of("orderId", orderId, "accountId", ACCOUNT, "instrumentId", "ACME", "side", "BUY", "type", "LIMIT",
-                                                  "quantity", 5, "limitPrice", usd("1.00"), "timeInForce", "GTC"),
+                                                  "quantity", 5, "limitPrice", usd("1.00"), "timeInForce", timeInForce),
                                            String.class);
         assertThat(placed.getStatusCode()).as("%s", placed.getBody()).isEqualTo(HttpStatus.CREATED);
         await().atMost(TIMEOUT).untilAsserted(() -> assertThat(projectedOrder(orderId).status()).isEqualTo(OrderStatus.OPEN));

@@ -20,10 +20,11 @@ import dk.trustworks.essentials.examples.trading.integration.ExternalEventEnvelo
 import dk.trustworks.essentials.examples.trading.orders.types.OrderId;
 import dk.trustworks.essentials.examples.trading.orders.use_cases.record_cancellation.RecordCancellation;
 import dk.trustworks.essentials.examples.trading.orders.use_cases.record_exchange_answer.RecordExchangeAnswer;
+import dk.trustworks.essentials.examples.trading.orders.use_cases.record_expiry.RecordExpiry;
 import org.junit.jupiter.api.Test;
 import tools.jackson.databind.json.JsonMapper;
 
-import java.time.OffsetDateTime;
+import java.time.*;
 
 import static org.assertj.core.api.Assertions.*;
 
@@ -53,6 +54,18 @@ class ExchangeOrderEventTranslationTest {
                 {"clientOrderId": "ORD-1", "status": "CANCELLED", "cancelReason": "IOC_REMAINDER"}""");
 
         assertThat(ExchangeOrderEventTranslation.toReport(event)).isEqualTo(new RecordCancellation(OrderId.of("ORD-1"), "IOC_REMAINDER"));
+    }
+
+    @Test
+    void an_expiry_carries_the_business_date_when_the_exchange_sends_one() {
+        var withDate = event("OrderExpired", """
+                {"clientOrderId": "ORD-1", "status": "EXPIRED", "businessDate": "2030-01-08"}""");
+        var withoutDate = event("OrderExpired", """
+                {"clientOrderId": "ORD-1", "status": "EXPIRED"}""");
+
+        assertThat(ExchangeOrderEventTranslation.isComplete(withoutDate)).isTrue();
+        assertThat(ExchangeOrderEventTranslation.toReport(withDate)).isEqualTo(new RecordExpiry(OrderId.of("ORD-1"), LocalDate.of(2030, 1, 8)));
+        assertThat(ExchangeOrderEventTranslation.toReport(withoutDate)).isEqualTo(new RecordExpiry(OrderId.of("ORD-1"), null));
     }
 
     @Test

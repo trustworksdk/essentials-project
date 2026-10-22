@@ -23,9 +23,10 @@ at the version in the POM's `simulator-api-specs.version`. To refresh: raise it,
 `mvn -pl examples/essentials-trading-demo initialize -P refresh-simulator-specs` with the artifact in the local
 repository, and commit the result. Never edit the copies by hand.
 
-**Generated request models initialise list fields to `[]`, not null**, and send them: a `WebhookRequest` without
-`participants` set went out as `"participants": []`, which the exchange refuses (`400`, "1 to 100 participant IDs").
-Set every list field you mean, and null the ones you don't.
+**Generated request models send every field, set or not**: unset lists as `[]` (a `WebhookRequest` without
+`participants` - `400`, "1 to 100 participant IDs") and unset optional scalars as `null` (`ClockAdvance` with only
+`days` - `400`, "hours: invalid type: null"). The simulators treat an absent field and a `null` one differently. Set
+every field of a request model you build.
 
 Tests: `ExternalEventIntakeIT` runs against a stub source and always runs. `ExchangeSimulatorWebhookIT` runs against
 the real `exchange-simulator:dev` image with its fault injection on (duplicates, missing fields, out-of-order), and

@@ -20,8 +20,10 @@ import dk.trustworks.essentials.examples.trading.integration.ExternalEventEnvelo
 import dk.trustworks.essentials.examples.trading.orders.types.OrderId;
 import dk.trustworks.essentials.examples.trading.orders.use_cases.record_cancellation.RecordCancellation;
 import dk.trustworks.essentials.examples.trading.orders.use_cases.record_exchange_answer.RecordExchangeAnswer;
+import dk.trustworks.essentials.examples.trading.orders.use_cases.record_expiry.RecordExpiry;
 import tools.jackson.databind.JsonNode;
 
+import java.time.*;
 import java.util.*;
 
 /**
@@ -32,18 +34,21 @@ import java.util.*;
  * <p>
  * Fills are not translated yet: the exchange's fill events carry neither the execution's quantity and price nor,
  * except on a resting order, its {@code executionId}, so a fill cannot be booked from them (SR-31). Until the exchange
- * sends them, fills come only from the submission's answer ({@link SimulatorExchangeGateway}). {@code OrderExpired}
- * waits for the exchange's own {@code DAY} expiry to replace the brokerage-side stopgap.
+ * sends them, fills come only from the submission's answer ({@link SimulatorExchangeGateway}).
+ * <p>
+ * {@code OrderExpired} carries no business date yet (SR-32); one is taken when the exchange sends {@code businessDate},
+ * never worked out from {@code occurredAt} (D10).
  */
 final class ExchangeOrderEventTranslation {
     static final String ORDER_ACCEPTED  = "OrderAccepted";
     static final String ORDER_REJECTED  = "OrderRejected";
     static final String ORDER_CANCELLED = "OrderCancelled";
+    static final String ORDER_EXPIRED   = "OrderExpired";
 
     /**
      * The event types the subscription is declared for (keep in step with {@code simulators/exchange.yaml}).
      */
-    static final Set<String> EVENT_TYPES = Set.of(ORDER_ACCEPTED, ORDER_REJECTED, ORDER_CANCELLED);
+    static final Set<String> EVENT_TYPES = Set.of(ORDER_ACCEPTED, ORDER_REJECTED, ORDER_CANCELLED, ORDER_EXPIRED);
 
     private ExchangeOrderEventTranslation() {
     }
@@ -58,7 +63,7 @@ final class ExchangeOrderEventTranslation {
             return false;
         }
         return switch (envelope.eventType()) {
-            case ORDER_ACCEPTED -> true;
+            case ORDER_ACCEPTED, ORDER_EXPIRED -> true;
             case ORDER_REJECTED -> text(payload, "rejectReason").isPresent();
             case ORDER_CANCELLED -> text(payload, "cancelReason").isPresent();
             default -> false;
@@ -75,8 +80,17 @@ final class ExchangeOrderEventTranslation {
             case ORDER_ACCEPTED -> RecordExchangeAnswer.accepted(orderId);
             case ORDER_REJECTED -> RecordExchangeAnswer.rejected(orderId, text(payload, "rejectReason").orElseThrow());
             case ORDER_CANCELLED -> new RecordCancellation(orderId, text(payload, "cancelReason").orElseThrow());
+            case ORDER_EXPIRED -> new RecordExpiry(orderId, text(payload, "businessDate").flatMap(ExchangeOrderEventTranslation::date).orElse(null));
             default -> throw new IllegalArgumentException("Not an order lifecycle event this slice translates: " + envelope.eventType());
         };
+    }
+
+    private static Optional<LocalDate> date(String text) {
+        try {
+            return Optional.of(LocalDate.parse(text));
+        } catch (DateTimeException e) {
+            return Optional.empty();
+        }
     }
 
     private static Optional<String> text(JsonNode payload, String field) {

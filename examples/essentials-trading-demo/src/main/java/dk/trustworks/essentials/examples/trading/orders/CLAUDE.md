@@ -43,11 +43,12 @@ books: an order is short-lived.
 - **A fill for an unknown order is an operator case, not a retry.** `record_fill` records it on an
   `UnknownExchangeOrder` (once per `executionId`) and books nothing. Never put it on the `Orders` stream: a stream with no
   `OrderPlaced` makes a later `PlaceOrder` with that id look like a repeat and place nothing.
-- **DAY expiry is a cancel at the exchange, closed `EXPIRED`.** `expire_order` records `OrderExpiryRequested`; the
-  router cancels at the exchange as for a customer cancel, and the exchange's `RecordCancellation` then closes the
-  order `OrderExpired`. A stopgap until the exchange expires its own DAY orders (SR-17); triggered by
-  `POST /api/admin/orders/business-day-closed` until the adapter receives `BusinessDayClosed` (SR-26). Reads the open
-  orders from the eventually consistent `orders` view.
+- **DAY expiry: the exchange's under the simulators, the brokerage's with the stub.** The exchange expires its own
+  `DAY` orders (SR-17); its `OrderExpired` becomes `RecordExpiry` (`record_expiry`), which closes the order `EXPIRED`
+  as a fact. Business date empty until the exchange sends one (SR-32) - never derived from its clock. The stub has no
+  business day, so with it - and only with it - `POST /api/admin/orders/business-day-closed` stands in: `expire_order`
+  records `OrderExpiryRequested`, the router cancels at the exchange, and the cancellation closes the order `EXPIRED`.
+  That endpoint is conditional on no exchange base URL; it reads open orders from the eventually consistent view.
 - **The retry budget for an unreachable exchange runs inside one delivery.** `ExchangeOrderRouter` retries
   `ExchangeUnavailableException` with a doubling backoff (`trading-demo.orders.exchange-submission.*`), then rejects
   `EXCHANGE_UNAVAILABLE`. Keep the total well inside the 30 s message-handling timeout; anything else the gateway throws
@@ -82,9 +83,9 @@ limit fills at its limit. Per-instance memory: a restart forgets resting orders.
 |---|---|---|
 | `place_order` | command | customer (`POST /api/accounts/{accountId}/orders`) |
 | `cancel_order` | command | customer (`POST /api/accounts/{accountId}/orders/{orderId}/cancellation`) |
-| `record_exchange_answer`, `record_fill`, `record_cancellation` | command | the exchange, through `external_systems/exchange` |
-| `expire_order` | command | the end of the business day, through `external_systems/exchange` |
-| `external_systems/exchange` | external system | `OrderPlaced`, `OrderCancelRequested`, `OrderExpiryRequested`; the exchange's order events (`POST /webhooks/exchange/orders`, event log); operator (`POST /api/admin/orders/business-day-closed`) |
+| `record_exchange_answer`, `record_fill`, `record_cancellation`, `record_expiry` | command | the exchange, through `external_systems/exchange` |
+| `expire_order` | command | the end of the business day with the stub exchange, through `external_systems/exchange` |
+| `external_systems/exchange` | external system | `OrderPlaced`, `OrderCancelRequested`, `OrderExpiryRequested`; the exchange's order events (`POST /webhooks/exchange/orders`, event log); operator (`POST /api/admin/orders/business-day-closed`, stub only) |
 | `apply_order_to_account` | automation | `OrderFilled` → `BookTrade`; `OrderClosed` → `ReleaseHold` / `ReleaseShares` |
 | `orders` | view | customer (own accounts) and operator |
 | `account_owners` | view | order entry's ownership check |
@@ -117,11 +118,11 @@ limit fills at its limit. Per-instance memory: a restart forgets resting orders.
   (`ExchangeOrderEventTranslation`, keyed by `clientOrderId` = our `OrderId`). Keep `EVENT_TYPES` and the yaml's
   `event_types` in step. Built on `ApplicationReadyEvent` (the inbox exists only then); earlier deliveries get `503`.
 - **Fill events are not subscribed** - they carry no execution quantity/price, and `executionId` only on a resting
-  order (SR-31). Until SR-31 a resting order's later fills are not booked. `OrderExpired` waits for step 3.
+  order (SR-31). Until SR-31 a resting order's later fills are not booked.
 - `ExchangeOrderEventsIT` cancels a resting order *at the exchange* so only the inbound path can close it: once via
-  catch-up alone, once via a signed webhook to a host port exposed before the containers start.
+  catch-up alone, once via a signed webhook to a host port exposed before the containers start; and a `DAY` order the
+  exchange expires when the test moves its clock a day on.
 
 ## Not built yet
 
-Fills from the exchange's events (SR-31), the exchange's own `DAY` expiry and `BusinessDayClosed` in place of the
-brokerage-side stopgap and its operator endpoint.
+Fills from the exchange's events (SR-31); the business date on an exchange-driven expiry (SR-32).

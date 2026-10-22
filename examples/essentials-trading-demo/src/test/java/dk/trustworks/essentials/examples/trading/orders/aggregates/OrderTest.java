@@ -181,6 +181,49 @@ class OrderTest {
     }
 
     @Test
+    void the_exchanges_expiry_closes_the_order_expired_with_what_was_filled_and_only_once() {
+        var order = placeBuy(10);
+        order.markAccepted();
+        fill(order, "EX-1", 4);
+        order.markExpired(TRADE_DATE);
+        order.markExpired(TRADE_DATE);    // a redelivered report: nothing
+        order.markCancelled("REQUESTED"); // closed already: nothing
+
+        var events = order.getUncommittedChanges().events;
+        assertThat(events).extracting(e -> e.getClass().getSimpleName())
+                          .containsExactly("OrderPlaced", "OrderAccepted", "OrderFilled", "OrderExpired", "OrderClosed");
+        assertThat(((OrderExpired) events.get(3)).businessDate()).isEqualTo(TRADE_DATE);
+        var closed = (OrderClosed) events.getLast();
+        assertThat(closed.finalStatus()).isEqualTo(OrderStatus.EXPIRED);
+        assertThat(closed.filledQuantity()).isEqualTo(Quantity.of(4));
+    }
+
+    @Test
+    void an_expiry_without_a_business_date_keeps_the_one_the_brokerage_asked_for_or_none() {
+        var asked = placeBuy(10);
+        asked.expire(TRADE_DATE);
+        asked.markExpired(null);
+        assertThat(asked.getUncommittedChanges().events).filteredOn(OrderExpired.class::isInstance)
+                                                       .extracting(e -> ((OrderExpired) e).businessDate())
+                                                       .containsExactly(TRADE_DATE);
+
+        var unasked = placeBuy(10);
+        unasked.markExpired(null);
+        assertThat(unasked.getUncommittedChanges().events).filteredOn(OrderExpired.class::isInstance)
+                                                         .extracting(e -> ((OrderExpired) e).businessDate())
+                                                         .containsExactly((LocalDate) null);
+    }
+
+    @Test
+    void a_filled_order_is_not_expired() {
+        var order = placeBuy(10);
+        fill(order, "EX-1", 10);
+        order.markExpired(TRADE_DATE);
+
+        assertThat(order.getUncommittedChanges().events).noneMatch(OrderExpired.class::isInstance);
+    }
+
+    @Test
     void only_an_open_day_order_expires() {
         var gtc = new Order(ORDER, ACCOUNT, InstrumentId.of("ACME"), TradeSide.BUY, OrderType.LIMIT, Quantity.of(10), usd("101"),
                             TimeInForce.GTC, usd("1010"));

@@ -272,6 +272,9 @@ Where it deviates from the sections above:
 - **Average fill price** (§2): every `OrderFilled` carries the quantity-weighted average of the order's fills so far
   (scale 6, half-even), recomputed from the running notional rather than from the previous average, so rounding never
   accumulates. The `orders` view shows it.
+- **DAY expiry by the exchange** (SR-17, simulators 0.2.0): its `OrderExpired` closes the order `EXPIRED` through
+  `RecordExpiry`; the business date waits for SR-32. What follows now holds for the stub exchange only, which keeps the
+  stopgap below.
 - **DAY expiry before SR-17** (§2). `OrderExpiryRequested` asks the exchange to cancel; the exchange's cancellation then
   closes the order `EXPIRED` (`OrderExpired`), not `CANCELLED`, and a fill before it still wins (`FILLED`). It is the
   existing cancel path. `GTC` orders, closed ones and one

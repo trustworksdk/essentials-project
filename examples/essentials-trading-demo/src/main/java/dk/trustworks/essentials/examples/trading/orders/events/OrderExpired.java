@@ -22,12 +22,14 @@ import java.time.LocalDate;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * A {@code DAY} order's remainder was taken off the market at the end of its business day: the exchange confirmed the
- * cancellation that {@link OrderExpiryRequested} asked for.
+ * A {@code DAY} order's remainder was taken off the market at the end of its business day: the exchange expired it
+ * itself (SR-17), or, with the stub exchange, confirmed the cancellation that {@link OrderExpiryRequested} asked for.
+ *
+ * @param businessDate the business day that ended; {@code null} when the exchange expired the order and did not say
+ *                     which day (until SR-32), never derived from a clock
  */
 public record OrderExpired(OrderId orderId, LocalDate businessDate) implements OrderEvent {
     public OrderExpired {
         requireNonNull(orderId, "No orderId provided");
-        requireNonNull(businessDate, "No businessDate provided");
     }
 }

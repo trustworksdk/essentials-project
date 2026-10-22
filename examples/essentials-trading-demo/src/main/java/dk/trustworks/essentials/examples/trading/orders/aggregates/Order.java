@@ -38,9 +38,9 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * no-op. The order closes — {@link OrderClosed} — exactly once, when it first reaches a terminal status, and that is
  * the release automation's trigger. Reached through {@link Orders}.
  * <p>
- * A {@code DAY} order still open when its business day closes is expired by the brokerage until the exchange does it
- * itself (SR-17): {@link #expire} asks the exchange to cancel it, and the exchange's cancellation then closes it
- * {@code EXPIRED} rather than {@code CANCELLED}.
+ * A {@code DAY} order still open when its business day closes is expired by the exchange itself (SR-17,
+ * {@link #markExpired}). The stub exchange does not expire orders, so there the brokerage does it: {@link #expire} asks
+ * the exchange to cancel it, and the exchange's cancellation then closes it {@code EXPIRED} rather than {@code CANCELLED}.
  */
 public class Order extends AggregateRoot<OrderId, OrderEvent, Order> {
     /**
@@ -189,6 +189,20 @@ public class Order extends AggregateRoot<OrderId, OrderEvent, Order> {
         } else {
             apply(new OrderCancelled(aggregateId(), reason));
         }
+        close();
+    }
+
+    /**
+     * The exchange expired the order at the end of its business day (SR-17). A fact like a cancellation: an order that
+     * already closed is left alone.
+     *
+     * @param businessDate the day that ended, or {@code null} if the exchange did not say (until SR-32)
+     */
+    public void markExpired(LocalDate businessDate) {
+        if (status.isTerminal()) {
+            return;
+        }
+        apply(new OrderExpired(aggregateId(), businessDate != null ? businessDate : expiringBusinessDate));
         close();
     }
 

@@ -9,10 +9,11 @@ generator: essentials
 language: java
 
 reactsTo: [OrderPlaced, OrderCancelRequested, OrderExpiryRequested]
-sends: [RecordExchangeAnswer, RecordFill, RecordCancellation, ExpireOrder]
+sends: [RecordExchangeAnswer, RecordFill, RecordCancellation, RecordExpiry, ExpireOrder]
 reads:
   - { name: OpenDayOrders, via: OrdersQuery }
 endpoints:
+  # Stub exchange only; under the simulators profile the exchange expires DAY orders itself
   - { method: POST, path: "/api/admin/orders/business-day-closed", auth: operator }
   # The exchange's signed webhook (subscription demo-orders); its event log is read as well
   - { method: POST, path: "/webhooks/exchange/orders", auth: service }
