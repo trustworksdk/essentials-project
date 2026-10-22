@@ -846,17 +846,12 @@ class ShardOwnedUnorderedReleaseChargeIT {
     }
 
     /**
-     * Delete unordered message {@code seq} of {@code shard}, as {@code ShardOwnedStorage.deleteMessage} - the admin API's
-     * delete - does.
+     * Delete unordered message {@code seq} of {@code shard} with {@link ShardOwnedStorage#deleteMessage}, the delete the
+     * admin API's message delete runs on a message still in its lane ({@code PostgresqlMessageQueue.deleteMessage}).
      */
     private void deleteUnorderedMessage(int shard, long seq) throws SQLException {
-        try (var connection = dataSource.getConnection();
-             var statement = connection.prepareStatement("DELETE FROM " + ShardOwnedSchema.UNORDERED_TABLE + " WHERE queue_id = ? AND shard = ? AND seq = ?")) {
-            statement.setShort(1, QUEUE_ID);
-            statement.setInt(2, shard);
-            statement.setLong(3, seq);
-            assertThat(statement.executeUpdate()).as("premise: the message in its handler is deleted").isEqualTo(1);
-        }
+        assertThat(new ShardOwnedStorage(dataSource, QUEUE_ID).deleteMessage(shard, seq, false))
+                .as("premise: the message in its handler is deleted").isTrue();
     }
 
     private String ownerOf(int shard) throws SQLException {
