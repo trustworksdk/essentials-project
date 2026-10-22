@@ -20,6 +20,7 @@ everything else: their command type, their one API file, their handler and their
 | `use_cases/risk_approve_instrument` | automation | Runs a newly registered instrument through an external risk assessment and records the answer. The demo's `UnitOfWorkMode.NONE` example |
 | `views/instrument_details` | view | Lists instruments and serves one by id, from a projection. Includes risk status |
 | `views/market_quotes` | view | Latest quote per instrument from the exchange's market-data stream (synthetic without the simulators), in memory. Implements the `MarketQuotes` seam |
+| `views/closing_prices` | view | The exchange's `ClosingPriceIssued` per instrument and business day (SR-14), stored as issued (table `closing_price`; intake simulators profile only). Implements the `ClosingPrices` seam |
 
 ## `views/market_quotes` — the market as the exchange's feed reports it (D14, D19)
 
@@ -83,7 +84,8 @@ The importable surface of this context is `events/` and `types/`, and nothing el
 BC-private.
 
 `brokerage` imports one thing from here: `types/InstrumentId` — a trade names the instrument it was placed
-against. `orders` imports `types/InstrumentId` and the `types/MarketQuotes` seam. Nothing imports an aggregate.
+against. `orders` imports `types/InstrumentId` and the `types/MarketQuotes` seam; `accounts`' valuation the
+`types/ClosingPrices` seam. Nothing imports an aggregate.
 
 The stream name lives in `types/MarketDataAggregateTypes` rather than on the repository wrapper, because a
 foreign context that subscribes to these events has to name the stream — and `aggregates/` is not on its
@@ -93,6 +95,6 @@ read together at the point of use.
 ## Directories beside the slices
 
 - `events/` — the sealed `InstrumentEvent` hierarchy, one variant per file
-- `types/` — `InstrumentId`, `Symbol`, `RiskRating`, `MarketDataAggregateTypes`, the `MarketQuotes` seam
+- `types/` — `InstrumentId`, `Symbol`, `RiskRating`, `MarketDataAggregateTypes`, the `MarketQuotes` and `ClosingPrices` seams
 - `aggregates/` — `Instrument` plus its `StatefulAggregateRepository` wrapper `Instruments`, which persists an
   already-constructed aggregate and never builds one

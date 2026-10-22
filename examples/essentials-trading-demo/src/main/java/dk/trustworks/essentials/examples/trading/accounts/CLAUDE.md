@@ -55,5 +55,6 @@ books `END_OF_DAY` in New York until EF-1, snapshots every 100 events.
 | `correct_settlement_amount` | command | operator; `settlement`, a corrected settlement (4) |
 | `roll_account_books` | command | operator; end of day (EF-1) |
 | `account_overview`, `positions`, `account_activity` | view | customer (own accounts) and operator |
+| `account_valuation` | view | customer (`GET /api/accounts/{accountId}/valuation`): current positions at the latest closing prices (`market_data`'s `ClosingPrices` seam), worked out when asked, not kept per day (4) |
 | `uncleared_deposits` | view | `clear_deposits` |
 | `automations/clear_deposits` | automation | the exchange's business days (`integration/BusinessCalendar`), simulators profile only (2) |

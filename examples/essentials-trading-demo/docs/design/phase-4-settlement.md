@@ -80,9 +80,10 @@ the cash but leave cost basis and P&L wrong.
 - `market_data/views/closing_prices`: `ClosingPriceIssued` per instrument and business day (price, basis
   `LAST_TRADE` / `REFERENCE`, volume), through the exchange's webhook and catch-up. Durable and replayable (SR-14),
   unlike the stream.
-- `accounts/views/account_valuation`: per account and business day, each position (settled + pending in − pending out)
-  at that day's closing price, and the total with the cash balance. Recomputed when a closing price arrives; the
-  intraday value from `MarketQuotes` stays as it is.
+- `accounts/views/account_valuation`: each position (settled + pending in − pending out) at its latest closing price,
+  and the total with the cash balance. **As built:** worked out when asked, from the current positions, so it is the
+  valuation as of the latest close and not kept per business day - positions are current state, and a past day's
+  valuation belongs to account statements (later). The intraday value from `MarketQuotes` stays as it is.
 
 ## 7. Deleting `brokerage` (Q-3)
 
