@@ -1,6 +1,6 @@
 # Phase 4 design — settlement
 
-**Status:** proposal (2026-10-22). Decisions this note asks for are marked **(Q-n)** and collected in §8.
+**Status:** decided (§8, 2026-10-22). Decisions are marked **(Q-n)** in the text.
 **Plan:** [`../EXPANSION_PLAN.md`](../EXPANSION_PLAN.md) phase 4; decisions D8, D10, D11, D20, D23; simulator
 requirements SR-14 (closing prices), SR-29 (dates on executions), SR-35 (holidays, bundled).
 **Builds on:** the ledger of phase 1, whose `settle_trade` and `reverse_trade_booking` exist with operator endpoints
@@ -96,7 +96,9 @@ it carried that the demo must keep showing: snapshots and closing books live on 
 
 ## 8. Decisions
 
-| | Question | Proposed |
+All four proposals accepted (2026-10-22).
+
+| | Question | Decided |
 |---|---|---|
 | **Q-1** | A failed, cancelled or rejected settlement | Reverse the booking and list the execution as an operator case (§4) |
 | **Q-2** | A corrected settlement amount | A ledger fact `SettlementAmountCorrected` on settled cash, cost basis (buy) or realized P&L (sell) (§5) |
