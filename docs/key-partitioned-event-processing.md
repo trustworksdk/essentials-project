@@ -529,8 +529,8 @@ could not come. In the 319-order run every stuck order's limit lay inside the as
 Fixed in the harness (`47c23cc8`): a 5 % margin, and a run that stands still for 10 s cancels such orders and reports
 them as `restedUnexpectedly` instead of hanging.
 
-**Two speeds, and where the ceiling sits now** (2026-10-21/22, one instance, same setup, 8 / 8 / 8 consumers on a
-40-connection pool, 200 x 50 orders). After the fixes above, runs still came out at one of two speeds, polling and CDC
+**Two speeds, and where the ceiling sits now** (2026-10-21/22, one instance, `compose` profile with the demo's
+defaults - 1 / 1 / 2 inbox consumers, a 20-connection pool - and the isolation opt-in, 200 x 50 orders). After the fixes above, runs still came out at one of two speeds, polling and CDC
 alike (CDC ~117 or ~178 completed orders/s, pure polling ~124 or ~200). Three causes, each fixed and measured:
 
 | Cause | Where | Fix | Effect on the order flow |
