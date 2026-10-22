@@ -23,7 +23,6 @@ import org.slf4j.*;
 import java.sql.*;
 import java.time.Duration;
 import java.util.*;
-import java.util.concurrent.ConcurrentSkipListSet;
 import java.util.concurrent.atomic.*;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
@@ -338,33 +337,11 @@ final class OrderedShardOwner implements BatchReadableOwner {
     private boolean exhaustionPending;
 
     /**
-     * Guards the fields of {@link #chargeKeysInHandlerBeforeRelease} below it (the last one only for its writes).
+     * The charge {@link #chargeKeysInHandlerBeforeRelease} makes, shared with the unordered lane: the rows charged before a
+     * release past their handlers, each with its key, and their dead-letter moves. A failure the handler of a message it
+     * dead-lettered reports later records nothing, as the row is gone ({@link #onFailure}).
      */
-    private final Object              releaseChargeLock     = new Object();
-    /**
-     * The rows charged before a release past their handlers, each with its attempt count after the charge, recorded as soon
-     * as the charge has committed. See {@link #chargeKeysInHandlerBeforeRelease}.
-     */
-    private final Map<Long, Integer>  chargedOnRelease      = new TreeMap<>();
-    /**
-     * The key of each row in {@link #chargedOnRelease}.
-     */
-    private final Map<Long, String>   keysChargedOnRelease  = new HashMap<>();
-    /**
-     * The rows of {@link #chargedOnRelease} whose dead-letter move at the redelivery limit has been made, each with whether
-     * it moved the row: {@code false} when the row was gone or no longer this owner's.
-     */
-    private final Map<Long, Boolean>  deadLetterMoveMade    = new TreeMap<>();
-    /**
-     * The keys whose charged message has been dead-lettered at the redelivery limit.
-     */
-    private final List<String>        deadLetteredOnRelease = new ArrayList<>();
-    /**
-     * The rows (by seq) whose message {@link #chargeKeysInHandlerBeforeRelease} dead-lettered at the redelivery limit while
-     * its handler still ran: a failure that handler reports later records nothing, as the row is gone
-     * ({@link #onFailure}). Read by the handler threads, written under {@link #releaseChargeLock}.
-     */
-    private final Set<Long>           seqsDeadLetteredOnRelease = new ConcurrentSkipListSet<>();
+    private final ReleaseChargeLedger releaseChargeLedger;
 
     /**
      * What to run once no key is in a handler ({@link #whenNoKeyInHandler}); {@code null} unless this owner's queue kept
@@ -395,6 +372,18 @@ final class OrderedShardOwner implements BatchReadableOwner {
         this.wakeup = requireNonNull(wakeup, "No wakeup provided");
         this.dispatch = requireNonNull(dispatch, "No dispatch provided");
         this.takeoverCharged = previousOwnerReleased;
+        this.releaseChargeLedger = new ReleaseChargeLedger(MessageId.Lane.ORDERED, shard, new ReleaseChargeLedger.Writes() {
+            @Override
+            public Map<Long, Integer> chargeRowsInHandler(Connection connection, Collection<Long> seqs) throws SQLException {
+                return storage.chargeRowsInHandler(connection, ShardOwnedSchema.ORDERED_TABLE, shard, seqs, instanceId, fence);
+            }
+
+            @Override
+            public boolean moveToDeadLetterIfOwned(Connection connection, long seq) throws SQLException {
+                return storage.moveToDeadLetterIfOwned(connection, ShardOwnedSchema.ORDERED_TABLE, "ordered", shard, seq,
+                                                       ShardOwnedStorage.EXHAUSTED_IN_A_RELEASED_HANDLER, instanceId, fence);
+            }
+        }, redeliveryPolicy, metrics, this::recordChargedAttempts);
     }
 
     @Override
@@ -903,7 +892,7 @@ final class OrderedShardOwner implements BatchReadableOwner {
      * resurrected or deleted.
      */
     private void onFailure(String key, long keyOrder, ShardOwnedStorage.OrderedRow row, Throwable cause) {
-        if (seqsDeadLetteredOnRelease.contains(row.seq())) {
+        if (releaseChargeLedger.deadLetteredWhileInHandler(row.seq())) {
             // Dead-lettered while this handler ran, by the charge before a release (chargeKeysInHandlerBeforeRelease): the row
             // is gone, so there is no attempt to count and nothing to retry - whether the release then succeeded, or failed
             // and left this owner holding the unit.
@@ -1632,11 +1621,15 @@ final class OrderedShardOwner implements BatchReadableOwner {
      * failed and is retried does not charge it again, and a message that has gone past the bound since - or a release on
      * request after a shed's or a hand-back's - is charged by the later call; the dead-letter moves are made until a call
      * completes them, as the takeover's exhaustion pass is. Callers do not run it for one owner at the same time (the
-     * queue's heartbeat, or a release on request under its claim); the monitor makes it safe if they do.
+     * queue's heartbeat, or a release on request under its claim); the ledger's monitor makes it safe if they do.
      * <p>
      * The {@code QueueObserver} told of a message dead-lettered here is told after the move, and what it throws is held
      * until every move is made, then thrown: by then nothing is owed ({@link #owesReleaseCharge}), so the queue tells that
      * failure from a failed charge and releases the unit all the same.
+     * <p>
+     * The charge itself is {@link ReleaseChargeLedger}'s, which the unordered lane composes too
+     * ({@code ShardOwner.chargeInHandlerBeforeRelease}); this owner supplies only its candidates - the message of each key
+     * in a handler that {@code scope} names - and its table. The dead-lettered keys it reports are in sequence order.
      *
      * @param scope which messages in a handler to charge
      * @return what this owner has charged and dead-lettered so far, this call included; nothing when no message in a
@@ -1649,65 +1642,7 @@ final class OrderedShardOwner implements BatchReadableOwner {
      */
     ReleaseCharge chargeKeysInHandlerBeforeRelease(Connection connection, ReleaseChargeScope scope) throws SQLException {
         requireNonNull(scope, "No scope provided");
-        synchronized (releaseChargeLock) {
-            var keyBySeq = keysInHandlerNotChargedYet(scope);
-            if (!keyBySeq.isEmpty()) {
-                var charged = storage.chargeRowsInHandler(connection, ShardOwnedSchema.ORDERED_TABLE, shard, keyBySeq.keySet(), instanceId, fence);
-                metrics.takeoverAttemptBumps.add(charged.size());
-                // The charge has committed: recorded before anything else can fail, or a retried release charges again
-                chargedOnRelease.putAll(charged);
-                charged.keySet().forEach(seq -> keysChargedOnRelease.put(seq, keyBySeq.get(seq)));
-                // And as the count this owner has for each, so a failure its handler reports later - the release having
-                // failed, and this owner holding the unit on - counts on from the charge: countAttempt prefers this map to
-                // the row, and scheduleRetryIfOwned writes the count it is given, which would undo the charge.
-                synchronized (stateLock) {
-                    attemptsBySeq.putAll(charged);
-                }
-            }
-            Throwable observerFailure = null;
-            for (var row : chargedOnRelease.entrySet()) {
-                var seq = row.getKey();
-                if (!redeliveryPolicy.isExhausted(row.getValue()) || deadLetterMoveMade.containsKey(seq)) {
-                    continue;
-                }
-                var     key = keysChargedOnRelease.get(seq);
-                boolean moved;
-                try {
-                    moved = storage.moveToDeadLetterIfOwned(connection, ShardOwnedSchema.ORDERED_TABLE, "ordered", shard, seq,
-                                                            ShardOwnedStorage.EXHAUSTED_IN_A_RELEASED_HANDLER, instanceId, fence);
-                } catch (SQLException | RuntimeException | Error e) {
-                    if (observerFailure != null) {
-                        e.addSuppressed(observerFailure);
-                    }
-                    throw e;
-                }
-                deadLetterMoveMade.put(seq, moved);
-                if (moved) {
-                    deadLetteredOnRelease.add(key);
-                    seqsDeadLetteredOnRelease.add(seq);
-                    // Counted before the observer is told: one that throws leaves the move made and remembered, so no later
-                    // call reaches this line for the key again.
-                    metrics.deadLettered.increment();
-                    try {
-                        metrics.observer().deadLettered(new MessageId(MessageId.Lane.ORDERED, shard, seq), row.getValue(),
-                                                        new IllegalStateException(ShardOwnedStorage.EXHAUSTED_IN_A_RELEASED_HANDLER));
-                    } catch (RuntimeException | Error e) {
-                        // The other moves are made first, and then this is thrown: with nothing left owed (owesReleaseCharge),
-                        // the queue releases the unit all the same.
-                        Exceptions.rethrowIfCriticalError(e);
-                        if (observerFailure == null) {
-                            observerFailure = e;
-                        } else if (!observerFailure.equals(e)) {
-                            observerFailure.addSuppressed(e);
-                        }
-                    }
-                }
-            }
-            if (observerFailure != null) {
-                Exceptions.sneakyThrow(observerFailure);
-            }
-            return currentReleaseCharge();
-        }
+        return toReleaseCharge(releaseChargeLedger.charge(connection, releaseChargeCandidates(scope)));
     }
 
     /**
@@ -1720,36 +1655,38 @@ final class OrderedShardOwner implements BatchReadableOwner {
      */
     boolean owesReleaseCharge(ReleaseChargeScope scope) {
         requireNonNull(scope, "No scope provided");
-        synchronized (releaseChargeLock) {
-            if (!keysInHandlerNotChargedYet(scope).isEmpty()) {
-                return true;
-            }
-            return chargedOnRelease.entrySet().stream()
-                                   .anyMatch(row -> redeliveryPolicy.isExhausted(row.getValue()) && !deadLetterMoveMade.containsKey(row.getKey()));
-        }
+        return releaseChargeLedger.owes(releaseChargeCandidates(scope));
     }
 
     /**
      * What {@link #chargeKeysInHandlerBeforeRelease} has charged and dead-lettered so far, without writing anything.
      */
     ReleaseCharge releaseCharge() {
-        synchronized (releaseChargeLock) {
-            return currentReleaseCharge();
+        return toReleaseCharge(releaseChargeLedger.answer());
+    }
+
+    private static ReleaseCharge toReleaseCharge(ReleaseChargeLedger.Answer answer) {
+        return answer.charged() == 0 ? ReleaseCharge.NONE
+                                     : new ReleaseCharge(answer.charged(), answer.deadLettered().stream().map(ReleaseChargeLedger.ChargedRow::key).toList());
+    }
+
+    /**
+     * The count after the charge of each row {@link #chargeKeysInHandlerBeforeRelease} charged, as the count this owner has
+     * for it, so a failure its handler reports later - the release having failed, and this owner holding the unit on -
+     * counts on from the charge: {@link #countAttempt} prefers this map to the row, and {@code scheduleRetryIfOwned} writes
+     * the count it is given, which would undo the charge.
+     */
+    private void recordChargedAttempts(Map<Long, Integer> charged) {
+        synchronized (stateLock) {
+            attemptsBySeq.putAll(charged);
         }
     }
 
     /**
-     * What has been charged and dead-lettered so far; called under {@link #releaseChargeLock}.
+     * The message (by seq) of each key in a handler that {@code scope} names, with its key, in the order the keys entered
+     * their handlers: the candidates of {@link #chargeKeysInHandlerBeforeRelease}.
      */
-    private ReleaseCharge currentReleaseCharge() {
-        return chargedOnRelease.isEmpty() ? ReleaseCharge.NONE : new ReleaseCharge(chargedOnRelease.size(), List.copyOf(deadLetteredOnRelease));
-    }
-
-    /**
-     * The message (by seq) of each key in a handler that {@code scope} names and this owner has not charged before a
-     * release, with its key, in the order the keys entered their handlers. Called under {@link #releaseChargeLock}.
-     */
-    private Map<Long, String> keysInHandlerNotChargedYet(ReleaseChargeScope scope) {
+    private Map<Long, String> releaseChargeCandidates(ReleaseChargeScope scope) {
         var now      = System.nanoTime();
         var bound    = settings.stuckHandlerTimeout().toNanos();
         var keyBySeq = new LinkedHashMap<Long, String>();
@@ -1760,7 +1697,6 @@ final class OrderedShardOwner implements BatchReadableOwner {
                 }
             });
         }
-        keyBySeq.keySet().removeAll(chargedOnRelease.keySet());
         return keyBySeq;
     }
 
