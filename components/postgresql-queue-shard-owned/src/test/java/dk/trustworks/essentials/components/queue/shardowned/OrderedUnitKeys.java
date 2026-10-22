@@ -16,6 +16,8 @@
 
 package dk.trustworks.essentials.components.queue.shardowned;
 
+import java.util.*;
+
 /**
  * Finds a key that the ordered lane routes to a given unit, for the tests that need a message on a unit chosen up front
  * (the unit another key is stuck on, the unit a test holds). A shared, bounded search: it tries a bounded number of
@@ -32,37 +34,29 @@ final class OrderedUnitKeys {
     }
 
     /**
-     * The first key {@code prefix + n} that {@link ShardOwnedSchema#unitForKey(String, int)} routes to {@code unit} in a
-     * routing space of {@code units}.
+     * The first key {@code prefix + n}, other than each of {@code others}, that
+     * {@link ShardOwnedSchema#unitForKey(String, int)} routes to {@code unit} in a routing space of {@code units}; when a
+     * key of {@code others} routes to {@code unit} too, its messages and the result's are served by the same owner. Two
+     * keys of one unit besides a given one are {@code a = keyInUnit(p, u, n, given)} and
+     * {@code keyInUnit(p, u, n, given, a)}.
      *
+     * @param others the keys the result must differ from; none to take the first key that routes to {@code unit}
      * @throws AssertionError when {@code unit} lies outside the routing space, or none of the {@link #CANDIDATES} candidates
-     *                        routes to it
+     *                        other than {@code others} routes to it
      */
-    static String keyInUnit(String prefix, int unit, int units) {
-        return keyInUnit(prefix, unit, units, null);
-    }
-
-    /**
-     * The first key {@code prefix + n} other than {@code other} that {@link ShardOwnedSchema#unitForKey(String, int)} routes
-     * to {@code unit} in a routing space of {@code units}; when {@code other} routes to {@code unit} too, the two keys'
-     * messages are served by the same owner.
-     *
-     * @param other a key the result must differ from, or {@code null} for none
-     * @throws AssertionError when {@code unit} lies outside the routing space, or none of the {@link #CANDIDATES} candidates
-     *                        other than {@code other} routes to it
-     */
-    static String keyInUnit(String prefix, int unit, int units, String other) {
+    static String keyInUnit(String prefix, int unit, int units, String... others) {
         if (unit < 0 || unit >= units) {
             throw new AssertionError("Ordered unit " + unit + " is outside the routing space of " + units + " units");
         }
+        var excluded = Arrays.asList(others);
         for (var index = 0; index < CANDIDATES; index++) {
             var candidate = prefix + index;
-            if (!candidate.equals(other) && ShardOwnedSchema.unitForKey(candidate, units) == unit) {
+            if (!excluded.contains(candidate) && ShardOwnedSchema.unitForKey(candidate, units) == unit) {
                 return candidate;
             }
         }
         throw new AssertionError("None of the keys " + prefix + "0 to " + prefix + (CANDIDATES - 1)
-                                 + (other == null ? "" : " other than " + other)
+                                 + (excluded.isEmpty() ? "" : " other than " + String.join(", ", excluded))
                                  + " routes to ordered unit " + unit + " of " + units);
     }
 }

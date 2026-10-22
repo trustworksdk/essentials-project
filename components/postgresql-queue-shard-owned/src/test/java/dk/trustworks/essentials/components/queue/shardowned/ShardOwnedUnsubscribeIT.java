@@ -1499,9 +1499,7 @@ class ShardOwnedUnsubscribeIT {
         var leaseTtl = Duration.ofSeconds(3);
         var deleted  = "ACC-1";
         var unit     = ShardOwnedSchema.unitForKey(deleted, ShardOwnedSchema.ORDERED_UNITS);
-        var other    = java.util.stream.IntStream.range(2, 100_000).mapToObj(i -> "ACC-" + i)
-                                                 .filter(key -> ShardOwnedSchema.unitForKey(key, ShardOwnedSchema.ORDERED_UNITS) == unit)
-                                                 .findFirst().orElseThrow();
+        var other    = OrderedUnitKeys.keyInUnit("ACC-", unit, ShardOwnedSchema.ORDERED_UNITS, deleted);
         var entered  = new CountDownLatch(2);
         var release  = new CountDownLatch(1);
         var told     = new AtomicInteger();
@@ -1692,12 +1690,8 @@ class ShardOwnedUnsubscribeIT {
         var leaseTtl      = Duration.ofSeconds(3);
         var hung          = "ACC-1";
         var unit          = ShardOwnedSchema.unitForKey(hung, ShardOwnedSchema.ORDERED_UNITS);
-        var sameUnit      = java.util.stream.IntStream.range(2, 100_000).mapToObj(i -> "ACC-" + i)
-                                                      .filter(key -> ShardOwnedSchema.unitForKey(key, ShardOwnedSchema.ORDERED_UNITS) == unit)
-                                                      .limit(2)
-                                                      .toList();
-        var returnedBefore = sameUnit.get(0);
-        var returnsDuring  = sameUnit.get(1);
+        var returnedBefore = OrderedUnitKeys.keyInUnit("ACC-", unit, ShardOwnedSchema.ORDERED_UNITS, hung);
+        var returnsDuring  = OrderedUnitKeys.keyInUnit("ACC-", unit, ShardOwnedSchema.ORDERED_UNITS, hung, returnedBefore);
         var releases       = Map.of(hung, new CountDownLatch(1), returnedBefore, new CountDownLatch(1), returnsDuring, new CountDownLatch(1));
         var entered        = new CountDownLatch(3);
         var onConnection   = new RunBeforeConnectionDataSource(dataSource);

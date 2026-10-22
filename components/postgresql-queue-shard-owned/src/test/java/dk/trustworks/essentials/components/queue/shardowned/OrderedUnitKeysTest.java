@@ -45,6 +45,26 @@ class OrderedUnitKeysTest {
     }
 
     @Test
+    void never_returns_any_of_several_keys_it_is_told_to_avoid() {
+        var first  = OrderedUnitKeys.keyInUnit("YOUNG-", 7, ShardOwnedSchema.ORDERED_UNITS);
+        var second = OrderedUnitKeys.keyInUnit("YOUNG-", 7, ShardOwnedSchema.ORDERED_UNITS, first);
+
+        var key = OrderedUnitKeys.keyInUnit("YOUNG-", 7, ShardOwnedSchema.ORDERED_UNITS, first, second);
+
+        assertThat(key).isNotIn(first, second);
+        assertThat(ShardOwnedSchema.unitForKey(key, ShardOwnedSchema.ORDERED_UNITS)).isEqualTo(7);
+    }
+
+    @Test
+    @Timeout(value = 10, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
+    void fails_naming_the_unit_and_the_keys_it_avoided_when_no_other_candidate_routes_to_it() {
+        var unreachable = unitNoCandidateRoutesTo();
+        assertThatThrownBy(() -> OrderedUnitKeys.keyInUnit("X", unreachable.unit(), unreachable.units(), "X1", "X2"))
+                .isInstanceOf(AssertionError.class)
+                .hasMessageContaining("other than X1, X2 routes to ordered unit " + unreachable.unit() + " of " + unreachable.units());
+    }
+
+    @Test
     @Timeout(value = 10, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
     void fails_naming_the_unit_when_the_unit_is_outside_the_routing_space() {
         assertThatThrownBy(() -> OrderedUnitKeys.keyInUnit("YOUNG-", ShardOwnedSchema.ORDERED_UNITS, ShardOwnedSchema.ORDERED_UNITS))
