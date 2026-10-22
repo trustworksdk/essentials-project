@@ -320,8 +320,13 @@ so a message whose handler hangs on every delivery is dead-lettered too, once th
 `maxAttempts` times. An unordered shard is released without waiting for its handlers - by a fair-share shed or a
 dead-pump hand-back at once, by `stop()` once `shedGrace` has run out - and each message in one of them longer than
 `stuckHandlerTimeout` is charged its attempt the same way before the release, and dead-lettered at `maxAttempts`; one
-in a handler for less is released uncharged. A hang in a handler of an owner that goes on serving its unit is not
-bounded by this.
+in a handler for less is released uncharged. On both lanes a message deleted through the admin API while in its
+handler is not charged and does not hold the release up, and when the release is refused after the charge and the
+owner keeps the unit or shard, a failure its handler then reports counts on from the charged attempt. A handler that
+returns after the charge has dead-lettered its message is neither acknowledged nor counted in `delivered`: one that
+completes logs a WARN saying that resurrecting the dead letter delivers the message again, and one that throws logs a
+WARN with its exception and is reported to `QueueObserver.deliveryFailed` at the charged count (not for a requested
+redelivery). A hang in a handler of an owner that goes on serving its unit is not bounded by this.
 
 ### What a handler is given
 

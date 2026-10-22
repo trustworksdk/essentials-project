@@ -917,6 +917,19 @@ lease as a failed release does, so whoever takes the shard over next charges, as
 `QueueObserver` that throws when told of a message the charge dead-lettered does not keep the shard: it
 is released all the same, with a WARN.
 
+On both lanes, a message deleted through the admin API while in its handler is not charged and is not
+asked for again, so it does not hold the release up. When the release is refused after the charge and the
+owner keeps the unit or shard, a failure its handler then reports counts on from the charged attempt
+instead of undoing the charge. A handler that returns after the charge has dead-lettered its message is
+neither acknowledged nor counted in `ShardOwnerMetrics.delivered`: one that completes logs a WARN saying
+that resurrecting the dead letter delivers the message again, and one that throws logs a WARN with its
+exception - the dead letter carries the release's error, not what the handler threw - and is reported
+to `QueueObserver.deliveryFailed` at the charged count (not for a requested redelivery). A handler that
+returns before the charge has taken its message is left alone by it: the charge neither charges nor
+dead-letters that message, and the handler's acknowledgement or failure goes the way it would without
+the charge - recorded only if written while this owner still holds the unit or shard, otherwise the
+next owner delivers the message again, as after any release.
+
 `keptUnitsInHandler()` (also in `snapshot()`) counts the kept units whose key is in its handler now:
 normally zero, so alert on it staying above zero. A unit taken over at the bound still counts while
 its stuck handler runs on, and so does a unit a shed or a dead pump's hand-back released at the bound,
