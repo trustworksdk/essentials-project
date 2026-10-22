@@ -16,6 +16,8 @@
 
 package dk.trustworks.essentials.components.queue.shardowned;
 
+import org.postgresql.PGStatement;
+
 import javax.sql.DataSource;
 import java.sql.*;
 import java.time.*;
@@ -113,6 +115,28 @@ public final class ShardOwnedStorage {
         try (var statement = connection.prepareStatement("SELECT pg_current_xact_id()")) {
             statement.execute();
         }
+    }
+
+    /**
+     * A statement PostgreSQL plans afresh on every execution, from the parameters and the table as it is now - for the
+     * shard-scoped reads and acknowledgements a pump or owner repeats on its one long-lived connection.
+     * <p>
+     * pgjdbc server-prepares a statement from its fifth use on a connection, and PostgreSQL then switches to a generic
+     * plan if that costs no more than the custom ones it has made. A queue table vacuumed or analyzed while drained has
+     * statistics saying it is empty ({@code relpages = 0, reltuples = 0}), which the planner trusts; the generic plan
+     * made then is a sequential scan plus sort per shard, and it stays cached until the next analyze. When a burst
+     * follows, a multi-shard read scans the whole table once per shard: 70 ms against 0.4 ms for 32 units of 1 000 rows
+     * (the custom plan uses the {@code seq} index, planned in 0.08 ms). In the trading demo autovacuum drained-vacuumed
+     * the ordered table just before the order flow in about half the runs, and one pump's queues then crawled at ~50
+     * messages/s until auto-analyze 30-40 s later - so the flow ran at one of two speeds. Never server-prepared, each
+     * execution is planned with the parameters and the table's current size. {@code ShardOwnedOrderedReadPlanIT}.
+     */
+    private static PreparedStatement prepareFreshlyPlanned(Connection connection, String sql) throws SQLException {
+        var statement = connection.prepareStatement(sql);
+        if (statement.isWrapperFor(PGStatement.class)) {
+            statement.unwrap(PGStatement.class).setPrepareThreshold(0);
+        }
+        return statement;
     }
 
     @FunctionalInterface
@@ -270,7 +294,7 @@ public final class ShardOwnedStorage {
                 + " AND (lease IS NULL OR lease <> ?)"
                 + notRowLeasedClause()
                 + " ORDER BY seq LIMIT " + limit;
-        try (var statement = connection.prepareStatement(sql)) {
+        try (var statement = prepareFreshlyPlanned(connection, sql)) {
             statement.setShort(1, queueId);
             statement.setInt(2, shard);
             statement.setLong(3, cursor);
@@ -301,7 +325,7 @@ public final class ShardOwnedStorage {
         // obvious shape and would reintroduce exactly the skew this engine avoids everywhere else:
         // a node whose clock runs five seconds behind the database would wait five seconds too long
         // for every delayed message. An interval is clock-free by construction.
-        try (var statement = connection.prepareStatement(
+        try (var statement = prepareFreshlyPlanned(connection,
                 "SELECT EXTRACT(EPOCH FROM (min(visible_at) - now())) * 1000 FROM " + table
                         + " WHERE queue_id = ? AND shard = ? AND visible_at > now()")) {
             statement.setShort(1, queueId);
@@ -330,7 +354,7 @@ public final class ShardOwnedStorage {
         var sql = "SELECT seq, payload, payload_type FROM " + UNORDERED_TABLE
                 + " WHERE queue_id = ? AND shard = ? AND seq = ANY(?) AND visible_at <= now()"
                 + notRowLeasedClause();
-        try (var statement = connection.prepareStatement(sql)) {
+        try (var statement = prepareFreshlyPlanned(connection, sql)) {
             statement.setShort(1, queueId);
             statement.setInt(2, shard);
             statement.setArray(3, connection.createArrayOf("bigint", seqs.toArray(Long[]::new)));
@@ -360,7 +384,7 @@ public final class ShardOwnedStorage {
                 + notRowLeasedClause()
                 + " AND (lease IS NULL OR lease <> ? OR enqueued_at <= now() - make_interval(secs => ? / 1000.0))"
                 + " ORDER BY seq LIMIT " + limit;
-        try (var statement = connection.prepareStatement(sql)) {
+        try (var statement = prepareFreshlyPlanned(connection, sql)) {
             statement.setShort(1, queueId);
             statement.setInt(2, shard);
             statement.setLong(3, ownFence);
@@ -396,7 +420,7 @@ public final class ShardOwnedStorage {
                            String owner, long fence) throws SQLException {
         var deleted = 0;
         if (contiguousThrough > rangeAbove) {
-            try (var statement = connection.prepareStatement(
+            try (var statement = prepareFreshlyPlanned(connection,
                     "DELETE FROM " + UNORDERED_TABLE + " u WHERE u.queue_id = ? AND u.shard = ? AND u.seq <= ? AND u.seq > ?"
                             // A row a session holds is not the owner's to delete. Without this the range
                             // delete would remove it once its hole expired — undelivered, and while a
@@ -419,7 +443,7 @@ public final class ShardOwnedStorage {
             }
         }
         if (!stragglers.isEmpty()) {
-            try (var statement = connection.prepareStatement(
+            try (var statement = prepareFreshlyPlanned(connection,
                     "DELETE FROM " + UNORDERED_TABLE + " u WHERE u.queue_id = ? AND u.shard = ? AND u.seq = ANY(?)"
                             + stillOwnedClause())) {
                 statement.setShort(1, queueId);
@@ -1282,7 +1306,7 @@ public final class ShardOwnedStorage {
         var sql = "SELECT seq, msg_key, key_order, payload, payload_type FROM " + ORDERED_TABLE
                 + " WHERE queue_id = ? AND shard = ? AND seq > ? AND visible_at <= now()"
                 + " ORDER BY seq LIMIT " + limit;
-        try (var statement = connection.prepareStatement(sql)) {
+        try (var statement = prepareFreshlyPlanned(connection, sql)) {
             statement.setShort(1, queueId);
             statement.setInt(2, shard);
             statement.setLong(3, cursor);
@@ -1369,7 +1393,7 @@ public final class ShardOwnedStorage {
                 + "          WHERE o.queue_id = ? AND o.shard = cur.shard::smallint AND o.seq > cur.cursor"
                 + "            AND o.visible_at <= now()"
                 + "          ORDER BY o.seq LIMIT " + perShardLimit + ") x";
-        try (var statement = connection.prepareStatement(sql)) {
+        try (var statement = prepareFreshlyPlanned(connection, sql)) {
             statement.setArray(1, connection.createArrayOf("int", boxed(shards)));
             statement.setArray(2, connection.createArrayOf("bigint", boxed(cursors)));
             statement.setShort(3, forQueueId);
@@ -1392,7 +1416,7 @@ public final class ShardOwnedStorage {
                 + "          FROM " + ORDERED_TABLE + " o"
                 + "          WHERE o.queue_id = ? AND o.shard = s.shard::smallint AND o.visible_at <= now()"
                 + "          ORDER BY o.seq LIMIT " + perShardLimit + ") x";
-        try (var statement = connection.prepareStatement(sql)) {
+        try (var statement = prepareFreshlyPlanned(connection, sql)) {
             statement.setArray(1, connection.createArrayOf("int", boxed(shards)));
             statement.setShort(2, forQueueId);
             return readOrderedRowsByShard(statement);
@@ -1411,7 +1435,7 @@ public final class ShardOwnedStorage {
         if (shards.length == 0) {
             return Map.of();
         }
-        try (var statement = connection.prepareStatement(
+        try (var statement = prepareFreshlyPlanned(connection,
                 "SELECT shard, EXTRACT(EPOCH FROM (min(visible_at) - now())) * 1000 FROM " + table
                         + " WHERE queue_id = ? AND shard = ANY(?) AND visible_at > now() GROUP BY shard")) {
             statement.setShort(1, forQueueId);
@@ -1460,7 +1484,7 @@ public final class ShardOwnedStorage {
     public List<OrderedRow> sweepOrderedFromHead(Connection connection, int shard, int limit) throws SQLException {
         var sql = "SELECT seq, msg_key, key_order, payload, payload_type FROM " + ORDERED_TABLE
                 + " WHERE queue_id = ? AND shard = ? AND visible_at <= now() ORDER BY seq LIMIT " + limit;
-        try (var statement = connection.prepareStatement(sql)) {
+        try (var statement = prepareFreshlyPlanned(connection, sql)) {
             statement.setShort(1, queueId);
             statement.setInt(2, shard);
             return readOrderedRows(statement);
@@ -1483,7 +1507,7 @@ public final class ShardOwnedStorage {
         }
         // Fenced, exactly as the unordered lane is. Its absence here was the gap: the lane whose
         // purpose is ordering was the one lane a superseded owner could still delete from.
-        try (var statement = connection.prepareStatement(
+        try (var statement = prepareFreshlyPlanned(connection,
                 "DELETE FROM " + ORDERED_TABLE + " o WHERE o.queue_id = ? AND o.shard = ? AND o.seq = ANY(?)"
                         + " AND EXISTS (SELECT 1 FROM " + LEASE_TABLE + " l"
                         + " WHERE l.queue_id = o.queue_id AND l.lane = 'ordered' AND l.shard = o.shard"
