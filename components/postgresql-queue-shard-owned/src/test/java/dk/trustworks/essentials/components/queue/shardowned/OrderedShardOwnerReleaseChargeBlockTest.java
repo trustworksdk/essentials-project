@@ -20,7 +20,6 @@ import org.junit.jupiter.api.Test;
 
 import javax.sql.DataSource;
 import java.lang.reflect.Proxy;
-import java.sql.*;
 import java.time.Duration;
 import java.util.*;
 
@@ -44,7 +43,7 @@ class OrderedShardOwnerReleaseChargeBlockTest {
         enterHandler(owner, "CHARGED-ONLY", 9L, 2L);
         hold(owner, new ShardOwnedStorage.OrderedRow(8L, "DEAD-LETTERED", 6L, new byte[0], 0));
         hold(owner, new ShardOwnedStorage.OrderedRow(10L, "CHARGED-ONLY", 3L, new byte[0], 0));
-        var database = new ChargingConnection(Map.of(7L, MAX_ATTEMPTS, 9L, 1));
+        var database = new ChargingConnection(ShardOwnedSchema.ORDERED_TABLE, Map.of(7L, MAX_ATTEMPTS, 9L, 1));
 
         var charge = owner.chargeKeysInHandlerBeforeRelease(database.connection(), OrderedShardOwner.ReleaseChargeScope.EVERY_KEY_IN_HANDLER);
 
@@ -62,7 +61,7 @@ class OrderedShardOwnerReleaseChargeBlockTest {
     void a_later_key_order_of_a_key_the_charge_dead_lettered_is_queued_for_the_dead_letter_table_when_it_is_read() throws Exception {
         var owner = owner();
         enterHandler(owner, "DEAD-LETTERED", 7L, 5L);
-        var database = new ChargingConnection(Map.of(7L, MAX_ATTEMPTS));
+        var database = new ChargingConnection(ShardOwnedSchema.ORDERED_TABLE, Map.of(7L, MAX_ATTEMPTS));
         owner.chargeKeysInHandlerBeforeRelease(database.connection(), OrderedShardOwner.ReleaseChargeScope.EVERY_KEY_IN_HANDLER);
 
         accept(owner, new ShardOwnedStorage.OrderedRow(11L, "DEAD-LETTERED", 6L, new byte[0], 0));
@@ -81,7 +80,7 @@ class OrderedShardOwnerReleaseChargeBlockTest {
         var owner = owner();
         enterHandler(owner, "ROW-GONE", 7L, 5L);
         hold(owner, new ShardOwnedStorage.OrderedRow(8L, "ROW-GONE", 6L, new byte[0], 0));
-        var database = new ChargingConnection(Map.of(7L, MAX_ATTEMPTS), Set.of(7L));
+        var database = new ChargingConnection(ShardOwnedSchema.ORDERED_TABLE, Map.of(7L, MAX_ATTEMPTS), Set.of(7L));
 
         var charge = owner.chargeKeysInHandlerBeforeRelease(database.connection(), OrderedShardOwner.ReleaseChargeScope.EVERY_KEY_IN_HANDLER);
 
@@ -166,103 +165,5 @@ class OrderedShardOwnerReleaseChargeBlockTest {
         var field = OrderedShardOwner.class.getDeclaredField(name);
         field.setAccessible(true);
         return field.get(owner);
-    }
-
-    /**
-     * A connection that answers the charge's {@code UPDATE ... RETURNING} with {@code chargedAttempts} - the attempt count
-     * after the charge of each row named - and the dead-letter move's {@code INSERT} and {@code DELETE} as if each moved the
-     * row, recording its sequence value; the move's {@code INSERT} of a row in {@code rowsGone} inserts nothing, as for a
-     * row no longer in the table or no longer the owner's. Any other statement fails the test.
-     */
-    private static final class ChargingConnection {
-        private final Map<Long, Integer> chargedAttempts;
-        private final Set<Long>          rowsGone;
-        private final List<Long>         moved = new ArrayList<>();
-
-        ChargingConnection(Map<Long, Integer> chargedAttempts) {
-            this(chargedAttempts, Set.of());
-        }
-
-        ChargingConnection(Map<Long, Integer> chargedAttempts, Set<Long> rowsGone) {
-            this.chargedAttempts = chargedAttempts;
-            this.rowsGone = rowsGone;
-        }
-
-        // Connection's own loader, not the thread's context loader: a proxy class must be defined in a loader that sees
-        // its interface, which the context loader need not.
-        @SuppressWarnings("PMD.UseProperClassLoader")
-        Connection connection() {
-            return (Connection) Proxy.newProxyInstance(Connection.class.getClassLoader(), new Class<?>[]{Connection.class}, (proxy, method, args) -> {
-                switch (method.getName()) {
-                    case "prepareStatement" -> {
-                        var sql = (String) args[0];
-                        if (sql.startsWith("UPDATE " + ShardOwnedSchema.ORDERED_TABLE)) {
-                            return statement(sql, true);
-                        }
-                        if (sql.startsWith("INSERT INTO ") || sql.startsWith("DELETE FROM " + ShardOwnedSchema.ORDERED_TABLE)) {
-                            return statement(sql, false);
-                        }
-                        throw new UnsupportedOperationException(sql);
-                    }
-                    case "createArrayOf", "setAutoCommit", "commit", "rollback" -> {
-                        return null;
-                    }
-                    case "getAutoCommit" -> {
-                        return true;
-                    }
-                    default -> throw new UnsupportedOperationException(method.getName());
-                }
-            });
-        }
-
-        // PreparedStatement's own loader, not the thread's context loader: a proxy class must be defined in a loader that
-        // sees its interface, which the context loader need not.
-        @SuppressWarnings("PMD.UseProperClassLoader")
-        private PreparedStatement statement(String sql, boolean charge) {
-            var seq = new long[1];
-            return (PreparedStatement) Proxy.newProxyInstance(PreparedStatement.class.getClassLoader(), new Class<?>[]{PreparedStatement.class},
-                                                              (proxy, method, args) -> {
-                                                                  var name = method.getName();
-                                                                  // Parameter 5 of the move's INSERT is the row's seq (m.seq = ? in
-                                                                  // ShardOwnedStorage.moveToDeadLetter): this depends on that bind order.
-                                                                  if ("setLong".equals(name) && !charge && (int) args[0] == 5) {
-                                                                      seq[0] = (long) args[1];
-                                                                  }
-                                                                  if ("executeQuery".equals(name) && charge) {
-                                                                      return resultSet(new ArrayList<>(new TreeMap<>(chargedAttempts).entrySet()));
-                                                                  }
-                                                                  if ("executeUpdate".equals(name) && !charge) {
-                                                                      if (sql.startsWith("INSERT INTO ")) {
-                                                                          if (rowsGone.contains(seq[0])) {
-                                                                              return 0;
-                                                                          }
-                                                                          moved.add(seq[0]);
-                                                                      }
-                                                                      return 1;
-                                                                  }
-                                                                  if ("close".equals(name) || name.startsWith("set")) {
-                                                                      return null;
-                                                                  }
-                                                                  throw new UnsupportedOperationException(name);
-                                                              });
-        }
-
-        // ResultSet's own loader, not the thread's context loader: a proxy class must be defined in a loader that sees its
-        // interface, which the context loader need not.
-        @SuppressWarnings("PMD.UseProperClassLoader")
-        private static ResultSet resultSet(List<Map.Entry<Long, Integer>> rows) {
-            var next = new int[]{-1};
-            return (ResultSet) Proxy.newProxyInstance(ResultSet.class.getClassLoader(), new Class<?>[]{ResultSet.class},
-                                                      (proxy, method, args) -> switch (method.getName()) {
-                                                          case "next" -> {
-                                                              next[0]++;
-                                                              yield next[0] < rows.size();
-                                                          }
-                                                          case "getLong" -> rows.get(next[0]).getKey();
-                                                          case "getInt" -> rows.get(next[0]).getValue();
-                                                          case "close" -> null;
-                                                          default -> throw new UnsupportedOperationException(method.getName());
-                                                      });
-        }
     }
 }

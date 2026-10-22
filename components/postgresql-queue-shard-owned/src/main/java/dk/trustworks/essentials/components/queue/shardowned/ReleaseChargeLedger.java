@@ -22,7 +22,7 @@ import dk.trustworks.essentials.shared.Exceptions;
 import java.sql.*;
 import java.util.*;
 import java.util.concurrent.ConcurrentSkipListMap;
-import java.util.function.Consumer;
+import java.util.function.*;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
@@ -54,9 +54,10 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  *     handed once it is {@link DeadLetterMove#MOVED} (the constructor's {@code onMoved}) - is derived from that write and
  *     cannot be seen half-made;</li>
  *     <li>written only under the monitor; read by the handler threads ({@link #deadLetteredWhileInHandler}) without it
- *     unless a charge is running or the message's move is still to be made, when they wait for that charge: a move commits
- *     before its write here, so a handler returning in between would otherwise take its message for one still in the
- *     table.</li>
+ *     unless a running charge may move the message or its move is still to be made, when they wait for that charge: a
+ *     move commits before its write here, so a handler returning in between would otherwise take its message for one
+ *     still in the table. A charge takes its candidates once it is running, and the owner leaves out a message whose
+ *     handler has returned, so a handler that finds no charge running is never a candidate of one still to start.</li>
  * </ul>
  * A {@code QueueObserver} told of a message dead-lettered here is told after the move, and what it throws is held until
  * every move is made, then thrown: by then nothing is owed ({@link #owes}), so the queue tells that failure from a failed
@@ -184,10 +185,26 @@ final class ReleaseChargeLedger {
      */
     private final Set<Long>                      gone    = new HashSet<>();
     /**
-     * Whether {@link #charge} is running: set and cleared under {@link #monitor}, read without it by
-     * {@link #deadLetteredWhileInHandler}, which then waits for that charge.
+     * The {@link #charge} running, and the messages it may move to the dead-letter table; {@code null} while none runs. Set
+     * and cleared under {@link #monitor}, read without it by {@link #deadLetteredWhileInHandler}, which waits for that charge
+     * only when it may move the handler's message.
      */
-    private volatile boolean                     charging;
+    private volatile RunningCharge               running;
+
+    /**
+     * A {@link #charge} running.
+     *
+     * @param mayMove the messages it may move to the dead-letter table, by sequence value: those it charges and those whose
+     *                move was {@link DeadLetterMove#PENDING} when it started. {@code null} while it is still taking its
+     *                candidates, when it may move any
+     */
+    private record RunningCharge(Set<Long> mayMove) {
+        static final RunningCharge TAKING_CANDIDATES = new RunningCharge(null);
+
+        boolean mayMove(long seq) {
+            return mayMove == null || mayMove.contains(seq);
+        }
+    }
 
     /**
      * @param lane             the owner's lane, for the {@link MessageId} the {@code QueueObserver} is told of
@@ -239,9 +256,17 @@ final class ReleaseChargeLedger {
 
     /**
      * Charge one attempt to each of {@code candidates} not charged yet, then make every dead-letter move still owed.
+     * <p>
+     * The candidates are taken once this call is running, under the monitor: a handler of one of them that returns after they
+     * are taken finds the call running ({@link #deadLetteredWhileInHandler}) and waits for it, and one that returned before is left
+     * out of them by the owner, which marks a handler returned before it asks {@link #deadLetteredWhileInHandler} and
+     * leaves such messages out of {@code candidates}. Taken before the call ran, a handler returning in between found no
+     * charge running and no record, queued its acknowledgement, and the charge then dead-lettered the message it had
+     * handled.
      *
-     * @param candidates the messages in a handler to charge, by sequence value, each as the owner knows it: its key and
-     *                   {@code key_order} go into its {@link ChargedRow}
+     * @param candidates the messages in a handler to charge, by sequence value, each as the owner knows it (its key and
+     *                   {@code key_order} go into its {@link ChargedRow}); asked once, under the monitor, so it may take the
+     *                   owner's state lock, never the other way round
      * @return what this ledger has charged and dead-lettered so far, this call included
      * @throws SQLException     when the charge, the lease lookup after a charge that left a row out, or a dead-letter move
      *                          fails; {@link #owes} then answers {@code true}
@@ -249,23 +274,26 @@ final class ReleaseChargeLedger {
      *                          {@link Error}), thrown once every move is made, so {@link #owes} then answers as after a call
      *                          that returned, and {@link #answer()} gives the answer
      */
-    Answer charge(Connection connection, Map<Long, Candidate> candidates) throws SQLException {
+    Answer charge(Connection connection, Supplier<Map<Long, Candidate>> candidates) throws SQLException {
         requireNonNull(candidates, "No candidates provided");
         synchronized (monitor) {
-            charging = true;
+            running = RunningCharge.TAKING_CANDIDATES;
             try {
-                return chargeAndMove(connection, candidates);
+                var toCharge = notChargedYet(requireNonNull(candidates.get(), "No candidates supplied"));
+                var mayMove  = new HashSet<>(toCharge.keySet());
+                rows.values().stream().filter(row -> row.move() == DeadLetterMove.PENDING).forEach(row -> mayMove.add(row.seq()));
+                running = new RunningCharge(Set.copyOf(mayMove));
+                return chargeAndMove(connection, toCharge);
             } finally {
-                charging = false;
+                running = null;
             }
         }
     }
 
     /**
-     * {@link #charge}'s work. Called under {@link #monitor}.
+     * {@link #charge}'s work, for {@code toCharge}: its candidates not charged yet. Called under {@link #monitor}.
      */
-    private Answer chargeAndMove(Connection connection, Map<Long, Candidate> candidates) throws SQLException {
-        var toCharge = notChargedYet(candidates);
+    private Answer chargeAndMove(Connection connection, Map<Long, Candidate> toCharge) throws SQLException {
         if (!toCharge.isEmpty()) {
             var charged = writes.chargeRowsInHandler(connection, toCharge.keySet());
             metrics.takeoverAttemptBumps.add(charged.size());
@@ -342,16 +370,20 @@ final class ReleaseChargeLedger {
      * reports later has nothing to acknowledge, no attempt to count and nothing to retry, and its dead letter carries
      * {@link ShardOwnedStorage#EXHAUSTED_IN_A_RELEASED_HANDLER}, not the handler's outcome.
      * <p>
-     * Asked by a handler thread once its handler has returned, before the owner records the outcome. Answered without the
-     * monitor while no charge is running and the message has no dead-letter move still to be made; otherwise it waits for
-     * the running charge to finish, so a move that has committed but is not recorded here yet is not missed. A charge that
-     * starts after this call is not waited for.
+     * Asked by a handler thread once its handler has returned, before the owner records the outcome, and after the owner
+     * has marked the handler returned, so no {@link #charge} that takes its candidates after this call takes this message.
+     * Answered without the monitor unless a running charge may move the message - it charges it, or its move was still to
+     * be made when the charge started, or the charge is still taking its candidates - or its dead-letter move is still to
+     * be made; then it waits for that charge to finish, so a move that has committed but is not recorded here yet is not
+     * missed. A charge that cannot move the message is not waited for: it holds the monitor across its database round
+     * trips, and the handlers of the messages it leaves alone - those a release past {@code stuckHandlerTimeout} spares, or an
+     * earlier call charged below the limit - would wait out every one of them.
      */
     Optional<ChargedRow> deadLetteredWhileInHandler(long seq) {
         // Read before the row: a charge that was running is then either seen running, or its record is read below
-        var chargeRunning = charging;
-        var row           = rows.get(seq);
-        if (chargeRunning || (row != null && row.move() == DeadLetterMove.PENDING)) {
+        var charge = running;
+        var row    = rows.get(seq);
+        if ((charge != null && charge.mayMove(seq)) || (row != null && row.move() == DeadLetterMove.PENDING)) {
             synchronized (monitor) {
                 row = rows.get(seq);
             }

@@ -45,9 +45,9 @@ class ReleaseChargeLedgerTest {
         var ledger  = ledger(writes, 3, metrics, counts);
 
         assertThat(ledger.owes(candidates(1L, 2L))).as("uncharged candidates are owed").isTrue();
-        var first = ledger.charge(null, candidates(1L, 2L));
-        var again = ledger.charge(null, candidates(1L, 2L));
-        var later = ledger.charge(null, candidates(1L, 2L, 3L));
+        var first = ledger.charge(null, () -> candidates(1L, 2L));
+        var again = ledger.charge(null, () -> candidates(1L, 2L));
+        var later = ledger.charge(null, () -> candidates(1L, 2L, 3L));
 
         assertThat(writes.chargeCalls).as("charged once each: a retry charges only what was not charged before")
                                       .containsExactly(Set.of(1L, 2L), Set.of(3L));
@@ -73,11 +73,11 @@ class ReleaseChargeLedgerTest {
         var metrics = new ShardOwnerMetrics();
         var ledger  = ledger(writes, 3, metrics, new ArrayList<>());
 
-        assertThat(ledger.charge(null, candidates(1L, 2L)).charged()).as("only the row found is charged").isEqualTo(1);
+        assertThat(ledger.charge(null, () -> candidates(1L, 2L)).charged()).as("only the row found is charged").isEqualTo(1);
         assertThat(writes.stillOwnsCalls).as("premise: a row left out is asked about").isEqualTo(1);
         assertThat(ledger.owes(candidates(1L, 2L))).as("a row gone is not owed").isFalse();
 
-        var again = ledger.charge(null, candidates(1L, 2L));
+        var again = ledger.charge(null, () -> candidates(1L, 2L));
 
         assertThat(writes.chargeCalls).as("the row gone is not asked for again").containsExactly(Set.of(1L, 2L));
         assertThat(again.charged()).as("nor counted as charged").isEqualTo(1);
@@ -95,12 +95,12 @@ class ReleaseChargeLedgerTest {
         writes.owns = false;
         var ledger = ledger(writes, 3, new ShardOwnerMetrics(), new ArrayList<>());
 
-        assertThat(ledger.charge(null, candidates(1L)).charged()).isZero();
+        assertThat(ledger.charge(null, () -> candidates(1L)).charged()).isZero();
         assertThat(ledger.owes(candidates(1L))).as("a row left out with the lease lost is still owed").isTrue();
 
         writes.leaveOut.clear();
         writes.owns = true;
-        assertThat(ledger.charge(null, candidates(1L)).charged()).as("charged by a later call").isEqualTo(1);
+        assertThat(ledger.charge(null, () -> candidates(1L)).charged()).as("charged by a later call").isEqualTo(1);
         assertThat(writes.chargeCalls).containsExactly(Set.of(1L), Set.of(1L));
     }
 
@@ -122,7 +122,7 @@ class ReleaseChargeLedgerTest {
         var ledger = new ReleaseChargeLedger(MessageId.Lane.ORDERED, SHARD, writes, RedeliveryPolicy.fixed(Duration.ofSeconds(1), 1), metrics, charged -> { },
                                              deadLettered -> { });
 
-        assertThatThrownBy(() -> ledger.charge(null, candidates(Map.of(1L, "A", 2L, "B")))).hasMessage("observer failure");
+        assertThatThrownBy(() -> ledger.charge(null, () -> candidates(Map.of(1L, "A", 2L, "B")))).hasMessage("observer failure");
 
         assertThat(writes.moveCalls).as("premise: the charged message was moved").containsExactly(1L);
         assertThat(ledger.owes(candidates(Map.of(1L, "A", 2L, "B")))).as("nothing owed: the observer's failure is not a failed charge").isFalse();
@@ -138,7 +138,7 @@ class ReleaseChargeLedgerTest {
         var metrics = new ShardOwnerMetrics();
         var ledger  = ledger(writes, 1, metrics, counts);
 
-        assertThatThrownBy(() -> ledger.charge(null, candidates(1L))).isInstanceOf(SQLException.class);
+        assertThatThrownBy(() -> ledger.charge(null, () -> candidates(1L))).isInstanceOf(SQLException.class);
 
         assertThat(writes.chargeCalls).as("premise: the charge committed before the move failed").containsExactly(Set.of(1L));
         assertThat(counts).as("the charged count is handed over though the move failed").containsExactly(Map.of(1L, 1));
@@ -147,7 +147,7 @@ class ReleaseChargeLedgerTest {
         assertThat(ledger.answer().deadLettered()).isEmpty();
         assertThat(ledger.deadLetteredWhileInHandler(1L)).isEmpty();
 
-        var answer = ledger.charge(null, candidates(1L));
+        var answer = ledger.charge(null, () -> candidates(1L));
 
         assertThat(writes.chargeCalls).as("the retry does not charge again").containsExactly(Set.of(1L));
         assertThat(writes.moveCalls).as("the move is retried").containsExactly(1L, 1L);
@@ -156,7 +156,7 @@ class ReleaseChargeLedgerTest {
         assertThat(ledger.owes(candidates(1L))).as("nothing is owed once the move is made").isFalse();
         assertThat(metrics.deadLettered.sum()).isEqualTo(1);
 
-        ledger.charge(null, candidates(1L));
+        ledger.charge(null, () -> candidates(1L));
         assertThat(writes.moveCalls).as("a made move is not made again").containsExactly(1L, 1L);
     }
 
@@ -174,7 +174,7 @@ class ReleaseChargeLedgerTest {
         var ledger = new ReleaseChargeLedger(MessageId.Lane.ORDERED, SHARD, writes, RedeliveryPolicy.fixed(Duration.ofSeconds(1), 1), metrics, charged -> { },
                                              deadLettered -> { });
 
-        assertThatThrownBy(() -> ledger.charge(null, candidates(Map.of(1L, "A", 2L, "B"))))
+        assertThatThrownBy(() -> ledger.charge(null, () -> candidates(Map.of(1L, "A", 2L, "B"))))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("observer of 1")
                 .satisfies(e -> assertThat(e.getSuppressed()).extracting(Throwable::getMessage).containsExactly("observer of 2"));
@@ -219,11 +219,11 @@ class ReleaseChargeLedgerTest {
                                              });
         self.set(ledger);
 
-        assertThatThrownBy(() -> ledger.charge(null, candidates(Map.of(1L, "A", 2L, "B", 3L, "C", 4L, "D")))).isInstanceOf(SQLException.class);
+        assertThatThrownBy(() -> ledger.charge(null, () -> candidates(Map.of(1L, "A", 2L, "B", 3L, "C", 4L, "D")))).isInstanceOf(SQLException.class);
         assertThat(handed).as("a move that failed hands nothing over").isEmpty();
 
-        ledger.charge(null, candidates(Map.of(1L, "A", 2L, "B", 3L, "C", 4L, "D")));
-        ledger.charge(null, candidates(Map.of(1L, "A", 2L, "B", 3L, "C", 4L, "D")));
+        ledger.charge(null, () -> candidates(Map.of(1L, "A", 2L, "B", 3L, "C", 4L, "D")));
+        ledger.charge(null, () -> candidates(Map.of(1L, "A", 2L, "B", 3L, "C", 4L, "D")));
 
         assertThat(writes.moveCalls).as("premise: 1 failed then moved, 2 found gone, 4 moved; 3 below the limit is not moved").containsExactly(1L, 1L, 2L, 4L);
         assertThat(handed).as("only the rows moved, each once, with the key and key_order of its candidate")
@@ -241,7 +241,7 @@ class ReleaseChargeLedgerTest {
         var metrics = new ShardOwnerMetrics();
         var ledger  = ledger(writes, 2, metrics, new ArrayList<>());
 
-        var answer = ledger.charge(null, candidates(1L));
+        var answer = ledger.charge(null, () -> candidates(1L));
 
         assertThat(writes.moveCalls).containsExactly(1L);
         assertThat(answer.charged()).isEqualTo(1);
@@ -302,9 +302,11 @@ class ReleaseChargeLedgerTest {
         refused.holdMoves();
         refused.failMoves = 1;
         var refusedLedger = ledger(refused, 1, new ShardOwnerMetrics(), new ArrayList<>());
-        var refusedCharge = CompletableFuture.runAsync(() -> assertThatThrownBy(() -> refusedLedger.charge(null, candidates(1L))).isInstanceOf(SQLException.class));
+        var refusedCharge = CompletableFuture.runAsync(() -> assertThatThrownBy(() -> refusedLedger.charge(null, () -> candidates(1L))).isInstanceOf(SQLException.class));
         assertThat(refused.moving.await(10, TimeUnit.SECONDS)).isTrue();
         var askedDuringARefusedMove = CompletableFuture.supplyAsync(() -> refusedLedger.deadLetteredWhileInHandler(1L));
+        assertThatThrownBy(() -> askedDuringARefusedMove.get(300, TimeUnit.MILLISECONDS)).as("the handler waits for the move being refused")
+                                                                                          .isInstanceOf(TimeoutException.class);
         refused.proceed.countDown();
         assertThat(askedDuringARefusedMove.get(10, TimeUnit.SECONDS)).as("a move that failed dead-lettered nothing").isEmpty();
         refusedCharge.get(10, TimeUnit.SECONDS);
@@ -316,9 +318,73 @@ class ReleaseChargeLedgerTest {
         var goneCharge = CompletableFuture.supplyAsync(() -> charge(goneLedger, candidates(1L)));
         assertThat(gone.moving.await(10, TimeUnit.SECONDS)).isTrue();
         var askedDuringAMoveOfNothing = CompletableFuture.supplyAsync(() -> goneLedger.deadLetteredWhileInHandler(1L));
+        assertThatThrownBy(() -> askedDuringAMoveOfNothing.get(300, TimeUnit.MILLISECONDS)).as("the handler waits for the move finding the row gone")
+                                                                                             .isInstanceOf(TimeoutException.class);
         gone.proceed.countDown();
         assertThat(askedDuringAMoveOfNothing.get(10, TimeUnit.SECONDS)).as("a move that found the row gone dead-lettered nothing").isEmpty();
         goneCharge.get(10, TimeUnit.SECONDS);
+    }
+
+    /**
+     * A handler whose message the running charge cannot move - charged below the limit by an earlier call, or never a
+     * candidate of it - is answered at once while that charge holds the monitor across a move. It used to wait for any
+     * charge running: every handler of the owner returning during a charge blocked for the charge's whole database time,
+     * the unordered lane's in its {@code HandlerDispatch} permit.
+     */
+    @Test
+    void a_handler_whose_message_the_running_charge_cannot_move_is_answered_without_waiting_for_it() throws Exception {
+        var writes = new FakeWrites(Map.of(1L, 2, 2L, 1));
+        var ledger = ledger(writes, 2, new ShardOwnerMetrics(), new ArrayList<>());
+        assertThat(ledger.charge(null, () -> candidates(2L)).charged()).as("premise: seq 2 charged below the limit").isEqualTo(1);
+        writes.holdMoves();
+
+        var charge = CompletableFuture.supplyAsync(() -> charge(ledger, candidates(1L, 2L)));
+        assertThat(writes.moving.await(10, TimeUnit.SECONDS)).as("premise: the charge is moving seq 1").isTrue();
+        var askedForTheOneMoved = CompletableFuture.supplyAsync(() -> ledger.deadLetteredWhileInHandler(1L));
+
+        assertThat(CompletableFuture.supplyAsync(() -> ledger.deadLetteredWhileInHandler(2L)).get(5, TimeUnit.SECONDS))
+                .as("a message charged below the limit before this charge is answered while the move is held").isEmpty();
+        assertThat(CompletableFuture.supplyAsync(() -> ledger.deadLetteredWhileInHandler(3L)).get(5, TimeUnit.SECONDS))
+                .as("a message the charge did not take is answered while the move is held").isEmpty();
+        assertThatThrownBy(() -> askedForTheOneMoved.get(300, TimeUnit.MILLISECONDS)).as("the message being moved still waits")
+                                                                                     .isInstanceOf(TimeoutException.class);
+        writes.proceed.countDown();
+
+        assertThat(askedForTheOneMoved.get(10, TimeUnit.SECONDS)).isPresent();
+        assertThat(charge.get(10, TimeUnit.SECONDS).deadLettered()).extracting(ReleaseChargeLedger.ChargedRow::seq).containsExactly(1L);
+    }
+
+    /**
+     * The candidates are taken once the charge is running, and a handler returning while it takes them waits for it: the
+     * charge may take that handler's message. Taken before the charge ran, a handler returning in between found no charge
+     * running and no record, and its message was dead-lettered after its handler had completed.
+     */
+    @Test
+    void a_handler_returning_while_the_charge_takes_its_candidates_waits_for_that_charge_and_is_told_of_its_move() throws Exception {
+        var ledger           = ledger(new FakeWrites(Map.of(1L, 1)), 1, new ShardOwnerMetrics(), new ArrayList<>());
+        var takingCandidates = new CountDownLatch(1);
+        var candidatesTaken  = new CountDownLatch(1);
+
+        var charge = CompletableFuture.supplyAsync(() -> {
+            try {
+                return ledger.charge(null, () -> {
+                    takingCandidates.countDown();
+                    awaitLatch(candidatesTaken);
+                    return candidates(1L);
+                });
+            } catch (SQLException e) {
+                throw new IllegalStateException(e);
+            }
+        });
+        assertThat(takingCandidates.await(10, TimeUnit.SECONDS)).as("premise: the charge is taking its candidates").isTrue();
+        var handlerAsks = CompletableFuture.supplyAsync(() -> ledger.deadLetteredWhileInHandler(1L));
+
+        assertThatThrownBy(() -> handlerAsks.get(300, TimeUnit.MILLISECONDS)).as("the handler waits for the charge taking its candidates")
+                                                                              .isInstanceOf(TimeoutException.class);
+        candidatesTaken.countDown();
+
+        assertThat(handlerAsks.get(10, TimeUnit.SECONDS)).as("told of the dead letter that charge made").isPresent();
+        assertThat(charge.get(10, TimeUnit.SECONDS).deadLettered()).extracting(ReleaseChargeLedger.ChargedRow::seq).containsExactly(1L);
     }
 
     @Test
@@ -336,8 +402,19 @@ class ReleaseChargeLedgerTest {
 
     private static ReleaseChargeLedger.Answer charge(ReleaseChargeLedger ledger, Map<Long, ReleaseChargeLedger.Candidate> candidates) {
         try {
-            return ledger.charge(null, candidates);
+            return ledger.charge(null, () -> candidates);
         } catch (SQLException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    private static void awaitLatch(CountDownLatch latch) {
+        try {
+            if (!latch.await(10, TimeUnit.SECONDS)) {
+                throw new IllegalStateException("not let proceed");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
             throw new IllegalStateException(e);
         }
     }

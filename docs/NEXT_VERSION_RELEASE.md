@@ -663,7 +663,11 @@ release up either. A handler that
 returns after the charge has dead-lettered its message is neither acknowledged nor counted in `delivered`: one that
 completes logs a WARN saying that resurrecting the dead letter delivers the message again, and one that throws logs a
 WARN with its exception and is told to `QueueObserver.deliveryFailed` with the charged count (not for a requested
-redelivery). (`6337f7d89`, `2fdeb3db0`, `bfa961ec5`, `dbae0986f`, `7dbd517be`, `e699c9d44`)
+redelivery). A handler that returns before the charge has taken its message has its outcome recorded as usual
+(acknowledged when it completed, its failure recorded when it threw), and the charge neither charges nor dead-letters
+that message; the unit's other handlers that return while the charge runs do not wait for its database statements,
+bar one returning while the charge is still choosing which messages to charge.
+(`6337f7d89`, `2fdeb3db0`, `bfa961ec5`, `dbae0986f`, `7dbd517be`, `e699c9d44`, `<!-- fix:U-026 -->`)
 
 **The unordered lane now charges a hung handler's delivery too, past the same bound.** It waits for no handler: a
 fair-share shed and a dead pump's hand-back release an unordered shard at once, and `stop()` once `shedGrace` has run
@@ -684,7 +688,11 @@ then still leaves the shard released. A handler that returns after the
 charge before a shed, a dead pump's hand-back or a `stop()` has dead-lettered its message is neither acknowledged nor
 counted in `delivered`: one that completes logs a WARN saying that resurrecting the dead letter delivers the message
 again, and one that throws logs a WARN with its exception and is told to `QueueObserver.deliveryFailed` with the
-charged count (not for a requested redelivery). (`18e423d1d`, `7dbd517be`, `e699c9d44`)
+charged count (not for a requested redelivery). A handler that returns before the charge has taken its message has
+its outcome recorded as usual (acknowledged when it completed, its failure recorded when it threw), and the charge
+neither charges nor dead-letters that message; the shard's other handlers that return while the charge runs - a
+message in its handler for less than `stuckHandlerTimeout`, say - do not wait for its database statements while
+holding their handler permit, bar one returning while the charge is still choosing which messages to charge. (`18e423d1d`, `7dbd517be`, `e699c9d44`, `<!-- fix:U-026 -->`)
 
 ---
 

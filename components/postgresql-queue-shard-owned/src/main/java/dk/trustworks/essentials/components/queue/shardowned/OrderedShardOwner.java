@@ -146,6 +146,14 @@ final class OrderedShardOwner implements BatchReadableOwner {
      */
     private final Map<String, InHandler>                                   keysInFlight          = new LinkedHashMap<>();
     /**
+     * The sequence values of the messages in {@link #keysInFlight} whose handler has returned or thrown, while the owner
+     * records the outcome: left out of the candidates of {@link #chargeKeysInHandlerBeforeRelease}. Marked before the handler
+     * thread asks {@link ReleaseChargeLedger#deadLetteredWhileInHandler}, so a charge that takes its candidates after that
+     * leaves the message to the outcome its handler records, and one that took them before is seen running and waited for.
+     * Charged regardless, a message whose handler had completed was acknowledged and dead-lettered both.
+     */
+    private final Set<Long>                                                returnedFromHandler   = new HashSet<>();
+    /**
      * Highest key_order handed to a handler per key, used to detect ordering violations.
      */
     private final Map<String, Long>                                        highestDeliveredOrder = new HashMap<>();
@@ -825,6 +833,7 @@ final class OrderedShardOwner implements BatchReadableOwner {
         try {
             handler.handle(new MessageId(MessageId.Lane.ORDERED, shard, row.seq()),
                            key, keyOrder, row.payload(), row.payloadType());
+            markReturnedFromHandler(row.seq());
             // Asked before stateLock is taken: it may wait for a running charge, which takes stateLock itself
             var deadLettered = releaseChargeLedger.deadLetteredWhileInHandler(row.seq());
             if (deadLettered.isPresent()) {
@@ -843,6 +852,7 @@ final class OrderedShardOwner implements BatchReadableOwner {
         } catch (RuntimeException | Error e) {
             // A non-critical Error is a failed delivery like any other - see ShardOwner.runHandler
             Exceptions.rethrowIfCriticalError(e);
+            markReturnedFromHandler(row.seq());
             if (!(e instanceof RedeliveryRequested)) {
                 metrics.handlerFailures.increment();
             }
@@ -855,6 +865,7 @@ final class OrderedShardOwner implements BatchReadableOwner {
             boolean noKeyInHandler;
             synchronized (stateLock) {
                 keysInFlight.remove(key);
+                returnedFromHandler.remove(row.seq());
                 noKeyInHandler = keysInFlight.isEmpty();
             }
             activeKeys.decrementAndGet();
@@ -867,6 +878,16 @@ final class OrderedShardOwner implements BatchReadableOwner {
                     action.run();
                 }
             }
+        }
+    }
+
+    /**
+     * Mark the message of {@code seq} as one whose handler has returned ({@link #returnedFromHandler}), before its handler
+     * thread asks {@link ReleaseChargeLedger#deadLetteredWhileInHandler}.
+     */
+    private void markReturnedFromHandler(long seq) {
+        synchronized (stateLock) {
+            returnedFromHandler.add(seq);
         }
     }
 
@@ -1733,8 +1754,8 @@ final class OrderedShardOwner implements BatchReadableOwner {
      * The charge itself is {@link ReleaseChargeLedger}'s, which the unordered lane composes too
      * ({@code ShardOwner.chargeInHandlerBeforeRelease}); this owner supplies only its candidates - the message of each key
      * in a handler that {@code scope} names, with its key and {@code key_order}, which the ledger keeps with what it
-     * charged - its table, and the block it records once a move is made. The dead-lettered keys it reports are in sequence
-     * order.
+     * charged, taken once the ledger's charge is running and leaving out a message whose handler has returned - its table,
+     * and the block it records once a move is made. The dead-lettered keys it reports are in sequence order.
      *
      * @param scope which messages in a handler to charge
      * @return what this owner has charged and dead-lettered so far, this call included; nothing when no message in a
@@ -1748,7 +1769,7 @@ final class OrderedShardOwner implements BatchReadableOwner {
      */
     ReleaseCharge chargeKeysInHandlerBeforeRelease(Connection connection, ReleaseChargeScope scope) throws SQLException {
         requireNonNull(scope, "No scope provided");
-        return toReleaseCharge(releaseChargeLedger.charge(connection, releaseChargeCandidates(scope)));
+        return toReleaseCharge(releaseChargeLedger.charge(connection, () -> releaseChargeCandidates(scope)));
     }
 
     /**
@@ -1790,7 +1811,8 @@ final class OrderedShardOwner implements BatchReadableOwner {
 
     /**
      * The message (by seq) of each key in a handler that {@code scope} names, with its key and {@code key_order}, in the
-     * order the keys entered their handlers: the candidates of {@link #chargeKeysInHandlerBeforeRelease}.
+     * order the keys entered their handlers: the candidates of {@link #chargeKeysInHandlerBeforeRelease}. A message whose
+     * handler has returned ({@link #returnedFromHandler}) is not one: its handler records its outcome.
      */
     private Map<Long, ReleaseChargeLedger.Candidate> releaseChargeCandidates(ReleaseChargeScope scope) {
         var now        = System.nanoTime();
@@ -1798,7 +1820,8 @@ final class OrderedShardOwner implements BatchReadableOwner {
         var candidates = new LinkedHashMap<Long, ReleaseChargeLedger.Candidate>();
         synchronized (stateLock) {
             keysInFlight.forEach((key, inHandler) -> {
-                if (scope == ReleaseChargeScope.EVERY_KEY_IN_HANDLER || now - inHandler.sinceNanos() >= bound) {
+                if (!returnedFromHandler.contains(inHandler.seq())
+                        && (scope == ReleaseChargeScope.EVERY_KEY_IN_HANDLER || now - inHandler.sinceNanos() >= bound)) {
                     candidates.put(inHandler.seq(), new ReleaseChargeLedger.Candidate(key, inHandler.keyOrder()));
                 }
             });

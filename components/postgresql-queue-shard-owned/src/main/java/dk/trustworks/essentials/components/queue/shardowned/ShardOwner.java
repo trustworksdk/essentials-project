@@ -142,6 +142,14 @@ final class ShardOwner implements LeasedOwner {
      */
     private final NavigableMap<Long, Long> inFlight     = new TreeMap<>();
     /**
+     * The messages in {@link #inFlight} whose handler has returned or thrown, while the owner records the outcome (still
+     * inside the in-flight slot): left out of the candidates of {@link #chargeInHandlerBeforeRelease}. Marked before the
+     * handler thread asks {@link ReleaseChargeLedger#deadLetteredWhileInHandler}, so a charge that takes its candidates after
+     * that leaves the message to the outcome its handler records, and one that took them before is seen running and waited
+     * for. Charged regardless, a message whose handler had completed was acknowledged and dead-lettered both.
+     */
+    private final Set<Long>                returnedFromHandler = new HashSet<>();
+    /**
      * Handled and awaiting the next ack flush.
      */
     private final NavigableSet<Long>       pendingAcks  = new TreeSet<>();
@@ -697,6 +705,7 @@ final class ShardOwner implements LeasedOwner {
             try {
                 handler.handle(new MessageId(MessageId.Lane.UNORDERED, shard, row.seq()),
                                row.payload(), row.payloadType());
+                markReturnedFromHandler(row.seq());
                 // An interrupted handler has NOT necessarily finished its work. A handler that catches
                 // InterruptedException and returns normally — which is what well-behaved code does on
                 // shutdown — would otherwise be indistinguishable from success, and the message would
@@ -715,6 +724,7 @@ final class ShardOwner implements LeasedOwner {
                 // through the head sweep forever and never reached the dead-letter table. A critical one
                 // (VirtualMachineError, LinkageError) still propagates, as it does from the classic queue.
                 Exceptions.rethrowIfCriticalError(e);
+                markReturnedFromHandler(row.seq());
                 if (!(e instanceof RedeliveryRequested)) {
                     metrics.handlerFailures.increment();
                 }
@@ -746,6 +756,7 @@ final class ShardOwner implements LeasedOwner {
             // rethrows — has to leave the slot free.
             synchronized (stateLock) {
                 inFlight.remove(row.seq());
+                returnedFromHandler.remove(row.seq());
                 if (handled) {
                     pendingAcks.add(row.seq());
                 }
@@ -758,6 +769,16 @@ final class ShardOwner implements LeasedOwner {
             dispatch.release();
             // Budget may have freed up while the pump was parked.
             wakeup.signal();
+        }
+    }
+
+    /**
+     * Mark {@code seq} as a message whose handler has returned ({@link #returnedFromHandler}), before its handler thread asks
+     * {@link ReleaseChargeLedger#deadLetteredWhileInHandler}.
+     */
+    private void markReturnedFromHandler(long seq) {
+        synchronized (stateLock) {
+            returnedFromHandler.add(seq);
         }
     }
 
@@ -1132,7 +1153,8 @@ final class ShardOwner implements LeasedOwner {
      * <p>
      * The charge itself is {@link ReleaseChargeLedger}'s, which the ordered lane composes too
      * ({@code OrderedShardOwner.chargeKeysInHandlerBeforeRelease}); this owner supplies only its candidates - the messages
-     * in a handler past the bound - and its table.
+     * in a handler past the bound, taken once the ledger's charge is running and leaving out a message whose handler has
+     * returned - and its table.
      *
      * @return what this owner has charged and dead-lettered so far, this call included; nothing when no message is in a
      *         handler past the bound, or when the row no longer names this owner
@@ -1142,7 +1164,7 @@ final class ShardOwner implements LeasedOwner {
      *                          as after a call that returned
      */
     ReleaseCharge chargeInHandlerBeforeRelease(Connection connection) throws SQLException {
-        return toReleaseCharge(releaseChargeLedger.charge(connection, inHandlerPastStuckHandlerTimeout()));
+        return toReleaseCharge(releaseChargeLedger.charge(connection, this::inHandlerPastStuckHandlerTimeout));
     }
 
     /**
@@ -1171,7 +1193,8 @@ final class ShardOwner implements LeasedOwner {
 
     /**
      * The messages in a handler since longer than {@code stuckHandlerTimeout} ago, in sequence order, each with no key
-     * ({@link ReleaseChargeLedger.Candidate#UNORDERED}): the candidates of {@link #chargeInHandlerBeforeRelease}.
+     * ({@link ReleaseChargeLedger.Candidate#UNORDERED}): the candidates of {@link #chargeInHandlerBeforeRelease}. A message
+     * whose handler has returned ({@link #returnedFromHandler}) is not one: its handler records its outcome.
      */
     private Map<Long, ReleaseChargeLedger.Candidate> inHandlerPastStuckHandlerTimeout() {
         var now   = System.nanoTime();
@@ -1179,7 +1202,7 @@ final class ShardOwner implements LeasedOwner {
         var stuck = new TreeMap<Long, ReleaseChargeLedger.Candidate>();
         synchronized (stateLock) {
             inFlight.forEach((seq, sinceNanos) -> {
-                if (now - sinceNanos >= bound) {
+                if (now - sinceNanos >= bound && !returnedFromHandler.contains(seq)) {
                     stuck.put(seq, ReleaseChargeLedger.Candidate.UNORDERED);
                 }
             });
