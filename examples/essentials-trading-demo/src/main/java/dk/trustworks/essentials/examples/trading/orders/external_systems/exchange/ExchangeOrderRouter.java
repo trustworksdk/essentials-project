@@ -20,7 +20,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ev
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.*;
 import dk.trustworks.essentials.components.foundation.messaging.*;
 import dk.trustworks.essentials.examples.trading.orders.aggregates.Orders;
-import dk.trustworks.essentials.examples.trading.orders.config.OrderProcessingProperties;
+import dk.trustworks.essentials.examples.trading.orders.config.*;
 import dk.trustworks.essentials.examples.trading.orders.events.*;
 import dk.trustworks.essentials.examples.trading.orders.types.OrderId;
 import dk.trustworks.essentials.examples.trading.orders.use_cases.record_exchange_answer.RecordExchangeAnswer;
@@ -54,15 +54,18 @@ public class ExchangeOrderRouter extends EventProcessor {
     private final Orders                       orders;
     private final ExchangeSubmissionProperties submission;
     private final OrderProcessingProperties    consumers;
+    private final OrderForwardingProperties    forwarding;
 
     public ExchangeOrderRouter(EventProcessorDependencies dependencies,
                                ExchangeGateway gateway,
                                ExchangeReports reports,
                                Orders orders,
                                ExchangeSubmissionProperties submission,
-                               OrderProcessingProperties consumers) {
+                               OrderProcessingProperties consumers,
+                               OrderForwardingProperties forwarding) {
         super(dependencies);
         this.consumers = requireNonNull(consumers, "No consumers provided");
+        this.forwarding = requireNonNull(forwarding, "No forwarding provided");
         this.gateway = requireNonNull(gateway, "No gateway provided");
         this.reports = requireNonNull(reports, "No reports provided");
         this.orders = requireNonNull(orders, "No orders provided");
@@ -85,6 +88,11 @@ public class ExchangeOrderRouter extends EventProcessor {
     @Override
     protected int getNumberOfParallelInboxMessageConsumers() {
         return consumers.getExchangeRouter();
+    }
+
+    @Override
+    protected int getForwardBatchSize() {
+        return forwarding.getBatchSize();
     }
 
     @MessageHandler(unitOfWork = UnitOfWorkMode.NONE)

@@ -24,7 +24,7 @@ import dk.trustworks.essentials.examples.trading.accounts.use_cases.book_trade.B
 import dk.trustworks.essentials.examples.trading.accounts.use_cases.release_hold.ReleaseHold;
 import dk.trustworks.essentials.examples.trading.accounts.use_cases.release_shares.ReleaseShares;
 import dk.trustworks.essentials.examples.trading.orders.aggregates.Orders;
-import dk.trustworks.essentials.examples.trading.orders.config.OrderProcessingProperties;
+import dk.trustworks.essentials.examples.trading.orders.config.*;
 import dk.trustworks.essentials.examples.trading.orders.events.*;
 import org.springframework.stereotype.Service;
 
@@ -47,10 +47,17 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 public class OrderLedgerProcessor extends EventProcessor {
 
     private final OrderProcessingProperties consumers;
+    private final OrderForwardingProperties forwarding;
 
-    public OrderLedgerProcessor(EventProcessorDependencies dependencies, OrderProcessingProperties consumers) {
+    public OrderLedgerProcessor(EventProcessorDependencies dependencies, OrderProcessingProperties consumers, OrderForwardingProperties forwarding) {
         super(dependencies);
         this.consumers = requireNonNull(consumers, "No consumers provided");
+        this.forwarding = requireNonNull(forwarding, "No forwarding provided");
+    }
+
+    @Override
+    protected int getForwardBatchSize() {
+        return forwarding.getBatchSize();
     }
 
     /**

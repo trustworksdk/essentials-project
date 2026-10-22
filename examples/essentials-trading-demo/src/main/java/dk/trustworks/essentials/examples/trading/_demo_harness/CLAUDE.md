@@ -328,8 +328,10 @@ quotes `ACME` by default). Done when every order released its hold and every fil
 **2026-10-22**, same 200 × 50 run with the demo's defaults (`trading-demo.orders.consumers` 1 / 1 / 2, 20-connection
 pool) and the fixes since (CDC warm-up, shard-owned read plans, batched CDC inbox): **~196 completed orders/s on polling, ~184 on
 CDC**, end to end p50 ~30 s on CDC, every run alike. What bounds it now is per-event handling; see
-`docs/key-partitioned-event-processing.md` §5, "Two speeds, and where the ceiling sits now". The paragraph below is
-the 2026-10-19 reading.
+`docs/key-partitioned-event-processing.md` §5, "Two speeds, and where the ceiling sits now". With the `compose`
+profile's present settings - 8 / 8 / 8 consumers, a 40-connection pool, the processors forwarding in batches of 100 -
+it completes at **~366 orders/s**, end to end p50 ~16 s (same section, "Batched forward, built and measured"). The
+paragraph below is the 2026-10-19 reading.
 
 No conflicts and no refusals in either. The cap is the `EventProcessor` forward: the router reaches `OrderPlaced`
 45 s late (p50) and the ledger processor adds 15 s, while the stub and the reports' inbox add nothing measurable.

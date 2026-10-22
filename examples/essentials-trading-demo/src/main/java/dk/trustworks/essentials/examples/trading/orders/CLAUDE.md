@@ -55,14 +55,16 @@ books: an order is short-lived.
   cent (Q-5), from `market_data`'s `MarketQuotes` seam. No fresh quote → `422`, never a guess. A fill above the hold
   is still booked.
 
-## Consumers
+## Consumers and forwarding
 
 `trading-demo.orders.consumers.*` (`OrderProcessingProperties`): threads on `Inbox:ExchangeOrderRouter`
-(`exchange-router`, 1), `Inbox:OrderLedgerProcessor` (`ledger`, 1) and `Inbox:Orders:ExchangeReports`
-(`exchange-reports`, 2). Each inbox keeps one order's messages in order on any number of threads. 8 / 8 / 8 with a
-40-connection pool (`spring.datasource.hikari.maximum-pool-size`) completed the order flow ~2x faster than the defaults
-(60 did no better); more threads on the default 20-connection pool did not help (EF-2 doc §5, M5). Two instances at 40
-fit PostgreSQL's `max_connections` of 100. Defaults left as they are, by decision.
+(`exchange-router`), `Inbox:OrderLedgerProcessor` (`ledger`) and `Inbox:Orders:ExchangeReports` (`exchange-reports`);
+code defaults 1 / 1 / 2, the `compose` profile runs **8 / 8 / 8 on a 40-connection pool**. Each inbox keeps one order's
+messages in order on any number of threads. `trading-demo.orders.forwarding.batch-size` (`OrderForwardingProperties`,
+`EventProcessor#getForwardBatchSize()`): code default 1, `compose` **100**. The two only pay together: batching alone left
+~180 completed orders/s, 8 / 8 / 8 alone gave ~298, both ~366 (EF-2 doc §5). More threads on a 20-connection pool did
+not help - each consumer holds a connection while it handles a message. Two instances at 40 fit PostgreSQL's
+`max_connections` of 100. The code defaults stay small so the tests, which run on a smaller pool, are unaffected.
 
 ## Stub exchange
 

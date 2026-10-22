@@ -23,8 +23,13 @@ spring:
     # by event-store subscriptions, both load generators, lease renewal and the projections. Until the
     # starter passed its runtime to its queues there were two runtimes holding 6, and a restart against
     # a database the demo had already run on failed start-up with the pool exhausted.
+    #
+    # 40 since the order flow runs 8 / 8 / 8 inbox consumers (trading-demo.orders.consumers below), each holding a
+    # connection while it handles a message: on 20 they starved each other and did no better than the defaults (EF-2,
+    # docs/key-partitioned-event-processing.md section 5, M5). Two instances at 40 still fit PostgreSQL's default
+    # max_connections of 100.
     hikari:
-      maximum-pool-size: 20
+      maximum-pool-size: 40
 
 essentials:
   immutable-jackson-module-enabled: true
@@ -128,6 +133,16 @@ essentials:
       inbox-ttl-duration-days: 1
 
 trading-demo:
+  orders:
+    # The order flow's two EventProcessors and the exchange reports' inbox. Batching the forward pays only together
+    # with more inbox consumers; together they took the order flow from ~180 to ~366 completed orders/s (EF-2,
+    # docs/key-partitioned-event-processing.md section 5, "Batched forward, built and measured").
+    consumers:
+      exchange-router: 8
+      ledger: 8
+      exchange-reports: 8
+    forwarding:
+      batch-size: 100
   accounts:
     closing-books:
       mode: event-count-or-time-boundary
