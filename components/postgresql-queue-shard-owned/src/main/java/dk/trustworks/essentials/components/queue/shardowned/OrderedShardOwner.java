@@ -23,6 +23,7 @@ import org.slf4j.*;
 import java.sql.*;
 import java.time.Duration;
 import java.util.*;
+import java.util.concurrent.ConcurrentSkipListSet;
 import java.util.concurrent.atomic.*;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
@@ -337,7 +338,7 @@ final class OrderedShardOwner implements BatchReadableOwner {
     private boolean exhaustionPending;
 
     /**
-     * Guards the four fields of {@link #chargeKeysInHandlerBeforeRelease} below it.
+     * Guards the fields of {@link #chargeKeysInHandlerBeforeRelease} below it (the last one only for its writes).
      */
     private final Object              releaseChargeLock     = new Object();
     /**
@@ -358,6 +359,12 @@ final class OrderedShardOwner implements BatchReadableOwner {
      * every dead-letter move after it (one whose {@code QueueObserver} then threw included).
      */
     private       ReleaseCharge       releaseCharge;
+    /**
+     * The rows (by seq) whose message {@link #chargeKeysInHandlerBeforeRelease} dead-lettered at the redelivery limit while
+     * its handler still ran: a failure that handler reports later records nothing, as the row is gone
+     * ({@link #onFailure}). Read by the handler threads, written under {@link #releaseChargeLock}.
+     */
+    private final Set<Long>           seqsDeadLetteredOnRelease = new ConcurrentSkipListSet<>();
 
     /**
      * What to run once no key is in a handler ({@link #whenNoKeyInHandler}); {@code null} unless this owner's queue kept
@@ -896,6 +903,16 @@ final class OrderedShardOwner implements BatchReadableOwner {
      * resurrected or deleted.
      */
     private void onFailure(String key, long keyOrder, ShardOwnedStorage.OrderedRow row, Throwable cause) {
+        if (seqsDeadLetteredOnRelease.contains(row.seq())) {
+            // Dead-lettered while this handler ran, by the charge before a release (chargeKeysInHandlerBeforeRelease): the row
+            // is gone, so there is no attempt to count and nothing to retry - whether the release then succeeded, or failed
+            // and left this owner holding the unit.
+            synchronized (stateLock) {
+                attemptsBySeq.remove(row.seq());
+                seen.remove(row.seq());
+            }
+            return;
+        }
         try (var connection = storage.connection()) {
             if (cause instanceof RedeliveryRequested request) {
                 onRedeliveryRequested(connection, key, keyOrder, row, request);
@@ -1617,6 +1634,12 @@ final class OrderedShardOwner implements BatchReadableOwner {
                 // The charge has committed: recorded before anything else can fail, or a retried release charges again
                 chargedOnRelease = charged;
                 keysChargedOnRelease = keyBySeq;
+                // And as the count this owner has for each, so a failure its handler reports later - the release having
+                // failed, and this owner holding the unit on - counts on from the charge: countAttempt prefers this map to
+                // the row, and scheduleRetryIfOwned writes the count it is given, which would undo the charge.
+                synchronized (stateLock) {
+                    attemptsBySeq.putAll(charged);
+                }
             }
             Throwable observerFailure = null;
             for (var row : chargedOnRelease.entrySet()) {
@@ -1636,6 +1659,7 @@ final class OrderedShardOwner implements BatchReadableOwner {
                 }
                 if (moved) {
                     deadLetteredOnRelease.add(key);
+                    seqsDeadLetteredOnRelease.add(row.getKey());
                     // Counted before the observer is told: one that throws leaves the move made and remembered, so no later
                     // call reaches this line for the key again.
                     metrics.deadLettered.increment();

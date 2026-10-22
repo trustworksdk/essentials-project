@@ -1831,6 +1831,132 @@ class ShardOwnedUnsubscribeIT {
     }
 
     /**
+     * A handler that fails after a release on request has charged its message and then been refused by the database counts
+     * on from the attempt that release charged. The message failed once under the owner before it hung, so the owner had a
+     * count of its own for it; a release charge the owner did not count as well left that older count in place, and the
+     * handler's failure was counted from it and written over the charge, undoing it. The unordered lane's twin is
+     * {@code ShardOwnedUnorderedReleaseChargeIT.a_failure_reported_after_a_refused_release_counts_on_from_the_attempt_the_release_charged}.
+     */
+    @Test
+    void a_failure_reported_after_a_refused_release_on_request_counts_on_from_the_attempt_the_release_charged() throws Throwable {
+        failTheHandlerAfterARefusedReleaseOnRequest(5, queue -> {
+            assertThat(storedAttemptsOfOrderedKey("ACC-1")).as("premise: one failure, and the release's charge, are stored").isEqualTo(2);
+        }, queue -> {
+            assertThat(storedAttemptsOfOrderedKey("ACC-1")).as("the failure is counted on from the charge, not written over it").isEqualTo(3);
+            assertThat(queue.deadLetters(0, 10)).as("below maxAttempts: nothing dead-lettered").isEmpty();
+        });
+    }
+
+    /**
+     * A handler that fails after a release on request has dead-lettered its message at {@code maxAttempts} and then been
+     * refused by the database records nothing: the row is gone, so there is no attempt to count, nothing to retry and
+     * nothing to dead-letter again. Before, the failure was counted from the owner's older count, reached the limit again,
+     * and the move it then tried found no row and WARNed that the message "was no longer in the table", for a message the
+     * release had dead-lettered as it should.
+     */
+    @Test
+    void a_failure_reported_after_a_refused_release_on_request_whose_charge_dead_lettered_its_message_records_nothing() throws Throwable {
+        var ownerLogged = new ListAppender<ILoggingEvent>();
+        ownerLogged.start();
+        var ownerLogger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(OrderedShardOwner.class);
+        ownerLogger.addAppender(ownerLogged);
+        try {
+            failTheHandlerAfterARefusedReleaseOnRequest(2, queue -> {
+                assertThat(queue.deadLetters(0, 10)).as("premise: the release's charge dead-lettered the message").singleElement().satisfies(deadLetter -> {
+                    assertThat(deadLetter.attempts()).isEqualTo(2);
+                    assertThat(deadLetter.lastError()).isEqualTo(ShardOwnedStorage.EXHAUSTED_IN_A_RELEASED_HANDLER);
+                });
+            }, queue -> {
+                assertThat(queue.deadLetters(0, 10)).as("the dead letter is left as the release wrote it").singleElement().satisfies(deadLetter -> {
+                    assertThat(deadLetter.attempts()).isEqualTo(2);
+                    assertThat(deadLetter.lastError()).isEqualTo(ShardOwnedStorage.EXHAUSTED_IN_A_RELEASED_HANDLER);
+                });
+                assertThat(orderedMessagesLeft()).as("nothing left to deliver").isZero();
+                assertThat(queue.registeredConsumers().getFirst().metrics().deadLettered.sum()).as("dead-lettered once").isEqualTo(1);
+                synchronized (ownerLogged) {
+                    assertThat(ownerLogged.list).as("no WARN for a row the release had already dead-lettered")
+                                                .filteredOn(event -> event.getLevel() == WARN)
+                                                .extracting(ILoggingEvent::getFormattedMessage)
+                                                .noneMatch(warning -> warning.contains("no longer in the table"));
+                }
+            });
+        } finally {
+            ownerLogger.detachAppender(ownerLogged);
+        }
+    }
+
+    /**
+     * The message of key {@code ACC-1} fails on its first delivery and is retried by the same owner; the retry's handler
+     * hangs, and {@code queue.stop()} keeps the unit. A release on request then charges the message an attempt (and
+     * dead-letters it when that reaches {@code maxAttempts}) before the database refuses the release, leaving the unit
+     * kept, its row naming the instance under the fence it was kept under. {@code afterTheRefusedRelease} runs then; the
+     * handler is then let go and fails, the kept unit is handed back once it has returned, and {@code afterTheFailure} runs.
+     */
+    private void failTheHandlerAfterARefusedReleaseOnRequest(int maxAttempts,
+                                                            ThrowingConsumer<PostgresqlMessageQueue> afterTheRefusedRelease,
+                                                            ThrowingConsumer<PostgresqlMessageQueue> afterTheFailure) throws Throwable {
+        // Far beyond the test, so the stopped instance's membership row cannot age out and let another id take the unit.
+        var leaseTtl   = Duration.ofSeconds(20);
+        var deliveries = new AtomicInteger();
+        var entered    = new CountDownLatch(1);
+        var release    = new CountDownLatch(1);
+        var queueIds   = new short[]{QUEUE_ID};
+        try (var queue = newQueue(PostgresqlMessageQueue.LifecycleHook.NONE, settingsWith(Duration.ofMillis(300), leaseTtl))) {
+            try {
+                queue.consume((messageId, key, payload, payloadType) -> {
+                    if (key == null) {
+                        return;
+                    }
+                    if (deliveries.incrementAndGet() == 1) {
+                        throw new IllegalStateException("the first delivery fails");
+                    }
+                    entered.countDown();
+                    awaitQuietly(release, Duration.ofSeconds(60));
+                    throw new IllegalStateException("fails once the release on request was refused");
+                }, new ConsumerOptions(8, Integer.MAX_VALUE, maxAttempts, RetryBackoff.fixed(Duration.ofMillis(100))));
+                var lanes = queue.registeredConsumers();
+                queue.enqueue(Message.ordered("fails-then-hangs".getBytes(StandardCharsets.UTF_8), 1, "ACC-1", 0));
+                assertThat(entered.await(20, TimeUnit.SECONDS)).as("premise: the retry is in its handler").isTrue();
+                assertThat(deliveries).as("premise: delivered twice, by the same owner").hasValue(2);
+                assertThat(storedAttemptsOfOrderedKey("ACC-1")).as("premise: the first failure is stored").isEqualTo(1);
+
+                // Stopped, and not started again: nothing but the request below and the hand-back release the unit.
+                queue.stop();
+                var kept = keptOrderedFence(INSTANCE_ID);
+                Awaitility.await().atMost(Duration.ofSeconds(5))
+                          .untilAsserted(() -> assertThat(lanes).as("premise: queue.stop()'s budget thread has flushed the kept unit")
+                                                                .noneMatch(ShardOwnedQueue::handBackStillRunning));
+                LeaseReleaseRefusals.failLeaseReleasesOf(dataSource, queueIds, "ordered", kept.shard(), true);
+                try {
+                    assertThatThrownBy(() -> queue.releaseKeptOrderedUnit(INSTANCE_ID, kept.shard()))
+                            .as("premise: the release on request is refused")
+                            .isInstanceOf(SQLException.class)
+                            .hasMessageContaining("simulated failure releasing");
+                } finally {
+                    LeaseReleaseRefusals.failLeaseReleasesOf(dataSource, queueIds, "ordered", kept.shard(), false);
+                }
+                assertThat(lanes.getFirst().metrics().takeoverAttemptBumps.sum()).as("premise: the refused request charged the message in the handler")
+                                                                                   .isEqualTo(1);
+                assertThat(ownerOf(kept.shard())).as("premise: the row still names the instance").isEqualTo(INSTANCE_ID);
+                afterTheRefusedRelease.accept(queue);
+
+                release.countDown();
+                // Handed back by the kept unit's own thread once the handler has returned, after its failure was recorded.
+                Awaitility.await().atMost(Duration.ofSeconds(10))
+                          .untilAsserted(() -> assertThat(ownerOf(kept.shard())).as("the kept unit is handed back once its handler has returned").isNull());
+                afterTheFailure.accept(queue);
+            } finally {
+                release.countDown();
+            }
+        }
+    }
+
+    @FunctionalInterface
+    private interface ThrowingConsumer<T> {
+        void accept(T value) throws Throwable;
+    }
+
+    /**
      * The stored attempt count of the ordered message of {@code key} on this queue: the test enqueues one per key.
      */
     private int storedAttemptsOfOrderedKey(String key) throws SQLException {
