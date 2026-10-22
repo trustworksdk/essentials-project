@@ -2,10 +2,9 @@
 
 Grows this module from a snapshot/closing-books showcase into a realistic retail brokerage that trades against the
 **exchange-simulator** and moves money through the **payment-gateway**, while keeping the test and performance
-features it has today. Both simulators are ours and can be changed; their contracts are in
-[`openapi/exchange-simulator/openapi.yaml`](openapi/exchange-simulator/openapi.yaml) and
-[`openapi/payment-gateway/openapi.yaml`](openapi/payment-gateway/openapi.yaml), and their guides in
-`exchange-simulator.zip`.
+features it has today. Both simulators are ours and can be changed; their contracts (OpenAPI) and guides live in the
+simulators' own repository, which the local images are built from. What the demo needs them to add is in
+[`SIMULATOR_REQUIREMENTS.md`](SIMULATOR_REQUIREMENTS.md).
 
 The demo has two purposes, and they are weighed equally: **showcase Essentials** in a realistic domain, and **push
 it under realistic load** to drive new features, find performance improvements and flush out bugs.
