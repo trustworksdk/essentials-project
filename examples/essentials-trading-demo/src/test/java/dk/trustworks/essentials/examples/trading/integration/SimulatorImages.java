@@ -57,6 +57,8 @@ public final class SimulatorImages {
     @SuppressWarnings("resource")
     public static GenericContainer<?> exchangeAsTheDemoRunsIt() {
         return exchange().withCopyFileToContainer(MountableFile.forHostPath("simulators/exchange.yaml"), "/etc/exchange/exchange.yaml")
+                         // The secret its webhook subscriptions sign with, where compose puts it
+                         .withCopyFileToContainer(MountableFile.forHostPath("simulators/secrets/webhook-secret.txt"), "/run/secrets/webhook_secret")
                          .withEnv("EXCHANGE_CONFIG", "/etc/exchange/exchange.yaml");
     }
 

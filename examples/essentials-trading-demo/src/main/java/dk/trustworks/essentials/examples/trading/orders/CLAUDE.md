@@ -30,8 +30,8 @@ books: an order is short-lived.
 - **Booking and release are one processor** (`automations/apply_order_to_account`). It delivers one order's events in
   order, so a release cannot overtake that order's bookings. Splitting it into two processors would break that.
 - **Every exchange report goes through the `Orders:ExchangeReports` inbox**, never straight to the command bus. Reports
-  for one order collide on its stream; the inbox redelivers the loser. The future webhook receiver must feed the same
-  inbox (through `integration/ExternalEventIntake`).
+  for one order collide on its stream; the inbox redelivers the loser. The exchange's events feed the same inbox
+  (through `integration/ExternalEventIntake`, see "Exchange-simulator adapter").
 - **`ExchangeOrderRouter`'s handlers are `UnitOfWorkMode.NONE`**: the exchange call holds no connection. Reading the
   order there needs an explicit `withUnitOfWork`. **Cancel by our `OrderId`, never wait for the exchange's id**
   (`ExchangeGateway.cancel(OrderId)`): that id is recorded only once the answer has gone through the reports inbox, and
@@ -84,7 +84,7 @@ limit fills at its limit. Per-instance memory: a restart forgets resting orders.
 | `cancel_order` | command | customer (`POST /api/accounts/{accountId}/orders/{orderId}/cancellation`) |
 | `record_exchange_answer`, `record_fill`, `record_cancellation` | command | the exchange, through `external_systems/exchange` |
 | `expire_order` | command | the end of the business day, through `external_systems/exchange` |
-| `external_systems/exchange` | external system | `OrderPlaced`, `OrderCancelRequested`, `OrderExpiryRequested`; operator (`POST /api/admin/orders/business-day-closed`); stub or exchange-simulator gateway |
+| `external_systems/exchange` | external system | `OrderPlaced`, `OrderCancelRequested`, `OrderExpiryRequested`; the exchange's order events (`POST /webhooks/exchange/orders`, event log); operator (`POST /api/admin/orders/business-day-closed`) |
 | `apply_order_to_account` | automation | `OrderFilled` → `BookTrade`; `OrderClosed` → `ReleaseHold` / `ReleaseShares` |
 | `orders` | view | customer (own accounts) and operator |
 | `account_owners` | view | order entry's ownership check |
@@ -111,8 +111,17 @@ limit fills at its limit. Per-instance memory: a restart forgets resting orders.
   exchange answers `unknown_participant`, which also covers a `/test/reset`.
 - **Only no answer, a timeout or a `5xx` is `ExchangeUnavailableException`** - the router's retry budget. Every
   other refusal rejects the order with the exchange's error code, upper-cased.
+- **Inbound: `ExchangeOrderEvents`** - `POST /webhooks/exchange/orders` (subscription `demo-orders` in
+  `simulators/exchange.yaml`, participant-filtered to the firm) plus an `ExternalEventLogCatchUp` on the same consumer.
+  Both queue the envelope into **`Orders:ExchangeReports` itself**; `ExchangeReports` translates it as it consumes it
+  (`ExchangeOrderEventTranslation`, keyed by `clientOrderId` = our `OrderId`). Keep `EVENT_TYPES` and the yaml's
+  `event_types` in step. Built on `ApplicationReadyEvent` (the inbox exists only then); earlier deliveries get `503`.
+- **Fill events are not subscribed** - they carry no execution quantity/price, and `executionId` only on a resting
+  order (SR-31). Until SR-31 a resting order's later fills are not booked. `OrderExpired` waits for step 3.
+- `ExchangeOrderEventsIT` cancels a resting order *at the exchange* so only the inbound path can close it: once via
+  catch-up alone, once via a signed webhook to a host port exposed before the containers start.
 
 ## Not built yet
 
-The exchange's webhooks into `Orders:ExchangeReports` (step 2 of the simulator work), the exchange's own `DAY` expiry
-and `BusinessDayClosed` in place of the brokerage-side stopgap and its operator endpoint.
+Fills from the exchange's events (SR-31), the exchange's own `DAY` expiry and `BusinessDayClosed` in place of the
+brokerage-side stopgap and its operator endpoint.

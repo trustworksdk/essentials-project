@@ -23,6 +23,10 @@ at the version in the POM's `simulator-api-specs.version`. To refresh: raise it,
 `mvn -pl examples/essentials-trading-demo initialize -P refresh-simulator-specs` with the artifact in the local
 repository, and commit the result. Never edit the copies by hand.
 
+**Generated request models initialise list fields to `[]`, not null**, and send them: a `WebhookRequest` without
+`participants` set went out as `"participants": []`, which the exchange refuses (`400`, "1 to 100 participant IDs").
+Set every list field you mean, and null the ones you don't.
+
 Tests: `ExternalEventIntakeIT` runs against a stub source and always runs. `ExchangeSimulatorWebhookIT` runs against
 the real `exchange-simulator:dev` image with its fault injection on (duplicates, missing fields, out-of-order), and
 **skips itself when the image is not built locally** (`SimulatorImages`) — a skip there is not a pass. Its webhook

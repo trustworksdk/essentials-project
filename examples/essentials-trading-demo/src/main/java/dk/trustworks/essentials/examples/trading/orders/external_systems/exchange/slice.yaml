@@ -14,6 +14,8 @@ reads:
   - { name: OpenDayOrders, via: OrdersQuery }
 endpoints:
   - { method: POST, path: "/api/admin/orders/business-day-closed", auth: operator }
+  # The exchange's signed webhook (subscription demo-orders); its event log is read as well
+  - { method: POST, path: "/webhooks/exchange/orders", auth: service }
 invariants:
   - id: INV-EX-1
     text: "The exchange is called with no UnitOfWork active, so no database connection is held for the duration of the call"
@@ -27,6 +29,9 @@ invariants:
   - id: INV-EX-4
     text: "An unreachable exchange is retried within the retry budget, then the order is rejected EXCHANGE_UNAVAILABLE and its hold released"
     enforcedBy: ExchangeOrderRouter
+  - id: INV-EX-5
+    text: "Each exchange event reaches the order once, whether by webhook or by the event-log catch-up: deduplicated per eventId in the same unit of work that queues it"
+    enforcedBy: ExternalEventIntake
 forbidden:
   - cross-slice-internal:orders
 tests:

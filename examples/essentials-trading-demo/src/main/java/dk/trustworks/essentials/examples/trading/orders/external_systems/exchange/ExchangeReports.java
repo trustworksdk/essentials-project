@@ -20,6 +20,7 @@ import dk.trustworks.essentials.components.foundation.messaging.RedeliveryPolicy
 import dk.trustworks.essentials.components.foundation.messaging.eip.store_and_forward.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.Message;
 import dk.trustworks.essentials.components.foundation.transaction.*;
+import dk.trustworks.essentials.examples.trading.integration.ExternalEventEnvelope;
 import dk.trustworks.essentials.examples.trading.orders.config.OrderProcessingProperties;
 import dk.trustworks.essentials.reactive.command.CommandBus;
 import org.slf4j.*;
@@ -41,6 +42,10 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * being written concurrently. Two reports for one order that collide on its stream fail one unit of work with an
  * optimistic-append conflict, and the inbox redelivers that report against the new state. The order applies every
  * report idempotently and in any order, so a redelivery never adds anything twice.
+ * <p>
+ * The exchange's own events reach the same inbox as {@link ExternalEventEnvelope}s, queued by
+ * {@link ExchangeOrderEvents} (webhook and event-log catch-up, deduplicated per event), and are translated to the same
+ * commands here, as they are consumed ({@link ExchangeOrderEventTranslation}).
  */
 @Component
 public class ExchangeReports {
@@ -77,7 +82,11 @@ public class ExchangeReports {
         unitOfWorkFactory.usingUnitOfWork(() -> inbox().addMessageReceived(recordCommand));
     }
 
-    private synchronized Inbox inbox() {
+    /**
+     * The inbox itself, for {@link ExchangeOrderEvents} to queue the exchange's events into through the deduplicating
+     * intake.
+     */
+    synchronized Inbox inbox() {
         if (inbox == null) {
             inbox = inboxes.getOrCreateInbox(InboxConfig.builder()
                                                         .inboxName(INBOX_NAME)
@@ -92,6 +101,9 @@ public class ExchangeReports {
 
     private void record(Message message) {
         log.debug("Recording exchange report {}", message.getPayload());
-        commandBus.send(message.getPayload());
+        var report = message.getPayload() instanceof ExternalEventEnvelope exchangeEvent
+                     ? ExchangeOrderEventTranslation.toReport(exchangeEvent)
+                     : message.getPayload();
+        commandBus.send(report);
     }
 }

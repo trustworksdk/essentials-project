@@ -1,7 +1,18 @@
 # The exchange-simulator as the trading demo runs it. Mounted at /etc/exchange/exchange.yaml, layered over the
 # simulator's built-in defaults; see SIMULATOR_REQUIREMENTS.md and the simulator's configuration guide.
 #
-# Webhook subscriptions are added here as the demo's bounded contexts start consuming events (phase 1 onwards).
+# Webhook subscriptions, one per consuming translation slice, signed with the shared demo secret (the compose secret).
+# Delivered to the demo on the host (instance 1, port 8080); every slice also reads the event log, so an event the
+# webhook could not deliver - another instance, an outage - still arrives. Unordered (D11): ordering is the demo's.
+webhooks:
+  subscriptions:
+    # orders/external_systems/exchange (ExchangeOrderEvents). Fill events are left out until they carry the execution
+    # (SR-31), OrderExpired until the exchange's own DAY expiry replaces the brokerage's.
+    - name: demo-orders
+      url: http://host.docker.internal:8080/webhooks/exchange/orders
+      event_types: [OrderAccepted, OrderRejected, OrderCancelled]
+      secret_file: /run/secrets/webhook_secret
+      participants: [DEMO-BROKER]
 clock:
   # A simulated day per real minute, starting on a Monday morning. Business dates always come from the exchange's
   # events, never from the demo's own clock (EXPANSION_PLAN.md D10). `mode: system` turns the virtual clock off.
