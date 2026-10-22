@@ -179,7 +179,7 @@ class ShardOwnedDeadPumpHandBackIT {
                 }, settings, SHARD_COUNT);
                 queue.enqueueOrdered(List.of(new ShardOwnedStorage.OrderedPayload("HOLD", 0, "HOLD-0".getBytes(StandardCharsets.UTF_8), 1)));
                 assertThat(entered.await(20, TimeUnit.SECONDS)).as("premise: the key is in its handler").isTrue();
-                var unit         = heldUnit.get();
+                int unit         = heldUnit.get();
                 var doomed       = runtime.pumpFor(QUEUE_ID, "ordered", unit);
                 var doomedUnits  = unitsOn(runtime, doomed, "ordered", ShardOwnedSchema.ORDERED_UNITS);
                 var idleUnits    = doomedUnits.stream().filter(candidate -> candidate != unit).toList();
@@ -335,7 +335,7 @@ class ShardOwnedDeadPumpHandBackIT {
                 }, settings, SHARD_COUNT);
                 queue.enqueueOrdered(List.of(new ShardOwnedStorage.OrderedPayload("HOLD", 0, "HOLD-0".getBytes(StandardCharsets.UTF_8), 1)));
                 assertThat(entered.await(20, TimeUnit.SECONDS)).as("premise: the key is in its handler").isTrue();
-                var unit         = heldUnit.get();
+                int unit         = heldUnit.get();
                 var doomed       = runtime.pumpFor(QUEUE_ID, "ordered", unit);
                 var doomedUnits  = unitsOn(runtime, doomed, "ordered", ShardOwnedSchema.ORDERED_UNITS);
                 var idleUnits    = doomedUnits.stream().filter(candidate -> candidate != unit).toList();
@@ -539,7 +539,7 @@ class ShardOwnedDeadPumpHandBackIT {
                 }, settings, SHARD_COUNT);
                 queue.enqueue(List.of("HOLD".getBytes(StandardCharsets.UTF_8)), 1);
                 assertThat(entered.await(20, TimeUnit.SECONDS)).as("premise: the message is in its handler").isTrue();
-                var shard         = heldShard.get();
+                int shard         = heldShard.get();
                 var doomed        = runtime.pumpFor(QUEUE_ID, "unordered", shard);
                 var doomedShards  = unitsOn(runtime, doomed, "unordered", SHARD_COUNT);
                 var idleShards    = doomedShards.stream().filter(candidate -> candidate != shard).toList();
@@ -718,7 +718,7 @@ class ShardOwnedDeadPumpHandBackIT {
                 }, settings, SHARD_COUNT);
                 queue.enqueueOrdered(List.of(new ShardOwnedStorage.OrderedPayload("HOLD", 0, "HOLD-0".getBytes(StandardCharsets.UTF_8), 1)));
                 assertThat(entered.await(20, TimeUnit.SECONDS)).as("premise: the key is in its handler").isTrue();
-                var unit         = heldUnit.get();
+                int unit         = heldUnit.get();
                 var doomed       = runtime.pumpFor(QUEUE_ID, "ordered", unit);
                 var doomedUnits  = unitsOn(runtime, doomed, "ordered", ShardOwnedSchema.ORDERED_UNITS);
                 var fencesBefore = fences("ordered", doomedUnits);
@@ -787,7 +787,7 @@ class ShardOwnedDeadPumpHandBackIT {
                 }, settings, SHARD_COUNT);
                 queue.enqueueOrdered(List.of(new ShardOwnedStorage.OrderedPayload("HOLD", 0, "HOLD-0".getBytes(StandardCharsets.UTF_8), 1)));
                 assertThat(entered.await(20, TimeUnit.SECONDS)).as("premise: the key is in its handler").isTrue();
-                var unit         = heldUnit.get();
+                int unit         = heldUnit.get();
                 var doomed       = runtime.pumpFor(QUEUE_ID, "ordered", unit);
                 var doomedUnits  = unitsOn(runtime, doomed, "ordered", ShardOwnedSchema.ORDERED_UNITS);
                 var idleUnits    = doomedUnits.stream().filter(candidate -> candidate != unit).toList();
