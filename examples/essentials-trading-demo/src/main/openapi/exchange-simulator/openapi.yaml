@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Exchange simulator API
-  version: 0.2.0
+  version: 0.3.0
   summary: A stock exchange simulator with price-time matching, settlement and clearing simulation, and signed webhooks.
   description: |
     Commands are answered after they are committed to SQLite. Field names are camelCase, enums use their upper-case
@@ -1944,11 +1944,24 @@ components:
         timeInForce: { $ref: "#/components/schemas/TimeInForce" }
         rejectReason: { enum: [SELF_TRADE, INSTRUMENT_DISABLED, MARKET_CLOSED] }
         cancelReason: { enum: [REQUESTED, MARKET_REMAINDER, IOC_REMAINDER] }
-        executionId: { type: string, format: uuid, description: On a resting order's fill event. }
+        executionId:
+          type: string
+          format: uuid
+          description: >-
+            On fill events, the execution the event reports (FIX ExecID): the same ID as on TradeExecuted and in the
+            order result's executions.
+        lastQuantity: { type: integer, description: "On fill events, what this execution filled (FIX LastQty)." }
+        lastPriceTicks: { type: integer, description: "On fill events, the execution's price in ticks (FIX LastPx)." }
+        lastPrice: { type: string, description: "On fill events, the execution's price in major units (FIX LastPx)." }
         tradeDate:
           $ref: "#/components/schemas/TradeDate"
-          description: On fill events, the execution's (one command's executions share their dates).
+          description: On fill events, the execution's.
         intendedSettlementDate: { $ref: "#/components/schemas/IntendedSettlementDate" }
+        businessDate:
+          $ref: "#/components/schemas/Date"
+          description: >-
+            On OrderExpired, the business day whose end expired the order: the date BusinessDayClosed names for that
+            cutoff, or on a market with a session the day whose session closed.
     TradeExecutedPayload:
       type: object
       additionalProperties: false
@@ -2061,7 +2074,7 @@ components:
         source: { const: exchange }
         payload:
           allOf: [{ $ref: "#/components/schemas/OrderEventPayload" }]
-          required: [tradeDate, intendedSettlementDate]
+          required: [executionId, lastQuantity, lastPriceTicks, lastPrice, tradeDate, intendedSettlementDate]
     OrderFilledEvent:
       allOf: [{ $ref: "#/components/schemas/EventEnvelope" }]
       properties:
@@ -2069,7 +2082,7 @@ components:
         source: { const: exchange }
         payload:
           allOf: [{ $ref: "#/components/schemas/OrderEventPayload" }]
-          required: [tradeDate, intendedSettlementDate]
+          required: [executionId, lastQuantity, lastPriceTicks, lastPrice, tradeDate, intendedSettlementDate]
     OrderCancelledEvent:
       allOf: [{ $ref: "#/components/schemas/EventEnvelope" }]
       properties:
@@ -2081,7 +2094,7 @@ components:
       properties:
         eventType: { const: OrderExpired }
         source: { const: exchange }
-        payload: { $ref: "#/components/schemas/OrderEventPayload" }
+        payload: { allOf: [{ $ref: "#/components/schemas/OrderEventPayload" }], required: [businessDate] }
     TradeExecutedEvent:
       allOf: [{ $ref: "#/components/schemas/EventEnvelope" }]
       properties:

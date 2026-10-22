@@ -16,11 +16,14 @@
 
 package dk.trustworks.essentials.examples.trading.orders.external_systems.exchange;
 
+import dk.trustworks.essentials.examples.trading.accounts.types.*;
 import dk.trustworks.essentials.examples.trading.integration.ExternalEventEnvelope;
 import dk.trustworks.essentials.examples.trading.orders.types.OrderId;
 import dk.trustworks.essentials.examples.trading.orders.use_cases.record_cancellation.RecordCancellation;
 import dk.trustworks.essentials.examples.trading.orders.use_cases.record_exchange_answer.RecordExchangeAnswer;
 import dk.trustworks.essentials.examples.trading.orders.use_cases.record_expiry.RecordExpiry;
+import dk.trustworks.essentials.examples.trading.orders.use_cases.record_fill.RecordFill;
+import dk.trustworks.essentials.types.Money;
 import org.junit.jupiter.api.Test;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -57,15 +60,30 @@ class ExchangeOrderEventTranslationTest {
     }
 
     @Test
-    void an_expiry_carries_the_business_date_when_the_exchange_sends_one() {
-        var withDate = event("OrderExpired", """
+    void an_expiry_carries_the_business_day_the_exchange_names() {
+        var event = event("OrderExpired", """
                 {"clientOrderId": "ORD-1", "status": "EXPIRED", "businessDate": "2030-01-08"}""");
-        var withoutDate = event("OrderExpired", """
-                {"clientOrderId": "ORD-1", "status": "EXPIRED"}""");
 
-        assertThat(ExchangeOrderEventTranslation.isComplete(withoutDate)).isTrue();
-        assertThat(ExchangeOrderEventTranslation.toReport(withDate)).isEqualTo(new RecordExpiry(OrderId.of("ORD-1"), LocalDate.of(2030, 1, 8)));
-        assertThat(ExchangeOrderEventTranslation.toReport(withoutDate)).isEqualTo(new RecordExpiry(OrderId.of("ORD-1"), null));
+        assertThat(ExchangeOrderEventTranslation.isComplete(event)).isTrue();
+        assertThat(ExchangeOrderEventTranslation.toReport(event)).isEqualTo(new RecordExpiry(OrderId.of("ORD-1"), LocalDate.of(2030, 1, 8)));
+    }
+
+    @Test
+    void a_fill_event_is_recorded_as_the_execution_it_names() {
+        var partial = event("OrderPartiallyFilled", """
+                {"clientOrderId": "ORD-1", "status": "PARTIALLY_FILLED", "filledQuantity": 3, "executionId": "EX-1",
+                 "lastQuantity": 3, "lastPriceTicks": 10032, "lastPrice": "100.32",
+                 "tradeDate": "2030-01-07", "intendedSettlementDate": "2030-01-08"}""");
+        var filled = event("OrderFilled", """
+                {"clientOrderId": "ORD-1", "status": "FILLED", "filledQuantity": 5, "executionId": "EX-2",
+                 "lastQuantity": 2, "lastPriceTicks": 10033, "lastPrice": "100.33",
+                 "tradeDate": "2030-01-07", "intendedSettlementDate": "2030-01-08"}""");
+
+        assertThat(ExchangeOrderEventTranslation.isComplete(partial)).isTrue();
+        assertThat(ExchangeOrderEventTranslation.toReport(partial))
+                .isEqualTo(new RecordFill(OrderId.of("ORD-1"), ExecutionId.of("EX-1"), Quantity.of(3), Money.of("100.32", "USD"), LocalDate.of(2030, 1, 7), LocalDate.of(2030, 1, 8)));
+        assertThat(ExchangeOrderEventTranslation.toReport(filled))
+                .isEqualTo(new RecordFill(OrderId.of("ORD-1"), ExecutionId.of("EX-2"), Quantity.of(2), Money.of("100.33", "USD"), LocalDate.of(2030, 1, 7), LocalDate.of(2030, 1, 8)));
     }
 
     @Test
@@ -81,13 +99,21 @@ class ExchangeOrderEventTranslationTest {
     }
 
     @Test
-    void fill_events_are_not_translated_until_they_carry_the_execution() {
-        var event = event("OrderFilled", """
-                {"clientOrderId": "ORD-1", "status": "FILLED", "filledQuantity": 5}""");
-
-        assertThat(ExchangeOrderEventTranslation.EVENT_TYPES).doesNotContain("OrderFilled", "OrderPartiallyFilled");
-        assertThat(ExchangeOrderEventTranslation.isComplete(event)).isFalse();
-        assertThatThrownBy(() -> ExchangeOrderEventTranslation.toReport(event)).isInstanceOf(IllegalArgumentException.class);
+    void a_fill_or_expiry_copy_missing_its_execution_or_date_is_incomplete() {
+        assertThat(ExchangeOrderEventTranslation.isComplete(event("OrderFilled", """
+                {"clientOrderId": "ORD-1", "status": "FILLED", "lastQuantity": 2, "lastPrice": "100.33",
+                 "tradeDate": "2030-01-07", "intendedSettlementDate": "2030-01-08"}"""))).as("no executionId").isFalse();
+        assertThat(ExchangeOrderEventTranslation.isComplete(event("OrderFilled", """
+                {"clientOrderId": "ORD-1", "status": "FILLED", "executionId": "EX-2", "lastQuantity": 0, "lastPrice": "100.33",
+                 "tradeDate": "2030-01-07", "intendedSettlementDate": "2030-01-08"}"""))).as("no quantity").isFalse();
+        assertThat(ExchangeOrderEventTranslation.isComplete(event("OrderFilled", """
+                {"clientOrderId": "ORD-1", "status": "FILLED", "executionId": "EX-2", "lastQuantity": 2, "lastPrice": null,
+                 "tradeDate": "2030-01-07", "intendedSettlementDate": "2030-01-08"}"""))).as("null price").isFalse();
+        assertThat(ExchangeOrderEventTranslation.isComplete(event("OrderPartiallyFilled", """
+                {"clientOrderId": "ORD-1", "status": "PARTIALLY_FILLED", "executionId": "EX-2", "lastQuantity": 2, "lastPrice": "100.33",
+                 "intendedSettlementDate": "2030-01-08"}"""))).as("no trade date").isFalse();
+        assertThat(ExchangeOrderEventTranslation.isComplete(event("OrderExpired", """
+                {"clientOrderId": "ORD-1", "status": "EXPIRED"}"""))).as("no business date").isFalse();
     }
 
     private static ExternalEventEnvelope event(String eventType, String payload) {

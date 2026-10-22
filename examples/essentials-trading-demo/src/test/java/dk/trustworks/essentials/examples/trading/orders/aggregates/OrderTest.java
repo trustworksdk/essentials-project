@@ -199,22 +199,6 @@ class OrderTest {
     }
 
     @Test
-    void an_expiry_without_a_business_date_keeps_the_one_the_brokerage_asked_for_or_none() {
-        var asked = placeBuy(10);
-        asked.expire(TRADE_DATE);
-        asked.markExpired(null);
-        assertThat(asked.getUncommittedChanges().events).filteredOn(OrderExpired.class::isInstance)
-                                                       .extracting(e -> ((OrderExpired) e).businessDate())
-                                                       .containsExactly(TRADE_DATE);
-
-        var unasked = placeBuy(10);
-        unasked.markExpired(null);
-        assertThat(unasked.getUncommittedChanges().events).filteredOn(OrderExpired.class::isInstance)
-                                                         .extracting(e -> ((OrderExpired) e).businessDate())
-                                                         .containsExactly((LocalDate) null);
-    }
-
-    @Test
     void a_filled_order_is_not_expired() {
         var order = placeBuy(10);
         fill(order, "EX-1", 10);

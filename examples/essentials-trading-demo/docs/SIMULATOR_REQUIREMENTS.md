@@ -416,6 +416,8 @@ a second cancel by id does.
 
 ### SR-31 — The execution on every fill event (MUST) [phase 3]
 
+**Implemented in simulators 0.3.0**, with the field names below; the demo consumes it.
+
 A member books its fills from its execution reports. A FIX `ExecutionReport` for a fill names the execution
 (`ExecID`, tag 17) and says what it filled: `LastQty` (32) and `LastPx` (31), next to the order's running totals
 (`CumQty`, `LeavesQty`). The simulator's `OrderPartiallyFilled` and `OrderFilled` carry only the running totals:
@@ -462,6 +464,8 @@ order's:
   `TradeExecuted` and `OrderResult.executions[]`.
 
 ### SR-32 — The business day on `OrderExpired` (SHOULD) [phase 3]
+
+**Implemented in simulators 0.3.0**, with the field names below; the demo consumes it.
 
 A `DAY` order expires at the end of its business day (SR-17), and a member records which day that was: the order
 belongs to that day's books and statements. The exchange's `OrderExpired` carries the order's state but no date. The

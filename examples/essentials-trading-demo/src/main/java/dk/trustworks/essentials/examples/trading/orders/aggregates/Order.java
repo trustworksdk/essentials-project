@@ -196,13 +196,14 @@ public class Order extends AggregateRoot<OrderId, OrderEvent, Order> {
      * The exchange expired the order at the end of its business day (SR-17). A fact like a cancellation: an order that
      * already closed is left alone.
      *
-     * @param businessDate the day that ended, or {@code null} if the exchange did not say (until SR-32)
+     * @param businessDate the day that ended, as the exchange names it (SR-32)
      */
     public void markExpired(LocalDate businessDate) {
+        requireNonNull(businessDate, "No businessDate provided");
         if (status.isTerminal()) {
             return;
         }
-        apply(new OrderExpired(aggregateId(), businessDate != null ? businessDate : expiringBusinessDate));
+        apply(new OrderExpired(aggregateId(), businessDate));
         close();
     }
 

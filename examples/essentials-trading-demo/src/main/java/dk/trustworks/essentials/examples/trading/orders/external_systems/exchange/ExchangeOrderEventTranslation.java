@@ -16,13 +16,17 @@
 
 package dk.trustworks.essentials.examples.trading.orders.external_systems.exchange;
 
+import dk.trustworks.essentials.examples.trading.accounts.types.*;
 import dk.trustworks.essentials.examples.trading.integration.ExternalEventEnvelope;
 import dk.trustworks.essentials.examples.trading.orders.types.OrderId;
 import dk.trustworks.essentials.examples.trading.orders.use_cases.record_cancellation.RecordCancellation;
 import dk.trustworks.essentials.examples.trading.orders.use_cases.record_exchange_answer.RecordExchangeAnswer;
 import dk.trustworks.essentials.examples.trading.orders.use_cases.record_expiry.RecordExpiry;
+import dk.trustworks.essentials.examples.trading.orders.use_cases.record_fill.RecordFill;
+import dk.trustworks.essentials.types.Money;
 import tools.jackson.databind.JsonNode;
 
+import java.math.BigDecimal;
 import java.time.*;
 import java.util.*;
 
@@ -32,23 +36,25 @@ import java.util.*;
  * <p>
  * The order is named by the event's {@code clientOrderId}, which is our {@code OrderId} (D8), so no lookup is needed.
  * <p>
- * Fills are not translated yet: the exchange's fill events carry neither the execution's quantity and price nor,
- * except on a resting order, its {@code executionId}, so a fill cannot be booked from them (SR-31). Until the exchange
- * sends them, fills come only from the submission's answer ({@link SimulatorExchangeGateway}).
+ * A fill event names its execution and what it filled (SR-31, FIX ExecID/LastQty/LastPx), with the execution's trade
+ * and settlement dates (SR-29). The submission's answer reports the same executions of a marketable order
+ * ({@link SimulatorExchangeGateway}); the order adds an {@code executionId} only once. The price is in USD, the only
+ * currency the exchange lists in (D3).
  * <p>
- * {@code OrderExpired} carries no business date yet (SR-32); one is taken when the exchange sends {@code businessDate},
- * never worked out from {@code occurredAt} (D10).
+ * {@code OrderExpired} names the business day that ended (SR-32), never worked out from {@code occurredAt} (D10).
  */
 final class ExchangeOrderEventTranslation {
-    static final String ORDER_ACCEPTED  = "OrderAccepted";
-    static final String ORDER_REJECTED  = "OrderRejected";
-    static final String ORDER_CANCELLED = "OrderCancelled";
-    static final String ORDER_EXPIRED   = "OrderExpired";
+    static final String ORDER_ACCEPTED         = "OrderAccepted";
+    static final String ORDER_REJECTED         = "OrderRejected";
+    static final String ORDER_CANCELLED        = "OrderCancelled";
+    static final String ORDER_EXPIRED          = "OrderExpired";
+    static final String ORDER_PARTIALLY_FILLED = "OrderPartiallyFilled";
+    static final String ORDER_FILLED           = "OrderFilled";
 
     /**
      * The event types the subscription is declared for (keep in step with {@code simulators/exchange.yaml}).
      */
-    static final Set<String> EVENT_TYPES = Set.of(ORDER_ACCEPTED, ORDER_REJECTED, ORDER_CANCELLED, ORDER_EXPIRED);
+    static final Set<String> EVENT_TYPES = Set.of(ORDER_ACCEPTED, ORDER_REJECTED, ORDER_CANCELLED, ORDER_EXPIRED, ORDER_PARTIALLY_FILLED, ORDER_FILLED);
 
     private ExchangeOrderEventTranslation() {
     }
@@ -63,7 +69,13 @@ final class ExchangeOrderEventTranslation {
             return false;
         }
         return switch (envelope.eventType()) {
-            case ORDER_ACCEPTED, ORDER_EXPIRED -> true;
+            case ORDER_ACCEPTED -> true;
+            case ORDER_EXPIRED -> text(payload, "businessDate").flatMap(ExchangeOrderEventTranslation::date).isPresent();
+            case ORDER_PARTIALLY_FILLED, ORDER_FILLED -> text(payload, "executionId").isPresent()
+                    && positiveLong(payload, "lastQuantity").isPresent()
+                    && text(payload, "lastPrice").flatMap(ExchangeOrderEventTranslation::decimal).isPresent()
+                    && text(payload, "tradeDate").flatMap(ExchangeOrderEventTranslation::date).isPresent()
+                    && text(payload, "intendedSettlementDate").flatMap(ExchangeOrderEventTranslation::date).isPresent();
             case ORDER_REJECTED -> text(payload, "rejectReason").isPresent();
             case ORDER_CANCELLED -> text(payload, "cancelReason").isPresent();
             default -> false;
@@ -80,9 +92,28 @@ final class ExchangeOrderEventTranslation {
             case ORDER_ACCEPTED -> RecordExchangeAnswer.accepted(orderId);
             case ORDER_REJECTED -> RecordExchangeAnswer.rejected(orderId, text(payload, "rejectReason").orElseThrow());
             case ORDER_CANCELLED -> new RecordCancellation(orderId, text(payload, "cancelReason").orElseThrow());
-            case ORDER_EXPIRED -> new RecordExpiry(orderId, text(payload, "businessDate").flatMap(ExchangeOrderEventTranslation::date).orElse(null));
+            case ORDER_EXPIRED -> new RecordExpiry(orderId, text(payload, "businessDate").flatMap(ExchangeOrderEventTranslation::date).orElseThrow());
+            case ORDER_PARTIALLY_FILLED, ORDER_FILLED -> new RecordFill(orderId,
+                                                                        ExecutionId.of(text(payload, "executionId").orElseThrow()),
+                                                                        Quantity.of(positiveLong(payload, "lastQuantity").orElseThrow()),
+                                                                        Money.of(text(payload, "lastPrice").flatMap(ExchangeOrderEventTranslation::decimal).orElseThrow(), "USD"),
+                                                                        text(payload, "tradeDate").flatMap(ExchangeOrderEventTranslation::date).orElseThrow(),
+                                                                        text(payload, "intendedSettlementDate").flatMap(ExchangeOrderEventTranslation::date).orElseThrow());
             default -> throw new IllegalArgumentException("Not an order lifecycle event this slice translates: " + envelope.eventType());
         };
+    }
+
+    private static Optional<BigDecimal> decimal(String text) {
+        try {
+            return Optional.of(new BigDecimal(text));
+        } catch (NumberFormatException e) {
+            return Optional.empty();
+        }
+    }
+
+    private static Optional<Long> positiveLong(JsonNode payload, String field) {
+        var node = payload.get(field);
+        return node != null && node.isIntegralNumber() && node.asLong() > 0 ? Optional.of(node.asLong()) : Optional.empty();
     }
 
     private static Optional<LocalDate> date(String text) {

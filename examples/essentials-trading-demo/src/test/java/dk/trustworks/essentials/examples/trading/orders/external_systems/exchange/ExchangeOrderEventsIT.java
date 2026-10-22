@@ -21,6 +21,10 @@ import dk.trustworks.essentials.examples.trading.integration.exchange_simulator.
 import dk.trustworks.essentials.examples.trading.integration.exchange_simulator.client.api.*;
 import dk.trustworks.essentials.examples.trading.integration.exchange_simulator.client.model.ClockAdvance;
 import dk.trustworks.essentials.examples.trading.integration.exchange_simulator.client.model.DeliveryStatus;
+import dk.trustworks.essentials.examples.trading.integration.exchange_simulator.client.model.OrderRequest;
+import dk.trustworks.essentials.examples.trading.integration.exchange_simulator.client.model.OrderType;
+import dk.trustworks.essentials.examples.trading.integration.exchange_simulator.client.model.Participant;
+import dk.trustworks.essentials.examples.trading.integration.exchange_simulator.client.model.Side;
 import dk.trustworks.essentials.examples.trading.integration.exchange_simulator.client.model.WebhookRequest;
 import dk.trustworks.essentials.examples.trading.orders.types.OrderStatus;
 import dk.trustworks.essentials.examples.trading.orders.views.orders.OrderView;
@@ -52,7 +56,8 @@ import static org.awaitility.Awaitility.await;
  * The inbound half of the exchange adapter against the real exchange-simulator: an order cancelled <em>at the exchange</em>,
  * not through the brokerage, so that only the exchange's {@code OrderCancelled} event can close it here. Once through the
  * event-log catch-up reader alone (no webhook reaches this test's application yet), once through a signed webhook. And a
- * {@code DAY} order the exchange expires itself when its clock passes the business day's end.
+ * {@code DAY} order the exchange expires itself when its clock passes the business day's end, and a resting order
+ * another participant's order fills later, which only the exchange's fill event (SR-31) can book here.
  * <p>
  * Skipped unless the {@code exchange-simulator:dev} image exists locally (see {@link SimulatorImages}).
  */
@@ -120,7 +125,7 @@ class ExchangeOrderEventsIT {
     void an_order_cancelled_at_the_exchange_is_closed_from_its_signed_webhook() throws IOException {
         openFundedAccountOnce();
         var subscription = new WebhooksApi(apiClient()).registerWebhook(new WebhookRequest().url(java.net.URI.create("http://host.testcontainers.internal:" + APPLICATION_PORT + "/webhooks/exchange/orders"))
-                                                                                        .eventTypes(List.of("OrderAccepted", "OrderRejected", "OrderCancelled", "OrderExpired"))
+                                                                                        .eventTypes(List.copyOf(ExchangeOrderEventTranslation.EVENT_TYPES))
                                                                                         .participants(List.of("DEMO-BROKER"))
                                                                                         .secret(Files.readString(Path.of("simulators/secrets/webhook-secret.txt")).trim()));
         var orderId = "ORD-EXCHANGE-CANCEL-WEBHOOK";
@@ -147,11 +152,51 @@ class ExchangeOrderEventsIT {
         await().atMost(TIMEOUT).untilAsserted(() -> {
             var order = projectedOrder(orderId);
             assertThat(order.status()).isEqualTo(OrderStatus.EXPIRED);
-            assertThat(order.reason()).as("no business date until the exchange sends one (SR-32)").isEqualTo("END_OF_DAY");
+            assertThat(order.reason()).as("the business day the exchange names (SR-32)").matches("END_OF_DAY \\d{4}-\\d{2}-\\d{2}");
         });
         assertThat(operator().postForEntity("/api/admin/orders/business-day-closed", Map.of("businessDate", "2030-01-07"), String.class).getStatusCode())
                 .as("the brokerage's end-of-day stopgap exists for the stub exchange only")
                 .isEqualTo(HttpStatus.NOT_FOUND);
+    }
+
+    @Test
+    @Order(4)
+    void a_resting_order_filled_later_at_the_exchange_is_filled_and_booked_from_the_fill_event() {
+        openFundedAccountOnce();
+        var orderId = "ORD-EXCHANGE-LATER-FILL";
+        var book    = new MarketDataApi(apiClient()).marketData("ACME");
+        // One cent above the best bid and below the best ask: rests as the best bid, so the sell below hits it first
+        var limit = new BigDecimal(book.getBestBid().getPrice()).add(new BigDecimal("0.01"));
+        assertThat(limit).isLessThan(new BigDecimal(book.getBestAsk().getPrice()));
+        var placed = alice().postForEntity("/api/accounts/" + ACCOUNT + "/orders",
+                                           Map.of("orderId", orderId, "accountId", ACCOUNT, "instrumentId", "ACME", "side", "BUY", "type", "LIMIT",
+                                                  "quantity", 5, "limitPrice", usd(limit.toPlainString()), "timeInForce", "GTC"),
+                                           String.class);
+        assertThat(placed.getStatusCode()).as("%s", placed.getBody()).isEqualTo(HttpStatus.CREATED);
+        await().atMost(TIMEOUT).untilAsserted(() -> assertThat(projectedOrder(orderId).status()).isEqualTo(OrderStatus.OPEN));
+
+        registerParticipantOnce("OTHER-BROKER");
+        orders().submitOrder(new OrderRequest().clientOrderId(UUID.randomUUID().toString())
+                                               .participantId("OTHER-BROKER")
+                                               .instrumentId("ACME")
+                                               .side(Side.SELL)
+                                               .type(OrderType.MARKET)
+                                               .quantity(5));
+
+        await().atMost(TIMEOUT).untilAsserted(() -> {
+            var order = projectedOrder(orderId);
+            assertThat(order.status()).isEqualTo(OrderStatus.FILLED);
+            assertThat(order.filledQuantity().value()).isEqualTo(5);
+            assertThat(order.averageFillPrice().getAmount().value()).isEqualByComparingTo(limit);
+        });
+    }
+
+    private static void registerParticipantOnce(String participantId) {
+        try {
+            new ParticipantsApi(apiClient()).registerParticipant(new Participant().id(participantId).name(participantId));
+        } catch (org.springframework.web.client.HttpClientErrorException.Conflict alreadyRegistered) {
+            // registered before
+        }
     }
 
     private boolean accountOpened;

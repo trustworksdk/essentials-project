@@ -6,11 +6,10 @@
 # webhook could not deliver - another instance, an outage - still arrives. Unordered (D11): ordering is the demo's.
 webhooks:
   subscriptions:
-    # orders/external_systems/exchange (ExchangeOrderEvents). Fill events are left out until they carry the execution
-    # (SR-31).
+    # orders/external_systems/exchange (ExchangeOrderEvents)
     - name: demo-orders
       url: http://host.docker.internal:8080/webhooks/exchange/orders
-      event_types: [OrderAccepted, OrderRejected, OrderCancelled, OrderExpired]
+      event_types: [OrderAccepted, OrderRejected, OrderPartiallyFilled, OrderFilled, OrderCancelled, OrderExpired]
       secret_file: /run/secrets/webhook_secret
       participants: [DEMO-BROKER]
 clock:

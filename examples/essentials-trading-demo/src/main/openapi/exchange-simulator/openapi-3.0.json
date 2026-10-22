@@ -2424,6 +2424,14 @@
       "OrderEventPayload": {
         "additionalProperties": false,
         "properties": {
+          "businessDate": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Date"
+              }
+            ],
+            "description": "On OrderExpired, the business day whose end expired the order: the date BusinessDayClosed names for that cutoff, or on a market with a session the day whose session closed."
+          },
           "cancelReason": {
             "enum": [
               "REQUESTED",
@@ -2437,7 +2445,7 @@
             "type": "string"
           },
           "executionId": {
-            "description": "On a resting order's fill event.",
+            "description": "On fill events, the execution the event reports (FIX ExecID): the same ID as on TradeExecuted and in the order result's executions.",
             "format": "uuid",
             "type": "string"
           },
@@ -2449,6 +2457,18 @@
           },
           "intendedSettlementDate": {
             "$ref": "#/components/schemas/IntendedSettlementDate"
+          },
+          "lastPrice": {
+            "description": "On fill events, the execution's price in major units (FIX LastPx).",
+            "type": "string"
+          },
+          "lastPriceTicks": {
+            "description": "On fill events, the execution's price in ticks (FIX LastPx).",
+            "type": "integer"
+          },
+          "lastQuantity": {
+            "description": "On fill events, what this execution filled (FIX LastQty).",
+            "type": "integer"
           },
           "orderId": {
             "format": "uuid",
@@ -2497,7 +2517,7 @@
                 "$ref": "#/components/schemas/TradeDate"
               }
             ],
-            "description": "On fill events, the execution's (one command's executions share their dates)."
+            "description": "On fill events, the execution's."
           },
           "type": {
             "$ref": "#/components/schemas/OrderType"
@@ -2535,7 +2555,14 @@
             "type": "string"
           },
           "payload": {
-            "$ref": "#/components/schemas/OrderEventPayload"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/OrderEventPayload"
+              }
+            ],
+            "required": [
+              "businessDate"
+            ]
           },
           "source": {
             "enum": [
@@ -2565,6 +2592,10 @@
               }
             ],
             "required": [
+              "executionId",
+              "lastQuantity",
+              "lastPriceTicks",
+              "lastPrice",
               "tradeDate",
               "intendedSettlementDate"
             ]
@@ -2597,6 +2628,10 @@
               }
             ],
             "required": [
+              "executionId",
+              "lastQuantity",
+              "lastPriceTicks",
+              "lastPrice",
               "tradeDate",
               "intendedSettlementDate"
             ]
@@ -4042,7 +4077,7 @@
       "name": "Apache-2.0"
     },
     "title": "Exchange simulator API",
-    "version": "0.2.0"
+    "version": "0.3.0"
   },
   "openapi": "3.0.3",
   "paths": {

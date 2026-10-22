@@ -25,10 +25,11 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 /**
  * The exchange expired what was left of a {@code DAY} order at the end of its business day (SR-17).
  *
- * @param businessDate the day that ended, or {@code null} if the exchange did not say (until SR-32)
+ * @param businessDate the day that ended, as the exchange names it (SR-32)
  */
 public record RecordExpiry(OrderId orderId, LocalDate businessDate) {
     public RecordExpiry {
         requireNonNull(orderId, "No orderId provided");
+        requireNonNull(businessDate, "No businessDate provided");
     }
 }

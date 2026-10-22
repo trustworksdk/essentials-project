@@ -45,7 +45,7 @@ books: an order is short-lived.
   `OrderPlaced` makes a later `PlaceOrder` with that id look like a repeat and place nothing.
 - **DAY expiry: the exchange's under the simulators, the brokerage's with the stub.** The exchange expires its own
   `DAY` orders (SR-17); its `OrderExpired` becomes `RecordExpiry` (`record_expiry`), which closes the order `EXPIRED`
-  as a fact. Business date empty until the exchange sends one (SR-32) - never derived from its clock. The stub has no
+  as a fact, with the business day the exchange names (SR-32) - never derived from its clock. The stub has no
   business day, so with it - and only with it - `POST /api/admin/orders/business-day-closed` stands in: `expire_order`
   records `OrderExpiryRequested`, the router cancels at the exchange, and the cancellation closes the order `EXPIRED`.
   That endpoint is conditional on no exchange base URL; it reads open orders from the eventually consistent view.
@@ -117,12 +117,10 @@ limit fills at its limit. Per-instance memory: a restart forgets resting orders.
   Both queue the envelope into **`Orders:ExchangeReports` itself**; `ExchangeReports` translates it as it consumes it
   (`ExchangeOrderEventTranslation`, keyed by `clientOrderId` = our `OrderId`). Keep `EVENT_TYPES` and the yaml's
   `event_types` in step. Built on `ApplicationReadyEvent` (the inbox exists only then); earlier deliveries get `503`.
-- **Fill events are not subscribed** - they carry no execution quantity/price, and `executionId` only on a resting
-  order (SR-31). Until SR-31 a resting order's later fills are not booked.
+- **Fills come from the fill events too** (`OrderPartiallyFilled`/`OrderFilled`, SR-31 since simulators 0.3.0):
+  `executionId`, `lastQuantity`, `lastPrice`, trade and settlement dates -> `RecordFill`, in USD (D3). The submit
+  answer reports a marketable order's executions first; the order adds each `executionId` once. A resting order's later
+  fills arrive only this way. A copy missing any of those fields is damaged (`422`, the exchange retries).
 - `ExchangeOrderEventsIT` cancels a resting order *at the exchange* so only the inbound path can close it: once via
   catch-up alone, once via a signed webhook to a host port exposed before the containers start; and a `DAY` order the
-  exchange expires when the test moves its clock a day on.
-
-## Not built yet
-
-Fills from the exchange's events (SR-31); the business date on an exchange-driven expiry (SR-32).
+  exchange expires when the test moves its clock a day on; and a resting order another participant fills later.

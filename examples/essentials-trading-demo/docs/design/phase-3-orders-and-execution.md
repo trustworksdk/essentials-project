@@ -125,11 +125,10 @@ contention (15 % retries at a 50 % hot share); order placement is far below that
   `OrderCancelled`, `OrderRejected`, `OrderExpired`) through the `integration/` receiver (signature, validation,
   dedupe, catch-up), keyed by `clientOrderId`.
 - **The fill comes from the order event, not from `TradeExecuted`** (Q-4). Order events carry `clientOrderId` and the
-  `executionId`, so routing to our `Order` needs no lookup. **Needs SR-31** (found 2026-10-22, simulators 0.2.0): the
-  fill events carry neither the execution's quantity and price nor, except on a resting order, its `executionId`.
-  Until SR-31 lands the adapter books fills from the submit answer only, and a resting order's later fills are not
-  booked; deriving them from `filledQuantity` deltas or routing `TradeExecuted` through a map of exchange order ids
-  was considered and rejected. `TradeExecuted` names exchange order ids and both
+  `executionId`, so routing to our `Order` needs no lookup. On simulators 0.2.0 the fill events carried neither the
+  execution's quantity and price nor, except on a resting order, its `executionId`; SR-31 added them in 0.3.0. Deriving
+  fills from `filledQuantity` deltas or routing `TradeExecuted` through a map of exchange order ids was considered and
+  rejected. `TradeExecuted` names exchange order ids and both
   participants; it is what settlement and clearing reconciliation consume (phases 4–5).
 - **Out-of-order tolerance.** Subscriptions are unordered (D11). A fill may arrive before `OrderAccepted`: the order
   accepts the fill (and implies acceptance) rather than refusing it. Every inbound command is idempotent on the
@@ -273,7 +272,7 @@ Where it deviates from the sections above:
   (scale 6, half-even), recomputed from the running notional rather than from the previous average, so rounding never
   accumulates. The `orders` view shows it.
 - **DAY expiry by the exchange** (SR-17, simulators 0.2.0): its `OrderExpired` closes the order `EXPIRED` through
-  `RecordExpiry`; the business date waits for SR-32. What follows now holds for the stub exchange only, which keeps the
+  `RecordExpiry`, with the business day the exchange names (SR-32, simulators 0.3.0). What follows now holds for the stub exchange only, which keeps the
   stopgap below.
 - **DAY expiry before SR-17** (§2). `OrderExpiryRequested` asks the exchange to cancel; the exchange's cancellation then
   closes the order `EXPIRED` (`OrderExpired`), not `CANCELLED`, and a fill before it still wins (`FILLED`). It is the
