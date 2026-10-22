@@ -12,6 +12,12 @@ webhooks:
       event_types: [OrderAccepted, OrderRejected, OrderPartiallyFilled, OrderFilled, OrderCancelled, OrderExpired]
       secret_file: /run/secrets/webhook_secret
       participants: [DEMO-BROKER]
+    # settlement/external_systems/exchange (SettlementEvents): the firm's settlements
+    - name: demo-settlement
+      url: http://host.docker.internal:8080/webhooks/exchange/settlements
+      event_types: [SettlementPending, SettlementDelayed, SettlementCompleted, SettlementFailed, SettlementCancelled, SettlementRejected, SettlementCorrected]
+      secret_file: /run/secrets/webhook_secret
+      participants: [DEMO-BROKER]
     # integration/BusinessCalendar: the business days as the exchange closes them (D10, SR-26)
     - name: demo-business-calendar
       url: http://host.docker.internal:8080/webhooks/exchange/business-days

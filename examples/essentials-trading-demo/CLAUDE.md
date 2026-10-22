@@ -23,6 +23,7 @@ mvn spring-boot:run -pl :essentials-trading-demo        # after `docker compose 
 | `orders` | `Order` (stream `Orders`), `UnknownExchangeOrder` (operator cases) | 7 command, 1 external system, 1 automation, 4 view |
 | `funding` | `BankAccountLink`, `Deposit`, `Withdrawal` | 4 command, 1 external system, 1 automation, 2 view |
 | `reconciliation` | — (bank statements stored as reference data) | 1 external system, 2 view |
+| `settlement` | `TradeSettlement` (stream `TradeSettlements`) | 1 command, 1 external system, 1 automation, 2 view |
 
 `brokerage` is **frozen** (expansion design Q-1): `accounts` replaces its account, and phase 4 deletes it once
 `orders` and `settlement` replace its last users. Do not extend it.
