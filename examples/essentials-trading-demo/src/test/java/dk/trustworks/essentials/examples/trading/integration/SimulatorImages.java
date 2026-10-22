@@ -19,7 +19,7 @@ package dk.trustworks.essentials.examples.trading.integration;
 import org.testcontainers.DockerClientFactory;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.wait.strategy.Wait;
-import org.testcontainers.utility.DockerImageName;
+import org.testcontainers.utility.*;
 
 import java.time.Duration;
 
@@ -48,6 +48,16 @@ public final class SimulatorImages {
                 .withEnv("EXCHANGE__TEST_CONTROL__ENABLED", "true")
                 .withEnv("EXCHANGE__DATABASE__MODE", "memory")
                 .waitingFor(Wait.forHttp("/health").forStatusCode(200).withStartupTimeout(Duration.ofSeconds(60)));
+    }
+
+    /**
+     * {@link #exchange()} with the demo's own configuration ({@code simulators/exchange.yaml}): its instruments, synthetic
+     * reference prices and the liquidity provider quoting them, so orders trade.
+     */
+    @SuppressWarnings("resource")
+    public static GenericContainer<?> exchangeAsTheDemoRunsIt() {
+        return exchange().withCopyFileToContainer(MountableFile.forHostPath("simulators/exchange.yaml"), "/etc/exchange/exchange.yaml")
+                         .withEnv("EXCHANGE_CONFIG", "/etc/exchange/exchange.yaml");
     }
 
     /**

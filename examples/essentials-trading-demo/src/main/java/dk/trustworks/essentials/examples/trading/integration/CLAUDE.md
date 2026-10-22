@@ -14,7 +14,14 @@ simulators' receiver guide ("A correct receiver, in five rules").
 | `SignedWebhookReceiver` | One subscription's receiving side: verify, parse, filter, validate, hand to the intake, answer |
 | `ExternalEventIntake` | Deduplicates per `(consumer, eventId)` and queues to the consumer's `Inbox`, in one unit of work |
 | `ExternalEventLogCatchUp` | Reads the source's `/api/events` log behind a fenced lock and feeds the same intake |
-| `SimulatorProperties`, `SimulatorIntegrationConfiguration` | `trading-demo.simulators.*` (set by the `simulators` profile) and the shared `WebhookSignatureVerifier` bean, which exists only when a secret file is configured |
+| `SimulatorProperties`, `SimulatorIntegrationConfiguration` | `trading-demo.simulators.*` (set by the `simulators` profile), the shared `WebhookSignatureVerifier` bean, which exists only when a secret file is configured, and the exchange's generated `ApiClient`, which exists only when its base URL is |
+| `exchange_simulator/client` (generated) | The exchange-simulator's client, generated at build time from `src/main/openapi/exchange-simulator/openapi-3.0.json` (Spring `RestClient`, Jackson 3). Contract only - adapters in each context's `external_systems/` use it, and no generated type leaves them |
+
+**The simulators' OpenAPI documents are copied into `src/main/openapi`**, so the build needs nothing outside this
+repository (CI cannot reach the simulators' artifact). They come from `dk.trustworks.simulators:simulator-api-specs`,
+at the version in the POM's `simulator-api-specs.version`. To refresh: raise it, run
+`mvn -pl examples/essentials-trading-demo initialize -P refresh-simulator-specs` with the artifact in the local
+repository, and commit the result. Never edit the copies by hand.
 
 Tests: `ExternalEventIntakeIT` runs against a stub source and always runs. `ExchangeSimulatorWebhookIT` runs against
 the real `exchange-simulator:dev` image with its fault injection on (duplicates, missing fields, out-of-order), and

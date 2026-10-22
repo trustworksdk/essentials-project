@@ -1,7 +1,7 @@
 # essentials-trading-demo
 
 Spring Boot demo for the PostgreSQL EventStore: snapshots, closing books, generation archival, and an order flow
-against a stub exchange. Not part of the release.
+against a stub exchange, or the exchange-simulator under the `simulators` profile. Not part of the release.
 
 Packaged by **vertical slice**, following the same law as `postgresql-cqrs` — see that module's
 `CLAUDE.md` and the essentials plugin's `rules/slice-design.md`. `REFACTORING_PLAN.md` records the
@@ -150,6 +150,13 @@ must add in `docs/SIMULATOR_REQUIREMENTS.md`. Shared receiving mechanics in `int
 - **`spring.docker.compose.profiles.active` is a list, and Spring profiles replace it rather than merge it.** With
   `observability,simulators` the last profile's YAML wins and one stack never starts. `run-instance.sh` passes the
   union on the command line; an IDE run configuration combining both must do the same.
+- **The exchange lists the demo's instruments itself** (`simulators/exchange.yaml`, D18): the ten seed instruments,
+  synthetic prices starting where the demo's own quote feed starts, and the liquidity provider quoting them. No
+  trading sessions - with sessions the accelerated clock would reject most orders `MARKET_CLOSED`. Until the demo
+  reads the exchange's market data (simulator step 4), the app's quotes and the exchange's prices wander apart, so a
+  market buy can fill above its hold; it is booked anyway.
+- **Under this profile orders go to the exchange-simulator**, not the stub (`orders/CLAUDE.md`, "Exchange-simulator
+  adapter").
 - **The Finnhub API key is never committed.** It lives in `simulators/secrets/finnhub.env` (gitignored; template
   `finnhub.env.example`), which both compose files load as an optional `env_file` for the exchange, so a run without
   it still starts - with no live price feed (D15, D16).

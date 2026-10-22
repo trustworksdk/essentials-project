@@ -23,6 +23,7 @@ import dk.trustworks.essentials.examples.trading.orders.use_cases.record_cancell
 import dk.trustworks.essentials.examples.trading.orders.use_cases.record_exchange_answer.RecordExchangeAnswer;
 import dk.trustworks.essentials.examples.trading.orders.use_cases.record_fill.RecordFill;
 import dk.trustworks.essentials.types.Money;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDate;
@@ -37,8 +38,12 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * reference price (D14). It answers at once and reports through {@link ExchangeReports} exactly as the adapter will: acceptance and fills after the
  * submission's answer, on its own. Per-instance memory only, which is enough for idempotent resubmission within one
  * process; a restart forgets the orders it took.
+ * <p>
+ * Active when no exchange-simulator is configured ({@code trading-demo.simulators.exchange.base-url}); with one, the
+ * {@link SimulatorExchangeGateway} takes its place.
  */
 @Component
+@ConditionalOnExpression("'${trading-demo.simulators.exchange.base-url:}'.isBlank()")
 public class StubExchangeGateway implements ExchangeGateway {
     private final StubExchangeProperties               properties;
     private final ExchangeReports                      reports;

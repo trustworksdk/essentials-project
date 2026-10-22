@@ -2,7 +2,6 @@
 # simulator's built-in defaults; see SIMULATOR_REQUIREMENTS.md and the simulator's configuration guide.
 #
 # Webhook subscriptions are added here as the demo's bounded contexts start consuming events (phase 1 onwards).
-# Until then the demo reads nothing from the exchange.
 clock:
   # A simulated day per real minute, starting on a Monday morning. Business dates always come from the exchange's
   # events, never from the demo's own clock (EXPANSION_PLAN.md D10). `mode: system` turns the virtual clock off.
@@ -10,6 +9,33 @@ clock:
   start: "2030-01-07T13:00:00Z"
   running: true
   speed: 1440
+# The exchange owns the instruments (D18): ACME, the order flow's and the order tests' instrument, and the demo's ten
+# seed instruments, listed at startup with an InstrumentListed each. The id is the demo's InstrumentId (its symbol). SAP and NOVO-B are listed as their US ADRs, quoted under SAP
+# and NVO, since the demo trades USD only (D3). One-cent ticks, lots of one share.
+instruments:
+  - { id: ACME, symbol: ACME, mic: XNAS, currency: USD, currency_scale: 2, price_source: { initial_price: "100.00" } }
+  - { id: AAPL, symbol: AAPL, mic: XNAS, currency: USD, currency_scale: 2, reference_symbol: AAPL, price_source: { initial_price: "475.00" } }
+  - { id: MSFT, symbol: MSFT, mic: XNAS, currency: USD, currency_scale: 2, reference_symbol: MSFT, price_source: { initial_price: "487.00" } }
+  - { id: NVDA, symbol: NVDA, mic: XNAS, currency: USD, currency_scale: 2, reference_symbol: NVDA, price_source: { initial_price: "499.00" } }
+  - { id: AMZN, symbol: AMZN, mic: XNAS, currency: USD, currency_scale: 2, reference_symbol: AMZN, price_source: { initial_price: "511.00" } }
+  - { id: GOOGL, symbol: GOOGL, mic: XNAS, currency: USD, currency_scale: 2, reference_symbol: GOOGL, price_source: { initial_price: "523.00" } }
+  - { id: META, symbol: META, mic: XNAS, currency: USD, currency_scale: 2, reference_symbol: META, price_source: { initial_price: "535.00" } }
+  - { id: TSLA, symbol: TSLA, mic: XNAS, currency: USD, currency_scale: 2, reference_symbol: TSLA, price_source: { initial_price: "547.00" } }
+  - { id: JPM, symbol: JPM, mic: XNYS, currency: USD, currency_scale: 2, reference_symbol: JPM, price_source: { initial_price: "559.00" } }
+  - { id: SAP, symbol: SAP, mic: XNYS, currency: USD, currency_scale: 2, reference_symbol: SAP, price_source: { initial_price: "571.00" } }
+  - { id: NOVO-B, symbol: NOVO-B, mic: XNYS, currency: USD, currency_scale: 2, reference_symbol: NVO, price_source: { initial_price: "583.00" } }
+# Reference prices: synthetic (seeded, D15) unless live prices are switched on. The starting prices are the ones the
+# demo's own synthetic quote feed starts from (market_data's MarketQuotesProperties), so the two stay close until the
+# demo reads the exchange's market data instead. For live Finnhub prices set EXCHANGE__PRICE_SOURCES__DEFAULT__KIND=finnhub
+# next to the key in simulators/secrets/finnhub.env.
+price_sources:
+  default: { kind: synthetic }
+# The exchange's built-in liquidity provider (participant LP, SR-6) quotes a ladder around each reference price, so the
+# firm's orders have something to trade against.
+liquidity:
+  default: { mode: "on" }
+# No trading sessions: every market is always open, so the accelerated clock does not reject most orders MARKET_CLOSED.
+# A DAY order then rests until the business day's cutoff (clearing.cutoff below) and expires there.
 settlement:
   mode: simulated
   settlement_days: 1

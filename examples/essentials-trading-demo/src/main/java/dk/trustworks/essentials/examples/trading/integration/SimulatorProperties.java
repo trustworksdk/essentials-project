@@ -26,7 +26,7 @@ import java.time.Duration;
  */
 @ConfigurationProperties(prefix = "trading-demo.simulators")
 public class SimulatorProperties {
-    private final Endpoint exchange       = new Endpoint();
+    private final Exchange exchange       = new Exchange();
     private final Endpoint paymentGateway = new Endpoint();
     /**
      * A file holding the shared webhook signing secret, trimmed when read. Both simulators sign with it.
@@ -36,8 +36,18 @@ public class SimulatorProperties {
      * How far a delivery's signature timestamp may be from this JVM's clock. The simulators' guide suggests 5 minutes.
      */
     private Duration       signatureTolerance = Duration.ofMinutes(5);
+    /**
+     * How long a call to a simulator may take to connect.
+     */
+    private Duration       connectTimeout     = Duration.ofSeconds(2);
+    /**
+     * How long a call to a simulator may wait for its answer. Kept short: a submission is retried within one delivery of
+     * {@code OrderPlaced} ({@code trading-demo.orders.exchange-submission.*}), and every attempt must fit inside the
+     * message-handling timeout.
+     */
+    private Duration       readTimeout        = Duration.ofSeconds(5);
 
-    public Endpoint getExchange() {
+    public Exchange getExchange() {
         return exchange;
     }
 
@@ -61,6 +71,22 @@ public class SimulatorProperties {
         this.signatureTolerance = signatureTolerance;
     }
 
+    public Duration getConnectTimeout() {
+        return connectTimeout;
+    }
+
+    public void setConnectTimeout(Duration connectTimeout) {
+        this.connectTimeout = connectTimeout;
+    }
+
+    public Duration getReadTimeout() {
+        return readTimeout;
+    }
+
+    public void setReadTimeout(Duration readTimeout) {
+        this.readTimeout = readTimeout;
+    }
+
     public static class Endpoint {
         /**
          * The simulator's base URL, e.g. {@code http://localhost:18080}.
@@ -73,6 +99,34 @@ public class SimulatorProperties {
 
         public void setBaseUrl(String baseUrl) {
             this.baseUrl = baseUrl;
+        }
+    }
+
+    /**
+     * The exchange-simulator, and who the brokerage is there.
+     */
+    public static class Exchange extends Endpoint {
+        /**
+         * The firm's participant id at the exchange: every client order is the firm's (D8, omnibus). Registered by the
+         * exchange adapter the first time the exchange does not know it.
+         */
+        private String participantId   = "DEMO-BROKER";
+        private String participantName = "Essentials Trading Demo Brokerage";
+
+        public String getParticipantId() {
+            return participantId;
+        }
+
+        public void setParticipantId(String participantId) {
+            this.participantId = participantId;
+        }
+
+        public String getParticipantName() {
+            return participantName;
+        }
+
+        public void setParticipantName(String participantName) {
+            this.participantName = participantName;
         }
     }
 }

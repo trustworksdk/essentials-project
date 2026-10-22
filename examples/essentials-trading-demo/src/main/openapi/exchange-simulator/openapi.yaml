@@ -1,0 +1,2457 @@
+openapi: 3.1.0
+info:
+  title: Exchange simulator API
+  version: 0.2.0
+  summary: A stock exchange simulator with price-time matching, settlement and clearing simulation, and signed webhooks.
+  description: |
+    Commands are answered after they are committed to SQLite. Field names are camelCase, enums use their upper-case
+    wire names, and prices are integer `priceTicks` plus, in responses, a decimal `price` string in major currency
+    units. Every error is `{"error": "<code>", "message": "<text>"}`.
+
+    In the `fast` and `memory` persistence modes every response carries an `Exchange-Persistence: <mode>` header;
+    durable responses carry none.
+
+    The `test-control` operations are mounted only with `test_control.enabled: true` (they return `404` otherwise)
+    and must never be exposed outside test deployments.
+
+    The README is the full reference; this specification is checked against the service by its test suite
+    (`tests/openapi.rs`).
+  license:
+    name: Apache-2.0
+    identifier: Apache-2.0
+servers:
+  - url: http://localhost:8080
+tags:
+  - name: service
+    description: Health, metrics and this specification.
+  - name: instruments
+  - name: participants
+  - name: orders
+  - name: trades
+  - name: events
+    description: The canonical event log, replayable by sequence.
+  - name: market-data
+    description: Reference prices from each instrument's price source.
+  - name: liquidity
+    description: The built-in liquidity provider, inspected and steered at runtime.
+  - name: settlements
+    description: The settlement simulator's instructions and externally reported outcomes.
+  - name: clearing
+    description: End-of-day clearing statements.
+  - name: clock
+    description: Simulated time, readable always; speed, freeze and resume with `clock.operator_control`.
+  - name: webhooks
+    description: Webhook subscriptions and their maintenance. Shared with the payment gateway.
+  - name: test-control
+    description: Only with `test_control.enabled`. Simulated time, reset, delivery inspection, fault injection, breaks.
+
+paths:
+  /health:
+    get:
+      tags: [service]
+      operationId: health
+      summary: Liveness and readiness
+      responses:
+        "200":
+          description: The process is up and the database answers.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Health" }
+        "503":
+          description: The database does not answer.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [status]
+                properties:
+                  status: { const: unavailable }
+  /metrics:
+    get:
+      tags: [service]
+      operationId: metrics
+      summary: Prometheus metrics
+      responses:
+        "200":
+          description: The Prometheus text format.
+          content:
+            text/plain:
+              schema: { type: string }
+  /openapi.yaml:
+    get:
+      tags: [service]
+      operationId: openapi
+      summary: This specification
+      responses:
+        "200":
+          description: The OpenAPI document.
+          content:
+            application/yaml:
+              schema: { type: string }
+
+  /api/instruments:
+    post:
+      tags: [instruments]
+      operationId: registerInstrument
+      summary: Register an instrument
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/InstrumentRequest" }
+      responses:
+        "201":
+          description: Registered.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Instrument" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+    get:
+      tags: [instruments]
+      operationId: listInstruments
+      summary: List instruments, optionally by symbol and identifiers
+      parameters:
+        - { name: symbol, in: query, schema: { type: string } }
+        - { name: mic, in: query, schema: { type: string } }
+        - { name: isin, in: query, schema: { type: string } }
+        - { name: cusip, in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: Matching instruments.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Instrument" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+  /api/instruments/{id}:
+    patch:
+      tags: [instruments]
+      operationId: updateInstrument
+      summary: Enable or disable trading, or change the reference symbol or price source
+      description: |
+        Give at least one field; absent fields stay as they are. A change that alters a value publishes
+        `InstrumentUpdated`. Resting orders stay; cancellations keep working while an instrument is disabled.
+        Instruments declared in configuration can be changed too, but the configuration wins again at the next start.
+      parameters:
+        - { $ref: "#/components/parameters/InstrumentIdPath" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              minProperties: 1
+              properties:
+                enabled: { type: boolean }
+                referenceSymbol:
+                  type: [string, "null"]
+                  minLength: 1
+                  maxLength: 64
+                  description: "`null` clears it."
+                priceSource:
+                  oneOf: [{ $ref: "#/components/schemas/PriceSource" }, { type: "null" }]
+                  description: Replaces the instrument's own price source and restarts it; `null` falls back to the default.
+                liquidity:
+                  oneOf: [{ $ref: "#/components/schemas/Liquidity" }, { type: "null" }]
+                  description: Replaces the instrument's own liquidity settings; `null` falls back to the default.
+      responses:
+        "200":
+          description: The instrument after the change.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Instrument" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+
+  /api/participants:
+    post:
+      tags: [participants]
+      operationId: registerParticipant
+      summary: Register a participant
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Participant" }
+      responses:
+        "201":
+          description: Registered.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Participant" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+
+  /api/orders:
+    post:
+      tags: [orders]
+      operationId: submitOrder
+      summary: Submit an order
+      description: |
+        `201` with the committed outcome, exchange rejections included (status `REJECTED` with a `rejectReason`).
+        `200` with the existing order and `duplicate: true` when the `clientOrderId` was already used with the same
+        terms.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OrderRequest" }
+      responses:
+        "201":
+          description: Committed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OrderResult" }
+        "200":
+          description: A repeated client order ID; the existing order.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OrderResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+    delete:
+      tags: [orders]
+      operationId: cancelOrderByClientOrderId
+      summary: Cancel an open or partially filled order named by its client order ID
+      description: |
+        The order the participant submitted with this `clientOrderId`, cancelled exactly as
+        `DELETE /api/orders/{id}` cancels it: the same answers and the same `OrderCancelled`. A cancel queued right
+        after the order is resolved after it, so it does not need the exchange's order ID first.
+      parameters:
+        - { name: participantId, in: query, required: true, description: Client order IDs are unique per participant., schema: { type: string } }
+        - { name: clientOrderId, in: query, required: true, schema: { type: string, minLength: 1, maxLength: 64 } }
+      responses:
+        "200":
+          description: Cancelled.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OrderResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /api/orders/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [orders]
+      operationId: getOrder
+      summary: An order, with its stored timestamps
+      responses:
+        "200":
+          description: The order.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Order" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [orders]
+      operationId: cancelOrder
+      summary: Cancel an open or partially filled order
+      responses:
+        "200":
+          description: Cancelled.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OrderResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /api/marketdata:
+    get:
+      tags: [market-data]
+      operationId: listMarketData
+      summary: Every instrument's market data, in instrument ID order
+      responses:
+        "200":
+          description: Market data per instrument.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/MarketData" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /api/marketdata/stream:
+    get:
+      tags: [market-data]
+      operationId: marketDataStream
+      summary: Live market data as server-sent events
+      description: |
+        One event per message: `event:` its kind, `id:` its `mdSequence`, `data:` its JSON
+        (`MarketDataQuote`, `MarketDataTrade` or `MarketDataReference`). `mdSequence` counts each instrument's
+        messages from 1 since the service started; the snapshot's `mdSequence` is that of the last message about the
+        instrument, so a subscriber resynchronises by reading the snapshot after subscribing and skipping messages at
+        or below it.
+
+        With `market_data.conflation_interval_ms`, at most one message per instrument and kind is sent per interval,
+        the latest. A subscriber more than half of `market_data.stream_buffer` messages behind has its backlog
+        collapsed the same way; one a whole buffer behind has its stream closed. Trade prints left out by conflation
+        remain in `/api/trades`. Market data is not in the event log and not delivered over webhooks.
+      parameters:
+        - name: instruments
+          in: query
+          required: false
+          description: Comma-separated instrument IDs; every instrument when left out.
+          schema: { type: string }
+      responses:
+        "200":
+          description: The event stream, open until the client disconnects, falls a buffer behind, or the service stops.
+          content:
+            text/event-stream:
+              schema: { type: string }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/marketdata/{instrumentId}:
+    get:
+      tags: [market-data]
+      operationId: marketData
+      summary: One instrument's market data
+      parameters:
+        - { name: instrumentId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: The instrument's market data.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MarketData" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /api/liquidity:
+    get:
+      tags: [liquidity]
+      operationId: listLiquidity
+      summary: The liquidity provider in every instrument, in instrument ID order
+      responses:
+        "200":
+          description: Its status per instrument.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/LiquidityStatus" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /api/liquidity/{instrumentId}:
+    get:
+      tags: [liquidity]
+      operationId: liquidity
+      summary: The liquidity provider in one instrument
+      parameters:
+        - { name: instrumentId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Its status.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LiquidityStatus" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+    patch:
+      tags: [liquidity]
+      operationId: patchLiquidity
+      summary: Change the provider's settings field by field, or the instrument's price source
+      description: |
+        Each settings field given replaces the instrument's own value; `null` clears it, so `liquidity.default` and
+        then the built-in default apply again; fields left out stay. `priceSource` replaces the price source as a whole
+        (`null` falls back to `price_sources.default`), as `PATCH /api/instruments` does; a switch to `synthetic` without
+        `initialPrice` continues from the current reference price. The provider re-quotes at once. Each change is
+        stored and published as `InstrumentUpdated`. A declared instrument gets its configuration back at the next start.
+      parameters:
+        - { name: instrumentId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LiquidityPatch" }
+      responses:
+        "200":
+          description: The provider's status after the change.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LiquidityStatus" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /api/orderbooks/{instrumentId}:
+    get:
+      tags: [orders]
+      operationId: orderBook
+      summary: An instrument's book, aggregated by price level
+      parameters:
+        - { name: instrumentId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: The book.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Book" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+
+  /api/trades:
+    get:
+      tags: [trades]
+      operationId: listTrades
+      summary: Executions in insertion order
+      parameters:
+        - { name: instrumentId, in: query, schema: { type: string } }
+        - { name: participantId, in: query, description: Buyer or seller., schema: { type: string } }
+        - { name: orderId, in: query, description: Buy or sell order., schema: { type: string, format: uuid } }
+        - { $ref: "#/components/parameters/Limit" }
+      responses:
+        "200":
+          description: Matching executions.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Trade" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+
+  /api/events:
+    get:
+      tags: [events]
+      operationId: listEvents
+      summary: Canonical events after a sequence, in sequence order
+      parameters:
+        - { name: after, in: query, description: Events with a sequence greater than this; default 0., schema: { type: integer, minimum: 0 } }
+        - { $ref: "#/components/parameters/Limit" }
+        - { name: eventType, in: query, schema: { $ref: "#/components/schemas/EventType" } }
+      responses:
+        "200":
+          description: Events.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/EventEnvelope" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+
+  /api/settlements:
+    get:
+      tags: [settlements]
+      operationId: listSettlements
+      summary: Simulated settlement instructions in trade order
+      parameters:
+        - { name: status, in: query, schema: { $ref: "#/components/schemas/SettlementStatus" } }
+        - { $ref: "#/components/parameters/Limit" }
+      responses:
+        "200":
+          description: Instructions.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Settlement" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+  /api/settlements/{executionId}:
+    get:
+      tags: [settlements]
+      operationId: getSettlement
+      summary: Everything known about one execution's settlement
+      description: The simulated instruction and its events, and externally reported outcomes, side by side, never merged.
+      parameters:
+        - { $ref: "#/components/parameters/ExecutionIdPath" }
+      responses:
+        "200":
+          description: The settlement.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SettlementDetail" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/settlements/{executionId}/outcomes:
+    post:
+      tags: [settlements]
+      operationId: reportSettlementOutcome
+      summary: Report an outcome from an external settlement service
+      description: |
+        `201` with the stored report and `duplicate: false`; `200` with the original and `duplicate: true` when
+        `reference` repeats an identical report. Refused with `409 external_outcomes_disabled` in settlement mode
+        `simulated`, and `409 report_conflict` when `reference` was used with a different outcome.
+      parameters:
+        - { $ref: "#/components/parameters/ExecutionIdPath" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ReportRequest" }
+      responses:
+        "201":
+          description: Stored.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Report" }
+        "200":
+          description: A repeated report; the original.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Report" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+
+  /api/clearing/statements:
+    get:
+      tags: [clearing]
+      operationId: listClearingStatements
+      summary: Issued clearing statements, in date and participant order
+      parameters:
+        - { $ref: "#/components/parameters/BusinessDate" }
+        - { name: participant, in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: Statements.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/ClearingStatement" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+  /api/clearing/statements/{id}:
+    get:
+      tags: [clearing]
+      operationId: getClearingStatement
+      summary: One issued clearing statement
+      description: "`404` also for a late statement not issued yet."
+      parameters:
+        - { name: id, in: path, required: true, description: "`CS:<businessDate>:<participant>`", schema: { type: string } }
+      responses:
+        "200":
+          description: The statement.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ClearingStatement" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/webhooks:
+    post:
+      tags: [webhooks]
+      operationId: registerWebhook
+      summary: Register a webhook subscription
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WebhookRequest" }
+      responses:
+        "201":
+          description: Registered. It receives events committed from now on.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Subscription" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+    get:
+      tags: [webhooks]
+      operationId: listWebhooks
+      summary: List subscriptions
+      parameters:
+        - { name: includeDeleted, in: query, schema: { type: boolean, default: false } }
+      responses:
+        "200":
+          description: Subscriptions in creation order.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Subscription" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+  /api/webhooks/{id}:
+    parameters:
+      - { $ref: "#/components/parameters/SubscriptionIdPath" }
+    get:
+      tags: [webhooks]
+      operationId: getWebhook
+      summary: A subscription and how its deliveries stand
+      responses:
+        "200":
+          description: The subscription.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SubscriptionDetail" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [webhooks]
+      operationId: updateWebhook
+      summary: Change, pause or disable a subscription
+      description: A subscription declared in configuration only takes `paused` (`409 managed_by_configuration` otherwise).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WebhookUpdate" }
+      responses:
+        "200":
+          description: The subscription after the change.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Subscription" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+    delete:
+      tags: [webhooks]
+      operationId: deleteWebhook
+      summary: Delete a subscription created through the API
+      description: Its deliveries and attempts are kept; it gets no new deliveries and sends none.
+      responses:
+        "204":
+          description: Deleted.
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /api/webhooks/{id}/secret:
+    post:
+      tags: [webhooks]
+      operationId: rotateWebhookSecret
+      summary: Rotate the signing secret
+      description: For `graceSeconds` deliveries are signed with both the new and the previous secret.
+      parameters:
+        - { $ref: "#/components/parameters/SubscriptionIdPath" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SecretRotation" }
+      responses:
+        "200":
+          description: The subscription after the rotation.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Subscription" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /api/webhooks/{id}/deliveries:
+    get:
+      tags: [webhooks]
+      operationId: listWebhookDeliveries
+      summary: A subscription's deliveries in event order
+      parameters:
+        - { $ref: "#/components/parameters/SubscriptionIdPath" }
+        - { name: status, in: query, schema: { $ref: "#/components/schemas/DeliveryStatus" } }
+        - { name: after, in: query, description: Deliveries of events after this sequence., schema: { type: integer, minimum: 0 } }
+        - { $ref: "#/components/parameters/Limit" }
+      responses:
+        "200":
+          description: Deliveries.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Delivery" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/webhooks/{id}/redeliver:
+    post:
+      tags: [webhooks]
+      operationId: redeliverWebhook
+      summary: Queue the subscription's events after a sequence for delivery again
+      parameters:
+        - { $ref: "#/components/parameters/SubscriptionIdPath" }
+        - { $ref: "#/components/parameters/RedeliverAfter" }
+      responses:
+        "200":
+          description: How many were queued.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Queued" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /api/webhooks/{id}/dead-letters/retry:
+    post:
+      tags: [webhooks]
+      operationId: retryWebhookDeadLetters
+      summary: Retry the subscription's dead letters with a fresh attempt budget
+      parameters:
+        - { $ref: "#/components/parameters/SubscriptionIdPath" }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                deliveryIds:
+                  description: Only these; all when empty or absent.
+                  type: array
+                  items: { type: string, format: uuid }
+      responses:
+        "200":
+          description: How many were retried.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Retried" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+
+  /test/scenarios:
+    post:
+      tags: [test-control]
+      operationId: runScenario
+      summary: Run a scenario in a sandbox
+      description: The service's own state is untouched. `200` whether the scenario passed or not (see `passed`).
+      requestBody:
+        required: true
+        content:
+          application/yaml:
+            schema: { type: string }
+          application/json:
+            schema: { type: object }
+      responses:
+        "200":
+          description: The report.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ScenarioReport" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+  /test/reset:
+    post:
+      tags: [test-control]
+      operationId: reset
+      summary: Clear all state, as on a new database
+      responses:
+        "204":
+          description: Reset. The virtual clock is back at its first reading; only the configuration remains.
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /test/clearing/breaks:
+    get:
+      tags: [test-control]
+      operationId: listClearingBreaks
+      summary: Clearing statements with reconciliation breaks, issued or still waiting
+      parameters:
+        - { $ref: "#/components/parameters/BusinessDate" }
+        - { name: participant, in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: Statements with their breaks.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/ClearingBreaks" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+  /api/clock:
+    get:
+      tags: [clock]
+      operationId: getOperatorClock
+      summary: How the service tells time
+      description: Always mounted, so a consumer can follow simulated time. Changes are also published as `ClockChanged`.
+      responses:
+        "200": { $ref: "#/components/responses/Clock" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /api/clock/freeze:
+    post:
+      tags: [clock]
+      operationId: freezeOperatorClock
+      summary: Stop the virtual clock
+      description: Only with `clock.operator_control`. Publishes `ClockChanged` unless the clock was already frozen.
+      responses:
+        "200": { $ref: "#/components/responses/Clock" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /api/clock/resume:
+    post:
+      tags: [clock]
+      operationId: resumeOperatorClock
+      summary: Let the virtual clock run at its speed
+      description: Only with `clock.operator_control`. Publishes `ClockChanged` unless the clock was already running.
+      responses:
+        "200": { $ref: "#/components/responses/Clock" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /api/clock/speed:
+    post:
+      tags: [clock]
+      operationId: setOperatorClockSpeed
+      summary: Change how fast the virtual clock runs
+      description: |
+        Only with `clock.operator_control`. From the current reading on; out of range is `400 invalid_clock_speed`.
+        Publishes `ClockChanged` unless the speed is unchanged. Setting and advancing the clock stay under `/test`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [speed]
+              properties:
+                speed: { type: number, exclusiveMinimum: 0, maximum: 1000000 }
+      responses:
+        "200": { $ref: "#/components/responses/Clock" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /test/clock:
+    get:
+      tags: [test-control]
+      operationId: getClock
+      summary: How the service tells time
+      responses:
+        "200": { $ref: "#/components/responses/Clock" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /test/clock/advance:
+    post:
+      tags: [test-control]
+      operationId: advanceClock
+      summary: Move the virtual clock forward
+      description: Whatever becomes due by the new time happens before the call returns.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ClockAdvance" }
+      responses:
+        "200": { $ref: "#/components/responses/Clock" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /test/clock/set:
+    post:
+      tags: [test-control]
+      operationId: setClock
+      summary: Move the virtual clock to an instant
+      description: Earlier than now is `409 clock_backwards`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [to]
+              properties:
+                to: { type: string, format: date-time }
+      responses:
+        "200": { $ref: "#/components/responses/Clock" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /test/clock/freeze:
+    post:
+      tags: [test-control]
+      operationId: freezeClock
+      summary: Stop the virtual clock
+      responses:
+        "200": { $ref: "#/components/responses/Clock" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /test/clock/resume:
+    post:
+      tags: [test-control]
+      operationId: resumeClock
+      summary: Let the virtual clock run at its speed
+      responses:
+        "200": { $ref: "#/components/responses/Clock" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /test/clock/speed:
+    post:
+      tags: [test-control]
+      operationId: setClockSpeed
+      summary: Change how fast the virtual clock runs
+      description: From the current reading on. Out of range is `400 invalid_clock_speed`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [speed]
+              properties:
+                speed: { type: number, exclusiveMinimum: 0, maximum: 1000000 }
+      responses:
+        "200": { $ref: "#/components/responses/Clock" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /test/deliveries:
+    get:
+      tags: [test-control]
+      operationId: listAllDeliveries
+      summary: Webhook deliveries across all subscriptions, in event order
+      parameters:
+        - { name: subscriptionId, in: query, schema: { type: string, format: uuid } }
+        - { name: status, in: query, schema: { $ref: "#/components/schemas/DeliveryStatus" } }
+      responses:
+        "200":
+          description: Deliveries.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Delivery" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+  /test/dead-letters/retry:
+    post:
+      tags: [test-control]
+      operationId: retryAllDeadLetters
+      summary: Retry dead letters (all, one subscription's, or the listed ones)
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                subscriptionId: { type: string, format: uuid }
+                deliveryIds:
+                  type: array
+                  items: { type: string, format: uuid }
+      responses:
+        "200":
+          description: How many were retried.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Retried" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /test/webhooks/{id}/redeliver:
+    post:
+      tags: [test-control]
+      operationId: testRedeliverWebhook
+      summary: Queue a subscription's events for delivery again (same as the /api route)
+      parameters:
+        - { $ref: "#/components/parameters/SubscriptionIdPath" }
+        - { $ref: "#/components/parameters/RedeliverAfter" }
+      responses:
+        "200":
+          description: How many were queued.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Queued" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /test/attempts:
+    get:
+      tags: [test-control]
+      operationId: listAttempts
+      summary: Every webhook request sent and every hold, oldest first
+      parameters:
+        - { name: subscriptionId, in: query, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Attempts.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Attempt" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+  /test/webhooks/{id}/faults:
+    parameters:
+      - { $ref: "#/components/parameters/SubscriptionIdPath" }
+    put:
+      tags: [test-control]
+      operationId: setWebhookFaults
+      summary: Set a subscription's delivery fault policy
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/FaultPolicy" }
+      responses:
+        "200":
+          description: The subscription with its policy.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Subscription" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+    delete:
+      tags: [test-control]
+      operationId: clearWebhookFaults
+      summary: Remove a subscription's fault policy
+      responses:
+        "200":
+          description: The subscription without a policy.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Subscription" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+
+webhooks:
+  OrderAccepted:
+    post:
+      summary: An order was accepted (`OPEN`, nothing filled)
+      operationId: onOrderAccepted
+      requestBody: { $ref: "#/components/requestBodies/OrderAcceptedEvent" }
+      responses: { "2XX": { $ref: "#/components/responses/WebhookAck" } }
+  OrderRejected:
+    post:
+      summary: An order was rejected, with `rejectReason`
+      operationId: onOrderRejected
+      requestBody: { $ref: "#/components/requestBodies/OrderRejectedEvent" }
+      responses: { "2XX": { $ref: "#/components/responses/WebhookAck" } }
+  OrderPartiallyFilled:
+    post:
+      summary: An order traded part of its quantity
+      operationId: onOrderPartiallyFilled
+      requestBody: { $ref: "#/components/requestBodies/OrderPartiallyFilledEvent" }
+      responses: { "2XX": { $ref: "#/components/responses/WebhookAck" } }
+  OrderFilled:
+    post:
+      summary: An order traded its whole quantity
+      operationId: onOrderFilled
+      requestBody: { $ref: "#/components/requestBodies/OrderFilledEvent" }
+      responses: { "2XX": { $ref: "#/components/responses/WebhookAck" } }
+  OrderCancelled:
+    post:
+      summary: An order was cancelled, with `cancelReason`
+      operationId: onOrderCancelled
+      requestBody: { $ref: "#/components/requestBodies/OrderCancelledEvent" }
+      responses: { "2XX": { $ref: "#/components/responses/WebhookAck" } }
+  OrderExpired:
+    post:
+      summary: A DAY order still open when its session closed (status EXPIRED, remainder kept)
+      operationId: onOrderExpired
+      requestBody: { $ref: "#/components/requestBodies/OrderExpiredEvent" }
+      responses: { "2XX": { $ref: "#/components/responses/WebhookAck" } }
+  TradeExecuted:
+    post:
+      summary: A trade, with everything a settlement consumer needs
+      operationId: onTradeExecuted
+      requestBody: { $ref: "#/components/requestBodies/TradeExecutedEvent" }
+      responses: { "2XX": { $ref: "#/components/responses/WebhookAck" } }
+  InstrumentListed:
+    post:
+      summary: An instrument was listed, through the API or from configuration (also after a reset)
+      operationId: onInstrumentListed
+      requestBody: { $ref: "#/components/requestBodies/InstrumentListedEvent" }
+      responses: { "2XX": { $ref: "#/components/responses/WebhookAck" } }
+  InstrumentUpdated:
+    post:
+      summary: A listed instrument changed; `changes` names the fields
+      operationId: onInstrumentUpdated
+      requestBody: { $ref: "#/components/requestBodies/InstrumentUpdatedEvent" }
+      responses: { "2XX": { $ref: "#/components/responses/WebhookAck" } }
+  ClockChanged:
+    post:
+      summary: The virtual clock changed speed, froze, resumed, or was set or advanced (`source` is `exchange`)
+      operationId: onClockChanged
+      requestBody: { $ref: "#/components/requestBodies/ClockChangedEvent" }
+      responses: { "2XX": { $ref: "#/components/responses/WebhookAck" } }
+  BusinessDayClosed:
+    post:
+      summary: A business day ended at its cutoff, also without trades and without clearing (`source` is `exchange`)
+      operationId: onBusinessDayClosed
+      requestBody: { $ref: "#/components/requestBodies/BusinessDayClosedEvent" }
+      responses: { "2XX": { $ref: "#/components/responses/WebhookAck" } }
+  ClosingPriceIssued:
+    post:
+      summary: An instrument's closing price for a business day, right after its `BusinessDayClosed`
+      operationId: onClosingPriceIssued
+      requestBody: { $ref: "#/components/requestBodies/ClosingPriceIssuedEvent" }
+      responses: { "2XX": { $ref: "#/components/responses/WebhookAck" } }
+  SettlementPending:
+    post:
+      summary: A settlement instruction was created
+      operationId: onSettlementPending
+      requestBody: { $ref: "#/components/requestBodies/SettlementPendingEvent" }
+      responses: { "2XX": { $ref: "#/components/responses/WebhookAck" } }
+  SettlementCompleted:
+    post:
+      summary: A trade settled
+      operationId: onSettlementCompleted
+      requestBody: { $ref: "#/components/requestBodies/SettlementCompletedEvent" }
+      responses: { "2XX": { $ref: "#/components/responses/WebhookAck" } }
+  SettlementFailed:
+    post:
+      summary: A settlement failed
+      operationId: onSettlementFailed
+      requestBody: { $ref: "#/components/requestBodies/SettlementFailedEvent" }
+      responses: { "2XX": { $ref: "#/components/responses/WebhookAck" } }
+  SettlementRejected:
+    post:
+      summary: A settlement instruction was rejected at intake
+      operationId: onSettlementRejected
+      requestBody: { $ref: "#/components/requestBodies/SettlementRejectedEvent" }
+      responses: { "2XX": { $ref: "#/components/responses/WebhookAck" } }
+  SettlementDelayed:
+    post:
+      summary: A settlement moved to a later date
+      operationId: onSettlementDelayed
+      requestBody: { $ref: "#/components/requestBodies/SettlementDelayedEvent" }
+      responses: { "2XX": { $ref: "#/components/responses/WebhookAck" } }
+  SettlementCorrected:
+    post:
+      summary: A settled amount was corrected
+      operationId: onSettlementCorrected
+      requestBody: { $ref: "#/components/requestBodies/SettlementCorrectedEvent" }
+      responses: { "2XX": { $ref: "#/components/responses/WebhookAck" } }
+  SettlementCancelled:
+    post:
+      summary: A settlement was cancelled
+      operationId: onSettlementCancelled
+      requestBody: { $ref: "#/components/requestBodies/SettlementCancelledEvent" }
+      responses: { "2XX": { $ref: "#/components/responses/WebhookAck" } }
+  SettlementOutcomeReported:
+    post:
+      summary: An external settlement service reported an outcome (`source` is `external`)
+      operationId: onSettlementOutcomeReported
+      requestBody: { $ref: "#/components/requestBodies/SettlementOutcomeReportedEvent" }
+      responses: { "2XX": { $ref: "#/components/responses/WebhookAck" } }
+  ClearingStatementIssued:
+    post:
+      summary: An end-of-day clearing statement for one participant (`source` is `clearinghouse`)
+      operationId: onClearingStatementIssued
+      requestBody: { $ref: "#/components/requestBodies/ClearingStatementIssuedEvent" }
+      responses: { "2XX": { $ref: "#/components/responses/WebhookAck" } }
+
+components:
+  parameters:
+    Limit:
+      name: limit
+      in: query
+      description: 1 to 1000; default 100.
+      schema: { type: integer, minimum: 1, maximum: 1000, default: 100 }
+    BusinessDate:
+      name: date
+      in: query
+      description: Business date.
+      schema: { type: string, format: date }
+    InstrumentIdPath:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+    ExecutionIdPath:
+      name: executionId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    SubscriptionIdPath:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    RedeliverAfter:
+      name: after
+      in: query
+      description: Redeliver events with a sequence after this one (default 0, all), also those from before the subscription existed.
+      schema: { type: integer, minimum: 0, default: 0 }
+
+  responses:
+    BadRequest:
+      description: "`invalid_json`, `invalid_request` or another validation code; the message says what is wrong."
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotFound:
+      description: "`not_found`."
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Conflict:
+      description: A conflict with the current state; `error` names it.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Unprocessable:
+      description: "`unknown_instrument` or `unknown_participant`."
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Unavailable:
+      description: "`overloaded` (the command queue is full; retry later) or `unavailable`."
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Clock:
+      description: The clock after the call.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Clock" }
+    WebhookAck:
+      description: Delivered. Any other answer is retried with backoff until the delivery is dead-lettered.
+
+  requestBodies:
+    OrderAcceptedEvent:
+      content: { application/json: { schema: { $ref: "#/components/schemas/OrderAcceptedEvent" } } }
+    OrderRejectedEvent:
+      content: { application/json: { schema: { $ref: "#/components/schemas/OrderRejectedEvent" } } }
+    OrderPartiallyFilledEvent:
+      content: { application/json: { schema: { $ref: "#/components/schemas/OrderPartiallyFilledEvent" } } }
+    OrderFilledEvent:
+      content: { application/json: { schema: { $ref: "#/components/schemas/OrderFilledEvent" } } }
+    OrderCancelledEvent:
+      content: { application/json: { schema: { $ref: "#/components/schemas/OrderCancelledEvent" } } }
+    OrderExpiredEvent:
+      content: { application/json: { schema: { $ref: "#/components/schemas/OrderExpiredEvent" } } }
+    TradeExecutedEvent:
+      content: { application/json: { schema: { $ref: "#/components/schemas/TradeExecutedEvent" } } }
+    InstrumentListedEvent:
+      content: { application/json: { schema: { $ref: "#/components/schemas/InstrumentListedEvent" } } }
+    InstrumentUpdatedEvent:
+      content: { application/json: { schema: { $ref: "#/components/schemas/InstrumentUpdatedEvent" } } }
+    ClockChangedEvent:
+      content: { application/json: { schema: { $ref: "#/components/schemas/ClockChangedEvent" } } }
+    BusinessDayClosedEvent:
+      content: { application/json: { schema: { $ref: "#/components/schemas/BusinessDayClosedEvent" } } }
+    ClosingPriceIssuedEvent:
+      content: { application/json: { schema: { $ref: "#/components/schemas/ClosingPriceIssuedEvent" } } }
+    SettlementPendingEvent:
+      content: { application/json: { schema: { $ref: "#/components/schemas/SettlementPendingEvent" } } }
+    SettlementCompletedEvent:
+      content: { application/json: { schema: { $ref: "#/components/schemas/SettlementCompletedEvent" } } }
+    SettlementFailedEvent:
+      content: { application/json: { schema: { $ref: "#/components/schemas/SettlementFailedEvent" } } }
+    SettlementRejectedEvent:
+      content: { application/json: { schema: { $ref: "#/components/schemas/SettlementRejectedEvent" } } }
+    SettlementDelayedEvent:
+      content: { application/json: { schema: { $ref: "#/components/schemas/SettlementDelayedEvent" } } }
+    SettlementCorrectedEvent:
+      content: { application/json: { schema: { $ref: "#/components/schemas/SettlementCorrectedEvent" } } }
+    SettlementCancelledEvent:
+      content: { application/json: { schema: { $ref: "#/components/schemas/SettlementCancelledEvent" } } }
+    SettlementOutcomeReportedEvent:
+      content: { application/json: { schema: { $ref: "#/components/schemas/SettlementOutcomeReportedEvent" } } }
+    ClearingStatementIssuedEvent:
+      content: { application/json: { schema: { $ref: "#/components/schemas/ClearingStatementIssuedEvent" } } }
+
+  schemas:
+    Error:
+      type: object
+      additionalProperties: false
+      required: [error, message]
+      properties:
+        error: { type: string, description: "A stable code, e.g. `not_found`." }
+        message: { type: string }
+    Health:
+      type: object
+      additionalProperties: false
+      required: [status, schemaVersion, persistence]
+      properties:
+        status: { const: ok }
+        schemaVersion: { type: integer, description: The database schema version. }
+        persistence: { $ref: "#/components/schemas/PersistenceMode" }
+    PersistenceMode:
+      enum: [durable, fast, memory]
+    Date:
+      type: string
+      format: date
+    Timestamp:
+      type: string
+      format: date-time
+    NullableTimestamp:
+      type: [string, "null"]
+      format: date-time
+    Amount:
+      type: string
+      description: A decimal amount in major currency units, e.g. `"1500.00"`.
+      pattern: "^-?[0-9]+(\\.[0-9]+)?$"
+
+    Side: { enum: [BUY, SELL] }
+    OrderType: { enum: [LIMIT, MARKET] }
+    OrderStatus: { enum: [OPEN, PARTIALLY_FILLED, FILLED, CANCELLED, REJECTED, EXPIRED] }
+    InstrumentRequest:
+      type: object
+      additionalProperties: false
+      required: [id, symbol, currency, currencyScale]
+      properties:
+        id: { type: string }
+        symbol: { type: string }
+        mic: { type: [string, "null"], description: ISO 10383 market identifier code. }
+        isin: { type: [string, "null"] }
+        cusip: { type: [string, "null"] }
+        currency: { type: string, description: ISO 4217 code. }
+        currencyScale: { type: integer, minimum: 0, description: Decimals of the currency. }
+        tickSizeMinor: { type: integer, minimum: 1, default: 1, description: One tick in minor currency units. }
+        lotSize: { type: integer, minimum: 1, default: 1 }
+        enabled: { type: boolean, default: true }
+        referenceSymbol:
+          type: [string, "null"]
+          minLength: 1
+          maxLength: 64
+          description: The symbol a price source quotes the instrument under (e.g. `AAPL`), if it differs from `symbol`.
+        priceSource:
+          oneOf: [{ $ref: "#/components/schemas/PriceSource" }, { type: "null" }]
+          description: The instrument's own price source; absent or `null` takes `price_sources.default`.
+        liquidity:
+          oneOf: [{ $ref: "#/components/schemas/Liquidity" }, { type: "null" }]
+          description: The instrument's own liquidity settings; absent or `null` takes `liquidity.default`.
+    Instrument:
+      type: object
+      additionalProperties: false
+      required: [id, symbol, mic, isin, cusip, currency, currencyScale, tickSizeMinor, tickSize, lotSize, enabled,
+                 referenceSymbol, priceSource, liquidity]
+      properties:
+        id: { type: string }
+        symbol: { type: string }
+        mic: { type: [string, "null"] }
+        isin: { type: [string, "null"] }
+        cusip: { type: [string, "null"] }
+        currency: { type: string }
+        currencyScale: { type: integer }
+        tickSizeMinor: { type: integer }
+        tickSize: { $ref: "#/components/schemas/Amount" }
+        lotSize: { type: integer }
+        enabled: { type: boolean }
+        referenceSymbol: { type: [string, "null"] }
+        priceSource: { oneOf: [{ $ref: "#/components/schemas/PriceSource" }, { type: "null" }] }
+        liquidity: { oneOf: [{ $ref: "#/components/schemas/Liquidity" }, { type: "null" }] }
+    Liquidity:
+      type: object
+      additionalProperties: false
+      description: |
+        The built-in liquidity provider's settings for an instrument. Every field is optional: missing ones come from
+        `liquidity.default`, field by field, then the built-in defaults (shown). It quotes `levels` limit orders a side
+        around the reference price, as the participant `liquidity.participant_id`.
+      properties:
+        mode: { enum: ["on", "off"], default: "off" }
+        levels: { type: integer, minimum: 1, maximum: 50, default: 5, description: Price levels a side. }
+        spreadBps: { type: number, minimum: 0, maximum: 10000, default: 10, description: From the mid to the best bid and to the best ask; rounded away from the mid to the tick. }
+        levelStepTicks: { type: integer, minimum: 1, default: 1, description: Between levels. }
+        levelQuantity: { type: integer, minimum: 1, maximum: 1000000000, default: 100, description: Lots at the best level. }
+        levelQuantityGrowth: { type: number, minimum: 0.1, maximum: 10, default: 1, description: Each deeper level holds this many times the one before. }
+        requoteThresholdTicks: { type: integer, minimum: 0, default: 1, description: How far the reference price must move before the ladder is quoted again. }
+        refillDelayMs: { type: integer, minimum: 0, maximum: 86400000, default: 0, description: Simulated time after a fill before the ladder is refilled. }
+        skewBpsPerLot: { type: number, minimum: 0, maximum: 10000, default: 0, description: How far each lot of inventory moves the mid against the position. }
+        maxInventory: { type: integer, minimum: 1, default: 10000, description: Lots long (or short) past which the side that adds to it is not quoted. }
+        stalePolicy:
+          enum: [keep, widen, pull]
+          default: pull
+          description: While the reference price is stale, keep the ladder as quoted, quote it with the spread times `staleWidenFactor`, or pull it.
+        staleWidenFactor: { type: number, minimum: 1, maximum: 100, default: 2, description: "`widen`: the factor the spread is multiplied by while the price is stale." }
+        closedPolicy:
+          enum: [keep, widen, pull]
+          default: pull
+          description: Outside the instrument's trading session, keep the ladder as quoted, quote it with the spread times `closedWidenFactor`, or pull it. Takes precedence over `stalePolicy`.
+        closedWidenFactor: { type: number, minimum: 1, maximum: 100, default: 2, description: "`widen`: the factor the spread is multiplied by while the market is closed." }
+    LiquidityPatch:
+      type: object
+      minProperties: 1
+      description: Any `Liquidity` field (`null` clears it), and optionally `priceSource`.
+      allOf: [{ $ref: "#/components/schemas/LiquidityFields" }]
+      properties:
+        priceSource:
+          oneOf:
+            - { type: "null" }
+            - $ref: "#/components/schemas/PriceSource"
+    LiquidityFields:
+      description: The `Liquidity` fields, each nullable.
+      type: object
+      properties:
+        mode: { enum: ["on", "off", null] }
+        levels: { type: [integer, "null"], minimum: 1, maximum: 50 }
+        spreadBps: { type: [number, "null"], minimum: 0 }
+        levelStepTicks: { type: [integer, "null"], minimum: 1 }
+        levelQuantity: { type: [integer, "null"], minimum: 1 }
+        levelQuantityGrowth: { type: [number, "null"] }
+        requoteThresholdTicks: { type: [integer, "null"], minimum: 0 }
+        refillDelayMs: { type: [integer, "null"], minimum: 0 }
+        skewBpsPerLot: { type: [number, "null"], minimum: 0 }
+        maxInventory: { type: [integer, "null"], minimum: 1 }
+        stalePolicy: { enum: [keep, widen, pull, null] }
+        staleWidenFactor: { type: [number, "null"], minimum: 1, maximum: 100 }
+        closedPolicy: { enum: [keep, widen, pull, null] }
+        closedWidenFactor: { type: [number, "null"], minimum: 1, maximum: 100 }
+    LiquidityStatus:
+      type: object
+      additionalProperties: false
+      required: [instrumentId, providerId, state, settings, own, inventory, quotedAround, ladder, priceSource, reference,
+                 session]
+      properties:
+        instrumentId: { type: string }
+        providerId: { type: [string, "null"], description: The participant the provider quotes as. }
+        state:
+          enum: ["off", no-reference, quoting, kept, widened, pulled]
+          description: What it did when it last quoted, as the market data's `liquidity` shows it.
+        settings:
+          description: Its settings, resolved (own, then `liquidity.default`, then built-in).
+          oneOf:
+            - { type: "null" }
+            - type: object
+              additionalProperties: false
+              required: [mode, levels, spreadBps, levelStepTicks, levelQuantity, levelQuantityGrowth,
+                         requoteThresholdTicks, refillDelayMs, skewBpsPerLot, maxInventory, stalePolicy,
+                         staleWidenFactor, closedPolicy, closedWidenFactor]
+              properties:
+                mode: { enum: ["on", "off"] }
+                levels: { type: integer }
+                spreadBps: { type: number }
+                levelStepTicks: { type: integer }
+                levelQuantity: { type: integer }
+                levelQuantityGrowth: { type: number }
+                requoteThresholdTicks: { type: integer }
+                refillDelayMs: { type: integer }
+                skewBpsPerLot: { type: number }
+                maxInventory: { type: integer }
+                stalePolicy: { enum: [keep, widen, pull] }
+                staleWidenFactor: { type: number }
+                closedPolicy: { enum: [keep, widen, pull] }
+                closedWidenFactor: { type: number }
+        own:
+          description: The instrument's own settings; `null` when it relies on the default only.
+          oneOf:
+            - { type: "null" }
+            - $ref: "#/components/schemas/Liquidity"
+        inventory: { type: integer, description: Its net position in units (positive long). }
+        quotedAround:
+          description: The reference price its current ladder was quoted around; `null` when it quotes nothing.
+          oneOf:
+            - { type: "null" }
+            - type: object
+              additionalProperties: false
+              required: [priceTicks, price]
+              properties:
+                priceTicks: { type: integer }
+                price: { $ref: "#/components/schemas/Amount" }
+        ladder:
+          type: object
+          additionalProperties: false
+          required: [bids, asks]
+          properties:
+            bids: { type: array, items: { $ref: "#/components/schemas/LiquidityQuote" }, description: Best first. }
+            asks: { type: array, items: { $ref: "#/components/schemas/LiquidityQuote" }, description: Best first. }
+        priceSource:
+          description: The instrument's own price source; `null` relies on `price_sources.default`.
+          oneOf:
+            - { type: "null" }
+            - $ref: "#/components/schemas/PriceSource"
+        reference: { $ref: "#/components/schemas/MarketDataReferencePrice" }
+        session: { enum: [open, closed] }
+    LiquidityQuote:
+      type: object
+      additionalProperties: false
+      required: [orderId, priceTicks, price, quantity]
+      properties:
+        orderId: { type: string, format: uuid }
+        priceTicks: { type: integer }
+        price: { $ref: "#/components/schemas/Amount" }
+        quantity: { type: integer, description: Remaining quantity. }
+    PriceSource:
+      type: object
+      additionalProperties: false
+      description: |
+        A reference-price source. Every field is optional: missing ones come from `price_sources.default`, field by
+        field, then the built-in defaults (kind `none`, drift 0, volatility 0.2, a step a second). Fields the kind does
+        not use are ignored. Prices are decimal strings in major units, on the instrument's tick grid.
+      properties:
+        kind:
+          enum: [none, fixed, synthetic, finnhub, replay]
+          description: "`none`: no reference price. `fixed`: `price`. `synthetic`: a seeded geometric Brownian motion. `finnhub`: live trade prices for the instrument's `referenceSymbol` (else its `symbol`); needs a Finnhub API key in the service's configuration. `replay`: that symbol's rows of the replay file (`price_sources.replay.file`), played on the exchange's clock."
+        price: { $ref: "#/components/schemas/Amount" }
+        initialPrice:
+          $ref: "#/components/schemas/Amount"
+          description: Where a synthetic walk starts. Left out on a switch to `synthetic`, the current reference price, which is then stored here.
+        drift: { type: number, description: Annualized drift μ (a year of 365.25 simulated days). }
+        volatility: { type: number, minimum: 0, description: Annualized volatility σ. }
+        tickIntervalMs: { type: integer, minimum: 100, maximum: 86400000, description: Simulated milliseconds per step. }
+        seed: { type: integer, minimum: 0, description: "Left out, derived from `price_sources.seed` and the instrument ID." }
+    MarketData:
+      type: object
+      additionalProperties: false
+      required: [instrumentId, mdSequence, reference, bestBid, bestAsk, lastTrade, sessionVolume, liquidity, session]
+      properties:
+        instrumentId: { type: string }
+        mdSequence:
+          type: integer
+          minimum: 0
+          description: The `mdSequence` of the last stream message about the instrument (0 before the first).
+        reference: { $ref: "#/components/schemas/MarketDataReferencePrice" }
+        bestBid: { $ref: "#/components/schemas/MarketDataTop" }
+        bestAsk: { $ref: "#/components/schemas/MarketDataTop" }
+        lastTrade:
+          description: "`null` before the instrument's first trade."
+          oneOf:
+            - { type: "null" }
+            - $ref: "#/components/schemas/MarketDataPrint"
+        sessionVolume:
+          type: integer
+          minimum: 0
+          description: Quantity traded on the current business date (the business day ends at `clearing.cutoff`).
+        liquidity:
+          enum: ["off", no-reference, quoting, kept, widened, pulled]
+          description: What the liquidity provider did when it last quoted the instrument. `off` without a provider, with mode `off` or with trading disabled; `kept`, `widened` and `pulled` apply its `closedPolicy` in a closed market, else its `stalePolicy` to a stale reference price.
+        session:
+          enum: [open, closed]
+          description: Whether the instrument's market is in its trading session (`sessions` by MIC); always `open` for a market without one.
+    MarketDataReferencePrice:
+      description: "`null` when the price source is `none`."
+      oneOf:
+        - { type: "null" }
+        - type: object
+          additionalProperties: false
+          required: [price, priceTicks, source, sourceTimestamp, stale]
+          properties:
+            price: { $ref: "#/components/schemas/Amount" }
+            priceTicks: { type: integer, minimum: 1 }
+            source: { enum: [fixed, synthetic, finnhub, replay] }
+            sourceTimestamp:
+              $ref: "#/components/schemas/Timestamp"
+              description: When the price was produced, on the exchange's clock.
+            stale:
+              type: boolean
+              description: "`finnhub`: nothing has arrived for `price_sources.finnhub.stale_after_ms` (real time); the last price is kept. Always `false` for `fixed` and `synthetic`."
+    MarketDataTop:
+      description: The best price on one side and the quantity resting there; `null` for an empty side.
+      oneOf:
+        - { type: "null" }
+        - type: object
+          additionalProperties: false
+          required: [priceTicks, price, quantity]
+          properties:
+            priceTicks: { type: integer }
+            price: { $ref: "#/components/schemas/Amount" }
+            quantity: { type: integer, minimum: 1 }
+    MarketDataPrint:
+      type: object
+      description: A trade, without participants.
+      additionalProperties: false
+      required: [priceTicks, price, quantity, executedAt]
+      properties:
+        priceTicks: { type: integer }
+        price: { $ref: "#/components/schemas/Amount" }
+        quantity: { type: integer, minimum: 1 }
+        executedAt: { $ref: "#/components/schemas/Timestamp" }
+    MarketDataQuote:
+      type: object
+      description: "Stream event `quote`: the best bid or ask changed."
+      additionalProperties: false
+      required: [instrumentId, mdSequence, bestBid, bestAsk]
+      properties:
+        instrumentId: { type: string }
+        mdSequence: { type: integer, minimum: 1 }
+        bestBid: { $ref: "#/components/schemas/MarketDataTop" }
+        bestAsk: { $ref: "#/components/schemas/MarketDataTop" }
+    MarketDataTrade:
+      type: object
+      description: "Stream event `trade`: an anonymous print."
+      additionalProperties: false
+      required: [instrumentId, mdSequence, priceTicks, price, quantity, executedAt]
+      properties:
+        instrumentId: { type: string }
+        mdSequence: { type: integer, minimum: 1 }
+        priceTicks: { type: integer }
+        price: { $ref: "#/components/schemas/Amount" }
+        quantity: { type: integer, minimum: 1 }
+        executedAt: { $ref: "#/components/schemas/Timestamp" }
+    MarketDataReference:
+      type: object
+      description: "Stream event `reference`: the reference price changed, became stale, or went away."
+      additionalProperties: false
+      required: [instrumentId, mdSequence, reference]
+      properties:
+        instrumentId: { type: string }
+        mdSequence: { type: integer, minimum: 1 }
+        reference: { $ref: "#/components/schemas/MarketDataReferencePrice" }
+    Participant:
+      type: object
+      additionalProperties: false
+      required: [id, name]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        settlement:
+          oneOf: [{ $ref: "#/components/schemas/SettlementDetails" }, { type: "null" }]
+          description: Free-form settlement details (at most 4 KiB), copied into `TradeExecuted`.
+    SettlementDetails:
+      type: object
+      description: >-
+        A participant's free-form settlement details, as registered. Written as a named schema so that client
+        generators read "this object or null" as a nullable map.
+    OrderRequest:
+      type: object
+      additionalProperties: false
+      required: [instrumentId, participantId, side, type, quantity]
+      properties:
+        clientOrderId: { type: [string, "null"], description: 1 to 64 characters; makes submission idempotent per participant. }
+        instrumentId: { type: string }
+        participantId: { type: string }
+        side: { $ref: "#/components/schemas/Side" }
+        type: { $ref: "#/components/schemas/OrderType" }
+        priceTicks: { type: [integer, "null"], description: "Required for `LIMIT`, absent for `MARKET`." }
+        quantity: { type: integer, minimum: 1 }
+        timeInForce:
+          $ref: "#/components/schemas/TimeInForce"
+          description: >-
+            Left out: `DAY` on a market with a trading session, else `GTC`. A `MARKET` order is always `IOC`;
+            `DAY` or `GTC` on one is a `400`.
+    TimeInForce:
+      enum: [DAY, GTC, IOC]
+      description: >-
+        `DAY` rests until its session closes (on a market without a session, until the business day's cutoff), then
+        expires (`OrderExpired`, status `EXPIRED`). `GTC` rests until filled or cancelled. `IOC` trades what it can at
+        once; its remainder is cancelled (`cancelReason: IOC_REMAINDER`).
+    Order:
+      type: object
+      additionalProperties: false
+      required: [orderId, clientOrderId, instrumentId, participantId, side, type, priceTicks, price, quantity,
+                 remainingQuantity, filledQuantity, status, sequence, timeInForce]
+      properties:
+        orderId: { type: string, format: uuid }
+        clientOrderId: { type: [string, "null"] }
+        instrumentId: { type: string }
+        participantId: { type: string }
+        side: { $ref: "#/components/schemas/Side" }
+        type: { $ref: "#/components/schemas/OrderType" }
+        priceTicks: { type: [integer, "null"] }
+        price: { type: [string, "null"] }
+        quantity: { type: integer }
+        remainingQuantity: { type: integer }
+        filledQuantity: { type: integer }
+        status: { $ref: "#/components/schemas/OrderStatus" }
+        sequence: { type: integer }
+        timeInForce: { $ref: "#/components/schemas/TimeInForce" }
+        rejectReason: { enum: [SELF_TRADE, INSTRUMENT_DISABLED, MARKET_CLOSED], description: Only on a rejection. }
+        createdAt: { $ref: "#/components/schemas/Timestamp", description: "Only from `GET /api/orders/{id}`." }
+        updatedAt: { $ref: "#/components/schemas/Timestamp", description: "Only from `GET /api/orders/{id}`." }
+    OrderResult:
+      type: object
+      additionalProperties: false
+      required: [order, executions, duplicate]
+      properties:
+        order: { $ref: "#/components/schemas/Order" }
+        executions:
+          type: array
+          items: { $ref: "#/components/schemas/Trade" }
+        duplicate: { type: boolean }
+    Trade:
+      type: object
+      additionalProperties: false
+      required: [executionId, instrumentId, buyOrderId, sellOrderId, buyerId, sellerId, priceTicks, price, quantity,
+                 currency, executedAt, tradeDate, intendedSettlementDate]
+      properties:
+        executionId: { type: string, format: uuid }
+        instrumentId: { type: string }
+        buyOrderId: { type: string, format: uuid }
+        sellOrderId: { type: string, format: uuid }
+        buyerId: { type: string }
+        sellerId: { type: string }
+        priceTicks: { type: integer }
+        price: { $ref: "#/components/schemas/Amount" }
+        quantity: { type: integer }
+        currency: { type: string }
+        executedAt: { $ref: "#/components/schemas/Timestamp" }
+        tradeDate: { $ref: "#/components/schemas/TradeDate" }
+        intendedSettlementDate: { $ref: "#/components/schemas/IntendedSettlementDate" }
+    TradeDate:
+      type: string
+      format: date
+      description: >-
+        The business day the trade belongs to (FIX tag 75): its date on the business-day calendar
+        (`clearing.cutoff` in `clearing.time_zone`, whether or not clearing runs). A trade at or after the cutoff, or
+        on a weekend, belongs to the next business day. The same for an execution on every event and response.
+    IntendedSettlementDate:
+      type: string
+      format: date
+      description: >-
+        The day the trade is meant to settle (FIX tag 64): `tradeDate` plus the instrument's market cycle
+        (`settlement.settlement_days`, `market_settlement_days`) in business days, in every settlement mode.
+    Book:
+      type: object
+      additionalProperties: false
+      required: [instrumentId, currency, enabled, bids, asks, lastSequence]
+      properties:
+        instrumentId: { type: string }
+        currency: { type: string }
+        enabled: { type: boolean }
+        bids:
+          description: Best (highest) first.
+          type: array
+          items: { $ref: "#/components/schemas/Level" }
+        asks:
+          description: Best (lowest) first.
+          type: array
+          items: { $ref: "#/components/schemas/Level" }
+        lastSequence: { type: integer, description: The last order processed when the snapshot was taken. }
+    Level:
+      type: object
+      additionalProperties: false
+      required: [priceTicks, price, quantity, orders]
+      properties:
+        priceTicks: { type: integer }
+        price: { $ref: "#/components/schemas/Amount" }
+        quantity: { type: integer }
+        orders: { type: integer }
+
+    SettlementStatus: { enum: [PENDING, DELAYED, SETTLED, FAILED, REJECTED, CANCELLED, CORRECTED] }
+    ClearingRefs:
+      type: object
+      additionalProperties: false
+      required: [businessDate, buyer, seller]
+      description: Which clearing statement and obligation each side of the trade appears on.
+      properties:
+        businessDate: { $ref: "#/components/schemas/Date" }
+        buyer: { $ref: "#/components/schemas/PartyRef" }
+        seller: { $ref: "#/components/schemas/PartyRef" }
+    PartyRef:
+      type: object
+      additionalProperties: false
+      required: [statementId, obligationId]
+      properties:
+        statementId: { type: string }
+        obligationId: { type: string }
+    Settlement:
+      type: object
+      additionalProperties: false
+      required: [executionId, tradeSequence, instrumentId, buyerId, sellerId, quantity, priceTicks, currency,
+                 settlementAmount, amountMinor, tradeDate, intendedSettlementDate, status, attempts, delays,
+                 nextTransitionAt, settledAt, updatedAt]
+      properties:
+        executionId: { type: string, format: uuid }
+        tradeSequence: { type: integer }
+        instrumentId: { type: string }
+        buyerId: { type: string }
+        sellerId: { type: string }
+        quantity: { type: integer }
+        priceTicks: { type: integer }
+        currency: { type: string }
+        settlementAmount: { $ref: "#/components/schemas/Amount" }
+        amountMinor: { type: integer }
+        tradeDate: { $ref: "#/components/schemas/Date" }
+        intendedSettlementDate: { $ref: "#/components/schemas/Date" }
+        status: { $ref: "#/components/schemas/SettlementStatus" }
+        attempts: { type: integer }
+        delays: { type: integer }
+        nextTransitionAt: { $ref: "#/components/schemas/NullableTimestamp" }
+        settledAt: { $ref: "#/components/schemas/NullableTimestamp" }
+        updatedAt: { $ref: "#/components/schemas/Timestamp" }
+        clearing: { $ref: "#/components/schemas/ClearingRefs" }
+    ReportRequest:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status: { $ref: "#/components/schemas/SettlementStatus" }
+        reference: { type: [string, "null"], description: The reporter's own identifier; a repeated reference is idempotent. }
+        reason: { type: [string, "null"] }
+        details: { type: [object, "null"] }
+        occurredAt: { type: [string, "null"], format: date-time, description: Default the time of receipt. }
+    Report:
+      type: object
+      additionalProperties: false
+      required: [reportId, executionId, status, reference, reason, details, occurredAt, receivedAt]
+      properties:
+        reportId: { type: string, format: uuid }
+        executionId: { type: string, format: uuid }
+        status: { $ref: "#/components/schemas/SettlementStatus" }
+        reference: { type: [string, "null"] }
+        reason: { type: [string, "null"] }
+        details: { type: [object, "null"] }
+        occurredAt: { $ref: "#/components/schemas/Timestamp" }
+        receivedAt: { $ref: "#/components/schemas/Timestamp" }
+        duplicate: { type: boolean, description: Only in answer to a report. }
+    SettlementDetail:
+      type: object
+      additionalProperties: false
+      required: [executionId, simulated, simulatedEvents, external]
+      properties:
+        executionId: { type: string, format: uuid }
+        simulated:
+          oneOf:
+            - { $ref: "#/components/schemas/Settlement" }
+            - { type: "null" }
+        simulatedEvents:
+          type: array
+          items: { $ref: "#/components/schemas/EventEnvelope" }
+        external:
+          type: array
+          items: { $ref: "#/components/schemas/Report" }
+
+    ClearingStatement:
+      type: object
+      additionalProperties: false
+      required: [statementId, businessDate, participantId, timeZone, tradesFrom, cutoffAt, issuedAt, trades, obligations]
+      properties:
+        statementId: { type: string, description: "`CS:<businessDate>:<participant>`" }
+        businessDate: { $ref: "#/components/schemas/Date" }
+        participantId: { type: string }
+        timeZone: { type: string }
+        tradesFrom: { $ref: "#/components/schemas/Timestamp" }
+        cutoffAt: { $ref: "#/components/schemas/Timestamp" }
+        issuedAt: { $ref: "#/components/schemas/Timestamp" }
+        trades:
+          type: array
+          items: { $ref: "#/components/schemas/ClearingTrade" }
+        obligations:
+          type: array
+          items: { $ref: "#/components/schemas/Obligation" }
+    ClearingTrade:
+      type: object
+      additionalProperties: false
+      required: [executionId, tradeSequence, instrumentId, side, quantity, priceTicks, currency, currencyScale,
+                 amountMinor, amount, executedAt, tradeDate, intendedSettlementDate, obligationId]
+      properties:
+        executionId: { type: string, format: uuid }
+        tradeSequence: { type: integer }
+        instrumentId: { type: string }
+        side: { $ref: "#/components/schemas/Side" }
+        quantity: { type: integer }
+        priceTicks: { type: integer }
+        currency: { type: string }
+        currencyScale: { type: integer }
+        amountMinor: { type: integer }
+        amount: { $ref: "#/components/schemas/Amount" }
+        executedAt: { $ref: "#/components/schemas/Timestamp" }
+        tradeDate: { $ref: "#/components/schemas/Date" }
+        intendedSettlementDate: { $ref: "#/components/schemas/Date" }
+        obligationId: { type: string }
+    Obligation:
+      type: object
+      additionalProperties: false
+      required: [obligationId, instrumentId, intendedSettlementDate, currency, currencyScale, securitiesNet,
+                 cashNetMinor, cashNet, tradeCount]
+      description: Positive receives, negative delivers.
+      properties:
+        obligationId: { type: string, description: "`<statementId>:<instrument>:<settlementDate>`" }
+        instrumentId: { type: string }
+        intendedSettlementDate: { $ref: "#/components/schemas/Date" }
+        currency: { type: string }
+        currencyScale: { type: integer }
+        securitiesNet: { type: integer }
+        cashNetMinor: { type: integer }
+        cashNet: { $ref: "#/components/schemas/Amount" }
+        tradeCount: { type: integer }
+    ClearingBreaks:
+      type: object
+      additionalProperties: false
+      required: [statementId, businessDate, participantId, issued, issuedAt, breaks]
+      properties:
+        statementId: { type: string }
+        businessDate: { $ref: "#/components/schemas/Date" }
+        participantId: { type: string }
+        issued: { type: boolean, description: "`false` for a late statement still waiting." }
+        issuedAt: { $ref: "#/components/schemas/Timestamp" }
+        breaks:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [kind, executionId, canonical, reported]
+            properties:
+              kind: { enum: [OMITTED_TRADE, QUANTITY_CHANGED, PRICE_CHANGED, PHANTOM_TRADE, LATE_STATEMENT] }
+              executionId: { type: [string, "null"], format: uuid }
+              canonical: { description: What the canonical trade says. }
+              reported: { description: What the statement says instead. }
+
+    ScenarioReport:
+      type: object
+      additionalProperties: false
+      required: [name, passed, steps, eventLog]
+      properties:
+        name: { type: string }
+        passed: { type: boolean }
+        steps:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [index, step, passed, failures]
+            properties:
+              index: { type: integer, description: 0 is the setup. }
+              step: { type: string }
+              passed: { type: boolean }
+              failures:
+                type: array
+                items: { type: string }
+        eventLog:
+          type: object
+          additionalProperties: false
+          required: [events, sha256]
+          description: Equal fingerprints mean byte-identical event logs.
+          properties:
+            events: { type: integer }
+            sha256: { type: string }
+
+    Clock:
+      type: object
+      additionalProperties: false
+      required: [mode, running, speed, now]
+      properties:
+        mode: { enum: [virtual, system] }
+        running: { type: boolean }
+        speed: { type: number, description: Simulated seconds per real second while running. }
+        now: { $ref: "#/components/schemas/Timestamp" }
+    ClockAdvance:
+      type: object
+      additionalProperties: false
+      description: The given units are added up and must total more than zero.
+      properties:
+        days: { type: integer, minimum: 0 }
+        hours: { type: integer, minimum: 0 }
+        minutes: { type: integer, minimum: 0 }
+        seconds: { type: integer, minimum: 0 }
+
+    EventType:
+      enum: [OrderAccepted, OrderRejected, OrderPartiallyFilled, OrderFilled, OrderCancelled, OrderExpired, TradeExecuted,
+             InstrumentListed, InstrumentUpdated, ClockChanged, BusinessDayClosed, ClosingPriceIssued, SettlementPending, SettlementCompleted, SettlementFailed, SettlementRejected, SettlementDelayed,
+             SettlementCorrected, SettlementCancelled, SettlementOutcomeReported, ClearingStatementIssued]
+    EventEnvelope:
+      type: object
+      additionalProperties: false
+      required: [eventId, sequence, eventType, schemaVersion, source, simulationId, aggregateId, correlationId,
+                 occurredAt, payload]
+      description: The canonical envelope, as stored, replayed and delivered. Deduplicate by `eventId`; `sequence` is the order.
+      properties:
+        eventId: { type: string, format: uuid }
+        sequence: { type: integer, minimum: 1 }
+        eventType: { type: string }
+        schemaVersion: { type: integer }
+        source: { type: string, description: "`exchange`, `settlement-simulator`, `external`, `clearinghouse` or `payment-gateway`, `bank`." }
+        simulationId: { type: [string, "null"] }
+        aggregateId: { type: string }
+        correlationId: { type: [string, "null"] }
+        occurredAt: { $ref: "#/components/schemas/Timestamp" }
+        payload: { type: object }
+    OrderEventPayload:
+      type: object
+      additionalProperties: false
+      required: [orderId, clientOrderId, instrumentId, participantId, side, type, priceTicks, price, quantity,
+                 remainingQuantity, filledQuantity, status, sequence, timeInForce]
+      properties:
+        orderId: { type: string, format: uuid }
+        clientOrderId: { type: [string, "null"] }
+        instrumentId: { type: string }
+        participantId: { type: string }
+        side: { $ref: "#/components/schemas/Side" }
+        type: { $ref: "#/components/schemas/OrderType" }
+        priceTicks: { type: [integer, "null"] }
+        price: { type: [string, "null"] }
+        quantity: { type: integer }
+        remainingQuantity: { type: integer }
+        filledQuantity: { type: integer }
+        status: { $ref: "#/components/schemas/OrderStatus" }
+        sequence: { type: integer }
+        timeInForce: { $ref: "#/components/schemas/TimeInForce" }
+        rejectReason: { enum: [SELF_TRADE, INSTRUMENT_DISABLED, MARKET_CLOSED] }
+        cancelReason: { enum: [REQUESTED, MARKET_REMAINDER, IOC_REMAINDER] }
+        executionId: { type: string, format: uuid, description: On a resting order's fill event. }
+        tradeDate:
+          $ref: "#/components/schemas/TradeDate"
+          description: On fill events, the execution's (one command's executions share their dates).
+        intendedSettlementDate: { $ref: "#/components/schemas/IntendedSettlementDate" }
+    TradeExecutedPayload:
+      type: object
+      additionalProperties: false
+      required: [executionId, instrumentId, instrument, buyOrderId, sellOrderId, buyerId, sellerId, buyerSettlement,
+                 sellerSettlement, priceTicks, price, quantity, currency, currencyScale, tickSizeMinor, executedAt,
+                 tradeDate, intendedSettlementDate]
+      properties:
+        executionId: { type: string, format: uuid }
+        instrumentId: { type: string }
+        instrument:
+          type: object
+          additionalProperties: false
+          required: [id, symbol, mic, isin, cusip, currency]
+          description: A snapshot as of execution time.
+          properties:
+            id: { type: string }
+            symbol: { type: string }
+            mic: { type: [string, "null"] }
+            isin: { type: [string, "null"] }
+            cusip: { type: [string, "null"] }
+            currency: { type: string }
+        buyOrderId: { type: string, format: uuid }
+        sellOrderId: { type: string, format: uuid }
+        buyerId: { type: string }
+        sellerId: { type: string }
+        buyerSettlement:
+          oneOf: [{ $ref: "#/components/schemas/SettlementDetails" }, { type: "null" }]
+          description: The buyer's settlement details at execution time.
+        sellerSettlement: { oneOf: [{ $ref: "#/components/schemas/SettlementDetails" }, { type: "null" }] }
+        priceTicks: { type: integer }
+        price: { $ref: "#/components/schemas/Amount" }
+        quantity: { type: integer }
+        currency: { type: string }
+        currencyScale: { type: integer }
+        tickSizeMinor: { type: integer }
+        executedAt: { $ref: "#/components/schemas/Timestamp" }
+        tradeDate: { $ref: "#/components/schemas/TradeDate" }
+        intendedSettlementDate: { $ref: "#/components/schemas/IntendedSettlementDate" }
+    InstrumentEventPayload:
+      type: object
+      required: [instrumentId, symbol, mic, isin, cusip, currency, currencyScale, tickSizeMinor, tickSize, lotSize,
+                 enabled, referenceSymbol, priceSource, liquidity]
+      description: The whole instrument after the change, as `GET /api/instruments` shows it.
+      properties:
+        instrumentId: { type: string }
+        symbol: { type: string }
+        mic: { type: [string, "null"] }
+        isin: { type: [string, "null"] }
+        cusip: { type: [string, "null"] }
+        currency: { type: string }
+        currencyScale: { type: integer }
+        tickSizeMinor: { type: integer }
+        tickSize: { $ref: "#/components/schemas/Amount" }
+        lotSize: { type: integer }
+        enabled: { type: boolean }
+        referenceSymbol: { type: [string, "null"] }
+        priceSource: { oneOf: [{ $ref: "#/components/schemas/PriceSource" }, { type: "null" }] }
+        liquidity: { oneOf: [{ $ref: "#/components/schemas/Liquidity" }, { type: "null" }] }
+    SettlementPayloadBase:
+      type: object
+      required: [executionId, tradeSequence, instrumentId, buyerId, sellerId, quantity, priceTicks, currency,
+                 settlementAmount, amountMinor, tradeDate, intendedSettlementDate, status, attempt]
+      properties:
+        executionId: { type: string, format: uuid }
+        tradeSequence: { type: integer }
+        instrumentId: { type: string }
+        buyerId: { type: string }
+        sellerId: { type: string }
+        quantity: { type: integer }
+        priceTicks: { type: integer }
+        currency: { type: string }
+        settlementAmount: { $ref: "#/components/schemas/Amount" }
+        amountMinor: { type: integer }
+        tradeDate: { $ref: "#/components/schemas/Date" }
+        intendedSettlementDate: { $ref: "#/components/schemas/Date" }
+        status: { $ref: "#/components/schemas/SettlementStatus" }
+        attempt: { type: integer }
+        clearing: { $ref: "#/components/schemas/ClearingRefs" }
+    SettlementOutcomeReportedPayload:
+      type: object
+      additionalProperties: false
+      required: [reportId, executionId, buyerId, sellerId, status, reference, reason, details, receivedAt]
+      properties:
+        reportId: { type: string, format: uuid }
+        executionId: { type: string, format: uuid }
+        buyerId: { type: string, description: The execution's buyer. }
+        sellerId: { type: string, description: The execution's seller. }
+        status: { $ref: "#/components/schemas/SettlementStatus" }
+        reference: { type: [string, "null"] }
+        reason: { type: [string, "null"] }
+        details: { type: [object, "null"] }
+        receivedAt: { $ref: "#/components/schemas/Timestamp" }
+
+    OrderAcceptedEvent:
+      allOf: [{ $ref: "#/components/schemas/EventEnvelope" }]
+      properties:
+        eventType: { const: OrderAccepted }
+        source: { const: exchange }
+        payload: { $ref: "#/components/schemas/OrderEventPayload" }
+    OrderRejectedEvent:
+      allOf: [{ $ref: "#/components/schemas/EventEnvelope" }]
+      properties:
+        eventType: { const: OrderRejected }
+        source: { const: exchange }
+        payload: { allOf: [{ $ref: "#/components/schemas/OrderEventPayload" }], required: [rejectReason] }
+    OrderPartiallyFilledEvent:
+      allOf: [{ $ref: "#/components/schemas/EventEnvelope" }]
+      properties:
+        eventType: { const: OrderPartiallyFilled }
+        source: { const: exchange }
+        payload:
+          allOf: [{ $ref: "#/components/schemas/OrderEventPayload" }]
+          required: [tradeDate, intendedSettlementDate]
+    OrderFilledEvent:
+      allOf: [{ $ref: "#/components/schemas/EventEnvelope" }]
+      properties:
+        eventType: { const: OrderFilled }
+        source: { const: exchange }
+        payload:
+          allOf: [{ $ref: "#/components/schemas/OrderEventPayload" }]
+          required: [tradeDate, intendedSettlementDate]
+    OrderCancelledEvent:
+      allOf: [{ $ref: "#/components/schemas/EventEnvelope" }]
+      properties:
+        eventType: { const: OrderCancelled }
+        source: { const: exchange }
+        payload: { allOf: [{ $ref: "#/components/schemas/OrderEventPayload" }], required: [cancelReason] }
+    OrderExpiredEvent:
+      allOf: [{ $ref: "#/components/schemas/EventEnvelope" }]
+      properties:
+        eventType: { const: OrderExpired }
+        source: { const: exchange }
+        payload: { $ref: "#/components/schemas/OrderEventPayload" }
+    TradeExecutedEvent:
+      allOf: [{ $ref: "#/components/schemas/EventEnvelope" }]
+      properties:
+        eventType: { const: TradeExecuted }
+        source: { const: exchange }
+        payload: { $ref: "#/components/schemas/TradeExecutedPayload" }
+    ClockChangedPayload:
+      type: object
+      additionalProperties: false
+      required: [change, mode, running, speed, now, effectiveAt]
+      description: |
+        The clock after a change. A follower computes simulated time as `now + (real time − effectiveAt) × speed`
+        while `running`, and `now` while frozen (then `effectiveAt` is `null`, so real time stays out of the log of a
+        reproducible run). Changes that alter nothing publish nothing; a reset publishes nothing
+        either (read `GET /api/clock` after one).
+      properties:
+        change:
+          enum: [advance, set, freeze, resume, speed, follow]
+          description: "`follow`: a following clock (the payment gateway's `clock.mode: follow`) took the followed clock's state."
+        mode: { const: virtual }
+        running: { type: boolean }
+        speed: { type: number }
+        now: { $ref: "#/components/schemas/Timestamp" }
+        effectiveAt:
+          oneOf: [{ $ref: "#/components/schemas/Timestamp" }, { type: "null" }]
+          description: The real time the change took effect; `null` while frozen, when `now` is the reading.
+    ClockChangedEvent:
+      allOf: [{ $ref: "#/components/schemas/EventEnvelope" }]
+      properties:
+        eventType: { const: ClockChanged }
+        source: { const: exchange }
+        aggregateId: { const: clock }
+        correlationId: { const: null }
+        payload: { $ref: "#/components/schemas/ClockChangedPayload" }
+    BusinessDayClosedEvent:
+      allOf: [{ $ref: "#/components/schemas/EventEnvelope" }]
+      description: |
+        The authoritative end of a business day: at `clearing.cutoff` in `clearing.time_zone`, every weekday, whether
+        or not clearing is enabled and whether or not anything traded. It comes before that day's
+        `ClearingStatementIssued`; a clock move past several cutoffs closes each day in turn.
+      properties:
+        eventType: { const: BusinessDayClosed }
+        source: { const: exchange }
+        correlationId: { const: null }
+        payload:
+          type: object
+          additionalProperties: false
+          required: [businessDate, cutoffAt, nextBusinessDate, timeZone]
+          properties:
+            businessDate: { $ref: "#/components/schemas/Date" }
+            cutoffAt: { $ref: "#/components/schemas/Timestamp" }
+            nextBusinessDate: { $ref: "#/components/schemas/Date" }
+            timeZone: { type: string, description: The IANA time zone of the cutoff. }
+    ClosingPriceIssuedEvent:
+      allOf: [{ $ref: "#/components/schemas/EventEnvelope" }]
+      description: |
+        One per instrument at each business day's cutoff, right after `BusinessDayClosed`, in instrument ID order: for
+        every instrument that traded in the day's window (its last trade then, basis `LAST_TRADE`) or has a reference
+        price (that price at the cutoff, basis `REFERENCE`). An instrument with neither has no closing price. Stamped
+        at the cutoff; the aggregate is the instrument, the correlation ID the business date. Exactly once per day and
+        instrument, and reproducible in a seeded run.
+      properties:
+        eventType: { const: ClosingPriceIssued }
+        source: { const: exchange }
+        correlationId: { $ref: "#/components/schemas/Date" }
+        payload:
+          type: object
+          additionalProperties: false
+          required: [instrumentId, businessDate, closingPrice, closingPriceTicks, currency, basis, volume]
+          properties:
+            instrumentId: { type: string }
+            businessDate: { $ref: "#/components/schemas/Date" }
+            closingPrice: { $ref: "#/components/schemas/Amount" }
+            closingPriceTicks: { type: integer, minimum: 1 }
+            currency: { type: string }
+            basis: { enum: [LAST_TRADE, REFERENCE] }
+            volume: { type: integer, minimum: 0, description: Quantity traded in the business day's window; 0 for `REFERENCE`. }
+    InstrumentListedEvent:
+      allOf: [{ $ref: "#/components/schemas/EventEnvelope" }]
+      properties:
+        eventType: { const: InstrumentListed }
+        source: { const: exchange }
+        correlationId: { const: null }
+        payload:
+          allOf: [{ $ref: "#/components/schemas/InstrumentEventPayload" }]
+          unevaluatedProperties: false
+    InstrumentUpdatedEvent:
+      allOf: [{ $ref: "#/components/schemas/EventEnvelope" }]
+      properties:
+        eventType: { const: InstrumentUpdated }
+        source: { const: exchange }
+        correlationId: { const: null }
+        payload:
+          allOf: [{ $ref: "#/components/schemas/InstrumentEventPayload" }]
+          required: [changes]
+          properties:
+            changes:
+              type: array
+              minItems: 1
+              uniqueItems: true
+              items: { enum: [enabled, referenceSymbol, priceSource, liquidity] }
+              description: The fields whose value changed.
+          unevaluatedProperties: false
+    SettlementPendingEvent:
+      allOf: [{ $ref: "#/components/schemas/EventEnvelope" }]
+      properties:
+        eventType: { const: SettlementPending }
+        source: { const: settlement-simulator }
+        payload:
+          allOf: [{ $ref: "#/components/schemas/SettlementPayloadBase" }]
+          required: [settlementDays]
+          properties:
+            settlementDays: { type: integer, description: "The cycle applied, T+N business days." }
+          unevaluatedProperties: false
+    SettlementCompletedEvent:
+      allOf: [{ $ref: "#/components/schemas/EventEnvelope" }]
+      properties:
+        eventType: { const: SettlementCompleted }
+        source: { const: settlement-simulator }
+        payload:
+          allOf: [{ $ref: "#/components/schemas/SettlementPayloadBase" }]
+          required: [settledAt]
+          properties:
+            settledAt: { $ref: "#/components/schemas/Timestamp" }
+          unevaluatedProperties: false
+    SettlementFailedEvent:
+      allOf: [{ $ref: "#/components/schemas/EventEnvelope" }]
+      properties:
+        eventType: { const: SettlementFailed }
+        source: { const: settlement-simulator }
+        payload:
+          allOf: [{ $ref: "#/components/schemas/SettlementPayloadBase" }]
+          required: [reason]
+          properties:
+            reason: { const: SIMULATED_FAILURE }
+          unevaluatedProperties: false
+    SettlementRejectedEvent:
+      allOf: [{ $ref: "#/components/schemas/EventEnvelope" }]
+      properties:
+        eventType: { const: SettlementRejected }
+        source: { const: settlement-simulator }
+        payload:
+          allOf: [{ $ref: "#/components/schemas/SettlementPayloadBase" }]
+          required: [reason]
+          properties:
+            reason: { enum: [SIMULATED_REJECTION, AMOUNT_OUT_OF_RANGE] }
+          unevaluatedProperties: false
+    SettlementDelayedEvent:
+      allOf: [{ $ref: "#/components/schemas/EventEnvelope" }]
+      properties:
+        eventType: { const: SettlementDelayed }
+        source: { const: settlement-simulator }
+        payload:
+          allOf: [{ $ref: "#/components/schemas/SettlementPayloadBase" }]
+          required: [previousIntendedSettlementDate, delayBusinessDays]
+          properties:
+            previousIntendedSettlementDate: { $ref: "#/components/schemas/Date" }
+            delayBusinessDays: { type: integer, minimum: 1 }
+          unevaluatedProperties: false
+    SettlementCorrectedEvent:
+      allOf: [{ $ref: "#/components/schemas/EventEnvelope" }]
+      properties:
+        eventType: { const: SettlementCorrected }
+        source: { const: settlement-simulator }
+        payload:
+          allOf: [{ $ref: "#/components/schemas/SettlementPayloadBase" }]
+          required: [reason, previousSettlementAmount, previousAmountMinor]
+          properties:
+            reason: { const: SIMULATED_CORRECTION }
+            previousSettlementAmount: { $ref: "#/components/schemas/Amount" }
+            previousAmountMinor: { type: integer }
+          unevaluatedProperties: false
+    SettlementCancelledEvent:
+      allOf: [{ $ref: "#/components/schemas/EventEnvelope" }]
+      properties:
+        eventType: { const: SettlementCancelled }
+        source: { const: settlement-simulator }
+        payload:
+          allOf: [{ $ref: "#/components/schemas/SettlementPayloadBase" }]
+          required: [reason]
+          properties:
+            reason: { const: SIMULATED_CANCELLATION }
+          unevaluatedProperties: false
+    SettlementOutcomeReportedEvent:
+      allOf: [{ $ref: "#/components/schemas/EventEnvelope" }]
+      properties:
+        eventType: { const: SettlementOutcomeReported }
+        source: { const: external }
+        payload: { $ref: "#/components/schemas/SettlementOutcomeReportedPayload" }
+    ClearingStatementIssuedEvent:
+      allOf: [{ $ref: "#/components/schemas/EventEnvelope" }]
+      properties:
+        eventType: { const: ClearingStatementIssued }
+        source: { const: clearinghouse }
+        payload: { $ref: "#/components/schemas/ClearingStatement" }
+
+    DeliveryStatus: { enum: [PENDING, IN_FLIGHT, DELIVERED, DEAD] }
+    WebhookRequest:
+      type: object
+      additionalProperties: false
+      required: [url, eventTypes]
+      properties:
+        url: { type: string, format: uri, description: http or https. }
+        eventTypes:
+          type: array
+          minItems: 1
+          items: { type: string }
+          description: Known event types of this service; duplicates are removed.
+        secret: { type: [string, "null"], minLength: 16, maxLength: 256, description: "When set, every delivery is signed. Never returned." }
+        ordered: { type: boolean, default: false, description: "One delivery at a time, in event sequence order." }
+        participants: { $ref: "#/components/schemas/ParticipantFilter" }
+    WebhookUpdate:
+      type: object
+      additionalProperties: false
+      properties:
+        url: { type: [string, "null"], format: uri }
+        eventTypes:
+          type: [array, "null"]
+          items: { type: string }
+        ordered: { type: [boolean, "null"] }
+        enabled: { type: [boolean, "null"] }
+        paused: { type: [boolean, "null"] }
+        participants:
+          oneOf: [{ $ref: "#/components/schemas/ParticipantFilter" }, { type: "null" }]
+          description: "`null` removes the filter."
+    ParticipantFilter:
+      type: array
+      minItems: 1
+      maxItems: 100
+      items: { type: string, minLength: 1, maxLength: 64 }
+      description: |
+        Exchange only; the payment gateway refuses it. The subscription receives only events involving one of these
+        participants (an order's participant, either side of a trade, settlement or outcome report, a statement's
+        participant), plus events that involve none, such as instrument events. Duplicates are removed.
+    SecretRotation:
+      type: object
+      additionalProperties: false
+      required: [secret]
+      properties:
+        secret: { type: string, minLength: 16, maxLength: 256 }
+        graceSeconds: { type: integer, minimum: 0, maximum: 604800, default: 3600, description: How long the previous secret stays valid. }
+    SubscriptionFields:
+      type: object
+      required: [id, url, eventTypes, enabled, paused, signed, ordered, createdAt, source]
+      properties:
+        id: { type: string, format: uuid }
+        url: { type: string }
+        eventTypes:
+          type: array
+          items: { type: string }
+        enabled: { type: boolean }
+        paused: { type: boolean, description: Deliveries are recorded but held until unpaused. }
+        signed: { type: boolean }
+        ordered: { type: boolean }
+        createdAt: { $ref: "#/components/schemas/Timestamp" }
+        faults: { $ref: "#/components/schemas/FaultPolicy" }
+        name: { type: string, description: The name it is declared under in `webhooks.subscriptions`. }
+        source: { enum: [api, config] }
+        previousSecretValidUntil: { $ref: "#/components/schemas/Timestamp" }
+        deleted: { const: true, description: Shown only when listing with `includeDeleted=true`. }
+        participants: { $ref: "#/components/schemas/ParticipantFilter" }
+    Subscription:
+      allOf: [{ $ref: "#/components/schemas/SubscriptionFields" }]
+      unevaluatedProperties: false
+    SubscriptionDetail:
+      allOf: [{ $ref: "#/components/schemas/SubscriptionFields" }]
+      required: [deliveries]
+      properties:
+        deliveries:
+          type: object
+          additionalProperties: false
+          required: [pending, inFlight, delivered, dead, oldestUnfinished]
+          properties:
+            pending: { type: integer }
+            inFlight: { type: integer }
+            delivered: { type: integer }
+            dead: { type: integer }
+            oldestUnfinished:
+              description: How far behind the consumer is.
+              oneOf:
+                - type: object
+                  additionalProperties: false
+                  required: [eventSequence, occurredAt]
+                  properties:
+                    eventSequence: { type: integer }
+                    occurredAt: { $ref: "#/components/schemas/Timestamp" }
+                - { type: "null" }
+      unevaluatedProperties: false
+    Delivery:
+      type: object
+      additionalProperties: false
+      required: [deliveryId, subscriptionId, url, eventSequence, eventId, eventType, status, attempts, lastError,
+                 nextAttemptAt, deliveredAt]
+      properties:
+        deliveryId: { type: string, format: uuid }
+        subscriptionId: { type: string, format: uuid }
+        url: { type: string }
+        eventSequence: { type: integer }
+        eventId: { type: string, format: uuid }
+        eventType: { type: string }
+        status: { $ref: "#/components/schemas/DeliveryStatus" }
+        attempts: { type: integer }
+        lastError: { type: [string, "null"] }
+        nextAttemptAt: { $ref: "#/components/schemas/NullableTimestamp" }
+        deliveredAt: { $ref: "#/components/schemas/NullableTimestamp" }
+    Attempt:
+      type: object
+      additionalProperties: false
+      required: [id, deliveryId, subscriptionId, url, eventSequence, eventId, eventType, attempt, outcome, faults,
+                 httpStatus, error, at]
+      properties:
+        id: { type: integer }
+        deliveryId: { type: string, format: uuid }
+        subscriptionId: { type: string, format: uuid }
+        url: { type: string }
+        eventSequence: { type: integer }
+        eventId: { type: string, format: uuid }
+        eventType: { type: string }
+        attempt: { type: integer, minimum: 1 }
+        outcome: { enum: [SENT, HELD] }
+        faults:
+          type: array
+          items: { type: string }
+          description: e.g. `missing:payload.price`, `duplicate`, `delay:500ms`, `held:1000ms`.
+        body: { description: "The body sent, only when a fault changed it." }
+        httpStatus: { type: [integer, "null"] }
+        error: { type: [string, "null"] }
+        at: { $ref: "#/components/schemas/Timestamp" }
+    FaultPolicy:
+      type: object
+      additionalProperties: false
+      properties:
+        seed: { type: integer, minimum: 0, default: 0 }
+        missing: { $ref: "#/components/schemas/FieldFault" }
+        nulls: { $ref: "#/components/schemas/FieldFault" }
+        invalid: { $ref: "#/components/schemas/FieldFault" }
+        duplicateProbability: { type: number, minimum: 0, maximum: 1, default: 0 }
+        delay:
+          type: object
+          additionalProperties: false
+          required: [ms]
+          properties:
+            probability: { type: number, minimum: 0, maximum: 1, default: 1 }
+            ms: { type: integer, minimum: 0, maximum: 10000 }
+        outOfOrder:
+          type: object
+          additionalProperties: false
+          required: [holdMs]
+          description: Not for an ordered subscription.
+          properties:
+            probability: { type: number, minimum: 0, maximum: 1, default: 1 }
+            holdMs: { type: integer, minimum: 0, maximum: 3600000 }
+    FieldFault:
+      type: object
+      additionalProperties: false
+      description: Damage to the listed fields, or to one random leaf field when there are none.
+      properties:
+        probability: { type: number, minimum: 0, maximum: 1, default: 1 }
+        paths:
+          type: array
+          items: { type: string }
+    Queued:
+      type: object
+      additionalProperties: false
+      required: [queued]
+      properties:
+        queued: { type: integer }
+    Retried:
+      type: object
+      additionalProperties: false
+      required: [retried]
+      properties:
+        retried: { type: integer }

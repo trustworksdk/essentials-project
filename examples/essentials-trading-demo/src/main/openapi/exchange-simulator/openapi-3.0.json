@@ -1,0 +1,6139 @@
+{
+  "components": {
+    "parameters": {
+      "BusinessDate": {
+        "description": "Business date.",
+        "in": "query",
+        "name": "date",
+        "schema": {
+          "format": "date",
+          "type": "string"
+        }
+      },
+      "ExecutionIdPath": {
+        "in": "path",
+        "name": "executionId",
+        "required": true,
+        "schema": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "InstrumentIdPath": {
+        "in": "path",
+        "name": "id",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "Limit": {
+        "description": "1 to 1000; default 100.",
+        "in": "query",
+        "name": "limit",
+        "schema": {
+          "default": 100,
+          "maximum": 1000,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "RedeliverAfter": {
+        "description": "Redeliver events with a sequence after this one (default 0, all), also those from before the subscription existed.",
+        "in": "query",
+        "name": "after",
+        "schema": {
+          "default": 0,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "SubscriptionIdPath": {
+        "in": "path",
+        "name": "id",
+        "required": true,
+        "schema": {
+          "format": "uuid",
+          "type": "string"
+        }
+      }
+    },
+    "requestBodies": {
+      "BusinessDayClosedEvent": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/BusinessDayClosedEvent"
+            }
+          }
+        }
+      },
+      "ClearingStatementIssuedEvent": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ClearingStatementIssuedEvent"
+            }
+          }
+        }
+      },
+      "ClockChangedEvent": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ClockChangedEvent"
+            }
+          }
+        }
+      },
+      "ClosingPriceIssuedEvent": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ClosingPriceIssuedEvent"
+            }
+          }
+        }
+      },
+      "InstrumentListedEvent": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/InstrumentListedEvent"
+            }
+          }
+        }
+      },
+      "InstrumentUpdatedEvent": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/InstrumentUpdatedEvent"
+            }
+          }
+        }
+      },
+      "OrderAcceptedEvent": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/OrderAcceptedEvent"
+            }
+          }
+        }
+      },
+      "OrderCancelledEvent": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/OrderCancelledEvent"
+            }
+          }
+        }
+      },
+      "OrderExpiredEvent": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/OrderExpiredEvent"
+            }
+          }
+        }
+      },
+      "OrderFilledEvent": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/OrderFilledEvent"
+            }
+          }
+        }
+      },
+      "OrderPartiallyFilledEvent": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/OrderPartiallyFilledEvent"
+            }
+          }
+        }
+      },
+      "OrderRejectedEvent": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/OrderRejectedEvent"
+            }
+          }
+        }
+      },
+      "SettlementCancelledEvent": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/SettlementCancelledEvent"
+            }
+          }
+        }
+      },
+      "SettlementCompletedEvent": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/SettlementCompletedEvent"
+            }
+          }
+        }
+      },
+      "SettlementCorrectedEvent": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/SettlementCorrectedEvent"
+            }
+          }
+        }
+      },
+      "SettlementDelayedEvent": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/SettlementDelayedEvent"
+            }
+          }
+        }
+      },
+      "SettlementFailedEvent": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/SettlementFailedEvent"
+            }
+          }
+        }
+      },
+      "SettlementOutcomeReportedEvent": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/SettlementOutcomeReportedEvent"
+            }
+          }
+        }
+      },
+      "SettlementPendingEvent": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/SettlementPendingEvent"
+            }
+          }
+        }
+      },
+      "SettlementRejectedEvent": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/SettlementRejectedEvent"
+            }
+          }
+        }
+      },
+      "TradeExecutedEvent": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/TradeExecutedEvent"
+            }
+          }
+        }
+      }
+    },
+    "responses": {
+      "BadRequest": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        },
+        "description": "`invalid_json`, `invalid_request` or another validation code; the message says what is wrong."
+      },
+      "Clock": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Clock"
+            }
+          }
+        },
+        "description": "The clock after the call."
+      },
+      "Conflict": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        },
+        "description": "A conflict with the current state; `error` names it."
+      },
+      "NotFound": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        },
+        "description": "`not_found`."
+      },
+      "Unavailable": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        },
+        "description": "`overloaded` (the command queue is full; retry later) or `unavailable`."
+      },
+      "Unprocessable": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        },
+        "description": "`unknown_instrument` or `unknown_participant`."
+      },
+      "WebhookAck": {
+        "description": "Delivered. Any other answer is retried with backoff until the delivery is dead-lettered."
+      }
+    },
+    "schemas": {
+      "Amount": {
+        "description": "A decimal amount in major currency units, e.g. `\"1500.00\"`.",
+        "pattern": "^-?[0-9]+(\\.[0-9]+)?$",
+        "type": "string"
+      },
+      "Attempt": {
+        "additionalProperties": false,
+        "properties": {
+          "at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "attempt": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "body": {
+            "description": "The body sent, only when a fault changed it."
+          },
+          "deliveryId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "error": {
+            "nullable": true,
+            "type": "string"
+          },
+          "eventId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "eventSequence": {
+            "type": "integer"
+          },
+          "eventType": {
+            "type": "string"
+          },
+          "faults": {
+            "description": "e.g. `missing:payload.price`, `duplicate`, `delay:500ms`, `held:1000ms`.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "httpStatus": {
+            "nullable": true,
+            "type": "integer"
+          },
+          "id": {
+            "type": "integer"
+          },
+          "outcome": {
+            "enum": [
+              "SENT",
+              "HELD"
+            ],
+            "type": "string"
+          },
+          "subscriptionId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "deliveryId",
+          "subscriptionId",
+          "url",
+          "eventSequence",
+          "eventId",
+          "eventType",
+          "attempt",
+          "outcome",
+          "faults",
+          "httpStatus",
+          "error",
+          "at"
+        ],
+        "type": "object"
+      },
+      "Book": {
+        "additionalProperties": false,
+        "properties": {
+          "asks": {
+            "description": "Best (lowest) first.",
+            "items": {
+              "$ref": "#/components/schemas/Level"
+            },
+            "type": "array"
+          },
+          "bids": {
+            "description": "Best (highest) first.",
+            "items": {
+              "$ref": "#/components/schemas/Level"
+            },
+            "type": "array"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "instrumentId": {
+            "type": "string"
+          },
+          "lastSequence": {
+            "description": "The last order processed when the snapshot was taken.",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "instrumentId",
+          "currency",
+          "enabled",
+          "bids",
+          "asks",
+          "lastSequence"
+        ],
+        "type": "object"
+      },
+      "BusinessDayClosedEvent": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/EventEnvelope"
+          }
+        ],
+        "description": "The authoritative end of a business day: at `clearing.cutoff` in `clearing.time_zone`, every weekday, whether\nor not clearing is enabled and whether or not anything traded. It comes before that day's\n`ClearingStatementIssued`; a clock move past several cutoffs closes each day in turn.\n",
+        "properties": {
+          "correlationId": {
+            "nullable": true
+          },
+          "eventType": {
+            "enum": [
+              "BusinessDayClosed"
+            ],
+            "type": "string"
+          },
+          "payload": {
+            "additionalProperties": false,
+            "properties": {
+              "businessDate": {
+                "$ref": "#/components/schemas/Date"
+              },
+              "cutoffAt": {
+                "$ref": "#/components/schemas/Timestamp"
+              },
+              "nextBusinessDate": {
+                "$ref": "#/components/schemas/Date"
+              },
+              "timeZone": {
+                "description": "The IANA time zone of the cutoff.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "businessDate",
+              "cutoffAt",
+              "nextBusinessDate",
+              "timeZone"
+            ],
+            "type": "object"
+          },
+          "source": {
+            "enum": [
+              "exchange"
+            ],
+            "type": "string"
+          }
+        }
+      },
+      "ClearingBreaks": {
+        "additionalProperties": false,
+        "properties": {
+          "breaks": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "canonical": {
+                  "description": "What the canonical trade says."
+                },
+                "executionId": {
+                  "format": "uuid",
+                  "nullable": true,
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "OMITTED_TRADE",
+                    "QUANTITY_CHANGED",
+                    "PRICE_CHANGED",
+                    "PHANTOM_TRADE",
+                    "LATE_STATEMENT"
+                  ],
+                  "type": "string"
+                },
+                "reported": {
+                  "description": "What the statement says instead."
+                }
+              },
+              "required": [
+                "kind",
+                "executionId",
+                "canonical",
+                "reported"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "businessDate": {
+            "$ref": "#/components/schemas/Date"
+          },
+          "issued": {
+            "description": "`false` for a late statement still waiting.",
+            "type": "boolean"
+          },
+          "issuedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "participantId": {
+            "type": "string"
+          },
+          "statementId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "statementId",
+          "businessDate",
+          "participantId",
+          "issued",
+          "issuedAt",
+          "breaks"
+        ],
+        "type": "object"
+      },
+      "ClearingRefs": {
+        "additionalProperties": false,
+        "description": "Which clearing statement and obligation each side of the trade appears on.",
+        "properties": {
+          "businessDate": {
+            "$ref": "#/components/schemas/Date"
+          },
+          "buyer": {
+            "$ref": "#/components/schemas/PartyRef"
+          },
+          "seller": {
+            "$ref": "#/components/schemas/PartyRef"
+          }
+        },
+        "required": [
+          "businessDate",
+          "buyer",
+          "seller"
+        ],
+        "type": "object"
+      },
+      "ClearingStatement": {
+        "additionalProperties": false,
+        "properties": {
+          "businessDate": {
+            "$ref": "#/components/schemas/Date"
+          },
+          "cutoffAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "issuedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "obligations": {
+            "items": {
+              "$ref": "#/components/schemas/Obligation"
+            },
+            "type": "array"
+          },
+          "participantId": {
+            "type": "string"
+          },
+          "statementId": {
+            "description": "`CS:<businessDate>:<participant>`",
+            "type": "string"
+          },
+          "timeZone": {
+            "type": "string"
+          },
+          "trades": {
+            "items": {
+              "$ref": "#/components/schemas/ClearingTrade"
+            },
+            "type": "array"
+          },
+          "tradesFrom": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        },
+        "required": [
+          "statementId",
+          "businessDate",
+          "participantId",
+          "timeZone",
+          "tradesFrom",
+          "cutoffAt",
+          "issuedAt",
+          "trades",
+          "obligations"
+        ],
+        "type": "object"
+      },
+      "ClearingStatementIssuedEvent": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/EventEnvelope"
+          }
+        ],
+        "properties": {
+          "eventType": {
+            "enum": [
+              "ClearingStatementIssued"
+            ],
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/ClearingStatement"
+          },
+          "source": {
+            "enum": [
+              "clearinghouse"
+            ],
+            "type": "string"
+          }
+        }
+      },
+      "ClearingTrade": {
+        "additionalProperties": false,
+        "properties": {
+          "amount": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "amountMinor": {
+            "type": "integer"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "currencyScale": {
+            "type": "integer"
+          },
+          "executedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "executionId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "instrumentId": {
+            "type": "string"
+          },
+          "intendedSettlementDate": {
+            "$ref": "#/components/schemas/Date"
+          },
+          "obligationId": {
+            "type": "string"
+          },
+          "priceTicks": {
+            "type": "integer"
+          },
+          "quantity": {
+            "type": "integer"
+          },
+          "side": {
+            "$ref": "#/components/schemas/Side"
+          },
+          "tradeDate": {
+            "$ref": "#/components/schemas/Date"
+          },
+          "tradeSequence": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "executionId",
+          "tradeSequence",
+          "instrumentId",
+          "side",
+          "quantity",
+          "priceTicks",
+          "currency",
+          "currencyScale",
+          "amountMinor",
+          "amount",
+          "executedAt",
+          "tradeDate",
+          "intendedSettlementDate",
+          "obligationId"
+        ],
+        "type": "object"
+      },
+      "Clock": {
+        "additionalProperties": false,
+        "properties": {
+          "mode": {
+            "enum": [
+              "virtual",
+              "system"
+            ],
+            "type": "string"
+          },
+          "now": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "running": {
+            "type": "boolean"
+          },
+          "speed": {
+            "description": "Simulated seconds per real second while running.",
+            "type": "number"
+          }
+        },
+        "required": [
+          "mode",
+          "running",
+          "speed",
+          "now"
+        ],
+        "type": "object"
+      },
+      "ClockAdvance": {
+        "additionalProperties": false,
+        "description": "The given units are added up and must total more than zero.",
+        "properties": {
+          "days": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "hours": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "minutes": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "seconds": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "ClockChangedEvent": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/EventEnvelope"
+          }
+        ],
+        "properties": {
+          "aggregateId": {
+            "enum": [
+              "clock"
+            ],
+            "type": "string"
+          },
+          "correlationId": {
+            "nullable": true
+          },
+          "eventType": {
+            "enum": [
+              "ClockChanged"
+            ],
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/ClockChangedPayload"
+          },
+          "source": {
+            "enum": [
+              "exchange"
+            ],
+            "type": "string"
+          }
+        }
+      },
+      "ClockChangedPayload": {
+        "additionalProperties": false,
+        "description": "The clock after a change. A follower computes simulated time as `now + (real time − effectiveAt) × speed`\nwhile `running`, and `now` while frozen (then `effectiveAt` is `null`, so real time stays out of the log of a\nreproducible run). Changes that alter nothing publish nothing; a reset publishes nothing\neither (read `GET /api/clock` after one).\n",
+        "properties": {
+          "change": {
+            "description": "`follow`: a following clock (the payment gateway's `clock.mode: follow`) took the followed clock's state.",
+            "enum": [
+              "advance",
+              "set",
+              "freeze",
+              "resume",
+              "speed",
+              "follow"
+            ],
+            "type": "string"
+          },
+          "effectiveAt": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Timestamp"
+              }
+            ],
+            "description": "The real time the change took effect; `null` while frozen, when `now` is the reading.",
+            "nullable": true
+          },
+          "mode": {
+            "enum": [
+              "virtual"
+            ],
+            "type": "string"
+          },
+          "now": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "running": {
+            "type": "boolean"
+          },
+          "speed": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "change",
+          "mode",
+          "running",
+          "speed",
+          "now",
+          "effectiveAt"
+        ],
+        "type": "object"
+      },
+      "ClosingPriceIssuedEvent": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/EventEnvelope"
+          }
+        ],
+        "description": "One per instrument at each business day's cutoff, right after `BusinessDayClosed`, in instrument ID order: for\nevery instrument that traded in the day's window (its last trade then, basis `LAST_TRADE`) or has a reference\nprice (that price at the cutoff, basis `REFERENCE`). An instrument with neither has no closing price. Stamped\nat the cutoff; the aggregate is the instrument, the correlation ID the business date. Exactly once per day and\ninstrument, and reproducible in a seeded run.\n",
+        "properties": {
+          "correlationId": {
+            "$ref": "#/components/schemas/Date"
+          },
+          "eventType": {
+            "enum": [
+              "ClosingPriceIssued"
+            ],
+            "type": "string"
+          },
+          "payload": {
+            "additionalProperties": false,
+            "properties": {
+              "basis": {
+                "enum": [
+                  "LAST_TRADE",
+                  "REFERENCE"
+                ],
+                "type": "string"
+              },
+              "businessDate": {
+                "$ref": "#/components/schemas/Date"
+              },
+              "closingPrice": {
+                "$ref": "#/components/schemas/Amount"
+              },
+              "closingPriceTicks": {
+                "minimum": 1,
+                "type": "integer"
+              },
+              "currency": {
+                "type": "string"
+              },
+              "instrumentId": {
+                "type": "string"
+              },
+              "volume": {
+                "description": "Quantity traded in the business day's window; 0 for `REFERENCE`.",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "instrumentId",
+              "businessDate",
+              "closingPrice",
+              "closingPriceTicks",
+              "currency",
+              "basis",
+              "volume"
+            ],
+            "type": "object"
+          },
+          "source": {
+            "enum": [
+              "exchange"
+            ],
+            "type": "string"
+          }
+        }
+      },
+      "Date": {
+        "format": "date",
+        "type": "string"
+      },
+      "Delivery": {
+        "additionalProperties": false,
+        "properties": {
+          "attempts": {
+            "type": "integer"
+          },
+          "deliveredAt": {
+            "$ref": "#/components/schemas/NullableTimestamp"
+          },
+          "deliveryId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "eventId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "eventSequence": {
+            "type": "integer"
+          },
+          "eventType": {
+            "type": "string"
+          },
+          "lastError": {
+            "nullable": true,
+            "type": "string"
+          },
+          "nextAttemptAt": {
+            "$ref": "#/components/schemas/NullableTimestamp"
+          },
+          "status": {
+            "$ref": "#/components/schemas/DeliveryStatus"
+          },
+          "subscriptionId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "deliveryId",
+          "subscriptionId",
+          "url",
+          "eventSequence",
+          "eventId",
+          "eventType",
+          "status",
+          "attempts",
+          "lastError",
+          "nextAttemptAt",
+          "deliveredAt"
+        ],
+        "type": "object"
+      },
+      "DeliveryStatus": {
+        "enum": [
+          "PENDING",
+          "IN_FLIGHT",
+          "DELIVERED",
+          "DEAD"
+        ],
+        "type": "string"
+      },
+      "Error": {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "description": "A stable code, e.g. `not_found`.",
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error",
+          "message"
+        ],
+        "type": "object"
+      },
+      "EventEnvelope": {
+        "additionalProperties": false,
+        "description": "The canonical envelope, as stored, replayed and delivered. Deduplicate by `eventId`; `sequence` is the order.",
+        "properties": {
+          "aggregateId": {
+            "type": "string"
+          },
+          "correlationId": {
+            "nullable": true,
+            "type": "string"
+          },
+          "eventId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "eventType": {
+            "type": "string"
+          },
+          "occurredAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "payload": {
+            "type": "object"
+          },
+          "schemaVersion": {
+            "type": "integer"
+          },
+          "sequence": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "simulationId": {
+            "nullable": true,
+            "type": "string"
+          },
+          "source": {
+            "description": "`exchange`, `settlement-simulator`, `external`, `clearinghouse` or `payment-gateway`, `bank`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "eventId",
+          "sequence",
+          "eventType",
+          "schemaVersion",
+          "source",
+          "simulationId",
+          "aggregateId",
+          "correlationId",
+          "occurredAt",
+          "payload"
+        ],
+        "type": "object"
+      },
+      "EventType": {
+        "enum": [
+          "OrderAccepted",
+          "OrderRejected",
+          "OrderPartiallyFilled",
+          "OrderFilled",
+          "OrderCancelled",
+          "OrderExpired",
+          "TradeExecuted",
+          "InstrumentListed",
+          "InstrumentUpdated",
+          "ClockChanged",
+          "BusinessDayClosed",
+          "ClosingPriceIssued",
+          "SettlementPending",
+          "SettlementCompleted",
+          "SettlementFailed",
+          "SettlementRejected",
+          "SettlementDelayed",
+          "SettlementCorrected",
+          "SettlementCancelled",
+          "SettlementOutcomeReported",
+          "ClearingStatementIssued"
+        ],
+        "type": "string"
+      },
+      "FaultPolicy": {
+        "additionalProperties": false,
+        "properties": {
+          "delay": {
+            "additionalProperties": false,
+            "properties": {
+              "ms": {
+                "maximum": 10000,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "probability": {
+                "default": 1,
+                "maximum": 1,
+                "minimum": 0,
+                "type": "number"
+              }
+            },
+            "required": [
+              "ms"
+            ],
+            "type": "object"
+          },
+          "duplicateProbability": {
+            "default": 0,
+            "maximum": 1,
+            "minimum": 0,
+            "type": "number"
+          },
+          "invalid": {
+            "$ref": "#/components/schemas/FieldFault"
+          },
+          "missing": {
+            "$ref": "#/components/schemas/FieldFault"
+          },
+          "nulls": {
+            "$ref": "#/components/schemas/FieldFault"
+          },
+          "outOfOrder": {
+            "additionalProperties": false,
+            "description": "Not for an ordered subscription.",
+            "properties": {
+              "holdMs": {
+                "maximum": 3600000,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "probability": {
+                "default": 1,
+                "maximum": 1,
+                "minimum": 0,
+                "type": "number"
+              }
+            },
+            "required": [
+              "holdMs"
+            ],
+            "type": "object"
+          },
+          "seed": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "FieldFault": {
+        "additionalProperties": false,
+        "description": "Damage to the listed fields, or to one random leaf field when there are none.",
+        "properties": {
+          "paths": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "probability": {
+            "default": 1,
+            "maximum": 1,
+            "minimum": 0,
+            "type": "number"
+          }
+        },
+        "type": "object"
+      },
+      "Health": {
+        "additionalProperties": false,
+        "properties": {
+          "persistence": {
+            "$ref": "#/components/schemas/PersistenceMode"
+          },
+          "schemaVersion": {
+            "description": "The database schema version.",
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "ok"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "schemaVersion",
+          "persistence"
+        ],
+        "type": "object"
+      },
+      "Instrument": {
+        "additionalProperties": false,
+        "properties": {
+          "currency": {
+            "type": "string"
+          },
+          "currencyScale": {
+            "type": "integer"
+          },
+          "cusip": {
+            "nullable": true,
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "isin": {
+            "nullable": true,
+            "type": "string"
+          },
+          "liquidity": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Liquidity"
+              }
+            ],
+            "nullable": true
+          },
+          "lotSize": {
+            "type": "integer"
+          },
+          "mic": {
+            "nullable": true,
+            "type": "string"
+          },
+          "priceSource": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PriceSource"
+              }
+            ],
+            "nullable": true
+          },
+          "referenceSymbol": {
+            "nullable": true,
+            "type": "string"
+          },
+          "symbol": {
+            "type": "string"
+          },
+          "tickSize": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "tickSizeMinor": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "symbol",
+          "mic",
+          "isin",
+          "cusip",
+          "currency",
+          "currencyScale",
+          "tickSizeMinor",
+          "tickSize",
+          "lotSize",
+          "enabled",
+          "referenceSymbol",
+          "priceSource",
+          "liquidity"
+        ],
+        "type": "object"
+      },
+      "InstrumentEventPayload": {
+        "description": "The whole instrument after the change, as `GET /api/instruments` shows it.",
+        "properties": {
+          "currency": {
+            "type": "string"
+          },
+          "currencyScale": {
+            "type": "integer"
+          },
+          "cusip": {
+            "nullable": true,
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "instrumentId": {
+            "type": "string"
+          },
+          "isin": {
+            "nullable": true,
+            "type": "string"
+          },
+          "liquidity": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Liquidity"
+              }
+            ],
+            "nullable": true
+          },
+          "lotSize": {
+            "type": "integer"
+          },
+          "mic": {
+            "nullable": true,
+            "type": "string"
+          },
+          "priceSource": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PriceSource"
+              }
+            ],
+            "nullable": true
+          },
+          "referenceSymbol": {
+            "nullable": true,
+            "type": "string"
+          },
+          "symbol": {
+            "type": "string"
+          },
+          "tickSize": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "tickSizeMinor": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "instrumentId",
+          "symbol",
+          "mic",
+          "isin",
+          "cusip",
+          "currency",
+          "currencyScale",
+          "tickSizeMinor",
+          "tickSize",
+          "lotSize",
+          "enabled",
+          "referenceSymbol",
+          "priceSource",
+          "liquidity"
+        ],
+        "type": "object"
+      },
+      "InstrumentListedEvent": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/EventEnvelope"
+          }
+        ],
+        "properties": {
+          "correlationId": {
+            "nullable": true
+          },
+          "eventType": {
+            "enum": [
+              "InstrumentListed"
+            ],
+            "type": "string"
+          },
+          "payload": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/InstrumentEventPayload"
+              }
+            ]
+          },
+          "source": {
+            "enum": [
+              "exchange"
+            ],
+            "type": "string"
+          }
+        }
+      },
+      "InstrumentRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "currency": {
+            "description": "ISO 4217 code.",
+            "type": "string"
+          },
+          "currencyScale": {
+            "description": "Decimals of the currency.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "cusip": {
+            "nullable": true,
+            "type": "string"
+          },
+          "enabled": {
+            "default": true,
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "isin": {
+            "nullable": true,
+            "type": "string"
+          },
+          "liquidity": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Liquidity"
+              }
+            ],
+            "description": "The instrument's own liquidity settings; absent or `null` takes `liquidity.default`.",
+            "nullable": true
+          },
+          "lotSize": {
+            "default": 1,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "mic": {
+            "description": "ISO 10383 market identifier code.",
+            "nullable": true,
+            "type": "string"
+          },
+          "priceSource": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PriceSource"
+              }
+            ],
+            "description": "The instrument's own price source; absent or `null` takes `price_sources.default`.",
+            "nullable": true
+          },
+          "referenceSymbol": {
+            "description": "The symbol a price source quotes the instrument under (e.g. `AAPL`), if it differs from `symbol`.",
+            "maxLength": 64,
+            "minLength": 1,
+            "nullable": true,
+            "type": "string"
+          },
+          "symbol": {
+            "type": "string"
+          },
+          "tickSizeMinor": {
+            "default": 1,
+            "description": "One tick in minor currency units.",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "symbol",
+          "currency",
+          "currencyScale"
+        ],
+        "type": "object"
+      },
+      "InstrumentUpdatedEvent": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/EventEnvelope"
+          }
+        ],
+        "properties": {
+          "correlationId": {
+            "nullable": true
+          },
+          "eventType": {
+            "enum": [
+              "InstrumentUpdated"
+            ],
+            "type": "string"
+          },
+          "payload": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/InstrumentEventPayload"
+              }
+            ],
+            "properties": {
+              "changes": {
+                "description": "The fields whose value changed.",
+                "items": {
+                  "enum": [
+                    "enabled",
+                    "referenceSymbol",
+                    "priceSource",
+                    "liquidity"
+                  ],
+                  "type": "string"
+                },
+                "minItems": 1,
+                "type": "array",
+                "uniqueItems": true
+              }
+            },
+            "required": [
+              "changes"
+            ]
+          },
+          "source": {
+            "enum": [
+              "exchange"
+            ],
+            "type": "string"
+          }
+        }
+      },
+      "IntendedSettlementDate": {
+        "description": "The day the trade is meant to settle (FIX tag 64): `tradeDate` plus the instrument's market cycle (`settlement.settlement_days`, `market_settlement_days`) in business days, in every settlement mode.",
+        "format": "date",
+        "type": "string"
+      },
+      "Level": {
+        "additionalProperties": false,
+        "properties": {
+          "orders": {
+            "type": "integer"
+          },
+          "price": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "priceTicks": {
+            "type": "integer"
+          },
+          "quantity": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "priceTicks",
+          "price",
+          "quantity",
+          "orders"
+        ],
+        "type": "object"
+      },
+      "Liquidity": {
+        "additionalProperties": false,
+        "description": "The built-in liquidity provider's settings for an instrument. Every field is optional: missing ones come from\n`liquidity.default`, field by field, then the built-in defaults (shown). It quotes `levels` limit orders a side\naround the reference price, as the participant `liquidity.participant_id`.\n",
+        "properties": {
+          "closedPolicy": {
+            "default": "pull",
+            "description": "Outside the instrument's trading session, keep the ladder as quoted, quote it with the spread times `closedWidenFactor`, or pull it. Takes precedence over `stalePolicy`.",
+            "enum": [
+              "keep",
+              "widen",
+              "pull"
+            ],
+            "type": "string"
+          },
+          "closedWidenFactor": {
+            "default": 2,
+            "description": "`widen`: the factor the spread is multiplied by while the market is closed.",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "number"
+          },
+          "levelQuantity": {
+            "default": 100,
+            "description": "Lots at the best level.",
+            "maximum": 1000000000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "levelQuantityGrowth": {
+            "default": 1,
+            "description": "Each deeper level holds this many times the one before.",
+            "maximum": 10,
+            "minimum": 0.1,
+            "type": "number"
+          },
+          "levelStepTicks": {
+            "default": 1,
+            "description": "Between levels.",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "levels": {
+            "default": 5,
+            "description": "Price levels a side.",
+            "maximum": 50,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "maxInventory": {
+            "default": 10000,
+            "description": "Lots long (or short) past which the side that adds to it is not quoted.",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "mode": {
+            "default": "off",
+            "enum": [
+              "on",
+              "off"
+            ],
+            "type": "string"
+          },
+          "refillDelayMs": {
+            "default": 0,
+            "description": "Simulated time after a fill before the ladder is refilled.",
+            "maximum": 86400000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "requoteThresholdTicks": {
+            "default": 1,
+            "description": "How far the reference price must move before the ladder is quoted again.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "skewBpsPerLot": {
+            "default": 0,
+            "description": "How far each lot of inventory moves the mid against the position.",
+            "maximum": 10000,
+            "minimum": 0,
+            "type": "number"
+          },
+          "spreadBps": {
+            "default": 10,
+            "description": "From the mid to the best bid and to the best ask; rounded away from the mid to the tick.",
+            "maximum": 10000,
+            "minimum": 0,
+            "type": "number"
+          },
+          "stalePolicy": {
+            "default": "pull",
+            "description": "While the reference price is stale, keep the ladder as quoted, quote it with the spread times `staleWidenFactor`, or pull it.",
+            "enum": [
+              "keep",
+              "widen",
+              "pull"
+            ],
+            "type": "string"
+          },
+          "staleWidenFactor": {
+            "default": 2,
+            "description": "`widen`: the factor the spread is multiplied by while the price is stale.",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "number"
+          }
+        },
+        "type": "object"
+      },
+      "LiquidityFields": {
+        "description": "The `Liquidity` fields, each nullable.",
+        "properties": {
+          "closedPolicy": {
+            "enum": [
+              "keep",
+              "widen",
+              "pull"
+            ],
+            "nullable": true,
+            "type": "string"
+          },
+          "closedWidenFactor": {
+            "maximum": 100,
+            "minimum": 1,
+            "nullable": true,
+            "type": "number"
+          },
+          "levelQuantity": {
+            "minimum": 1,
+            "nullable": true,
+            "type": "integer"
+          },
+          "levelQuantityGrowth": {
+            "nullable": true,
+            "type": "number"
+          },
+          "levelStepTicks": {
+            "minimum": 1,
+            "nullable": true,
+            "type": "integer"
+          },
+          "levels": {
+            "maximum": 50,
+            "minimum": 1,
+            "nullable": true,
+            "type": "integer"
+          },
+          "maxInventory": {
+            "minimum": 1,
+            "nullable": true,
+            "type": "integer"
+          },
+          "mode": {
+            "enum": [
+              "on",
+              "off"
+            ],
+            "nullable": true,
+            "type": "string"
+          },
+          "refillDelayMs": {
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "requoteThresholdTicks": {
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "skewBpsPerLot": {
+            "minimum": 0,
+            "nullable": true,
+            "type": "number"
+          },
+          "spreadBps": {
+            "minimum": 0,
+            "nullable": true,
+            "type": "number"
+          },
+          "stalePolicy": {
+            "enum": [
+              "keep",
+              "widen",
+              "pull"
+            ],
+            "nullable": true,
+            "type": "string"
+          },
+          "staleWidenFactor": {
+            "maximum": 100,
+            "minimum": 1,
+            "nullable": true,
+            "type": "number"
+          }
+        },
+        "type": "object"
+      },
+      "LiquidityPatch": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/LiquidityFields"
+          }
+        ],
+        "description": "Any `Liquidity` field (`null` clears it), and optionally `priceSource`.",
+        "minProperties": 1,
+        "properties": {
+          "priceSource": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PriceSource"
+              }
+            ],
+            "nullable": true
+          }
+        },
+        "type": "object"
+      },
+      "LiquidityQuote": {
+        "additionalProperties": false,
+        "properties": {
+          "orderId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "price": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "priceTicks": {
+            "type": "integer"
+          },
+          "quantity": {
+            "description": "Remaining quantity.",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "orderId",
+          "priceTicks",
+          "price",
+          "quantity"
+        ],
+        "type": "object"
+      },
+      "LiquidityStatus": {
+        "additionalProperties": false,
+        "properties": {
+          "instrumentId": {
+            "type": "string"
+          },
+          "inventory": {
+            "description": "Its net position in units (positive long).",
+            "type": "integer"
+          },
+          "ladder": {
+            "additionalProperties": false,
+            "properties": {
+              "asks": {
+                "description": "Best first.",
+                "items": {
+                  "$ref": "#/components/schemas/LiquidityQuote"
+                },
+                "type": "array"
+              },
+              "bids": {
+                "description": "Best first.",
+                "items": {
+                  "$ref": "#/components/schemas/LiquidityQuote"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "bids",
+              "asks"
+            ],
+            "type": "object"
+          },
+          "own": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Liquidity"
+              }
+            ],
+            "description": "The instrument's own settings; `null` when it relies on the default only.",
+            "nullable": true
+          },
+          "priceSource": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PriceSource"
+              }
+            ],
+            "description": "The instrument's own price source; `null` relies on `price_sources.default`.",
+            "nullable": true
+          },
+          "providerId": {
+            "description": "The participant the provider quotes as.",
+            "nullable": true,
+            "type": "string"
+          },
+          "quotedAround": {
+            "additionalProperties": false,
+            "description": "The reference price its current ladder was quoted around; `null` when it quotes nothing.",
+            "nullable": true,
+            "properties": {
+              "price": {
+                "$ref": "#/components/schemas/Amount"
+              },
+              "priceTicks": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "priceTicks",
+              "price"
+            ],
+            "type": "object"
+          },
+          "reference": {
+            "$ref": "#/components/schemas/MarketDataReferencePrice"
+          },
+          "session": {
+            "enum": [
+              "open",
+              "closed"
+            ],
+            "type": "string"
+          },
+          "settings": {
+            "additionalProperties": false,
+            "description": "Its settings, resolved (own, then `liquidity.default`, then built-in).",
+            "nullable": true,
+            "properties": {
+              "closedPolicy": {
+                "enum": [
+                  "keep",
+                  "widen",
+                  "pull"
+                ],
+                "type": "string"
+              },
+              "closedWidenFactor": {
+                "type": "number"
+              },
+              "levelQuantity": {
+                "type": "integer"
+              },
+              "levelQuantityGrowth": {
+                "type": "number"
+              },
+              "levelStepTicks": {
+                "type": "integer"
+              },
+              "levels": {
+                "type": "integer"
+              },
+              "maxInventory": {
+                "type": "integer"
+              },
+              "mode": {
+                "enum": [
+                  "on",
+                  "off"
+                ],
+                "type": "string"
+              },
+              "refillDelayMs": {
+                "type": "integer"
+              },
+              "requoteThresholdTicks": {
+                "type": "integer"
+              },
+              "skewBpsPerLot": {
+                "type": "number"
+              },
+              "spreadBps": {
+                "type": "number"
+              },
+              "stalePolicy": {
+                "enum": [
+                  "keep",
+                  "widen",
+                  "pull"
+                ],
+                "type": "string"
+              },
+              "staleWidenFactor": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "mode",
+              "levels",
+              "spreadBps",
+              "levelStepTicks",
+              "levelQuantity",
+              "levelQuantityGrowth",
+              "requoteThresholdTicks",
+              "refillDelayMs",
+              "skewBpsPerLot",
+              "maxInventory",
+              "stalePolicy",
+              "staleWidenFactor",
+              "closedPolicy",
+              "closedWidenFactor"
+            ],
+            "type": "object"
+          },
+          "state": {
+            "description": "What it did when it last quoted, as the market data's `liquidity` shows it.",
+            "enum": [
+              "off",
+              "no-reference",
+              "quoting",
+              "kept",
+              "widened",
+              "pulled"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "instrumentId",
+          "providerId",
+          "state",
+          "settings",
+          "own",
+          "inventory",
+          "quotedAround",
+          "ladder",
+          "priceSource",
+          "reference",
+          "session"
+        ],
+        "type": "object"
+      },
+      "MarketData": {
+        "additionalProperties": false,
+        "properties": {
+          "bestAsk": {
+            "$ref": "#/components/schemas/MarketDataTop"
+          },
+          "bestBid": {
+            "$ref": "#/components/schemas/MarketDataTop"
+          },
+          "instrumentId": {
+            "type": "string"
+          },
+          "lastTrade": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MarketDataPrint"
+              }
+            ],
+            "description": "`null` before the instrument's first trade.",
+            "nullable": true
+          },
+          "liquidity": {
+            "description": "What the liquidity provider did when it last quoted the instrument. `off` without a provider, with mode `off` or with trading disabled; `kept`, `widened` and `pulled` apply its `closedPolicy` in a closed market, else its `stalePolicy` to a stale reference price.",
+            "enum": [
+              "off",
+              "no-reference",
+              "quoting",
+              "kept",
+              "widened",
+              "pulled"
+            ],
+            "type": "string"
+          },
+          "mdSequence": {
+            "description": "The `mdSequence` of the last stream message about the instrument (0 before the first).",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "reference": {
+            "$ref": "#/components/schemas/MarketDataReferencePrice"
+          },
+          "session": {
+            "description": "Whether the instrument's market is in its trading session (`sessions` by MIC); always `open` for a market without one.",
+            "enum": [
+              "open",
+              "closed"
+            ],
+            "type": "string"
+          },
+          "sessionVolume": {
+            "description": "Quantity traded on the current business date (the business day ends at `clearing.cutoff`).",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "instrumentId",
+          "mdSequence",
+          "reference",
+          "bestBid",
+          "bestAsk",
+          "lastTrade",
+          "sessionVolume",
+          "liquidity",
+          "session"
+        ],
+        "type": "object"
+      },
+      "MarketDataPrint": {
+        "additionalProperties": false,
+        "description": "A trade, without participants.",
+        "properties": {
+          "executedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "price": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "priceTicks": {
+            "type": "integer"
+          },
+          "quantity": {
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "priceTicks",
+          "price",
+          "quantity",
+          "executedAt"
+        ],
+        "type": "object"
+      },
+      "MarketDataQuote": {
+        "additionalProperties": false,
+        "description": "Stream event `quote`: the best bid or ask changed.",
+        "properties": {
+          "bestAsk": {
+            "$ref": "#/components/schemas/MarketDataTop"
+          },
+          "bestBid": {
+            "$ref": "#/components/schemas/MarketDataTop"
+          },
+          "instrumentId": {
+            "type": "string"
+          },
+          "mdSequence": {
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "instrumentId",
+          "mdSequence",
+          "bestBid",
+          "bestAsk"
+        ],
+        "type": "object"
+      },
+      "MarketDataReference": {
+        "additionalProperties": false,
+        "description": "Stream event `reference`: the reference price changed, became stale, or went away.",
+        "properties": {
+          "instrumentId": {
+            "type": "string"
+          },
+          "mdSequence": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "reference": {
+            "$ref": "#/components/schemas/MarketDataReferencePrice"
+          }
+        },
+        "required": [
+          "instrumentId",
+          "mdSequence",
+          "reference"
+        ],
+        "type": "object"
+      },
+      "MarketDataReferencePrice": {
+        "additionalProperties": false,
+        "description": "`null` when the price source is `none`.",
+        "nullable": true,
+        "properties": {
+          "price": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "priceTicks": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "source": {
+            "enum": [
+              "fixed",
+              "synthetic",
+              "finnhub",
+              "replay"
+            ],
+            "type": "string"
+          },
+          "sourceTimestamp": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Timestamp"
+              }
+            ],
+            "description": "When the price was produced, on the exchange's clock."
+          },
+          "stale": {
+            "description": "`finnhub`: nothing has arrived for `price_sources.finnhub.stale_after_ms` (real time); the last price is kept. Always `false` for `fixed` and `synthetic`.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "price",
+          "priceTicks",
+          "source",
+          "sourceTimestamp",
+          "stale"
+        ],
+        "type": "object"
+      },
+      "MarketDataTop": {
+        "additionalProperties": false,
+        "description": "The best price on one side and the quantity resting there; `null` for an empty side.",
+        "nullable": true,
+        "properties": {
+          "price": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "priceTicks": {
+            "type": "integer"
+          },
+          "quantity": {
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "priceTicks",
+          "price",
+          "quantity"
+        ],
+        "type": "object"
+      },
+      "MarketDataTrade": {
+        "additionalProperties": false,
+        "description": "Stream event `trade`: an anonymous print.",
+        "properties": {
+          "executedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "instrumentId": {
+            "type": "string"
+          },
+          "mdSequence": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "price": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "priceTicks": {
+            "type": "integer"
+          },
+          "quantity": {
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "instrumentId",
+          "mdSequence",
+          "priceTicks",
+          "price",
+          "quantity",
+          "executedAt"
+        ],
+        "type": "object"
+      },
+      "NullableTimestamp": {
+        "format": "date-time",
+        "nullable": true,
+        "type": "string"
+      },
+      "Obligation": {
+        "additionalProperties": false,
+        "description": "Positive receives, negative delivers.",
+        "properties": {
+          "cashNet": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "cashNetMinor": {
+            "type": "integer"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "currencyScale": {
+            "type": "integer"
+          },
+          "instrumentId": {
+            "type": "string"
+          },
+          "intendedSettlementDate": {
+            "$ref": "#/components/schemas/Date"
+          },
+          "obligationId": {
+            "description": "`<statementId>:<instrument>:<settlementDate>`",
+            "type": "string"
+          },
+          "securitiesNet": {
+            "type": "integer"
+          },
+          "tradeCount": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "obligationId",
+          "instrumentId",
+          "intendedSettlementDate",
+          "currency",
+          "currencyScale",
+          "securitiesNet",
+          "cashNetMinor",
+          "cashNet",
+          "tradeCount"
+        ],
+        "type": "object"
+      },
+      "Order": {
+        "additionalProperties": false,
+        "properties": {
+          "clientOrderId": {
+            "nullable": true,
+            "type": "string"
+          },
+          "createdAt": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Timestamp"
+              }
+            ],
+            "description": "Only from `GET /api/orders/{id}`."
+          },
+          "filledQuantity": {
+            "type": "integer"
+          },
+          "instrumentId": {
+            "type": "string"
+          },
+          "orderId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "participantId": {
+            "type": "string"
+          },
+          "price": {
+            "nullable": true,
+            "type": "string"
+          },
+          "priceTicks": {
+            "nullable": true,
+            "type": "integer"
+          },
+          "quantity": {
+            "type": "integer"
+          },
+          "rejectReason": {
+            "description": "Only on a rejection.",
+            "enum": [
+              "SELF_TRADE",
+              "INSTRUMENT_DISABLED",
+              "MARKET_CLOSED"
+            ],
+            "type": "string"
+          },
+          "remainingQuantity": {
+            "type": "integer"
+          },
+          "sequence": {
+            "type": "integer"
+          },
+          "side": {
+            "$ref": "#/components/schemas/Side"
+          },
+          "status": {
+            "$ref": "#/components/schemas/OrderStatus"
+          },
+          "timeInForce": {
+            "$ref": "#/components/schemas/TimeInForce"
+          },
+          "type": {
+            "$ref": "#/components/schemas/OrderType"
+          },
+          "updatedAt": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Timestamp"
+              }
+            ],
+            "description": "Only from `GET /api/orders/{id}`."
+          }
+        },
+        "required": [
+          "orderId",
+          "clientOrderId",
+          "instrumentId",
+          "participantId",
+          "side",
+          "type",
+          "priceTicks",
+          "price",
+          "quantity",
+          "remainingQuantity",
+          "filledQuantity",
+          "status",
+          "sequence",
+          "timeInForce"
+        ],
+        "type": "object"
+      },
+      "OrderAcceptedEvent": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/EventEnvelope"
+          }
+        ],
+        "properties": {
+          "eventType": {
+            "enum": [
+              "OrderAccepted"
+            ],
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/OrderEventPayload"
+          },
+          "source": {
+            "enum": [
+              "exchange"
+            ],
+            "type": "string"
+          }
+        }
+      },
+      "OrderCancelledEvent": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/EventEnvelope"
+          }
+        ],
+        "properties": {
+          "eventType": {
+            "enum": [
+              "OrderCancelled"
+            ],
+            "type": "string"
+          },
+          "payload": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/OrderEventPayload"
+              }
+            ],
+            "required": [
+              "cancelReason"
+            ]
+          },
+          "source": {
+            "enum": [
+              "exchange"
+            ],
+            "type": "string"
+          }
+        }
+      },
+      "OrderEventPayload": {
+        "additionalProperties": false,
+        "properties": {
+          "cancelReason": {
+            "enum": [
+              "REQUESTED",
+              "MARKET_REMAINDER",
+              "IOC_REMAINDER"
+            ],
+            "type": "string"
+          },
+          "clientOrderId": {
+            "nullable": true,
+            "type": "string"
+          },
+          "executionId": {
+            "description": "On a resting order's fill event.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "filledQuantity": {
+            "type": "integer"
+          },
+          "instrumentId": {
+            "type": "string"
+          },
+          "intendedSettlementDate": {
+            "$ref": "#/components/schemas/IntendedSettlementDate"
+          },
+          "orderId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "participantId": {
+            "type": "string"
+          },
+          "price": {
+            "nullable": true,
+            "type": "string"
+          },
+          "priceTicks": {
+            "nullable": true,
+            "type": "integer"
+          },
+          "quantity": {
+            "type": "integer"
+          },
+          "rejectReason": {
+            "enum": [
+              "SELF_TRADE",
+              "INSTRUMENT_DISABLED",
+              "MARKET_CLOSED"
+            ],
+            "type": "string"
+          },
+          "remainingQuantity": {
+            "type": "integer"
+          },
+          "sequence": {
+            "type": "integer"
+          },
+          "side": {
+            "$ref": "#/components/schemas/Side"
+          },
+          "status": {
+            "$ref": "#/components/schemas/OrderStatus"
+          },
+          "timeInForce": {
+            "$ref": "#/components/schemas/TimeInForce"
+          },
+          "tradeDate": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/TradeDate"
+              }
+            ],
+            "description": "On fill events, the execution's (one command's executions share their dates)."
+          },
+          "type": {
+            "$ref": "#/components/schemas/OrderType"
+          }
+        },
+        "required": [
+          "orderId",
+          "clientOrderId",
+          "instrumentId",
+          "participantId",
+          "side",
+          "type",
+          "priceTicks",
+          "price",
+          "quantity",
+          "remainingQuantity",
+          "filledQuantity",
+          "status",
+          "sequence",
+          "timeInForce"
+        ],
+        "type": "object"
+      },
+      "OrderExpiredEvent": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/EventEnvelope"
+          }
+        ],
+        "properties": {
+          "eventType": {
+            "enum": [
+              "OrderExpired"
+            ],
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/OrderEventPayload"
+          },
+          "source": {
+            "enum": [
+              "exchange"
+            ],
+            "type": "string"
+          }
+        }
+      },
+      "OrderFilledEvent": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/EventEnvelope"
+          }
+        ],
+        "properties": {
+          "eventType": {
+            "enum": [
+              "OrderFilled"
+            ],
+            "type": "string"
+          },
+          "payload": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/OrderEventPayload"
+              }
+            ],
+            "required": [
+              "tradeDate",
+              "intendedSettlementDate"
+            ]
+          },
+          "source": {
+            "enum": [
+              "exchange"
+            ],
+            "type": "string"
+          }
+        }
+      },
+      "OrderPartiallyFilledEvent": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/EventEnvelope"
+          }
+        ],
+        "properties": {
+          "eventType": {
+            "enum": [
+              "OrderPartiallyFilled"
+            ],
+            "type": "string"
+          },
+          "payload": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/OrderEventPayload"
+              }
+            ],
+            "required": [
+              "tradeDate",
+              "intendedSettlementDate"
+            ]
+          },
+          "source": {
+            "enum": [
+              "exchange"
+            ],
+            "type": "string"
+          }
+        }
+      },
+      "OrderRejectedEvent": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/EventEnvelope"
+          }
+        ],
+        "properties": {
+          "eventType": {
+            "enum": [
+              "OrderRejected"
+            ],
+            "type": "string"
+          },
+          "payload": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/OrderEventPayload"
+              }
+            ],
+            "required": [
+              "rejectReason"
+            ]
+          },
+          "source": {
+            "enum": [
+              "exchange"
+            ],
+            "type": "string"
+          }
+        }
+      },
+      "OrderRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "clientOrderId": {
+            "description": "1 to 64 characters; makes submission idempotent per participant.",
+            "nullable": true,
+            "type": "string"
+          },
+          "instrumentId": {
+            "type": "string"
+          },
+          "participantId": {
+            "type": "string"
+          },
+          "priceTicks": {
+            "description": "Required for `LIMIT`, absent for `MARKET`.",
+            "nullable": true,
+            "type": "integer"
+          },
+          "quantity": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "side": {
+            "$ref": "#/components/schemas/Side"
+          },
+          "timeInForce": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/TimeInForce"
+              }
+            ],
+            "description": "Left out: `DAY` on a market with a trading session, else `GTC`. A `MARKET` order is always `IOC`; `DAY` or `GTC` on one is a `400`."
+          },
+          "type": {
+            "$ref": "#/components/schemas/OrderType"
+          }
+        },
+        "required": [
+          "instrumentId",
+          "participantId",
+          "side",
+          "type",
+          "quantity"
+        ],
+        "type": "object"
+      },
+      "OrderResult": {
+        "additionalProperties": false,
+        "properties": {
+          "duplicate": {
+            "type": "boolean"
+          },
+          "executions": {
+            "items": {
+              "$ref": "#/components/schemas/Trade"
+            },
+            "type": "array"
+          },
+          "order": {
+            "$ref": "#/components/schemas/Order"
+          }
+        },
+        "required": [
+          "order",
+          "executions",
+          "duplicate"
+        ],
+        "type": "object"
+      },
+      "OrderStatus": {
+        "enum": [
+          "OPEN",
+          "PARTIALLY_FILLED",
+          "FILLED",
+          "CANCELLED",
+          "REJECTED",
+          "EXPIRED"
+        ],
+        "type": "string"
+      },
+      "OrderType": {
+        "enum": [
+          "LIMIT",
+          "MARKET"
+        ],
+        "type": "string"
+      },
+      "Participant": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "settlement": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SettlementDetails"
+              }
+            ],
+            "description": "Free-form settlement details (at most 4 KiB), copied into `TradeExecuted`.",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "type": "object"
+      },
+      "ParticipantFilter": {
+        "description": "Exchange only; the payment gateway refuses it. The subscription receives only events involving one of these\nparticipants (an order's participant, either side of a trade, settlement or outcome report, a statement's\nparticipant), plus events that involve none, such as instrument events. Duplicates are removed.\n",
+        "items": {
+          "maxLength": 64,
+          "minLength": 1,
+          "type": "string"
+        },
+        "maxItems": 100,
+        "minItems": 1,
+        "type": "array"
+      },
+      "PartyRef": {
+        "additionalProperties": false,
+        "properties": {
+          "obligationId": {
+            "type": "string"
+          },
+          "statementId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "statementId",
+          "obligationId"
+        ],
+        "type": "object"
+      },
+      "PersistenceMode": {
+        "enum": [
+          "durable",
+          "fast",
+          "memory"
+        ],
+        "type": "string"
+      },
+      "PriceSource": {
+        "additionalProperties": false,
+        "description": "A reference-price source. Every field is optional: missing ones come from `price_sources.default`, field by\nfield, then the built-in defaults (kind `none`, drift 0, volatility 0.2, a step a second). Fields the kind does\nnot use are ignored. Prices are decimal strings in major units, on the instrument's tick grid.\n",
+        "properties": {
+          "drift": {
+            "description": "Annualized drift μ (a year of 365.25 simulated days).",
+            "type": "number"
+          },
+          "initialPrice": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Amount"
+              }
+            ],
+            "description": "Where a synthetic walk starts. Left out on a switch to `synthetic`, the current reference price, which is then stored here."
+          },
+          "kind": {
+            "description": "`none`: no reference price. `fixed`: `price`. `synthetic`: a seeded geometric Brownian motion. `finnhub`: live trade prices for the instrument's `referenceSymbol` (else its `symbol`); needs a Finnhub API key in the service's configuration. `replay`: that symbol's rows of the replay file (`price_sources.replay.file`), played on the exchange's clock.",
+            "enum": [
+              "none",
+              "fixed",
+              "synthetic",
+              "finnhub",
+              "replay"
+            ],
+            "type": "string"
+          },
+          "price": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "seed": {
+            "description": "Left out, derived from `price_sources.seed` and the instrument ID.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "tickIntervalMs": {
+            "description": "Simulated milliseconds per step.",
+            "maximum": 86400000,
+            "minimum": 100,
+            "type": "integer"
+          },
+          "volatility": {
+            "description": "Annualized volatility σ.",
+            "minimum": 0,
+            "type": "number"
+          }
+        },
+        "type": "object"
+      },
+      "Queued": {
+        "additionalProperties": false,
+        "properties": {
+          "queued": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "queued"
+        ],
+        "type": "object"
+      },
+      "Report": {
+        "additionalProperties": false,
+        "properties": {
+          "details": {
+            "nullable": true,
+            "type": "object"
+          },
+          "duplicate": {
+            "description": "Only in answer to a report.",
+            "type": "boolean"
+          },
+          "executionId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "occurredAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "reason": {
+            "nullable": true,
+            "type": "string"
+          },
+          "receivedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "reference": {
+            "nullable": true,
+            "type": "string"
+          },
+          "reportId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/SettlementStatus"
+          }
+        },
+        "required": [
+          "reportId",
+          "executionId",
+          "status",
+          "reference",
+          "reason",
+          "details",
+          "occurredAt",
+          "receivedAt"
+        ],
+        "type": "object"
+      },
+      "ReportRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "details": {
+            "nullable": true,
+            "type": "object"
+          },
+          "occurredAt": {
+            "description": "Default the time of receipt.",
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "reason": {
+            "nullable": true,
+            "type": "string"
+          },
+          "reference": {
+            "description": "The reporter's own identifier; a repeated reference is idempotent.",
+            "nullable": true,
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/SettlementStatus"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "type": "object"
+      },
+      "Retried": {
+        "additionalProperties": false,
+        "properties": {
+          "retried": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "retried"
+        ],
+        "type": "object"
+      },
+      "ScenarioReport": {
+        "additionalProperties": false,
+        "properties": {
+          "eventLog": {
+            "additionalProperties": false,
+            "description": "Equal fingerprints mean byte-identical event logs.",
+            "properties": {
+              "events": {
+                "type": "integer"
+              },
+              "sha256": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "events",
+              "sha256"
+            ],
+            "type": "object"
+          },
+          "name": {
+            "type": "string"
+          },
+          "passed": {
+            "type": "boolean"
+          },
+          "steps": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "failures": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "index": {
+                  "description": "0 is the setup.",
+                  "type": "integer"
+                },
+                "passed": {
+                  "type": "boolean"
+                },
+                "step": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "index",
+                "step",
+                "passed",
+                "failures"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "passed",
+          "steps",
+          "eventLog"
+        ],
+        "type": "object"
+      },
+      "SecretRotation": {
+        "additionalProperties": false,
+        "properties": {
+          "graceSeconds": {
+            "default": 3600,
+            "description": "How long the previous secret stays valid.",
+            "maximum": 604800,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "secret": {
+            "maxLength": 256,
+            "minLength": 16,
+            "type": "string"
+          }
+        },
+        "required": [
+          "secret"
+        ],
+        "type": "object"
+      },
+      "Settlement": {
+        "additionalProperties": false,
+        "properties": {
+          "amountMinor": {
+            "type": "integer"
+          },
+          "attempts": {
+            "type": "integer"
+          },
+          "buyerId": {
+            "type": "string"
+          },
+          "clearing": {
+            "$ref": "#/components/schemas/ClearingRefs"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "delays": {
+            "type": "integer"
+          },
+          "executionId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "instrumentId": {
+            "type": "string"
+          },
+          "intendedSettlementDate": {
+            "$ref": "#/components/schemas/Date"
+          },
+          "nextTransitionAt": {
+            "$ref": "#/components/schemas/NullableTimestamp"
+          },
+          "priceTicks": {
+            "type": "integer"
+          },
+          "quantity": {
+            "type": "integer"
+          },
+          "sellerId": {
+            "type": "string"
+          },
+          "settledAt": {
+            "$ref": "#/components/schemas/NullableTimestamp"
+          },
+          "settlementAmount": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "status": {
+            "$ref": "#/components/schemas/SettlementStatus"
+          },
+          "tradeDate": {
+            "$ref": "#/components/schemas/Date"
+          },
+          "tradeSequence": {
+            "type": "integer"
+          },
+          "updatedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        },
+        "required": [
+          "executionId",
+          "tradeSequence",
+          "instrumentId",
+          "buyerId",
+          "sellerId",
+          "quantity",
+          "priceTicks",
+          "currency",
+          "settlementAmount",
+          "amountMinor",
+          "tradeDate",
+          "intendedSettlementDate",
+          "status",
+          "attempts",
+          "delays",
+          "nextTransitionAt",
+          "settledAt",
+          "updatedAt"
+        ],
+        "type": "object"
+      },
+      "SettlementCancelledEvent": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/EventEnvelope"
+          }
+        ],
+        "properties": {
+          "eventType": {
+            "enum": [
+              "SettlementCancelled"
+            ],
+            "type": "string"
+          },
+          "payload": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SettlementPayloadBase"
+              }
+            ],
+            "properties": {
+              "reason": {
+                "enum": [
+                  "SIMULATED_CANCELLATION"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "reason"
+            ]
+          },
+          "source": {
+            "enum": [
+              "settlement-simulator"
+            ],
+            "type": "string"
+          }
+        }
+      },
+      "SettlementCompletedEvent": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/EventEnvelope"
+          }
+        ],
+        "properties": {
+          "eventType": {
+            "enum": [
+              "SettlementCompleted"
+            ],
+            "type": "string"
+          },
+          "payload": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SettlementPayloadBase"
+              }
+            ],
+            "properties": {
+              "settledAt": {
+                "$ref": "#/components/schemas/Timestamp"
+              }
+            },
+            "required": [
+              "settledAt"
+            ]
+          },
+          "source": {
+            "enum": [
+              "settlement-simulator"
+            ],
+            "type": "string"
+          }
+        }
+      },
+      "SettlementCorrectedEvent": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/EventEnvelope"
+          }
+        ],
+        "properties": {
+          "eventType": {
+            "enum": [
+              "SettlementCorrected"
+            ],
+            "type": "string"
+          },
+          "payload": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SettlementPayloadBase"
+              }
+            ],
+            "properties": {
+              "previousAmountMinor": {
+                "type": "integer"
+              },
+              "previousSettlementAmount": {
+                "$ref": "#/components/schemas/Amount"
+              },
+              "reason": {
+                "enum": [
+                  "SIMULATED_CORRECTION"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "reason",
+              "previousSettlementAmount",
+              "previousAmountMinor"
+            ]
+          },
+          "source": {
+            "enum": [
+              "settlement-simulator"
+            ],
+            "type": "string"
+          }
+        }
+      },
+      "SettlementDelayedEvent": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/EventEnvelope"
+          }
+        ],
+        "properties": {
+          "eventType": {
+            "enum": [
+              "SettlementDelayed"
+            ],
+            "type": "string"
+          },
+          "payload": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SettlementPayloadBase"
+              }
+            ],
+            "properties": {
+              "delayBusinessDays": {
+                "minimum": 1,
+                "type": "integer"
+              },
+              "previousIntendedSettlementDate": {
+                "$ref": "#/components/schemas/Date"
+              }
+            },
+            "required": [
+              "previousIntendedSettlementDate",
+              "delayBusinessDays"
+            ]
+          },
+          "source": {
+            "enum": [
+              "settlement-simulator"
+            ],
+            "type": "string"
+          }
+        }
+      },
+      "SettlementDetail": {
+        "additionalProperties": false,
+        "properties": {
+          "executionId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "external": {
+            "items": {
+              "$ref": "#/components/schemas/Report"
+            },
+            "type": "array"
+          },
+          "simulated": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Settlement"
+              }
+            ],
+            "nullable": true
+          },
+          "simulatedEvents": {
+            "items": {
+              "$ref": "#/components/schemas/EventEnvelope"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "executionId",
+          "simulated",
+          "simulatedEvents",
+          "external"
+        ],
+        "type": "object"
+      },
+      "SettlementDetails": {
+        "description": "A participant's free-form settlement details, as registered. Written as a named schema so that client generators read \"this object or null\" as a nullable map.",
+        "type": "object"
+      },
+      "SettlementFailedEvent": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/EventEnvelope"
+          }
+        ],
+        "properties": {
+          "eventType": {
+            "enum": [
+              "SettlementFailed"
+            ],
+            "type": "string"
+          },
+          "payload": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SettlementPayloadBase"
+              }
+            ],
+            "properties": {
+              "reason": {
+                "enum": [
+                  "SIMULATED_FAILURE"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "reason"
+            ]
+          },
+          "source": {
+            "enum": [
+              "settlement-simulator"
+            ],
+            "type": "string"
+          }
+        }
+      },
+      "SettlementOutcomeReportedEvent": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/EventEnvelope"
+          }
+        ],
+        "properties": {
+          "eventType": {
+            "enum": [
+              "SettlementOutcomeReported"
+            ],
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/SettlementOutcomeReportedPayload"
+          },
+          "source": {
+            "enum": [
+              "external"
+            ],
+            "type": "string"
+          }
+        }
+      },
+      "SettlementOutcomeReportedPayload": {
+        "additionalProperties": false,
+        "properties": {
+          "buyerId": {
+            "description": "The execution's buyer.",
+            "type": "string"
+          },
+          "details": {
+            "nullable": true,
+            "type": "object"
+          },
+          "executionId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "reason": {
+            "nullable": true,
+            "type": "string"
+          },
+          "receivedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "reference": {
+            "nullable": true,
+            "type": "string"
+          },
+          "reportId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "sellerId": {
+            "description": "The execution's seller.",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/SettlementStatus"
+          }
+        },
+        "required": [
+          "reportId",
+          "executionId",
+          "buyerId",
+          "sellerId",
+          "status",
+          "reference",
+          "reason",
+          "details",
+          "receivedAt"
+        ],
+        "type": "object"
+      },
+      "SettlementPayloadBase": {
+        "properties": {
+          "amountMinor": {
+            "type": "integer"
+          },
+          "attempt": {
+            "type": "integer"
+          },
+          "buyerId": {
+            "type": "string"
+          },
+          "clearing": {
+            "$ref": "#/components/schemas/ClearingRefs"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "executionId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "instrumentId": {
+            "type": "string"
+          },
+          "intendedSettlementDate": {
+            "$ref": "#/components/schemas/Date"
+          },
+          "priceTicks": {
+            "type": "integer"
+          },
+          "quantity": {
+            "type": "integer"
+          },
+          "sellerId": {
+            "type": "string"
+          },
+          "settlementAmount": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "status": {
+            "$ref": "#/components/schemas/SettlementStatus"
+          },
+          "tradeDate": {
+            "$ref": "#/components/schemas/Date"
+          },
+          "tradeSequence": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "executionId",
+          "tradeSequence",
+          "instrumentId",
+          "buyerId",
+          "sellerId",
+          "quantity",
+          "priceTicks",
+          "currency",
+          "settlementAmount",
+          "amountMinor",
+          "tradeDate",
+          "intendedSettlementDate",
+          "status",
+          "attempt"
+        ],
+        "type": "object"
+      },
+      "SettlementPendingEvent": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/EventEnvelope"
+          }
+        ],
+        "properties": {
+          "eventType": {
+            "enum": [
+              "SettlementPending"
+            ],
+            "type": "string"
+          },
+          "payload": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SettlementPayloadBase"
+              }
+            ],
+            "properties": {
+              "settlementDays": {
+                "description": "The cycle applied, T+N business days.",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "settlementDays"
+            ]
+          },
+          "source": {
+            "enum": [
+              "settlement-simulator"
+            ],
+            "type": "string"
+          }
+        }
+      },
+      "SettlementRejectedEvent": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/EventEnvelope"
+          }
+        ],
+        "properties": {
+          "eventType": {
+            "enum": [
+              "SettlementRejected"
+            ],
+            "type": "string"
+          },
+          "payload": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SettlementPayloadBase"
+              }
+            ],
+            "properties": {
+              "reason": {
+                "enum": [
+                  "SIMULATED_REJECTION",
+                  "AMOUNT_OUT_OF_RANGE"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "reason"
+            ]
+          },
+          "source": {
+            "enum": [
+              "settlement-simulator"
+            ],
+            "type": "string"
+          }
+        }
+      },
+      "SettlementStatus": {
+        "enum": [
+          "PENDING",
+          "DELAYED",
+          "SETTLED",
+          "FAILED",
+          "REJECTED",
+          "CANCELLED",
+          "CORRECTED"
+        ],
+        "type": "string"
+      },
+      "Side": {
+        "enum": [
+          "BUY",
+          "SELL"
+        ],
+        "type": "string"
+      },
+      "Subscription": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/SubscriptionFields"
+          }
+        ]
+      },
+      "SubscriptionDetail": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/SubscriptionFields"
+          }
+        ],
+        "properties": {
+          "deliveries": {
+            "additionalProperties": false,
+            "properties": {
+              "dead": {
+                "type": "integer"
+              },
+              "delivered": {
+                "type": "integer"
+              },
+              "inFlight": {
+                "type": "integer"
+              },
+              "oldestUnfinished": {
+                "additionalProperties": false,
+                "description": "How far behind the consumer is.",
+                "nullable": true,
+                "properties": {
+                  "eventSequence": {
+                    "type": "integer"
+                  },
+                  "occurredAt": {
+                    "$ref": "#/components/schemas/Timestamp"
+                  }
+                },
+                "required": [
+                  "eventSequence",
+                  "occurredAt"
+                ],
+                "type": "object"
+              },
+              "pending": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "pending",
+              "inFlight",
+              "delivered",
+              "dead",
+              "oldestUnfinished"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "deliveries"
+        ]
+      },
+      "SubscriptionFields": {
+        "properties": {
+          "createdAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "deleted": {
+            "description": "Shown only when listing with `includeDeleted=true`.",
+            "enum": [
+              true
+            ]
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "eventTypes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "faults": {
+            "$ref": "#/components/schemas/FaultPolicy"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "name": {
+            "description": "The name it is declared under in `webhooks.subscriptions`.",
+            "type": "string"
+          },
+          "ordered": {
+            "type": "boolean"
+          },
+          "participants": {
+            "$ref": "#/components/schemas/ParticipantFilter"
+          },
+          "paused": {
+            "description": "Deliveries are recorded but held until unpaused.",
+            "type": "boolean"
+          },
+          "previousSecretValidUntil": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "signed": {
+            "type": "boolean"
+          },
+          "source": {
+            "enum": [
+              "api",
+              "config"
+            ],
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "url",
+          "eventTypes",
+          "enabled",
+          "paused",
+          "signed",
+          "ordered",
+          "createdAt",
+          "source"
+        ],
+        "type": "object"
+      },
+      "TimeInForce": {
+        "description": "`DAY` rests until its session closes (on a market without a session, until the business day's cutoff), then expires (`OrderExpired`, status `EXPIRED`). `GTC` rests until filled or cancelled. `IOC` trades what it can at once; its remainder is cancelled (`cancelReason: IOC_REMAINDER`).",
+        "enum": [
+          "DAY",
+          "GTC",
+          "IOC"
+        ],
+        "type": "string"
+      },
+      "Timestamp": {
+        "format": "date-time",
+        "type": "string"
+      },
+      "Trade": {
+        "additionalProperties": false,
+        "properties": {
+          "buyOrderId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "buyerId": {
+            "type": "string"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "executedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "executionId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "instrumentId": {
+            "type": "string"
+          },
+          "intendedSettlementDate": {
+            "$ref": "#/components/schemas/IntendedSettlementDate"
+          },
+          "price": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "priceTicks": {
+            "type": "integer"
+          },
+          "quantity": {
+            "type": "integer"
+          },
+          "sellOrderId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "sellerId": {
+            "type": "string"
+          },
+          "tradeDate": {
+            "$ref": "#/components/schemas/TradeDate"
+          }
+        },
+        "required": [
+          "executionId",
+          "instrumentId",
+          "buyOrderId",
+          "sellOrderId",
+          "buyerId",
+          "sellerId",
+          "priceTicks",
+          "price",
+          "quantity",
+          "currency",
+          "executedAt",
+          "tradeDate",
+          "intendedSettlementDate"
+        ],
+        "type": "object"
+      },
+      "TradeDate": {
+        "description": "The business day the trade belongs to (FIX tag 75): its date on the business-day calendar (`clearing.cutoff` in `clearing.time_zone`, whether or not clearing runs). A trade at or after the cutoff, or on a weekend, belongs to the next business day. The same for an execution on every event and response.",
+        "format": "date",
+        "type": "string"
+      },
+      "TradeExecutedEvent": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/EventEnvelope"
+          }
+        ],
+        "properties": {
+          "eventType": {
+            "enum": [
+              "TradeExecuted"
+            ],
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/TradeExecutedPayload"
+          },
+          "source": {
+            "enum": [
+              "exchange"
+            ],
+            "type": "string"
+          }
+        }
+      },
+      "TradeExecutedPayload": {
+        "additionalProperties": false,
+        "properties": {
+          "buyOrderId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "buyerId": {
+            "type": "string"
+          },
+          "buyerSettlement": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SettlementDetails"
+              }
+            ],
+            "description": "The buyer's settlement details at execution time.",
+            "nullable": true
+          },
+          "currency": {
+            "type": "string"
+          },
+          "currencyScale": {
+            "type": "integer"
+          },
+          "executedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "executionId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "instrument": {
+            "additionalProperties": false,
+            "description": "A snapshot as of execution time.",
+            "properties": {
+              "currency": {
+                "type": "string"
+              },
+              "cusip": {
+                "nullable": true,
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "isin": {
+                "nullable": true,
+                "type": "string"
+              },
+              "mic": {
+                "nullable": true,
+                "type": "string"
+              },
+              "symbol": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "symbol",
+              "mic",
+              "isin",
+              "cusip",
+              "currency"
+            ],
+            "type": "object"
+          },
+          "instrumentId": {
+            "type": "string"
+          },
+          "intendedSettlementDate": {
+            "$ref": "#/components/schemas/IntendedSettlementDate"
+          },
+          "price": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "priceTicks": {
+            "type": "integer"
+          },
+          "quantity": {
+            "type": "integer"
+          },
+          "sellOrderId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "sellerId": {
+            "type": "string"
+          },
+          "sellerSettlement": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SettlementDetails"
+              }
+            ],
+            "nullable": true
+          },
+          "tickSizeMinor": {
+            "type": "integer"
+          },
+          "tradeDate": {
+            "$ref": "#/components/schemas/TradeDate"
+          }
+        },
+        "required": [
+          "executionId",
+          "instrumentId",
+          "instrument",
+          "buyOrderId",
+          "sellOrderId",
+          "buyerId",
+          "sellerId",
+          "buyerSettlement",
+          "sellerSettlement",
+          "priceTicks",
+          "price",
+          "quantity",
+          "currency",
+          "currencyScale",
+          "tickSizeMinor",
+          "executedAt",
+          "tradeDate",
+          "intendedSettlementDate"
+        ],
+        "type": "object"
+      },
+      "WebhookRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "eventTypes": {
+            "description": "Known event types of this service; duplicates are removed.",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "type": "array"
+          },
+          "ordered": {
+            "default": false,
+            "description": "One delivery at a time, in event sequence order.",
+            "type": "boolean"
+          },
+          "participants": {
+            "$ref": "#/components/schemas/ParticipantFilter"
+          },
+          "secret": {
+            "description": "When set, every delivery is signed. Never returned.",
+            "maxLength": 256,
+            "minLength": 16,
+            "nullable": true,
+            "type": "string"
+          },
+          "url": {
+            "description": "http or https.",
+            "format": "uri",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url",
+          "eventTypes"
+        ],
+        "type": "object"
+      },
+      "WebhookUpdate": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "nullable": true,
+            "type": "boolean"
+          },
+          "eventTypes": {
+            "items": {
+              "type": "string"
+            },
+            "nullable": true,
+            "type": "array"
+          },
+          "ordered": {
+            "nullable": true,
+            "type": "boolean"
+          },
+          "participants": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ParticipantFilter"
+              }
+            ],
+            "description": "`null` removes the filter.",
+            "nullable": true
+          },
+          "paused": {
+            "nullable": true,
+            "type": "boolean"
+          },
+          "url": {
+            "format": "uri",
+            "nullable": true,
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "description": "Commands are answered after they are committed to SQLite. Field names are camelCase, enums use their upper-case\nwire names, and prices are integer `priceTicks` plus, in responses, a decimal `price` string in major currency\nunits. Every error is `{\"error\": \"<code>\", \"message\": \"<text>\"}`.\n\nIn the `fast` and `memory` persistence modes every response carries an `Exchange-Persistence: <mode>` header;\ndurable responses carry none.\n\nThe `test-control` operations are mounted only with `test_control.enabled: true` (they return `404` otherwise)\nand must never be exposed outside test deployments.\n\nThe README is the full reference; this specification is checked against the service by its test suite\n(`tests/openapi.rs`).\n",
+    "license": {
+      "name": "Apache-2.0"
+    },
+    "title": "Exchange simulator API",
+    "version": "0.2.0"
+  },
+  "openapi": "3.0.3",
+  "paths": {
+    "/api/clearing/statements": {
+      "get": {
+        "operationId": "listClearingStatements",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/BusinessDate"
+          },
+          {
+            "in": "query",
+            "name": "participant",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ClearingStatement"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Statements."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        },
+        "summary": "Issued clearing statements, in date and participant order",
+        "tags": [
+          "clearing"
+        ]
+      }
+    },
+    "/api/clearing/statements/{id}": {
+      "get": {
+        "description": "`404` also for a late statement not issued yet.",
+        "operationId": "getClearingStatement",
+        "parameters": [
+          {
+            "description": "`CS:<businessDate>:<participant>`",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClearingStatement"
+                }
+              }
+            },
+            "description": "The statement."
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "summary": "One issued clearing statement",
+        "tags": [
+          "clearing"
+        ]
+      }
+    },
+    "/api/clock": {
+      "get": {
+        "description": "Always mounted, so a consumer can follow simulated time. Changes are also published as `ClockChanged`.",
+        "operationId": "getOperatorClock",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Clock"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        },
+        "summary": "How the service tells time",
+        "tags": [
+          "clock"
+        ]
+      }
+    },
+    "/api/clock/freeze": {
+      "post": {
+        "description": "Only with `clock.operator_control`. Publishes `ClockChanged` unless the clock was already frozen.",
+        "operationId": "freezeOperatorClock",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Clock"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        },
+        "summary": "Stop the virtual clock",
+        "tags": [
+          "clock"
+        ]
+      }
+    },
+    "/api/clock/resume": {
+      "post": {
+        "description": "Only with `clock.operator_control`. Publishes `ClockChanged` unless the clock was already running.",
+        "operationId": "resumeOperatorClock",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Clock"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        },
+        "summary": "Let the virtual clock run at its speed",
+        "tags": [
+          "clock"
+        ]
+      }
+    },
+    "/api/clock/speed": {
+      "post": {
+        "description": "Only with `clock.operator_control`. From the current reading on; out of range is `400 invalid_clock_speed`.\nPublishes `ClockChanged` unless the speed is unchanged. Setting and advancing the clock stay under `/test`.\n",
+        "operationId": "setOperatorClockSpeed",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "speed": {
+                    "exclusiveMinimum": true,
+                    "maximum": 1000000,
+                    "minimum": 0,
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "speed"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Clock"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        },
+        "summary": "Change how fast the virtual clock runs",
+        "tags": [
+          "clock"
+        ]
+      }
+    },
+    "/api/events": {
+      "get": {
+        "operationId": "listEvents",
+        "parameters": [
+          {
+            "description": "Events with a sequence greater than this; default 0.",
+            "in": "query",
+            "name": "after",
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/Limit"
+          },
+          {
+            "in": "query",
+            "name": "eventType",
+            "schema": {
+              "$ref": "#/components/schemas/EventType"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/EventEnvelope"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Events."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        },
+        "summary": "Canonical events after a sequence, in sequence order",
+        "tags": [
+          "events"
+        ]
+      }
+    },
+    "/api/instruments": {
+      "get": {
+        "operationId": "listInstruments",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "symbol",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "mic",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "isin",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cusip",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Instrument"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Matching instruments."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        },
+        "summary": "List instruments, optionally by symbol and identifiers",
+        "tags": [
+          "instruments"
+        ]
+      },
+      "post": {
+        "operationId": "registerInstrument",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InstrumentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Instrument"
+                }
+              }
+            },
+            "description": "Registered."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        },
+        "summary": "Register an instrument",
+        "tags": [
+          "instruments"
+        ]
+      }
+    },
+    "/api/instruments/{id}": {
+      "patch": {
+        "description": "Give at least one field; absent fields stay as they are. A change that alters a value publishes\n`InstrumentUpdated`. Resting orders stay; cancellations keep working while an instrument is disabled.\nInstruments declared in configuration can be changed too, but the configuration wins again at the next start.\n",
+        "operationId": "updateInstrument",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/InstrumentIdPath"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "minProperties": 1,
+                "properties": {
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "liquidity": {
+                    "allOf": [
+                      {
+                        "$ref": "#/components/schemas/Liquidity"
+                      }
+                    ],
+                    "description": "Replaces the instrument's own liquidity settings; `null` falls back to the default.",
+                    "nullable": true
+                  },
+                  "priceSource": {
+                    "allOf": [
+                      {
+                        "$ref": "#/components/schemas/PriceSource"
+                      }
+                    ],
+                    "description": "Replaces the instrument's own price source and restarts it; `null` falls back to the default.",
+                    "nullable": true
+                  },
+                  "referenceSymbol": {
+                    "description": "`null` clears it.",
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "nullable": true,
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Instrument"
+                }
+              }
+            },
+            "description": "The instrument after the change."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        },
+        "summary": "Enable or disable trading, or change the reference symbol or price source",
+        "tags": [
+          "instruments"
+        ]
+      }
+    },
+    "/api/liquidity": {
+      "get": {
+        "operationId": "listLiquidity",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/LiquidityStatus"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Its status per instrument."
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        },
+        "summary": "The liquidity provider in every instrument, in instrument ID order",
+        "tags": [
+          "liquidity"
+        ]
+      }
+    },
+    "/api/liquidity/{instrumentId}": {
+      "get": {
+        "operationId": "liquidity",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "instrumentId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LiquidityStatus"
+                }
+              }
+            },
+            "description": "Its status."
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        },
+        "summary": "The liquidity provider in one instrument",
+        "tags": [
+          "liquidity"
+        ]
+      },
+      "patch": {
+        "description": "Each settings field given replaces the instrument's own value; `null` clears it, so `liquidity.default` and\nthen the built-in default apply again; fields left out stay. `priceSource` replaces the price source as a whole\n(`null` falls back to `price_sources.default`), as `PATCH /api/instruments` does; a switch to `synthetic` without\n`initialPrice` continues from the current reference price. The provider re-quotes at once. Each change is\nstored and published as `InstrumentUpdated`. A declared instrument gets its configuration back at the next start.\n",
+        "operationId": "patchLiquidity",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "instrumentId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LiquidityPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LiquidityStatus"
+                }
+              }
+            },
+            "description": "The provider's status after the change."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        },
+        "summary": "Change the provider's settings field by field, or the instrument's price source",
+        "tags": [
+          "liquidity"
+        ]
+      }
+    },
+    "/api/marketdata": {
+      "get": {
+        "operationId": "listMarketData",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/MarketData"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Market data per instrument."
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        },
+        "summary": "Every instrument's market data, in instrument ID order",
+        "tags": [
+          "market-data"
+        ]
+      }
+    },
+    "/api/marketdata/stream": {
+      "get": {
+        "description": "One event per message: `event:` its kind, `id:` its `mdSequence`, `data:` its JSON\n(`MarketDataQuote`, `MarketDataTrade` or `MarketDataReference`). `mdSequence` counts each instrument's\nmessages from 1 since the service started; the snapshot's `mdSequence` is that of the last message about the\ninstrument, so a subscriber resynchronises by reading the snapshot after subscribing and skipping messages at\nor below it.\n\nWith `market_data.conflation_interval_ms`, at most one message per instrument and kind is sent per interval,\nthe latest. A subscriber more than half of `market_data.stream_buffer` messages behind has its backlog\ncollapsed the same way; one a whole buffer behind has its stream closed. Trade prints left out by conflation\nremain in `/api/trades`. Market data is not in the event log and not delivered over webhooks.\n",
+        "operationId": "marketDataStream",
+        "parameters": [
+          {
+            "description": "Comma-separated instrument IDs; every instrument when left out.",
+            "in": "query",
+            "name": "instruments",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The event stream, open until the client disconnects, falls a buffer behind, or the service stops."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "summary": "Live market data as server-sent events",
+        "tags": [
+          "market-data"
+        ]
+      }
+    },
+    "/api/marketdata/{instrumentId}": {
+      "get": {
+        "operationId": "marketData",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "instrumentId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MarketData"
+                }
+              }
+            },
+            "description": "The instrument's market data."
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        },
+        "summary": "One instrument's market data",
+        "tags": [
+          "market-data"
+        ]
+      }
+    },
+    "/api/orderbooks/{instrumentId}": {
+      "get": {
+        "operationId": "orderBook",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "instrumentId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Book"
+                }
+              }
+            },
+            "description": "The book."
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        },
+        "summary": "An instrument's book, aggregated by price level",
+        "tags": [
+          "orders"
+        ]
+      }
+    },
+    "/api/orders": {
+      "delete": {
+        "description": "The order the participant submitted with this `clientOrderId`, cancelled exactly as\n`DELETE /api/orders/{id}` cancels it: the same answers and the same `OrderCancelled`. A cancel queued right\nafter the order is resolved after it, so it does not need the exchange's order ID first.\n",
+        "operationId": "cancelOrderByClientOrderId",
+        "parameters": [
+          {
+            "description": "Client order IDs are unique per participant.",
+            "in": "query",
+            "name": "participantId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "clientOrderId",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderResult"
+                }
+              }
+            },
+            "description": "Cancelled."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        },
+        "summary": "Cancel an open or partially filled order named by its client order ID",
+        "tags": [
+          "orders"
+        ]
+      },
+      "post": {
+        "description": "`201` with the committed outcome, exchange rejections included (status `REJECTED` with a `rejectReason`).\n`200` with the existing order and `duplicate: true` when the `clientOrderId` was already used with the same\nterms.\n",
+        "operationId": "submitOrder",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OrderRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderResult"
+                }
+              }
+            },
+            "description": "A repeated client order ID; the existing order."
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderResult"
+                }
+              }
+            },
+            "description": "Committed."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/Unprocessable"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        },
+        "summary": "Submit an order",
+        "tags": [
+          "orders"
+        ]
+      }
+    },
+    "/api/orders/{id}": {
+      "delete": {
+        "operationId": "cancelOrder",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderResult"
+                }
+              }
+            },
+            "description": "Cancelled."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        },
+        "summary": "Cancel an open or partially filled order",
+        "tags": [
+          "orders"
+        ]
+      },
+      "get": {
+        "operationId": "getOrder",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Order"
+                }
+              }
+            },
+            "description": "The order."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "summary": "An order, with its stored timestamps",
+        "tags": [
+          "orders"
+        ]
+      },
+      "parameters": [
+        {
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "format": "uuid",
+            "type": "string"
+          }
+        }
+      ]
+    },
+    "/api/participants": {
+      "post": {
+        "operationId": "registerParticipant",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Participant"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Participant"
+                }
+              }
+            },
+            "description": "Registered."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        },
+        "summary": "Register a participant",
+        "tags": [
+          "participants"
+        ]
+      }
+    },
+    "/api/settlements": {
+      "get": {
+        "operationId": "listSettlements",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "status",
+            "schema": {
+              "$ref": "#/components/schemas/SettlementStatus"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/Limit"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Settlement"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Instructions."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        },
+        "summary": "Simulated settlement instructions in trade order",
+        "tags": [
+          "settlements"
+        ]
+      }
+    },
+    "/api/settlements/{executionId}": {
+      "get": {
+        "description": "The simulated instruction and its events, and externally reported outcomes, side by side, never merged.",
+        "operationId": "getSettlement",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ExecutionIdPath"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettlementDetail"
+                }
+              }
+            },
+            "description": "The settlement."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "summary": "Everything known about one execution's settlement",
+        "tags": [
+          "settlements"
+        ]
+      }
+    },
+    "/api/settlements/{executionId}/outcomes": {
+      "post": {
+        "description": "`201` with the stored report and `duplicate: false`; `200` with the original and `duplicate: true` when\n`reference` repeats an identical report. Refused with `409 external_outcomes_disabled` in settlement mode\n`simulated`, and `409 report_conflict` when `reference` was used with a different outcome.\n",
+        "operationId": "reportSettlementOutcome",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ExecutionIdPath"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Report"
+                }
+              }
+            },
+            "description": "A repeated report; the original."
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Report"
+                }
+              }
+            },
+            "description": "Stored."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        },
+        "summary": "Report an outcome from an external settlement service",
+        "tags": [
+          "settlements"
+        ]
+      }
+    },
+    "/api/trades": {
+      "get": {
+        "operationId": "listTrades",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "instrumentId",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Buyer or seller.",
+            "in": "query",
+            "name": "participantId",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Buy or sell order.",
+            "in": "query",
+            "name": "orderId",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/Limit"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Trade"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Matching executions."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        },
+        "summary": "Executions in insertion order",
+        "tags": [
+          "trades"
+        ]
+      }
+    },
+    "/api/webhooks": {
+      "get": {
+        "operationId": "listWebhooks",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "includeDeleted",
+            "schema": {
+              "default": false,
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Subscription"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Subscriptions in creation order."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        },
+        "summary": "List subscriptions",
+        "tags": [
+          "webhooks"
+        ]
+      },
+      "post": {
+        "operationId": "registerWebhook",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebhookRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Subscription"
+                }
+              }
+            },
+            "description": "Registered. It receives events committed from now on."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        },
+        "summary": "Register a webhook subscription",
+        "tags": [
+          "webhooks"
+        ]
+      }
+    },
+    "/api/webhooks/{id}": {
+      "delete": {
+        "description": "Its deliveries and attempts are kept; it gets no new deliveries and sends none.",
+        "operationId": "deleteWebhook",
+        "responses": {
+          "204": {
+            "description": "Deleted."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        },
+        "summary": "Delete a subscription created through the API",
+        "tags": [
+          "webhooks"
+        ]
+      },
+      "get": {
+        "operationId": "getWebhook",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionDetail"
+                }
+              }
+            },
+            "description": "The subscription."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "summary": "A subscription and how its deliveries stand",
+        "tags": [
+          "webhooks"
+        ]
+      },
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/SubscriptionIdPath"
+        }
+      ],
+      "patch": {
+        "description": "A subscription declared in configuration only takes `paused` (`409 managed_by_configuration` otherwise).",
+        "operationId": "updateWebhook",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebhookUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Subscription"
+                }
+              }
+            },
+            "description": "The subscription after the change."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        },
+        "summary": "Change, pause or disable a subscription",
+        "tags": [
+          "webhooks"
+        ]
+      }
+    },
+    "/api/webhooks/{id}/dead-letters/retry": {
+      "post": {
+        "operationId": "retryWebhookDeadLetters",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SubscriptionIdPath"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "deliveryIds": {
+                    "description": "Only these; all when empty or absent.",
+                    "items": {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "type": "array"
+                  }
+                },
+                "type": "object"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Retried"
+                }
+              }
+            },
+            "description": "How many were retried."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        },
+        "summary": "Retry the subscription's dead letters with a fresh attempt budget",
+        "tags": [
+          "webhooks"
+        ]
+      }
+    },
+    "/api/webhooks/{id}/deliveries": {
+      "get": {
+        "operationId": "listWebhookDeliveries",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SubscriptionIdPath"
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "schema": {
+              "$ref": "#/components/schemas/DeliveryStatus"
+            }
+          },
+          {
+            "description": "Deliveries of events after this sequence.",
+            "in": "query",
+            "name": "after",
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/Limit"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Delivery"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Deliveries."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "summary": "A subscription's deliveries in event order",
+        "tags": [
+          "webhooks"
+        ]
+      }
+    },
+    "/api/webhooks/{id}/redeliver": {
+      "post": {
+        "operationId": "redeliverWebhook",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SubscriptionIdPath"
+          },
+          {
+            "$ref": "#/components/parameters/RedeliverAfter"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Queued"
+                }
+              }
+            },
+            "description": "How many were queued."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        },
+        "summary": "Queue the subscription's events after a sequence for delivery again",
+        "tags": [
+          "webhooks"
+        ]
+      }
+    },
+    "/api/webhooks/{id}/secret": {
+      "post": {
+        "description": "For `graceSeconds` deliveries are signed with both the new and the previous secret.",
+        "operationId": "rotateWebhookSecret",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SubscriptionIdPath"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SecretRotation"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Subscription"
+                }
+              }
+            },
+            "description": "The subscription after the rotation."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        },
+        "summary": "Rotate the signing secret",
+        "tags": [
+          "webhooks"
+        ]
+      }
+    },
+    "/health": {
+      "get": {
+        "operationId": "health",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Health"
+                }
+              }
+            },
+            "description": "The process is up and the database answers."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "status": {
+                      "enum": [
+                        "unavailable"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "status"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The database does not answer."
+          }
+        },
+        "summary": "Liveness and readiness",
+        "tags": [
+          "service"
+        ]
+      }
+    },
+    "/metrics": {
+      "get": {
+        "operationId": "metrics",
+        "responses": {
+          "200": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The Prometheus text format."
+          }
+        },
+        "summary": "Prometheus metrics",
+        "tags": [
+          "service"
+        ]
+      }
+    },
+    "/openapi.yaml": {
+      "get": {
+        "operationId": "openapi",
+        "responses": {
+          "200": {
+            "content": {
+              "application/yaml": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The OpenAPI document."
+          }
+        },
+        "summary": "This specification",
+        "tags": [
+          "service"
+        ]
+      }
+    },
+    "/test/attempts": {
+      "get": {
+        "operationId": "listAttempts",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "subscriptionId",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Attempt"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Attempts."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        },
+        "summary": "Every webhook request sent and every hold, oldest first",
+        "tags": [
+          "test-control"
+        ]
+      }
+    },
+    "/test/clearing/breaks": {
+      "get": {
+        "operationId": "listClearingBreaks",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/BusinessDate"
+          },
+          {
+            "in": "query",
+            "name": "participant",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ClearingBreaks"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Statements with their breaks."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        },
+        "summary": "Clearing statements with reconciliation breaks, issued or still waiting",
+        "tags": [
+          "test-control"
+        ]
+      }
+    },
+    "/test/clock": {
+      "get": {
+        "operationId": "getClock",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Clock"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        },
+        "summary": "How the service tells time",
+        "tags": [
+          "test-control"
+        ]
+      }
+    },
+    "/test/clock/advance": {
+      "post": {
+        "description": "Whatever becomes due by the new time happens before the call returns.",
+        "operationId": "advanceClock",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClockAdvance"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Clock"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        },
+        "summary": "Move the virtual clock forward",
+        "tags": [
+          "test-control"
+        ]
+      }
+    },
+    "/test/clock/freeze": {
+      "post": {
+        "operationId": "freezeClock",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Clock"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        },
+        "summary": "Stop the virtual clock",
+        "tags": [
+          "test-control"
+        ]
+      }
+    },
+    "/test/clock/resume": {
+      "post": {
+        "operationId": "resumeClock",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Clock"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        },
+        "summary": "Let the virtual clock run at its speed",
+        "tags": [
+          "test-control"
+        ]
+      }
+    },
+    "/test/clock/set": {
+      "post": {
+        "description": "Earlier than now is `409 clock_backwards`.",
+        "operationId": "setClock",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "to": {
+                    "format": "date-time",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "to"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Clock"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        },
+        "summary": "Move the virtual clock to an instant",
+        "tags": [
+          "test-control"
+        ]
+      }
+    },
+    "/test/clock/speed": {
+      "post": {
+        "description": "From the current reading on. Out of range is `400 invalid_clock_speed`.",
+        "operationId": "setClockSpeed",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "speed": {
+                    "exclusiveMinimum": true,
+                    "maximum": 1000000,
+                    "minimum": 0,
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "speed"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Clock"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        },
+        "summary": "Change how fast the virtual clock runs",
+        "tags": [
+          "test-control"
+        ]
+      }
+    },
+    "/test/dead-letters/retry": {
+      "post": {
+        "operationId": "retryAllDeadLetters",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "deliveryIds": {
+                    "items": {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "subscriptionId": {
+                    "format": "uuid",
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Retried"
+                }
+              }
+            },
+            "description": "How many were retried."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        },
+        "summary": "Retry dead letters (all, one subscription's, or the listed ones)",
+        "tags": [
+          "test-control"
+        ]
+      }
+    },
+    "/test/deliveries": {
+      "get": {
+        "operationId": "listAllDeliveries",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "subscriptionId",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "schema": {
+              "$ref": "#/components/schemas/DeliveryStatus"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Delivery"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Deliveries."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        },
+        "summary": "Webhook deliveries across all subscriptions, in event order",
+        "tags": [
+          "test-control"
+        ]
+      }
+    },
+    "/test/reset": {
+      "post": {
+        "operationId": "reset",
+        "responses": {
+          "204": {
+            "description": "Reset. The virtual clock is back at its first reading; only the configuration remains."
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        },
+        "summary": "Clear all state, as on a new database",
+        "tags": [
+          "test-control"
+        ]
+      }
+    },
+    "/test/scenarios": {
+      "post": {
+        "description": "The service's own state is untouched. `200` whether the scenario passed or not (see `passed`).",
+        "operationId": "runScenario",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            },
+            "application/yaml": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScenarioReport"
+                }
+              }
+            },
+            "description": "The report."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        },
+        "summary": "Run a scenario in a sandbox",
+        "tags": [
+          "test-control"
+        ]
+      }
+    },
+    "/test/webhooks/{id}/faults": {
+      "delete": {
+        "operationId": "clearWebhookFaults",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Subscription"
+                }
+              }
+            },
+            "description": "The subscription without a policy."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        },
+        "summary": "Remove a subscription's fault policy",
+        "tags": [
+          "test-control"
+        ]
+      },
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/SubscriptionIdPath"
+        }
+      ],
+      "put": {
+        "operationId": "setWebhookFaults",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FaultPolicy"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Subscription"
+                }
+              }
+            },
+            "description": "The subscription with its policy."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        },
+        "summary": "Set a subscription's delivery fault policy",
+        "tags": [
+          "test-control"
+        ]
+      }
+    },
+    "/test/webhooks/{id}/redeliver": {
+      "post": {
+        "operationId": "testRedeliverWebhook",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SubscriptionIdPath"
+          },
+          {
+            "$ref": "#/components/parameters/RedeliverAfter"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Queued"
+                }
+              }
+            },
+            "description": "How many were queued."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        },
+        "summary": "Queue a subscription's events for delivery again (same as the /api route)",
+        "tags": [
+          "test-control"
+        ]
+      }
+    }
+  },
+  "servers": [
+    {
+      "url": "http://localhost:8080"
+    }
+  ],
+  "tags": [
+    {
+      "description": "Health, metrics and this specification.",
+      "name": "service"
+    },
+    {
+      "name": "instruments"
+    },
+    {
+      "name": "participants"
+    },
+    {
+      "name": "orders"
+    },
+    {
+      "name": "trades"
+    },
+    {
+      "description": "The canonical event log, replayable by sequence.",
+      "name": "events"
+    },
+    {
+      "description": "Reference prices from each instrument's price source.",
+      "name": "market-data"
+    },
+    {
+      "description": "The built-in liquidity provider, inspected and steered at runtime.",
+      "name": "liquidity"
+    },
+    {
+      "description": "The settlement simulator's instructions and externally reported outcomes.",
+      "name": "settlements"
+    },
+    {
+      "description": "End-of-day clearing statements.",
+      "name": "clearing"
+    },
+    {
+      "description": "Simulated time, readable always; speed, freeze and resume with `clock.operator_control`.",
+      "name": "clock"
+    },
+    {
+      "description": "Webhook subscriptions and their maintenance. Shared with the payment gateway.",
+      "name": "webhooks"
+    },
+    {
+      "description": "Only with `test_control.enabled`. Simulated time, reset, delivery inspection, fault injection, breaks.",
+      "name": "test-control"
+    }
+  ]
+}

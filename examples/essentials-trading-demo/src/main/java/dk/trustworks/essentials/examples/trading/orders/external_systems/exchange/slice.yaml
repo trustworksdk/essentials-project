@@ -4,7 +4,7 @@ kind: external_system
 bc: orders
 owner: orders-team
 status: live
-summary: "Sends orders and cancel requests to the exchange and records what it reports back. A stub until the exchange-simulator adapter exists."
+summary: "Sends orders and cancel requests to the exchange and records what it reports back. The exchange-simulator under the simulators profile, a stub otherwise."
 generator: essentials
 language: java
 
@@ -23,7 +23,7 @@ invariants:
     enforcedBy: ExchangeReports
   - id: INV-EX-3
     text: "A resubmitted order is answered as it was the first time (idempotent per orderId)"
-    enforcedBy: StubExchangeGateway
+    enforcedBy: StubExchangeGateway, SimulatorExchangeGateway
   - id: INV-EX-4
     text: "An unreachable exchange is retried within the retry budget, then the order is rejected EXCHANGE_UNAVAILABLE and its hold released"
     enforcedBy: ExchangeOrderRouter
@@ -32,4 +32,5 @@ forbidden:
 tests:
   unit: { present: false }
   integration: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/orders/OrdersIT.java" }
-  contract: { present: false }
+  # Against the real exchange-simulator image; skips when the image is not built locally
+  contract: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/orders/external_systems/exchange/SimulatorExchangeGatewayIT.java" }

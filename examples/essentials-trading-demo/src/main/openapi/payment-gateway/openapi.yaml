@@ -1,0 +1,1186 @@
+openapi: 3.1.0
+info:
+  title: Payment gateway simulator API
+  version: 0.2.0
+  summary: Deposits and withdrawals with seeded outcomes, signed webhooks, and end-of-day bank statements.
+  description: |
+    The payment provider and bank for the trading demo. Amounts are decimal strings in major currency units on the
+    way in, and both decimal strings and integer minor units on the way out. Every error is
+    `{"error": "<code>", "message": "<text>"}`.
+
+    The `test-control` operations are mounted only with `test_control.enabled: true` (they return `404` otherwise)
+    and must never be exposed outside test deployments. The webhook, clock and reset operations are the same as the
+    exchange simulator's.
+
+    The README is the full reference; this specification is checked against the service by its test suite
+    (`tests/openapi.rs`).
+  license:
+    name: Apache-2.0
+    identifier: Apache-2.0
+servers:
+  - url: http://localhost:8081
+tags:
+  - name: service
+    description: Health, metrics and this specification.
+  - name: payments
+  - name: events
+    description: The canonical event log, replayable by sequence.
+  - name: statements
+    description: The bank's end-of-day statements of the firm's client-money account.
+  - name: clock
+    description: Simulated time, readable always; speed, freeze and resume with `clock.operator_control`.
+  - name: webhooks
+    description: Webhook subscriptions and their maintenance. Shared with the exchange simulator.
+  - name: test-control
+    description: Only with `test_control.enabled`. Simulated time, reset, delivery inspection, fault injection, breaks.
+
+paths:
+  /health:
+    get:
+      tags: [service]
+      operationId: health
+      summary: Liveness and readiness
+      responses:
+        "200":
+          description: The process is up and the database answers.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Health" }
+        "503":
+          description: The database does not answer.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [status]
+                properties:
+                  status: { const: unavailable }
+  /metrics:
+    get:
+      tags: [service]
+      operationId: metrics
+      summary: Prometheus metrics
+      responses:
+        "200":
+          description: The Prometheus text format.
+          content:
+            text/plain:
+              schema: { type: string }
+  /openapi.yaml:
+    get:
+      tags: [service]
+      operationId: openapi
+      summary: This specification
+      responses:
+        "200":
+          description: The OpenAPI document.
+          content:
+            application/yaml:
+              schema: { type: string }
+
+  /api/payments:
+    post:
+      tags: [payments]
+      operationId: initiatePayment
+      summary: Initiate a deposit or withdrawal
+      description: |
+        `201` with the new payment, `PENDING`. A repeated `idempotencyKey` with the same details returns the payment
+        with `200` and `duplicate: true`; with different details `409 idempotency_conflict`. There is no balance
+        check: whether a client may withdraw is the caller's decision.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PaymentRequest" }
+      responses:
+        "201":
+          description: Initiated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Payment" }
+        "200":
+          description: A repeated idempotency key with the same details; the existing payment.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Payment" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    get:
+      tags: [payments]
+      operationId: listPayments
+      summary: Payments in sequence order
+      parameters:
+        - { name: accountId, in: query, schema: { type: string } }
+        - { name: status, in: query, schema: { $ref: "#/components/schemas/PaymentStatus" } }
+        - { name: after, in: query, description: "Payments with a sequence after this one, for paging.", schema: { type: integer, minimum: 0 } }
+        - { $ref: "#/components/parameters/Limit" }
+      responses:
+        "200":
+          description: Payments.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Payment" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+  /api/payments/{id}:
+    get:
+      tags: [payments]
+      operationId: getPayment
+      summary: One payment
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The payment.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Payment" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/events:
+    get:
+      tags: [events]
+      operationId: listEvents
+      summary: Canonical events after a sequence, in sequence order
+      parameters:
+        - { name: after, in: query, description: Events with a sequence greater than this; default 0., schema: { type: integer, minimum: 0 } }
+        - { $ref: "#/components/parameters/Limit" }
+        - { name: eventType, in: query, schema: { $ref: "#/components/schemas/EventType" } }
+      responses:
+        "200":
+          description: Events.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/EventEnvelope" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+
+  /api/statements:
+    get:
+      tags: [statements]
+      operationId: listStatements
+      summary: Issued bank statements, in date and currency order
+      parameters:
+        - { name: date, in: query, description: Business date., schema: { type: string, format: date } }
+        - { name: currency, in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: Statements.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/BankStatement" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+  /api/statements/{id}:
+    get:
+      tags: [statements]
+      operationId: getStatement
+      summary: One issued bank statement
+      description: "`404` also for a late statement not issued yet."
+      parameters:
+        - { name: id, in: path, required: true, description: "`BS:<businessDate>:<currency>`", schema: { type: string } }
+      responses:
+        "200":
+          description: The statement.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BankStatement" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /test/payments/{id}/outcome:
+    post:
+      tags: [test-control]
+      operationId: forcePaymentOutcome
+      summary: Force a payment's outcome
+      description: |
+        Decision D20. The outcome replaces the payment's seeded draws and is stored with it. A pending payment takes
+        any outcome, due when it was scheduled or `delaySeconds` from now (0 is at once); a completed payment not yet
+        returned takes only `RETURNED`, due `returnAfterSeconds` from now. A failed or returned payment is
+        `409 payment_settled`. Whatever is due at once happens before the answer.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [outcome]
+              properties:
+                outcome: { enum: [COMPLETED, FAILED, RETURNED] }
+                reason: { type: string, minLength: 1, maxLength: 64, description: "`FAILED` only; default `REFUSED_BY_BANK`." }
+                returnAfterSeconds: { type: integer, minimum: 0, maximum: 604800, description: "`RETURNED` only: how long after completing it is returned; default 86400." }
+                delaySeconds: { type: integer, minimum: 0, maximum: 604800, description: A pending payment's outcome happens this long from now. }
+      responses:
+        "200":
+          description: The payment after the change.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Payment" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /test/statements/breaks:
+    get:
+      tags: [test-control]
+      operationId: listStatementBreaks
+      summary: Bank statements with reconciliation breaks, issued or still waiting
+      parameters:
+        - { name: date, in: query, description: Business date., schema: { type: string, format: date } }
+        - { name: currency, in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: Statements with their breaks.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/StatementBreaks" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+
+  /api/webhooks:
+    post:
+      tags: [webhooks]
+      operationId: registerWebhook
+      summary: Register a webhook subscription
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WebhookRequest" }
+      responses:
+        "201":
+          description: Registered. It receives events committed from now on.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Subscription" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+    get:
+      tags: [webhooks]
+      operationId: listWebhooks
+      summary: List subscriptions
+      parameters:
+        - { name: includeDeleted, in: query, schema: { type: boolean, default: false } }
+      responses:
+        "200":
+          description: Subscriptions in creation order.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Subscription" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+  /api/webhooks/{id}:
+    parameters:
+      - { $ref: "#/components/parameters/SubscriptionIdPath" }
+    get:
+      tags: [webhooks]
+      operationId: getWebhook
+      summary: A subscription and how its deliveries stand
+      responses:
+        "200":
+          description: The subscription.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SubscriptionDetail" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [webhooks]
+      operationId: updateWebhook
+      summary: Change, pause or disable a subscription
+      description: A subscription declared in configuration only takes `paused` (`409 managed_by_configuration` otherwise).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WebhookUpdate" }
+      responses:
+        "200":
+          description: The subscription after the change.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Subscription" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+    delete:
+      tags: [webhooks]
+      operationId: deleteWebhook
+      summary: Delete a subscription created through the API
+      description: Its deliveries and attempts are kept; it gets no new deliveries and sends none.
+      responses:
+        "204":
+          description: Deleted.
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /api/webhooks/{id}/secret:
+    post:
+      tags: [webhooks]
+      operationId: rotateWebhookSecret
+      summary: Rotate the signing secret
+      description: For `graceSeconds` deliveries are signed with both the new and the previous secret.
+      parameters:
+        - { $ref: "#/components/parameters/SubscriptionIdPath" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SecretRotation" }
+      responses:
+        "200":
+          description: The subscription after the rotation.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Subscription" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /api/webhooks/{id}/deliveries:
+    get:
+      tags: [webhooks]
+      operationId: listWebhookDeliveries
+      summary: A subscription's deliveries in event order
+      parameters:
+        - { $ref: "#/components/parameters/SubscriptionIdPath" }
+        - { name: status, in: query, schema: { $ref: "#/components/schemas/DeliveryStatus" } }
+        - { name: after, in: query, description: Deliveries of events after this sequence., schema: { type: integer, minimum: 0 } }
+        - { $ref: "#/components/parameters/Limit" }
+      responses:
+        "200":
+          description: Deliveries.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Delivery" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/webhooks/{id}/redeliver:
+    post:
+      tags: [webhooks]
+      operationId: redeliverWebhook
+      summary: Queue the subscription's events after a sequence for delivery again
+      parameters:
+        - { $ref: "#/components/parameters/SubscriptionIdPath" }
+        - { $ref: "#/components/parameters/RedeliverAfter" }
+      responses:
+        "200":
+          description: How many were queued.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Queued" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /api/webhooks/{id}/dead-letters/retry:
+    post:
+      tags: [webhooks]
+      operationId: retryWebhookDeadLetters
+      summary: Retry the subscription's dead letters with a fresh attempt budget
+      parameters:
+        - { $ref: "#/components/parameters/SubscriptionIdPath" }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                deliveryIds:
+                  description: Only these; all when empty or absent.
+                  type: array
+                  items: { type: string, format: uuid }
+      responses:
+        "200":
+          description: How many were retried.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Retried" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /test/reset:
+    post:
+      tags: [test-control]
+      operationId: reset
+      summary: Clear all state, as on a new database
+      responses:
+        "204":
+          description: Reset. The virtual clock is back at its first reading; only the configuration remains.
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /api/clock:
+    get:
+      tags: [clock]
+      operationId: getOperatorClock
+      summary: How the service tells time
+      description: Always mounted, so a consumer can follow simulated time. Changes are also published as `ClockChanged`.
+      responses:
+        "200": { $ref: "#/components/responses/Clock" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /api/clock/freeze:
+    post:
+      tags: [clock]
+      operationId: freezeOperatorClock
+      summary: Stop the virtual clock
+      description: Only with `clock.operator_control`. Publishes `ClockChanged` unless the clock was already frozen.
+      responses:
+        "200": { $ref: "#/components/responses/Clock" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /api/clock/resume:
+    post:
+      tags: [clock]
+      operationId: resumeOperatorClock
+      summary: Let the virtual clock run at its speed
+      description: Only with `clock.operator_control`. Publishes `ClockChanged` unless the clock was already running.
+      responses:
+        "200": { $ref: "#/components/responses/Clock" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /api/clock/speed:
+    post:
+      tags: [clock]
+      operationId: setOperatorClockSpeed
+      summary: Change how fast the virtual clock runs
+      description: |
+        Only with `clock.operator_control`. From the current reading on; out of range is `400 invalid_clock_speed`.
+        Publishes `ClockChanged` unless the speed is unchanged. Setting and advancing the clock stay under `/test`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [speed]
+              properties:
+                speed: { type: number, exclusiveMinimum: 0, maximum: 1000000 }
+      responses:
+        "200": { $ref: "#/components/responses/Clock" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /test/clock:
+    get:
+      tags: [test-control]
+      operationId: getClock
+      summary: How the service tells time
+      responses:
+        "200": { $ref: "#/components/responses/Clock" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /test/clock/advance:
+    post:
+      tags: [test-control]
+      operationId: advanceClock
+      summary: Move the virtual clock forward
+      description: Whatever becomes due by the new time happens before the call returns.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ClockAdvance" }
+      responses:
+        "200": { $ref: "#/components/responses/Clock" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /test/clock/set:
+    post:
+      tags: [test-control]
+      operationId: setClock
+      summary: Move the virtual clock to an instant
+      description: Earlier than now is `409 clock_backwards`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [to]
+              properties:
+                to: { type: string, format: date-time }
+      responses:
+        "200": { $ref: "#/components/responses/Clock" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /test/clock/freeze:
+    post:
+      tags: [test-control]
+      operationId: freezeClock
+      summary: Stop the virtual clock
+      responses:
+        "200": { $ref: "#/components/responses/Clock" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /test/clock/resume:
+    post:
+      tags: [test-control]
+      operationId: resumeClock
+      summary: Let the virtual clock run at its speed
+      responses:
+        "200": { $ref: "#/components/responses/Clock" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /test/clock/speed:
+    post:
+      tags: [test-control]
+      operationId: setClockSpeed
+      summary: Change how fast the virtual clock runs
+      description: From the current reading on. Out of range is `400 invalid_clock_speed`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [speed]
+              properties:
+                speed: { type: number, exclusiveMinimum: 0, maximum: 1000000 }
+      responses:
+        "200": { $ref: "#/components/responses/Clock" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /test/deliveries:
+    get:
+      tags: [test-control]
+      operationId: listAllDeliveries
+      summary: Webhook deliveries across all subscriptions, in event order
+      parameters:
+        - { name: subscriptionId, in: query, schema: { type: string, format: uuid } }
+        - { name: status, in: query, schema: { $ref: "#/components/schemas/DeliveryStatus" } }
+      responses:
+        "200":
+          description: Deliveries.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Delivery" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+  /test/dead-letters/retry:
+    post:
+      tags: [test-control]
+      operationId: retryAllDeadLetters
+      summary: Retry dead letters (all, one subscription's, or the listed ones)
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                subscriptionId: { type: string, format: uuid }
+                deliveryIds:
+                  type: array
+                  items: { type: string, format: uuid }
+      responses:
+        "200":
+          description: How many were retried.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Retried" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /test/webhooks/{id}/redeliver:
+    post:
+      tags: [test-control]
+      operationId: testRedeliverWebhook
+      summary: Queue a subscription's events for delivery again (same as the /api route)
+      parameters:
+        - { $ref: "#/components/parameters/SubscriptionIdPath" }
+        - { $ref: "#/components/parameters/RedeliverAfter" }
+      responses:
+        "200":
+          description: How many were queued.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Queued" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /test/attempts:
+    get:
+      tags: [test-control]
+      operationId: listAttempts
+      summary: Every webhook request sent and every hold, oldest first
+      parameters:
+        - { name: subscriptionId, in: query, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Attempts.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Attempt" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+  /test/webhooks/{id}/faults:
+    parameters:
+      - { $ref: "#/components/parameters/SubscriptionIdPath" }
+    put:
+      tags: [test-control]
+      operationId: setWebhookFaults
+      summary: Set a subscription's delivery fault policy
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/FaultPolicy" }
+      responses:
+        "200":
+          description: The subscription with its policy.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Subscription" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+    delete:
+      tags: [test-control]
+      operationId: clearWebhookFaults
+      summary: Remove a subscription's fault policy
+      responses:
+        "200":
+          description: The subscription without a policy.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Subscription" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+
+webhooks:
+  PaymentPending:
+    post:
+      summary: A payment was initiated
+      operationId: onPaymentPending
+      requestBody: { $ref: "#/components/requestBodies/PaymentPendingEvent" }
+      responses: { "2XX": { $ref: "#/components/responses/WebhookAck" } }
+  PaymentCompleted:
+    post:
+      summary: A payment completed and was booked on the firm's account
+      operationId: onPaymentCompleted
+      requestBody: { $ref: "#/components/requestBodies/PaymentCompletedEvent" }
+      responses: { "2XX": { $ref: "#/components/responses/WebhookAck" } }
+  PaymentFailed:
+    post:
+      summary: A payment failed, with a reason; nothing was booked
+      operationId: onPaymentFailed
+      requestBody: { $ref: "#/components/requestBodies/PaymentFailedEvent" }
+      responses: { "2XX": { $ref: "#/components/responses/WebhookAck" } }
+  PaymentReturned:
+    post:
+      summary: The bank reversed a completed payment, and booked the reversal
+      operationId: onPaymentReturned
+      requestBody: { $ref: "#/components/requestBodies/PaymentReturnedEvent" }
+      responses: { "2XX": { $ref: "#/components/responses/WebhookAck" } }
+  ClockChanged:
+    post:
+      summary: The virtual clock changed speed, froze, resumed, or was set or advanced (`source` is `payment-gateway`)
+      operationId: onClockChanged
+      requestBody: { $ref: "#/components/requestBodies/ClockChangedEvent" }
+      responses: { "2XX": { $ref: "#/components/responses/WebhookAck" } }
+  BankStatementIssued:
+    post:
+      summary: The bank's end-of-day statement for one currency (`source` is `bank`)
+      operationId: onBankStatementIssued
+      requestBody: { $ref: "#/components/requestBodies/BankStatementIssuedEvent" }
+      responses: { "2XX": { $ref: "#/components/responses/WebhookAck" } }
+
+components:
+  parameters:
+    Limit:
+      name: limit
+      in: query
+      description: 1 to 1000; default 100.
+      schema: { type: integer, minimum: 1, maximum: 1000, default: 100 }
+    SubscriptionIdPath:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    RedeliverAfter:
+      name: after
+      in: query
+      description: Redeliver events with a sequence after this one (default 0, all), also those from before the subscription existed.
+      schema: { type: integer, minimum: 0, default: 0 }
+  responses:
+    BadRequest:
+      description: "`invalid_json`, `invalid_request` or another validation code; the message says what is wrong."
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotFound:
+      description: "`not_found`."
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Conflict:
+      description: A conflict with the current state; `error` names it.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Unavailable:
+      description: "`overloaded` (the command queue is full; retry later) or `unavailable`."
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Clock:
+      description: The clock after the call.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Clock" }
+    WebhookAck:
+      description: Delivered. Any other answer is retried with backoff until the delivery is dead-lettered.
+  requestBodies:
+    PaymentPendingEvent:
+      content: { application/json: { schema: { $ref: "#/components/schemas/PaymentPendingEvent" } } }
+    PaymentCompletedEvent:
+      content: { application/json: { schema: { $ref: "#/components/schemas/PaymentCompletedEvent" } } }
+    PaymentFailedEvent:
+      content: { application/json: { schema: { $ref: "#/components/schemas/PaymentFailedEvent" } } }
+    PaymentReturnedEvent:
+      content: { application/json: { schema: { $ref: "#/components/schemas/PaymentReturnedEvent" } } }
+    ClockChangedEvent:
+      content: { application/json: { schema: { $ref: "#/components/schemas/ClockChangedEvent" } } }
+    BankStatementIssuedEvent:
+      content: { application/json: { schema: { $ref: "#/components/schemas/BankStatementIssuedEvent" } } }
+  schemas:
+    Health:
+      type: object
+      additionalProperties: false
+      required: [status, schemaVersion, persistence]
+      properties:
+        status: { const: ok }
+        schemaVersion: { type: integer, description: The database schema version. }
+        persistence: { enum: [durable, fast, memory] }
+    Date:
+      type: string
+      format: date
+    Amount:
+      type: string
+      description: A decimal amount in major currency units, e.g. `"1500.00"`.
+      pattern: "^-?[0-9]+(\\.[0-9]+)?$"
+
+    PaymentType: { enum: [DEPOSIT, WITHDRAWAL] }
+    PaymentStatus: { enum: [PENDING, COMPLETED, FAILED, RETURNED] }
+    BookingKind: { enum: [DEPOSIT, WITHDRAWAL, DEPOSIT_RETURN, WITHDRAWAL_RETURN] }
+    BankAccount:
+      type: object
+      additionalProperties: false
+      required: [iban, holderName]
+      properties:
+        iban: { type: string, description: Check digits validated; stored and returned in compact form. }
+        holderName: { type: string, minLength: 1, maxLength: 140 }
+    PaymentRequest:
+      type: object
+      additionalProperties: false
+      required: [idempotencyKey, type, accountId, bankAccount, amount, currency]
+      properties:
+        idempotencyKey: { type: string, minLength: 1, maxLength: 64 }
+        type: { $ref: "#/components/schemas/PaymentType" }
+        accountId: { type: string, minLength: 1, maxLength: 64, description: The caller's own account; never interpreted. }
+        bankAccount: { $ref: "#/components/schemas/BankAccount" }
+        amount: { $ref: "#/components/schemas/Amount", description: "Positive, with at most the currency's decimals." }
+        currency: { type: string, description: An accepted currency (`payments.currencies`). }
+        reference: { type: [string, "null"], maxLength: 140 }
+    PaymentFields:
+      type: object
+      required: [paymentId, sequence, idempotencyKey, type, accountId, bankAccount, amount, amountMinor, currency,
+                 currencyScale, reference, status, reason, createdAt, completedAt, failedAt, returnedAt, updatedAt]
+      properties:
+        paymentId: { type: string, format: uuid }
+        sequence: { type: integer, minimum: 1 }
+        idempotencyKey: { type: string }
+        type: { $ref: "#/components/schemas/PaymentType" }
+        accountId: { type: string }
+        bankAccount: { $ref: "#/components/schemas/BankAccount" }
+        amount: { $ref: "#/components/schemas/Amount" }
+        amountMinor: { type: integer, minimum: 1 }
+        currency: { type: string }
+        currencyScale: { type: integer }
+        reference: { type: [string, "null"] }
+        status: { $ref: "#/components/schemas/PaymentStatus" }
+        reason:
+          type: [string, "null"]
+          description: "`ACCOUNT_CLOSED`, `INSUFFICIENT_FUNDS`, `INVALID_ACCOUNT` or `REFUSED_BY_BANK` for a failure; `RETURNED_BY_BANK` for a return."
+        createdAt: { $ref: "#/components/schemas/Timestamp" }
+        completedAt: { $ref: "#/components/schemas/NullableTimestamp" }
+        failedAt: { $ref: "#/components/schemas/NullableTimestamp" }
+        returnedAt: { $ref: "#/components/schemas/NullableTimestamp" }
+        updatedAt: { $ref: "#/components/schemas/Timestamp" }
+    Payment:
+      allOf: [{ $ref: "#/components/schemas/PaymentFields" }]
+      properties:
+        duplicate: { const: true, description: Only on a repeated idempotency key. }
+      unevaluatedProperties: false
+
+    BankStatement:
+      type: object
+      additionalProperties: false
+      required: [statementId, businessDate, accountIban, currency, currencyScale, timeZone, entriesFrom, cutoffAt,
+                 issuedAt, openingBalanceMinor, openingBalance, totalCreditsMinor, totalDebitsMinor,
+                 closingBalanceMinor, closingBalance, entries]
+      properties:
+        statementId: { type: string, description: "`BS:<businessDate>:<currency>`" }
+        businessDate: { $ref: "#/components/schemas/Date" }
+        accountIban: { type: string, description: The firm's account at the bank. }
+        currency: { type: string }
+        currencyScale: { type: integer }
+        timeZone: { type: string }
+        entriesFrom: { $ref: "#/components/schemas/Timestamp" }
+        cutoffAt: { $ref: "#/components/schemas/Timestamp" }
+        issuedAt: { $ref: "#/components/schemas/Timestamp" }
+        openingBalanceMinor: { type: integer }
+        openingBalance: { $ref: "#/components/schemas/Amount" }
+        totalCreditsMinor: { type: integer, minimum: 0 }
+        totalDebitsMinor: { type: integer, maximum: 0 }
+        closingBalanceMinor: { type: integer }
+        closingBalance: { $ref: "#/components/schemas/Amount" }
+        entries:
+          type: array
+          items: { $ref: "#/components/schemas/StatementEntry" }
+    StatementEntry:
+      type: object
+      additionalProperties: false
+      required: [entryId, paymentId, endToEndId, accountId, counterparty, kind, direction, amountMinor, amount, bookedAt,
+                 valueDate]
+      properties:
+        entryId: { type: string, description: "`<statementId>:<n>`" }
+        paymentId: { type: string, format: uuid }
+        endToEndId: { type: string, description: The payment's idempotency key. }
+        accountId: { type: string }
+        counterparty: { $ref: "#/components/schemas/BankAccount" }
+        kind: { $ref: "#/components/schemas/BookingKind" }
+        direction: { enum: [CREDIT, DEBIT] }
+        amountMinor: { type: integer, description: "Positive credits, negative debits." }
+        amount: { $ref: "#/components/schemas/Amount" }
+        bookedAt: { $ref: "#/components/schemas/Timestamp" }
+        valueDate: { $ref: "#/components/schemas/Date" }
+    StatementBreaks:
+      type: object
+      additionalProperties: false
+      required: [statementId, businessDate, currency, issued, issuedAt, breaks]
+      properties:
+        statementId: { type: string }
+        businessDate: { $ref: "#/components/schemas/Date" }
+        currency: { type: string }
+        issued: { type: boolean, description: "`false` for a late statement still waiting." }
+        issuedAt: { $ref: "#/components/schemas/Timestamp" }
+        breaks:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [kind, paymentId, canonical, reported]
+            properties:
+              kind: { enum: [OMITTED_ENTRY, AMOUNT_CHANGED, PHANTOM_ENTRY, LATE_STATEMENT] }
+              paymentId: { type: [string, "null"], format: uuid }
+              canonical: { description: What the canonical booking says. }
+              reported: { description: What the statement says instead. }
+
+    EventType: { enum: [PaymentPending, PaymentCompleted, PaymentFailed, PaymentReturned, BankStatementIssued, ClockChanged] }
+    PaymentPendingEvent:
+      allOf: [{ $ref: "#/components/schemas/EventEnvelope" }]
+      properties:
+        eventType: { const: PaymentPending }
+        source: { const: payment-gateway }
+        payload: { allOf: [{ $ref: "#/components/schemas/PaymentFields" }], unevaluatedProperties: false }
+    PaymentCompletedEvent:
+      allOf: [{ $ref: "#/components/schemas/EventEnvelope" }]
+      properties:
+        eventType: { const: PaymentCompleted }
+        source: { const: payment-gateway }
+        payload: { allOf: [{ $ref: "#/components/schemas/PaymentFields" }], unevaluatedProperties: false }
+    PaymentFailedEvent:
+      allOf: [{ $ref: "#/components/schemas/EventEnvelope" }]
+      properties:
+        eventType: { const: PaymentFailed }
+        source: { const: payment-gateway }
+        payload: { allOf: [{ $ref: "#/components/schemas/PaymentFields" }], unevaluatedProperties: false }
+    PaymentReturnedEvent:
+      allOf: [{ $ref: "#/components/schemas/EventEnvelope" }]
+      properties:
+        eventType: { const: PaymentReturned }
+        source: { const: payment-gateway }
+        payload: { allOf: [{ $ref: "#/components/schemas/PaymentFields" }], unevaluatedProperties: false }
+    ClockChangedPayload:
+      type: object
+      additionalProperties: false
+      required: [change, mode, running, speed, now, effectiveAt]
+      description: |
+        The clock after a change. A follower computes simulated time as `now + (real time − effectiveAt) × speed`
+        while `running`, and `now` while frozen (then `effectiveAt` is `null`, so real time stays out of the log of a
+        reproducible run). Changes that alter nothing publish nothing; a reset publishes nothing
+        either (read `GET /api/clock` after one).
+      properties:
+        change:
+          enum: [advance, set, freeze, resume, speed, follow]
+          description: "`follow`: a following clock (the payment gateway's `clock.mode: follow`) took the followed clock's state."
+        mode: { const: virtual }
+        running: { type: boolean }
+        speed: { type: number }
+        now: { $ref: "#/components/schemas/Timestamp" }
+        effectiveAt:
+          oneOf: [{ $ref: "#/components/schemas/Timestamp" }, { type: "null" }]
+          description: The real time the change took effect; `null` while frozen, when `now` is the reading.
+    ClockChangedEvent:
+      allOf: [{ $ref: "#/components/schemas/EventEnvelope" }]
+      properties:
+        eventType: { const: ClockChanged }
+        source: { const: payment-gateway }
+        aggregateId: { const: clock }
+        correlationId: { const: null }
+        payload: { $ref: "#/components/schemas/ClockChangedPayload" }
+    BankStatementIssuedEvent:
+      allOf: [{ $ref: "#/components/schemas/EventEnvelope" }]
+      properties:
+        eventType: { const: BankStatementIssued }
+        source: { const: bank }
+        payload: { $ref: "#/components/schemas/BankStatement" }
+
+    Error:
+      type: object
+      additionalProperties: false
+      required: [error, message]
+      properties:
+        error: { type: string, description: "A stable code, e.g. `not_found`." }
+        message: { type: string }
+    Timestamp:
+      type: string
+      format: date-time
+    NullableTimestamp:
+      type: [string, "null"]
+      format: date-time
+    Clock:
+      type: object
+      additionalProperties: false
+      required: [mode, running, speed, now]
+      properties:
+        mode: { enum: [virtual, system] }
+        running: { type: boolean }
+        speed: { type: number, description: Simulated seconds per real second while running. }
+        now: { $ref: "#/components/schemas/Timestamp" }
+    ClockAdvance:
+      type: object
+      additionalProperties: false
+      description: The given units are added up and must total more than zero.
+      properties:
+        days: { type: integer, minimum: 0 }
+        hours: { type: integer, minimum: 0 }
+        minutes: { type: integer, minimum: 0 }
+        seconds: { type: integer, minimum: 0 }
+    EventEnvelope:
+      type: object
+      additionalProperties: false
+      required: [eventId, sequence, eventType, schemaVersion, source, simulationId, aggregateId, correlationId,
+                 occurredAt, payload]
+      description: The canonical envelope, as stored, replayed and delivered. Deduplicate by `eventId`; `sequence` is the order.
+      properties:
+        eventId: { type: string, format: uuid }
+        sequence: { type: integer, minimum: 1 }
+        eventType: { type: string }
+        schemaVersion: { type: integer }
+        source: { type: string, description: "`exchange`, `settlement-simulator`, `external`, `clearinghouse` or `payment-gateway`, `bank`." }
+        simulationId: { type: [string, "null"] }
+        aggregateId: { type: string }
+        correlationId: { type: [string, "null"] }
+        occurredAt: { $ref: "#/components/schemas/Timestamp" }
+        payload: { type: object }
+    DeliveryStatus: { enum: [PENDING, IN_FLIGHT, DELIVERED, DEAD] }
+    WebhookRequest:
+      type: object
+      additionalProperties: false
+      required: [url, eventTypes]
+      properties:
+        url: { type: string, format: uri, description: http or https. }
+        eventTypes:
+          type: array
+          minItems: 1
+          items: { type: string }
+          description: Known event types of this service; duplicates are removed.
+        secret: { type: [string, "null"], minLength: 16, maxLength: 256, description: "When set, every delivery is signed. Never returned." }
+        ordered: { type: boolean, default: false, description: "One delivery at a time, in event sequence order." }
+        participants: { $ref: "#/components/schemas/ParticipantFilter" }
+    WebhookUpdate:
+      type: object
+      additionalProperties: false
+      properties:
+        url: { type: [string, "null"], format: uri }
+        eventTypes:
+          type: [array, "null"]
+          items: { type: string }
+        ordered: { type: [boolean, "null"] }
+        enabled: { type: [boolean, "null"] }
+        paused: { type: [boolean, "null"] }
+        participants:
+          oneOf: [{ $ref: "#/components/schemas/ParticipantFilter" }, { type: "null" }]
+          description: "`null` removes the filter."
+    ParticipantFilter:
+      type: array
+      minItems: 1
+      maxItems: 100
+      items: { type: string, minLength: 1, maxLength: 64 }
+      description: |
+        Exchange only; the payment gateway refuses it. The subscription receives only events involving one of these
+        participants (an order's participant, either side of a trade, settlement or outcome report, a statement's
+        participant), plus events that involve none, such as instrument events. Duplicates are removed.
+    SecretRotation:
+      type: object
+      additionalProperties: false
+      required: [secret]
+      properties:
+        secret: { type: string, minLength: 16, maxLength: 256 }
+        graceSeconds: { type: integer, minimum: 0, maximum: 604800, default: 3600, description: How long the previous secret stays valid. }
+    SubscriptionFields:
+      type: object
+      required: [id, url, eventTypes, enabled, paused, signed, ordered, createdAt, source]
+      properties:
+        id: { type: string, format: uuid }
+        url: { type: string }
+        eventTypes:
+          type: array
+          items: { type: string }
+        enabled: { type: boolean }
+        paused: { type: boolean, description: Deliveries are recorded but held until unpaused. }
+        signed: { type: boolean }
+        ordered: { type: boolean }
+        createdAt: { $ref: "#/components/schemas/Timestamp" }
+        faults: { $ref: "#/components/schemas/FaultPolicy" }
+        name: { type: string, description: The name it is declared under in `webhooks.subscriptions`. }
+        source: { enum: [api, config] }
+        previousSecretValidUntil: { $ref: "#/components/schemas/Timestamp" }
+        deleted: { const: true, description: Shown only when listing with `includeDeleted=true`. }
+        participants: { $ref: "#/components/schemas/ParticipantFilter" }
+    Subscription:
+      allOf: [{ $ref: "#/components/schemas/SubscriptionFields" }]
+      unevaluatedProperties: false
+    SubscriptionDetail:
+      allOf: [{ $ref: "#/components/schemas/SubscriptionFields" }]
+      required: [deliveries]
+      properties:
+        deliveries:
+          type: object
+          additionalProperties: false
+          required: [pending, inFlight, delivered, dead, oldestUnfinished]
+          properties:
+            pending: { type: integer }
+            inFlight: { type: integer }
+            delivered: { type: integer }
+            dead: { type: integer }
+            oldestUnfinished:
+              description: How far behind the consumer is.
+              oneOf:
+                - type: object
+                  additionalProperties: false
+                  required: [eventSequence, occurredAt]
+                  properties:
+                    eventSequence: { type: integer }
+                    occurredAt: { $ref: "#/components/schemas/Timestamp" }
+                - { type: "null" }
+      unevaluatedProperties: false
+    Delivery:
+      type: object
+      additionalProperties: false
+      required: [deliveryId, subscriptionId, url, eventSequence, eventId, eventType, status, attempts, lastError,
+                 nextAttemptAt, deliveredAt]
+      properties:
+        deliveryId: { type: string, format: uuid }
+        subscriptionId: { type: string, format: uuid }
+        url: { type: string }
+        eventSequence: { type: integer }
+        eventId: { type: string, format: uuid }
+        eventType: { type: string }
+        status: { $ref: "#/components/schemas/DeliveryStatus" }
+        attempts: { type: integer }
+        lastError: { type: [string, "null"] }
+        nextAttemptAt: { $ref: "#/components/schemas/NullableTimestamp" }
+        deliveredAt: { $ref: "#/components/schemas/NullableTimestamp" }
+    Attempt:
+      type: object
+      additionalProperties: false
+      required: [id, deliveryId, subscriptionId, url, eventSequence, eventId, eventType, attempt, outcome, faults,
+                 httpStatus, error, at]
+      properties:
+        id: { type: integer }
+        deliveryId: { type: string, format: uuid }
+        subscriptionId: { type: string, format: uuid }
+        url: { type: string }
+        eventSequence: { type: integer }
+        eventId: { type: string, format: uuid }
+        eventType: { type: string }
+        attempt: { type: integer, minimum: 1 }
+        outcome: { enum: [SENT, HELD] }
+        faults:
+          type: array
+          items: { type: string }
+          description: e.g. `missing:payload.price`, `duplicate`, `delay:500ms`, `held:1000ms`.
+        body: { description: "The body sent, only when a fault changed it." }
+        httpStatus: { type: [integer, "null"] }
+        error: { type: [string, "null"] }
+        at: { $ref: "#/components/schemas/Timestamp" }
+    FaultPolicy:
+      type: object
+      additionalProperties: false
+      properties:
+        seed: { type: integer, minimum: 0, default: 0 }
+        missing: { $ref: "#/components/schemas/FieldFault" }
+        nulls: { $ref: "#/components/schemas/FieldFault" }
+        invalid: { $ref: "#/components/schemas/FieldFault" }
+        duplicateProbability: { type: number, minimum: 0, maximum: 1, default: 0 }
+        delay:
+          type: object
+          additionalProperties: false
+          required: [ms]
+          properties:
+            probability: { type: number, minimum: 0, maximum: 1, default: 1 }
+            ms: { type: integer, minimum: 0, maximum: 10000 }
+        outOfOrder:
+          type: object
+          additionalProperties: false
+          required: [holdMs]
+          description: Not for an ordered subscription.
+          properties:
+            probability: { type: number, minimum: 0, maximum: 1, default: 1 }
+            holdMs: { type: integer, minimum: 0, maximum: 3600000 }
+    FieldFault:
+      type: object
+      additionalProperties: false
+      description: Damage to the listed fields, or to one random leaf field when there are none.
+      properties:
+        probability: { type: number, minimum: 0, maximum: 1, default: 1 }
+        paths:
+          type: array
+          items: { type: string }
+    Queued:
+      type: object
+      additionalProperties: false
+      required: [queued]
+      properties:
+        queued: { type: integer }
+    Retried:
+      type: object
+      additionalProperties: false
+      required: [retried]
+      properties:
+        retried: { type: integer }

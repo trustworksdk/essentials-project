@@ -16,11 +16,15 @@
 
 package dk.trustworks.essentials.examples.trading.integration;
 
+import dk.trustworks.essentials.examples.trading.integration.exchange_simulator.client.ApiClient;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.*;
+import org.springframework.http.client.JdkClientHttpRequestFactory;
+import org.springframework.web.client.RestClient;
 
 import java.io.*;
+import java.net.http.HttpClient;
 import java.nio.file.*;
 import java.time.Clock;
 
@@ -42,5 +46,22 @@ public class SimulatorIntegrationConfiguration {
         } catch (IOException e) {
             throw new UncheckedIOException("Cannot read the simulators' webhook secret from '" + secretFile.toAbsolutePath() + "'", e);
         }
+    }
+
+    /**
+     * The exchange-simulator's generated client ({@code src/main/openapi/exchange-simulator}), on Spring Boot's
+     * {@link RestClient.Builder} so its calls are observed like the application's own. Only adapters use it; no domain
+     * code sees a generated type.
+     */
+    @Bean
+    @ConditionalOnProperty(prefix = "trading-demo.simulators.exchange", name = "base-url")
+    public ApiClient exchangeSimulatorApiClient(RestClient.Builder restClientBuilder, SimulatorProperties properties) {
+        var requestFactory = new JdkClientHttpRequestFactory(HttpClient.newBuilder()
+                                                                       .connectTimeout(properties.getConnectTimeout())
+                                                                       .build());
+        requestFactory.setReadTimeout(properties.getReadTimeout());
+        var apiClient = new ApiClient(restClientBuilder.clone().requestFactory(requestFactory).build());
+        apiClient.setBasePath(properties.getExchange().getBaseUrl());
+        return apiClient;
     }
 }

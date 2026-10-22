@@ -1,8 +1,9 @@
 # Bounded context: orders
 
 Customer orders and their life at the exchange. Design: `docs/design/phase-3-orders-and-execution.md` (decisions §10,
-what was built and where it deviates §11). Phase 3 order core: limit orders against a **stub exchange** (design Q-7);
-the exchange-simulator adapter replaces the stub later.
+what was built and where it deviates §11). Two `ExchangeGateway`s: the **stub exchange** (design Q-7), used when no
+simulator is configured, and `SimulatorExchangeGateway`, the exchange-simulator adapter, under the `simulators`
+profile (`trading-demo.simulators.exchange.base-url` set).
 
 **Write style: aggregate (§R5)** — `Order` behind `Orders` (a plain `StatefulAggregateRepository`, stream `Orders`),
 and `UnknownExchangeOrder` behind `UnknownExchangeOrders` (stream `UnknownExchangeOrders`). No snapshots, no closing
@@ -83,14 +84,35 @@ limit fills at its limit. Per-instance memory: a restart forgets resting orders.
 | `cancel_order` | command | customer (`POST /api/accounts/{accountId}/orders/{orderId}/cancellation`) |
 | `record_exchange_answer`, `record_fill`, `record_cancellation` | command | the exchange, through `external_systems/exchange` |
 | `expire_order` | command | the end of the business day, through `external_systems/exchange` |
-| `external_systems/exchange` | external system | `OrderPlaced`, `OrderCancelRequested`, `OrderExpiryRequested`; operator (`POST /api/admin/orders/business-day-closed`) |
+| `external_systems/exchange` | external system | `OrderPlaced`, `OrderCancelRequested`, `OrderExpiryRequested`; operator (`POST /api/admin/orders/business-day-closed`); stub or exchange-simulator gateway |
 | `apply_order_to_account` | automation | `OrderFilled` → `BookTrade`; `OrderClosed` → `ReleaseHold` / `ReleaseShares` |
 | `orders` | view | customer (own accounts) and operator |
 | `account_owners` | view | order entry's ownership check |
 | `unknown_exchange_orders` | view | operator (`GET /api/admin/orders/unknown-exchange-fills`) |
 | `late_fills` | view | operator (`GET /api/admin/orders/late-fills`) |
 
+## Exchange-simulator adapter
+
+`SimulatorExchangeGateway`, on the generated client (`integration/exchange_simulator/client`, from
+`src/main/openapi`). Covered by `SimulatorExchangeGatewayIT` against the real image (skips without it).
+
+- **The synchronous answers are reported at once** (Q-2): the `201`'s acceptance, one `RecordFill` per execution with
+  the exchange's `tradeDate` and `intendedSettlementDate` (SR-29), the `IOC` remainder as `RecordCancellation`
+  `IOC_REMAINDER`, and a `DELETE`'s `200` as `RecordCancellation` `REQUESTED`. The webhooks will report the same again;
+  the order deduplicates. A resting order's later fills and a `DAY` order's expiry arrive only through the webhooks.
+- **A market order is sent without a time in force**: it is always `IOC` at the exchange, and `DAY`/`GTC` on one is a
+  `400`.
+- **Prices go as ticks**: minor units of the instrument's `currencyScale` over its `tickSizeMinor`, both read from
+  `GET /api/instruments` and cached (they cannot change once listed). A price off the tick is rejected
+  `INVALID_PRICE_TICK` without a call.
+- **Cancel by `clientOrderId`** (SR-30, `DELETE /api/orders?participantId&clientOrderId`). `404` and `409` (no longer open)
+  are let go.
+- **The firm registers itself as participant** (`trading-demo.simulators.exchange.participant-id`, D8) the first time the
+  exchange answers `unknown_participant`, which also covers a `/test/reset`.
+- **Only no answer, a timeout or a `5xx` is `ExchangeUnavailableException`** - the router's retry budget. Every
+  other refusal rejects the order with the exchange's error code, upper-cased.
+
 ## Not built yet
 
-The exchange-simulator adapter (webhooks, synchronous executions in the submit answer, `BusinessDayClosed` in place of
-the operator endpoint).
+The exchange's webhooks into `Orders:ExchangeReports` (step 2 of the simulator work), the exchange's own `DAY` expiry
+and `BusinessDayClosed` in place of the brokerage-side stopgap and its operator endpoint.
