@@ -21,6 +21,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.pr
 import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
 import dk.trustworks.essentials.examples.trading.accounts.events.AccountOpened;
 import dk.trustworks.essentials.examples.trading.accounts.types.AccountsAggregateTypes;
+import dk.trustworks.essentials.examples.trading.config.TradingDemoViewEventProcessor;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
@@ -34,7 +35,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * upsert is idempotent.
  */
 @Service
-public class AccountOwnersProjection extends ViewEventProcessor {
+public class AccountOwnersProjection extends TradingDemoViewEventProcessor {
     private final JdbcTemplate jdbcTemplate;
 
     public AccountOwnersProjection(ViewEventProcessorDependencies dependencies, JdbcTemplate jdbcTemplate) {

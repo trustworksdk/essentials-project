@@ -23,6 +23,7 @@ import dk.trustworks.essentials.examples.trading.accounts.types.*;
 import dk.trustworks.essentials.examples.trading.market_data.types.InstrumentId;
 import dk.trustworks.essentials.examples.trading.orders.events.OrderFilled;
 import dk.trustworks.essentials.examples.trading.orders.types.OrdersAggregateTypes;
+import dk.trustworks.essentials.examples.trading.config.TradingDemoViewEventProcessor;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
@@ -36,7 +37,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * {@code orders}. Eventually consistent: a settlement report for a fill not projected yet is redelivered.
  */
 @Service
-public class SettlementFillsProjection extends ViewEventProcessor {
+public class SettlementFillsProjection extends TradingDemoViewEventProcessor {
     private final JdbcTemplate jdbcTemplate;
 
     public record Fill(ExecutionId executionId, AccountId accountId, InstrumentId instrumentId, TradeSide side) {

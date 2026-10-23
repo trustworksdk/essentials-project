@@ -136,3 +136,8 @@ trading-demo:
       exchange-reports: 8
     forwarding:
       batch-size: 100
+  # The projections (config/TradingDemoViewEventProcessor) handle up to this many events per unit of work instead of one
+  # (ViewEventProcessor#getDirectHandlingBatchSize; docs/view-event-processor-batched-handling.md). Phase 6 measured the
+  # order list (OrdersProjection) falling 5 000-7 500 events behind in a business day at 300 orders/s rushes.
+  views:
+    direct-handling-batch-size: 100

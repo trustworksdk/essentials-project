@@ -22,6 +22,7 @@ import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
 import dk.trustworks.essentials.examples.trading.reconciliation.aggregates.ReconciliationCases;
 import dk.trustworks.essentials.examples.trading.reconciliation.events.*;
 import dk.trustworks.essentials.examples.trading.reconciliation.types.*;
+import dk.trustworks.essentials.examples.trading.config.TradingDemoViewEventProcessor;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
@@ -36,7 +37,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * open ones whose break has gone.
  */
 @Service
-public class CasesProjection extends ViewEventProcessor {
+public class CasesProjection extends TradingDemoViewEventProcessor {
     private static final String SELECT = """
                                          SELECT case_id, statement_id, business_date, kind, reference, detail, state, assignee, resolution, note, adjustment_id, opened_at, updated_at
                                          FROM projection_reconciliation_case

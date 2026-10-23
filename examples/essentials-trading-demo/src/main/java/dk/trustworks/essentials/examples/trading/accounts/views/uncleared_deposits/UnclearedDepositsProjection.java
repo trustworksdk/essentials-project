@@ -21,6 +21,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.pr
 import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
 import dk.trustworks.essentials.examples.trading.accounts.events.*;
 import dk.trustworks.essentials.examples.trading.accounts.types.*;
+import dk.trustworks.essentials.examples.trading.config.TradingDemoViewEventProcessor;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
@@ -39,7 +40,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * uncleared deposit carries into the account's next generation and clears there.
  */
 @Service
-public class UnclearedDepositsProjection extends ViewEventProcessor {
+public class UnclearedDepositsProjection extends TradingDemoViewEventProcessor {
     private final JdbcTemplate jdbcTemplate;
 
     public UnclearedDepositsProjection(ViewEventProcessorDependencies dependencies, JdbcTemplate jdbcTemplate) {

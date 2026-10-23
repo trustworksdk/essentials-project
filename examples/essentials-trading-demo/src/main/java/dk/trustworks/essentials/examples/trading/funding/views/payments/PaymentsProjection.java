@@ -22,6 +22,7 @@ import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
 import dk.trustworks.essentials.examples.trading.funding.aggregates.*;
 import dk.trustworks.essentials.examples.trading.funding.events.*;
 import dk.trustworks.essentials.examples.trading.funding.types.*;
+import dk.trustworks.essentials.examples.trading.config.TradingDemoViewEventProcessor;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
@@ -35,7 +36,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * ({@code status_rank}), so a redelivered or reordered event never sets an older status back.
  */
 @Service
-public class PaymentsProjection extends ViewEventProcessor {
+public class PaymentsProjection extends TradingDemoViewEventProcessor {
     private final JdbcTemplate jdbcTemplate;
 
     public PaymentsProjection(ViewEventProcessorDependencies dependencies, JdbcTemplate jdbcTemplate) {

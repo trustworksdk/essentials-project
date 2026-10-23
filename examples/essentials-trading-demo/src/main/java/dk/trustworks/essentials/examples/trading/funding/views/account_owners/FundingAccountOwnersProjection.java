@@ -21,6 +21,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.pr
 import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
 import dk.trustworks.essentials.examples.trading.accounts.events.AccountOpened;
 import dk.trustworks.essentials.examples.trading.accounts.types.AccountsAggregateTypes;
+import dk.trustworks.essentials.examples.trading.config.TradingDemoViewEventProcessor;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
@@ -33,7 +34,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * {@code events/} import, as {@code orders} has its own. Every generation repeats the owner, so the upsert is idempotent.
  */
 @Service
-public class FundingAccountOwnersProjection extends ViewEventProcessor {
+public class FundingAccountOwnersProjection extends TradingDemoViewEventProcessor {
     private final JdbcTemplate jdbcTemplate;
 
     public FundingAccountOwnersProjection(ViewEventProcessorDependencies dependencies, JdbcTemplate jdbcTemplate) {

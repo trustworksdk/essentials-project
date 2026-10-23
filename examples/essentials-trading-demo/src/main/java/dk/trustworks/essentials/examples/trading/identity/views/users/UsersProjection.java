@@ -22,6 +22,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ty
 import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
 import dk.trustworks.essentials.examples.trading.identity.events.*;
 import dk.trustworks.essentials.examples.trading.identity.types.*;
+import dk.trustworks.essentials.examples.trading.config.TradingDemoViewEventProcessor;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
@@ -36,7 +37,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * the strongly consistent half).
  */
 @Service
-public class UsersProjection extends ViewEventProcessor {
+public class UsersProjection extends TradingDemoViewEventProcessor {
     private final JdbcTemplate jdbcTemplate;
 
     public UsersProjection(ViewEventProcessorDependencies dependencies, JdbcTemplate jdbcTemplate) {

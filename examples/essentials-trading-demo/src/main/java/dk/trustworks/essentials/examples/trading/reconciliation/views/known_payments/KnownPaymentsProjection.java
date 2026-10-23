@@ -22,6 +22,7 @@ import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
 import dk.trustworks.essentials.examples.trading.funding.events.*;
 import dk.trustworks.essentials.examples.trading.funding.types.FundingAggregateTypes;
 import dk.trustworks.essentials.types.Money;
+import dk.trustworks.essentials.examples.trading.config.TradingDemoViewEventProcessor;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
@@ -37,7 +38,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * amount), the gateway's id it was taken under, and the value dates of its completion and return. What a bank statement is checked against.
  */
 @Service
-public class KnownPaymentsProjection extends ViewEventProcessor {
+public class KnownPaymentsProjection extends TradingDemoViewEventProcessor {
     private final JdbcTemplate jdbcTemplate;
 
     public KnownPaymentsProjection(ViewEventProcessorDependencies dependencies, JdbcTemplate jdbcTemplate) {

@@ -23,6 +23,7 @@ import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
 import dk.trustworks.essentials.components.foundation.messaging.queue.OrderedMessage;
 import dk.trustworks.essentials.examples.trading.accounts.events.*;
 import dk.trustworks.essentials.examples.trading.accounts.types.*;
+import dk.trustworks.essentials.examples.trading.config.TradingDemoViewEventProcessor;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
@@ -36,7 +37,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * Insert-only — no versioning needed.
  */
 @Service
-public class AccountActivityProjection extends ViewEventProcessor {
+public class AccountActivityProjection extends TradingDemoViewEventProcessor {
     private final JdbcTemplate jdbcTemplate;
 
     public AccountActivityProjection(ViewEventProcessorDependencies dependencies, JdbcTemplate jdbcTemplate) {

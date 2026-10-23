@@ -22,6 +22,7 @@ import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
 import dk.trustworks.essentials.examples.trading.settlement.aggregates.TradeSettlements;
 import dk.trustworks.essentials.examples.trading.settlement.events.*;
 import dk.trustworks.essentials.examples.trading.settlement.types.SettlementState;
+import dk.trustworks.essentials.examples.trading.config.TradingDemoViewEventProcessor;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
@@ -35,7 +36,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * reason - the operator's settlement exceptions (Q-1).
  */
 @Service
-public class SettlementsProjection extends ViewEventProcessor {
+public class SettlementsProjection extends TradingDemoViewEventProcessor {
     private final JdbcTemplate jdbcTemplate;
 
     public SettlementsProjection(ViewEventProcessorDependencies dependencies, JdbcTemplate jdbcTemplate) {

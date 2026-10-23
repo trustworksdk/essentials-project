@@ -27,6 +27,7 @@ import dk.trustworks.essentials.examples.trading.market_data.events.InstrumentRe
 import dk.trustworks.essentials.examples.trading.market_data.events.InstrumentRiskApproved;
 import dk.trustworks.essentials.examples.trading.market_data.events.InstrumentRiskRejected;
 import dk.trustworks.essentials.examples.trading.market_data.events.InstrumentSuspended;
+import dk.trustworks.essentials.examples.trading.config.TradingDemoViewEventProcessor;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
@@ -41,7 +42,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * consistently, and the aggregate exposes no accessors.
  */
 @Service
-public class InstrumentDetailsProjection extends ViewEventProcessor {
+public class InstrumentDetailsProjection extends TradingDemoViewEventProcessor {
     private final JdbcTemplate jdbcTemplate;
 
     public InstrumentDetailsProjection(ViewEventProcessorDependencies dependencies,

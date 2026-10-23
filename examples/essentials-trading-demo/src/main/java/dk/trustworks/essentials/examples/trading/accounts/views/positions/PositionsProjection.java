@@ -24,6 +24,7 @@ import dk.trustworks.essentials.components.foundation.messaging.queue.OrderedMes
 import dk.trustworks.essentials.examples.trading.accounts.events.*;
 import dk.trustworks.essentials.examples.trading.accounts.types.*;
 import dk.trustworks.essentials.examples.trading.market_data.types.InstrumentId;
+import dk.trustworks.essentials.examples.trading.config.TradingDemoViewEventProcessor;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
@@ -38,7 +39,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * same reason (deltas, redelivery). The guard and the row update commit together in the view's unit of work.
  */
 @Service
-public class PositionsProjection extends ViewEventProcessor {
+public class PositionsProjection extends TradingDemoViewEventProcessor {
     private final JdbcTemplate jdbcTemplate;
 
     public PositionsProjection(ViewEventProcessorDependencies dependencies, JdbcTemplate jdbcTemplate) {

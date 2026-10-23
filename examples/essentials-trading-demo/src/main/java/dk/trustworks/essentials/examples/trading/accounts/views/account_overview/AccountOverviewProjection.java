@@ -24,6 +24,7 @@ import dk.trustworks.essentials.components.foundation.messaging.queue.OrderedMes
 import dk.trustworks.essentials.examples.trading.accounts.events.*;
 import dk.trustworks.essentials.examples.trading.accounts.types.*;
 import dk.trustworks.essentials.types.Money;
+import dk.trustworks.essentials.examples.trading.config.TradingDemoViewEventProcessor;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
@@ -47,7 +48,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * already include it.
  */
 @Service
-public class AccountOverviewProjection extends ViewEventProcessor {
+public class AccountOverviewProjection extends TradingDemoViewEventProcessor {
     private static final BigDecimal ZERO = BigDecimal.ZERO;
 
     private final JdbcTemplate jdbcTemplate;

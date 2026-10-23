@@ -21,6 +21,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.pr
 import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
 import dk.trustworks.essentials.examples.trading.orders.events.OrderFilled;
 import dk.trustworks.essentials.examples.trading.orders.types.OrdersAggregateTypes;
+import dk.trustworks.essentials.examples.trading.config.TradingDemoViewEventProcessor;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
@@ -36,7 +37,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * statement is checked against.
  */
 @Service
-public class KnownExecutionsProjection extends ViewEventProcessor {
+public class KnownExecutionsProjection extends TradingDemoViewEventProcessor {
     private final JdbcTemplate jdbcTemplate;
 
     public KnownExecutionsProjection(ViewEventProcessorDependencies dependencies, JdbcTemplate jdbcTemplate) {

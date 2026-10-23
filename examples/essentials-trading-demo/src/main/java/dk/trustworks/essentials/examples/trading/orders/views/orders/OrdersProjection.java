@@ -22,6 +22,7 @@ import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
 import dk.trustworks.essentials.components.foundation.messaging.queue.OrderedMessage;
 import dk.trustworks.essentials.examples.trading.orders.events.*;
 import dk.trustworks.essentials.examples.trading.orders.types.*;
+import dk.trustworks.essentials.examples.trading.config.TradingDemoViewEventProcessor;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
@@ -34,7 +35,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * row's last applied {@code EventOrder}, so a redelivered or late event never moves the status back.
  */
 @Service
-public class OrdersProjection extends ViewEventProcessor {
+public class OrdersProjection extends TradingDemoViewEventProcessor {
     private final JdbcTemplate jdbcTemplate;
 
     public OrdersProjection(ViewEventProcessorDependencies dependencies, JdbcTemplate jdbcTemplate) {

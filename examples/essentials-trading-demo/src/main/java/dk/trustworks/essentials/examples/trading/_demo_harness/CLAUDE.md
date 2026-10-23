@@ -461,8 +461,9 @@ head, queue depths, container CPU; `wave-sampler.sh` in the session scratchpad):
   16:30 cutoff: the settlement ledger processor's lag peaks (1 000-3 000 events) while the order flow is idle. A
   nightly settlement batch is what real clearing does, so this is the realistic case; the overlap seen earlier came
   from weekend trading.
-- **Not the connection pool**: active connections peak at 29 of 40, threads waiting for one were 0 in every sample.
-  PostgreSQL runs at ~2 cores while trading.
+- **Rarely the connection pool**: threads waited for a connection in 2 of 256 samples (9 at most, once during the
+  first open); active connections usually well under 40. *Corrected: first recorded as "0 in every sample" from a
+  window of the run.* PostgreSQL runs at ~2 cores while trading.
 - **Behind the opens, one stage per processor**: at each open the router falls ~1 000-1 600 `Orders` events behind and
   catches up within the business day (~40 real seconds); the ledger processor tracks it. **`OrdersProjection` falls
   5 000-7 500 events behind** and catches up only in the evening: a customer's order list is seconds stale through
