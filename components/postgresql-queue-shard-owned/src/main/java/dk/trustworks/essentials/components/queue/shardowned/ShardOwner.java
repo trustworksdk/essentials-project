@@ -243,6 +243,11 @@ final class ShardOwner implements LeasedOwner {
             }
 
             @Override
+            public boolean isDeadLetteredOnRelease(Connection connection, long seq) throws SQLException {
+                return storage.isDeadLetteredWith(connection, "unordered", shard, seq, ShardOwnedStorage.EXHAUSTED_IN_A_RELEASED_HANDLER);
+            }
+
+            @Override
             public boolean stillOwns(Connection connection) throws SQLException {
                 return storage.stillOwns(connection, "unordered", shard, instanceId, fence);
             }

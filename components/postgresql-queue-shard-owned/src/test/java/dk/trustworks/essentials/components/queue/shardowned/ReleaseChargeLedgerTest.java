@@ -284,11 +284,89 @@ class ReleaseChargeLedgerTest {
         var answer = ledger.charge(null, () -> candidates(1L));
 
         assertThat(writes.moveCalls).containsExactly(1L);
+        assertThat(writes.deadLetterLookups).as("no earlier attempt of the move threw: the dead-letter table is not asked").isEmpty();
         assertThat(answer.charged()).isEqualTo(1);
         assertThat(answer.deadLettered()).isEmpty();
         assertThat(ledger.deadLetteredWhileInHandler(1L)).isEmpty();
         assertThat(ledger.owes(candidates(1L))).isFalse();
         assertThat(metrics.deadLettered.sum()).isZero();
+    }
+
+    /**
+     * A dead-letter move that throws after its {@code COMMIT} went through on the server - the driver stopped waiting for
+     * the reply, as a release on request does past its network wait bound - leaves the message in the dead-letter table.
+     * The later call that makes the move again finds the row gone, and reports the message dead-lettered once: counted in
+     * {@code deadLettered}, the owner handed its row (the ordered lane blocks the key), the {@code QueueObserver} told, and
+     * named in the answer. Read as a move that moved nothing, it was reported nowhere.
+     */
+    @Test
+    void a_move_that_committed_before_it_threw_is_reported_dead_lettered_by_the_call_that_makes_it_again() throws Exception {
+        var writes = new FakeWrites(Map.of(1L, 1));
+        writes.commitThenFailMoves.add(1L);
+        var told   = new CopyOnWriteArrayList<Long>();
+        var metrics = new ShardOwnerMetrics(new QueueObserver() {
+            @Override
+            public void deadLettered(MessageId id, int attempts, Throwable cause) {
+                told.add(id.sequence());
+            }
+        });
+        var handed = new ArrayList<ReleaseChargeLedger.ChargedRow>();
+        var ledger = new ReleaseChargeLedger(MessageId.Lane.ORDERED, SHARD, writes, RedeliveryPolicy.fixed(Duration.ofSeconds(1), 1), metrics, charged -> { },
+                                             handed::add);
+
+        assertThatThrownBy(() -> ledger.charge(null, () -> candidates(Map.of(1L, "A")))).isInstanceOf(SQLException.class);
+        assertThat(writes.deadLetters).as("premise: the move that threw committed").containsExactly(1L);
+        assertThat(ledger.owes(candidates(Map.of(1L, "A")))).as("the move is still owed: this call could not tell it committed").isTrue();
+
+        var answer = ledger.charge(null, () -> candidates(Map.of(1L, "A")));
+
+        assertThat(writes.moveCalls).as("premise: the move is made again and finds the row gone").containsExactly(1L, 1L);
+        assertThat(answer.deadLettered()).as("the message is dead-lettered").extracting(ReleaseChargeLedger.ChargedRow::seq, ReleaseChargeLedger.ChargedRow::key)
+                                         .containsExactly(tuple(1L, "A"));
+        assertThat(metrics.deadLettered.sum()).as("counted once").isEqualTo(1);
+        assertThat(told).as("the observer is told once").containsExactly(1L);
+        assertThat(handed).as("the owner is handed its row once").extracting(ReleaseChargeLedger.ChargedRow::seq).containsExactly(1L);
+        assertThat(ledger.deadLetteredWhileInHandler(1L)).isPresent();
+        assertThat(writes.deadLetterLookups).as("the dead-letter table is asked").containsExactly(1L);
+        assertThat(ledger.owes(candidates(Map.of(1L, "A")))).isFalse();
+
+        ledger.charge(null, () -> candidates(Map.of(1L, "A")));
+        assertThat(writes.moveCalls).as("a made move is not made again").containsExactly(1L, 1L);
+        assertThat(told).containsExactly(1L);
+        assertThat(metrics.deadLettered.sum()).isEqualTo(1);
+    }
+
+    /**
+     * A dead-letter move that threw without committing, made again once the row is gone - deleted through the admin API
+     * meanwhile, say - moved nothing: the dead-letter table does not hold the message, and nothing is reported.
+     */
+    @Test
+    void a_move_that_threw_without_committing_and_then_finds_the_row_gone_dead_letters_nothing() throws Exception {
+        var writes = new FakeWrites(Map.of(1L, 1));
+        writes.failMoves = 1;
+        var told   = new CopyOnWriteArrayList<Long>();
+        var metrics = new ShardOwnerMetrics(new QueueObserver() {
+            @Override
+            public void deadLettered(MessageId id, int attempts, Throwable cause) {
+                told.add(id.sequence());
+            }
+        });
+        var handed = new ArrayList<ReleaseChargeLedger.ChargedRow>();
+        var ledger = new ReleaseChargeLedger(MessageId.Lane.ORDERED, SHARD, writes, RedeliveryPolicy.fixed(Duration.ofSeconds(1), 1), metrics, charged -> { },
+                                             handed::add);
+
+        assertThatThrownBy(() -> ledger.charge(null, () -> candidates(Map.of(1L, "A")))).isInstanceOf(SQLException.class);
+        writes.rowsGone.add(1L);
+
+        var answer = ledger.charge(null, () -> candidates(Map.of(1L, "A")));
+
+        assertThat(writes.deadLetterLookups).as("the dead-letter table is asked").containsExactly(1L);
+        assertThat(answer.deadLettered()).isEmpty();
+        assertThat(metrics.deadLettered.sum()).isZero();
+        assertThat(told).isEmpty();
+        assertThat(handed).isEmpty();
+        assertThat(ledger.deadLetteredWhileInHandler(1L)).isEmpty();
+        assertThat(ledger.owes(candidates(Map.of(1L, "A")))).as("the move was made: nothing is owed").isFalse();
     }
 
     /**
@@ -551,6 +629,16 @@ class ReleaseChargeLedgerTest {
         final Map<Long, Integer> countAfterCharge;
         final Set<Long>          leaveOut    = new HashSet<>();
         final Set<Long>          rowsGone    = new HashSet<>();
+        /**
+         * The seqs whose next move commits - the row moved to {@link #deadLetters}, gone from the lane - and then throws, once
+         * each: a {@code COMMIT} whose reply the driver stopped waiting for.
+         */
+        final Set<Long>          commitThenFailMoves = new HashSet<>();
+        /**
+         * The seqs the dead-letter table holds, as the moves left it.
+         */
+        final Set<Long>          deadLetters = new TreeSet<>();
+        final List<Long>         deadLetterLookups = new ArrayList<>();
         final List<Set<Long>>    chargeCalls = new ArrayList<>();
         final List<Long>         moveCalls   = new ArrayList<>();
         final CountDownLatch     charging    = new CountDownLatch(1);
@@ -612,7 +700,21 @@ class ReleaseChargeLedgerTest {
                 failMoveOf = -1;
                 throw new SQLException("move of " + seq + " refused");
             }
-            return !rowsGone.contains(seq);
+            if (rowsGone.contains(seq)) {
+                return false;
+            }
+            deadLetters.add(seq);
+            if (commitThenFailMoves.remove(seq)) {
+                rowsGone.add(seq);
+                throw new SQLException("move of " + seq + " committed, its reply not waited for");
+            }
+            return true;
+        }
+
+        @Override
+        public boolean isDeadLetteredOnRelease(Connection connection, long seq) {
+            deadLetterLookups.add(seq);
+            return deadLetters.contains(seq);
         }
 
         @Override

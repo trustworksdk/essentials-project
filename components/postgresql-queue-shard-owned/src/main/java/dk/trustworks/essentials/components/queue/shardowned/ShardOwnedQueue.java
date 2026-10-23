@@ -3312,17 +3312,23 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * review - and answers empty: the operator named the instance whose WARN reported the unit kept, and a unit of the
      * same number this queue kept is not the one diagnosed.
      * <p>
-     * Each wait of the release for an answer from the database - the flush, the charge, the release of the row - is
-     * bounded as the hand-back bounds its own ({@link #handBackKeptUnit}, {@link #stopNetworkWaitBound()},
-     * {@link NetworkWaitBound}), on the caller's thread: a statement on a connection that does not answer - a half-open
-     * socket, with no {@code socketTimeout} on the {@code DataSource} - throws once it has waited that long, unless the
-     * connection's own network timeout is shorter, and this throws that {@link SQLException}, the unit back where it
-     * was claimed from, for a later hand-back or request - as far as this queue knows, its row still naming this
-     * instance, though a statement the driver stopped waiting for may still go through on the server: a charge that
-     * does leaves its message charged, and a later request may charge it again; a release of the row that does leaves
-     * the row released by the earlier request's own statement, and a later request finds nothing left to release: it
-     * answers {@code ALREADY_TAKEN}, or, once a hand-back of the unit has found the row released first, nothing for the
-     * unit. The wait for a pool connection is the pool's own. Unbounded, a request - an admin API call's thread among
+     * Each wait of the release for an answer from the database - the flush, the charge and its dead-letter moves, the
+     * release of the row - is bounded as the hand-back bounds its own ({@link #handBackKeptUnit},
+     * {@link #stopNetworkWaitBound()}, {@link NetworkWaitBound}), on the caller's thread: a statement on a connection
+     * that does not answer - a half-open socket, with no {@code socketTimeout} on the {@code DataSource} - throws once it
+     * has waited that long, unless the connection's own network timeout is shorter, and this throws that
+     * {@link SQLException}, the unit back where it was claimed from, for a later hand-back or request - as far as this
+     * queue knows, its row still naming this instance, though a statement the driver stopped waiting for may still go
+     * through on the server: a charge that does leaves its message charged, and a later request may charge it again; a
+     * dead-letter move that does leaves its message in the dead-letter table; a later request that makes the move again
+     * finds the row gone, finds the message in the dead-letter table ({@code ReleaseChargeLedger}) and reports it
+     * dead-lettered - counted, the {@code QueueObserver} told, its key in {@link KeptUnitRelease#deadLetteredKeys()} - as
+     * this request would have, but a hand-back of the unit once its handler has returned ({@link #handBackKeptUnit}), or
+     * a takeover of it, makes no move, and that dead letter is then reported nowhere, though it blocks its key; a
+     * release of the row that does leaves the row released by the earlier request's own
+     * statement, and a later request finds nothing left to release: it answers {@code ALREADY_TAKEN}, or, once a
+     * hand-back of the unit has found the row released first, nothing for the unit. The wait for a pool connection is
+     * the pool's own. Unbounded, a request - an admin API call's thread among
      * them - held its claim ({@link KeptUnit.Phase#HANDING_BACK}) for as long as that connection hung, and every later
      * hand-back or request of the unit found it claimed: the hand-back did nothing, the request answered {@code BUSY}.
      *
@@ -3334,7 +3340,11 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      *                      or request, and a later request does not charge again what this one's charge was seen to
      *                      commit. Past the bound, a statement the driver stopped waiting for may still go through on the
      *                      server: a charge that does leaves its message charged, and a later request may charge it
-     *                      again; a release that does leaves the row released by this request's own statement, and a
+     *                      again; a dead-letter move that does leaves its message dead-lettered, and a later request
+     *                      that makes the move again reports it dead-lettered, finding it in the dead-letter table, but a
+     *                      hand-back once the handler has returned, or a takeover, makes no move, and that dead letter
+     *                      is then reported nowhere; a
+     *                      release that does leaves the row released by this request's own statement, and a
      *                      later request then finds nothing to release ({@code ALREADY_TAKEN}, or nothing once a
      *                      hand-back has found the row released first)
      */

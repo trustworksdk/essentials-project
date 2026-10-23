@@ -669,8 +669,15 @@ other handlers that return while the charge runs do not wait for its database st
 charge is still choosing which messages to charge. Your `QueueObserver` is told of the charge's dead letters after the
 charge's database statements, not during them, so a slow `deadLettered` callback does not hold up the unit's handlers
 returning meanwhile. As a result, a handler failing meanwhile may be reported to `deliveryFailed` before its message's
-`deadLettered`; an observer must not assume the reverse order.
-(`6337f7d89`, `2fdeb3db0`, `bfa961ec5`, `dbae0986f`, `7dbd517be`, `e699c9d44`, `895b1a498`, `52c5e943e`)
+`deadLettered`; an observer must not assume the reverse order. A dead-letter move that fails although it went through on
+the server - the database committed it after the driver stopped waiting for the reply, as a `releaseKeptOrderedUnit`
+does past its network wait bound - is reported only when a retried release makes the move again: the retry, finding the
+row gone, looks for the message in the dead-letter table, so the message is counted in `deadLettered`,
+`QueueObserver.deadLettered` is told of it, and its key is blocked and, on a release on request, named in the answer's
+`deadLetteredKeys`, as for any other move. The unordered lane's charge, below, does the same. When the kept unit is
+instead handed back once its handler returns, or taken over, the move is not made again, and that dead letter is then
+reported nowhere, though it blocks its key.
+(`6337f7d89`, `2fdeb3db0`, `bfa961ec5`, `dbae0986f`, `7dbd517be`, `e699c9d44`, `895b1a498`, `52c5e943e`, `<!-- fix:U-012 -->`)
 
 **The unordered lane now charges a hung handler's delivery too, past the same bound.** It waits for no handler: a
 fair-share shed and a dead pump's hand-back release an unordered shard at once, and `stop()` once `shedGrace` has run

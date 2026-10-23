@@ -2110,6 +2110,27 @@ public final class ShardOwnedStorage {
     }
 
     /**
+     * Whether the dead-letter table holds the message of {@code seq} from {@code lane} on {@code shard} with {@code error}
+     * as its last error - a dead letter is addressed by {@code (shard, seq, source_lane)}, never {@code (shard, seq)}
+     * alone. Asked when a dead-letter move that threw is made again and moves nothing: the {@code COMMIT} of the attempt
+     * that threw may have gone through on the server after the driver stopped waiting for its reply, in which case the
+     * row is in this table, not gone. Unfenced: it writes nothing.
+     */
+    boolean isDeadLetteredWith(Connection connection, String lane, int shard, long seq, String error) throws SQLException {
+        try (var statement = connection.prepareStatement(
+                "SELECT 1 FROM " + DLQ_TABLE + " WHERE queue_id = ? AND shard = ? AND seq = ? AND source_lane = ? AND last_error = ?")) {
+            statement.setShort(1, queueId);
+            statement.setInt(2, shard);
+            statement.setLong(3, seq);
+            statement.setString(4, lane);
+            statement.setString(5, error);
+            try (var resultSet = statement.executeQuery()) {
+                return resultSet.next();
+            }
+        }
+    }
+
+    /**
      * The ordered keys this shard has a dead letter for, and the lowest {@code key_order} it was
      * recorded at.
      * <p>
