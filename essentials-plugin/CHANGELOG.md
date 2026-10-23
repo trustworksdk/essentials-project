@@ -94,8 +94,9 @@ targets, with a `-N` suffix for plugin-only releases.
 - **Fixed: every command of a service-entity command slice failed with a `NullPointerException`.** The
   handler template (Java and Kotlin) was `@Transactional`, so Spring proxied it, and the `CommandBus` called
   the final `AnnotatedCommandHandler.handle` on the uninitialised proxy. The annotation is gone: the bus
-  already runs the handler inside a unit of work that is a Spring-managed transaction. A slice scaffolded
-  before keeps the annotation: delete `@Transactional` and its import from the handler by hand.
+  already runs the handler inside a unit of work that is a Spring-managed transaction, and a behaviour check
+  now shows it: a publish that fails after the save rolls the save back. A slice scaffolded before keeps the
+  annotation: delete `@Transactional` and its import from the handler by hand.
 - **`behaviours.json` statuses are tested.** Every `implemented` behaviour now has an integration test
   under `tests/slice-compile/behaviours/` that the CI slices build runs against the rendered, untouched
   skeleton, and `test_behaviours_catalog.py` fails an `implemented` entry without one. Five Kotlin entries

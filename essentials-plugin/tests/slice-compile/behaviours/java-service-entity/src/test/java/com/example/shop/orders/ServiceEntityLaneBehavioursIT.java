@@ -27,6 +27,7 @@ import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * CI-only behaviour check for the Java service-entity lane (tests/slice-compile/README.md): each test asserts one
@@ -73,6 +74,29 @@ class ServiceEntityLaneBehavioursIT extends IntegrationTestBase {
 
         assertThat(placeholderOf(id)).isEqualTo("placed");
         assertThat(orderEvents()).containsExactly(new OrderPlaced(OrderId.of(id), "placed"));
+    }
+
+    // The "same transaction" half of the entry: LocalEventBus.publish rethrows a sync subscriber's exception, so a
+    // publish that fails after the save must take the save back with it. Were the save committed on its own, the
+    // Order would read "placed" here.
+    // behaviour: java/command_service_entity command.emits-event
+    @Test
+    void a_publish_that_fails_after_the_save_rolls_the_save_back() {
+        var id = seeded("initial");
+        EventHandler failing = event -> {
+            if (event instanceof OrderPlaced) {
+                throw new IllegalStateException("subscriber refuses " + event);
+            }
+        };
+        eventBus.addSyncSubscriber(failing);
+        try {
+            assertThatThrownBy(() -> commandBus.send(new PlaceOrder(OrderId.of(id), "placed")))
+                    .hasRootCauseInstanceOf(IllegalStateException.class);
+        } finally {
+            eventBus.removeSyncSubscriber(failing);
+        }
+
+        assertThat(placeholderOf(id)).isEqualTo("initial");
     }
 
     // behaviour: java/command_service_entity command.idempotent-replay

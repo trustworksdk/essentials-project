@@ -12,6 +12,7 @@ import dk.trustworks.essentials.reactive.EventBus
 import dk.trustworks.essentials.reactive.EventHandler
 import dk.trustworks.essentials.reactive.command.CommandBus
 import org.assertj.core.api.Assertions.assertThat
+import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.bson.Document
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
@@ -69,6 +70,27 @@ class ServiceEntityLaneBehavioursIT : IntegrationTestBase() {
 
         assertThat(placeholderOf(id)).isEqualTo("placed")
         assertThat(orderEvents()).containsExactly(OrderPlaced(OrderId(id), "placed"))
+    }
+
+    // The "same transaction" half of the entry: LocalEventBus.publish rethrows a sync subscriber's exception, so a
+    // publish that fails after the save must take the save back with it. Were the save committed on its own, the
+    // Order would read "placed" here.
+    // behaviour: kotlin/command_service_entity command.emits-event
+    @Test
+    fun `a publish that fails after the save rolls the save back`() {
+        val id = seeded("initial")
+        val failing = EventHandler { event ->
+            if (event is OrderPlaced) throw IllegalStateException("subscriber refuses $event")
+        }
+        eventBus.addSyncSubscriber(failing)
+        try {
+            assertThatThrownBy { commandBus.send<Any?, PlaceOrder>(PlaceOrder(OrderId(id), "placed")) }
+                .hasRootCauseInstanceOf(IllegalStateException::class.java)
+        } finally {
+            eventBus.removeSyncSubscriber(failing)
+        }
+
+        assertThat(placeholderOf(id)).isEqualTo("initial")
     }
 
     // behaviour: kotlin/command_service_entity command.idempotent-replay
