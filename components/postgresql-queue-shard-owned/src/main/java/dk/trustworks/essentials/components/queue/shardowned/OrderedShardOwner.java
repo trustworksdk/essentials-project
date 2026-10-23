@@ -402,8 +402,8 @@ final class OrderedShardOwner implements BatchReadableOwner {
             }
 
             @Override
-            public boolean isDeadLetteredOnRelease(Connection connection, long seq) throws SQLException {
-                return storage.isDeadLetteredWith(connection, "ordered", shard, seq, ShardOwnedStorage.EXHAUSTED_IN_A_RELEASED_HANDLER);
+            public boolean isDeadLetteredOnRelease(Connection connection, long seq, int attempts) throws SQLException {
+                return storage.isDeadLetteredWith(connection, "ordered", shard, seq, attempts, ShardOwnedStorage.EXHAUSTED_IN_A_RELEASED_HANDLER);
             }
 
             @Override

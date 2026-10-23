@@ -52,9 +52,10 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  *     {@link DeadLetterMove#MOVED} or {@link DeadLetterMove#ROW_GONE}, each in one write, so what was dead-lettered - the
  *     sequence values and keys {@link #answer()} reports, {@link #deadLetteredWhileInHandler}, and the row the owner is
  *     handed once it is {@link DeadLetterMove#MOVED} (the constructor's {@code onMoved}) - is derived from that write and
- *     cannot be seen half-made. A move that throws may have committed all the same (its {@code COMMIT} reply not waited
- *     for), so a later attempt of it that moves nothing asks the dead-letter table ({@link #movesInDoubt}) rather than
- *     taking the row for gone;</li>
+ *     cannot be seen half-made. A move that throws with no answer from the database may have committed all the same (its
+ *     {@code COMMIT} reply not waited for; {@link LeaseRowState#mayHaveGoneThrough}), so a later attempt of it that moves
+ *     nothing asks the dead-letter table ({@link #movesInDoubt}) rather than taking the row for gone; one the database
+ *     answered with an error of its own rolled back, and the dead-letter table is not asked about it;</li>
  *     <li>written only under the monitor; read by the handler threads ({@link #deadLetteredWhileInHandler}) without it
  *     unless a running charge may move the message or its move is still to be made, when they wait for that charge: a
  *     move commits before its write here, so a handler returning in between would otherwise take its message for one
@@ -122,12 +123,18 @@ final class ReleaseChargeLedger {
 
         /**
          * Whether the dead-letter table holds the message of {@code seq} as {@link #moveToDeadLetterIfOwned} moves it, with
-         * {@link ShardOwnedStorage#EXHAUSTED_IN_A_RELEASED_HANDLER} (see {@link ShardOwnedStorage#isDeadLetteredWith}). Asked
-         * only when a move of that message threw and a later attempt of it moved nothing: the attempt that threw may have
-         * committed on the server after the driver stopped waiting for its reply - a network timeout during the
-         * {@code COMMIT} - which leaves the row moved, not gone.
+         * {@link ShardOwnedStorage#EXHAUSTED_IN_A_RELEASED_HANDLER} and {@code attempts} - the count this ledger's charge
+         * committed for it ({@link ChargedRow#attemptsAfterCharge}), which the move copies unchanged (see
+         * {@link ShardOwnedStorage#isDeadLetteredWith}). Asked only when a move of that message failed in a way that may
+         * have committed on the server ({@link LeaseRowState#mayHaveGoneThrough}) and a later attempt of it moved nothing:
+         * the attempt that threw may have committed after the driver stopped waiting for its reply - a network timeout
+         * during the {@code COMMIT} - which leaves the row moved, not gone. Unfenced, so the attempt count is what tells
+         * this owner's move from a dead letter a later owner of the unit made of the same message with the same error: that
+         * owner's charge counts on from this one's, so its dead letter carries a higher count - unless an operator retried
+         * the message in between ({@link ShardOwnedStorage#retryMessage}, which resets its attempt count to 0). Then the
+         * lookup can match a later owner's dead letter, or miss this owner's own.
          */
-        boolean isDeadLetteredOnRelease(Connection connection, long seq) throws SQLException;
+        boolean isDeadLetteredOnRelease(Connection connection, long seq, int attempts) throws SQLException;
 
         /**
          * Whether the owner still holds its unit's lease under its fence (see
@@ -155,9 +162,9 @@ final class ReleaseChargeLedger {
         MOVED,
         /**
          * The move was made and moved nothing: the row was gone or no longer the owner's, and no earlier attempt of the
-         * move had moved it. An attempt that threw may have committed on the server all the same, so a later attempt that
-         * moves nothing asks the dead-letter table ({@link Writes#isDeadLetteredOnRelease}) and is {@link #MOVED} when the
-         * message is there.
+         * move had moved it. An attempt that threw with no answer from the database ({@link LeaseRowState#mayHaveGoneThrough})
+         * may have committed on the server all the same, so a later attempt that moves nothing asks the dead-letter table
+         * ({@link Writes#isDeadLetteredOnRelease}) and is {@link #MOVED} when the message is there.
          */
         ROW_GONE
     }
@@ -228,9 +235,11 @@ final class ReleaseChargeLedger {
      */
     private final Set<Long>                      gone    = new HashSet<>();
     /**
-     * The messages whose dead-letter move threw and has not been made since, by sequence value. The attempt that threw may
-     * have committed on the server - a network timeout while the driver waited for the {@code COMMIT} reply - so a later
-     * attempt that moves nothing asks {@link Writes#isDeadLetteredOnRelease} before it records
+     * The messages whose dead-letter move threw in a way that may have committed on the server and has not been made since,
+     * by sequence value: thrown with no answer from the database - a network timeout while the driver waited for the
+     * {@code COMMIT} reply, say - as {@link LeaseRowState#mayHaveGoneThrough} classifies a release that threw. One the
+     * database answered with an error of its own (an SQL state outside class {@code 08}) rolled back and is not held here.
+     * A later attempt that moves nothing asks {@link Writes#isDeadLetteredOnRelease} before it records
      * {@link DeadLetterMove#ROW_GONE}. Taken for gone, such a message was in the dead-letter table and reported nowhere:
      * not counted in {@code deadLettered}, the {@code QueueObserver} not told, its key in no answer. Read and written under
      * {@link #monitor} only.
@@ -330,9 +339,9 @@ final class ReleaseChargeLedger {
      * @return what this ledger has charged and dead-lettered so far, this call included
      * @throws SQLException     when the charge, the lease lookup after a charge that left a row out, a dead-letter move, or
      *                          the dead-letter lookup after a move that threw fails; {@link #owes} then answers {@code true}.
-     *                          A move that threw may have committed on the server all the same; the later call that makes it
-     *                          again finds the row gone, asks the dead-letter table, and reports the message dead-lettered
-     *                          when it is there. The {@code QueueObserver} is still told of each move made before the
+     *                          A move that threw with no answer from the database may have committed on the server all the
+     *                          same; the later call that makes it again finds the row gone, asks the dead-letter table, and
+     *                          reports the message dead-lettered when it is there. The {@code QueueObserver} is still told of each move made before the
      *                          failure, and what it threw is added to this as suppressed
      * @throws RuntimeException what the {@code QueueObserver} threw when told of a dead letter (or a non-critical
      *                          {@link Error}), thrown once every move is made, so {@link #owes} then answers as after a call
@@ -437,11 +446,16 @@ final class ReleaseChargeLedger {
             try {
                 movedNow = writes.moveToDeadLetterIfOwned(connection, row.seq());
             } catch (SQLException | RuntimeException | Error e) {
-                // It may have committed on the server all the same: the next attempt that moves nothing asks the table
-                movesInDoubt.add(row.seq());
+                // Failed with no answer from the database (a connection lost, a read timed out), it may have committed on
+                // the server all the same: the next attempt that moves nothing asks the table. An error the database
+                // answered with rolled the move back - as for a release (releaseLeaseRows), the same rule
+                if (LeaseRowState.mayHaveGoneThrough(e)) {
+                    movesInDoubt.add(row.seq());
+                }
                 throw e;
             }
-            var made = row.moved(movedNow || (movesInDoubt.contains(row.seq()) && writes.isDeadLetteredOnRelease(connection, row.seq())));
+            var made = row.moved(movedNow || (movesInDoubt.contains(row.seq())
+                                              && writes.isDeadLetteredOnRelease(connection, row.seq(), row.attemptsAfterCharge())));
             movesInDoubt.remove(row.seq());
             rows.put(row.seq(), made);
             if (made.move() == DeadLetterMove.MOVED) {

@@ -18,6 +18,8 @@ package dk.trustworks.essentials.components.queue.shardowned;
 
 import dk.trustworks.essentials.components.queue.shardowned.spi.*;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.sql.*;
 import java.time.Duration;
@@ -370,6 +372,63 @@ class ReleaseChargeLedgerTest {
     }
 
     /**
+     * A dead-letter move the database answered with an error of its own - an SQL state outside class {@code 08}, a trigger
+     * refusing it ({@code P0001}) or a statement cancelled ({@code 57014}) - rolled back for certain: the move is not in
+     * doubt, as a release failing the same way is not ({@link LeaseRowState#mayHaveGoneThrough}). The later attempt that
+     * finds the row gone takes it for gone and does not ask the dead-letter table, whose unfenced lookup could otherwise
+     * name a dead letter this owner did not make.
+     */
+    @ParameterizedTest(name = "SQL state {0}")
+    @ValueSource(strings = {"P0001", "57014", "23505"})
+    void a_move_the_database_refused_with_an_error_of_its_own_is_not_in_doubt_and_the_row_found_gone_after_it_is_taken_for_gone(String sqlState) throws Exception {
+        var writes = new FakeWrites(Map.of(1L, 1));
+        writes.failMoves = 1;
+        writes.failMovesSqlState = sqlState;
+        var metrics = new ShardOwnerMetrics();
+        var handed  = new ArrayList<ReleaseChargeLedger.ChargedRow>();
+        var ledger  = new ReleaseChargeLedger(MessageId.Lane.ORDERED, SHARD, writes, RedeliveryPolicy.fixed(Duration.ofSeconds(1), 1), metrics, charged -> { },
+                                              handed::add);
+
+        assertThatThrownBy(() -> ledger.charge(null, () -> candidates(Map.of(1L, "A")))).isInstanceOf(SQLException.class);
+        // Gone meanwhile, and the dead-letter table holds a message of that seq all the same: made by another owner
+        writes.rowsGone.add(1L);
+        writes.deadLetters.add(1L);
+
+        var answer = ledger.charge(null, () -> candidates(Map.of(1L, "A")));
+
+        assertThat(writes.moveCalls).as("premise: the move is made again and finds the row gone").containsExactly(1L, 1L);
+        assertThat(writes.deadLetterLookups).as("the move was not in doubt: the dead-letter table is not asked").isEmpty();
+        assertThat(answer.deadLettered()).isEmpty();
+        assertThat(metrics.deadLettered.sum()).isZero();
+        assertThat(handed).isEmpty();
+        assertThat(ledger.deadLetteredWhileInHandler(1L)).isEmpty();
+        assertThat(ledger.owes(candidates(Map.of(1L, "A")))).as("the move was made: nothing is owed").isFalse();
+    }
+
+    /**
+     * A dead-letter move that failed with no answer from the database - a connection lost or a read timed out, which
+     * pgjdbc reports as {@code 08006} - may have committed: the later attempt that finds the row gone asks the dead-letter
+     * table, for the message at the attempt count the charge gave it, which the move copies unchanged.
+     */
+    @Test
+    void a_move_that_failed_with_a_connection_error_is_in_doubt_and_the_lookup_asks_for_the_charged_attempt_count() throws Exception {
+        var writes = new FakeWrites(Map.of(1L, 3));
+        writes.failMoves = 1;
+        writes.failMovesSqlState = "08006";
+        var ledger = ledger(writes, 3, new ShardOwnerMetrics(), new ArrayList<>());
+
+        assertThatThrownBy(() -> ledger.charge(null, () -> candidates(1L))).isInstanceOf(SQLException.class);
+        writes.rowsGone.add(1L);
+        writes.deadLetters.add(1L);
+
+        var answer = ledger.charge(null, () -> candidates(1L));
+
+        assertThat(writes.deadLetterLookups).as("the move was in doubt: the dead-letter table is asked").containsExactly(1L);
+        assertThat(writes.deadLetterLookupAttempts).as("for the count after the charge").containsExactly(3);
+        assertThat(answer.deadLettered()).extracting(ReleaseChargeLedger.ChargedRow::seq).containsExactly(1L);
+    }
+
+    /**
      * A handler that returns while the charge is moving its message to the dead-letter table - the move committed in the
      * database, not yet recorded here - is told its message was dead-lettered, once the charge has recorded the move: it
      * waits for the running charge rather than reading the record half-way. Answered from the record alone, it read "not
@@ -646,6 +705,15 @@ class ReleaseChargeLedgerTest {
         final CountDownLatch     proceed     = new CountDownLatch(1);
         int                      failMoves;
         /**
+         * The SQL state of the {@link SQLException} each of the {@link #failMoves} throws; {@code null}: none, as a driver
+         * that stopped waiting may report.
+         */
+        String                   failMovesSqlState;
+        /**
+         * The attempt count each dead-letter lookup asked for, in the order asked.
+         */
+        final List<Integer>      deadLetterLookupAttempts = new ArrayList<>();
+        /**
          * The seq whose next move fails, once, whatever moves come before it; {@code -1}: none.
          */
         long                     failMoveOf  = -1;
@@ -694,7 +762,7 @@ class ReleaseChargeLedgerTest {
             }
             if (failMoves > 0) {
                 failMoves--;
-                throw new SQLException("move refused");
+                throw new SQLException("move refused", failMovesSqlState);
             }
             if (seq == failMoveOf) {
                 failMoveOf = -1;
@@ -712,8 +780,9 @@ class ReleaseChargeLedgerTest {
         }
 
         @Override
-        public boolean isDeadLetteredOnRelease(Connection connection, long seq) {
+        public boolean isDeadLetteredOnRelease(Connection connection, long seq, int attempts) {
             deadLetterLookups.add(seq);
+            deadLetterLookupAttempts.add(attempts);
             return deadLetters.contains(seq);
         }
 

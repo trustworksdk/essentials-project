@@ -2110,20 +2110,26 @@ public final class ShardOwnedStorage {
     }
 
     /**
-     * Whether the dead-letter table holds the message of {@code seq} from {@code lane} on {@code shard} with {@code error}
-     * as its last error - a dead letter is addressed by {@code (shard, seq, source_lane)}, never {@code (shard, seq)}
-     * alone. Asked when a dead-letter move that threw is made again and moves nothing: the {@code COMMIT} of the attempt
-     * that threw may have gone through on the server after the driver stopped waiting for its reply, in which case the
-     * row is in this table, not gone. Unfenced: it writes nothing.
+     * Whether the dead-letter table holds the message of {@code seq} from {@code lane} on {@code shard} with
+     * {@code attempts} as its attempt count and {@code error} as its last error - a dead letter is addressed by
+     * {@code (shard, seq, source_lane)}, never {@code (shard, seq)} alone. Asked when a dead-letter move that threw is made
+     * again and moves nothing: the {@code COMMIT} of the attempt that threw may have gone through on the server after the
+     * driver stopped waiting for its reply, in which case the row is in this table, not gone. Unfenced: it writes nothing,
+     * and the dead-letter table records no owner or fence, so the attempt count - copied unchanged by
+     * {@link #moveToDeadLetter} - is what tells the asking owner's move, made at the count its charge committed, from a
+     * dead letter a later owner made of the same message with the same error after charging it again - unless an
+     * operator's {@link #retryMessage}, which resets the attempt count to 0, ran on the message in between. Then this can
+     * match a later owner's dead letter, or miss the asking owner's own.
      */
-    boolean isDeadLetteredWith(Connection connection, String lane, int shard, long seq, String error) throws SQLException {
+    boolean isDeadLetteredWith(Connection connection, String lane, int shard, long seq, int attempts, String error) throws SQLException {
         try (var statement = connection.prepareStatement(
-                "SELECT 1 FROM " + DLQ_TABLE + " WHERE queue_id = ? AND shard = ? AND seq = ? AND source_lane = ? AND last_error = ?")) {
+                "SELECT 1 FROM " + DLQ_TABLE + " WHERE queue_id = ? AND shard = ? AND seq = ? AND source_lane = ? AND attempts = ? AND last_error = ?")) {
             statement.setShort(1, queueId);
             statement.setInt(2, shard);
             statement.setLong(3, seq);
             statement.setString(4, lane);
-            statement.setString(5, error);
+            statement.setInt(5, attempts);
+            statement.setString(6, error);
             try (var resultSet = statement.executeQuery()) {
                 return resultSet.next();
             }

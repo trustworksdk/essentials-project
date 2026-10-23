@@ -28,7 +28,7 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
 import java.nio.charset.StandardCharsets;
 import java.sql.SQLException;
 import java.time.Duration;
-import java.util.List;
+import java.util.*;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.*;
@@ -146,12 +146,12 @@ class ShardOwnedDeadLetterCountIT {
     /**
      * The lookup that settles a release charge's dead-letter move that threw ({@code ReleaseChargeLedger.Writes.isDeadLetteredOnRelease}):
      * it finds the message the move put in the dead-letter table - addressed by shard, seq and source lane, with the
-     * move's error - and nothing else. Answering {@code false} for a dead letter there, the charge's retry reported a
+     * move's error, at the attempt count the move copied (the charge's) - and nothing else. Answering {@code false} for a dead letter there, the charge's retry reported a
      * message it had dead-lettered as one gone from the table, and nothing counted or named it.
      */
     @ParameterizedTest(name = "{0} lane")
     @ValueSource(strings = {"unordered", "ordered"})
-    void the_dead_letter_a_release_charges_move_made_is_found_by_shard_seq_lane_and_error(String lane) throws Exception {
+    void the_dead_letter_a_release_charges_move_made_is_found_by_shard_seq_lane_attempt_count_and_error(String lane) throws Exception {
         enqueueWithAttempts(lane, MAX_ATTEMPTS);
         var table     = "ordered".equals(lane) ? ShardOwnedSchema.ORDERED_TABLE : ShardOwnedSchema.UNORDERED_TABLE;
         var otherLane = "ordered".equals(lane) ? "unordered" : "ordered";
@@ -166,24 +166,70 @@ class ShardOwnedDeadLetterCountIT {
                     seq = resultSet.getLong(1);
                 }
             }
-            assertThat(storage.isDeadLetteredWith(connection, lane, SHARD, seq, ShardOwnedStorage.EXHAUSTED_IN_A_RELEASED_HANDLER))
+            assertThat(storage.isDeadLetteredWith(connection, lane, SHARD, seq, MAX_ATTEMPTS, ShardOwnedStorage.EXHAUSTED_IN_A_RELEASED_HANDLER))
                     .as("not dead-lettered before the move").isFalse();
 
             assertThat(storage.moveToDeadLetterIfOwned(connection, table, lane, SHARD, seq, ShardOwnedStorage.EXHAUSTED_IN_A_RELEASED_HANDLER,
                                                        OWNER, grant.fence())).as("premise: the move moved the row").isTrue();
 
-            assertThat(storage.isDeadLetteredWith(connection, lane, SHARD, seq, ShardOwnedStorage.EXHAUSTED_IN_A_RELEASED_HANDLER)).isTrue();
-            assertThat(storage.isDeadLetteredWith(connection, otherLane, SHARD, seq, ShardOwnedStorage.EXHAUSTED_IN_A_RELEASED_HANDLER))
+            assertThat(storage.isDeadLetteredWith(connection, lane, SHARD, seq, MAX_ATTEMPTS, ShardOwnedStorage.EXHAUSTED_IN_A_RELEASED_HANDLER)).isTrue();
+            assertThat(storage.isDeadLetteredWith(connection, otherLane, SHARD, seq, MAX_ATTEMPTS, ShardOwnedStorage.EXHAUSTED_IN_A_RELEASED_HANDLER))
                     .as("another lane's message of the same shard and seq").isFalse();
-            assertThat(storage.isDeadLetteredWith(connection, lane, SHARD + 1, seq, ShardOwnedStorage.EXHAUSTED_IN_A_RELEASED_HANDLER))
+            assertThat(storage.isDeadLetteredWith(connection, lane, SHARD + 1, seq, MAX_ATTEMPTS, ShardOwnedStorage.EXHAUSTED_IN_A_RELEASED_HANDLER))
                     .as("another shard").isFalse();
-            assertThat(storage.isDeadLetteredWith(connection, lane, SHARD, seq + 1, ShardOwnedStorage.EXHAUSTED_IN_A_RELEASED_HANDLER))
+            assertThat(storage.isDeadLetteredWith(connection, lane, SHARD, seq + 1, MAX_ATTEMPTS, ShardOwnedStorage.EXHAUSTED_IN_A_RELEASED_HANDLER))
                     .as("another seq").isFalse();
-            assertThat(storage.isDeadLetteredWith(connection, lane, SHARD, seq, ShardOwnedStorage.EXHAUSTED_BY_TAKEOVERS))
+            assertThat(storage.isDeadLetteredWith(connection, lane, SHARD, seq, MAX_ATTEMPTS + 1, ShardOwnedStorage.EXHAUSTED_IN_A_RELEASED_HANDLER))
+                    .as("dead-lettered at another attempt count").isFalse();
+            assertThat(storage.isDeadLetteredWith(connection, lane, SHARD, seq, MAX_ATTEMPTS, ShardOwnedStorage.EXHAUSTED_BY_TAKEOVERS))
                     .as("dead-lettered with another error").isFalse();
             assertThat(new ShardOwnedStorage(dataSource, (short) (QUEUE_ID + 1))
-                               .isDeadLetteredWith(connection, lane, SHARD, seq, ShardOwnedStorage.EXHAUSTED_IN_A_RELEASED_HANDLER))
+                               .isDeadLetteredWith(connection, lane, SHARD, seq, MAX_ATTEMPTS, ShardOwnedStorage.EXHAUSTED_IN_A_RELEASED_HANDLER))
                     .as("another queue").isFalse();
+        }
+    }
+
+    /**
+     * An owner whose release charge brought a message to the limit, and whose dead-letter move of it did not commit, has
+     * lost the unit to a successor, which charged the same message again on its own release and dead-lettered it with the
+     * same error. The first owner's retried move is refused (the row is not its own, and gone), and the lookup that settles
+     * a move that threw - asked for the count the first owner's charge committed - does not take the successor's dead
+     * letter for that owner's: reported as its own, it was counted and told to the observer twice and named in an answer of
+     * an owner that did not make it.
+     */
+    @ParameterizedTest(name = "{0} lane")
+    @ValueSource(strings = {"unordered", "ordered"})
+    void a_dead_letter_a_successor_made_of_the_same_message_is_not_found_for_the_count_an_earlier_owners_charge_committed(String lane) throws Exception {
+        enqueueWithAttempts(lane, MAX_ATTEMPTS - 1);
+        var table     = "ordered".equals(lane) ? ShardOwnedSchema.ORDERED_TABLE : ShardOwnedSchema.UNORDERED_TABLE;
+        var successor = "instance-2";
+        var grant     = storage.acquireLeaseGrant(lane, SHARD, OWNER, 60_000L).orElseThrow();
+        try (var connection = dataSource.getConnection()) {
+            long seq;
+            try (var statement = connection.prepareStatement("SELECT seq FROM " + table + " WHERE queue_id = ? AND shard = ?")) {
+                statement.setShort(1, QUEUE_ID);
+                statement.setInt(2, SHARD);
+                try (var resultSet = statement.executeQuery()) {
+                    assertThat(resultSet.next()).as("premise: one message enqueued").isTrue();
+                    seq = resultSet.getLong(1);
+                }
+            }
+            var chargedByOwner = storage.chargeRowsInHandler(connection, table, SHARD, List.of(seq), OWNER, grant.fence());
+            assertThat(chargedByOwner).as("premise: the owner's charge brought the message to the limit").containsEntry(seq, MAX_ATTEMPTS);
+            // Its dead-letter move did not commit; the unit moves on
+            assertThat(storage.releaseFencedLeases(lane, Map.of(SHARD, grant.fence()), OWNER)).as("premise: the unit was let go").isOne();
+            var successorGrant = storage.acquireLeaseGrant(lane, SHARD, successor, 60_000L).orElseThrow();
+            assertThat(successorGrant.fence()).as("premise: the successor holds the unit under another fence").isNotEqualTo(grant.fence());
+            var chargedBySuccessor = storage.chargeRowsInHandler(connection, table, SHARD, List.of(seq), successor, successorGrant.fence());
+            assertThat(storage.moveToDeadLetterIfOwned(connection, table, lane, SHARD, seq, ShardOwnedStorage.EXHAUSTED_IN_A_RELEASED_HANDLER,
+                                                       successor, successorGrant.fence())).as("premise: the successor dead-lettered the message").isTrue();
+
+            assertThat(storage.moveToDeadLetterIfOwned(connection, table, lane, SHARD, seq, ShardOwnedStorage.EXHAUSTED_IN_A_RELEASED_HANDLER,
+                                                       OWNER, grant.fence())).as("premise: the earlier owner's retried move moves nothing").isFalse();
+            assertThat(storage.isDeadLetteredWith(connection, lane, SHARD, seq, chargedBySuccessor.get(seq), ShardOwnedStorage.EXHAUSTED_IN_A_RELEASED_HANDLER))
+                    .as("premise: the successor's dead letter is there, at its own count").isTrue();
+            assertThat(storage.isDeadLetteredWith(connection, lane, SHARD, seq, chargedByOwner.get(seq), ShardOwnedStorage.EXHAUSTED_IN_A_RELEASED_HANDLER))
+                    .as("not found for the count the earlier owner's charge committed").isFalse();
         }
     }
 
