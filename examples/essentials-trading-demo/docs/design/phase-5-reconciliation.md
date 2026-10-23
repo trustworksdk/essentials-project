@@ -115,8 +115,8 @@ Where the build differs from the text above, or fills in what it left open:
   not add up to its own lines; the simulator seeds none.
 - **A changed price shows as a changed amount**: lines are compared by side, then quantity, then amount.
 - **The event log is not participant-filtered**; the webhook subscription is. The clearing intake drops another
-  participant's statement itself (the liquidity provider's). A `participant` filter on `/api/events` is proposed as
-  SR-39.
+  participant's statement itself (the liquidity provider's). Simulators 0.6.0 added the `participant` filter on
+  `/api/events` (SR-39); the catch-up reads use it, and the intake's check stays as a guard.
 - **Missing statements (§3)** compare the day's cutoff (`business_day_closed`) plus the grace with the exchange's
   clock (`GET /api/clock`); the bank's statement day is taken to end at the exchange's cutoff, since the gateway follows
   its calendar.

@@ -24,6 +24,7 @@ import org.springframework.web.client.RestClient;
 import tools.jackson.databind.ObjectMapper;
 
 import java.time.Duration;
+import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -69,14 +70,25 @@ public final class ExternalEventLogCatchUp implements SmartLifecycle {
      * @param target       the consumer this reader feeds — the same settings its webhook receiver uses
      * @param interval     pause between reads once the reader has caught up
      * @param pageSize     events per request, 1 to 1000
+     * @param participants the participants whose events to read (the exchange's {@code participant}, SR-39), as the
+     *                     consumer's webhook subscription lists them; empty for every participant's, and for a source
+     *                     without the filter (the payment gateway)
      */
-    public record Settings(String name, RestClient sourceClient, SignedWebhookReceiver.Settings target, Duration interval, int pageSize) {
+    public record Settings(String name, RestClient sourceClient, SignedWebhookReceiver.Settings target, Duration interval, int pageSize, Set<String> participants) {
         public Settings {
             requireNonNull(name, "No name provided");
             requireNonNull(sourceClient, "No sourceClient provided");
             requireNonNull(target, "No target provided");
             requireNonNull(interval, "No interval provided");
             requireTrue(pageSize >= 1 && pageSize <= 1000, "pageSize must be 1..1000");
+            participants = Set.copyOf(requireNonNull(participants, "No participants provided"));
+        }
+
+        /**
+         * Every participant's events.
+         */
+        public Settings(String name, RestClient sourceClient, SignedWebhookReceiver.Settings target, Duration interval, int pageSize) {
+            this(name, sourceClient, target, interval, pageSize, Set.of());
         }
     }
 
@@ -180,6 +192,9 @@ public final class ExternalEventLogCatchUp implements SmartLifecycle {
                                               .queryParam("after", after)
                                               .queryParam("limit", settings.pageSize())
                                               .queryParam("eventType", target.eventTypes().stream().sorted().toArray())
+                                              .queryParamIfPresent("participant", settings.participants().isEmpty()
+                                                                                  ? Optional.empty()
+                                                                                  : Optional.of(String.join(",", settings.participants().stream().sorted().toList())))
                                               .build())
                                .retrieve()
                                .toEntity(byte[].class);

@@ -30,6 +30,7 @@ import org.springframework.web.client.RestClient;
 import tools.jackson.databind.ObjectMapper;
 
 import java.time.Duration;
+import java.util.Set;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
@@ -55,6 +56,7 @@ public class ExchangeOrderEvents {
     private final JdbcTemplate             jdbcTemplate;
     private final ObjectMapper             objectMapper;
     private final RestClient               exchange;
+    private final String                   participantId;
     private volatile SignedWebhookReceiver  receiver;
     private volatile ExternalEventLogCatchUp catchUp;
 
@@ -70,6 +72,7 @@ public class ExchangeOrderEvents {
         this.jdbcTemplate = dependencies.jdbcTemplate();
         this.objectMapper = dependencies.objectMapper();
         this.exchange = dependencies.restClientBuilder().clone().baseUrl(dependencies.properties().getExchange().getBaseUrl()).build();
+        this.participantId = dependencies.properties().getExchange().getParticipantId();
     }
 
     /**
@@ -98,7 +101,8 @@ public class ExchangeOrderEvents {
                                                           ExchangeOrderEventTranslation::isComplete,
                                                           reports.inbox());
         receiver = new SignedWebhookReceiver(settings, verifier, intake, objectMapper);
-        catchUp = new ExternalEventLogCatchUp(new ExternalEventLogCatchUp.Settings("exchange:" + CONSUMER, exchange, settings, Duration.ofSeconds(5), 500),
+        catchUp = new ExternalEventLogCatchUp(new ExternalEventLogCatchUp.Settings("exchange:" + CONSUMER, exchange, settings, Duration.ofSeconds(5), 500,
+                                                                                         Set.of(participantId)),
                                               intake,
                                               fencedLockManager,
                                               jdbcTemplate,

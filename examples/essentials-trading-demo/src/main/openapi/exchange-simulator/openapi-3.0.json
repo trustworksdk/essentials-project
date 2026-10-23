@@ -95,6 +95,24 @@
           }
         }
       },
+      "CorporateActionAnnouncedEvent": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/CorporateActionAnnouncedEvent"
+            }
+          }
+        }
+      },
+      "DividendPaidEvent": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/DividendPaidEvent"
+            }
+          }
+        }
+      },
       "InstrumentListedEvent": {
         "content": {
           "application/json": {
@@ -136,6 +154,24 @@
           "application/json": {
             "schema": {
               "$ref": "#/components/schemas/OrderExpiredEvent"
+            }
+          }
+        }
+      },
+      "OrderFillBustedEvent": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/OrderFillBustedEvent"
+            }
+          }
+        }
+      },
+      "OrderFillCorrectedEvent": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/OrderFillCorrectedEvent"
             }
           }
         }
@@ -235,6 +271,33 @@
           "application/json": {
             "schema": {
               "$ref": "#/components/schemas/SettlementRejectedEvent"
+            }
+          }
+        }
+      },
+      "SplitAppliedEvent": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/SplitAppliedEvent"
+            }
+          }
+        }
+      },
+      "TradeBustedEvent": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/TradeBustedEvent"
+            }
+          }
+        }
+      },
+      "TradeCorrectedEvent": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/TradeCorrectedEvent"
             }
           }
         }
@@ -727,6 +790,13 @@
             "format": "uuid",
             "type": "string"
           },
+          "fee": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "feeMinor": {
+            "description": "What the participant pays the exchange for this trade (SR-37).",
+            "type": "integer"
+          },
           "instrumentId": {
             "type": "string"
           },
@@ -766,7 +836,9 @@
           "executedAt",
           "tradeDate",
           "intendedSettlementDate",
-          "obligationId"
+          "obligationId",
+          "feeMinor",
+          "fee"
         ],
         "type": "object"
       },
@@ -974,6 +1046,186 @@
           }
         }
       },
+      "CorporateAction": {
+        "additionalProperties": false,
+        "properties": {
+          "amountPerShare": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "amountPerShareMinor": {
+            "type": "integer"
+          },
+          "announcedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "corporateActionId": {
+            "description": "`CA:<instrument>:<kind>:<payDate or effectiveDate>`",
+            "type": "string"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "effectiveDate": {
+            "$ref": "#/components/schemas/Date"
+          },
+          "exDate": {
+            "$ref": "#/components/schemas/Date"
+          },
+          "instrumentId": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "CASH_DIVIDEND",
+              "SPLIT"
+            ],
+            "type": "string"
+          },
+          "payDate": {
+            "$ref": "#/components/schemas/Date"
+          },
+          "ratio": {
+            "type": "string"
+          },
+          "recordDate": {
+            "$ref": "#/components/schemas/Date"
+          },
+          "status": {
+            "enum": [
+              "ANNOUNCED",
+              "DONE"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "corporateActionId",
+          "kind",
+          "instrumentId",
+          "announcedAt",
+          "status"
+        ],
+        "type": "object"
+      },
+      "CorporateActionAnnouncedEvent": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/EventEnvelope"
+          }
+        ],
+        "description": "Aggregate ID the action; no correlation ID.",
+        "properties": {
+          "eventType": {
+            "enum": [
+              "CorporateActionAnnounced"
+            ],
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/CorporateAction"
+          },
+          "source": {
+            "enum": [
+              "exchange"
+            ],
+            "type": "string"
+          }
+        }
+      },
+      "CorporateActionFields": {
+        "description": "The action as announced, on its paid and applied events.",
+        "properties": {
+          "amountPerShare": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "amountPerShareMinor": {
+            "type": "integer"
+          },
+          "announcedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "corporateActionId": {
+            "type": "string"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "effectiveDate": {
+            "$ref": "#/components/schemas/Date"
+          },
+          "exDate": {
+            "$ref": "#/components/schemas/Date"
+          },
+          "instrumentId": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "CASH_DIVIDEND",
+              "SPLIT"
+            ],
+            "type": "string"
+          },
+          "payDate": {
+            "$ref": "#/components/schemas/Date"
+          },
+          "ratio": {
+            "type": "string"
+          },
+          "recordDate": {
+            "$ref": "#/components/schemas/Date"
+          },
+          "status": {
+            "enum": [
+              "ANNOUNCED",
+              "DONE"
+            ],
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "CorporateActionRequest": {
+        "additionalProperties": false,
+        "description": "A cash dividend takes `exDate` ≤ `recordDate` ≤ `payDate` and `amountPerShare` (at most the currency's decimals); a split takes `ratio` (`new:old`, not 1:1) and `effectiveDate`.",
+        "properties": {
+          "amountPerShare": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "effectiveDate": {
+            "$ref": "#/components/schemas/Date"
+          },
+          "exDate": {
+            "$ref": "#/components/schemas/Date"
+          },
+          "instrumentId": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "CASH_DIVIDEND",
+              "SPLIT"
+            ],
+            "type": "string"
+          },
+          "payDate": {
+            "$ref": "#/components/schemas/Date"
+          },
+          "ratio": {
+            "description": "`new:old`, e.g. `2:1`.",
+            "pattern": "^[0-9]+:[0-9]+$",
+            "type": "string"
+          },
+          "recordDate": {
+            "$ref": "#/components/schemas/Date"
+          }
+        },
+        "required": [
+          "kind",
+          "instrumentId"
+        ],
+        "type": "object"
+      },
       "Date": {
         "format": "date",
         "type": "string"
@@ -1042,6 +1294,61 @@
           "DEAD"
         ],
         "type": "string"
+      },
+      "DividendPaidEvent": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/EventEnvelope"
+          }
+        ],
+        "description": "Aggregate ID the action, correlation ID the participant; `occurredAt` 00:00 UTC on the pay date.",
+        "properties": {
+          "eventType": {
+            "enum": [
+              "DividendPaid"
+            ],
+            "type": "string"
+          },
+          "payload": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CorporateActionFields"
+              }
+            ],
+            "properties": {
+              "amount": {
+                "$ref": "#/components/schemas/Amount"
+              },
+              "amountMinor": {
+                "type": "integer"
+              },
+              "participantId": {
+                "type": "string"
+              },
+              "quantity": {
+                "description": "Holdings at the record date.",
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "participantId",
+              "quantity",
+              "amount",
+              "amountMinor",
+              "recordDate",
+              "payDate",
+              "amountPerShare",
+              "currency"
+            ]
+          },
+          "source": {
+            "enum": [
+              "exchange"
+            ],
+            "type": "string"
+          }
+        }
       },
       "Error": {
         "additionalProperties": false,
@@ -1123,6 +1430,13 @@
           "OrderCancelled",
           "OrderExpired",
           "TradeExecuted",
+          "TradeCorrected",
+          "TradeBusted",
+          "OrderFillCorrected",
+          "OrderFillBusted",
+          "CorporateActionAnnounced",
+          "DividendPaid",
+          "SplitApplied",
           "InstrumentListed",
           "InstrumentUpdated",
           "ClockChanged",
@@ -1205,6 +1519,28 @@
             "type": "integer"
           }
         },
+        "type": "object"
+      },
+      "Fee": {
+        "additionalProperties": false,
+        "description": "What one side pays the exchange for an execution (SR-37): the maker's or taker's rate of its value (`fees`), at least the minimum, in the instrument's currency.",
+        "properties": {
+          "amount": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "amountMinor": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "currency": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "amount",
+          "amountMinor",
+          "currency"
+        ],
         "type": "object"
       },
       "FieldFault": {
@@ -2298,6 +2634,13 @@
           "currencyScale": {
             "type": "integer"
           },
+          "feesNet": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "feesNetMinor": {
+            "description": "The obligation's trades' fees (SR-37), owed to the exchange apart from the cash settled.",
+            "type": "integer"
+          },
           "instrumentId": {
             "type": "string"
           },
@@ -2324,13 +2667,19 @@
           "securitiesNet",
           "cashNetMinor",
           "cashNet",
-          "tradeCount"
+          "tradeCount",
+          "feesNetMinor",
+          "feesNet"
         ],
         "type": "object"
       },
       "Order": {
         "additionalProperties": false,
         "properties": {
+          "bustedQuantity": {
+            "description": "Quantity whose fills were busted or corrected away (SR-36), not reinstated: quantity = filled + remaining + busted.",
+            "type": "integer"
+          },
           "clientOrderId": {
             "nullable": true,
             "type": "string"
@@ -2415,6 +2764,7 @@
           "quantity",
           "remainingQuantity",
           "filledQuantity",
+          "bustedQuantity",
           "status",
           "sequence",
           "timeInForce"
@@ -2487,6 +2837,10 @@
             ],
             "description": "On OrderExpired, the business day whose end expired the order: the date BusinessDayClosed names for that cutoff, or on a market with a session the day whose session closed."
           },
+          "bustedQuantity": {
+            "description": "Quantity whose fills were busted or corrected away (SR-36), not reinstated: quantity = filled + remaining + busted.",
+            "type": "integer"
+          },
           "cancelReason": {
             "enum": [
               "REQUESTED",
@@ -2513,6 +2867,14 @@
           "intendedSettlementDate": {
             "$ref": "#/components/schemas/IntendedSettlementDate"
           },
+          "lastFee": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Fee"
+              }
+            ],
+            "description": "On fill events, the order's side's fee for the execution (SR-37, FIX Commission)."
+          },
           "lastPrice": {
             "description": "On fill events, the execution's price in major units (FIX LastPx).",
             "type": "string"
@@ -2532,6 +2894,18 @@
           "participantId": {
             "type": "string"
           },
+          "previousLastPrice": {
+            "description": "On OrderFillCorrected, the execution's price before.",
+            "type": "string"
+          },
+          "previousLastPriceTicks": {
+            "description": "On OrderFillCorrected, the execution's price before.",
+            "type": "integer"
+          },
+          "previousLastQuantity": {
+            "description": "On OrderFillCorrected, the execution's quantity before.",
+            "type": "integer"
+          },
           "price": {
             "nullable": true,
             "type": "string"
@@ -2542,6 +2916,10 @@
           },
           "quantity": {
             "type": "integer"
+          },
+          "reason": {
+            "description": "On OrderFillCorrected and OrderFillBusted, why.",
+            "type": "string"
           },
           "rejectReason": {
             "enum": [
@@ -2590,6 +2968,7 @@
           "quantity",
           "remainingQuantity",
           "filledQuantity",
+          "bustedQuantity",
           "status",
           "sequence",
           "timeInForce"
@@ -2627,6 +3006,87 @@
           }
         }
       },
+      "OrderFillBustedEvent": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/EventEnvelope"
+          }
+        ],
+        "description": "Aggregate the order, correlation ID the execution. The execution's fields are the busted ones.",
+        "properties": {
+          "eventType": {
+            "enum": [
+              "OrderFillBusted"
+            ],
+            "type": "string"
+          },
+          "payload": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/OrderEventPayload"
+              }
+            ],
+            "required": [
+              "executionId",
+              "lastQuantity",
+              "lastPriceTicks",
+              "lastPrice",
+              "lastFee",
+              "reason",
+              "tradeDate",
+              "intendedSettlementDate"
+            ]
+          },
+          "source": {
+            "enum": [
+              "exchange"
+            ],
+            "type": "string"
+          }
+        }
+      },
+      "OrderFillCorrectedEvent": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/EventEnvelope"
+          }
+        ],
+        "description": "Aggregate the order, correlation ID the execution. The execution's fields are the corrected ones.",
+        "properties": {
+          "eventType": {
+            "enum": [
+              "OrderFillCorrected"
+            ],
+            "type": "string"
+          },
+          "payload": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/OrderEventPayload"
+              }
+            ],
+            "required": [
+              "executionId",
+              "lastQuantity",
+              "lastPriceTicks",
+              "lastPrice",
+              "lastFee",
+              "previousLastQuantity",
+              "previousLastPriceTicks",
+              "previousLastPrice",
+              "reason",
+              "tradeDate",
+              "intendedSettlementDate"
+            ]
+          },
+          "source": {
+            "enum": [
+              "exchange"
+            ],
+            "type": "string"
+          }
+        }
+      },
       "OrderFilledEvent": {
         "allOf": [
           {
@@ -2651,6 +3111,7 @@
               "lastQuantity",
               "lastPriceTicks",
               "lastPrice",
+              "lastFee",
               "tradeDate",
               "intendedSettlementDate"
             ]
@@ -2687,6 +3148,7 @@
               "lastQuantity",
               "lastPriceTicks",
               "lastPrice",
+              "lastFee",
               "tradeDate",
               "intendedSettlementDate"
             ]
@@ -3223,8 +3685,10 @@
             ],
             "properties": {
               "reason": {
+                "description": "`TRADE_BUSTED` follows a trade bust (SR-36).",
                 "enum": [
-                  "SIMULATED_CANCELLATION"
+                  "SIMULATED_CANCELLATION",
+                  "TRADE_BUSTED"
                 ],
                 "type": "string"
               }
@@ -3300,12 +3764,22 @@
               "previousAmountMinor": {
                 "type": "integer"
               },
+              "previousPriceTicks": {
+                "description": "Only with `TRADE_CORRECTED`.",
+                "type": "integer"
+              },
+              "previousQuantity": {
+                "description": "Only with `TRADE_CORRECTED`.",
+                "type": "integer"
+              },
               "previousSettlementAmount": {
                 "$ref": "#/components/schemas/Amount"
               },
               "reason": {
+                "description": "`TRADE_CORRECTED` follows a trade correction (SR-36): the corrected quantity and price, the amount recomputed, the status kept (a settled instruction becomes CORRECTED).",
                 "enum": [
-                  "SIMULATED_CORRECTION"
+                  "SIMULATED_CORRECTION",
+                  "TRADE_CORRECTED"
                 ],
                 "type": "string"
               }
@@ -3682,6 +4156,121 @@
         ],
         "type": "string"
       },
+      "SplitAppliedEvent": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/EventEnvelope"
+          }
+        ],
+        "description": "Aggregate ID the action, correlation ID the participant; `occurredAt` 00:00 UTC on the effective date.",
+        "properties": {
+          "eventType": {
+            "enum": [
+              "SplitApplied"
+            ],
+            "type": "string"
+          },
+          "payload": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CorporateActionFields"
+              }
+            ],
+            "properties": {
+              "orders": {
+                "description": "The participant's resting orders as the split adjusted them.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "clientOrderId": {
+                      "nullable": true,
+                      "type": "string"
+                    },
+                    "orderId": {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "previousPrice": {
+                      "nullable": true,
+                      "type": "string"
+                    },
+                    "previousPriceTicks": {
+                      "nullable": true,
+                      "type": "integer"
+                    },
+                    "previousQuantity": {
+                      "type": "integer"
+                    },
+                    "previousRemainingQuantity": {
+                      "type": "integer"
+                    },
+                    "price": {
+                      "nullable": true,
+                      "type": "string"
+                    },
+                    "priceTicks": {
+                      "nullable": true,
+                      "type": "integer"
+                    },
+                    "quantity": {
+                      "type": "integer"
+                    },
+                    "remainingQuantity": {
+                      "type": "integer"
+                    },
+                    "side": {
+                      "$ref": "#/components/schemas/Side"
+                    },
+                    "status": {
+                      "$ref": "#/components/schemas/OrderStatus"
+                    }
+                  },
+                  "required": [
+                    "orderId",
+                    "clientOrderId",
+                    "side",
+                    "status",
+                    "previousQuantity",
+                    "quantity",
+                    "previousRemainingQuantity",
+                    "remainingQuantity",
+                    "previousPriceTicks",
+                    "priceTicks",
+                    "previousPrice",
+                    "price"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "participantId": {
+                "type": "string"
+              },
+              "quantityAfter": {
+                "type": "integer"
+              },
+              "quantityBefore": {
+                "description": "Holdings settled before the effective date.",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "participantId",
+              "quantityBefore",
+              "quantityAfter",
+              "orders",
+              "ratio",
+              "effectiveDate"
+            ]
+          },
+          "source": {
+            "enum": [
+              "exchange"
+            ],
+            "type": "string"
+          }
+        }
+      },
       "Subscription": {
         "allOf": [
           {
@@ -3835,6 +4424,9 @@
             "format": "uuid",
             "type": "string"
           },
+          "buyerFee": {
+            "$ref": "#/components/schemas/Fee"
+          },
           "buyerId": {
             "type": "string"
           },
@@ -3847,6 +4439,14 @@
           "executionId": {
             "format": "uuid",
             "type": "string"
+          },
+          "fee": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Fee"
+              }
+            ],
+            "description": "In an order's result only, the order's own side's fee."
           },
           "instrumentId": {
             "type": "string"
@@ -3867,7 +4467,19 @@
             "format": "uuid",
             "type": "string"
           },
+          "sellerFee": {
+            "$ref": "#/components/schemas/Fee"
+          },
           "sellerId": {
+            "type": "string"
+          },
+          "status": {
+            "description": "SR-36: a corrected execution shows its corrected price and quantity.",
+            "enum": [
+              "EXECUTED",
+              "CORRECTED",
+              "BUSTED"
+            ],
             "type": "string"
           },
           "tradeDate": {
@@ -3887,9 +4499,230 @@
           "currency",
           "executedAt",
           "tradeDate",
-          "intendedSettlementDate"
+          "intendedSettlementDate",
+          "status",
+          "buyerFee",
+          "sellerFee"
         ],
         "type": "object"
+      },
+      "TradeAdjustment": {
+        "additionalProperties": false,
+        "properties": {
+          "orders": {
+            "description": "The buy order, then the sell order, after the change.",
+            "items": {
+              "$ref": "#/components/schemas/Order"
+            },
+            "type": "array"
+          },
+          "trade": {
+            "$ref": "#/components/schemas/Trade"
+          }
+        },
+        "required": [
+          "trade",
+          "orders"
+        ],
+        "type": "object"
+      },
+      "TradeBustedEvent": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/EventEnvelope"
+          }
+        ],
+        "description": "Aggregate and correlation ID the execution.",
+        "properties": {
+          "eventType": {
+            "enum": [
+              "TradeBusted"
+            ],
+            "type": "string"
+          },
+          "payload": {
+            "additionalProperties": false,
+            "properties": {
+              "buyOrderId": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "buyerId": {
+                "type": "string"
+              },
+              "currency": {
+                "type": "string"
+              },
+              "executionId": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "instrumentId": {
+                "type": "string"
+              },
+              "intendedSettlementDate": {
+                "$ref": "#/components/schemas/IntendedSettlementDate"
+              },
+              "price": {
+                "$ref": "#/components/schemas/Amount"
+              },
+              "priceTicks": {
+                "type": "integer"
+              },
+              "quantity": {
+                "description": "The busted quantity.",
+                "type": "integer"
+              },
+              "reason": {
+                "description": "`OPERATOR_BUST` (or the operator's), or `SIMULATED_BUST`.",
+                "type": "string"
+              },
+              "sellOrderId": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "sellerId": {
+                "type": "string"
+              },
+              "tradeDate": {
+                "$ref": "#/components/schemas/TradeDate"
+              }
+            },
+            "required": [
+              "executionId",
+              "instrumentId",
+              "buyOrderId",
+              "sellOrderId",
+              "buyerId",
+              "sellerId",
+              "currency",
+              "reason",
+              "tradeDate",
+              "intendedSettlementDate",
+              "quantity",
+              "priceTicks",
+              "price"
+            ],
+            "type": "object"
+          },
+          "source": {
+            "enum": [
+              "exchange"
+            ],
+            "type": "string"
+          }
+        }
+      },
+      "TradeCorrectedEvent": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/EventEnvelope"
+          }
+        ],
+        "description": "Aggregate and correlation ID the execution.",
+        "properties": {
+          "eventType": {
+            "enum": [
+              "TradeCorrected"
+            ],
+            "type": "string"
+          },
+          "payload": {
+            "additionalProperties": false,
+            "properties": {
+              "buyOrderId": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "buyerFee": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/Fee"
+                  }
+                ],
+                "description": "The fee repriced on the correction."
+              },
+              "buyerId": {
+                "type": "string"
+              },
+              "currency": {
+                "type": "string"
+              },
+              "executionId": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "instrumentId": {
+                "type": "string"
+              },
+              "intendedSettlementDate": {
+                "$ref": "#/components/schemas/IntendedSettlementDate"
+              },
+              "previousPrice": {
+                "$ref": "#/components/schemas/Amount"
+              },
+              "previousPriceTicks": {
+                "type": "integer"
+              },
+              "previousQuantity": {
+                "type": "integer"
+              },
+              "price": {
+                "$ref": "#/components/schemas/Amount"
+              },
+              "priceTicks": {
+                "type": "integer"
+              },
+              "quantity": {
+                "type": "integer"
+              },
+              "reason": {
+                "description": "`OPERATOR_CORRECTION` (or the operator's), or `SIMULATED_CORRECTION`.",
+                "type": "string"
+              },
+              "sellOrderId": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "sellerFee": {
+                "$ref": "#/components/schemas/Fee"
+              },
+              "sellerId": {
+                "type": "string"
+              },
+              "tradeDate": {
+                "$ref": "#/components/schemas/TradeDate"
+              }
+            },
+            "required": [
+              "executionId",
+              "instrumentId",
+              "buyOrderId",
+              "sellOrderId",
+              "buyerId",
+              "sellerId",
+              "currency",
+              "reason",
+              "tradeDate",
+              "intendedSettlementDate",
+              "previousQuantity",
+              "quantity",
+              "previousPriceTicks",
+              "priceTicks",
+              "previousPrice",
+              "price",
+              "buyerFee",
+              "sellerFee"
+            ],
+            "type": "object"
+          },
+          "source": {
+            "enum": [
+              "exchange"
+            ],
+            "type": "string"
+          }
+        }
       },
       "TradeDate": {
         "description": "The business day the trade belongs to (FIX tag 75): its date on the business-day calendar (`clearing.cutoff` in `clearing.time_zone`, whether or not clearing runs). A trade at or after the cutoff, or on a weekend, belongs to the next business day. The same for an execution on every event and response.",
@@ -3926,6 +4759,9 @@
           "buyOrderId": {
             "format": "uuid",
             "type": "string"
+          },
+          "buyerFee": {
+            "$ref": "#/components/schemas/Fee"
           },
           "buyerId": {
             "type": "string"
@@ -4007,6 +4843,9 @@
             "format": "uuid",
             "type": "string"
           },
+          "sellerFee": {
+            "$ref": "#/components/schemas/Fee"
+          },
           "sellerId": {
             "type": "string"
           },
@@ -4043,7 +4882,9 @@
           "tickSizeMinor",
           "executedAt",
           "tradeDate",
-          "intendedSettlementDate"
+          "intendedSettlementDate",
+          "buyerFee",
+          "sellerFee"
         ],
         "type": "object"
       },
@@ -4132,7 +4973,7 @@
       "name": "Apache-2.0"
     },
     "title": "Exchange simulator API",
-    "version": "0.4.0"
+    "version": "0.6.0"
   },
   "openapi": "3.0.3",
   "paths": {
@@ -4360,6 +5201,69 @@
         ]
       }
     },
+    "/api/corporate-actions": {
+      "get": {
+        "operationId": "listCorporateActions",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/CorporateAction"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Corporate actions."
+          }
+        },
+        "summary": "Every corporate action, announced or done, in due order",
+        "tags": [
+          "corporate-actions"
+        ]
+      },
+      "post": {
+        "description": "SR-38. A cash dividend is paid at 00:00 UTC on its pay date, one `DividendPaid` per participant holding a positive quantity at the record date: its non-busted executions settling on or before then, net. A split `new:old` applies at 00:00 UTC on its effective date: resting orders' remainders × new / old (rounded down; one left with nothing is cancelled), their limit prices × old / new (to the nearest tick), the reference price of a source that is not live likewise, and one `SplitApplied` per participant with holdings or resting orders. The same action (instrument, kind, pay or effective date) is announced once (`409`).",
+        "operationId": "announceCorporateAction",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CorporateActionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CorporateAction"
+                }
+              }
+            },
+            "description": "Announced."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/Unprocessable"
+          }
+        },
+        "summary": "Announce a cash dividend or a split",
+        "tags": [
+          "corporate-actions"
+        ]
+      }
+    },
     "/api/events": {
       "get": {
         "operationId": "listEvents",
@@ -4385,6 +5289,22 @@
               "items": {
                 "$ref": "#/components/schemas/EventType"
               },
+              "type": "array"
+            },
+            "style": "form"
+          },
+          {
+            "description": "The participants whose events to return; every participant's when absent. An event is returned when it involves one of them (an order's participant, either side of a trade, settlement or outcome report, a statement's participant) or involves none, such as instrument events and `BusinessDayClosed`: the rule of a webhook subscription's `participants`. Repeat the parameter or separate IDs by commas, as `eventType`.",
+            "explode": true,
+            "in": "query",
+            "name": "participant",
+            "schema": {
+              "items": {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              "maxItems": 100,
               "type": "array"
             },
             "style": "form"
@@ -5248,6 +6168,136 @@
           }
         },
         "summary": "Executions in insertion order",
+        "tags": [
+          "trades"
+        ]
+      }
+    },
+    "/api/trades/{executionId}/bust": {
+      "post": {
+        "description": "SR-36 (FIX `ExecType` `H`). Both orders' filled quantities drop by the execution's (`OrderFillBusted`), and nothing goes back on the book: a filled order whose fills are all busted is `CANCELLED`. The settlement instruction is cancelled. A busted execution cannot change again (`409`).",
+        "operationId": "bustTrade",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "executionId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "reason": {
+                    "description": "Default `OPERATOR_BUST`.",
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TradeAdjustment"
+                }
+              }
+            },
+            "description": "The execution and both orders after the bust."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        },
+        "summary": "Bust an execution",
+        "tags": [
+          "trades"
+        ]
+      }
+    },
+    "/api/trades/{executionId}/correction": {
+      "post": {
+        "description": "SR-36 (FIX `ExecType` `G`). The price may move to any positive tick; the quantity may only go down, to at least 1. Both orders' fills follow (`OrderFillCorrected`); quantity corrected away is busted, not reinstated. The settlement instruction follows (`SettlementCorrected`). Statements drafted later show the correction; issued ones are not reissued.",
+        "operationId": "correctTrade",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "executionId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "priceTicks": {
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "quantity": {
+                    "description": "At most the executed quantity.",
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "reason": {
+                    "description": "Default `OPERATOR_CORRECTION`.",
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TradeAdjustment"
+                }
+              }
+            },
+            "description": "The execution and both orders after the correction."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        },
+        "summary": "Correct an execution's price, lower its quantity, or both",
         "tags": [
           "trades"
         ]
@@ -6275,6 +7325,10 @@
     {
       "description": "The business-day calendar, as reference data.",
       "name": "calendar"
+    },
+    {
+      "description": "Cash dividends and splits (SR-38).",
+      "name": "corporate-actions"
     },
     {
       "description": "Simulated time, readable always; speed, freeze and resume with `clock.operator_control`.",

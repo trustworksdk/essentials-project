@@ -43,8 +43,8 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 /**
  * The clearinghouse's end-of-day statements of the firm's trades (design phase 5 §1-§2): {@code ClearingStatementIssued}
  * from the exchange, by the {@code demo-clearing} webhook subscription ({@code simulators/exchange.yaml},
- * participant-filtered to the firm) and a catch-up reader of its event log, which is not, so another participant's
- * statement is dropped here. Stored as they are - tables
+ * participant-filtered to the firm) and a catch-up reader of its event log, filtered the same way (SR-39). Stored as
+ * they are - tables
  * {@code clearing_statement}, {@code clearing_trade} and {@code clearing_obligation}. Reference data, as the bank's
  * statements are; the breaks are worked out when read ({@code views/clearing_statement_breaks}).
  * <p>
@@ -101,7 +101,8 @@ public class ClearingStatements {
                                              this::record);
         var settings = new SignedWebhookReceiver.Settings(CONSUMER, Set.of(EVENT_TYPE), ClearingStatements::isComplete, inbox);
         receiver = new SignedWebhookReceiver(settings, verifier, intake, dependencies.objectMapper());
-        catchUp = new ExternalEventLogCatchUp(new ExternalEventLogCatchUp.Settings("exchange:" + CONSUMER, exchange, settings, Duration.ofSeconds(5), 500),
+        catchUp = new ExternalEventLogCatchUp(new ExternalEventLogCatchUp.Settings("exchange:" + CONSUMER, exchange, settings, Duration.ofSeconds(5), 500,
+                                                                                         Set.of(dependencies.properties().getExchange().getParticipantId())),
                                               intake,
                                               dependencies.fencedLockManager(),
                                               dependencies.jdbcTemplate(),
@@ -193,8 +194,8 @@ public class ClearingStatements {
         var jdbc        = dependencies.jdbcTemplate();
         var statementId = text(statement, "statementId").orElseThrow();
         if (!dependencies.properties().getExchange().getParticipantId().equals(text(statement, "participantId").orElseThrow())) {
-            // The event log is not participant-filtered, as the webhook subscription is: it carries every participant's
-            // statements, the liquidity provider's among them
+            // Both the subscription and the catch-up read (SR-39) ask for the firm's statements only; this keeps a
+            // statement of another participant, the liquidity provider's say, out should either ever not
             return;
         }
         var stored = jdbc.update("""

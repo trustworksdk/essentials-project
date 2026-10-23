@@ -30,6 +30,7 @@ import org.springframework.web.client.RestClient;
 import tools.jackson.databind.ObjectMapper;
 
 import java.time.Duration;
+import java.util.Set;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
@@ -85,7 +86,8 @@ public class SettlementEvents {
                                                           SettlementEventTranslation::isComplete,
                                                           reports.inbox());
         receiver = new SignedWebhookReceiver(settings, verifier, intake, dependencies.objectMapper());
-        catchUp = new ExternalEventLogCatchUp(new ExternalEventLogCatchUp.Settings("exchange:" + CONSUMER, gateway, settings, Duration.ofSeconds(5), 500),
+        catchUp = new ExternalEventLogCatchUp(new ExternalEventLogCatchUp.Settings("exchange:" + CONSUMER, gateway, settings, Duration.ofSeconds(5), 500,
+                                                                                         Set.of(dependencies.properties().getExchange().getParticipantId())),
                                               intake,
                                               dependencies.fencedLockManager(),
                                               dependencies.jdbcTemplate(),

@@ -50,7 +50,7 @@
         <!-- The simulators' OpenAPI documents are copied into src/main/openapi, so the build needs nothing outside this
              repository. This is the version they were copied from; refresh them with
              `mvn -pl examples/essentials-trading-demo initialize -P refresh-simulator-specs` after raising it. -->
-        <simulator-api-specs.version>0.4.0</simulator-api-specs.version>
+        <simulator-api-specs.version>0.6.0</simulator-api-specs.version>
         <openapi-generator.version>7.25.0</openapi-generator.version>
         <simulator.client.package>dk.trustworks.essentials.examples.trading.integration.exchange_simulator.client</simulator.client.package>
         <payment-gateway.client.package>dk.trustworks.essentials.examples.trading.integration.payment_gateway.client</payment-gateway.client.package>

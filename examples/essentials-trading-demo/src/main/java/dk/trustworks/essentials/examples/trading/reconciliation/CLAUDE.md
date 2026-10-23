@@ -14,8 +14,8 @@ phase 5 adds the clearinghouse's statements against `orders`' executions, missin
   projection keeps a false break forever.
 - **`known_payments` / `known_executions` are reconciliation's own projections** of `funding`'s and `orders`' events
   (cross-BC `events/` imports); nothing here calls into those contexts.
-- **The event log is not participant-filtered** - the webhook subscription is. `ClearingStatements` drops another
-  participant's statement (the liquidity provider's `CS:<date>:LP`) itself.
+- **Only the firm's statements**: the subscription and the catch-up read (`participant`, SR-39) both ask for them.
+  Unfiltered, the log carries the liquidity provider's `CS:<date>:LP` too; `ClearingStatements` still drops a foreign one.
 - **Bank matching is by `endToEndId` and `paymentId`** and entry kind: the gateway's phantom entry copies a real
   entry's `endToEndId` and amount under a payment that does not exist. Amounts stored unsigned.
 - **Clearing matching is by `executionId`**; a statement's trades belong to its business date as an execution belongs

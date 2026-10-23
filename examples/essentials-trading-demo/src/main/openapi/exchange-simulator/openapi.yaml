@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Exchange simulator API
-  version: 0.4.0
+  version: 0.6.0
   summary: A stock exchange simulator with price-time matching, settlement and clearing simulation, and signed webhooks.
   description: |
     Commands are answered after they are committed to SQLite. Field names are camelCase, enums use their upper-case
@@ -40,6 +40,8 @@ tags:
     description: End-of-day clearing statements.
   - name: calendar
     description: The business-day calendar, as reference data.
+  - name: corporate-actions
+    description: Cash dividends and splits (SR-38).
   - name: clock
     description: Simulated time, readable always; speed, freeze and resume with `clock.operator_control`.
   - name: webhooks
@@ -420,6 +422,107 @@ paths:
                 items: { $ref: "#/components/schemas/Trade" }
         "400": { $ref: "#/components/responses/BadRequest" }
 
+  /api/trades/{executionId}/correction:
+    post:
+      tags: [trades]
+      operationId: correctTrade
+      summary: Correct an execution's price, lower its quantity, or both
+      description: >-
+        SR-36 (FIX `ExecType` `G`). The price may move to any positive tick; the quantity may only go down, to at least
+        1. Both orders' fills follow (`OrderFillCorrected`); quantity corrected away is busted, not reinstated. The
+        settlement instruction follows (`SettlementCorrected`). Statements drafted later show the correction; issued
+        ones are not reissued.
+      parameters:
+        - { name: executionId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                priceTicks: { type: integer, minimum: 1 }
+                quantity: { type: integer, minimum: 1, description: At most the executed quantity. }
+                reason: { type: string, minLength: 1, maxLength: 64, description: "Default `OPERATOR_CORRECTION`." }
+      responses:
+        "200":
+          description: The execution and both orders after the correction.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TradeAdjustment" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/trades/{executionId}/bust:
+    post:
+      tags: [trades]
+      operationId: bustTrade
+      summary: Bust an execution
+      description: >-
+        SR-36 (FIX `ExecType` `H`). Both orders' filled quantities drop by the execution's (`OrderFillBusted`), and
+        nothing goes back on the book: a filled order whose fills are all busted is `CANCELLED`. The settlement
+        instruction is cancelled. A busted execution cannot change again (`409`).
+      parameters:
+        - { name: executionId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                reason: { type: string, minLength: 1, maxLength: 64, description: "Default `OPERATOR_BUST`." }
+      responses:
+        "200":
+          description: The execution and both orders after the bust.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TradeAdjustment" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/corporate-actions:
+    get:
+      tags: [corporate-actions]
+      operationId: listCorporateActions
+      summary: Every corporate action, announced or done, in due order
+      responses:
+        "200":
+          description: Corporate actions.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/CorporateAction" }
+    post:
+      tags: [corporate-actions]
+      operationId: announceCorporateAction
+      summary: Announce a cash dividend or a split
+      description: >-
+        SR-38. A cash dividend is paid at 00:00 UTC on its pay date, one `DividendPaid` per participant holding a
+        positive quantity at the record date: its non-busted executions settling on or before then, net. A split
+        `new:old` applies at 00:00 UTC on its effective date: resting orders' remainders × new / old (rounded down;
+        one left with nothing is cancelled), their limit prices × old / new (to the nearest tick), the reference price
+        of a source that is not live likewise, and one `SplitApplied` per participant with holdings or resting orders.
+        The same action (instrument, kind, pay or effective date) is announced once (`409`).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CorporateActionRequest" }
+      responses:
+        "201":
+          description: Announced.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CorporateAction" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+
   /api/events:
     get:
       tags: [events]
@@ -436,6 +539,16 @@ paths:
           style: form
           explode: true
           schema: { type: array, items: { $ref: "#/components/schemas/EventType" } }
+        - name: participant
+          in: query
+          description: >-
+            The participants whose events to return; every participant's when absent. An event is returned when it
+            involves one of them (an order's participant, either side of a trade, settlement or outcome report, a
+            statement's participant) or involves none, such as instrument events and `BusinessDayClosed`: the rule of
+            a webhook subscription's `participants`. Repeat the parameter or separate IDs by commas, as `eventType`.
+          style: form
+          explode: true
+          schema: { type: array, maxItems: 100, items: { type: string, minLength: 1, maxLength: 64 } }
       responses:
         "200":
           description: Events.
@@ -1072,6 +1185,48 @@ webhooks:
       operationId: onOrderExpired
       requestBody: { $ref: "#/components/requestBodies/OrderExpiredEvent" }
       responses: { "2XX": { $ref: "#/components/responses/WebhookAck" } }
+  CorporateActionAnnounced:
+    post:
+      summary: A cash dividend or a split was announced (SR-38)
+      operationId: onCorporateActionAnnounced
+      requestBody: { $ref: "#/components/requestBodies/CorporateActionAnnouncedEvent" }
+      responses: { "2XX": { $ref: "#/components/responses/WebhookAck" } }
+  DividendPaid:
+    post:
+      summary: A participant was paid a cash dividend on its holdings at the record date (SR-38)
+      operationId: onDividendPaid
+      requestBody: { $ref: "#/components/requestBodies/DividendPaidEvent" }
+      responses: { "2XX": { $ref: "#/components/responses/WebhookAck" } }
+  SplitApplied:
+    post:
+      summary: A split was applied to a participant's holdings and resting orders (SR-38)
+      operationId: onSplitApplied
+      requestBody: { $ref: "#/components/requestBodies/SplitAppliedEvent" }
+      responses: { "2XX": { $ref: "#/components/responses/WebhookAck" } }
+  TradeCorrected:
+    post:
+      summary: An execution's price or quantity was corrected (SR-36)
+      operationId: onTradeCorrected
+      requestBody: { $ref: "#/components/requestBodies/TradeCorrectedEvent" }
+      responses: { "2XX": { $ref: "#/components/responses/WebhookAck" } }
+  TradeBusted:
+    post:
+      summary: An execution was busted (SR-36)
+      operationId: onTradeBusted
+      requestBody: { $ref: "#/components/requestBodies/TradeBustedEvent" }
+      responses: { "2XX": { $ref: "#/components/responses/WebhookAck" } }
+  OrderFillCorrected:
+    post:
+      summary: An order's fill was corrected, with the order's new running totals (SR-36)
+      operationId: onOrderFillCorrected
+      requestBody: { $ref: "#/components/requestBodies/OrderFillCorrectedEvent" }
+      responses: { "2XX": { $ref: "#/components/responses/WebhookAck" } }
+  OrderFillBusted:
+    post:
+      summary: An order's fill was busted, with the order's new running totals (SR-36)
+      operationId: onOrderFillBusted
+      requestBody: { $ref: "#/components/requestBodies/OrderFillBustedEvent" }
+      responses: { "2XX": { $ref: "#/components/responses/WebhookAck" } }
   TradeExecuted:
     post:
       summary: A trade, with everything a settlement consumer needs
@@ -1245,6 +1400,20 @@ components:
       content: { application/json: { schema: { $ref: "#/components/schemas/OrderExpiredEvent" } } }
     TradeExecutedEvent:
       content: { application/json: { schema: { $ref: "#/components/schemas/TradeExecutedEvent" } } }
+    TradeCorrectedEvent:
+      content: { application/json: { schema: { $ref: "#/components/schemas/TradeCorrectedEvent" } } }
+    CorporateActionAnnouncedEvent:
+      content: { application/json: { schema: { $ref: "#/components/schemas/CorporateActionAnnouncedEvent" } } }
+    DividendPaidEvent:
+      content: { application/json: { schema: { $ref: "#/components/schemas/DividendPaidEvent" } } }
+    SplitAppliedEvent:
+      content: { application/json: { schema: { $ref: "#/components/schemas/SplitAppliedEvent" } } }
+    TradeBustedEvent:
+      content: { application/json: { schema: { $ref: "#/components/schemas/TradeBustedEvent" } } }
+    OrderFillCorrectedEvent:
+      content: { application/json: { schema: { $ref: "#/components/schemas/OrderFillCorrectedEvent" } } }
+    OrderFillBustedEvent:
+      content: { application/json: { schema: { $ref: "#/components/schemas/OrderFillBustedEvent" } } }
     InstrumentListedEvent:
       content: { application/json: { schema: { $ref: "#/components/schemas/InstrumentListedEvent" } } }
     InstrumentUpdatedEvent:
@@ -1666,7 +1835,7 @@ components:
       type: object
       additionalProperties: false
       required: [orderId, clientOrderId, instrumentId, participantId, side, type, priceTicks, price, quantity,
-                 remainingQuantity, filledQuantity, status, sequence, timeInForce]
+                 remainingQuantity, filledQuantity, bustedQuantity, status, sequence, timeInForce]
       properties:
         orderId: { type: string, format: uuid }
         clientOrderId: { type: [string, "null"] }
@@ -1679,6 +1848,11 @@ components:
         quantity: { type: integer }
         remainingQuantity: { type: integer }
         filledQuantity: { type: integer }
+        bustedQuantity:
+          type: integer
+          description: >-
+            Quantity whose fills were busted or corrected away (SR-36), not reinstated: quantity = filled + remaining
+            + busted.
         status: { $ref: "#/components/schemas/OrderStatus" }
         sequence: { type: integer }
         timeInForce: { $ref: "#/components/schemas/TimeInForce" }
@@ -1699,7 +1873,7 @@ components:
       type: object
       additionalProperties: false
       required: [executionId, instrumentId, buyOrderId, sellOrderId, buyerId, sellerId, priceTicks, price, quantity,
-                 currency, executedAt, tradeDate, intendedSettlementDate]
+                 currency, executedAt, tradeDate, intendedSettlementDate, status, buyerFee, sellerFee]
       properties:
         executionId: { type: string, format: uuid }
         instrumentId: { type: string }
@@ -1714,6 +1888,35 @@ components:
         executedAt: { $ref: "#/components/schemas/Timestamp" }
         tradeDate: { $ref: "#/components/schemas/TradeDate" }
         intendedSettlementDate: { $ref: "#/components/schemas/IntendedSettlementDate" }
+        status:
+          enum: [EXECUTED, CORRECTED, BUSTED]
+          description: "SR-36: a corrected execution shows its corrected price and quantity."
+        buyerFee: { $ref: "#/components/schemas/Fee" }
+        sellerFee: { $ref: "#/components/schemas/Fee" }
+        fee:
+          allOf: [{ $ref: "#/components/schemas/Fee" }]
+          description: In an order's result only, the order's own side's fee.
+    Fee:
+      type: object
+      additionalProperties: false
+      required: [amount, amountMinor, currency]
+      description: >-
+        What one side pays the exchange for an execution (SR-37): the maker's or taker's rate of its value (`fees`),
+        at least the minimum, in the instrument's currency.
+      properties:
+        amount: { $ref: "#/components/schemas/Amount" }
+        amountMinor: { type: integer, minimum: 0 }
+        currency: { type: string }
+    TradeAdjustment:
+      type: object
+      additionalProperties: false
+      required: [trade, orders]
+      properties:
+        trade: { $ref: "#/components/schemas/Trade" }
+        orders:
+          type: array
+          description: The buy order, then the sell order, after the change.
+          items: { $ref: "#/components/schemas/Order" }
     TradeDate:
       type: string
       format: date
@@ -1860,7 +2063,7 @@ components:
       type: object
       additionalProperties: false
       required: [executionId, tradeSequence, instrumentId, side, quantity, priceTicks, currency, currencyScale,
-                 amountMinor, amount, executedAt, tradeDate, intendedSettlementDate, obligationId]
+                 amountMinor, amount, executedAt, tradeDate, intendedSettlementDate, obligationId, feeMinor, fee]
       properties:
         executionId: { type: string, format: uuid }
         tradeSequence: { type: integer }
@@ -1876,11 +2079,13 @@ components:
         tradeDate: { $ref: "#/components/schemas/Date" }
         intendedSettlementDate: { $ref: "#/components/schemas/Date" }
         obligationId: { type: string }
+        feeMinor: { type: integer, description: "What the participant pays the exchange for this trade (SR-37)." }
+        fee: { $ref: "#/components/schemas/Amount" }
     Obligation:
       type: object
       additionalProperties: false
       required: [obligationId, instrumentId, intendedSettlementDate, currency, currencyScale, securitiesNet,
-                 cashNetMinor, cashNet, tradeCount]
+                 cashNetMinor, cashNet, tradeCount, feesNetMinor, feesNet]
       description: Positive receives, negative delivers.
       properties:
         obligationId: { type: string, description: "`<statementId>:<instrument>:<settlementDate>`" }
@@ -1892,6 +2097,10 @@ components:
         cashNetMinor: { type: integer }
         cashNet: { $ref: "#/components/schemas/Amount" }
         tradeCount: { type: integer }
+        feesNetMinor:
+          type: integer
+          description: The obligation's trades' fees (SR-37), owed to the exchange apart from the cash settled.
+        feesNet: { $ref: "#/components/schemas/Amount" }
     ClearingBreaks:
       type: object
       additionalProperties: false
@@ -1964,6 +2173,8 @@ components:
 
     EventType:
       enum: [OrderAccepted, OrderRejected, OrderPartiallyFilled, OrderFilled, OrderCancelled, OrderExpired, TradeExecuted,
+             TradeCorrected, TradeBusted, OrderFillCorrected, OrderFillBusted, CorporateActionAnnounced, DividendPaid,
+             SplitApplied,
              InstrumentListed, InstrumentUpdated, ClockChanged, BusinessDayClosed, ClosingPriceIssued, SettlementPending, SettlementCompleted, SettlementFailed, SettlementRejected, SettlementDelayed,
              SettlementCorrected, SettlementCancelled, SettlementOutcomeReported, ClearingStatementIssued]
     EventEnvelope:
@@ -1987,7 +2198,7 @@ components:
       type: object
       additionalProperties: false
       required: [orderId, clientOrderId, instrumentId, participantId, side, type, priceTicks, price, quantity,
-                 remainingQuantity, filledQuantity, status, sequence, timeInForce]
+                 remainingQuantity, filledQuantity, bustedQuantity, status, sequence, timeInForce]
       properties:
         orderId: { type: string, format: uuid }
         clientOrderId: { type: [string, "null"] }
@@ -2000,6 +2211,11 @@ components:
         quantity: { type: integer }
         remainingQuantity: { type: integer }
         filledQuantity: { type: integer }
+        bustedQuantity:
+          type: integer
+          description: >-
+            Quantity whose fills were busted or corrected away (SR-36), not reinstated: quantity = filled + remaining
+            + busted.
         status: { $ref: "#/components/schemas/OrderStatus" }
         sequence: { type: integer }
         timeInForce: { $ref: "#/components/schemas/TimeInForce" }
@@ -2014,6 +2230,13 @@ components:
         lastQuantity: { type: integer, description: "On fill events, what this execution filled (FIX LastQty)." }
         lastPriceTicks: { type: integer, description: "On fill events, the execution's price in ticks (FIX LastPx)." }
         lastPrice: { type: string, description: "On fill events, the execution's price in major units (FIX LastPx)." }
+        lastFee:
+          allOf: [{ $ref: "#/components/schemas/Fee" }]
+          description: On fill events, the order's side's fee for the execution (SR-37, FIX Commission).
+        previousLastQuantity: { type: integer, description: "On OrderFillCorrected, the execution's quantity before." }
+        previousLastPriceTicks: { type: integer, description: "On OrderFillCorrected, the execution's price before." }
+        previousLastPrice: { type: string, description: "On OrderFillCorrected, the execution's price before." }
+        reason: { type: string, description: "On OrderFillCorrected and OrderFillBusted, why." }
         tradeDate:
           $ref: "#/components/schemas/TradeDate"
           description: On fill events, the execution's.
@@ -2028,7 +2251,7 @@ components:
       additionalProperties: false
       required: [executionId, instrumentId, instrument, buyOrderId, sellOrderId, buyerId, sellerId, buyerSettlement,
                  sellerSettlement, priceTicks, price, quantity, currency, currencyScale, tickSizeMinor, executedAt,
-                 tradeDate, intendedSettlementDate]
+                 tradeDate, intendedSettlementDate, buyerFee, sellerFee]
       properties:
         executionId: { type: string, format: uuid }
         instrumentId: { type: string }
@@ -2061,6 +2284,8 @@ components:
         executedAt: { $ref: "#/components/schemas/Timestamp" }
         tradeDate: { $ref: "#/components/schemas/TradeDate" }
         intendedSettlementDate: { $ref: "#/components/schemas/IntendedSettlementDate" }
+        buyerFee: { $ref: "#/components/schemas/Fee" }
+        sellerFee: { $ref: "#/components/schemas/Fee" }
     InstrumentEventPayload:
       type: object
       required: [instrumentId, symbol, mic, isin, cusip, currency, currencyScale, tickSizeMinor, tickSize, lotSize,
@@ -2135,7 +2360,7 @@ components:
         source: { const: exchange }
         payload:
           allOf: [{ $ref: "#/components/schemas/OrderEventPayload" }]
-          required: [executionId, lastQuantity, lastPriceTicks, lastPrice, tradeDate, intendedSettlementDate]
+          required: [executionId, lastQuantity, lastPriceTicks, lastPrice, lastFee, tradeDate, intendedSettlementDate]
     OrderFilledEvent:
       allOf: [{ $ref: "#/components/schemas/EventEnvelope" }]
       properties:
@@ -2143,7 +2368,7 @@ components:
         source: { const: exchange }
         payload:
           allOf: [{ $ref: "#/components/schemas/OrderEventPayload" }]
-          required: [executionId, lastQuantity, lastPriceTicks, lastPrice, tradeDate, intendedSettlementDate]
+          required: [executionId, lastQuantity, lastPriceTicks, lastPrice, lastFee, tradeDate, intendedSettlementDate]
     OrderCancelledEvent:
       allOf: [{ $ref: "#/components/schemas/EventEnvelope" }]
       properties:
@@ -2162,6 +2387,190 @@ components:
         eventType: { const: TradeExecuted }
         source: { const: exchange }
         payload: { $ref: "#/components/schemas/TradeExecutedPayload" }
+    CorporateActionRequest:
+      type: object
+      additionalProperties: false
+      required: [kind, instrumentId]
+      description: >-
+        A cash dividend takes `exDate` ≤ `recordDate` ≤ `payDate` and `amountPerShare` (at most the currency's
+        decimals); a split takes `ratio` (`new:old`, not 1:1) and `effectiveDate`.
+      properties:
+        kind: { enum: [CASH_DIVIDEND, SPLIT] }
+        instrumentId: { type: string }
+        exDate: { $ref: "#/components/schemas/Date" }
+        recordDate: { $ref: "#/components/schemas/Date" }
+        payDate: { $ref: "#/components/schemas/Date" }
+        amountPerShare: { $ref: "#/components/schemas/Amount" }
+        ratio: { type: string, pattern: "^[0-9]+:[0-9]+$", description: "`new:old`, e.g. `2:1`." }
+        effectiveDate: { $ref: "#/components/schemas/Date" }
+    CorporateAction:
+      type: object
+      additionalProperties: false
+      required: [corporateActionId, kind, instrumentId, announcedAt, status]
+      properties:
+        corporateActionId: { type: string, description: "`CA:<instrument>:<kind>:<payDate or effectiveDate>`" }
+        kind: { enum: [CASH_DIVIDEND, SPLIT] }
+        instrumentId: { type: string }
+        announcedAt: { $ref: "#/components/schemas/Timestamp" }
+        status: { enum: [ANNOUNCED, DONE] }
+        exDate: { $ref: "#/components/schemas/Date" }
+        recordDate: { $ref: "#/components/schemas/Date" }
+        payDate: { $ref: "#/components/schemas/Date" }
+        amountPerShare: { $ref: "#/components/schemas/Amount" }
+        amountPerShareMinor: { type: integer }
+        currency: { type: string }
+        ratio: { type: string }
+        effectiveDate: { $ref: "#/components/schemas/Date" }
+    CorporateActionAnnouncedEvent:
+      allOf: [{ $ref: "#/components/schemas/EventEnvelope" }]
+      description: Aggregate ID the action; no correlation ID.
+      properties:
+        eventType: { const: CorporateActionAnnounced }
+        source: { const: exchange }
+        payload: { $ref: "#/components/schemas/CorporateAction" }
+    DividendPaidEvent:
+      allOf: [{ $ref: "#/components/schemas/EventEnvelope" }]
+      description: Aggregate ID the action, correlation ID the participant; `occurredAt` 00:00 UTC on the pay date.
+      properties:
+        eventType: { const: DividendPaid }
+        source: { const: exchange }
+        payload:
+          allOf: [{ $ref: "#/components/schemas/CorporateActionFields" }]
+          required: [participantId, quantity, amount, amountMinor, recordDate, payDate, amountPerShare, currency]
+          properties:
+            participantId: { type: string }
+            quantity: { type: integer, minimum: 1, description: Holdings at the record date. }
+            amount: { $ref: "#/components/schemas/Amount" }
+            amountMinor: { type: integer }
+          unevaluatedProperties: false
+    SplitAppliedEvent:
+      allOf: [{ $ref: "#/components/schemas/EventEnvelope" }]
+      description: >-
+        Aggregate ID the action, correlation ID the participant; `occurredAt` 00:00 UTC on the effective date.
+      properties:
+        eventType: { const: SplitApplied }
+        source: { const: exchange }
+        payload:
+          allOf: [{ $ref: "#/components/schemas/CorporateActionFields" }]
+          required: [participantId, quantityBefore, quantityAfter, orders, ratio, effectiveDate]
+          properties:
+            participantId: { type: string }
+            quantityBefore: { type: integer, description: Holdings settled before the effective date. }
+            quantityAfter: { type: integer }
+            orders:
+              type: array
+              description: The participant's resting orders as the split adjusted them.
+              items:
+                type: object
+                additionalProperties: false
+                required: [orderId, clientOrderId, side, status, previousQuantity, quantity, previousRemainingQuantity,
+                           remainingQuantity, previousPriceTicks, priceTicks, previousPrice, price]
+                properties:
+                  orderId: { type: string, format: uuid }
+                  clientOrderId: { type: [string, "null"] }
+                  side: { $ref: "#/components/schemas/Side" }
+                  status: { $ref: "#/components/schemas/OrderStatus" }
+                  previousQuantity: { type: integer }
+                  quantity: { type: integer }
+                  previousRemainingQuantity: { type: integer }
+                  remainingQuantity: { type: integer }
+                  previousPriceTicks: { type: [integer, "null"] }
+                  priceTicks: { type: [integer, "null"] }
+                  previousPrice: { type: [string, "null"] }
+                  price: { type: [string, "null"] }
+          unevaluatedProperties: false
+    CorporateActionFields:
+      type: object
+      description: The action as announced, on its paid and applied events.
+      properties:
+        corporateActionId: { type: string }
+        kind: { enum: [CASH_DIVIDEND, SPLIT] }
+        instrumentId: { type: string }
+        announcedAt: { $ref: "#/components/schemas/Timestamp" }
+        status: { enum: [ANNOUNCED, DONE] }
+        exDate: { $ref: "#/components/schemas/Date" }
+        recordDate: { $ref: "#/components/schemas/Date" }
+        payDate: { $ref: "#/components/schemas/Date" }
+        amountPerShare: { $ref: "#/components/schemas/Amount" }
+        amountPerShareMinor: { type: integer }
+        currency: { type: string }
+        ratio: { type: string }
+        effectiveDate: { $ref: "#/components/schemas/Date" }
+    TradeCorrectedEvent:
+      allOf: [{ $ref: "#/components/schemas/EventEnvelope" }]
+      description: Aggregate and correlation ID the execution.
+      properties:
+        eventType: { const: TradeCorrected }
+        source: { const: exchange }
+        payload:
+          type: object
+          additionalProperties: false
+          required: [executionId, instrumentId, buyOrderId, sellOrderId, buyerId, sellerId, currency, reason, tradeDate,
+                     intendedSettlementDate, previousQuantity, quantity, previousPriceTicks, priceTicks, previousPrice,
+                     price, buyerFee, sellerFee]
+          properties:
+            executionId: { type: string, format: uuid }
+            instrumentId: { type: string }
+            buyOrderId: { type: string, format: uuid }
+            sellOrderId: { type: string, format: uuid }
+            buyerId: { type: string }
+            sellerId: { type: string }
+            currency: { type: string }
+            reason: { type: string, description: "`OPERATOR_CORRECTION` (or the operator's), or `SIMULATED_CORRECTION`." }
+            tradeDate: { $ref: "#/components/schemas/TradeDate" }
+            intendedSettlementDate: { $ref: "#/components/schemas/IntendedSettlementDate" }
+            previousQuantity: { type: integer }
+            quantity: { type: integer }
+            previousPriceTicks: { type: integer }
+            priceTicks: { type: integer }
+            previousPrice: { $ref: "#/components/schemas/Amount" }
+            price: { $ref: "#/components/schemas/Amount" }
+            buyerFee: { $ref: "#/components/schemas/Fee", description: The fee repriced on the correction. }
+            sellerFee: { $ref: "#/components/schemas/Fee" }
+    TradeBustedEvent:
+      allOf: [{ $ref: "#/components/schemas/EventEnvelope" }]
+      description: Aggregate and correlation ID the execution.
+      properties:
+        eventType: { const: TradeBusted }
+        source: { const: exchange }
+        payload:
+          type: object
+          additionalProperties: false
+          required: [executionId, instrumentId, buyOrderId, sellOrderId, buyerId, sellerId, currency, reason, tradeDate,
+                     intendedSettlementDate, quantity, priceTicks, price]
+          properties:
+            executionId: { type: string, format: uuid }
+            instrumentId: { type: string }
+            buyOrderId: { type: string, format: uuid }
+            sellOrderId: { type: string, format: uuid }
+            buyerId: { type: string }
+            sellerId: { type: string }
+            currency: { type: string }
+            reason: { type: string, description: "`OPERATOR_BUST` (or the operator's), or `SIMULATED_BUST`." }
+            tradeDate: { $ref: "#/components/schemas/TradeDate" }
+            intendedSettlementDate: { $ref: "#/components/schemas/IntendedSettlementDate" }
+            quantity: { type: integer, description: The busted quantity. }
+            priceTicks: { type: integer }
+            price: { $ref: "#/components/schemas/Amount" }
+    OrderFillCorrectedEvent:
+      allOf: [{ $ref: "#/components/schemas/EventEnvelope" }]
+      description: Aggregate the order, correlation ID the execution. The execution's fields are the corrected ones.
+      properties:
+        eventType: { const: OrderFillCorrected }
+        source: { const: exchange }
+        payload:
+          allOf: [{ $ref: "#/components/schemas/OrderEventPayload" }]
+          required: [executionId, lastQuantity, lastPriceTicks, lastPrice, lastFee, previousLastQuantity, previousLastPriceTicks,
+                     previousLastPrice, reason, tradeDate, intendedSettlementDate]
+    OrderFillBustedEvent:
+      allOf: [{ $ref: "#/components/schemas/EventEnvelope" }]
+      description: Aggregate the order, correlation ID the execution. The execution's fields are the busted ones.
+      properties:
+        eventType: { const: OrderFillBusted }
+        source: { const: exchange }
+        payload:
+          allOf: [{ $ref: "#/components/schemas/OrderEventPayload" }]
+          required: [executionId, lastQuantity, lastPriceTicks, lastPrice, lastFee, reason, tradeDate, intendedSettlementDate]
     ClockChangedPayload:
       type: object
       additionalProperties: false
@@ -2324,9 +2733,15 @@ components:
           allOf: [{ $ref: "#/components/schemas/SettlementPayloadBase" }]
           required: [reason, previousSettlementAmount, previousAmountMinor]
           properties:
-            reason: { const: SIMULATED_CORRECTION }
+            reason:
+              enum: [SIMULATED_CORRECTION, TRADE_CORRECTED]
+              description: >-
+                `TRADE_CORRECTED` follows a trade correction (SR-36): the corrected quantity and price, the amount
+                recomputed, the status kept (a settled instruction becomes CORRECTED).
             previousSettlementAmount: { $ref: "#/components/schemas/Amount" }
             previousAmountMinor: { type: integer }
+            previousQuantity: { type: integer, description: Only with `TRADE_CORRECTED`. }
+            previousPriceTicks: { type: integer, description: Only with `TRADE_CORRECTED`. }
           unevaluatedProperties: false
     SettlementCancelledEvent:
       allOf: [{ $ref: "#/components/schemas/EventEnvelope" }]
@@ -2337,7 +2752,9 @@ components:
           allOf: [{ $ref: "#/components/schemas/SettlementPayloadBase" }]
           required: [reason]
           properties:
-            reason: { const: SIMULATED_CANCELLATION }
+            reason:
+              enum: [SIMULATED_CANCELLATION, TRADE_BUSTED]
+              description: "`TRADE_BUSTED` follows a trade bust (SR-36)."
           unevaluatedProperties: false
     SettlementOutcomeReportedEvent:
       allOf: [{ $ref: "#/components/schemas/EventEnvelope" }]

@@ -570,6 +570,8 @@ Wednesday on the gateway, and a return 1 business day later is booked on Friday.
 
 ### SR-36 — Trade corrections and busts (LATER) [after phase 5]
 
+**Implemented in simulators 0.6.0**; not consumed yet - the demo books no trade corrections or busts (a later phase).
+
 An exchange corrects an execution's price or quantity, or cancels ("busts") it, after the fact, and tells both
 members with an execution report (FIX `ExecType` `G` Trade Correct and `H` Trade Cancel, `ExecRefID` naming the
 execution). The simulator has `SettlementCorrected`, which changes a settlement amount, but no correction of the trade
@@ -589,6 +591,8 @@ settlement is cancelled; a corrected price shows on `TradeCorrected`, the fill c
 
 ### SR-37 — Exchange fees (LATER) [after phase 5]
 
+**Implemented in simulators 0.6.0**; not consumed yet - the demo books no exchange fees (a later phase).
+
 A member pays the exchange per execution, and the fee is on the execution report (FIX `Commission`/`MiscFees`) and on
 the clearing statement. The simulator charges nothing, so the demo cannot show fees on a statement or reconcile them.
 
@@ -601,6 +605,8 @@ the clearing statement. The simulator charges nothing, so the demo cannot show f
 the statement's `feesNet`.
 
 ### SR-38 — Corporate actions (LATER) [after phase 5]
+
+**Implemented in simulators 0.6.0**; not consumed yet - the demo books no dividends or splits (a later phase).
 
 A broker books dividends and adjusts positions for splits from the market's announcements. The simulator has neither.
 
@@ -618,6 +624,8 @@ amount on the pay date, and a 2:1 split doubles a resting order's quantity and h
 ---
 
 ### SR-39 — Participant filter on the event log (SHOULD) [phase 6]
+
+**Implemented in simulators 0.6.0**; the demo consumes it (`ExternalEventLogCatchUp.Settings.participants`).
 
 A webhook subscription delivers only the events of its listed participants (SR-19), but `GET /api/events` returns
 every participant's. A member's catch-up reader therefore reads, and must drop, the other members' clearing statements
