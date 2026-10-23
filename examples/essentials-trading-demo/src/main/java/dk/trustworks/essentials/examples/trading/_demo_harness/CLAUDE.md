@@ -442,3 +442,30 @@ the DB and its CDC slot, start one instance on it, run, stop).
   Not yet known: which shared resource carries the interference (CDC bus, connection pool, or CPU).
 - **Correct throughout**: every order and payment reached its outcome, every fill booked, 0 dead letters, 0 cases,
   0 missing statements, at every rush rate.
+
+### Business-day trading and the settlement wave, 2026-10-23
+
+The driver now trades only inside the exchange's business days (`0eec2946`). Same 300/s profile, fresh database and
+simulators, 7 business days (a weekend inside), sampled every ~3 s (pool, each subscriber's lag behind its stream's
+head, queue depths, container CPU; `wave-sampler.sh` in the session scratchpad):
+
+| | Trading 24/7 (`burst300`, earlier) | Business days only |
+|---|---|---|
+| Settlement completions per date | 3 305 - **16 860** | 2 765 - 4 563, flat |
+| Worst 10 s median, placed → booked | 20 s | **1.8 s** |
+| Placed → booked p50 / p99 | 0.41 s / 50 s | 0.37 s / **12.5 s** |
+| Router p99 / ledger p99 | 49 s / 17 s | 15.5 s / 2.4 s |
+| Checks | all pass | all pass |
+
+- **The wave now lands outside trading.** The exchange settles at 00:00 UTC, which is 19:00 in New York, after the
+  16:30 cutoff: the settlement ledger processor's lag peaks (1 000-3 000 events) while the order flow is idle. A
+  nightly settlement batch is what real clearing does, so this is the realistic case; the overlap seen earlier came
+  from weekend trading.
+- **Not the connection pool**: active connections peak at 29 of 40, threads waiting for one were 0 in every sample.
+  PostgreSQL runs at ~2 cores while trading.
+- **Behind the opens, one stage per processor**: at each open the router falls ~1 000-1 600 `Orders` events behind and
+  catches up within the business day (~40 real seconds); the ledger processor tracks it. **`OrdersProjection` falls
+  5 000-7 500 events behind** and catches up only in the evening: a customer's order list is seconds stale through
+  the trading day. The view ceiling of phase 1 (~700-800 events/s per exclusive `ViewEventProcessor`), now visible to
+  a customer - the case for the parked batched view handling.
+- The sampler's `cpu:app` (`ps %cpu`) is a lifetime average and useless; read the app's CPU from `top` next time.
