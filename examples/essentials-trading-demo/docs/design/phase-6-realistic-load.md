@@ -1,6 +1,6 @@
 # Phase 6 design — realistic load
 
-**Status:** proposed (2026-10-23). Open decisions are marked **(Q-n)** and collected in §9.
+**Status:** decided (§9, 2026-10-23). Decisions are marked **(Q-n)** in the text.
 **Plan:** [`../EXPANSION_PLAN.md`](../EXPANSION_PLAN.md) phase 6; decisions D1, D11; simulator requirements SR-4,
 SR-15, SR-20, SR-23, SR-34, SR-39; Essentials feature EF-2.
 **Builds on:** the per-phase load scenarios in `_demo_harness` (ledger, order flow, funding), each measured alone, and
@@ -142,12 +142,14 @@ not needed for the targets above - synthetic prices give the burst - and stay op
 
 ---
 
-## 9. Decisions to take
+## 9. Decisions
 
-| | Question | Proposed |
+Decided 2026-10-23.
+
+| | Question | Decided |
 |---|---|---|
 | **Q-1** | How the load reaches the brokerage | Over HTTP, through the public API, each customer logged in once per session (cookie), pinned to one instance by the driver; the in-process scenarios stay |
-| **Q-2** | Where the driver runs | A separate JVM: a `load-driver` profile of this module, `run-load.sh` |
-| **Q-3** | Targets | §4: 10 000 customers, 100 orders/s steady, 600/s bursts at each open, an hour, pass criteria as listed |
-| **Q-4** | Instances on this machine | Two and three instances for correctness under load; throughput scaling indicative only until other hardware |
-| **Q-5** | "Benchmarks against `main`" | A phase 6 baseline on this branch; each library change measured before/after against it, from worktrees |
+| **Q-2** | Where the driver runs | A separate JVM, `run-load.sh` |
+| **Q-3** | Targets | §4's profile is the goal, not the start: **start smaller, everything configurable** (population, active customers, steady and burst rates, mix, duration) |
+| **Q-4** | Instances on this machine | **One instance is the baseline.** Two or three are a stretch in the devcontainer; the user runs them on other hardware once the driver is more complete |
+| **Q-5** | "Benchmarks against `main`" | **Not yet** - not before the next release is merged into this branch |

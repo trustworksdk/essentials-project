@@ -118,6 +118,12 @@ for; one instance exercises none of its ownership, rebalancing or fencing.
   `spring.docker.compose.lifecycle-management: start-only`; the database outlives the demo and
   `docker compose down` stops it.
 
+## Load driver
+
+`./run-load.sh` (phase 6, `docs/design/phase-6-realistic-load.md`) drives running instances over HTTP as simulated
+customers, from a JVM of its own; details in `_demo_harness/CLAUDE.md`, "The load driver". Needs the `simulators`
+profile - it follows the exchange's business days.
+
 ## Simulators profile
 
 `run-instance.sh N simulators` (or profile `compose,simulators`): the exchange-simulator (`localhost:18080`) and the

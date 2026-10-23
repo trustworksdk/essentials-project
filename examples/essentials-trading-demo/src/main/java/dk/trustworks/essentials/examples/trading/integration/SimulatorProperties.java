@@ -46,6 +46,16 @@ public class SimulatorProperties {
      * message-handling timeout.
      */
     private Duration       readTimeout        = Duration.ofSeconds(5);
+    /**
+     * How long an accepted event's deduplication row ({@code external_inbound_event}) is kept. It must outlast every way
+     * a copy can still arrive - the simulators' webhook retries, and a catch-up read behind its cursor - or that copy
+     * is taken as new; the consumers are idempotent on the source's own ids (D11), so one that is still costs nothing.
+     */
+    private Duration       inboundEventRetention = Duration.ofDays(7);
+    /**
+     * How often rows older than {@link #inboundEventRetention} are deleted.
+     */
+    private Duration       inboundEventPruneInterval = Duration.ofHours(1);
 
     public Exchange getExchange() {
         return exchange;
@@ -61,6 +71,22 @@ public class SimulatorProperties {
 
     public void setWebhookSecretFile(String webhookSecretFile) {
         this.webhookSecretFile = webhookSecretFile;
+    }
+
+    public Duration getInboundEventRetention() {
+        return inboundEventRetention;
+    }
+
+    public void setInboundEventRetention(Duration inboundEventRetention) {
+        this.inboundEventRetention = inboundEventRetention;
+    }
+
+    public Duration getInboundEventPruneInterval() {
+        return inboundEventPruneInterval;
+    }
+
+    public void setInboundEventPruneInterval(Duration inboundEventPruneInterval) {
+        this.inboundEventPruneInterval = inboundEventPruneInterval;
     }
 
     public Duration getSignatureTolerance() {

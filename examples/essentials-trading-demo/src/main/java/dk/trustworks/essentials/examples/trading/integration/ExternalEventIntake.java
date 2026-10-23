@@ -62,6 +62,7 @@ public class ExternalEventIntake {
                                               PRIMARY KEY (consumer, event_id)
                                           )
                                           """);
+        this.jdbcTemplate.execute("CREATE INDEX IF NOT EXISTS external_inbound_event_received_at ON external_inbound_event (received_at)");
     }
 
     /**

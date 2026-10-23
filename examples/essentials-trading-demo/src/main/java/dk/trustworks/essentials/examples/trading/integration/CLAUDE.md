@@ -15,6 +15,7 @@ simulators' receiver guide ("A correct receiver, in five rules").
 | `ExternalEventIntake` | Deduplicates per `(consumer, eventId)` and queues to the consumer's `Inbox`, in one unit of work |
 | `ExternalEventLogCatchUp` | Reads the source's `/api/events` log behind a fenced lock and feeds the same intake; asks for its consumer's event types only, and its participants (`Settings.participants`, SR-39: the exchange's orders, settlement and clearing consumers ask for the firm's; empty for the gateway, which has no filter), and moves its cursor on by `Event-Log-Scanned-Through` (SR-34) |
 | `SimulatorProperties`, `SimulatorIntegrationConfiguration` | `trading-demo.simulators.*` (set by the `simulators` profile), the shared `WebhookSignatureVerifier` bean, which exists only when a secret file is configured, and the exchange's generated `ApiClient`, which exists only when its base URL is |
+| `InboundEventRetention` | Deletes `external_inbound_event` rows received longer ago than `trading-demo.simulators.inbound-event-retention` (7 days), every `inbound-event-prune-interval` (1 h), in batches, on every instance |
 | `BusinessCalendar` | The business days as the exchange closes them: table `business_day_closed`, fed by `BusinessDayClosed` (subscription `demo-business-calendar` + catch-up), announced in process as `BusinessDayClosedNotice`; `latestClosedBusinessDate()`; `businessDaysAfter(date, n)` for a date ahead, from the exchange's `GET /api/calendar` (SR-35), cached a year at a time. Reference data, not a context's state; the store D24 plans for EF-1. Simulators profile only |
 | `exchange_simulator/client`, `payment_gateway/client` (generated) | The simulators' clients, generated at build time from `src/main/openapi/<simulator>/openapi-3.0.json` (Spring `RestClient`, Jackson 3); an `ApiClient` bean each, when the simulator's base URL is set. Contract only - adapters in each context's `external_systems/` use them, and no generated type leaves them |
 
@@ -50,7 +51,8 @@ host port reachable only from containers started after that call.
   numbering and committing in different orders, not an engine fault.
 - **Webhooks are the fast path; the catch-up reader is the guarantee.** Without it, a delivery dead-lettered at the
   source, or an outage longer than its retry span, is lost.
-- **`external_inbound_event` grows by one row per event per consumer and is never pruned yet.** At load-test volume
-  that is the first table to watch; pruning or partitioning by `received_at` is a phase 6 item.
+- **`external_inbound_event` grows by one row per event per consumer**, pruned after 7 days (`InboundEventRetention`).
+  The retention must outlast every way a copy can still arrive - the simulators' webhook retries, a catch-up read
+  behind its cursor; a copy that arrives later is taken as new, which the consumers' idempotency on source ids absorbs.
 - **Business time is the source's** (`occurredAt`, D10). The signature timestamp is the exception: it is the sender's
   real clock, checked against ours.

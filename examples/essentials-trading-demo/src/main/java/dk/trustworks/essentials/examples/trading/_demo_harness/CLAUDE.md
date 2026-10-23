@@ -15,6 +15,8 @@ What lives here is the machinery that makes the demo demonstrate something:
 | `OrderFlowLoadGenerator`, `OrderFlowLoadController` | Phase 3: simulated customers placing and cancelling orders, against the stub exchange or the exchange-simulator; placement vs completion throughput and end-to-end latency |
 | `FundingLoadGenerator`, `FundingLoadController` | Phase 2: simulated customers depositing and withdrawing, against the stub or the payment gateway, `/api/admin/funding-load` |
 | `NoOpAccounts*Processor`, `BatchedAccountsForwarder` | EF-2 measurement processors, off by default |
+| `load_driver/` (`LoadDriver`, `run-load.sh`) | Phase 6: the HTTP load driver - **not part of the application**, a plain `main` run in a JVM of its own |
+| `LoadRunReport`, `LoadRunReportController` | `GET /api/admin/load-report?runPrefix=`: what the brokerage recorded of a driver run - orders by status, placed→filled/booked latency overall and per 10 s placement bucket, payments, durable-queue depth and dead letters, largest tables |
 
 The `brokerage` bootstrap runner, its trading load generator, the dashboard and the demo's own admin page went with
 `brokerage` (phase 4 Q-3). The Essentials admin console covers closing books, snapshots, archives and lifecycle for
@@ -344,3 +346,27 @@ M4: the proposed EF-2 topology built from today's parts — fenced lock, batched
 per batch, competing inbox. A new `run-token` reads the backlog from the start. **Horizontal results from this
 devcontainer are not evidence**: PostgreSQL and every JVM share 8 cores, PostgreSQL alone takes 2.5–4 of them under
 load, and identical runs vary by tens of percent on the handling side.
+
+## The load driver (phase 6)
+
+`./run-load.sh [--key=value ...]` against running instances (`docs/design/phase-6-realistic-load.md`). Customers
+`LDA-<n>` (user `lda-<n>@load.local`, password `load-driver-password`), registered, linked and funded on first use and
+reused by later runs; orders and payments `LD-<run>-O<n>` / `-D<n>` / `-W<n>`. Each customer logs in once through the
+form login (CSRF token from `/login`, then `JSESSIONID`) and is pinned to `base-urls[n % size]`. Open-loop: steady
+`orders-per-second`, `burst-orders-per-second` in the first `burst-fraction` of each business day (a close starts the
+day), `payments-per-second`; `business-days` closes. Settings and defaults: `LoadDriverSettings`. Exit code 0 only if
+every check passed; the full report goes to `target/load-driver/load-<run>.json`.
+
+- **`main`, not Spring.** A Spring Boot app in this module would start every context and the Docker Compose support.
+  It lives under `_demo_harness/load_driver`, so the application's component scan sees it, but it carries no
+  annotations and registers nothing.
+- **`run-load.sh` does not compile.** It runs `target/classes` with the runtime classpath resolved once into
+  `target/load-driver.classpath`. Compile the module yourself, never while an instance is starting (`target/` has more
+  than one writer - root `CLAUDE.md`).
+- **Login is the expensive request**: ~100 ms p50 (BCrypt), which is why a session logs in once. HTTP Basic per request
+  would cost that on every call.
+- **A `DAY` order can legitimately live several business days' worth of real minutes**: one that reaches the exchange
+  after a Friday cutoff belongs to the next business day, and a holiday Monday (2030-01-21) puts its expiry four closes
+  away. The drain waits for it (`drain-timeout`, default 10 minutes).
+- **`skipped:driver-saturated`** counts actions not started because `max-in-flight` were running; non-zero means the
+  driver, not the brokerage, set the rate.

@@ -69,8 +69,11 @@ price_sources:
   default: { kind: synthetic }
 # The exchange's built-in liquidity provider (participant LP, SR-6) quotes a ladder around each reference price, so the
 # firm's orders have something to trade against.
+# max_inventory: the provider stops quoting a side once it is this many shares long or short. The default (10 000) is
+# used up within minutes by the load driver's customers, who buy more than they sell (phase 6): with no ask there is no
+# quote, and the brokerage refuses market orders ("No current price").
 liquidity:
-  default: { mode: "on" }
+  default: { mode: "on", max_inventory: 10000000 }
 # No trading sessions: every market is always open, so the accelerated clock does not reject most orders MARKET_CLOSED.
 # A DAY order then rests until the business day's cutoff (clearing.cutoff below) and expires there.
 settlement:
