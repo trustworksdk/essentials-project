@@ -11,7 +11,8 @@ A case is one host build:
     host's ApplicationContextIT and OpenApiContractIT start the context with the slices in it, and the slices' own
     tests run. The `*-decider-two-bc` compositions also get the boot overlay (`boot/<lang>/src/`), because the defect
     they guard (a second decider configurator) is runtime-only. The compositions in BEHAVIOUR_OVERLAYS also get their
-    behaviour checks (`behaviours/<dir>/src/`): an integration test per `implemented` behaviour of the catalog;
+    behaviour checks (`behaviours/<dir>/src/`): an integration test per `implemented` behaviour of the catalog; a
+    composition rendering an `implemented` behaviour its overlays do not assert is listed in BEHAVIOUR_EXEMPT, with why;
   - the fixtures that are Essentials applications. Only `.java`/`.kt` files are copied. `fixture-worked-example`
     (`{{packagePath}}` rendered to the host's packagePath, plus a test-only adapter for its outbound port from
     `stubs/worked-example/`) runs `verify`; `fixture-multi-lane` and `fixture-aggregate-lane` live outside the host's
@@ -57,12 +58,29 @@ SOURCE_SUFFIXES = {".java", ".kt"}
 # test carries a `// behaviour: <language>/<family> <id>` line above its @Test; tests/scripts/test_behaviours_catalog.py
 # fails an `implemented` entry no such line names. One directory may serve several compositions: the Java view and
 # automation templates are the same on the decider and the aggregate lane, so `java-event-processors` goes on both.
+# The test file fails a composition whose directories leave an `implemented` entry of a family it renders unasserted,
+# unless BEHAVIOUR_EXEMPT names it.
 BEHAVIOUR_OVERLAYS = {
     "java-decider": ("java-decider", "java-event-processors"),
     "java-aggregate": ("java-aggregate", "java-event-processors"),
     "java-service-entity": ("java-service-entity",),
     "kotlin-decider": ("kotlin-decider",),
     "kotlin-service-entity": ("kotlin-service-entity",),
+    # The --manifest render path: place_order and order_list only, no cancel_order, so kotlin-decider's tests (which
+    # send CancelOrder) would not compile on it.
+    "kotlin-decider-manifest": ("kotlin-decider-manifest",),
+}
+
+# Compositions that render a family with `implemented` entries yet run no behaviour check of them, and why.
+# `check` fails on a name that is not a composition.
+BEHAVIOUR_EXEMPT = {
+    "java-decider-two-bc": "two decider bounded contexts (orders, payments) with one command each, for the boot overlay "
+                           "(boot/java/src/): one decider configurator, each command reaching its own BC's decider. Its "
+                           "app-wiring, bc-scaffold and command templates are the ones java-decider renders and checks",
+    "kotlin-decider-two-bc": "two decider bounded contexts (orders, payments) with one command each, for the boot "
+                             "overlay (boot/kotlin/src/): one decider configurator, each command reaching its own BC's "
+                             "decider. Its app-wiring, bc-scaffold and command templates are the ones kotlin-decider "
+                             "renders and checks",
 }
 
 # Fixture directories that are deliberately not compiled, and why. `check` fails on a fixture in neither list.
@@ -215,6 +233,10 @@ def check() -> list[str]:
     for name in BEHAVIOUR_OVERLAYS:
         if name not in all_cases:
             problems.append(f"BEHAVIOUR_OVERLAYS names {name!r}, which is not a case")
+    compositions = load_json(GOLDEN / "compositions.json").get("compositions", {})
+    for name in BEHAVIOUR_EXEMPT:
+        if name not in compositions:
+            problems.append(f"BEHAVIOUR_EXEMPT names {name!r}, which is not a composition in compositions.json")
     used = {d for dirs in BEHAVIOUR_OVERLAYS.values() for d in dirs}
     if BEHAVIOURS.is_dir():
         for directory in sorted(p.name for p in BEHAVIOURS.iterdir() if p.is_dir()):

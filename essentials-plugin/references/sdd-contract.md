@@ -154,8 +154,12 @@ Paths are relative to `--project-root`. `behaviours` and `stubTests` come from
 `slice/templates/behaviours.json`; `tests/scripts/test_behaviours_catalog.py` keeps it complete for
 every family and every stub test, and fails an `implemented` behaviour that no test under
 `tests/slice-compile/behaviours/` names. Those tests run in the plugin's CI slices build against the
-rendered, untouched skeleton of every composition that renders the family
-(`tests/slice-compile/README.md` § Behaviour checks).
+rendered, untouched skeleton of every golden composition (`tests/slice-golden/compositions.json`)
+that renders the family, the `--manifest` render's included, except a composition
+`tests/slice-compile/overlay.py` lists in `BEHAVIOUR_EXEMPT` with the reason: today the two
+two-bounded-context compositions, which run a boot check instead. `test_behaviours_catalog.py` fails a
+composition that leaves an `implemented` behaviour of a family it renders unchecked and is not
+exempt (`tests/slice-compile/README.md` § Behaviour checks).
 
 ## 3. `init.preset` — `/essentials:init --preset FILE --report FILE`
 

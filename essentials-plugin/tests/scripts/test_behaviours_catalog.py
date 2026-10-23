@@ -9,7 +9,9 @@ not do: the behaviour checks under tests/slice-compile/behaviours/ do, in the CI
 (scripts/plugin-scaffold.sh slices). Here every `implemented` entry must be named by a
 `// behaviour: <language>/<family> <id>` line directly above an @Test in one of those integration
 tests, in an overlay directory tests/slice-compile/overlay.py puts only on compositions that render
-that family; a `placeholder` entry may not be named.
+that family; a `placeholder` entry may not be named. The reverse holds too: every composition runs a
+marked test of each `implemented` entry of every family it renders, unless overlay.py lists it in
+BEHAVIOUR_EXEMPT with the reason.
 
 Run from the plugin root:  python3 -m unittest discover -s tests/scripts
 """
@@ -37,12 +39,17 @@ MARKER = re.compile(r"^\s*//\s*behaviour:(.*)$")
 MARKER_BODY = re.compile(r"^ (java|kotlin)/([a-z0-9_-]+) (\S+)$")
 
 
-def behaviour_overlays() -> dict[str, tuple[str, ...]]:
+def overlay_module():
+    """tests/slice-compile/overlay.py, for its BEHAVIOUR_OVERLAYS and BEHAVIOUR_EXEMPT."""
     spec = importlib.util.spec_from_file_location("slice_compile_overlay", SLICE_COMPILE / "overlay.py")
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module            # its dataclasses look their module up there
     spec.loader.exec_module(module)
-    return module.BEHAVIOUR_OVERLAYS
+    return module
+
+
+def composition_names() -> list[str]:
+    return list(json.loads((GOLDEN / "compositions.json").read_text(encoding="utf-8"))["compositions"])
 
 
 def rendered_families(composition: str) -> set[str]:
@@ -140,7 +147,9 @@ class BehaviourChecksTest(unittest.TestCase):
         families = json.loads(CATALOG.read_text(encoding="utf-8"))["families"]
         cls.status = {(family, b["id"]): b["status"] for family, entry in families.items() for b in entry["behaviours"]}
         cls.markers = behaviour_markers()
-        cls.overlays = behaviour_overlays()
+        overlay = overlay_module()
+        cls.overlays = overlay.BEHAVIOUR_OVERLAYS
+        cls.exempt = overlay.BEHAVIOUR_EXEMPT
 
     def test_markers_name_implemented_entries(self):
         for rel, number, _, family, behaviour in self.markers:
@@ -164,6 +173,24 @@ class BehaviourChecksTest(unittest.TestCase):
                             if status == "implemented" and (family, behaviour) not in asserted)
         self.assertEqual(unasserted, [], "implemented with no behaviour test under tests/slice-compile/behaviours/ "
                                          "(add one, or make the entry a placeholder that says what is missing)")
+
+    def test_every_composition_rendering_an_implemented_family_runs_its_checks(self):
+        for composition in composition_names():
+            families = rendered_families(composition)
+            directories = self.overlays.get(composition, ())
+            asserted = {(family, behaviour) for _, _, directory, family, behaviour in self.markers
+                        if directory in directories}
+            unchecked = sorted(f"{family} {behaviour}" for (family, behaviour), status in self.status.items()
+                               if status == "implemented" and family in families
+                               and (family, behaviour) not in asserted)
+            with self.subTest(composition=composition):
+                if composition in self.exempt:
+                    self.assertTrue(unchecked, f"{composition} is in overlay.py BEHAVIOUR_EXEMPT, yet its behaviour "
+                                               "overlays assert every implemented entry it renders; drop the exemption")
+                    continue
+                self.assertEqual(unchecked, [], f"{composition} renders these implemented entries, which no directory "
+                                                "overlay.py BEHAVIOUR_OVERLAYS gives it asserts; add a behaviour "
+                                                "overlay for it, or list it in BEHAVIOUR_EXEMPT with the reason")
 
 
 if __name__ == "__main__":

@@ -99,7 +99,11 @@ targets, with a `-N` suffix for plugin-only releases.
   annotation: delete `@Transactional` and its import from the handler by hand.
 - **`behaviours.json` statuses are tested.** Every `implemented` behaviour now has an integration test
   under `tests/slice-compile/behaviours/` that the CI slices build runs against the rendered, untouched
-  skeleton, and `test_behaviours_catalog.py` fails an `implemented` entry without one. Five Kotlin entries
+  skeleton, and `test_behaviours_catalog.py` fails an `implemented` entry without one. It also fails a
+  golden composition that renders an `implemented` behaviour without running its test, unless
+  `tests/slice-compile/overlay.py` exempts it with the reason: the `--manifest` render sdd drives
+  (`kotlin-decider-manifest`) now runs its own checks, and only the two-bounded-context compositions,
+  which run a boot check, are exempt. Five Kotlin entries
   the tests showed false are `placeholder` now, so sdd's test author writes failing tests for them:
   `automation.records-progress` and `automation.idempotent-redelivery` (the placeholder `Any()` command
   throws before the TodoList is saved), and the service-entity view's `view.query-endpoint`,
