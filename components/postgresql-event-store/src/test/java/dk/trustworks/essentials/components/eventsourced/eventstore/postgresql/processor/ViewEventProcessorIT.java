@@ -101,6 +101,12 @@ public class ViewEventProcessorIT {
      * through {@code usingUnitOfWork} and fail inside it, which marks the {@link UnitOfWork} rollback-only
      */
     public static final String        JOINS_UNIT_OF_WORK_THEN_FAILS           = "JoinsUnitOfWorkThenFails order details";
+    /**
+     * {@link EventProcessorIT.OrderPlacedEvent#orderDetails} prefix that makes the test processor count the event in
+     * {@code order_view_count} - in the subscription's transaction, so the count is what committed, once per event
+     * projected exactly once
+     */
+    public static final String        COUNTED                                 = "Counted order details";
 
     private HikariConfig                                                            cfg;
     private HikariDataSource                                                        ds;
@@ -126,6 +132,11 @@ public class ViewEventProcessorIT {
      * {@link EventStoreSubscriptionObserver}
      */
     private final List<PersistedEvent>    handleEventFailedEvents = new CopyOnWriteArrayList<>();
+    /**
+     * The batches whose handling failed after the {@link SubscriptionErrorPolicy} gave up, as reported to the
+     * {@link EventStoreSubscriptionObserver}
+     */
+    private final List<List<PersistedEvent>> handleEventBatchFailedBatches = new CopyOnWriteArrayList<>();
 
     /**
      * Runs the annotated test with {@link SubscriptionErrorPolicy#stop()} (without auto-resume) instead of {@link SubscriptionErrorPolicy#skip()}
@@ -133,6 +144,16 @@ public class ViewEventProcessorIT {
     @Retention(RetentionPolicy.RUNTIME)
     @Target(ElementType.METHOD)
     private @interface WithSubscriptionErrorPolicyStop {
+    }
+
+    /**
+     * Runs the annotated test with the test processor handling events in batches of {@link #value()}
+     * ({@link ViewEventProcessor#getDirectHandlingBatchSize()})
+     */
+    @Retention(RetentionPolicy.RUNTIME)
+    @Target(ElementType.METHOD)
+    private @interface WithDirectHandlingBatchSize {
+        int value();
     }
 
     @BeforeEach
@@ -153,6 +174,7 @@ public class ViewEventProcessorIT {
         jdbi.installPlugin(new PostgresPlugin());
         jdbi.setSqlLogger(new SqlExecutionTimeLogger());
         jdbi.useHandle(handle -> handle.execute("CREATE TABLE IF NOT EXISTS order_view (order_id TEXT NOT NULL, status TEXT NOT NULL, PRIMARY KEY (order_id, status))"));
+        jdbi.useHandle(handle -> handle.execute("CREATE TABLE IF NOT EXISTS order_view_count (order_id TEXT PRIMARY KEY, handled INT NOT NULL)"));
 
         unitOfWorkFactory = new EventStoreManagedUnitOfWorkFactory(jdbi);
         eventMapper = new EventProcessorIT.TestPersistableEventMapper();
@@ -172,6 +194,11 @@ public class ViewEventProcessorIT {
                                              @Override
                                              public void handleEventFailed(PersistedEvent event, PersistedEventHandler eventHandler, Throwable cause, EventStoreSubscription eventStoreSubscription) {
                                                  handleEventFailedEvents.add(event);
+                                             }
+
+                                             @Override
+                                             public void handleEventBatchFailed(List<PersistedEvent> events, BatchedPersistedEventHandler eventHandler, Throwable cause, EventStoreSubscription eventStoreSubscription) {
+                                                 handleEventBatchFailedBatches.add(List.copyOf(events));
                                              }
                                          })
                                          .build();
@@ -216,6 +243,9 @@ public class ViewEventProcessorIT {
                                                                                            commandBus,
                                                                                            List.of(new CheckedExceptionThrowingInterceptor())),
                                                         eventStore);
+        testInfo.getTestMethod()
+                .map(method -> method.getAnnotation(WithDirectHandlingBatchSize.class))
+                .ifPresent(batchSize -> testProcessor.setDirectHandlingBatchSize(batchSize.value()));
         testProcessor.start();
     }
 
@@ -619,6 +649,130 @@ public class ViewEventProcessorIT {
     }
 
     @Test
+    @WithDirectHandlingBatchSize(100)
+    public void a_view_handling_in_batches_projects_every_event_once_under_load() {
+        var orderIds = IntStream.range(0, 2_000).mapToObj(i -> EventProcessorIT.OrderId.random()).toList();
+        unitOfWorkFactory.usingUnitOfWork(uow -> orderIds.forEach(orderId ->
+                eventStore.appendToStream(TEST_ORDERS, orderId, List.of(new EventProcessorIT.OrderPlacedEvent(orderId, COUNTED)))));
+
+        Awaitility.waitAtMost(Duration.ofSeconds(60)).untilAsserted(() -> assertThat(totalCounted()).isEqualTo(orderIds.size()));
+        assertThat(countedMoreThanOnce()).isZero();
+        assertThat(testProcessor.subscriptionsForTesting()).singleElement()
+                                                           .satisfies(subscription -> assertThat(subscription.getClass().getSimpleName()).isEqualTo("NonExclusiveBatchedAsynchronousSubscription"));
+        assertThat(durableQueues.getTotalMessagesQueuedFor(testProcessor.getDurableQueueName())).isZero();
+    }
+
+    /**
+     * In a batch, a failing event is rolled back to its savepoint and queued; the batch's other events commit, and a later
+     * event of the same order is queued behind the failed one, so the order's events stay in order
+     */
+    @Test
+    @WithDirectHandlingBatchSize(50)
+    public void a_failing_event_in_a_batch_is_queued_the_others_commit_and_a_later_event_of_its_order_queues_behind_it() {
+        var others   = IntStream.range(0, 8).mapToObj(i -> EventProcessorIT.OrderId.random()).toList();
+        var failedId = EventProcessorIT.OrderId.random();
+        unitOfWorkFactory.usingUnitOfWork(uow -> {
+            others.subList(0, 5).forEach(orderId -> eventStore.appendToStream(TEST_ORDERS, orderId, List.of(new EventProcessorIT.OrderPlacedEvent(orderId, COUNTED))));
+            eventStore.appendToStream(TEST_ORDERS, failedId, List.of(new EventProcessorIT.OrderPlacedEvent(failedId, "Fail order details"),
+                                                                     new EventProcessorIT.OrderPlacedEvent(failedId, COUNTED)));
+            others.subList(5, 8).forEach(orderId -> eventStore.appendToStream(TEST_ORDERS, orderId, List.of(new EventProcessorIT.OrderPlacedEvent(orderId, COUNTED))));
+        });
+
+        var queueName = testProcessor.getDurableQueueName();
+        Awaitility.waitAtMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+            assertThat(totalCounted()).isEqualTo(others.size());
+            assertThat(durableQueues.getTotalDeadLetterMessagesQueuedFor(queueName)).isEqualTo(1);
+            assertThat(durableQueues.getTotalMessagesQueuedFor(queueName)).isEqualTo(1);
+        });
+        var queued = durableQueues.getQueuedMessages(queueName, DurableQueues.QueueingSortOrder.ASC, 0, 10);
+        assertThat(((OrderedMessage) queued.get(0).getMessage()).getKey()).isEqualTo(failedId.toString());
+        assertThat(((OrderedMessage) queued.get(0).getMessage()).getOrder()).isEqualTo(1);
+        assertThat(countedFor(failedId)).as("queued behind the dead letter, not handled directly").isZero();
+        assertThat(countedMoreThanOnce()).isZero();
+        assertThat(handleEventBatchFailedBatches).isEmpty();
+    }
+
+    /**
+     * An event whose failure a savepoint cannot undo - here a handler that appended an event - rolls the whole batch back,
+     * the events before it included. The {@link SubscriptionErrorPolicy} ({@code SKIP}) gives up on the batch, which is
+     * then handled again one event per {@link UnitOfWork}: only the escalating event is queued, every other event is
+     * projected exactly once, and the policy never skips the batch
+     */
+    @Test
+    @WithDirectHandlingBatchSize(50)
+    public void an_escalating_event_in_a_batch_is_replayed_alone_and_queued_and_every_other_event_is_projected_once() {
+        var before    = IntStream.range(0, 4).mapToObj(i -> EventProcessorIT.OrderId.random()).toList();
+        var after     = IntStream.range(0, 4).mapToObj(i -> EventProcessorIT.OrderId.random()).toList();
+        var escalates = EventProcessorIT.OrderId.random();
+        unitOfWorkFactory.usingUnitOfWork(uow -> {
+            before.forEach(orderId -> eventStore.appendToStream(TEST_ORDERS, orderId, List.of(new EventProcessorIT.OrderPlacedEvent(orderId, COUNTED))));
+            eventStore.appendToStream(TEST_ORDERS, escalates, List.of(new EventProcessorIT.OrderPlacedEvent(escalates, APPENDS_EVENT_THEN_FAILS)));
+            after.forEach(orderId -> eventStore.appendToStream(TEST_ORDERS, orderId, List.of(new EventProcessorIT.OrderPlacedEvent(orderId, COUNTED))));
+        });
+
+        assertQueuedAfterTheRollbackAndDeadLettered(escalates);
+        Awaitility.waitAtMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(totalCounted()).isEqualTo(before.size() + after.size()));
+        assertThat(countedMoreThanOnce()).as("the batch's rolled-back first attempt left nothing behind").isZero();
+        assertThat(handleEventBatchFailedBatches).as("taken over, not skipped").isEmpty();
+        assertOnlyTheOrderPlacedEventIsPersisted(escalates);
+    }
+
+    /**
+     * A processor switched from event-by-event handling to batches - as by a redeploy - continues from its resume point:
+     * the same subscriber id
+     */
+    @Test
+    public void a_view_switched_to_handling_in_batches_continues_from_its_resume_point() {
+        var subscriberId = AbstractEventProcessor.resolveSubscriberId(TEST_ORDERS, testProcessor.getProcessorName());
+        var beforeTheSwitch = IntStream.range(0, 5).mapToObj(i -> EventProcessorIT.OrderId.random()).toList();
+        unitOfWorkFactory.usingUnitOfWork(uow -> beforeTheSwitch.forEach(orderId ->
+                eventStore.appendToStream(TEST_ORDERS, orderId, List.of(new EventProcessorIT.OrderPlacedEvent(orderId, COUNTED)))));
+        Awaitility.waitAtMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+            assertThat(totalCounted()).isEqualTo(5);
+            assertThat(durableSubscriptionRepository.getResumePoint(subscriberId, TEST_ORDERS))
+                    .hasValueSatisfying(resumePoint -> assertThat(resumePoint.getResumeFromAndIncluding().longValue()).isEqualTo(6L));
+        });
+        // As a restart would: the event-by-event subscription goes away, its resume point stays
+        testProcessor.shutDownForTesting(eventStoreSubscriptionManager);
+
+        testProcessor = new TestOrderViewEventProcessor(new ViewEventProcessorDependencies(eventStoreSubscriptionManager,
+                                                                                           fencedLockManager,
+                                                                                           durableQueues,
+                                                                                           commandBus,
+                                                                                           List.of()),
+                                                        eventStore);
+        testProcessor.setDirectHandlingBatchSize(20);
+        testProcessor.start();
+        var afterTheSwitch = IntStream.range(0, 40).mapToObj(i -> EventProcessorIT.OrderId.random()).toList();
+        unitOfWorkFactory.usingUnitOfWork(uow -> afterTheSwitch.forEach(orderId ->
+                eventStore.appendToStream(TEST_ORDERS, orderId, List.of(new EventProcessorIT.OrderPlacedEvent(orderId, COUNTED)))));
+
+        Awaitility.waitAtMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+            assertThat(totalCounted()).isEqualTo(beforeTheSwitch.size() + afterTheSwitch.size());
+            assertThat(eventStoreSubscriptionManager.getCurrentEventOrder(subscriberId, TEST_ORDERS))
+                    .hasValueSatisfying(order -> assertThat(order.longValue()).isEqualTo(46L));
+        });
+        assertThat(countedMoreThanOnce()).as("nothing before the switch handled again").isZero();
+        assertThat(testProcessor.subscriptionsForTesting()).singleElement()
+                                                           .satisfies(subscription -> assertThat(subscription.getClass().getSimpleName()).isEqualTo("NonExclusiveBatchedAsynchronousSubscription"));
+    }
+
+    private int totalCounted() {
+        return jdbi.withHandle(handle -> handle.createQuery("SELECT coalesce(sum(handled), 0) FROM order_view_count").mapTo(Integer.class).one());
+    }
+
+    private int countedMoreThanOnce() {
+        return jdbi.withHandle(handle -> handle.createQuery("SELECT count(*) FROM order_view_count WHERE handled > 1").mapTo(Integer.class).one());
+    }
+
+    private int countedFor(EventProcessorIT.OrderId orderId) {
+        return jdbi.withHandle(handle -> handle.createQuery("SELECT coalesce(sum(handled), 0) FROM order_view_count WHERE order_id = :orderId")
+                                               .bind("orderId", orderId.toString())
+                                               .mapTo(Integer.class)
+                                               .one());
+    }
+
+    @Test
     public void testResetAllSubscriptions() {
         IntStream.range(0, 5).forEach(i -> {
             var orderId      = EventProcessorIT.OrderId.random();
@@ -705,6 +859,7 @@ public class ViewEventProcessorIT {
          */
         private final ThreadLocal<Boolean>                 checkedFailureRequested    = ThreadLocal.withInitial(() -> false);
         private final AtomicInteger appendedEventsBeforeFailing = new AtomicInteger(0);
+        private       int           directHandlingBatchSize     = 1;
         /**
          * Appends the registered events when the {@link UnitOfWork} commits - the way an aggregate repository's
          * {@link UnitOfWorkLifecycleCallback} persists an aggregate's uncommitted events. Doesn't override
@@ -769,6 +924,30 @@ public class ViewEventProcessorIT {
         @Override
         public String getProcessorName() {
             return "TestOrderViewEventProcessor";
+        }
+
+        @Override
+        protected int getDirectHandlingBatchSize() {
+            return directHandlingBatchSize;
+        }
+
+        void setDirectHandlingBatchSize(int directHandlingBatchSize) {
+            this.directHandlingBatchSize = directHandlingBatchSize;
+        }
+
+        List<EventStoreSubscription> subscriptionsForTesting() {
+            return eventStoreSubscriptions;
+        }
+
+        /**
+         * What a process shutting down leaves behind: no subscription in the manager and no command handler on the bus -
+         * only the durable resume point
+         */
+        void shutDownForTesting(EventStoreSubscriptionManager eventStoreSubscriptionManager) {
+            stop();
+            Awaitility.waitAtMost(Duration.ofSeconds(10)).until(() -> eventStoreSubscriptions.stream().noneMatch(EventStoreSubscription::isActive));
+            eventStoreSubscriptions.forEach(eventStoreSubscriptionManager::unsubscribe);
+            getCommandBus().removeCommandHandler(commandBusHandlerDelegate);
         }
 
         public DurableQueues getDurableQueuesForTesting() {
@@ -839,6 +1018,9 @@ public class ViewEventProcessorIT {
             var unitOfWork = eventStore.getUnitOfWorkFactory().getRequiredUnitOfWork();
             if (event.orderDetails.startsWith("Load")) {
                 orderPlacedEventCounter.incrementAndGet();
+            } else if (event.orderDetails.equals(COUNTED)) {
+                unitOfWork.handle().execute("INSERT INTO order_view_count (order_id, handled) VALUES (?, 1) " +
+                                            "ON CONFLICT (order_id) DO UPDATE SET handled = order_view_count.handled + 1", event.orderId.toString());
             } else if (event.orderDetails.startsWith("Fail")) {
                 throw new RuntimeException(event.orderDetails);
             } else if (event.orderDetails.equals(APPENDS_EVENT_THEN_FAILS)) {

@@ -29,9 +29,11 @@ import dk.trustworks.essentials.components.foundation.messaging.eip.store_and_fo
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
 import dk.trustworks.essentials.components.foundation.reactive.command.DurableLocalCommandBus;
 import dk.trustworks.essentials.components.foundation.transaction.*;
+import dk.trustworks.essentials.components.foundation.types.SubscriberId;
 import dk.trustworks.essentials.shared.Exceptions;
 import org.slf4j.*;
 
+import java.time.Duration;
 import java.util.*;
 import java.util.function.Consumer;
 
@@ -52,6 +54,20 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  * its retries the event is queued in a transaction of its own instead of being skipped or stopping the subscription
  * (see {@link PersistedEventHandler#handOffFailedEvent(PersistedEvent, Throwable)}). Only if that queueing fails too does
  * the policy give up on the event. A handler that only loaded an aggregate is queued like any other failure.
+ * <p>
+ * <h3>Handling in batches</h3>
+ * By default every event is handled in a {@link UnitOfWork} of its own. A processor that overrides
+ * {@link #getDirectHandlingBatchSize()} with a value above {@code 1} handles up to that many events in one
+ * {@link UnitOfWork} instead - one commit, together with the resume point, per batch - each event still under a
+ * savepoint of its own, so a failing event is queued and the batch's other events commit. A later event of the batch for
+ * the key of an event queued in it is queued behind it. A failure the savepoint cannot undo (see above) rolls the whole
+ * batch back, the events before it included; the {@code SubscriptionErrorPolicy} retries the batch, and once it gives up
+ * the batch is handled again one event per {@link UnitOfWork}, through the per-event path, so only the failing event is
+ * queued (see {@link BatchedPersistedEventHandler#handOffFailedBatch(List, Throwable)}). Should that replay fail as well
+ * - the database is unreachable, say - the policy's skip or stop applies to the <em>whole batch</em>: under
+ * {@code RETRY_N_THEN_SKIP} up to a batch of events can be missing from the view, where per-event handling would miss
+ * one. Events of the batch the replay had already committed are handled again by a subscription that restarts at the
+ * batch, as after any crash: delivery is at least once.
  * <p>
  * <h3>Event Queuing</h3>
  * When events from the {@link EventStore} need to be queued for processing, they are converted to {@link OrderedMessage}s where:
@@ -181,9 +197,19 @@ public abstract class ViewEventProcessor extends AbstractEventProcessor {
                                                                   });
                                                               }
                                                              );
+        var directHandlingBatchSize = getDirectHandlingBatchSize();
         eventStoreSubscriptions = subscribeToEventsRelatedTo.stream()
                                                             .map(aggregateType -> {
                                                                 var subscriberId = AbstractEventProcessor.resolveSubscriberId(aggregateType, processorName);
+                                                                if (directHandlingBatchSize > 1) {
+                                                                    var subscription = subscribeHandlingInBatches(subscriberId, aggregateType, directHandlingBatchSize, processorName);
+                                                                    logger.info("🎑⚙️ [{}] Created non-exclusive async batched '{}' subscription (batch size {}): {}",
+                                                                                processorName,
+                                                                                aggregateType,
+                                                                                directHandlingBatchSize,
+                                                                                subscription);
+                                                                    return subscription;
+                                                                }
                                                                 var subscription = eventStoreSubscriptionManager.subscribeToAggregateEventsAsynchronously(
                                                                         subscriberId,
                                                                         aggregateType,
@@ -191,7 +217,7 @@ public abstract class ViewEventProcessor extends AbstractEventProcessor {
                                                                         new PersistedEventHandler() {
                                                                             @Override
                                                                             public void handle(PersistedEvent event) {
-                                                                                handlePersistedEvent(event);
+                                                                                handlePersistedEvent(event, null);
                                                                             }
 
                                                                             @Override
@@ -221,6 +247,100 @@ public abstract class ViewEventProcessor extends AbstractEventProcessor {
         logger.info("🎑⚙️  [{}] Started. There are #{} undelivered queue messages",
                     processorName,
                     durableQueues.getTotalMessagesQueuedFor(durableQueueName));
+    }
+
+    /**
+     * Subscribe to <code>aggregateType</code> handling the events in batches of up to <code>batchSize</code> - same
+     * subscriber id as the per-event subscription, so a processor switched either way continues from its resume point.
+     */
+    private EventStoreSubscription subscribeHandlingInBatches(SubscriberId subscriberId, AggregateType aggregateType, int batchSize, String processorName) {
+        return eventStoreSubscriptionManager.batchSubscribeToAggregateEventsAsynchronously(
+                subscriberId,
+                aggregateType,
+                resolveStartSubscriptionFromGlobalEventOrder().apply(aggregateType),
+                Optional.empty(),
+                batchSize,
+                requireNonNull(getDirectHandlingMaxLatency(), "getDirectHandlingMaxLatency() returned null"),
+                new BatchedPersistedEventHandler() {
+                    @Override
+                    public int handleBatch(List<PersistedEvent> events) {
+                        // The keys of this batch's events queued so far - see handlePersistedEvent
+                        var keysQueuedInBatch = new HashSet<String>();
+                        for (var event : events) {
+                            handlePersistedEvent(event, keysQueuedInBatch);
+                        }
+                        return batchSize;
+                    }
+
+                    @Override
+                    public boolean handOffFailedBatch(List<PersistedEvent> events, Throwable failure) {
+                        replayOneEventPerUnitOfWork(events, failure);
+                        return true;
+                    }
+
+                    @Override
+                    public Optional<SubscriptionErrorPolicy> subscriptionErrorPolicy() {
+                        return getSubscriptionErrorPolicy();
+                    }
+
+                    @Override
+                    public String toString() {
+                        return processorName;
+                    }
+                });
+    }
+
+    /**
+     * A batch the {@code SubscriptionErrorPolicy} gave up on - its {@link UnitOfWork} could not commit, because an event's
+     * failure left state a savepoint cannot undo, or the database failed - is handled again one event per
+     * {@link UnitOfWork}, as {@link #getDirectHandlingBatchSize()} {@code 1} handles every event: a failing event is queued
+     * in its own {@link UnitOfWork} (escalating ones by {@link #queueAfterRollback(PersistedEvent, Throwable)}) and the others
+     * commit. Throws if an event can be neither handled nor queued, and the policy then gives up on the whole batch.
+     */
+    private void replayOneEventPerUnitOfWork(List<PersistedEvent> events, Throwable batchFailure) {
+        logger.warn(msg("[{}] Handling the batch [#{} - #{}] failed and could not be committed - handling its {} events again one per UnitOfWork",
+                        getProcessorName(), events.getFirst().globalEventOrder(), events.getLast().globalEventOrder(), events.size()), batchFailure);
+        for (var event : events) {
+            try {
+                eventStore.getUnitOfWorkFactory().usingUnitOfWork(() -> handlePersistedEvent(event, null));
+            } catch (RuntimeException failure) {
+                // The UnitOfWorkFactory wraps what the work threw (UnitOfWorkException)
+                if (!escalated(failure)) {
+                    throw failure;
+                }
+                queueAfterRollback(event, failure);
+            }
+        }
+    }
+
+    private static boolean escalated(Throwable failure) {
+        for (var cause = failure; cause != null; cause = cause.getCause()) {
+            if (cause instanceof UnitOfWorkRequiresRollbackException) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * The most events handled directly in one {@link UnitOfWork}, see "Handling in batches" in the class javadoc. Default
+     * {@code 1}: every event in a {@link UnitOfWork} of its own. A batch is handled once it is full or
+     * {@link #getDirectHandlingMaxLatency()} has passed.
+     *
+     * @return the most events handled in one unit of work; values below {@code 2} handle event by event
+     */
+    protected int getDirectHandlingBatchSize() {
+        return 1;
+    }
+
+    /**
+     * The longest a partial batch waits for more events before it is handled, when {@link #getDirectHandlingBatchSize()}
+     * is above {@code 1}. Default 20 ms.
+     *
+     * @return the maximum time a partial batch waits
+     */
+    protected Duration getDirectHandlingMaxLatency() {
+        return Duration.ofMillis(20);
     }
 
     @Override
@@ -261,8 +381,15 @@ public abstract class ViewEventProcessor extends AbstractEventProcessor {
      * <p>
      * An event this processor has no {@link MessageHandler} for is passed over before any of that - see
      * {@link #hasNoHandlerFor(PersistedEvent)}.
+     *
+     * @param keysQueuedInBatch handling in a batch: the keys of the batch's events queued so far, which this method adds
+     *                          to when it queues one. An event for such a key is queued without asking the queue, so a
+     *                          later event of the batch for a key queued in it lines up behind it. The set may be stale
+     *                          the other way only - while the batch runs the queue consumer can empty a key, so an event
+     *                          is queued that could have been handled; that is harmless, and ordering holds, since only
+     *                          this processor's direct path queues on its queue. {@code null} when handling event by event
      */
-    private void handlePersistedEvent(PersistedEvent event) {
+    private void handlePersistedEvent(PersistedEvent event, Set<String> keysQueuedInBatch) {
         if (hasNoHandlerFor(event)) {
             logger.trace("[{}:{}] No handler for event '{}' - passed over", event.aggregateType(), event.aggregateId(), event.event().getEventTypeOrNamePersistenceValue());
             return;
@@ -275,10 +402,13 @@ public abstract class ViewEventProcessor extends AbstractEventProcessor {
 
         try {
             meta = new MessageMetaData(event.metaData().deserialize());
-            if (durableQueues.hasOrderedMessageQueuedForKey(durableQueueName, key)) {
+            if ((keysQueuedInBatch != null && keysQueuedInBatch.contains(key)) || durableQueues.hasOrderedMessageQueuedForKey(durableQueueName, key)) {
                 logger.debug("[{}:{}] The queue already has ordered message queued for key '{}'. Queueing message with event-order '{}'", aggregateType, key, key, order);
                 durableQueues.queueMessage(durableQueueName,
                                            new EventReferenceOrderedMessage(aggregateType, key, event.eventOrder(), meta));
+                if (keysQueuedInBatch != null) {
+                    keysQueuedInBatch.add(key);
+                }
             } else {
                 var payload = event.event().deserialize();
                 var msg     = OrderedMessage.of(payload, key, order, meta);
@@ -292,6 +422,9 @@ public abstract class ViewEventProcessor extends AbstractEventProcessor {
                          aggregateType, key, event.event().getEventTypeOrNamePersistenceValue(), e);
             durableQueues.queueMessage(durableQueueName, new EventReferenceOrderedMessage(
                     aggregateType, key, event.eventOrder(), meta != null ? meta : new MessageMetaData()));
+            if (keysQueuedInBatch != null) {
+                keysQueuedInBatch.add(key);
+            }
         }
     }
 
@@ -439,7 +572,7 @@ public abstract class ViewEventProcessor extends AbstractEventProcessor {
     /**
      * The direct handler's failure left the {@link UnitOfWork} unable to commit, or in a state it must not be committed
      * in, so the event cannot be queued in it.
-     * Not caught by {@link #handlePersistedEvent(PersistedEvent)}: it propagates to the subscription.
+     * Not caught by {@link #handlePersistedEvent(PersistedEvent, Set)}: it propagates to the subscription.
      */
     private static final class UnitOfWorkRequiresRollbackException extends RuntimeException {
         UnitOfWorkRequiresRollbackException(String message, Throwable cause) {

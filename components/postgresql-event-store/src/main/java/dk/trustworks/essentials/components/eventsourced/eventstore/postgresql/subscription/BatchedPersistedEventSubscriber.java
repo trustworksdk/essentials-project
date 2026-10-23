@@ -58,6 +58,9 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  * the batch: neither the <code>onErrorHandler</code> nor the observer is told, and the resume point stays at the batch,
  * so the restarted subscription handles it again (see {@link SubscriptionStoppedDuringRetryException}).
  * <p>
+ * Before the {@link SubscriptionErrorPolicy} skips or stops a batch, the event handler may take the failed batch over
+ * instead - see {@link BatchedPersistedEventHandler#handOffFailedBatch(List, Throwable)}.
+ * <p>
  * Acknowledgement: the subscriber acknowledges a batch through its {@link SubscriberAcknowledgement} (see
  * {@link BatchedPersistedEventSubscriberBuilder#setSubscriberAcknowledgement(SubscriberAcknowledgement)}) inside the unit of
  * work that handled it, after {@link BatchedPersistedEventHandler#handleBatch(List)} returned - so an event store that
@@ -617,6 +620,13 @@ public class BatchedPersistedEventSubscriber extends BaseSubscriber<PersistedEve
                                stoppedWhileHandling(firstEvent, lastEvent, failure);
                                return;
                            }
+                           if (handedOffToEventHandler(immutableBatch, failure)) {
+                               // Taken over by the event handler - done with here
+                               acknowledgeGivenUp(immutableBatch);
+                               movedPast(lastEvent);
+                               eventStoreSubscription.request(immutableBatch.size());
+                               return;
+                           }
                            eventStore.getEventStoreSubscriptionObserver().handleEventBatchFailed(immutableBatch,
                                                                                                  eventHandler,
                                                                                                  failure,
@@ -632,6 +642,37 @@ public class BatchedPersistedEventSubscriber extends BaseSubscriber<PersistedEve
                                onErrorHandler.accept(lastEvent, failure.getCause());
                            }
                        });
+    }
+
+    /**
+     * Offer the failed batch to {@link BatchedPersistedEventHandler#handOffFailedBatch(List, Throwable)} before the
+     * {@link SubscriptionErrorPolicy} gives up on it. Runs before the {@code doFinally} that advances the resume point, so
+     * the resume point only moves past the batch once the handler has taken it over
+     *
+     * @return true if the handler took the batch over
+     */
+    private boolean handedOffToEventHandler(List<PersistedEvent> batch, Throwable failure) {
+        try {
+            if (eventHandler.handOffFailedBatch(batch, failure)) {
+                log.debug("[{}-{}] The {} event handler took over the failed batch [#{} - #{}] - the {} SubscriptionErrorPolicy does not give up on it",
+                          eventStoreSubscription.subscriberId(),
+                          eventStoreSubscription.aggregateType(),
+                          eventHandler,
+                          batch.getFirst().globalEventOrder(),
+                          batch.getLast().globalEventOrder(),
+                          subscriptionErrorPolicy.mode());
+                return true;
+            }
+        } catch (RuntimeException handOffFailure) {
+            failure.addSuppressed(handOffFailure);
+            log.warn(msg("[{}-{}] The event handler failed to take over the failed batch [#{} - #{}] - the {} SubscriptionErrorPolicy applies",
+                         eventStoreSubscription.subscriberId(),
+                         eventStoreSubscription.aggregateType(),
+                         batch.getFirst().globalEventOrder(),
+                         batch.getLast().globalEventOrder(),
+                         subscriptionErrorPolicy.mode()), handOffFailure);
+        }
+        return false;
     }
 
     /**

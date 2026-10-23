@@ -61,7 +61,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * and <b>drain</b> until every one of them was handled, which adds the single inbox consumer. {@code view_all_five} is
  * a {@link ViewEventProcessor} handling all five on the reader's thread, so its forward and drain are one number: the
  * reader's rate is what a projection gets end to end. {@code view_one_of_five} is a view handling one of them, as a
- * projection of a few event types of a busy aggregate type does. The {@code *_batched} shapes are {@code two_of_five}
+ * projection of a few event types of a busy aggregate type does; {@code view_*_batched} handle a batch per unit of work
+ * ({@code ViewEventProcessor#getDirectHandlingBatchSize()}, {@code -Dbenchmark.view.batch-size}, default 100). The
+ * {@code *_batched} shapes are {@code two_of_five}
  * and {@code all_five} forwarding in batches ({@code EventProcessor#getForwardBatchSize()},
  * {@code -Dbenchmark.forward.batch-size}, default 100). The {@code *_8_consumers} shapes add inbox consumers
  * ({@code -Dbenchmark.forward.inbox-consumers}, default 8), with and without the batched forward, so forward and drain
@@ -86,6 +88,11 @@ class EventProcessorForwardBenchmarkIT {
      * Inbox consumers for the {@code *_8_consumers} shapes; the others keep the default single consumer
      */
     private static final int      INBOX_CONSUMERS    = Integer.getInteger("benchmark.forward.inbox-consumers", 8);
+    /**
+     * {@code ViewEventProcessor#getDirectHandlingBatchSize()} for the {@code view_*_batched} shapes, which handle a batch per
+     * unit of work
+     */
+    private static final int      VIEW_BATCH_SIZE    = Integer.getInteger("benchmark.view.batch-size", 100);
 
     @Container
     private final PostgreSQLContainer postgreSQLContainer = new PostgreSQLContainer("postgres:18.4")
@@ -276,6 +283,26 @@ class EventProcessorForwardBenchmarkIT {
     @Test
     void view_one_of_five() {
         measure("view_one_of_five", aggregateType -> new OneOfFiveViewProcessor(viewDependencies, aggregateType), 1);
+    }
+
+    @Test
+    void view_all_five_batched() {
+        measure("view_all_five_batched", aggregateType -> new AllFiveViewProcessor(viewDependencies, aggregateType) {
+            @Override
+            protected int getDirectHandlingBatchSize() {
+                return VIEW_BATCH_SIZE;
+            }
+        }, 5);
+    }
+
+    @Test
+    void view_one_of_five_batched() {
+        measure("view_one_of_five_batched", aggregateType -> new OneOfFiveViewProcessor(viewDependencies, aggregateType) {
+            @Override
+            protected int getDirectHandlingBatchSize() {
+                return VIEW_BATCH_SIZE;
+            }
+        }, 1);
     }
 
     private interface BenchProcessor {

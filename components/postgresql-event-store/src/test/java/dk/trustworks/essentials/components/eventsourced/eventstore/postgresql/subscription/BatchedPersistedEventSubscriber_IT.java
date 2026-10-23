@@ -492,6 +492,106 @@ class BatchedPersistedEventSubscriber_IT {
         ordersSubscription.stop();
     }
 
+    /**
+     * {@link BatchedPersistedEventHandler#handOffFailedBatch(List, Throwable)} returning true: the handler took the failed
+     * batch over, so the {@link SubscriptionErrorPolicy} - {@code STOP} here - does not stop at it, and later batches are
+     * delivered
+     */
+    @Test
+    void a_failed_batch_the_handler_takes_over_does_not_stop_the_subscription() {
+        var takenOver = new CopyOnWriteArrayList<PersistedEvent>();
+        var handled   = new CopyOnWriteArrayList<PersistedEvent>();
+        var subscription = subscribeFailingTheFirstBatch(handled, failedBatch -> {
+            takenOver.addAll(failedBatch);
+            return true;
+        });
+
+        appendOrders(30);
+
+        Awaitility.waitAtMost(Duration.ofSeconds(15)).untilAsserted(() -> {
+            assertThat(takenOver).isNotEmpty();
+            assertThat(takenOver.size() + handled.size()).isEqualTo(30);
+            assertThat(eventStoreSubscriptionManager.getCurrentEventOrder(subscription.subscriberId(), ORDERS))
+                    .hasValueSatisfying(order -> assertThat(order.longValue()).isEqualTo(31L));
+        });
+        assertThat(takenOver.getFirst().globalEventOrder().longValue()).isEqualTo(1L);
+        assertThat(subscription.isStoppedByErrorPolicy()).isFalse();
+    }
+
+    /**
+     * A hand-off that throws is not a take-over: the {@link SubscriptionErrorPolicy} applies to the batch - {@code STOP}
+     * stops at its first event
+     */
+    @Test
+    void a_hand_off_that_throws_leaves_the_failed_batch_to_the_subscription_error_policy() {
+        var handOffs = new AtomicInteger();
+        var handled  = new CopyOnWriteArrayList<PersistedEvent>();
+        var subscription = subscribeFailingTheFirstBatch(handled, failedBatch -> {
+            handOffs.incrementAndGet();
+            throw new IllegalStateException("Intentional hand-off failure");
+        });
+
+        appendOrders(30);
+
+        Awaitility.waitAtMost(Duration.ofSeconds(15)).until(subscription::isStoppedByErrorPolicy);
+        assertThat(handOffs.get()).isEqualTo(1);
+        assertThat(handled).isEmpty();
+        assertThat(eventStoreSubscriptionManager.getCurrentEventOrder(subscription.subscriberId(), ORDERS))
+                .hasValueSatisfying(order -> assertThat(order.longValue()).isEqualTo(1L));
+    }
+
+    /**
+     * A batched subscription to {@code ORDERS}, under {@link SubscriptionErrorPolicy#stop()} without auto-resume, whose
+     * handler fails every batch holding the first event and hands it to <code>handOff</code>
+     */
+    private EventStoreSubscription subscribeFailingTheFirstBatch(List<PersistedEvent> handled, java.util.function.Function<List<PersistedEvent>, Boolean> handOff) {
+        eventStoreSubscriptionManager = EventStoreSubscriptionManager.builder()
+                                                                     .setEventStore(eventStore)
+                                                                     .setEventStorePollingBatchSize(10)
+                                                                     .setEventStorePollingInterval(Duration.ofMillis(50))
+                                                                     .setFencedLockManager(PostgresqlFencedLockManager.builder()
+                                                                                                                      .setJdbi(jdbi)
+                                                                                                                      .setUnitOfWorkFactory(unitOfWorkFactory)
+                                                                                                                      .setLockManagerInstanceId("Node1")
+                                                                                                                      .setLockTimeOut(Duration.ofSeconds(3))
+                                                                                                                      .setLockConfirmationInterval(Duration.ofSeconds(1))
+                                                                                                                      .build())
+                                                                     .setSnapshotResumePointsEvery(Duration.ofMillis(200))
+                                                                     .setDurableSubscriptionRepository(new PostgresqlDurableSubscriptionRepository(jdbi, eventStore))
+                                                                     .setSubscriptionErrorPolicy(SubscriptionErrorPolicy.stop().withoutAutoResume())
+                                                                     .build();
+        eventStoreSubscriptionManager.start();
+        return eventStoreSubscriptionManager.batchSubscribeToAggregateEventsAsynchronously(
+                SubscriberId.of("OrdersHandOffSub"),
+                ORDERS,
+                GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER,
+                Optional.empty(),
+                10,
+                Duration.ofMillis(50),
+                new BatchedPersistedEventHandler() {
+                    @Override
+                    public int handleBatch(List<PersistedEvent> events) {
+                        if (events.stream().anyMatch(event -> event.globalEventOrder().longValue() == 1L)) {
+                            throw new IllegalStateException("Intentional batch failure");
+                        }
+                        handled.addAll(events);
+                        return 10;
+                    }
+
+                    @Override
+                    public boolean handOffFailedBatch(List<PersistedEvent> events, Throwable failure) {
+                        return handOff.apply(events);
+                    }
+                });
+    }
+
+    private void appendOrders(int count) {
+        unitOfWorkFactory.usingUnitOfWork(() -> IntStream.range(0, count).forEach(i -> {
+            var orderId = OrderId.random();
+            eventStore.appendToStream(ORDERS, orderId, List.of(new OrderEvent.OrderAdded(orderId, CustomerId.random(), i)));
+        }));
+    }
+
     private Map<AggregateType, Map<?, List<?>>> createTestEvents() {
         var eventsPerAggregateType = new HashMap<AggregateType, Map<?, List<?>>>();
 

@@ -669,6 +669,34 @@ A savepoint only undoes SQL. When the failed handler left `UnitOfWork` state tha
 
 Instead the whole `UnitOfWork` rolls back - nothing the failed handler did is persisted or published - and the subscription's `SubscriptionErrorPolicy` runs its retries as for any failure (see [Direct async subscribers retry, stop and resume at a failing event](#direct-async-subscribers-retry-stop-and-resume-at-a-failing-event)). When the policy would give up - skip under `skip()`/`retryThenSkip(...)`, stop under `stop()`/`retryThenStop(...)` (the default) - the processor takes the event over instead (`PersistedEventHandler#handOffFailedEvent`) and queues it in a `UnitOfWork` of its own, after the rollback. From there the queue's `RedeliveryPolicy` and dead-letter handling apply, exactly as for any other failed event: **under every policy the event ends up in the view or in the queue, never lost**, and a stopping policy does not stop the subscription for it. One WARN line records the hand-off. Only if that queueing itself fails does the policy give up on the event. The subscriber moves its resume point past the event only after the queued message committed, and later events for the same aggregate find it queued and queue behind it. A `UnitOfWork` implementation that cannot report this state (the `EventStoreUnitOfWork.getNumberOfEventsPersisted()` / `UnitOfWork.hasLifecycleCallbackResourcesWithPendingChanges()` defaults throw `UnsupportedOperationException`) is treated as having it; every Essentials implementation reports it. The stateful, flex and decider repository callbacks report pending changes only while there are uncommitted events.
 
+#### Throughput: handling in batches
+
+`getDirectHandlingBatchSize()` (default 1, event by event) lets the processor handle up to that many events in one
+`UnitOfWork` - one commit, together with the resume point, per batch - instead of one per event; `getDirectHandlingMaxLatency()`
+(default 20 ms) bounds how long a partial batch waits. Each event still runs under a savepoint of its own, so a failing event
+is queued exactly as above and the batch's other events commit; a later event of the batch for the same aggregate queues
+behind it. Measured (`EventProcessorForwardBenchmarkIT`, 50 000 events, every one handled): 3 600 events/s event by event,
+6 900 in batches of 100. A projection that handles few of its aggregate type's events gains little - events it has no
+handler for already cost almost nothing.
+
+```java
+@Override protected int getDirectHandlingBatchSize() { return 100; }
+```
+
+What changes with a batch:
+
+- **An escalating failure** (the cases above a savepoint cannot undo) rolls the **whole batch** back, the events before it
+  included. The `SubscriptionErrorPolicy` retries the batch; once it gives up, the batch is handled again one event per
+  `UnitOfWork` through the event-by-event path, so only the failing event is queued and the others commit
+  (`BatchedPersistedEventHandler#handOffFailedBatch`). Nothing is lost.
+- **A failure the replay cannot get past either** (the database is unreachable, say) leaves the policy's skip or stop to the
+  **whole batch**: under `skip()`/`retryThenSkip(...)` up to a batch of events can be missing from the view, where event by
+  event it would be one. Events the replay had already committed are handled again by a subscription that restarts at the
+  batch - delivery is at least once, so keep projections idempotent (*Version = EventOrder* below).
+- **Row locks are held for the length of a batch.** A view that updates rows shared across aggregates (per-instrument
+  totals, say) can deadlock with the queue consumer; the batch is retried, nothing is lost, throughput suffers.
+- Switching either way keeps the processor's resume point (same subscriber id).
+
 ```java
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.ViewEventProcessor;
 
@@ -1477,8 +1505,10 @@ protected Optional<SubscriptionErrorPolicy> getSubscriptionErrorPolicy() {   // 
 (default `false`) is called on the delivery thread once the policy has used up its retries, in place of skipping or stopping, after
 the event's `UnitOfWork` was rolled back - so take the event over in a `UnitOfWork` of your own (e.g. queue it). Return `true` and the
 subscription carries on as if the event had been handled: no skip, no stop, no `handleEventFailed` callback, the resume point moves past
-it. Return `false`, or throw, and the policy gives up as usual. Single-event async subscriptions only (not batched, not in-transaction).
-`ViewEventProcessor` uses it to queue failures it could not queue in the subscription's `UnitOfWork` - see [ViewEventProcessor](#vieweventprocessor).
+it. Return `false`, or throw, and the policy gives up as usual. Async subscriptions only, not in-transaction ones. A batched subscription's
+`BatchedPersistedEventHandler#handOffFailedBatch(events, failure)` is the same for a whole batch. `ViewEventProcessor` uses the first to
+queue failures it could not queue in the subscription's `UnitOfWork`, and the second to handle a failed batch again event by event - see
+[ViewEventProcessor](#vieweventprocessor).
 
 **Retries block only their own subscription.** They are synchronous on the subscription's delivery thread (that is what keeps
 events in order), and every async subscription has its own: polling `Publish-<subscriber>-<aggregateType>`, CDC

@@ -52,6 +52,7 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
 
 import java.time.*;
 import java.util.*;
+import java.util.stream.IntStream;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 import static dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.SeparateTablePerAggregateTypeEventStreamConfigurationFactory.standardSingleTenantConfiguration;
@@ -88,6 +89,11 @@ class SpringTransactionAwareEventStoreUnitOfWorkFactory_ViewEventProcessorIT {
      * reports no pending changes for it - as an aggregate repository does for an aggregate that only was loaded - and then fail
      */
     private static final String        REGISTERS_UNCHANGED_RESOURCE_THEN_FAILS = "RegistersUnchangedResourceThenFails order details";
+    /**
+     * {@link OrderPlacedEvent#orderDetails} that makes the test processor count the event in {@code order_view_count}, in the
+     * subscription's transaction, and succeed
+     */
+    private static final String        COUNTED                                 = "Counted order details";
 
     @Container
     static PostgreSQLContainer postgreSQLContainer = new PostgreSQLContainer("postgres:18.4")
@@ -127,6 +133,7 @@ class SpringTransactionAwareEventStoreUnitOfWorkFactory_ViewEventProcessorIT {
         jdbi.setSqlLogger(new SqlExecutionTimeLogger());
         // The container is shared by every test method, and each one starts from an empty database
         jdbi.useHandle(handle -> handle.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public"));
+        jdbi.useHandle(handle -> handle.execute("CREATE TABLE order_view_count (order_id TEXT PRIMARY KEY, handled INT NOT NULL)"));
 
         unitOfWorkFactory = new SpringTransactionAwareEventStoreUnitOfWorkFactory(jdbi, transactionManager);
         var jsonSerializer = EssentialsJSONEventSerializers.create();
@@ -273,6 +280,48 @@ class SpringTransactionAwareEventStoreUnitOfWorkFactory_ViewEventProcessorIT {
         assertOnlyTheOrderPlacedEventIsPersisted(orderId);
     }
 
+    /**
+     * Handling in batches ({@link ViewEventProcessor#getDirectHandlingBatchSize()}): an escalating event rolls the batch's
+     * Spring {@link UnitOfWork} back, the events before it included. Once the {@link SubscriptionErrorPolicy} ({@code SKIP})
+     * gives up, the batch is handled again one event per {@link UnitOfWork} - the replay must recognise the escalation
+     * through the Spring {@link UnitOfWork}'s wrapping too - so only the escalating event is queued and every other event is
+     * projected exactly once
+     */
+    @Test
+    void an_escalating_event_in_a_batch_is_replayed_alone_and_queued_and_every_other_event_is_projected_once() {
+        // The event-by-event processor goes away, so only the batched one handles the events below
+        testProcessor.stop();
+        Awaitility.waitAtMost(Duration.ofSeconds(10)).until(() -> testProcessor.subscriptionsForTesting() != null);
+        testProcessor.subscriptionsForTesting().forEach(eventStoreSubscriptionManager::unsubscribe);
+        testProcessor = new BatchedTestOrderViewEventProcessor(new ViewEventProcessorDependencies(eventStoreSubscriptionManager,
+                                                                                                  fencedLockManager,
+                                                                                                  durableQueues,
+                                                                                                  commandBus,
+                                                                                                  List.of()),
+                                                               eventStore);
+        testProcessor.start();
+
+        var counted   = IntStream.range(0, 8).mapToObj(i -> OrderId.random()).toList();
+        var escalates = OrderId.random();
+        unitOfWorkFactory.usingUnitOfWork(uow -> {
+            counted.subList(0, 4).forEach(orderId -> eventStore.appendToStream(TEST_ORDERS, orderId, List.of(new OrderPlacedEvent(orderId, COUNTED))));
+            eventStore.appendToStream(TEST_ORDERS, escalates, List.of(new OrderPlacedEvent(escalates, APPENDS_EVENT_THEN_FAILS)));
+            counted.subList(4, 8).forEach(orderId -> eventStore.appendToStream(TEST_ORDERS, orderId, List.of(new OrderPlacedEvent(orderId, COUNTED))));
+        });
+
+        assertQueuedAfterTheRollbackAndDeadLettered(escalates);
+        Awaitility.waitAtMost(Duration.ofSeconds(30)).untilAsserted(() -> assertThat(countOf("SELECT coalesce(sum(handled), 0) FROM order_view_count")).isEqualTo(counted.size()));
+        assertThat(countOf("SELECT count(*) FROM order_view_count WHERE handled > 1")).isZero();
+        assertThat(testProcessor.subscriptionsForTesting()).singleElement()
+                                                           .satisfies(subscription -> assertThat(subscription.getClass().getSimpleName()).isEqualTo("NonExclusiveBatchedAsynchronousSubscription"));
+        assertOnlyTheOrderPlacedEventIsPersisted(escalates);
+    }
+
+    private int countOf(String sql) {
+        Integer count = jdbi.withHandle(handle -> handle.createQuery(sql).mapTo(Integer.class).one());
+        return count;
+    }
+
     private void appendOrderPlacedEvent(OrderId orderId, String orderDetails) {
         unitOfWorkFactory.usingUnitOfWork(uow -> eventStore.appendToStream(TEST_ORDERS, orderId, List.of(new OrderPlacedEvent(orderId, orderDetails))));
     }
@@ -399,10 +448,19 @@ class SpringTransactionAwareEventStoreUnitOfWorkFactory_ViewEventProcessorIT {
             return RedeliveryPolicy.fixedBackoff(Duration.ofMillis(200), 3);
         }
 
+        List<EventStoreSubscription> subscriptionsForTesting() {
+            return eventStoreSubscriptions;
+        }
+
         @MessageHandler
         public void onOrderPlaced(OrderPlacedEvent event) {
             var unitOfWork = eventStore.getUnitOfWorkFactory().getRequiredUnitOfWork();
             switch (event.orderDetails) {
+                case COUNTED -> {
+                    unitOfWork.handle().execute("INSERT INTO order_view_count (order_id, handled) VALUES (?, 1) " +
+                                                "ON CONFLICT (order_id) DO UPDATE SET handled = order_view_count.handled + 1", event.orderId.toString());
+                    return;
+                }
                 case APPENDS_EVENT_THEN_FAILS -> {
                     eventStore.appendToStream(TEST_ORDERS, event.orderId, new OrderConfirmedEvent(event.orderId));
                     appendedEventsBeforeFailing.add(event.orderId);
@@ -413,6 +471,26 @@ class SpringTransactionAwareEventStoreUnitOfWorkFactory_ViewEventProcessorIT {
                 }
             }
             throw new RuntimeException(event.orderDetails);
+        }
+    }
+
+    /**
+     * {@link TestOrderViewEventProcessor} handling events in batches of 50, under a name - so a subscription and a queue - of
+     * its own
+     */
+    public static class BatchedTestOrderViewEventProcessor extends TestOrderViewEventProcessor {
+        public BatchedTestOrderViewEventProcessor(ViewEventProcessorDependencies eventProcessorDependencies, PostgresqlEventStore<?> eventStore) {
+            super(eventProcessorDependencies, eventStore);
+        }
+
+        @Override
+        public String getProcessorName() {
+            return "SpringBatchedTestOrderViewEventProcessor";
+        }
+
+        @Override
+        protected int getDirectHandlingBatchSize() {
+            return 50;
         }
     }
 
