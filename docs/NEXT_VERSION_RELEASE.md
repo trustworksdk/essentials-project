@@ -629,7 +629,7 @@ that at INFO, not as a unit it keeps; and an acknowledgement a flush has refused
 released, or found taken, is not counted in `fencedOutAcks` nor logged as a lost lease, on either lane - nor is one
 refused after a release of the row that failed with no error answer from the database (a timed-out read or a lost
 connection), which may have gone through on the server. What to do: nothing. (`6fd885d93`, `66b907912`, `3e719bf2a`,
-`<!-- fix:U-013 -->`)
+`1afcfabd1`)
 
 The same `stuckHandlerTimeout` now ends a wait for an ordered handler which 0.60.0 left unbounded: a fair-share shed of an ordered
 unit, which waits for the keys in its handlers and otherwise keeps the unit and retries on the next heartbeat. A
@@ -679,7 +679,7 @@ row gone, looks for the message in the dead-letter table, so the message is coun
 `deadLetteredKeys`, as for any other move. The unordered lane's charge, below, does the same. When the kept unit is
 instead handed back once its handler returns, or taken over, the move is not made again, and that dead letter is then
 reported nowhere, though it blocks its key.
-(`6337f7d89`, `2fdeb3db0`, `bfa961ec5`, `dbae0986f`, `7dbd517be`, `e699c9d44`, `895b1a498`, `52c5e943e`, `<!-- fix:U-012 -->`)
+(`6337f7d89`, `2fdeb3db0`, `bfa961ec5`, `dbae0986f`, `7dbd517be`, `e699c9d44`, `895b1a498`, `52c5e943e`, `56790ca82`)
 
 **The unordered lane now charges a hung handler's delivery too, past the same bound.** It waits for no handler: a
 fair-share shed and a dead pump's hand-back release an unordered shard at once, and `stop()` once `shedGrace` has run
