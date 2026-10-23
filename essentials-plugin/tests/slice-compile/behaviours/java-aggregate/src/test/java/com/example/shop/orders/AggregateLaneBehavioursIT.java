@@ -7,8 +7,10 @@ import com.example.shop.orders.events.OrderPlaced;
 import com.example.shop.orders.types.OrderId;
 import com.example.shop.orders.use_cases.cancel_order.CancelOrder;
 import com.example.shop.orders.use_cases.place_order.PlaceOrder;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.AggregateNotFoundException;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.EventStore;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.PersistedEvent;
+import dk.trustworks.essentials.components.foundation.transaction.UnitOfWorkException;
 import dk.trustworks.essentials.reactive.command.CommandBus;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -73,7 +75,12 @@ class AggregateLaneBehavioursIT extends IntegrationTestBase {
         assertThat(inUnitOfWork(() -> orders.findOrder(missing))).isEmpty();
         assertThat(inUnitOfWork(() -> orders.hasOrder(missing))).isFalse();
         assertThat(inUnitOfWork(() -> orders.isOrderMissing(missing))).isTrue();
-        assertThatThrownBy(() -> inUnitOfWork(() -> orders.getOrder(missing))).isInstanceOf(RuntimeException.class);
+        // withUnitOfWork rethrows whatever the action threw wrapped in a UnitOfWorkException
+        assertThatThrownBy(() -> inUnitOfWork(() -> orders.getOrder(missing)))
+                .isInstanceOf(UnitOfWorkException.class)
+                .cause()
+                .isInstanceOfSatisfying(AggregateNotFoundException.class,
+                                        e -> assertThat(e.aggregateId).isEqualTo(missing));
 
         var id = create(OrderId.random(), "stored");
 
