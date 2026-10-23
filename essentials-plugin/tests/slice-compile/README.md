@@ -41,12 +41,12 @@ extending the host's `IntegrationTestBase`, so they run in the case's `verify` a
 
 `tests/scripts/test_behaviours_catalog.py` fails an `implemented` entry no marker names, a marker naming a
 `placeholder` or unknown entry, a marker in a directory whose compositions do not render its family, and a composition
-whose directories leave an `implemented` entry of a family it renders unasserted. A composition that cannot run those
-checks is listed in `BEHAVIOUR_EXEMPT` in `overlay.py` with the reason: the two `*-decider-two-bc` compositions, which
-render no `cancel_order` and run the boot overlay instead. `kotlin-decider-manifest`, the `--manifest` render path, has
-its own directory for the same reason: `behaviours/kotlin-decider` sends `CancelOrder`. When a
-template change makes a behaviour real, add its test in the same commit as the status; when a test cannot pass on the
-untouched skeleton, the entry is a `placeholder` whose summary says what is missing.
+whose directories leave an `implemented` entry of a family it renders unasserted. A composition whose directories
+leave such an entry unasserted is listed in `BEHAVIOUR_EXEMPT` in `overlay.py` with the reason: today the two
+`*-decider-two-bc` compositions, which run the boot overlay instead. `kotlin-decider-manifest`, the `--manifest` render
+path, has its own directory because `behaviours/kotlin-decider` sends `CancelOrder`, which that render does not have.
+When a template change makes a behaviour real, add its test in the same commit as the status; when a test cannot pass
+on the untouched skeleton, the entry is a `placeholder` whose summary says what is missing.
 
 ## Running
 
