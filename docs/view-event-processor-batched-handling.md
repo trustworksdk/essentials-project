@@ -1,7 +1,8 @@
 # Plan: batched direct handling for `ViewEventProcessor`
 
-**Status:** parked (2026-10-22). It waits until the next release has been merged into `feature/trading-demo-expansion`,
-then it is built on top of that.
+**Status:** decided, being built (2026-10-23). Unparked before the release merge, by the user's call: the phase 6
+baseline (`examples/essentials-trading-demo/.../_demo_harness/CLAUDE.md`, the business-day run) measures it now, and
+again once the release lands. Step 1 is therefore skipped; conflicts with the release are resolved at the merge.
 **Module:** `components/postgresql-event-store` (plus `foundation` and the `DurableQueues` implementations if step 3
 goes ahead).
 **Builds on:** `3ff8870d` — `EventProcessor.getForwardBatchSize()` and the batched forward.
@@ -139,9 +140,13 @@ throughput suffers. Watch for it while measuring.
 - Trading demo view lag under the order-flow load, using `~/trading-demo-profiling/lag-sample.sh`, alternating runs as
   in EF-2.
 
-## Open questions
+## Decisions (2026-10-23)
 
-1. On escalation, should the batch first be retried per policy and only then replayed (proposed, consistent with
-   per-event semantics today), or should it go straight to the replay, skipping the batch retries?
-2. Should step 3 (bulk key check) be staged after step 2 as proposed, or built together with it?
-3. Are the names `getDirectHandlingBatchSize()` / `getDirectHandlingMaxLatency()` acceptable?
+1. **On escalation, retry the batch per the policy first, then replay** event by event - consistent with the per-event
+   semantics today; the usual escalation is a dropped connection, which a retry fixes.
+2. **The bulk key check (step 3) is staged after step 2**, and only if step 2's measurements show it is worth it: it
+   changes the queue engines, which needs before/after measurements against `main`, and those wait for the release.
+3. **`getDirectHandlingBatchSize()` / `getDirectHandlingMaxLatency()`** are the names.
+
+The failure semantics above are accepted, including the one trade: an infrastructure failure the replay cannot get past
+leaves the policy's skip or stop to the whole batch.
