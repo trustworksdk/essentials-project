@@ -219,13 +219,13 @@ targets, with a `-N` suffix for plugin-only releases.
   delivers nothing again), or for another instance until the lease TTL runs out; an operator can release such a
   unit sooner on the instance that kept it, with `MessageQueue.releaseKeptOrderedUnit(instanceId, unit)` or the
   admin API's `POST /shard-owned-queues/{queueName}/ordered-units/{unit}/release-kept?instanceId=…`, naming the
-  instance id the kept-unit WARN printed - only a unit a subscription under that id kept is released, and the answer's
-  `answeredBy` names the instance ids of the process that answered; nothing passes the request on to another
-  process, so behind a load balancer it goes to that process's own address (a pod address, `kubectl port-forward`) -
-  accepting that the messages still in a
-  handler are delivered again, possibly beside those handlers; and a new Gotcha
-  lists what a `QueueObserver` calling the queue back from `shardOwnershipChanged` gets - a `consume()` from a release
-  a stop tells, or from one a failed start tells while it stops the lanes it had started, returns a subscription
+  instance id the kept-unit WARN printed - only a unit a subscription under that id kept is released - accepting that
+  the messages still in a handler are delivered again, possibly beside those handlers; nothing forwards the request to
+  another process, so behind a load balancer send it to the process that kept the unit, at its own address (a pod
+  address, `kubectl port-forward`), and the answer's `answeredBy`, the instance ids of the process that answered, shows
+  whether it got there; and a new Gotcha lists what a `QueueObserver` calling the queue back from
+  `shardOwnershipChanged` gets - a `consume()` from a release a stop tells, or from one a failed start tells while it
+  stops the lanes it had started, returns a subscription
   registered but not started, now with a WARN; a `Subscription.start()` there starts neither lane and WARNs, even with
   both lanes running, and a queue `start()` starts nothing and WARNs, bar one case: finding the queue marked started
   while a failed `consume()` or `Subscription.start()` stops its lanes, it returns at once, as that call leaves the
@@ -247,7 +247,10 @@ targets, with a `-N` suffix for plugin-only releases.
   one uncharged; a release on request charges every message in a handler. An
   unordered shard, released without waiting for its handlers - by a fair-share shed, a dead pump's hand-back or a
   `stop()` once `shedGrace` has run out - charges each message in a handler longer than `stuckHandlerTimeout` the same
-  way and dead-letters it at `maxAttempts`; a message in a handler for less is released uncharged.
+  way and dead-letters it at `maxAttempts`; a message in a handler for less is released uncharged. A handler that
+  returns before the charge has taken its message is left alone by it, and the `QueueObserver` is told of the
+  charge's dead letters after its database statements, so `deliveryFailed` for a message may arrive before its
+  `deadLettered`.
 - **Docs: supported PostgreSQL is 15+.** `LLM.md` states the floor (the majors the PostgreSQL community still patches)
   and the fenced-lock and shard-owned docs point at it instead of the old 9.5+ and 13+.
 - **Docs: `shared` helpers for Essentials 0.60.1** (`LLM-shared.md`). § Exceptions lists `ROOT_CAUSE_PREFIX`,
