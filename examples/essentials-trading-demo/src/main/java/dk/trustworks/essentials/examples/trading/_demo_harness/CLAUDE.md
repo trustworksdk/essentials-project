@@ -414,3 +414,27 @@ fill report is often recorded before the router records `OrderSubmitted`, which 
   inbox (network reordering, `integration/CLAUDE.md`).
 - **Reverted** to Tomcat's platform pool: the baseline runs on the known configuration. Virtual threads with a cap on
   concurrent requests are a separate A/B, on a fresh database.
+
+### Burst sweep, 2026-10-23 - the one-instance baseline
+
+What it answers: **the largest market-open rush one instance absorbs** while the steady load is 100 orders/s. Each run
+on a fresh database (`trading_load`) and freshly reset simulators, 2 000 customers / 1 000 active, 5 business days,
+`max-in-flight` 2 048; platform threads. Script in the session scratchpad (`load-sweep.sh`: reset simulators, recreate
+the DB and its CDC slot, start one instance on it, run, stop).
+
+| Rush (6 s at each open) | Orders | Placed → booked p50 / p99 | Router (placed → submitted) p50 / p99 | Ledger (filled → booked) p50 / p99 | Checks |
+|---|---|---|---|---|---|
+| 200/s | 42 441 | 0.37 s / 29 s | 0.22 s / 31 s | 0.16 s / 9 s | all pass |
+| 300/s | 44 488 | 0.41 s / 50 s | 0.28 s / 49 s | 0.18 s / 17 s | all pass |
+| 400/s | 47 282 | 0.53 s / 102 s | **2.2 s** / 94 s | 0.21 s / 62 s | all pass |
+
+- **Baseline: rushes up to 300/s.** The median stays under half a second and a rush's backlog clears before the next
+  open. At 400/s the router's median jumps tenfold: that is the knee. The router (`ExchangeOrderRouter`, an exclusive
+  `EventProcessor`) is the first stage to fall behind; the ledger processor follows at a distance.
+- **One open per run is far worse than the others, at the same point every time**: the 5th-6th minute of each run
+  (worst 10 s median 16 s at 200/s, 20 s at 300/s, 27 s at 400/s; the other opens 0.3-3 s). Each run starts the exchange
+  on Monday 2030-01-07, so it is the same business day each time - around Friday's close and the weekend. Not explained
+  yet; candidates are what a close does for every account at once (closing books, valuation, statements, clearing) and
+  T+1 settlement landing together.
+- **Correct throughout**: every order and payment reached its outcome, every fill booked, 0 dead letters, 0 cases,
+  0 missing statements, at every rush rate.
