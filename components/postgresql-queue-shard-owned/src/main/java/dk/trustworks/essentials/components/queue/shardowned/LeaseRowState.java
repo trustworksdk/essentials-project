@@ -18,6 +18,7 @@ package dk.trustworks.essentials.components.queue.shardowned;
 
 import dk.trustworks.essentials.components.queue.shardowned.LeasedOwner.LeaseRow;
 
+import java.sql.SQLException;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
@@ -32,10 +33,18 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * count), keyed on the state
  * {@link #advanceTo} returns. A compare-and-set is enough, without the owner's lock: no other field of an owner changes
  * together with its lease row.
+ * <p>
+ * Beside the state, whether a release of the row is in doubt ({@link #markReleaseInDoubt()}): a release that failed may
+ * still have gone through on the server, and the owners read a row found no longer naming them by it.
  */
 final class LeaseRowState {
 
     private final AtomicReference<LeaseRow> state = new AtomicReference<>(LeaseRow.HELD);
+
+    /**
+     * Set once and never cleared: see {@link #markReleaseInDoubt()}.
+     */
+    private volatile boolean releaseInDoubt;
 
     /**
      * Where the lease row stands now.
@@ -54,6 +63,42 @@ final class LeaseRowState {
     LeaseRow advanceTo(LeaseRow target) {
         requireNonNull(target, "No target lease row state provided");
         return state.getAndUpdate(current -> current.ordinal() < target.ordinal() ? target : current);
+    }
+
+    /**
+     * Record that a release of this row failed ({@code ShardOwnedQueue.releaseLeaseRows} threw) in a way that may have
+     * let it go through on the server ({@link #mayHaveGoneThrough}): a statement the driver stopped waiting for - past a
+     * network wait bound ({@code NetworkWaitBound}) or a {@code socketTimeout} - can still commit there. Not cleared: no later
+     * answer proves that statement will not still commit, and a release is only ever sent for an owner this instance is
+     * giving up. Leaves the state where it is.
+     */
+    void markReleaseInDoubt() {
+        releaseInDoubt = true;
+    }
+
+    /**
+     * Whether a release that failed with {@code failure} may still have gone through on the server: unless the database
+     * answered the statement with an error of its own - an {@link SQLException} with an SQL state outside class
+     * {@code 08} (connection exception), a trigger refusing the release, say - which rolled the statement back. A
+     * connection lost or a read timed out (pgjdbc reports both as {@code 08006}, a network timeout among them), an
+     * {@link SQLException} with no SQL state, or any other throwable leaves the outcome unknown. So does a pool that had no
+     * connection to give: that statement was never sent, but it cannot be told apart here, and taking it as in doubt only
+     * costs counting a later loss of the unit.
+     */
+    static boolean mayHaveGoneThrough(Throwable failure) {
+        if (failure instanceof SQLException sql) {
+            var state = sql.getSQLState();
+            return state == null || state.startsWith("08");
+        }
+        return true;
+    }
+
+    /**
+     * Whether a release of this row failed and may have gone through on the server ({@link #markReleaseInDoubt()}). A row
+     * found no longer naming the owner is then read as given up by that release, not as a lease lost.
+     */
+    boolean releaseInDoubt() {
+        return releaseInDoubt;
     }
 
     @Override

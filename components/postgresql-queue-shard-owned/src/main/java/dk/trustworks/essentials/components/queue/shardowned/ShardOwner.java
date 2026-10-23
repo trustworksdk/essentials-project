@@ -285,14 +285,19 @@ final class ShardOwner implements LeasedOwner {
         if (was == LeaseRow.RELEASED) {
             return;
         }
-        if (reason == LeaseEnd.TAKEN) {
+        // A unit found gone after a release of its row failed with no error answer from the database
+        // (LeaseRowState#mayHaveGoneThrough) is read as given up by that release, which may have gone through on the
+        // server (markReleaseInDoubt), not as a lease lost.
+        var lost = reason == LeaseEnd.TAKEN && !leaseRow.releaseInDoubt();
+        if (lost) {
             // Counted by the call that moved the row: a refused takeover charge may have found the same loss first
             metrics.leasesLost.increment();
         }
         // Per unit, and DEBUG for both: the caller knows how many units it just moved and says so
         // once. At a two-instance handover this fires 32 times in one heartbeat tick.
-        log.debug("Shard {}: lease {} under fence {}{}",
-                  shard, reason == LeaseEnd.TAKEN ? "taken" : "released", fence, was == LeaseRow.HELD ? ", owner stopping" : "");
+        log.debug("Shard {}: lease under fence {} {}{}",
+                  shard, fence, lost ? "taken" : reason == LeaseEnd.TAKEN ? "found given up by a release whose answer was not received" : "released",
+                  was == LeaseRow.HELD ? ", owner stopping" : "");
         if (was == LeaseRow.HELD) {
             wakeup.signal();
         }
@@ -301,6 +306,16 @@ final class ShardOwner implements LeasedOwner {
     @Override
     public LeaseRow leaseRow() {
         return leaseRow.get();
+    }
+
+    @Override
+    public void markReleaseInDoubt() {
+        leaseRow.markReleaseInDoubt();
+    }
+
+    @Override
+    public boolean releaseInDoubt() {
+        return leaseRow.releaseInDoubt();
     }
 
     @Override
@@ -411,12 +426,18 @@ final class ShardOwner implements LeasedOwner {
      *     <li>The owner was already {@code RELEASED}: this instance released its row (a stop, or a rebalance shedding it),
      *     or the queue's lease check found the unit taken and counted it in {@code leasesLost} then.</li>
      * </ul>
+     * Nor when a release of the row had failed with no error answer from the database (a lost connection or a timed-out
+     * read, {@link LeaseRowState#mayHaveGoneThrough}; {@link #markReleaseInDoubt()}): that release may have gone through
+     * on the server, the row given up by this instance itself; logged at DEBUG.
      */
     void leaseLostBeforeTakeover() {
         var was = leaseRow.advanceTo(LeaseRow.RELEASED);
-        if (was == LeaseRow.HELD) {
+        if (was == LeaseRow.HELD && !leaseRow.releaseInDoubt()) {
             metrics.leasesLost.increment();
             log.warn("Shard {}: takeover charge rejected under fence {} — lease lost, stopping", shard, fence);
+        } else if (was == LeaseRow.HELD) {
+            log.debug("Shard {}: takeover charge rejected under fence {} after a release of the row whose answer was not received; "
+                              + "taken as given up by that release, stopping", shard, fence);
         } else {
             log.debug("Shard {}: takeover charge rejected under fence {}; the owner had already stopped", shard, fence);
         }
@@ -968,8 +989,13 @@ final class ShardOwner implements LeasedOwner {
         if (storage.stillOwns("unordered", shard, instanceId, fence)) {
             return false;
         }
-        log.info("Shard {}: {} not recorded under fence {} - lease lost, the next owner redelivers the message",
-                 shard, write, fence);
+        if (leaseRow.releaseInDoubt()) {
+            log.info("Shard {}: {} not recorded under fence {} after a release of the row whose answer was not received - the next "
+                     + "owner redelivers the message", shard, write, fence);
+        } else {
+            log.info("Shard {}: {} not recorded under fence {} - lease lost, the next owner redelivers the message",
+                     shard, write, fence);
+        }
         return true;
     }
 
@@ -1108,6 +1134,14 @@ final class ShardOwner implements LeasedOwner {
             if (leaseRow.advanceTo(LeaseRow.RELEASED) == LeaseRow.RELEASED) {
                 log.debug("Shard {}: acknowledgement refused under fence {} for a lease row already given up or found taken",
                           shard, fence);
+                return;
+            }
+            // Nor by one refused after a release of the row failed with no error answer from the database (a lost
+            // connection or a timed-out read, LeaseRowState#mayHaveGoneThrough; ShardOwnedQueue.releaseLeaseRows marked
+            // it): that release may have gone through on the server after all, the row given up by this instance itself.
+            if (leaseRow.releaseInDoubt()) {
+                log.debug("Shard {}: acknowledgement refused under fence {} after a release of the row whose answer was not received; "
+                                  + "taken as given up by that release, stopping", shard, fence);
                 return;
             }
             metrics.fencedOutAcks.increment();

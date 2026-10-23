@@ -322,7 +322,11 @@ public final class ShardOwnerMetrics {
      * Acknowledgements the fence clause rejected because the lease had moved on. Counted only by the refused flush that
      * moves its owner's lease row to {@code RELEASED} ({@link LeasedOwner.LeaseRow}): a flush refused once the row is
      * {@code RELEASED} already - released by this instance, as by a stop whose flush returned after its kept unit was
-     * given up and released, or found taken by an earlier check or write - counts nothing.
+     * given up and released, or found taken by an earlier check or write - counts nothing, and nor does one refused after
+     * a release of the row failed with no error answer from the database (a lost connection or a timed-out read,
+     * {@link LeaseRowState#mayHaveGoneThrough}; {@link LeasedOwner#markReleaseInDoubt()}): that release may have gone
+     * through on the server, as one whose answer the network wait bound of a kept unit's hand-back or release on request
+     * stopped waiting for can.
      */
     public final LongAdder     fencedOutAcks                    = new LongAdder();
     public final LongAdder     leaseRenewals                    = new LongAdder();
@@ -339,6 +343,12 @@ public final class ShardOwnerMetrics {
      *     a unit the stop gave up is not a lost lease. The lease check leaves a run's owners alone once a stop has taken
      *     the run out, which it does before it drains and ends them (so a loss the lease check would find during that
      *     drain is not counted either), and a refused takeover charge counts only an owner still serving its unit.</li>
+     *     <li>An owner a release of whose lease row failed with no error answer from the database (a lost connection or a
+     *     timed-out read, {@link LeaseRowState#mayHaveGoneThrough}) is counted by neither
+     *     ({@link LeasedOwner#markReleaseInDoubt()}): that release may have gone through on the server, the unit given up
+     *     by this instance itself; the lease check logs such units at INFO, not in its "lost to another instance" WARN. A
+     *     release the database refused with an error of its own, which it rolled back, is not marked, so a later loss of
+     *     that owner's unit still counts.</li>
      * </ul>
      */
     public final LongAdder     leasesLost                       = new LongAdder();

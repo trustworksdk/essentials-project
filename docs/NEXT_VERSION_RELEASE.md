@@ -626,8 +626,10 @@ a minute, with or without a key in a handler: the WARN says the stop's flush has
 the unit, until it has been handed back, given up or released on request (§3, the entry on a stop's hand-back on a
 connection that never answers). Should that flush return once the unit was given up, the stop logs
 that at INFO, not as a unit it keeps; and an acknowledgement a flush has refused for a unit this instance has already
-released, or found taken, is not counted in `fencedOutAcks` nor logged as a lost lease, on either lane. What to do:
-nothing. (`6fd885d93`, `66b907912`, `3e719bf2a`)
+released, or found taken, is not counted in `fencedOutAcks` nor logged as a lost lease, on either lane - nor is one
+refused after a release of the row that failed with no error answer from the database (a timed-out read or a lost
+connection), which may have gone through on the server. What to do: nothing. (`6fd885d93`, `66b907912`, `3e719bf2a`,
+`<!-- fix:U-013 -->`)
 
 The same `stuckHandlerTimeout` now ends a wait for an ordered handler which 0.60.0 left unbounded: a fair-share shed of an ordered
 unit, which waits for the keys in its handlers and otherwise keeps the unit and retries on the next heartbeat. A

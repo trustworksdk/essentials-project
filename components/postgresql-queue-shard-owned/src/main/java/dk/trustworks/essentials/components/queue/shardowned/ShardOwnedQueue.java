@@ -1366,7 +1366,8 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                     // keeps its row; stopAbruptly() leaves them as a crash would), and a unit the stop gives up is not a
                     // lost lease. A row this read found absent because the stop had released it is therefore never read
                     // as taken: that release came after the take-out, so the check sees it.
-                    var taken = new ArrayList<Integer>();
+                    var taken          = new ArrayList<Integer>();
+                    var releaseInDoubt = new ArrayList<Integer>();
                     synchronized (run) {
                         if (currentRun.get() != run) {
                             break;
@@ -1380,11 +1381,21 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                                 // Both mean this owner's fence is stale. The owner counts it in leasesLost if this call
                                 // moves its row to RELEASED. It is RELEASED already, and not counted here, when one of its
                                 // own fenced writes was refused since `held` was read: a refused takeover charge counted
-                                // the loss in leasesLost, a refused acknowledgement in fencedOutAcks.
+                                // the loss in leasesLost, a refused acknowledgement in fencedOutAcks. Nor is it counted
+                                // when a release of the row had failed with no error answer from the database (a lost
+                                // connection or a timed-out read, LeaseRowState#mayHaveGoneThrough; releaseLeaseRows
+                                // marked it): that release may have gone through on the server, the unit given up by
+                                // this instance itself, not lost.
                                 owner.onLeaseEnded(LeasedOwner.LeaseEnd.TAKEN);
-                                taken.add(owner.shard());
+                                (owner.releaseInDoubt() ? releaseInDoubt : taken).add(owner.shard());
                             }
                         }
+                    }
+                    if (!releaseInDoubt.isEmpty()) {
+                        log.info("Instance {} found {} {} unit(s) [{}] on queue {} no longer held under their fences after a release of them "
+                                         + "failed: that release may have gone through on the server after all, or the units were taken "
+                                         + "since; read as given up by this instance, not as lost. Their owners stop, if they had not already",
+                                 instanceId, releaseInDoubt.size(), lane, summarise(releaseInDoubt), queueId);
                     }
                     if (!taken.isEmpty()) {
                         // Still a warning — the fence makes this safe, but something else believed
@@ -2467,6 +2478,16 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * and so is one this instance id has taken again under a newer fence: a run of this queue started again after a stop,
      * while a tick of the earlier run undoes the acquisition it made of the same unit ({@link #abandonAcquisition}). The
      * instance id alone released the newer owner's row while it still served the unit.
+     * <p>
+     * A release that throws may still have gone through on the server - a statement whose answer the driver stopped
+     * waiting for, past {@link #stopNetworkWaitBound()} on a kept unit's hand-back or release on request, or past the
+     * {@code DataSource}'s {@code socketTimeout}, can commit there all the same - so each owner is marked
+     * ({@link LeasedOwner#markReleaseInDoubt()}) before the failure is rethrown, its state left where it was, unless the
+     * database answered the statement with an error of its own, which rolled it back ({@link LeaseRowState#mayHaveGoneThrough}):
+     * such a release is known not to have gone through. A later
+     * fenced write of the owner refused, or the lease check finding its unit gone, is then read as this release's doing,
+     * not as a lease lost: a refused acknowledgement flush counted no {@code fencedOutAcks} and logged no "lease lost" for
+     * a row this instance had released itself.
      *
      * @return how many rows the statement released: fewer than {@code releasing} when some had been taken meanwhile
      */
@@ -2476,7 +2497,15 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         }
         var fenceByShard = new HashMap<Integer, Long>();
         releasing.forEach(owner -> fenceByShard.put(owner.shard(), owner.fence()));
-        var released = storage.releaseFencedLeases(activeLane, fenceByShard, instanceId);
+        int released;
+        try {
+            released = storage.releaseFencedLeases(activeLane, fenceByShard, instanceId);
+        } catch (SQLException | RuntimeException | Error e) {
+            if (LeaseRowState.mayHaveGoneThrough(e)) {
+                releasing.forEach(LeasedOwner::markReleaseInDoubt);
+            }
+            throw e;
+        }
         for (var owner : releasing) {
             owner.onLeaseEnded(LeasedOwner.LeaseEnd.RELEASED);
         }
@@ -3203,7 +3232,10 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * has waited that long, unless the connection's own network timeout is shorter, and the hand-back fails as on any
      * other database error: the unit goes back where it was claimed from for a later hand-back to retry. As far as this
      * queue knows its row still names this instance, though a statement the driver stopped waiting for may still complete
-     * on the server, and the retry's fenced flush and release then change nothing. The wait for a pool connection is the
+     * on the server, and the retry's fenced flush and release then change nothing - a flush refused after a release of the
+     * row that failed with no error answer from the database (a lost connection or a timed-out read,
+     * {@link LeaseRowState#mayHaveGoneThrough}) is read as that release's doing, not as a lease lost: no
+     * {@code fencedOutAcks}, no WARN ({@link LeasedOwner#markReleaseInDoubt()}). The wait for a pool connection is the
      * pool's own. Unbounded, it held its claim ({@link KeptUnit.Phase#HANDING_BACK}) for as long as that connection hung, and with it the instance's membership row
      * ({@link #needsMembership()}), and every later hand-back of the unit found it already claimed. Bounded on every
      * caller's thread, not only on the one a key leaving its handler starts: a heartbeat tick, a start or a
@@ -3327,7 +3359,9 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * a takeover of it, makes no move, and that dead letter is then reported nowhere, though it blocks its key; a
      * release of the row that does leaves the row released by the earlier request's own
      * statement, and a later request finds nothing left to release: it answers {@code ALREADY_TAKEN}, or, once a
-     * hand-back of the unit has found the row released first, nothing for the unit. The wait for a pool connection is
+     * hand-back of the unit has found the row released first, nothing for the unit; the acknowledgement flush either of
+     * them has refused then is read as that release's doing, not as a lease lost: no {@code fencedOutAcks}, no WARN
+     * ({@link LeasedOwner#markReleaseInDoubt()}). The wait for a pool connection is
      * the pool's own. Unbounded, a request - an admin API call's thread among
      * them - held its claim ({@link KeptUnit.Phase#HANDING_BACK}) for as long as that connection hung, and every later
      * hand-back or request of the unit found it claimed: the hand-back did nothing, the request answered {@code BUSY}.

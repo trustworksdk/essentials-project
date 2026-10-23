@@ -492,13 +492,17 @@ final class OrderedShardOwner implements BatchReadableOwner {
      * The takeover charge was refused by its fence: the unit's lease row no longer names this instance under this
      * owner's fence. As on the acknowledgement path, that is the lease lost; the pump drops the owner at the end of its
      * pass, before it has dispatched anything. Counted in {@code leasesLost} only when this call moved the owner out of
-     * {@code HELD}, so a loss the queue's lease check also finds is counted once - see ShardOwner#leaseLostBeforeTakeover.
+     * {@code HELD}, so a loss the queue's lease check also finds is counted once - see ShardOwner#leaseLostBeforeTakeover -
+     * and only when no release of the row is in doubt ({@link #markReleaseInDoubt()}).
      */
     void leaseLostBeforeTakeover() {
         var was = leaseRow.advanceTo(LeaseRow.RELEASED);
-        if (was == LeaseRow.HELD) {
+        if (was == LeaseRow.HELD && !leaseRow.releaseInDoubt()) {
             metrics.leasesLost.increment();
             log.warn("Ordered shard {}: takeover charge rejected under fence {} — lease lost, stopping", shard, fence);
+        } else if (was == LeaseRow.HELD) {
+            log.debug("Ordered shard {}: takeover charge rejected under fence {} after a release of the row whose answer was not "
+                              + "received; taken as given up by that release, stopping", shard, fence);
         } else {
             log.debug("Ordered shard {}: takeover charge rejected under fence {}; the owner had already stopped", shard, fence);
         }
@@ -1097,8 +1101,13 @@ final class OrderedShardOwner implements BatchReadableOwner {
             attemptsBySeq.remove(row.seq());
             keysAwaitingRetry.add(key);
         }
-        log.info("Ordered shard {}: {} for seq {} of key '{}' not recorded under fence {} - lease lost, the next "
-                 + "owner redelivers the message", shard, write, row.seq(), key, fence);
+        if (leaseRow.releaseInDoubt()) {
+            log.info("Ordered shard {}: {} for seq {} of key '{}' not recorded under fence {} after a release of the row whose "
+                     + "answer was not received - the next owner redelivers the message", shard, write, row.seq(), key, fence);
+        } else {
+            log.info("Ordered shard {}: {} for seq {} of key '{}' not recorded under fence {} - lease lost, the next "
+                     + "owner redelivers the message", shard, write, row.seq(), key, fence);
+        }
         return true;
     }
 
@@ -1461,6 +1470,15 @@ final class OrderedShardOwner implements BatchReadableOwner {
             if (leaseRow.advanceTo(LeaseRow.RELEASED) == LeaseRow.RELEASED) {
                 log.debug("Ordered shard {}: acknowledgement refused under fence {} for a lease row already given up or found taken",
                           shard, fence);
+                return;
+            }
+            // Nor by one refused after a release of the row failed with no error answer from the database (a lost
+            // connection or a timed-out read, LeaseRowState#mayHaveGoneThrough; ShardOwnedQueue.releaseLeaseRows marked
+            // it): that release may have gone through on the server after all - a kept unit's hand-back or release on
+            // request whose answer the network wait bound stopped waiting for - the row given up by this instance itself.
+            if (leaseRow.releaseInDoubt()) {
+                log.debug("Ordered shard {}: acknowledgement refused under fence {} after a release of the row whose answer was not "
+                                  + "received; taken as given up by that release, stopping", shard, fence);
                 return;
             }
             metrics.fencedOutAcks.increment();
@@ -1920,6 +1938,16 @@ final class OrderedShardOwner implements BatchReadableOwner {
         return leaseRow.get();
     }
 
+    @Override
+    public void markReleaseInDoubt() {
+        leaseRow.markReleaseInDoubt();
+    }
+
+    @Override
+    public boolean releaseInDoubt() {
+        return leaseRow.releaseInDoubt();
+    }
+
     /**
      * See {@link LeasedOwner#deliveryPermitted()}. Set once, by the queue that built this owner.
      */
@@ -1949,13 +1977,17 @@ final class OrderedShardOwner implements BatchReadableOwner {
         if (was == LeaseRow.RELEASED) {
             return;
         }
-        if (reason == LeaseEnd.TAKEN) {
+        // As in ShardOwner: found gone after a release of its row failed with no error answer from the database
+        // (LeaseRowState#mayHaveGoneThrough), the unit is read as given up by that release.
+        var lost = reason == LeaseEnd.TAKEN && !leaseRow.releaseInDoubt();
+        if (lost) {
             // Counted by the call that moved the row, as in ShardOwner
             metrics.leasesLost.increment();
         }
         // See ShardOwner: per unit and therefore DEBUG, because the caller reports the pass.
-        log.debug("Ordered unit {}: lease {} under fence {}{}",
-                  shard, reason == LeaseEnd.TAKEN ? "taken" : "released", fence, was == LeaseRow.HELD ? ", owner stopping" : "");
+        log.debug("Ordered unit {}: lease under fence {} {}{}",
+                  shard, fence, lost ? "taken" : reason == LeaseEnd.TAKEN ? "found given up by a release whose answer was not received" : "released",
+                  was == LeaseRow.HELD ? ", owner stopping" : "");
         if (was == LeaseRow.HELD) {
             wakeup.signal();
         }

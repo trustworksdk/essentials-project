@@ -23,6 +23,7 @@ import org.junit.jupiter.params.provider.*;
 
 import javax.sql.DataSource;
 import java.lang.reflect.Proxy;
+import java.sql.SQLException;
 import java.time.Duration;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -190,6 +191,80 @@ class LeasedOwnerLeaseRowTest {
 
         assertThat(owner.ownerMetrics().leasesLost.sum()).isEqualTo(1L);
         assertThat(owner.leaseRow()).isEqualTo(LeaseRow.RELEASED);
+    }
+
+    @Test
+    void marking_a_release_in_doubt_leaves_the_state_where_it_is_and_stays() {
+        var state = new LeaseRowState();
+        assertThat(state.releaseInDoubt()).isFalse();
+
+        state.markReleaseInDoubt();
+
+        assertThat(state.get()).as("as far as the instance knows, the row still names it").isEqualTo(LeaseRow.HELD);
+        assertThat(state.releaseInDoubt()).isTrue();
+        state.advanceTo(LeaseRow.RELEASED);
+        assertThat(state.releaseInDoubt()).as("nothing undoes it").isTrue();
+    }
+
+    /**
+     * A release the database answered with an error of its own was rolled back: not in doubt. One whose connection was
+     * lost or whose read timed out (pgjdbc: {@code 08006}), or that failed with no SQL state or with anything but an
+     * {@link SQLException}, may have gone through.
+     */
+    @Test
+    void a_release_is_in_doubt_unless_the_database_answered_it_with_an_error_of_its_own() {
+        assertThat(LeaseRowState.mayHaveGoneThrough(new SQLException("An I/O error occurred while sending to the backend.", "08006")))
+                .as("a network timeout or a lost connection").isTrue();
+        assertThat(LeaseRowState.mayHaveGoneThrough(new SQLException("Connection is not available", "08001"))).isTrue();
+        assertThat(LeaseRowState.mayHaveGoneThrough(new SQLException("no state"))).isTrue();
+        assertThat(LeaseRowState.mayHaveGoneThrough(new IllegalStateException("thrown by the driver"))).isTrue();
+
+        assertThat(LeaseRowState.mayHaveGoneThrough(new SQLException("simulated failure releasing 1 unordered unit(s)", "P0001")))
+                .as("a trigger refusing the release").isFalse();
+        assertThat(LeaseRowState.mayHaveGoneThrough(new SQLException("canceling statement due to statement timeout", "57014")))
+                .as("a statement the server cancelled").isFalse();
+    }
+
+    /**
+     * A release of the row failed - the queue's {@code releaseLeaseRows} threw, a statement whose answer the network wait
+     * bound stopped waiting for among the causes - so it may have gone through on the server. The unit then found gone is
+     * read as given up by that release, not counted lost.
+     */
+    @ParameterizedTest(name = "{0} lane, found gone while {1}")
+    @CsvSource({"unordered, HELD", "unordered, ENDED_ROW_HELD", "ordered, HELD", "ordered, ENDED_ROW_HELD"})
+    void a_unit_found_gone_after_a_release_of_its_row_failed_is_not_counted_lost(String lane, LeaseRow foundIn) {
+        var wakeup = new ShardWakeup();
+        var owner  = owner(lane, wakeup);
+        if (foundIn == LeaseRow.ENDED_ROW_HELD) {
+            owner.endKeepingLeaseRow();
+            wakeup.consume();
+        }
+        owner.markReleaseInDoubt();
+        assertThat(owner.releaseInDoubt()).isTrue();
+        assertThat(owner.leaseRow()).as("marking moves nothing").isEqualTo(foundIn);
+
+        owner.onLeaseEnded(LeaseEnd.TAKEN);
+
+        assertThat(owner.ownerMetrics().leasesLost.sum()).isZero();
+        assertThat(owner.leaseRow()).isEqualTo(LeaseRow.RELEASED);
+        assertThat(wakeup.consume()).as("the owner still stops: the pump drops it on its next pass when it was serving")
+                                    .isEqualTo(foundIn == LeaseRow.HELD);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"unordered", "ordered"})
+    void a_refused_takeover_charge_after_a_release_of_the_row_failed_is_not_counted_lost(String lane) {
+        var owner = owner(lane);
+        owner.markReleaseInDoubt();
+
+        if (owner instanceof OrderedShardOwner ordered) {
+            ordered.leaseLostBeforeTakeover();
+        } else {
+            ((ShardOwner) owner).leaseLostBeforeTakeover();
+        }
+
+        assertThat(owner.ownerMetrics().leasesLost.sum()).isZero();
+        assertThat(owner.leaseRow()).as("the owner stops all the same").isEqualTo(LeaseRow.RELEASED);
     }
 
     private static LeaseRowState stateAt(LeaseRow start) {

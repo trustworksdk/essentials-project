@@ -3380,6 +3380,91 @@ class ShardOwnedLifecycleIT {
     }
 
     /**
+     * A release on request of a kept unit whose release the database never answers throws, as above, and the release the
+     * driver stopped waiting for goes through on the server once the test lets go of the row. When the kept handler then
+     * returns, the hand-back of the unit flushes its acknowledgement under the kept fence, and the fence refuses it: the
+     * row no longer names this instance. That refusal is the release's doing, this instance's own, and is read as such -
+     * logged at DEBUG, the owner stopped, no {@code fencedOutAcks} and no "lease lost" WARN. It used to count and log a
+     * lost lease for a row this instance had released itself, a false alarm to whoever alerts on {@code fencedOutAcks}.
+     */
+    @Test
+    void a_hand_back_refused_after_a_release_on_request_whose_answer_the_bound_stopped_waiting_for_is_not_counted_a_lost_lease() throws Exception {
+        var entered     = new CountDownLatch(1);
+        var release     = new CountDownLatch(1);
+        var leaseTtl    = Duration.ofSeconds(4);
+        var settings    = settingsWith(Duration.ofMillis(300), leaseTtl);
+        var instanceId  = "kept-release-on-request-in-doubt";
+        var ownerLogged = new ListAppender<ILoggingEvent>();
+        var ownerLogger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(OrderedShardOwner.class);
+        var ownerLevel  = ownerLogger.getLevel();
+        ownerLogged.start();
+        ownerLogger.addAppender(ownerLogged);
+        ownerLogger.setLevel(ch.qos.logback.classic.Level.DEBUG);
+        try (var runtime = new ShardRuntime(dataSource, settings);
+             var locking = dataSource.getConnection()) {
+            var queue = ShardOwnedQueue.builder().setDataSource(dataSource).setQueueId(QUEUE_ID).setShardCount(SHARD_COUNT)
+                                       .setInstanceId(instanceId).setRuntime(runtime).build();
+            try {
+                queue.startConsumingOrdered((messageId, key, payload, payloadType) -> {
+                    entered.countDown();
+                    awaitQuietly(release);
+                }, settings, SHARD_COUNT);
+                queue.enqueueOrdered(List.of(new ShardOwnedStorage.OrderedPayload("ACC-1", 0, "0".getBytes(StandardCharsets.UTF_8), 1)));
+                assertThat(entered.await(20, TimeUnit.SECONDS)).isTrue();
+
+                queue.stop();
+                assertThat(orderedUnitsOwnedBy(instanceId)).as("premise: the busy unit is kept").isEqualTo(1);
+                var kept = keptOrderedFence(instanceId);
+                Awaitility.await().atMost(Duration.ofSeconds(10)).until(() -> !queue.handBackStillRunning());
+
+                locking.setAutoCommit(false);
+                try {
+                    assertThat(lockLeaseRowOf(locking, "ordered", kept.shard())).as("premise: the test holds the kept unit's lease row").isTrue();
+                    // On a thread of its own, so an unbounded request fails the test rather than hanging it.
+                    var requesting = new FutureTask<>(() -> queue.releaseKeptOrderedUnit(instanceId, kept.shard()));
+                    Thread.ofPlatform().daemon().name("kept-release-on-request-in-doubt").start(requesting);
+                    assertThatThrownBy(() -> requesting.get(leaseTtl.plusSeconds(5).toMillis(), TimeUnit.MILLISECONDS))
+                            .as("premise: the release behind the held row throws once it has waited the bound")
+                            .isInstanceOf(ExecutionException.class)
+                            .hasCauseInstanceOf(SQLException.class);
+                    assertThat(orderedUnitsOwnedBy(instanceId)).as("premise: the release behind the held row has not got through yet")
+                                                               .isEqualTo(1);
+                } finally {
+                    locking.rollback();
+                    locking.setAutoCommit(true);
+                }
+                // Premise: the release the driver stopped waiting for goes through on the server.
+                Awaitility.await("the abandoned release committing").atMost(Duration.ofSeconds(10)).until(() -> orderedUnitsOwnedBy(instanceId) == 0);
+                assertThat(fenceOf("ordered", kept.shard())).as("premise: released, not taken under a newer fence").isEqualTo(kept.fence());
+                assertThat(queue.keptOrderedUnitNotHandedBack()).as("premise: as far as the queue knows, its row still names it").isTrue();
+
+                // The kept handler returns: its acknowledgement is queued, and the unit's hand-back flushes it under the kept fence.
+                release.countDown();
+                Awaitility.await().atMost(Duration.ofSeconds(10)).until(() -> !queue.keptOrderedUnitNotHandedBack());
+                Awaitility.await().atMost(Duration.ofSeconds(5)).until(() -> threadsNamed("shard-queue-kept-unit-" + QUEUE_ID + "-" + kept.shard()) == 0);
+
+                assertThat(ownerLogged.list).extracting(ILoggingEvent::getFormattedMessage)
+                                            .as("premise: the hand-back's flush of the acknowledgement was refused by the fence")
+                                            .anyMatch(message -> message.contains("acknowledgement refused under fence " + kept.fence())
+                                                    || message.contains("acknowledgement rejected under fence " + kept.fence()));
+                assertThat(queue.orderedRemaining()).as("premise: nothing was acknowledged under the kept fence").isEqualTo(1);
+                assertThat(queue.metrics().fencedOutAcks.sum()).as("a refusal after this instance's own release is not a fenced-out acknowledgement")
+                                                               .isZero();
+                assertThat(ownerLogged.list).extracting(ILoggingEvent::getFormattedMessage)
+                                            .as("nor logged as a lost lease")
+                                            .noneMatch(message -> message.contains("lease lost"));
+                assertThat(queue.metrics().leasesLost.sum()).as("nor counted as one").isZero();
+            } finally {
+                release.countDown();
+                queue.stop();
+            }
+        } finally {
+            ownerLogger.setLevel(ownerLevel);
+            ownerLogger.detachAppender(ownerLogged);
+        }
+    }
+
+    /**
      * A {@code start()} made while the hand-back of the {@code stop()} before it is deleting the instance's membership row -
      * the deletion under way when the start began, here behind a row lock a test transaction holds on the row - waits for
      * that deletion before it registers the instance, at most the 2 s budget, and then says once that it goes on without

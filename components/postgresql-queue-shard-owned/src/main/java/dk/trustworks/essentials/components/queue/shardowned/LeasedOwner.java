@@ -198,14 +198,17 @@ interface LeasedOwner {
      *     pump drops it on its next pass rather than at its backstop. Nothing in any other state.</li>
      *     <li>{@link #onLeaseEnded}, to {@code RELEASED}: a DEBUG line unless it was {@code RELEASED} already, the wake-up
      *     when it was {@code HELD} (the pump still had the owner in its selection), and, for {@link LeaseEnd#TAKEN}, one
-     *     {@code leasesLost} unless it was {@code RELEASED} already. Called off the pump thread, by the queue's heartbeat or
+     *     {@code leasesLost} unless it was {@code RELEASED} already or a release of the row is in doubt
+     *     ({@link #markReleaseInDoubt()}). Called off the pump thread, by the queue's heartbeat or
      *     {@code stop()}; {@link LeaseEnd#TAKEN} only by the heartbeat's lease check, never for an owner {@code stop()} has
      *     ended, so a unit the stop gave up is not counted lost.</li>
      *     <li>The owner's own fenced write refused - its acknowledgement flush, or the attempt charge in
      *     {@link #onTakeover}: {@code RELEASED} and a WARN (the charge logs at DEBUG when the owner had already ended, and
      *     counts {@code leasesLost} only when it had not; a refused acknowledgement counts {@code fencedOutAcks}, and
      *     both it and its WARN only when the refusal moved the row: one already {@code RELEASED} - released by this
-     *     instance, or found taken - logs at DEBUG and counts nothing). No
+     *     instance, or found taken - logs at DEBUG and counts nothing; so does one refused after a release of the row
+     *     failed with no error answer from the database ({@link LeaseRowState#mayHaveGoneThrough}), which may have gone
+     *     through on the server ({@link #markReleaseInDoubt()}), as does the charge). No
      *     wake-up: those writes run on the owner's own pump, inside a pass, or on {@code stop()}'s flush of owners it had
      *     already ended; the pump drops the owner at the end of that pass, and a wake-up would only cost it one empty
      *     pass more.</li>
@@ -239,13 +242,39 @@ interface LeasedOwner {
      * The lease row no longer names this owner: {@link LeaseRow#RELEASED} from either other state, ending the owner if it
      * had not ended. {@link LeaseEnd#RELEASED} is called only once the row has been released, by
      * {@code ShardOwnedQueue.releaseLeaseRows}, the one method that gives a row up; {@link LeaseEnd#TAKEN} when the queue's
-     * lease check finds the unit taken, which the owner counts in {@code leasesLost} if this call moved its row (the lease
-     * check counts nothing itself, so a loss the owner's refused takeover charge found first is not counted twice). The
+     * lease check finds the unit taken, which the owner counts in {@code leasesLost} if this call moved its row and no
+     * release of the row is in doubt ({@link #markReleaseInDoubt()}; the lease check counts nothing itself, so a loss the
+     * owner's refused takeover charge found first is not counted twice). The
      * lease check makes that call only while the owner's run is still the queue's current one, decided under the run's
      * monitor, which {@code stop()} takes the run out under before it ends the run's owners: an owner {@code stop()} has
      * ended is never counted lost, whether or not another instance has taken its unit. Safe to repeat.
      */
     void onLeaseEnded(LeaseEnd reason);
+
+    /**
+     * A release of this owner's lease row failed - {@code ShardOwnedQueue.releaseLeaseRows} threw, a statement whose answer
+     * the driver stopped waiting for among the causes, and not an error the database answered it with
+     * ({@link LeaseRowState#mayHaveGoneThrough}) - so it may still have gone through on the server. Leaves
+     * {@link #leaseRow()} where it is: as far as this instance knows, the row still names it. From then on, a row found no
+     * longer naming this owner under its fence is read as given up by that release, not as a lease lost: a refused
+     * acknowledgement flush logs at DEBUG and counts no {@code fencedOutAcks}, and the queue's lease check finding the unit
+     * gone ({@link LeaseEnd#TAKEN}), or a refused takeover attempt charge, counts no {@code leasesLost}. Never undone (see
+     * {@link LeaseRowState#markReleaseInDoubt()}), so a unit taken from an owner after such a release failed - one whose
+     * release did not go through, kept serving since - is not counted lost either. Called by
+     * {@code ShardOwnedQueue.releaseLeaseRows} alone, before it rethrows.
+     * <p>
+     * Default: nothing, for a test double that keeps no lease row.
+     */
+    default void markReleaseInDoubt() {
+    }
+
+    /**
+     * Whether a release of this owner's lease row failed and may have gone through on the server
+     * ({@link #markReleaseInDoubt()}). Default {@code false}, for a test double that keeps no lease row.
+     */
+    default boolean releaseInDoubt() {
+        return false;
+    }
 
     /**
      * May this owner dispatch work right now?

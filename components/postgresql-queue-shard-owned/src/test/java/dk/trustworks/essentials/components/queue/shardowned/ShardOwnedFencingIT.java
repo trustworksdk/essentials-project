@@ -248,6 +248,67 @@ class ShardOwnedFencingIT {
         }
     }
 
+    /**
+     * The same, but with a release of the row whose answer this instance never received ({@code ShardOwnedQueue.releaseLeaseRows}
+     * marks the owner {@code markReleaseInDoubt()} and rethrows): the statement went through on the server, the owner stays
+     * where it was, as far as this instance knows still holding its row. Its next acknowledgement flush is refused by the
+     * fence; that is the instance's own release, not a lost lease - no {@code fencedOutAcks}, no "lease lost" WARN.
+     */
+    @ParameterizedTest(name = "{0} lane")
+    @ValueSource(strings = {"unordered", "ordered"})
+    void an_owner_whose_acknowledgement_flush_is_refused_after_a_release_of_its_row_in_doubt_reports_no_lost_lease(String lane) throws Exception {
+        var storage = new ShardOwnedStorage(dataSource, QUEUE_ID);
+        var payload = "a".getBytes(StandardCharsets.UTF_8);
+        try (var connection = dataSource.getConnection()) {
+            if ("ordered".equals(lane)) {
+                storage.enqueueOrderedBatch(connection, 0, List.of(new ShardOwnedStorage.OrderedPayload("key-1", 1L, payload, 1)));
+            } else {
+                storage.enqueueBatch(connection, 0, List.of(payload), 1);
+            }
+        }
+        var grant = storage.acquireLeaseGrant(lane, 0, "instance-1", 60_000L).orElseThrow();
+
+        var metrics     = new ShardOwnerMetrics();
+        var handled     = new AtomicInteger();
+        var owner       = owner(lane, storage, grant, metrics, handled);
+        var logged      = new ListAppender<ILoggingEvent>();
+        var ownerLogger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger("ordered".equals(lane) ? OrderedShardOwner.class : ShardOwner.class);
+        logged.start();
+        ownerLogger.addAppender(logged);
+        try {
+            try (var connection = dataSource.getConnection()) {
+                owner.onTakeover(connection);
+                Awaitility.await().atMost(Duration.ofSeconds(10)).pollInterval(Duration.ofMillis(10))
+                          .until(() -> {
+                              owner.pumpOnce(connection);
+                              return handled.get() == 1;
+                          });
+            }
+            assertThat(remaining(storage, lane)).as("premise: handled, not yet acknowledged").isEqualTo(1L);
+
+            // As a stop ends it; the release goes through on the server, but its answer is never received, so
+            // releaseLeaseRows marks the owner and rethrows, without ending it.
+            owner.endKeepingLeaseRow();
+            assertThat(storage.releaseFencedLeases(lane, Map.of(0, grant.fence()), "instance-1")).as("premise: the row is released").isOne();
+            owner.markReleaseInDoubt();
+            assertThat(owner.leaseRow()).as("premise: as far as this instance knows, the row is still its own")
+                                        .isEqualTo(LeasedOwner.LeaseRow.ENDED_ROW_HELD);
+
+            try (var connection = dataSource.getConnection()) {
+                owner.flushOnStop(connection);
+            }
+
+            assertThat(remaining(storage, lane)).as("the fence refused the acknowledgement of the released row").isEqualTo(1L);
+            assertThat(metrics.fencedOutAcks.sum()).as("a refusal after this instance's own release is no fenced-out acknowledgement").isZero();
+            assertThat(logged.list).extracting(ILoggingEvent::getFormattedMessage)
+                                   .as("nor logged as a lost lease")
+                                   .noneMatch(message -> message.contains("lease lost"));
+            assertThat(owner.leaseRow()).isEqualTo(LeasedOwner.LeaseRow.RELEASED);
+        } finally {
+            ownerLogger.detachAppender(logged);
+        }
+    }
+
     private static LeasedOwner owner(String lane, ShardOwnedStorage storage, ShardOwnedStorage.LeaseGrant grant, ShardOwnerMetrics metrics,
                                      AtomicInteger handled) {
         // An acknowledgement batch size and flush interval no pump pass reaches, so the acknowledgement is still pending
