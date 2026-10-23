@@ -12,7 +12,8 @@ A case is one host build:
     tests run. The `*-decider-two-bc` compositions also get the boot overlay (`boot/<lang>/src/`), because the defect
     they guard (a second decider configurator) is runtime-only. The compositions in BEHAVIOUR_OVERLAYS also get their
     behaviour checks (`behaviours/<dir>/src/`): an integration test per `implemented` behaviour of the catalog; a
-    composition rendering an `implemented` behaviour its overlays do not assert is listed in BEHAVIOUR_EXEMPT, with why;
+    composition rendering an `implemented` behaviour its overlays do not assert is listed in BEHAVIOUR_EXEMPT, with
+    the composition whose checks cover every family it renders, and why;
   - the fixtures that are Essentials applications. Only `.java`/`.kt` files are copied. `fixture-worked-example`
     (`{{packagePath}}` rendered to the host's packagePath, plus a test-only adapter for its outbound port from
     `stubs/worked-example/`) runs `verify`; `fixture-multi-lane` and `fixture-aggregate-lane` live outside the host's
@@ -72,16 +73,20 @@ BEHAVIOUR_OVERLAYS = {
     "kotlin-decider-manifest": ("kotlin-decider-manifest", "kotlin-event-processors"),
 }
 
-# Compositions that render a family with `implemented` entries yet run no behaviour check of them, and why.
-# `check` fails on a name that is not a composition.
+# Compositions that render a family with `implemented` entries yet run no behaviour check of them: each maps to
+# (the covering composition, why). The covering composition must render every family the exempt one renders, and its
+# own behaviour overlays must assert every `implemented` entry of those families; tests/scripts/test_behaviours_catalog.py
+# fails the exemption when either stops holding. `check` fails on a name that is not a composition, and on a covering
+# name that is not in BEHAVIOUR_OVERLAYS or is itself exempt.
 BEHAVIOUR_EXEMPT = {
-    "java-decider-two-bc": "two decider bounded contexts (orders, payments) with one command each, for the boot overlay "
-                           "(boot/java/src/): one decider configurator, each command reaching its own BC's decider. Its "
-                           "app-wiring, bc-scaffold and command templates are the ones java-decider renders and checks",
-    "kotlin-decider-two-bc": "two decider bounded contexts (orders, payments) with one command each, for the boot "
-                             "overlay (boot/kotlin/src/): one decider configurator, each command reaching its own BC's "
-                             "decider. Its app-wiring, bc-scaffold and command templates are the ones kotlin-decider "
-                             "renders and checks",
+    "java-decider-two-bc": ("java-decider",
+                            "two decider bounded contexts (orders, payments) with one command each, for the boot "
+                            "overlay (boot/java/src/): one decider configurator, each command reaching its own BC's "
+                            "decider"),
+    "kotlin-decider-two-bc": ("kotlin-decider",
+                              "two decider bounded contexts (orders, payments) with one command each, for the boot "
+                              "overlay (boot/kotlin/src/): one decider configurator, each command reaching its own "
+                              "BC's decider"),
 }
 
 # Fixture directories that are deliberately not compiled, and why. `check` fails on a fixture in neither list.
@@ -235,9 +240,18 @@ def check() -> list[str]:
         if name not in all_cases:
             problems.append(f"BEHAVIOUR_OVERLAYS names {name!r}, which is not a case")
     compositions = load_json(GOLDEN / "compositions.json").get("compositions", {})
-    for name in BEHAVIOUR_EXEMPT:
+    for name, entry in BEHAVIOUR_EXEMPT.items():
         if name not in compositions:
             problems.append(f"BEHAVIOUR_EXEMPT names {name!r}, which is not a composition in compositions.json")
+        if not (isinstance(entry, tuple) and len(entry) == 2 and all(isinstance(v, str) and v for v in entry)):
+            problems.append(f"BEHAVIOUR_EXEMPT[{name!r}] is not (covering composition, why)")
+            continue
+        covering = entry[0]
+        if covering not in BEHAVIOUR_OVERLAYS:
+            problems.append(f"BEHAVIOUR_EXEMPT[{name!r}] names {covering!r} as covering it, which runs no behaviour "
+                            "checks: it is not in BEHAVIOUR_OVERLAYS")
+        if covering in BEHAVIOUR_EXEMPT:
+            problems.append(f"BEHAVIOUR_EXEMPT[{name!r}] names {covering!r} as covering it, which is itself exempt")
     used = {d for dirs in BEHAVIOUR_OVERLAYS.values() for d in dirs}
     if BEHAVIOURS.is_dir():
         for directory in sorted(p.name for p in BEHAVIOURS.iterdir() if p.is_dir()):

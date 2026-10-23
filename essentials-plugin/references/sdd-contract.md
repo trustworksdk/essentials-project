@@ -156,8 +156,9 @@ every family and every stub test, and fails an `implemented` behaviour that no t
 `tests/slice-compile/behaviours/` names. Those tests run in the plugin's CI slices build against the
 rendered, untouched skeleton of every golden composition (`tests/slice-golden/compositions.json`)
 that renders the family, the `--manifest` render's included, except a composition
-`tests/slice-compile/overlay.py` lists in `BEHAVIOUR_EXEMPT` with the reason: today the two
-two-bounded-context compositions, which run a boot check instead. `test_behaviours_catalog.py` fails a
+`tests/slice-compile/overlay.py` lists in `BEHAVIOUR_EXEMPT` with the reason and a covering
+composition that renders and checks every family it renders: today the two two-bounded-context
+compositions, which run a boot check instead. `test_behaviours_catalog.py` fails a
 composition that leaves an `implemented` behaviour of a family it renders unchecked and is not
 exempt (`tests/slice-compile/README.md` § Behaviour checks).
 

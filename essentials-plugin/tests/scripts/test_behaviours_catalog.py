@@ -11,7 +11,8 @@ not do: the behaviour checks under tests/slice-compile/behaviours/ do, in the CI
 tests, in an overlay directory tests/slice-compile/overlay.py puts only on compositions that render
 that family; a `placeholder` entry may not be named. The reverse holds too: every composition runs a
 marked test of each `implemented` entry of every family it renders, unless overlay.py lists it in
-BEHAVIOUR_EXEMPT with the reason.
+BEHAVIOUR_EXEMPT with the reason and a covering composition: one, not exempt itself, that renders
+every family the exempt one renders and runs a marked test of each of their `implemented` entries.
 
 Run from the plugin root:  python3 -m unittest discover -s tests/scripts
 """
@@ -174,23 +175,39 @@ class BehaviourChecksTest(unittest.TestCase):
         self.assertEqual(unasserted, [], "implemented with no behaviour test under tests/slice-compile/behaviours/ "
                                          "(add one, or make the entry a placeholder that says what is missing)")
 
+    def unchecked(self, composition: str, families: set[str]) -> list[str]:
+        """`<family> <id>` for each `implemented` entry of `families` that no directory BEHAVIOUR_OVERLAYS gives
+        `composition` asserts."""
+        directories = self.overlays.get(composition, ())
+        asserted = {(family, behaviour) for _, _, directory, family, behaviour in self.markers
+                    if directory in directories}
+        return sorted(f"{family} {behaviour}" for (family, behaviour), status in self.status.items()
+                      if status == "implemented" and family in families and (family, behaviour) not in asserted)
+
     def test_every_composition_rendering_an_implemented_family_runs_its_checks(self):
         for composition in composition_names():
             families = rendered_families(composition)
-            directories = self.overlays.get(composition, ())
-            asserted = {(family, behaviour) for _, _, directory, family, behaviour in self.markers
-                        if directory in directories}
-            unchecked = sorted(f"{family} {behaviour}" for (family, behaviour), status in self.status.items()
-                               if status == "implemented" and family in families
-                               and (family, behaviour) not in asserted)
+            unchecked = self.unchecked(composition, families)
             with self.subTest(composition=composition):
                 if composition in self.exempt:
                     self.assertTrue(unchecked, f"{composition} is in overlay.py BEHAVIOUR_EXEMPT, yet its behaviour "
                                                "overlays assert every implemented entry it renders; drop the exemption")
+                    covering, _ = self.exempt[composition]
+                    self.assertNotIn(covering, self.exempt, f"{composition} is covered by {covering} in overlay.py "
+                                                            "BEHAVIOUR_EXEMPT, which is itself exempt")
+                    self.assertEqual(sorted(families - rendered_families(covering)), [],
+                                     f"{composition} renders these families, which {covering} (its covering "
+                                     "composition in overlay.py BEHAVIOUR_EXEMPT) does not; check them on "
+                                     f"{composition} or on a composition that renders them")
+                    self.assertEqual(self.unchecked(covering, families), [],
+                                     f"{covering} covers {composition} in overlay.py BEHAVIOUR_EXEMPT, yet its "
+                                     f"behaviour overlays leave these implemented entries of {composition}'s "
+                                     "families unasserted")
                     continue
                 self.assertEqual(unchecked, [], f"{composition} renders these implemented entries, which no directory "
                                                 "overlay.py BEHAVIOUR_OVERLAYS gives it asserts; add a behaviour "
-                                                "overlay for it, or list it in BEHAVIOUR_EXEMPT with the reason")
+                                                "overlay for it, or list it in BEHAVIOUR_EXEMPT with the composition "
+                                                "that checks its families and the reason")
 
 
 if __name__ == "__main__":
