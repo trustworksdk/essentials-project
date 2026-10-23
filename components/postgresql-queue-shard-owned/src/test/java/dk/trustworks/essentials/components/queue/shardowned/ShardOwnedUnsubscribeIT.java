@@ -1487,6 +1487,286 @@ class ShardOwnedUnsubscribeIT {
     }
 
     /**
+     * A release on request whose dead-letter move of the message it charged to its attempt limit throws once it has waited
+     * its network wait bound for the {@code COMMIT}'s answer - the {@code COMMIT} held on the server past the bound, then
+     * going through - leaves that move owed. When the kept handler then returns, the hand-back of the unit makes the move
+     * again before releasing the row: it finds the message in the dead-letter table, counts it in {@code deadLettered},
+     * tells the {@code QueueObserver} and names the key in a WARN. The hand-back used to release the row with the move
+     * still owed, and that dead letter was counted nowhere and reported to nobody, though it blocked its key.
+     */
+    @Test
+    void a_dead_letter_move_a_release_on_request_stopped_waiting_for_is_reported_by_the_hand_back_once_the_handler_returns() throws Exception {
+        // The request's network wait bound is the lease TTL (2 s at least)
+        var leaseTtl = Duration.ofSeconds(3);
+        var entered  = new CountDownLatch(1);
+        var release  = new CountDownLatch(1);
+        var told     = new AtomicInteger();
+        try (var queue = newQueue(PostgresqlMessageQueue.LifecycleHook.NONE, settingsWith(Duration.ofMillis(300), leaseTtl))) {
+            queue.addObserver(new QueueObserver() {
+                @Override
+                public void deadLettered(MessageId id, int attempts, Throwable cause) {
+                    told.incrementAndGet();
+                }
+            });
+            try {
+                queue.consume((messageId, key, payload, payloadType) -> {
+                    if (key != null) {
+                        entered.countDown();
+                        awaitQuietly(release, Duration.ofSeconds(90));
+                    }
+                }, new ConsumerOptions(8, Integer.MAX_VALUE, 1, RetryBackoff.fixed(Duration.ofMillis(100))));
+                var metrics = queue.registeredConsumers().getFirst().metrics();
+                queue.enqueue(Message.ordered("hangs".getBytes(StandardCharsets.UTF_8), 1, "ACC-1", 0));
+                var unitOfTheKey = ShardOwnedSchema.unitForKey("ACC-1", ShardOwnedSchema.ORDERED_UNITS);
+                assertThat(entered.await(20, TimeUnit.SECONDS)).as("premise: the key is in its handler").isTrue();
+                queue.stop();
+                assertThat(keptOrderedFence(INSTANCE_ID).shard()).as("premise: the stop kept the unit of the key in its handler")
+                                                                  .isEqualTo(unitOfTheKey);
+
+                releaseOnRequestWhoseDeadLetterMoveCommitsPastTheBound(queue, unitOfTheKey, leaseTtl);
+                assertThat(metrics.deadLettered.sum()).as("premise: the request that threw counted no dead letter").isZero();
+                assertThat(told).as("premise: nor told the observer of one").hasValue(0);
+                assertThat(orderedUnitsOwnedBy(INSTANCE_ID)).as("premise: the request released nothing").isEqualTo(1);
+
+                // The kept handler returns, and the unit is handed back on a thread of its own
+                release.countDown();
+                Awaitility.await().atMost(Duration.ofSeconds(15)).until(() -> orderedUnitsOwnedBy(INSTANCE_ID) == 0);
+
+                assertThat(metrics.deadLettered.sum()).as("the hand-back counted the dead letter the request left in doubt").isEqualTo(1);
+                assertThat(told).as("and told the observer of it").hasValue(1);
+                assertThat(queue.deadLetters(0, 10)).as("one dead letter, the request's").singleElement()
+                                                    .satisfies(deadLetter -> assertThat(deadLetter.lastError()).isEqualTo(ShardOwnedStorage.EXHAUSTED_IN_A_RELEASED_HANDLER));
+                Awaitility.await().atMost(Duration.ofSeconds(5)).untilAsserted(
+                        () -> assertThat(laneWarnings()).as("the hand-back names the dead-lettered key")
+                                                        .filteredOn(warning -> warning.contains("handing back ordered unit " + unitOfTheKey + " on queue "
+                                                                                                        + QUEUE_ID + ", has made or found, before releasing it, dead-letter move(s)"))
+                                                        .singleElement()
+                                                        .satisfies(warning -> assertThat(warning).contains("1 message(s) of key(s) [ACC-1]")));
+            } finally {
+                release.countDown();
+            }
+        }
+    }
+
+    /**
+     * As above, but the database refuses the hand-back's release of the row once the hand-back has settled the move. The
+     * WARN naming the dead-lettered key is logged before the release, so the key is named though the release fails: the
+     * ledger then holds the key as dead-lettered, and a retried hand-back finds nothing new to name.
+     */
+    @Test
+    void a_dead_letter_move_the_hand_back_settles_is_named_though_its_release_is_then_refused() throws Exception {
+        var leaseTtl = Duration.ofSeconds(3);
+        var entered  = new CountDownLatch(1);
+        var release  = new CountDownLatch(1);
+        var told     = new AtomicInteger();
+        try (var queue = newQueue(PostgresqlMessageQueue.LifecycleHook.NONE, settingsWith(Duration.ofMillis(300), leaseTtl))) {
+            queue.addObserver(new QueueObserver() {
+                @Override
+                public void deadLettered(MessageId id, int attempts, Throwable cause) {
+                    told.incrementAndGet();
+                }
+            });
+            var unitOfTheKey = ShardOwnedSchema.unitForKey("ACC-1", ShardOwnedSchema.ORDERED_UNITS);
+            try {
+                queue.consume((messageId, key, payload, payloadType) -> {
+                    if (key != null) {
+                        entered.countDown();
+                        awaitQuietly(release, Duration.ofSeconds(90));
+                    }
+                }, new ConsumerOptions(8, Integer.MAX_VALUE, 1, RetryBackoff.fixed(Duration.ofMillis(100))));
+                var metrics = queue.registeredConsumers().getFirst().metrics();
+                queue.enqueue(Message.ordered("hangs".getBytes(StandardCharsets.UTF_8), 1, "ACC-1", 0));
+                assertThat(entered.await(20, TimeUnit.SECONDS)).as("premise: the key is in its handler").isTrue();
+                queue.stop();
+                assertThat(keptOrderedFence(INSTANCE_ID).shard()).as("premise: the stop kept the unit of the key in its handler")
+                                                                  .isEqualTo(unitOfTheKey);
+
+                releaseOnRequestWhoseDeadLetterMoveCommitsPastTheBound(queue, unitOfTheKey, leaseTtl);
+                assertThat(metrics.deadLettered.sum()).as("premise: the request that threw counted no dead letter").isZero();
+
+                LeaseReleaseRefusals.failLeaseReleasesOf(dataSource, new short[]{QUEUE_ID}, "ordered", unitOfTheKey, true);
+                // The kept handler returns, and the unit's hand-back settles the move, then has its release refused
+                release.countDown();
+                Awaitility.await().atMost(Duration.ofSeconds(15))
+                          .untilAsserted(() -> assertThat(laneWarnings()).as("premise: the hand-back's release failed")
+                                                                         .anyMatch(warning -> warning.contains("could not hand back ordered unit " + unitOfTheKey)));
+                assertThat(LeaseReleaseRefusals.releasesRefused(dataSource, QUEUE_ID, unitOfTheKey))
+                        .as("premise: refused by the database, as the injection meant").isPositive();
+                assertThat(orderedUnitsOwnedBy(INSTANCE_ID)).as("premise: the row still names this instance").isEqualTo(1);
+
+                assertThat(metrics.deadLettered.sum()).as("the hand-back counted the dead letter before its release failed").isEqualTo(1);
+                assertThat(told).as("and told the observer of it").hasValue(1);
+                assertThat(laneWarnings()).as("and named the dead-lettered key, though its release failed")
+                                          .filteredOn(warning -> warning.contains("handing back ordered unit " + unitOfTheKey + " on queue "
+                                                                                          + QUEUE_ID + ", has made or found, before releasing it, dead-letter move(s)"))
+                                          .singleElement()
+                                          .satisfies(warning -> assertThat(warning).contains("1 message(s) of key(s) [ACC-1]"));
+            } finally {
+                release.countDown();
+                LeaseReleaseRefusals.failLeaseReleasesOf(dataSource, new short[]{QUEUE_ID}, "ordered", unitOfTheKey, false);
+            }
+        }
+    }
+
+    /**
+     * As above, but the hand-back once the kept handler returns fails before its move - a test trigger refuses its
+     * acknowledgement flush - so the unit stays kept with no key in a handler and the move still owed. The next release on
+     * request makes that move before releasing the row, though no key is in a handler: it finds the message in the
+     * dead-letter table, counts it and tells the {@code QueueObserver}, and its answer names the key dead-lettered. With no
+     * key in a handler it used to release the row without the move, answering with no dead-lettered key.
+     */
+    @Test
+    void a_release_on_request_with_no_key_in_a_handler_makes_the_dead_letter_move_an_earlier_request_stopped_waiting_for() throws Exception {
+        var leaseTtl = Duration.ofSeconds(3);
+        var entered  = new CountDownLatch(1);
+        var release  = new CountDownLatch(1);
+        var told     = new AtomicInteger();
+        try (var queue = newQueue(PostgresqlMessageQueue.LifecycleHook.NONE, settingsWith(Duration.ofMillis(300), leaseTtl))) {
+            queue.addObserver(new QueueObserver() {
+                @Override
+                public void deadLettered(MessageId id, int attempts, Throwable cause) {
+                    told.incrementAndGet();
+                }
+            });
+            try {
+                queue.consume((messageId, key, payload, payloadType) -> {
+                    if (key != null) {
+                        entered.countDown();
+                        awaitQuietly(release, Duration.ofSeconds(90));
+                    }
+                }, new ConsumerOptions(8, Integer.MAX_VALUE, 1, RetryBackoff.fixed(Duration.ofMillis(100))));
+                var metrics = queue.registeredConsumers().getFirst().metrics();
+                queue.enqueue(Message.ordered("hangs".getBytes(StandardCharsets.UTF_8), 1, "ACC-1", 0));
+                var unitOfTheKey = ShardOwnedSchema.unitForKey("ACC-1", ShardOwnedSchema.ORDERED_UNITS);
+                assertThat(entered.await(20, TimeUnit.SECONDS)).as("premise: the key is in its handler").isTrue();
+                queue.stop();
+                assertThat(keptOrderedFence(INSTANCE_ID).shard()).as("premise: the stop kept the unit of the key in its handler")
+                                                                  .isEqualTo(unitOfTheKey);
+
+                releaseOnRequestWhoseDeadLetterMoveCommitsPastTheBound(queue, unitOfTheKey, leaseTtl);
+
+                refuseOrderedDeletes();
+                try {
+                    release.countDown();
+                    Awaitility.await().atMost(Duration.ofSeconds(15))
+                              .until(() -> laneWarnings().stream().anyMatch(warning -> warning.contains("could not hand back ordered unit " + unitOfTheKey
+                                                                                                                + " on queue " + QUEUE_ID)));
+                } finally {
+                    dropOrderedDeleteRefusal();
+                }
+                assertThat(metrics.deadLettered.sum()).as("premise: the hand-back failed before making the move").isZero();
+                assertThat(told).as("premise: and told the observer of nothing").hasValue(0);
+                assertThat(orderedUnitsOwnedBy(INSTANCE_ID)).as("premise: the unit is still kept").isEqualTo(1);
+
+                // Asked until the failed hand-back has let go of its claim: until then the release answers BUSY.
+                var releases = Awaitility.await().atMost(Duration.ofSeconds(5))
+                                         .until(() -> queue.releaseKeptOrderedUnit(INSTANCE_ID, unitOfTheKey).releases(),
+                                                answer -> answer.stream().noneMatch(entry -> entry.outcome() == KeptUnitRelease.Outcome.BUSY));
+
+                assertThat(releases).singleElement().satisfies(released -> {
+                    assertThat(released.outcome()).isEqualTo(KeptUnitRelease.Outcome.RELEASED);
+                    assertThat(released.keysInHandler()).as("premise: no key is in a handler any more").isEmpty();
+                    assertThat(released.charged()).as("the answer names the earlier request's charge").isEqualTo(1);
+                    assertThat(released.deadLetteredKeys()).as("and the key the move it owed dead-lettered").containsExactly("ACC-1");
+                });
+                assertThat(metrics.deadLettered.sum()).as("counted once").isEqualTo(1);
+                assertThat(told).as("the observer told once").hasValue(1);
+                assertThat(metrics.takeoverAttemptBumps.sum()).as("charged once, by the first request").isEqualTo(1);
+                assertThat(queue.deadLetters(0, 10)).as("one dead letter, the first request's").hasSize(1);
+                assertThat(orderedUnitsOwnedBy(INSTANCE_ID)).as("the unit is released").isZero();
+            } finally {
+                release.countDown();
+            }
+        }
+    }
+
+    /**
+     * A release on request charges two keys of one unit to their attempt limit, and its dead-letter move of the first key's
+     * message throws once it has waited its network wait bound for the {@code COMMIT}'s answer - the {@code COMMIT} going
+     * through on the server after all - which leaves both moves owed. When the kept handlers return - the second key's
+     * asking for a redelivery, which leaves its row in the table - the hand-back finds the first key's dead letter, then
+     * has its move of the second refused by a test trigger, and fails with the unit still kept. Its WARN names the first
+     * key all the same, which it counted and told the {@code QueueObserver} of: named only by a hand-back whose charge
+     * returned, that key was named in no WARN, as a retried hand-back finds it already dead-lettered in the ledger.
+     */
+    @Test
+    void a_dead_letter_move_the_hand_back_makes_before_a_later_move_of_it_throws_is_named_in_its_warning() throws Exception {
+        var leaseTtl = Duration.ofSeconds(3);
+        var first    = "ACC-1";
+        var unit     = ShardOwnedSchema.unitForKey(first, ShardOwnedSchema.ORDERED_UNITS);
+        var second   = OrderedUnitKeys.keyInUnit("ACC-", unit, ShardOwnedSchema.ORDERED_UNITS, first);
+        var entered  = new CountDownLatch(2);
+        var release  = new CountDownLatch(1);
+        var told     = new AtomicInteger();
+        try (var queue = newQueue(PostgresqlMessageQueue.LifecycleHook.NONE, settingsWith(Duration.ofMillis(300), leaseTtl))) {
+            queue.addObserver(new QueueObserver() {
+                @Override
+                public void deadLettered(MessageId id, int attempts, Throwable cause) {
+                    told.incrementAndGet();
+                }
+            });
+            try {
+                queue.consume((messageId, key, payload, payloadType) -> {
+                    if (key != null) {
+                        entered.countDown();
+                        awaitQuietly(release, Duration.ofSeconds(90));
+                        if (second.equals(key)) {
+                            // Not a failure, so the row stays in the table for the hand-back's move of it
+                            throw new RedeliveryRequested(Duration.ofMinutes(5));
+                        }
+                    }
+                }, new ConsumerOptions(8, Integer.MAX_VALUE, 1, RetryBackoff.fixed(Duration.ofMillis(100))));
+                var metrics = queue.registeredConsumers().getFirst().metrics();
+                // Enqueued first, the first key's message has the lower seq, and its move is made first
+                for (var key : List.of(first, second)) {
+                    queue.enqueue(Message.ordered(key.getBytes(StandardCharsets.UTF_8), 1, key, 0));
+                }
+                assertThat(entered.await(20, TimeUnit.SECONDS)).as("premise: both keys of one unit are in their handlers").isTrue();
+                queue.stop();
+                assertThat(keptOrderedFence(INSTANCE_ID).shard()).as("premise: the stop kept the unit of the keys in their handlers").isEqualTo(unit);
+
+                releaseOnRequestWhoseDeadLetterMoveCommitsPastTheBound(queue, unit, leaseTtl);
+                assertThat(metrics.deadLettered.sum()).as("premise: the request that threw counted no dead letter").isZero();
+                assertThat(told).as("premise: nor told the observer of one").hasValue(0);
+
+                refuseDeadLettersOfKey(second);
+                try {
+                    // The kept handlers return, and the unit's hand-back finds the first move, then has the second refused
+                    release.countDown();
+                    Awaitility.await().atMost(Duration.ofSeconds(15))
+                              .until(() -> laneWarnings().stream().anyMatch(warning -> warning.contains("could not hand back ordered unit " + unit
+                                                                                                                + " on queue " + QUEUE_ID)));
+                } finally {
+                    dropDeadLetterRefusal();
+                }
+                assertThat(queue.deadLetters(0, 10)).as("premise: the second key's move was refused").singleElement()
+                                                    .satisfies(deadLetter -> assertThat(deadLetter.key()).isEqualTo(first));
+                assertThat(orderedUnitsOwnedBy(INSTANCE_ID)).as("premise: the failed hand-back released nothing").isEqualTo(1);
+                assertThat(metrics.deadLettered.sum()).as("the hand-back counted the first key's dead letter").isEqualTo(1);
+                assertThat(told).as("and told the observer of it").hasValue(1);
+                assertThat(laneWarnings()).as("and named the first key, though a later move of it threw")
+                                          .filteredOn(warning -> warning.contains("handing back ordered unit " + unit + " on queue "
+                                                                                          + QUEUE_ID + ", has made or found, before releasing it, dead-letter move(s)"))
+                                          .singleElement()
+                                          .satisfies(warning -> assertThat(warning).contains("1 message(s) of key(s) [" + first + "]"));
+
+                // Asked until the failed hand-back has let go of its claim: until then the release answers BUSY.
+                var releases = Awaitility.await().atMost(Duration.ofSeconds(5))
+                                         .until(() -> queue.releaseKeptOrderedUnit(INSTANCE_ID, unit).releases(),
+                                                answer -> answer.stream().noneMatch(entry -> entry.outcome() == KeptUnitRelease.Outcome.BUSY));
+                assertThat(releases).singleElement().satisfies(released -> {
+                    assertThat(released.outcome()).isEqualTo(KeptUnitRelease.Outcome.RELEASED);
+                    assertThat(released.deadLetteredKeys()).as("the second move made by the next release").containsExactly(first, second);
+                });
+                assertThat(metrics.deadLettered.sum()).as("each dead letter counted once").isEqualTo(2);
+                assertThat(told).as("and told once").hasValue(2);
+            } finally {
+                release.countDown();
+            }
+        }
+    }
+
+    /**
      * A key in a handler whose message was deleted through the admin API ({@link MessageQueue#deleteMessage}) while its
      * handler ran has nothing left to charge: the release on request's charge does not find its row, settles it and charges
      * the other key alone, so a {@code QueueObserver} that throws when told of the other key's dead letter still finds
@@ -2522,6 +2802,103 @@ class ShardOwnedUnsubscribeIT {
             try (var resultSet = statement.executeQuery()) {
                 return resultSet.next() ? resultSet.getString(1) : null;
             }
+        }
+    }
+
+    /**
+     * Ask for the release of the kept {@code unit} - until it is claimed, not {@code BUSY} - while the {@code COMMIT} of
+     * every dead-letter move is held on the server longer than the request's network wait bound ({@code bound}): the
+     * request's charge commits, its move throws once it has waited the bound for the {@code COMMIT}'s answer, and the
+     * {@code COMMIT} goes through on the server after all. Returns once it has.
+     */
+    private void releaseOnRequestWhoseDeadLetterMoveCommitsPastTheBound(PostgresqlMessageQueue queue, int unit, Duration bound) throws SQLException {
+        delayDeadLetterCommits(bound.plusSeconds(3));
+        try {
+            var failure = new AtomicReference<SQLException>();
+            Awaitility.await().atMost(Duration.ofSeconds(30)).until(() -> {
+                try {
+                    List<KeptUnitRelease> releases = queue.releaseKeptOrderedUnit(INSTANCE_ID, unit).releases();
+                    assertThat(releases)
+                            .as("premise: a request answers only BUSY until it claims the unit")
+                            .isNotEmpty()
+                            .allMatch(entry -> entry.outcome() == KeptUnitRelease.Outcome.BUSY);
+                    return false;
+                } catch (SQLException e) {
+                    failure.set(e);
+                    return true;
+                }
+            });
+            assertThat((Throwable) failure.get()).as("premise: the request threw once its move had waited the bound").isNotNull();
+        } finally {
+            // Waits for the held COMMIT: the transaction that fired the trigger holds a lock on the table until it ends
+            dropDeadLetterCommitDelay();
+        }
+        assertThat(queue.deadLetters(0, 10)).as("premise: the move the request stopped waiting for committed on the server")
+                                            .singleElement()
+                                            .satisfies(deadLetter -> assertThat(deadLetter.lastError()).isEqualTo(ShardOwnedStorage.EXHAUSTED_IN_A_RELEASED_HANDLER));
+    }
+
+    /**
+     * Hold the {@code COMMIT} of every transaction inserting a dead letter on the server for {@code delay}, then let it
+     * through: a deferred constraint trigger runs at {@code COMMIT}.
+     */
+    private void delayDeadLetterCommits(Duration delay) throws SQLException {
+        try (var connection = dataSource.getConnection();
+             var statement = connection.createStatement()) {
+            statement.execute("CREATE OR REPLACE FUNCTION delay_dead_letter_commit() RETURNS trigger LANGUAGE plpgsql AS $$ "
+                                      + "BEGIN PERFORM pg_sleep(" + delay.toMillis() / 1000.0 + "); RETURN NULL; END $$");
+            statement.execute("CREATE CONSTRAINT TRIGGER delay_dead_letter_commit AFTER INSERT ON " + ShardOwnedSchema.DLQ_TABLE
+                                      + " DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION delay_dead_letter_commit()");
+        }
+    }
+
+    private void dropDeadLetterCommitDelay() throws SQLException {
+        try (var connection = dataSource.getConnection();
+             var statement = connection.createStatement()) {
+            statement.execute("DROP TRIGGER IF EXISTS delay_dead_letter_commit ON " + ShardOwnedSchema.DLQ_TABLE);
+        }
+    }
+
+    /**
+     * Refuse every dead letter of {@code key}: a trigger raises an error of its own (SQL state {@code P0001}), so the move
+     * is rolled back and not in doubt.
+     */
+    private void refuseDeadLettersOfKey(String key) throws SQLException {
+        try (var connection = dataSource.getConnection();
+             var statement = connection.createStatement()) {
+            statement.execute("CREATE OR REPLACE FUNCTION refuse_dead_letters_of_key() RETURNS trigger LANGUAGE plpgsql AS $$ "
+                                      + "BEGIN IF NEW.msg_key = '" + key.replace("'", "''") + "' THEN "
+                                      + "RAISE EXCEPTION 'dead letters of the key refused by the test'; END IF; RETURN NEW; END $$");
+            statement.execute("CREATE TRIGGER refuse_dead_letters_of_key BEFORE INSERT ON " + ShardOwnedSchema.DLQ_TABLE
+                                      + " FOR EACH ROW EXECUTE FUNCTION refuse_dead_letters_of_key()");
+        }
+    }
+
+    private void dropDeadLetterRefusal() throws SQLException {
+        try (var connection = dataSource.getConnection();
+             var statement = connection.createStatement()) {
+            statement.execute("DROP TRIGGER IF EXISTS refuse_dead_letters_of_key ON " + ShardOwnedSchema.DLQ_TABLE);
+        }
+    }
+
+    /**
+     * Refuse every {@code DELETE} on the ordered lane's table, a statement deleting no row included: an acknowledgement
+     * flush then throws.
+     */
+    private void refuseOrderedDeletes() throws SQLException {
+        try (var connection = dataSource.getConnection();
+             var statement = connection.createStatement()) {
+            statement.execute("CREATE OR REPLACE FUNCTION refuse_ordered_deletes() RETURNS trigger LANGUAGE plpgsql AS $$ "
+                                      + "BEGIN RAISE EXCEPTION 'ordered deletes refused by the test'; END $$");
+            statement.execute("CREATE TRIGGER refuse_ordered_deletes BEFORE DELETE ON " + ShardOwnedSchema.ORDERED_TABLE
+                                      + " FOR EACH STATEMENT EXECUTE FUNCTION refuse_ordered_deletes()");
+        }
+    }
+
+    private void dropOrderedDeleteRefusal() throws SQLException {
+        try (var connection = dataSource.getConnection();
+             var statement = connection.createStatement()) {
+            statement.execute("DROP TRIGGER IF EXISTS refuse_ordered_deletes ON " + ShardOwnedSchema.ORDERED_TABLE);
         }
     }
 

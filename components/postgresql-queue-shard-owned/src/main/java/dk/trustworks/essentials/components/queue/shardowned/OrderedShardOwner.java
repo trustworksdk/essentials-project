@@ -1608,7 +1608,7 @@ final class OrderedShardOwner implements BatchReadableOwner {
      * The keys named in a log line, capped: they are what an operator looks up, but a shard can hold
      * up to {@code keyConcurrency} of them.
      */
-    private static String describeKeys(List<String> keys) {
+    static String describeKeys(List<String> keys) {
         var max = 10;
         return keys.size() <= max ? keys.toString() : keys.subList(0, max) + " and " + (keys.size() - max) + " more";
     }
@@ -1733,6 +1733,8 @@ final class OrderedShardOwner implements BatchReadableOwner {
         /**
          * Every one in a handler, however long it has been there: for a release on request
          * ({@code ShardOwnedQueue.releaseKeptOrderedUnit}), which an operator asks for, and which no handler's age decides.
+         * Also asked by the hand-back of a kept unit ({@code ShardOwnedQueue.handBackKeptUnit}), with no key in a handler:
+         * it charges nothing new there, and only makes a dead-letter move an earlier release left owed.
          */
         EVERY_KEY_IN_HANDLER
     }
