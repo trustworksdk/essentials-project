@@ -432,9 +432,13 @@ the DB and its CDC slot, start one instance on it, run, stop).
   open. At 400/s the router's median jumps tenfold: that is the knee. The router (`ExchangeOrderRouter`, an exclusive
   `EventProcessor`) is the first stage to fall behind; the ledger processor follows at a distance.
 - **One open per run is far worse than the others, at the same point every time**: the 5th-6th minute of each run
-  (worst 10 s median 16 s at 200/s, 20 s at 300/s, 27 s at 400/s; the other opens 0.3-3 s). Each run starts the exchange
-  on Monday 2030-01-07, so it is the same business day each time - around Friday's close and the weekend. Not explained
-  yet; candidates are what a close does for every account at once (closing books, valuation, statements, clearing) and
-  T+1 settlement landing together.
+  (worst 10 s median 16 s at 200/s, 20 s at 300/s, 27 s at 400/s; the other opens 0.3-3 s). **Cause: the exchange's
+  settlement wave.** It completes a settlement date's instructions all at one instant, 00:00 UTC (400/s run: 3 305,
+  6 581, **16 860**, 6 202, 6 927 `SettlementCompleted` per date), and each one becomes a `TradeSettlement` event, a
+  `SettleTrade` on the account and its projections - up to ~18 000 ledger events a minute on top of the order flow,
+  through the same pool, CPU and CDC bus. The big one is Tuesday's: without trading sessions customers trade through
+  the weekend, those trades are dated Monday, and Tuesday settles three days of trading. Closing books is not involved:
+  0 `AccountBooksClosed` in the run - books roll at New York midnight on the application's real clock until EF-1.
+  Not yet known: which shared resource carries the interference (CDC bus, connection pool, or CPU).
 - **Correct throughout**: every order and payment reached its outcome, every fill booked, 0 dead letters, 0 cases,
   0 missing statements, at every rush rate.
