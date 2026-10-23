@@ -370,3 +370,28 @@ every check passed; the full report goes to `target/load-driver/load-<run>.json`
   away. The drain waits for it (`drain-timeout`, default 10 minutes).
 - **`skipped:driver-saturated`** counts actions not started because `max-in-flight` were running; non-zero means the
   driver, not the brokerage, set the rate.
+
+### Baseline, 2026-10-23, devcontainer, `compose,simulators`, simulators 0.6.0, one instance, one sample each
+
+Same 2 000-customer population throughout, reads 3 per order, mix 45/20/20/15 (market buy / marketable limit / sell /
+resting), 5 business days (~6 real minutes of load):
+
+| Run | Orders | Steady / burst | Placement p50 / p99 | Placed → booked p50 / p99 | Checks |
+|---|---|---|---|---|---|
+| `g840`, 500 customers, 300 active | 8 964 | 20 / 100 per s | 3.3 / 22 ms | 194 / 752 ms | all pass |
+| `g9bx`, 2 000 customers, 1 000 active | 46 263 (~127/s) | 100 / 600 per s | 10.7 / 414 ms | **5.3 s / 202 s** | pass, except driver saturated (2 036 skipped) |
+
+- **Correctness held at the full target**: every order and payment reached its outcome, every fill was booked, 0 dead
+  letters, 0 reconciliation cases, 0 missing statements.
+- **Latency did not**: the 600/s bursts build a backlog in the order pipeline that one business day (60 s) does not
+  drain, so it grows day by day (booked p99 51 s after day 3, 116 s after day 5); `CdcEventStore` logs "fell more than
+  100 events behind the CDC bus" for every `Orders` subscriber. The known `EventProcessor` forward ceiling
+  (~366 orders/s in process, EF-2), now with the HTTP edge, reads and every flow on the same 8 cores. Not yet split
+  by stage; the report's buckets in `target/load-driver/load-g9bx.json` have the per-10 s curve.
+- **The driver saturated** in the bursts (`max-in-flight` 1 024): with reads at p99 ~250-380 ms an action holds its
+  permit for over a second. A larger `max-in-flight` or a lower burst; the brokerage, not the driver, is the limit.
+- **First attempt (`g8ox`) failed for a reason outside the brokerage**: the exchange's liquidity provider hit its
+  `max_inventory` (10 000 shares short per instrument) because customers buy more than they sell, stopped quoting asks,
+  and with no ask there is no quote - 18 424 market buys refused "No current price", 5 055 `SELF_TRADE` rejections
+  where our sells met our own resting buys priced off the driver's stale quotes. Fixed: `max_inventory` 10 000 000 in
+  `simulators/exchange.yaml`, and the driver drops a quote that is missing or stale.
