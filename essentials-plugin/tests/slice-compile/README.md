@@ -36,7 +36,8 @@ its test author writes no failing test for an `implemented` one, so a false `imp
 Every `implemented` entry is therefore asserted here, against the rendered, untouched skeleton: a test under
 `behaviours/<dir>/src/` carries a `// behaviour: <language>/<family> <id>` line directly above its `@Test`, and
 `BEHAVIOUR_OVERLAYS` in `overlay.py` adds each directory to the compositions it serves (`java-event-processors`, the
-Java view and automation checks, goes on both `java-decider` and `java-aggregate`). The tests are `*IT` classes
+Java view and automation checks, goes on both `java-decider` and `java-aggregate`; `kotlin-event-processors`, the
+Kotlin view checks, on both `kotlin-decider` and `kotlin-decider-manifest`). The tests are `*IT` classes
 extending the host's `IntegrationTestBase`, so they run in the case's `verify` against Testcontainers.
 
 `tests/scripts/test_behaviours_catalog.py` fails an `implemented` entry no marker names, a marker naming a
@@ -44,7 +45,8 @@ extending the host's `IntegrationTestBase`, so they run in the case's `verify` a
 whose directories leave an `implemented` entry of a family it renders unasserted. A composition whose directories
 leave such an entry unasserted is listed in `BEHAVIOUR_EXEMPT` in `overlay.py` with the reason: today the two
 `*-decider-two-bc` compositions, which run the boot overlay instead. `kotlin-decider-manifest`, the `--manifest` render
-path, has its own directory because `behaviours/kotlin-decider` sends `CancelOrder`, which that render does not have.
+path, has its own directory for the decider checks because `behaviours/kotlin-decider` sends `CancelOrder`, which
+that render does not have.
 When a template change makes a behaviour real, add its test in the same commit as the status; when a test cannot pass
 on the untouched skeleton, the entry is a `placeholder` whose summary says what is missing.
 

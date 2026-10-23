@@ -57,18 +57,19 @@ SOURCE_SUFFIXES = {".java", ".kt"}
 # `implemented` entries of references/slice/templates/behaviours.json against the rendered, untouched skeleton. Each
 # test carries a `// behaviour: <language>/<family> <id>` line above its @Test; tests/scripts/test_behaviours_catalog.py
 # fails an `implemented` entry no such line names. One directory may serve several compositions: the Java view and
-# automation templates are the same on the decider and the aggregate lane, so `java-event-processors` goes on both.
+# automation templates are the same on the decider and the aggregate lane, so `java-event-processors` goes on both;
+# the Kotlin view template is the same on both decider render paths, so `kotlin-event-processors` goes on both.
 # The test file fails a composition whose directories leave an `implemented` entry of a family it renders unasserted,
 # unless BEHAVIOUR_EXEMPT names it.
 BEHAVIOUR_OVERLAYS = {
     "java-decider": ("java-decider", "java-event-processors"),
     "java-aggregate": ("java-aggregate", "java-event-processors"),
     "java-service-entity": ("java-service-entity",),
-    "kotlin-decider": ("kotlin-decider",),
+    "kotlin-decider": ("kotlin-decider", "kotlin-event-processors"),
     "kotlin-service-entity": ("kotlin-service-entity",),
-    # The --manifest render path: place_order and order_list only, no cancel_order, so kotlin-decider's tests (which
-    # send CancelOrder) would not compile on it.
-    "kotlin-decider-manifest": ("kotlin-decider-manifest",),
+    # The --manifest render path: place_order and order_list only, no cancel_order, so kotlin-decider's decider test
+    # (which sends CancelOrder) would not compile on it; it shares the view test with kotlin-decider.
+    "kotlin-decider-manifest": ("kotlin-decider-manifest", "kotlin-event-processors"),
 }
 
 # Compositions that render a family with `implemented` entries yet run no behaviour check of them, and why.
