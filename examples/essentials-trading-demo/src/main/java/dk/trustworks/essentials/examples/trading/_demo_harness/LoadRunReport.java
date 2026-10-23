@@ -42,7 +42,12 @@ public class LoadRunReport {
     public record Latency(long count, double p50Ms, double p99Ms, double maxMs) {
     }
 
-    public record Orders(long placed, Map<String, Long> byStatus, long nonTerminal, Latency placedToFilled, Latency placedToBooked, long fillsNotBooked) {
+    /**
+     * @param stages per execution: placed → submitted (the router), submitted → filled (the exchange and its reports'
+     *               inbox), filled → booked (the ledger processor)
+     */
+    public record Orders(long placed, Map<String, Long> byStatus, long nonTerminal, Latency placedToFilled, Latency placedToBooked, long fillsNotBooked,
+                         Map<String, Latency> stages) {
     }
 
     public record Bucket(Instant start, long placed, long fills, long booked, double p50BookedMs, double p99BookedMs) {
@@ -68,7 +73,7 @@ public class LoadRunReport {
         this.durableQueues = requireNonNull(durableQueues, "No durableQueues provided");
     }
 
-    private record Execution(String orderId, Instant placedAt, Instant filledAt, Instant bookedAt) {
+    private record Execution(String orderId, Instant placedAt, Instant submittedAt, Instant filledAt, Instant bookedAt) {
     }
 
     public Report report(String runPrefix, String accountPrefix, Duration bucket) {
@@ -95,17 +100,28 @@ public class LoadRunReport {
         var executions = jdbcTemplate.query(
                 "WITH placed AS (SELECT " + o.aggregateIdColumn + " AS order_id, " + o.timestampColumn + " AS at FROM " + orders.eventStreamTableName
                 + "                WHERE " + o.aggregateIdColumn + " LIKE ? AND " + o.eventTypeColumn + " LIKE '%.OrderPlaced'),"
+                + " submitted AS (SELECT " + o.aggregateIdColumn + " AS order_id, min(" + o.timestampColumn + ") AS at FROM " + orders.eventStreamTableName
+                + "                WHERE " + o.aggregateIdColumn + " LIKE ? AND " + o.eventTypeColumn + " LIKE '%.OrderSubmitted' GROUP BY 1),"
                 + " fills AS (SELECT " + o.aggregateIdColumn + " AS order_id, " + o.eventPayloadColumn + "->>'executionId' AS execution_id, " + o.timestampColumn + " AS at"
                 + "             FROM " + orders.eventStreamTableName + " WHERE " + o.aggregateIdColumn + " LIKE ? AND " + o.eventTypeColumn + " LIKE '%.OrderFilled'),"
                 + " booked AS (SELECT " + a.eventPayloadColumn + "->'trade'->>'executionId' AS execution_id, min(" + a.timestampColumn + ") AS at FROM " + accounts.eventStreamTableName
                 + "              WHERE " + a.aggregateIdColumn + " LIKE ? AND " + a.eventTypeColumn + " LIKE '%.TradeBooked' GROUP BY 1)"
-                + " SELECT f.order_id, p.at, f.at, b.at FROM fills f JOIN placed p ON p.order_id = f.order_id LEFT JOIN booked b ON b.execution_id = f.execution_id",
-                (rs, row) -> new Execution(rs.getString(1), rs.getTimestamp(2).toInstant(), rs.getTimestamp(3).toInstant(),
-                                           rs.getTimestamp(4) == null ? null : rs.getTimestamp(4).toInstant()),
-                runPrefix + "%", runPrefix + "%", accountPrefix + "%");
+                + " SELECT f.order_id, p.at, s.at, f.at, b.at FROM fills f JOIN placed p ON p.order_id = f.order_id"
+                + "   LEFT JOIN submitted s ON s.order_id = f.order_id LEFT JOIN booked b ON b.execution_id = f.execution_id",
+                (rs, row) -> new Execution(rs.getString(1), rs.getTimestamp(2).toInstant(), rs.getTimestamp(3) == null ? null : rs.getTimestamp(3).toInstant(),
+                                           rs.getTimestamp(4).toInstant(), rs.getTimestamp(5) == null ? null : rs.getTimestamp(5).toInstant()),
+                runPrefix + "%", runPrefix + "%", runPrefix + "%", accountPrefix + "%");
 
         var toFilled = executions.stream().mapToLong(e -> Duration.between(e.placedAt(), e.filledAt()).toMillis()).sorted().toArray();
         var toBooked = executions.stream().filter(e -> e.bookedAt() != null).mapToLong(e -> Duration.between(e.placedAt(), e.bookedAt()).toMillis()).sorted().toArray();
+
+        var stages = new LinkedHashMap<String, Latency>();
+        stages.put("placedToSubmitted", latency(executions.stream().filter(e -> e.submittedAt() != null)
+                                                          .mapToLong(e -> Duration.between(e.placedAt(), e.submittedAt()).toMillis()).sorted().toArray()));
+        stages.put("submittedToFilled", latency(executions.stream().filter(e -> e.submittedAt() != null)
+                                                          .mapToLong(e -> Duration.between(e.submittedAt(), e.filledAt()).toMillis()).sorted().toArray()));
+        stages.put("filledToBooked", latency(executions.stream().filter(e -> e.bookedAt() != null)
+                                                       .mapToLong(e -> Duration.between(e.filledAt(), e.bookedAt()).toMillis()).sorted().toArray()));
 
         var placedPerBucket = new TreeMap<Instant, Long>();
         jdbcTemplate.query("SELECT " + o.timestampColumn + " FROM " + orders.eventStreamTableName + " WHERE " + o.aggregateIdColumn + " LIKE ? AND " + o.eventTypeColumn + " LIKE '%.OrderPlaced'",
@@ -135,7 +151,7 @@ public class LoadRunReport {
         var largest = jdbcTemplate.query("SELECT relname, n_live_tup, pg_total_relation_size(relid) FROM pg_stat_user_tables ORDER BY 3 DESC LIMIT 15",
                                          (rs, row) -> new StoreSize(rs.getString(1), rs.getLong(2), rs.getLong(3)));
         return new Report(runPrefix, Instant.now(),
-                          new Orders(placed == null ? 0 : placed, byStatus, nonTerminal, latency(toFilled), latency(toBooked), toFilled.length - toBooked.length),
+                          new Orders(placed == null ? 0 : placed, byStatus, nonTerminal, latency(toFilled), latency(toBooked), toFilled.length - toBooked.length, stages),
                           payments, buckets, queues, largest);
     }
 

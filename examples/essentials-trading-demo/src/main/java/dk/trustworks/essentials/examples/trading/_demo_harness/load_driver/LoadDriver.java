@@ -493,6 +493,10 @@ public final class LoadDriver {
         log("counters: %s", stats.counters());
         log("brokerage: %s; orders by status %s; placed to filled p50/p99 %.0f/%.0f ms", progress(server), orders.path("byStatus"),
             orders.path("placedToFilled").path("p50Ms").asDouble(), orders.path("placedToFilled").path("p99Ms").asDouble());
+        for (var stage : orders.path("stages").properties()) {
+            log("stage %-18s p50 %8.0f ms  p99 %8.0f ms  max %8.0f ms", stage.getKey(), stage.getValue().path("p50Ms").asDouble(),
+                stage.getValue().path("p99Ms").asDouble(), stage.getValue().path("maxMs").asDouble());
+        }
         checks.forEach((check, passed) -> log("%s %s", passed ? "PASS" : "FAIL", check));
         log("report: %s", file.toAbsolutePath());
         return !checks.containsValue(false);

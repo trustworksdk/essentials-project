@@ -1,6 +1,13 @@
 spring:
   application:
     name: essentials-trading-demo
+  # Tomcat serves each request on a virtual thread, not from its 200-thread pool (phase 6): under the load driver's
+  # bursts up to ~1 000 requests arrive at once, and with a fixed pool they queue in front of Tomcat. Boot also puts its
+  # own task executors and schedulers on virtual threads. The database is still the limit - a request needing a
+  # connection waits for one of Hikari's (maximum-pool-size), now inside the request rather than in Tomcat's queue.
+  threads:
+    virtual:
+      enabled: true
 
 logging:
   level:
