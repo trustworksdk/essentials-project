@@ -398,7 +398,7 @@ resting), 5 business days (~6 real minutes of load):
 
 ### Virtual threads, 2026-10-23, same profile as `g9bx`, one sample
 
-`spring.threads.virtual.enabled: true` (Tomcat on virtual threads, `7e9deb6c`), run `gehb`: **worse on every count.**
+`spring.threads.virtual.enabled: true` (Tomcat on virtual threads, `7e9deb6c`, **reverted** after this run), run `gehb`: **worse on every count.**
 40 671 orders; driver skipped 6 648 (was 2 036); read p99 ~0.7-1.1 s (was ~0.25-0.38 s); after the 10-minute drain
 9 865 orders still open and 2 492 fills not booked. The new stage split puts the backlog in the **router**:
 placed → submitted p50 17 s, p99 948 s; filled → booked p50 1 s. (Submitted → filled is negative at p50: the exchange's
@@ -412,3 +412,5 @@ fill report is often recorded before the router records `OrderSubmitted`, which 
 - Errors in the log were the expected kinds: `RecordSettlementReport` refused until the fill is projected (redelivered,
   10 634), buying-power refusals, re-registrations; 140 `OrderedShardOwner` key-order warnings on the exchange reports'
   inbox (network reordering, `integration/CLAUDE.md`).
+- **Reverted** to Tomcat's platform pool: the baseline runs on the known configuration. Virtual threads with a cap on
+  concurrent requests are a separate A/B, on a fresh database.
