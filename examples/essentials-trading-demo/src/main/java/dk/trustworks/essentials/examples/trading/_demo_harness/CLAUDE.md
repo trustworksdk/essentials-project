@@ -395,3 +395,20 @@ resting), 5 business days (~6 real minutes of load):
   and with no ask there is no quote - 18 424 market buys refused "No current price", 5 055 `SELF_TRADE` rejections
   where our sells met our own resting buys priced off the driver's stale quotes. Fixed: `max_inventory` 10 000 000 in
   `simulators/exchange.yaml`, and the driver drops a quote that is missing or stale.
+
+### Virtual threads, 2026-10-23, same profile as `g9bx`, one sample
+
+`spring.threads.virtual.enabled: true` (Tomcat on virtual threads, `7e9deb6c`), run `gehb`: **worse on every count.**
+40 671 orders; driver skipped 6 648 (was 2 036); read p99 ~0.7-1.1 s (was ~0.25-0.38 s); after the 10-minute drain
+9 865 orders still open and 2 492 fills not booked. The new stage split puts the backlog in the **router**:
+placed → submitted p50 17 s, p99 948 s; filled → booked p50 1 s. (Submitted → filled is negative at p50: the exchange's
+fill report is often recorded before the router records `OrderSubmitted`, which D11 tolerates.)
+
+- **Unconfirmed explanation**: Tomcat's 200 platform threads were admission control. On virtual threads every request
+  is admitted, up to ~1 000 at once, and they all compete with the event processors and inbox consumers for the same
+  40 pooled connections and 8 cores. No Hikari timeout was logged, so this is not proven; the next run should record
+  `hikaricp.connections.pending` and the router's lag.
+- **Not like for like**: `gehb` ran on a database holding the earlier runs' ~55 000 orders; `g9bx` on ~9 000.
+- Errors in the log were the expected kinds: `RecordSettlementReport` refused until the fill is projected (redelivered,
+  10 634), buying-power refusals, re-registrations; 140 `OrderedShardOwner` key-order warnings on the exchange reports'
+  inbox (network reordering, `integration/CLAUDE.md`).
