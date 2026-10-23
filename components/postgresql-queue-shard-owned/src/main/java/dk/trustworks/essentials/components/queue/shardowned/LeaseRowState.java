@@ -70,7 +70,9 @@ final class LeaseRowState {
      * let it go through on the server ({@link #mayHaveGoneThrough}): a statement the driver stopped waiting for - past a
      * network wait bound ({@code NetworkWaitBound}) or a {@code socketTimeout} - can still commit there. Not cleared: no later
      * answer proves that statement will not still commit, and a release is only ever sent for an owner this instance is
-     * giving up. Leaves the state where it is.
+     * giving up - one an unordered fair-share shed keeps serving after such a failure included, as that shed releases it
+     * again on later heartbeat ticks, whatever the fair share says, until a release succeeds
+     * ({@code ShardOwnedQueue.rebalance}). Leaves the state where it is.
      */
     void markReleaseInDoubt() {
         releaseInDoubt = true;

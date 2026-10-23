@@ -628,8 +628,14 @@ connection that never answers). Should that flush return once the unit was given
 that at INFO, not as a unit it keeps; and an acknowledgement a flush has refused for a unit this instance has already
 released, or found taken, is not counted in `fencedOutAcks` nor logged as a lost lease, on either lane - nor is one
 refused after a release of the row that failed with no error answer from the database (a timed-out read or a lost
-connection), which may have gone through on the server. What to do: nothing. (`6fd885d93`, `66b907912`, `3e719bf2a`,
-`1afcfabd1`)
+connection), which may have gone through on the server. After such a release, a unit then found no longer held under
+its fence, by the heartbeat's lease check or by a refused takeover charge, is not counted in `leasesLost`
+(`QueueStatistics`) either: the lease check logs such a unit at INFO rather than in its "lost ... to another instance"
+WARN, and a refused takeover charge logs it at DEBUG rather than in its "takeover charge rejected ... lease lost" WARN.
+An alert on any of these misses only a unit this instance was giving up. An unordered shard whose fair-share shed
+release failed that way is shed again on later heartbeat ticks, whatever the fair share says, until a release succeeds -
+even once the fair share has risen to keep it - so it does not go on serving with that release in doubt. What to do:
+nothing. (`6fd885d93`, `66b907912`, `3e719bf2a`, `1afcfabd1`, `<!-- fix:U-017 -->`)
 
 The same `stuckHandlerTimeout` now ends a wait for an ordered handler which 0.60.0 left unbounded: a fair-share shed of an ordered
 unit, which waits for the keys in its handlers and otherwise keeps the unit and retries on the next heartbeat. A

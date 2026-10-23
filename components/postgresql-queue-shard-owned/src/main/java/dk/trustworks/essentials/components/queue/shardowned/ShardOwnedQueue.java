@@ -1772,14 +1772,29 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         // leaseHeld (HELD): only an owner that serves its unit is shed. One whose pump died (ENDED_ROW_HELD) is released by
         // handBackUnitsOnDeadPumps.
         var held = run.owners.stream().filter(LeasedOwner::leaseHeld).toList();
-        if (held.size() > fairShare) {
+        // An owner whose shed release failed with no error answer from the database (a lost connection or a timed-out read,
+        // LeaseRowState#mayHaveGoneThrough; releaseLeaseRows marked it) is shed again on later ticks, whatever the fair
+        // share says, until a release of it succeeds: that release may still have gone through on the server, so from
+        // then on its unit found no longer naming it is read as given up, not lost (LeasedOwner#markReleaseInDoubt). Kept
+        // serving once the fair share rose, a later takeover of its unit counted no leasesLost and logged no WARN for the
+        // rest of the owner's life. Left out of the fair-share count, as each of them is on its way out.
+        var inDoubt = held.stream().filter(LeasedOwner::releaseInDoubt).toList();
+        var serving = held.stream().filter(owner -> !owner.releaseInDoubt()).toList();
+        var shedding = new ArrayList<LeasedOwner>();
+        if (serving.size() > fairShare) {
+            shedding.addAll(serving.subList(fairShare, serving.size()));
+        }
+        // After the excess: a release that keeps failing does not keep the excess from being shed.
+        shedding.addAll(inDoubt);
+        if (!shedding.isEmpty()) {
             var released = new ArrayList<Integer>();
+            var releasedInDoubt = new ArrayList<Integer>();
             // Only the releases this loop is the first to count: a stop() of this run running meanwhile counts the
             // others (countRelease).
             var counted = new ArrayList<Integer>();
             Throwable loopFailure = null;
             try {
-                for (var owner : held.subList(fairShare, held.size())) {
+                for (var owner : shedding) {
                     // A message in a handler longer than stuckHandlerTimeout is charged its attempt before the release, as the
                     // next owner charges nothing for a released shard. A shard whose charge fails with a charge still owed is
                     // left serving (HELD) and shed again on the next tick, while the others are released.
@@ -1790,15 +1805,17 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                             continue;
                         }
                     }
-                    // One unit at a time: a failed release leaves this owner serving (HELD) and the next tick sheds it again.
-                    // The owner may dispatch for the moment between the release and its end; a successor's acquire bumps the
-                    // fence, so that is at worst a redelivery, which this lane allows.
+                    // One unit at a time: a failed release leaves this owner serving (HELD), and a later tick sheds it again -
+                    // the next one while the run is still over its fair share, and later ones, whatever the fair share says,
+                    // until a release succeeds when the failure left the release in doubt (inDoubt above). The owner may dispatch for the moment between the
+                    // release and its end; a successor's acquire bumps the fence, so that is at worst a redelivery, which this
+                    // lane allows.
                     releaseLeaseRows(List.of(owner));
                     run.ownedShards.remove(owner.shard(), owner);
                     if (countRelease(run, owner)) {
                         counted.add(owner.shard());
                     }
-                    released.add(owner.shard());
+                    (inDoubt.contains(owner) ? releasedInDoubt : released).add(owner.shard());
                     log.debug("Instance {} released unordered shard {}", instanceId, owner.shard());
                     releasedPastStuckUnorderedHandlers(owner, charge, "in a fair-share shed");
                 }
@@ -1816,8 +1833,14 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                              instanceId, released.size(), summarise(released), queueId, fairShare, shardCount,
                              liveInstances, countHeld(run));
                 }
+                if (!releasedInDoubt.isEmpty()) {
+                    log.info("Instance {} released {} unordered shard(s) [{}] on queue {} whose earlier release failed with no "
+                                     + "error answer from the database, which is retried whatever the fair share says; now holding {}",
+                             instanceId, releasedInDoubt.size(), summarise(releasedInDoubt), queueId, countHeld(run));
+                }
                 reportReleases(counted, loopFailure);
             }
+            // The acquire step waits for the next tick, as after any shed.
             return;
         }
 

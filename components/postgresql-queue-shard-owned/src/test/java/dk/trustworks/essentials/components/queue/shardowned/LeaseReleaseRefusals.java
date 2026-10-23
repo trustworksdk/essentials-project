@@ -52,10 +52,30 @@ final class LeaseReleaseRefusals {
      * @param queueIds every queue registered in the test's schema, so each one's refusals can be counted
      */
     static void failLeaseReleasesOf(DataSource dataSource, short[] queueIds, String lane, int unit, boolean fail) throws Exception {
-        failLeaseReleases(dataSource, queueIds, lane, unit, fail);
+        failLeaseReleases(dataSource, queueIds, lane, unit, null, fail);
+    }
+
+    /**
+     * Refuse every release of {@code unit}'s lease row on {@code lane}, of any queue, with an error of SQL state
+     * {@code 08006} (connection failure). The engine cannot tell that answer from a connection lost
+     * mid-statement, so it takes the release as in doubt ({@code LeaseRowState.mayHaveGoneThrough}), while the release
+     * is in fact rolled back: the row still names the instance. Stop it with {@link #failLeaseReleasesOf}.
+     *
+     * @param queueIds every queue registered in the test's schema, so each one's refusals can be counted
+     */
+    static void failLeaseReleasesInDoubtOf(DataSource dataSource, short[] queueIds, String lane, int unit) throws Exception {
+        failLeaseReleases(dataSource, queueIds, lane, unit, "08006", true);
     }
 
     private static void failLeaseReleases(DataSource dataSource, short[] queueIds, String lane, Integer unit, boolean fail) throws Exception {
+        failLeaseReleases(dataSource, queueIds, lane, unit, null, fail);
+    }
+
+    /**
+     * @param sqlState the SQL state the refusal raises, {@code null} for PL/pgSQL's default ({@code P0001}, an error the
+     *                 database answered with)
+     */
+    private static void failLeaseReleases(DataSource dataSource, short[] queueIds, String lane, Integer unit, String sqlState, boolean fail) throws Exception {
         try (var connection = dataSource.getConnection(); var statement = connection.createStatement()) {
             if (fail) {
                 statement.execute(refusalCounters(queueIds, "DROP SEQUENCE IF EXISTS lease_release_refusals_q%s_%s"));
@@ -67,7 +87,8 @@ final class LeaseReleaseRefusals {
                                           + "AND (TG_NARGS < 2 OR n.shard = TG_ARGV[1]::int) LOOP "
                                           + "PERFORM nextval(format('lease_release_refusals_q%s_%s', released.queue_id, released.shard)::regclass); "
                                           + "refused := refused + 1; END LOOP; "
-                                          + "IF refused > 0 THEN RAISE EXCEPTION 'simulated failure releasing % % unit(s)', refused, TG_ARGV[0]; END IF; "
+                                          + "IF refused > 0 THEN RAISE EXCEPTION 'simulated failure releasing % % unit(s)', refused, TG_ARGV[0]"
+                                          + (sqlState == null ? "" : " USING ERRCODE = '" + sqlState + "'") + "; END IF; "
                                           + "RETURN NULL; END $$ LANGUAGE plpgsql");
                 statement.execute("CREATE TRIGGER fail_lease_release AFTER UPDATE ON " + ShardOwnedSchema.LEASE_TABLE
                                           + " REFERENCING OLD TABLE AS refused_old NEW TABLE AS refused_new"

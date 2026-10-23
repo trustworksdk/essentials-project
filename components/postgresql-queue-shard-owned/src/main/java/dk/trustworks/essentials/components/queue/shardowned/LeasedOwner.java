@@ -260,8 +260,10 @@ interface LeasedOwner {
      * acknowledgement flush logs at DEBUG and counts no {@code fencedOutAcks}, and the queue's lease check finding the unit
      * gone ({@link LeaseEnd#TAKEN}), or a refused takeover attempt charge, counts no {@code leasesLost}. Never undone (see
      * {@link LeaseRowState#markReleaseInDoubt()}), so a unit taken from an owner after such a release failed - one whose
-     * release did not go through, kept serving since - is not counted lost either. Called by
-     * {@code ShardOwnedQueue.releaseLeaseRows} alone, before it rethrows.
+     * release did not go through, kept serving since - is not counted lost either. Such an owner is on its way out: the
+     * owners released while they serve are an unordered fair-share shed's, and that shed releases a marked owner again on
+     * later heartbeat ticks, whatever the fair share says, until a release succeeds ({@code ShardOwnedQueue.rebalance}).
+     * Called by {@code ShardOwnedQueue.releaseLeaseRows} alone, before it rethrows.
      * <p>
      * Default: nothing, for a test double that keeps no lease row.
      */

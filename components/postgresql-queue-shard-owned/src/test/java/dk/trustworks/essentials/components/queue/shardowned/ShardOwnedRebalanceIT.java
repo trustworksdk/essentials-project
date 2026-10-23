@@ -16,6 +16,7 @@
 
 package dk.trustworks.essentials.components.queue.shardowned;
 
+import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.spi.*;
 import ch.qos.logback.core.read.ListAppender;
 import com.zaxxer.hikari.*;
@@ -221,6 +222,73 @@ class ShardOwnedRebalanceIT {
                     assertThat(unitsLeasedTo("shed-fail-1")).as("the first's leases match what it serves").isEqualTo(SHARD_COUNT / 2);
                 });
             }
+        }
+    }
+
+    /**
+     * An unordered shard whose shed release failed with no error answer from the database - SQL state {@code 08006}, which
+     * the engine cannot tell from a connection lost mid-statement, so the release is in doubt - is released on a later tick
+     * even once the fair share has risen to keep it, and a takeover of the unit after that is a lost lease: counted in
+     * {@code leasesLost} and logged in the "lost to another instance" WARN. The shed only retried the release while the run
+     * was over its fair share, so with the other instance gone the owner served on with its release in doubt for good, and
+     * read every later takeover as its own release: INFO, no {@code leasesLost}. The trigger raising {@code 08006} rolls the
+     * release back, so the row still names the first instance until the trigger is dropped.
+     */
+    @Test
+    void an_unordered_shard_whose_shed_release_failed_in_doubt_is_released_once_the_fair_share_rose_and_a_later_takeover_is_a_lost_lease() throws Exception {
+        var refusedUnit = SHARD_COUNT - 1;
+        var queueIds    = new short[]{QUEUE_ID};
+        var logged      = captureQueueLog();
+        try (var first = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "in-doubt-1")) {
+            first.startConsuming((messageId, payload, payloadType) -> { }, FAST, SHARD_COUNT);
+            Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(first.shardsHeld()).isEqualTo(SHARD_COUNT));
+
+            LeaseReleaseRefusals.failLeaseReleasesInDoubtOf(dataSource, queueIds, "unordered", refusedUnit);
+            try {
+                try (var second = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "in-doubt-2")) {
+                    second.startConsuming((messageId, payload, payloadType) -> { }, FAST, SHARD_COUNT);
+                    // The shed releases the shards before the refused one, the last held, and the second takes them.
+                    Awaitility.await().atMost(Duration.ofSeconds(10)).until(
+                            () -> LeaseReleaseRefusals.releasesRefused(dataSource, QUEUE_ID, refusedUnit) >= 1
+                                    && second.shardsHeld() == SHARD_COUNT / 2 - 1);
+                    assertThat(ownerOf(refusedUnit)).as("premise: the refused release was rolled back").isEqualTo("in-doubt-1");
+                }
+                // The second has stopped and deregistered: the first's fair share is every shard, the refused one included.
+                // Two more refusals, so at least one is from a tick that began after the stop.
+                var refusedAtStop = LeaseReleaseRefusals.releasesRefused(dataSource, QUEUE_ID, refusedUnit);
+                Awaitility.await("the shard whose release is in doubt is still shed with the fair share risen to keep it")
+                          .atMost(Duration.ofSeconds(10))
+                          .until(() -> LeaseReleaseRefusals.releasesRefused(dataSource, QUEUE_ID, refusedUnit) >= refusedAtStop + 2);
+            } finally {
+                LeaseReleaseRefusals.failLeaseReleasesOf(dataSource, queueIds, "unordered", refusedUnit, false);
+            }
+
+            // Released at last, and taken again by the first under a new fence: a fresh owner, with no release of it in doubt.
+            var fenceWhileInDoubt = fenceOf(refusedUnit);
+            Awaitility.await("the first releases the shard and takes it again").atMost(Duration.ofSeconds(10))
+                      .until(() -> "in-doubt-1".equals(ownerOf(refusedUnit)) && fenceOf(refusedUnit) > fenceWhileInDoubt
+                              && first.shardsHeld() == SHARD_COUNT);
+            var metrics = first.metrics();
+            assertThat(metrics.leasesLost.sum()).as("premise: nothing lost yet").isZero();
+            var fenceBeforeTakeover = fenceOf(refusedUnit);
+
+            // Another instance takes the unit under a new fence, as a takeover after a missed heartbeat would.
+            takeAs(refusedUnit, "in-doubt-intruder");
+            Awaitility.await("the lease check finds the unit taken").atMost(Duration.ofSeconds(10)).until(() -> metrics.leasesLost.sum() > 0);
+            // The intruder has no membership row, so the first takes the unit back: by then the check that found the loss is done.
+            Awaitility.await("the first takes the unit back").atMost(Duration.ofSeconds(10))
+                      .until(() -> "in-doubt-1".equals(ownerOf(refusedUnit)) && fenceOf(refusedUnit) > fenceBeforeTakeover + 1);
+
+            assertThat(metrics.leasesLost.sum()).as("the takeover is one lost lease").isEqualTo(1L);
+            synchronized (logged) {
+                assertThat(logged.list).as("logged in the lost-to-another-instance WARN")
+                                       .anyMatch(event -> event.getLevel() == Level.WARN
+                                               && event.getFormattedMessage().startsWith("Instance in-doubt-1 lost 1 unordered unit(s) [" + refusedUnit + "]"));
+                assertThat(logged.list).as("not read as given up by a release in doubt")
+                                       .noneMatch(event -> event.getFormattedMessage().contains("no longer held under their fences after a release"));
+            }
+        } finally {
+            releaseQueueLog(logged);
         }
     }
 
@@ -435,6 +503,42 @@ class ShardOwnedRebalanceIT {
     private long releaseAttempts() throws Exception {
         return queryForLong(dataSource, "Reading the release_attempts sequence",
                             "SELECT CASE WHEN is_called THEN last_value ELSE 0 END FROM release_attempts");
+    }
+
+    /**
+     * Point unordered shard {@code shard}'s lease row at {@code instanceId} under a new fence, as a takeover would.
+     */
+    private void takeAs(int shard, String instanceId) throws Exception {
+        try (var connection = dataSource.getConnection();
+             var statement = connection.prepareStatement("UPDATE " + ShardOwnedSchema.LEASE_TABLE
+                                                                 + " SET owner = ?, lease_until = NULL, fence = fence + 1"
+                                                                 + " WHERE queue_id = ? AND lane = 'unordered' AND shard = ?")) {
+            statement.setString(1, instanceId);
+            statement.setShort(2, QUEUE_ID);
+            statement.setInt(3, shard);
+            assertThat(statement.executeUpdate()).as("premise: shard %d has a lease row", shard).isEqualTo(1);
+        }
+    }
+
+    /**
+     * The instance unordered shard {@code shard}'s lease row names, {@code null} when it names none.
+     */
+    private String ownerOf(int shard) throws Exception {
+        try (var connection = dataSource.getConnection();
+             var statement = connection.prepareStatement("SELECT owner FROM " + ShardOwnedSchema.LEASE_TABLE
+                                                                 + " WHERE queue_id = ? AND lane = 'unordered' AND shard = ?")) {
+            statement.setShort(1, QUEUE_ID);
+            statement.setInt(2, shard);
+            try (var rows = statement.executeQuery()) {
+                return rows.next() ? rows.getString(1) : null;
+            }
+        }
+    }
+
+    private long fenceOf(int shard) throws Exception {
+        return queryForLong(dataSource, "Reading the fence of unordered shard " + shard,
+                            "SELECT fence FROM " + ShardOwnedSchema.LEASE_TABLE + " WHERE queue_id = ? AND lane = 'unordered' AND shard = ?",
+                            QUEUE_ID, shard);
     }
 
     private int unitsLeasedTo(String instanceId) throws Exception {
