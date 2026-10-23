@@ -27,7 +27,8 @@ import java.util.*;
  * @param population          customers {@code LDA-0} .. {@code LDA-<population-1>}, registered and funded once, reused
  * @param activePerDay        customers active in a business day, drawn afresh at each close
  * @param ordersPerSecond     the steady order rate
- * @param burstOrdersPerSecond the order rate in the first {@code burstFraction} of each business day (the open)
+ * @param burstOrdersPerSecond the order rate at each business day's open, for {@code burstFraction} of a business day's
+ *                            real length after it
  * @param readsPerOrder       account reads a customer makes before each order
  * @param paymentsPerSecond   deposits and withdrawals together
  * @param businessDays        closes to run for

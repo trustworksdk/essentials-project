@@ -33,6 +33,10 @@ import java.util.concurrent.atomic.*;
  * A run registers and funds the customer population it needs (once - later runs reuse it), then for
  * {@code business-days} closes of the exchange's calendar places orders at a steady rate and at a burst rate in the
  * first part of each business day (§3), with account reads before each order and a stream of deposits and withdrawals.
+ * Customers act only inside a business day of the exchange's calendar ({@code GET /api/calendar}), from its local
+ * midnight to its cutoff, so every trade is dated the day it is placed: no weekend or holiday trading, which the exchange
+ * (run without trading sessions) would otherwise accept and date the next business day - one settlement date would then
+ * carry three days of trading.
  * The customers active in a business day are drawn afresh at each close. Then it waits for every order and payment to
  * reach its outcome, for one more close so reconciliation has run, and reports: its own request latencies and outcomes,
  * and what the brokerage recorded ({@code GET /api/admin/load-report}), reconciliation cases and missing statements.
@@ -60,6 +64,11 @@ public final class LoadDriver {
     private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(2, Thread.ofPlatform().daemon().name("load-driver-", 0).factory());
     private volatile List<Customer>        activeToday = List.of();
     private long                           closeCursor;
+    private final Map<LocalDate, Instant>  cutoffs   = new HashMap<>();
+    private ZoneId                         calendarZone;
+    private Instant                        clockReading;
+    private long                           clockReadAt;
+    private double                         clockSpeed;
 
     LoadDriver(LoadDriverSettings settings) {
         this.settings = settings;
@@ -77,6 +86,7 @@ public final class LoadDriver {
         log("run %s: %s", settings.runToken(), settings);
         var dayMillis = realBusinessDayMillis();
         log("the exchange's business day lasts %.1f real seconds", dayMillis / 1000.0);
+        loadCalendar();
         setUpPopulation();
         skipToTheLatestClose();
         scheduler.scheduleAtFixedRate(this::refreshQuotes, 0, 1, TimeUnit.SECONDS);
@@ -87,6 +97,7 @@ public final class LoadDriver {
         var dayStarted  = -1L;
         var lastTick    = System.nanoTime();
         var lastPoll    = 0L;
+        var wasOpen     = tradingOpen();
         var orderCredit = 0.0;
         var payCredit   = 0.0;
         while (closes < settings.businessDays()) {
@@ -97,14 +108,24 @@ public final class LoadDriver {
                 var newCloses = pollCloses();
                 if (newCloses > 0) {
                     closes += newCloses;
-                    dayStarted = now;
                     chooseActiveCustomers();
                     log("close %d of %d; %s", closes, settings.businessDays(), progress());
                 }
+                if (now - clockReadAt > 5_000_000_000L) {
+                    readClock();
+                }
             }
+            var open = tradingOpen();
+            if (open && !wasOpen) {
+                dayStarted = now; // the open: a business day's window begins
+            }
+            wasOpen = open;
             var inBurst = dayStarted >= 0 && (now - dayStarted) / 1e6 < settings.burstFraction() * dayMillis;
             var seconds = (now - lastTick) / 1e9;
             lastTick = now;
+            if (!open) {
+                continue;
+            }
             orderCredit += (inBurst ? settings.burstOrdersPerSecond() : settings.ordersPerSecond()) * seconds;
             payCredit += settings.paymentsPerSecond() * seconds;
             for (; orderCredit >= 1; orderCredit--) {
@@ -130,6 +151,39 @@ public final class LoadDriver {
         var openCases = http.json(http.operatorGet("REPORT", base() + "/api/admin/reconciliation/cases?state=OPEN"));
         var missing   = http.json(http.operatorGet("REPORT", base() + "/api/admin/reconciliation/missing-statements"));
         return report(report, openCases, missing, loadSeconds);
+    }
+
+    // ---- the exchange's calendar and clock
+
+    private void loadCalendar() {
+        readClock();
+        var today    = clockReading.atZone(ZoneOffset.UTC).toLocalDate();
+        var calendar = http.plainGet("SETUP", settings.exchangeUrl() + "/api/calendar?from=" + today.minusDays(7) + "&to=" + today.plusDays(400));
+        if (!calendar.ok()) {
+            throw new IllegalStateException("Cannot read the exchange's calendar: " + calendar);
+        }
+        var json = http.json(calendar);
+        calendarZone = ZoneId.of(json.path("timeZone").asString());
+        for (var day : json.path("businessDays")) {
+            cutoffs.put(LocalDate.parse(day.path("date").asString()), Instant.parse(day.path("cutoffAt").asString()));
+        }
+        log("calendar: %d business days, cutoff %s %s", cutoffs.size(), json.path("cutoff").asString(), calendarZone);
+    }
+
+    private void readClock() {
+        var clock = http.json(http.plainGet("EXCHANGE_CLOCK", settings.exchangeUrl() + "/api/clock"));
+        clockReading = Instant.parse(clock.path("now").asString());
+        clockSpeed = clock.path("speed").asDouble(1);
+        clockReadAt = System.nanoTime();
+    }
+
+    /**
+     * Whether the exchange's clock is inside a business day, between its local midnight and its cutoff.
+     */
+    private boolean tradingOpen() {
+        var now    = clockReading.plusNanos((long) ((System.nanoTime() - clockReadAt) * clockSpeed));
+        var cutoff = cutoffs.get(now.atZone(calendarZone).toLocalDate());
+        return cutoff != null && now.isBefore(cutoff);
     }
 
     // ---- setup
