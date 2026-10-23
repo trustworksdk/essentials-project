@@ -75,7 +75,7 @@ class AggregateLaneBehavioursIT extends IntegrationTestBase {
         assertThat(inUnitOfWork(() -> orders.findOrder(missing))).isEmpty();
         assertThat(inUnitOfWork(() -> orders.hasOrder(missing))).isFalse();
         assertThat(inUnitOfWork(() -> orders.isOrderMissing(missing))).isTrue();
-        // withUnitOfWork rethrows whatever the action threw wrapped in a UnitOfWorkException
+        // withUnitOfWork wraps the AggregateNotFoundException getOrder throws in a UnitOfWorkException
         assertThatThrownBy(() -> inUnitOfWork(() -> orders.getOrder(missing)))
                 .isInstanceOf(UnitOfWorkException.class)
                 .cause()
