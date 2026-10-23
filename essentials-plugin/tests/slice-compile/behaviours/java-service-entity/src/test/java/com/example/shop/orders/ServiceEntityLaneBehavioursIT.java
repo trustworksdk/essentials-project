@@ -78,24 +78,30 @@ class ServiceEntityLaneBehavioursIT extends IntegrationTestBase {
 
     // The "same transaction" half of the entry: LocalEventBus.publish rethrows a sync subscriber's exception, so a
     // publish that fails after the save must take the save back with it. Were the save committed on its own, the
-    // Order would read "placed" here.
+    // Order would read "placed" here. The refused event and the root cause's message tie the failure to this
+    // subscriber: a command failing before the publish would leave the Order at "initial" too.
     // behaviour: java/command_service_entity command.emits-event
     @Test
     void a_publish_that_fails_after_the_save_rolls_the_save_back() {
         var id = seeded("initial");
+        var refused = new CopyOnWriteArrayList<Object>();
         EventHandler failing = event -> {
             if (event instanceof OrderPlaced) {
+                refused.add(event);
                 throw new IllegalStateException("subscriber refuses " + event);
             }
         };
         eventBus.addSyncSubscriber(failing);
         try {
             assertThatThrownBy(() -> commandBus.send(new PlaceOrder(OrderId.of(id), "placed")))
-                    .hasRootCauseInstanceOf(IllegalStateException.class);
+                    .rootCause()
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageStartingWith("subscriber refuses ");
         } finally {
             eventBus.removeSyncSubscriber(failing);
         }
 
+        assertThat(refused).containsExactly(new OrderPlaced(OrderId.of(id), "placed"));
         assertThat(placeholderOf(id)).isEqualTo("initial");
     }
 
