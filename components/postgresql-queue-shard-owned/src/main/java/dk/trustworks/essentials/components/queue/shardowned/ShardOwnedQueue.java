@@ -1813,6 +1813,8 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         // free, up to its fair share counted with those rows. Ending such a tick before the acquire step, as after an
         // excess shed, left them unowned for as long as that one release kept failing.
         var inDoubt = held.stream().filter(LeasedOwner::releaseInDoubt).toList();
+        // The rate limit of an owner no longer held here in doubt (found taken, say) goes with it.
+        run.inDoubtReleaseFailures.keySet().retainAll(inDoubt);
         var serving = held.stream().filter(owner -> !owner.releaseInDoubt()).toList();
         var excess  = serving.size() > fairShare ? serving.subList(fairShare, serving.size()) : List.<LeasedOwner>of();
         var shedding = new ArrayList<LeasedOwner>(excess);
@@ -1849,12 +1851,24 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                             releaseLeaseRows(List.of(owner));
                         } catch (SQLException | RuntimeException | Error e) {
                             Exceptions.rethrowIfCriticalError(e);
-                            log.warn("Instance {} could not release unordered shard {} on queue {}, whose earlier release failed with no "
-                                             + "error answer from the database; it serves the shard on and retries the release on the next "
-                                             + "heartbeat, whatever the fair share says",
-                                     instanceId, owner.shard(), queueId, e);
+                            // Retried on every tick for as long as the cause lasts (a trigger refusing it, a database that keeps
+                            // timing out): a WARN with the stack trace at most once a minute per owner, the rest at DEBUG.
+                            var failedSinceWarning = run.inDoubtReleaseFailures.computeIfAbsent(owner, ignored -> new InDoubtReleaseFailures())
+                                                                               .failed(System.nanoTime());
+                            if (failedSinceWarning > 0) {
+                                log.warn("Instance {} could not release unordered shard {} on queue {}, whose earlier release failed with no "
+                                                 + "error answer from the database ({} failed release attempt(s) of it since its last WARN, or since "
+                                                 + "it was first retried, this one included; the others at DEBUG, at most one WARN a minute); it serves the "
+                                                 + "shard on and retries the release on the next heartbeat, whatever the fair share says",
+                                         instanceId, owner.shard(), queueId, failedSinceWarning, e);
+                            } else {
+                                log.debug("Instance {} could not release unordered shard {} on queue {} again, whose earlier release failed "
+                                                  + "with no error answer from the database; retried on the next heartbeat: {}",
+                                          instanceId, owner.shard(), queueId, e.toString());
+                            }
                             continue;
                         }
+                        run.inDoubtReleaseFailures.remove(owner);
                     } else {
                         releaseLeaseRows(List.of(owner));
                     }
@@ -4973,6 +4987,14 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
          * ({@link #adoptIntoRun} says why the observer is kept out of the monitor).
          */
         final Set<LeasedOwner>         acquisitionReported = ConcurrentHashMap.newKeySet();
+        /**
+         * The rate limit of {@link #rebalance}'s WARN for each unordered owner whose release is in doubt
+         * ({@link LeasedOwner#releaseInDoubt()}) and whose release failed again on a heartbeat tick: at most one WARN a
+         * minute per owner, the rest at DEBUG ({@link InDoubtReleaseFailures}). Written by this run's heartbeat ticks alone;
+         * an owner is dropped once its release succeeds, and on every tick once it is no longer one of the run's held
+         * owners in doubt (found taken, say).
+         */
+        final Map<LeasedOwner, InDoubtReleaseFailures> inDoubtReleaseFailures = new ConcurrentHashMap<>();
         /**
          * This run's slot on the shared heartbeat scheduler; {@code null} until its start has scheduled it.
          */

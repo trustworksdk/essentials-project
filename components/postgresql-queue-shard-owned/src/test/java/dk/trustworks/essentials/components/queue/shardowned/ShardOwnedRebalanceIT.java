@@ -235,7 +235,9 @@ class ShardOwnedRebalanceIT {
      * release back, so the row still names the first instance until the trigger is dropped.
      * <p>
      * While that release keeps failing, the first still takes the shards the departed instance released: a failed release of
-     * an owner in doubt is that owner's alone, and a tick with no excess to shed goes on to the acquire step.
+     * an owner in doubt is that owner's alone, and a tick with no excess to shed goes on to the acquire step. Those failed
+     * retries log one WARN with the stack trace inside the minute, the rest at DEBUG; each used to log a WARN with its stack
+     * trace on every tick.
      */
     @Test
     void an_unordered_shard_whose_shed_release_failed_in_doubt_is_released_once_the_fair_share_rose_and_a_later_takeover_is_a_lost_lease() throws Exception {
@@ -246,6 +248,7 @@ class ShardOwnedRebalanceIT {
             first.startConsuming((messageId, payload, payloadType) -> { }, FAST, SHARD_COUNT);
             Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(first.shardsHeld()).isEqualTo(SHARD_COUNT));
 
+            var refusalsStartedAt = System.nanoTime();
             LeaseReleaseRefusals.failLeaseReleasesInDoubtOf(dataSource, queueIds, "unordered", refusedUnit);
             // Read while the refusal is still in place: once it is dropped, the first may release the shard and take it again
             // under a new fence before a read after the drop.
@@ -280,11 +283,26 @@ class ShardOwnedRebalanceIT {
                           .until(() -> LeaseReleaseRefusals.releasesRefused(dataSource, QUEUE_ID, refusedUnit) > refusedAfterAcquiring);
                 assertThat(ownerOf(refusedUnit)).as("premise: every release of it was rolled back").isEqualTo("in-doubt-1");
                 assertThat(fenceOf(refusedUnit)).as("premise: not taken again while the release is refused").isEqualTo(fenceWhileInDoubt);
+                assertThat(System.nanoTime() - refusalsStartedAt).as("premise: the retries all failed inside one minute").isLessThan(ErrorWindow.EVERY_NANOS);
+                var retriesFailed = LeaseReleaseRefusals.releasesRefused(dataSource, QUEUE_ID, refusedUnit) - 1;
+                assertThat(retriesFailed).as("premise: the release in doubt failed on several ticks").isGreaterThanOrEqualTo(3);
                 synchronized (logged) {
-                    assertThat(logged.list).as("each failed release of the shard in doubt is logged as that shard's alone")
-                                           .anyMatch(event -> event.getLevel() == Level.WARN
-                                                   && event.getFormattedMessage().startsWith("Instance in-doubt-1 could not release unordered shard " + refusedUnit + " on queue")
-                                                   && event.getThrowableProxy() != null);
+                    var failedRetryLines = logged.list.stream()
+                                                      .filter(event -> event.getFormattedMessage().startsWith("Instance in-doubt-1 could not release unordered shard " + refusedUnit + " on queue"))
+                                                      .toList();
+                    // Logged as that shard's alone, and once a minute: a WARN with the stack trace on every tick, a third of the
+                    // lease TTL apart, for as long as the release kept failing flooded the log.
+                    assertThat(failedRetryLines.stream().filter(event -> event.getLevel() == Level.WARN))
+                            .as("one WARN for the failed retries of the release in doubt, inside the minute")
+                            .singleElement()
+                            .satisfies(event -> {
+                                assertThat(event.getThrowableProxy()).as("with its stack trace").isNotNull();
+                                assertThat(event.getFormattedMessage()).contains("(1 failed release attempt(s) of it since its last WARN, or since it was first retried");
+                            });
+                    assertThat(failedRetryLines.stream().filter(event -> event.getLevel() == Level.DEBUG))
+                            .as("the later failed retries at DEBUG, without a stack trace")
+                            .hasSizeGreaterThanOrEqualTo(2)
+                            .allMatch(event -> event.getThrowableProxy() == null);
                 }
             } finally {
                 LeaseReleaseRefusals.failLeaseReleasesOf(dataSource, queueIds, "unordered", refusedUnit, false);

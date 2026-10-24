@@ -26,7 +26,8 @@ import java.util.concurrent.atomic.AtomicLong;
  * {@link ShardPump}'s per-pump ERROR for a pass that fails outside its per-shard guards. Also by
  * {@code ShardOwnedQueue}'s WARN that an ordered unit a stop kept is held up by a handler past {@code leaseTtl}, one
  * window per kept unit ({@code KeptUnit.warningDue}), taken by {@code ShardOwnedQueue.reviewStuckKeptUnits} rather
- * than by a pump.
+ * than by a pump. And by {@code ShardOwnedQueue.rebalance}'s WARN that the release of an unordered owner in doubt failed
+ * again, one window per owner ({@link InDoubtReleaseFailures}), taken by the heartbeat tick.
  * Reuse it for a new once-a-minute log rather than writing the CAS again.
  * <p>
  * Its own class rather than a helper on one of them, so a change to one log's semantics (the takeover window reopening
