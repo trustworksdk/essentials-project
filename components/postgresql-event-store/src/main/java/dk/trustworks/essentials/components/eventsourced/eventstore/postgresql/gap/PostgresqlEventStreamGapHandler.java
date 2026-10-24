@@ -41,6 +41,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
 import java.util.stream.*;
 
+import static dk.trustworks.essentials.components.foundation.postgresql.PostgresqlSchemaStatements.createIndexUnlessPresent;
 import static dk.trustworks.essentials.shared.FailFast.*;
 import static dk.trustworks.essentials.shared.MessageFormatter.msg;
 
@@ -219,8 +220,11 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
                                                        ")"),
                        SchemaChange.repeatable("transient-gaps-index",
                                                TRANSIENT_SUBSCRIBER_GAPS_TABLE_NAME,
-                                               "CREATE INDEX IF NOT EXISTS " + TRANSIENT_SUBSCRIBER_GAPS_INDEX_NAME + " ON \n" +
-                                                       TRANSIENT_SUBSCRIBER_GAPS_TABLE_NAME + "(subscriber_id, aggregate_type)"),
+                                               // Only when missing: CREATE INDEX IF NOT EXISTS alone locks the table on every start - see PostgresqlSchemaStatements
+                                               createIndexUnlessPresent(TRANSIENT_SUBSCRIBER_GAPS_TABLE_NAME,
+                                                                        TRANSIENT_SUBSCRIBER_GAPS_INDEX_NAME,
+                                                                        "CREATE INDEX IF NOT EXISTS " + TRANSIENT_SUBSCRIBER_GAPS_INDEX_NAME + " ON \n" +
+                                                                                TRANSIENT_SUBSCRIBER_GAPS_TABLE_NAME + "(subscriber_id, aggregate_type)")),
                        SchemaChange.repeatable("permanent-gaps-table",
                                                PERMANENT_GAPS_TABLE_NAME,
                                                "CREATE TABLE IF NOT EXISTS " + PERMANENT_GAPS_TABLE_NAME + " (\n" +

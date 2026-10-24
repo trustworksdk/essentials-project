@@ -154,6 +154,11 @@ targets, with a `-N` suffix for plugin-only releases.
   value. `--fix-manifests` still writes none of them. `commands/slice-check.md` Step 4 now states how a
   bounded context's `tier` is resolved, which `--adopt-tier` and slice-enrich share. `manifest-guide.md`
   §3 documents the `featureFlag` shape `{ property, havingValue, matchIfMissing }`.
+- **Docs: repeatable index and column changes in your own schema contributor.** `LLM-foundation.md`
+  § Database Schema Harness and the new trap `ESS-128`: `CREATE INDEX IF NOT EXISTS` and
+  `ADD COLUMN IF NOT EXISTS` lock their table even when the index or column exists, so every start of
+  another instance stalls the writers and can deadlock with them. Wrap them with
+  `PostgresqlSchemaStatements` (Essentials' next release).
 - **Fixed:** `LLM-eventsourced-aggregates.md` and the Java command test template showed
   `.thenThrows(...)`, which `GivenWhenThenScenario` does not have. They now use
   `thenFailsWithExceptionType(...)`.

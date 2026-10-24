@@ -40,6 +40,7 @@ import java.util.function.*;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
+import static dk.trustworks.essentials.components.foundation.postgresql.PostgresqlSchemaStatements.createIndexUnlessPresent;
 import static dk.trustworks.essentials.shared.FailFast.*;
 import static dk.trustworks.essentials.shared.MessageFormatter.NamedArgumentBinding.arg;
 import static dk.trustworks.essentials.shared.MessageFormatter.*;
@@ -432,11 +433,19 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                                             // 20 000-row ANALYZEd table where the planner chose each of the other three. The ordered claim's
                                             // NOT EXISTS barrier is served by idx_<table>_ordered_msg instead.
                                             bindTable("DROP INDEX IF EXISTS idx_{:tableName}_ordered_ready")));
+        // Each index is only created when it is missing: CREATE INDEX IF NOT EXISTS alone locks the table on every start,
+        // against the other instances' queue operations - see PostgresqlSchemaStatements
         changes.add(SchemaChange.repeatable("queue-indexes",
                                             sharedQueueTableName,
-                                            bindTable(durableQueuesSql.getCreateOrderedMessageIndexSql()),
-                                            bindTable(durableQueuesSql.getCreateUnorderedMessageReadyIndexSql()),
-                                            bindTable(durableQueuesSql.getCreateOrderedMessageHeadIndexSql())));
+                                            createIndexUnlessPresent(sharedQueueTableName,
+                                                                     bindTable("idx_{:tableName}_ordered_msg"),
+                                                                     durableQueuesSql.getCreateOrderedMessageIndexSql()),
+                                            createIndexUnlessPresent(sharedQueueTableName,
+                                                                     bindTable("idx_{:tableName}_unordered_ready"),
+                                                                     durableQueuesSql.getCreateUnorderedMessageReadyIndexSql()),
+                                            createIndexUnlessPresent(sharedQueueTableName,
+                                                                     bindTable("idx_{:tableName}_ordered_head"),
+                                                                     durableQueuesSql.getCreateOrderedMessageHeadIndexSql())));
         changes.add(SchemaChange.repeatable("legacy-queue-statistics-removal", sharedQueueTableName, legacyQueueStatisticsRemovalSql()));
         multiTableChangeListener.ifPresent(listener -> changes.add(new SchemaChange("change-notification-trigger",
                                                                                    sharedQueueTableName,

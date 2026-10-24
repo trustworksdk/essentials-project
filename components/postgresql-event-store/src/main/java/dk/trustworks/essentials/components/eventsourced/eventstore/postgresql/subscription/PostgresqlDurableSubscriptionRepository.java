@@ -35,6 +35,7 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
+import static dk.trustworks.essentials.components.foundation.postgresql.PostgresqlSchemaStatements.addColumnUnlessPresent;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 import static dk.trustworks.essentials.shared.MessageFormatter.msg;
 
@@ -174,9 +175,13 @@ public final class PostgresqlDurableSubscriptionRepository implements DurableSub
                                                        "reposition_epoch BIGINT NOT NULL DEFAULT 0,\n" +
                                                        "PRIMARY KEY (subscriber_id, aggregate_type))",
                                                // Added in 0.60, so tables created by an earlier release get it here rather than only via CREATE TABLE.
-                                               // 0 is the epoch of a resume point that has never been repositioned - what every existing row is
-                                               "ALTER TABLE " + this.durableSubscriptionsTableName +
-                                                       " ADD COLUMN IF NOT EXISTS reposition_epoch BIGINT NOT NULL DEFAULT 0"));
+                                               // 0 is the epoch of a resume point that has never been repositioned - what every existing row is.
+                                               // Only when missing: ADD COLUMN IF NOT EXISTS alone locks the table exclusively on every start, against
+                                               // every resume point the running instances read or save - see PostgresqlSchemaStatements
+                                               addColumnUnlessPresent(this.durableSubscriptionsTableName,
+                                                                      "reposition_epoch",
+                                                                      "ALTER TABLE " + this.durableSubscriptionsTableName +
+                                                                              " ADD COLUMN IF NOT EXISTS reposition_epoch BIGINT NOT NULL DEFAULT 0")));
     }
 
     @Override

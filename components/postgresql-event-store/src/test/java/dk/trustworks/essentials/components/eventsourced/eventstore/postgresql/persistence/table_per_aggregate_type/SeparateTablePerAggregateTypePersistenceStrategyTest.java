@@ -62,7 +62,8 @@ class SeparateTablePerAggregateTypePersistenceStrategyTest {
             // SeparateTablePerAggregateTypePersistenceStrategy.addAggregateEventStreamConfiguration
             // SeparateTablePerAggregateTypePersistenceStrategy.schemaChangesFor
             // PostgresqlCreateSchemaApplier.apply - the name only, once per change (table and tenant index)
-            postgresqlUtilMock.verify(() -> PostgresqlUtil.checkIsValidTableOrColumnName("valid_name"), times(5));
+            // PostgresqlSchemaStatements.createIndexUnlessPresent - the tenant index's table
+            postgresqlUtilMock.verify(() -> PostgresqlUtil.checkIsValidTableOrColumnName("valid_name"), times(6));
             verify(eventStreamTableColumnNames, times(3)).validate();
         }
     }
@@ -97,7 +98,8 @@ class SeparateTablePerAggregateTypePersistenceStrategyTest {
             // SeparateTablePerAggregateTypePersistenceStrategy.addAggregateEventStreamConfiguration
             // SeparateTablePerAggregateTypePersistenceStrategy.schemaChangesFor
             // PostgresqlCreateSchemaApplier.apply - the name only, once per change (table and tenant index)
-            postgresqlUtilMock.verify(() -> PostgresqlUtil.checkIsValidTableOrColumnName("valid_name"), times(5));
+            // PostgresqlSchemaStatements.createIndexUnlessPresent - the tenant index's table
+            postgresqlUtilMock.verify(() -> PostgresqlUtil.checkIsValidTableOrColumnName("valid_name"), times(6));
             verify(eventStreamTableColumnNames, times(3)).validate();
         }
     }
@@ -132,7 +134,8 @@ class SeparateTablePerAggregateTypePersistenceStrategyTest {
             // SeparateTablePerAggregateTypePersistenceStrategy.resetEventStorageFor
             // SeparateTablePerAggregateTypePersistenceStrategy.schemaChangesFor
             // PostgresqlCreateSchemaApplier.apply - the name only, once per change (table and tenant index)
-            postgresqlUtilMock.verify(() -> PostgresqlUtil.checkIsValidTableOrColumnName("valid_name"), times(5));
+            // PostgresqlSchemaStatements.createIndexUnlessPresent - the tenant index's table
+            postgresqlUtilMock.verify(() -> PostgresqlUtil.checkIsValidTableOrColumnName("valid_name"), times(6));
             verify(eventStreamTableColumnNames, times(3)).validate();
         }
     }

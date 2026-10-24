@@ -28,6 +28,7 @@ import java.sql.*;
 import java.time.OffsetDateTime;
 import java.util.*;
 
+import static dk.trustworks.essentials.components.foundation.postgresql.PostgresqlSchemaStatements.createIndexUnlessPresent;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
@@ -139,11 +140,17 @@ public class PostgresqlAggregateSnapshotJobRepository implements AggregateSnapsh
                                                // Hot-path index for the PENDING/FAILED branch of `lockNextBatch`. The third column
                                                // (`created_ts`) covers the ORDER BY so Postgres can yield rows in queue order
                                                // without an external sort step.
-                                               "CREATE INDEX IF NOT EXISTS " + pendingIndexName + " ON " + tableName + " (status, next_attempt_ts, created_ts)",
+                                               // Each only when missing: CREATE INDEX IF NOT EXISTS alone locks the table on every start - see
+                                               // PostgresqlSchemaStatements
+                                               createIndexUnlessPresent(tableName,
+                                                                        pendingIndexName,
+                                                                        "CREATE INDEX IF NOT EXISTS " + pendingIndexName + " ON " + tableName + " (status, next_attempt_ts, created_ts)"),
                                                // Recovery-path partial index for the PROCESSING reclaim branch. Small in steady
                                                // state (PROCESSING rows are short-lived) and supports `processing_started_ts <= ...`
                                                // ordered by `created_ts`.
-                                               "CREATE INDEX IF NOT EXISTS " + processingIndexName + " ON " + tableName + " (processing_started_ts, created_ts) WHERE status = 'PROCESSING'"));
+                                               createIndexUnlessPresent(tableName,
+                                                                        processingIndexName,
+                                                                        "CREATE INDEX IF NOT EXISTS " + processingIndexName + " ON " + tableName + " (processing_started_ts, created_ts) WHERE status = 'PROCESSING'")));
     }
 
     @Override

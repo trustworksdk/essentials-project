@@ -28,6 +28,7 @@ import org.slf4j.*;
 import java.time.OffsetDateTime;
 import java.util.*;
 
+import static dk.trustworks.essentials.components.foundation.postgresql.PostgresqlSchemaStatements.createIndexUnlessPresent;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 import static dk.trustworks.essentials.shared.MessageFormatter.msg;
 
@@ -156,7 +157,11 @@ public final class PostgresqlFencedLockStorage implements FencedLockStorage<Hand
                                                        ")"),
                        SchemaChange.repeatable("fenced-locks-token-index",
                                                indexName,
-                                               "CREATE INDEX IF NOT EXISTS " + indexName + " ON " + this.fencedLocksTableName + " (lock_name, last_issued_fence_token)"));
+                                               // Only when missing: CREATE INDEX IF NOT EXISTS alone locks the table on every start, against the lock
+                                               // confirmations of the running instances - see PostgresqlSchemaStatements
+                                               createIndexUnlessPresent(fencedLocksTableName,
+                                                                        indexName,
+                                                                        "CREATE INDEX IF NOT EXISTS " + indexName + " ON " + this.fencedLocksTableName + " (lock_name, last_issued_fence_token)")));
     }
 
     /**
