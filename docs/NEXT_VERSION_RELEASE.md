@@ -639,7 +639,7 @@ release, or the attempt charge made before it, keeps failing, the instance serve
 charge at WARN and a failed release at WARN with the stack trace at most once a minute per shard, naming how many
 release attempts failed since the last such WARN (the others at DEBUG), and still takes shards no instance holds, up to its fair share: a heartbeat tick goes on to
 acquire unless it serves more than its fair share, not counting shards whose release is in doubt. What to do:
-nothing. (`6fd885d93`, `66b907912`, `3e719bf2a`, `1afcfabd1`, `9d2007abf`, `042dc5bc2`, `<!-- fix:U-007 -->`)
+nothing. (`6fd885d93`, `66b907912`, `3e719bf2a`, `1afcfabd1`, `9d2007abf`, `042dc5bc2`, `bc7f2786f`)
 
 The same `stuckHandlerTimeout` now ends a wait for an ordered handler which 0.60.0 left unbounded: a fair-share shed of an ordered
 unit, which waits for the keys in its handlers and otherwise keeps the unit and retries on the next heartbeat. A
@@ -709,7 +709,7 @@ same hand-back, or its release, may still fail and leave the unit held. A `relea
 still in a handler whose charge dead-letters a message but that then does not release the unit - the charge fails
 after a move, the release fails, or it finds the unit taken over - names the dead-lettered keys in a WARN of its own,
 as a later request or hand-back with no key in a handler does not name them.
-(`6337f7d89`, `2fdeb3db0`, `bfa961ec5`, `dbae0986f`, `7dbd517be`, `e699c9d44`, `895b1a498`, `52c5e943e`, `56790ca82`, `b785a52b2`, `ab601d493`, `311efc4ad`, `055e013d6`, `<!-- fix:U-008 -->`, `<!-- fix:U-022 -->`)
+(`6337f7d89`, `2fdeb3db0`, `bfa961ec5`, `dbae0986f`, `7dbd517be`, `e699c9d44`, `895b1a498`, `52c5e943e`, `56790ca82`, `b785a52b2`, `ab601d493`, `311efc4ad`, `055e013d6`, `4cce8acbb`, `29e3893d2`)
 
 **The unordered lane now charges a hung handler's delivery too, past the same bound.** It waits for no handler: a
 fair-share shed and a dead pump's hand-back release an unordered shard at once, and `stop()` once `shedGrace` has run
