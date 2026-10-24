@@ -56,6 +56,13 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
 
     private final    ConcurrentMap<Pair<SubscriberId, AggregateType>, EventStoreSubscription> subscribers = new ConcurrentHashMap<>();
     private volatile boolean                                                                  started;
+    /**
+     * The subscriptions this manager has started, or is starting, since its last {@link #start()}. {@link #start()}
+     * starts every subscription in {@link #subscribers}, and adding a subscription starts it when the manager is already
+     * started; a subscription added on another thread while the manager starts - an event processor's fenced-lock
+     * callback - is seen by both. Whichever claims it here first starts it, so it is started once
+     */
+    private final    Set<EventStoreSubscription>                                              startClaimed = ConcurrentHashMap.newKeySet();
     private          ScheduledFuture<?>                                                       saveResumePointsFuture;
     private          ScheduledFuture<?>                                                       saveAdvancedResumePointsFuture;
     private final    boolean                                                                  startLifeCycles;
@@ -294,9 +301,20 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
     }
 
     private void startEventStoreSubscriber(EventStoreSubscription eventStoreSubscription) {
+        if (!startClaimed.add(eventStoreSubscription)) {
+            log.debug("[{}] EventStoreSubscription '{}' is already started, or being started, by this manager", fencedLockManager.getLockManagerInstanceId(), eventStoreSubscription.subscriberId());
+            return;
+        }
         log.debug("[{}] Starting EventStoreSubscription '{}': '{}'", fencedLockManager.getLockManagerInstanceId(), eventStoreSubscription.subscriberId(), eventStoreSubscription);
         eventStoreSubscriptionObserver.startingSubscriber(eventStoreSubscription);
-        var startDuration = StopWatch.time(CheckedRunnable.safe(eventStoreSubscription::start));
+        Duration startDuration;
+        try {
+            startDuration = StopWatch.time(CheckedRunnable.safe(eventStoreSubscription::start));
+        } catch (RuntimeException e) {
+            // Not started, so a later attempt may start it
+            startClaimed.remove(eventStoreSubscription);
+            throw e;
+        }
         log.info("[{}] Started EventStoreSubscription '{}' in {} ms.", fencedLockManager.getLockManagerInstanceId(), eventStoreSubscription.subscriberId(), startDuration.toMillis());
         eventStoreSubscriptionObserver.startedSubscriber(eventStoreSubscription, startDuration);
     }
@@ -350,6 +368,7 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
             }
 
             started = false;
+            startClaimed.clear();
             log.info("[{}] Stopped EventStore Subscription Manager", fencedLockManager.getLockManagerInstanceId());
         } else {
             log.info("[{}] EventStore Subscription Manager was already stopped", fencedLockManager.getLockManagerInstanceId());
@@ -593,6 +612,7 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
         if (removedSubscription != null) {
             log.info("[{}-{}] Unsubscribing", removedSubscription.subscriberId(), removedSubscription.aggregateType());
             stopEventStoreSubscriber(eventStoreSubscription);
+            startClaimed.remove(removedSubscription);
             // Nothing is owed to a subscription that is gone - see EventStore#forgetGapMiddlesAwaitedInMemory
             eventStore.forgetGapMiddlesAwaitedInMemory(removedSubscription.subscriberId(), removedSubscription.aggregateType());
         }
