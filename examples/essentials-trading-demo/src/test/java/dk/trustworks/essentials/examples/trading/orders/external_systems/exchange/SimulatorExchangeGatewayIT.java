@@ -83,6 +83,21 @@ class SimulatorExchangeGatewayIT {
     }
 
     @Test
+    void with_synchronous_answers_off_only_the_submissions_outcome_is_returned_and_nothing_is_reported() {
+        var quiet   = gatewayTo("http://" + exchange.getHost() + ":" + exchange.getMappedPort(8080), false);
+        var market  = OrderId.random();
+        var resting = OrderId.random();
+
+        var filled = quiet.submit(new OrderSubmission(market, AAPL, TradeSide.BUY, OrderType.MARKET, Quantity.of(10), null, TimeInForce.DAY));
+        quiet.submit(new OrderSubmission(resting, AAPL, TradeSide.BUY, OrderType.LIMIT, Quantity.of(5), usd("1.00"), TimeInForce.GTC));
+        quiet.cancel(resting);
+
+        assertThat(filled.isRejected()).isFalse();
+        assertThat((Object) filled.exchangeOrderId()).isNotNull();
+        assertThat(reported).isEmpty();
+    }
+
+    @Test
     void a_resubmission_answers_as_the_first_submission_did() {
         var submission = new OrderSubmission(OrderId.random(), AAPL, TradeSide.BUY, OrderType.LIMIT, Quantity.of(5), usd("1.00"), TimeInForce.GTC);
 
@@ -129,9 +144,17 @@ class SimulatorExchangeGatewayIT {
                 .isInstanceOf(ExchangeUnavailableException.class);
     }
 
+    /**
+     * Reporting the synchronous answers, which is what most of these tests look at; the application's default is not to.
+     */
     private SimulatorExchangeGateway gatewayTo(String baseUrl) {
+        return gatewayTo(baseUrl, true);
+    }
+
+    private SimulatorExchangeGateway gatewayTo(String baseUrl, boolean reportSynchronousAnswers) {
         var properties = new SimulatorProperties();
         properties.getExchange().setBaseUrl(baseUrl);
+        properties.getExchange().setReportSynchronousAnswers(reportSynchronousAnswers);
         var apiClient = new ApiClient(RestClient.builder().build());
         apiClient.setBasePath(baseUrl);
         var reports = mock(ExchangeReports.class);

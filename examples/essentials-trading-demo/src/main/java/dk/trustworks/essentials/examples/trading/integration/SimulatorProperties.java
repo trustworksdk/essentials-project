@@ -138,6 +138,15 @@ public class SimulatorProperties {
          */
         private String participantId   = "DEMO-BROKER";
         private String participantName = "Essentials Trading Demo Brokerage";
+        /**
+         * Whether the answers the exchange's calls carry - the acceptance, the executions and the market-order remainder
+         * of a submission, a cancel's confirmation - are also reported at once (design Q-2 as first decided), or left to
+         * the exchange's webhooks and event log, which report the same again. Off by default (Q-2 revised): reporting
+         * both made {@code Orders:ExchangeReports} consume every fact twice and the router commit three or four times
+         * per order, and that inbox was the deepest backlog under a market-open rush. Off, an order's acceptance and
+         * immediate fills wait for the webhook - tens of milliseconds when quiet.
+         */
+        private boolean reportSynchronousAnswers = false;
 
         public String getParticipantId() {
             return participantId;
@@ -153,6 +162,14 @@ public class SimulatorProperties {
 
         public void setParticipantName(String participantName) {
             this.participantName = participantName;
+        }
+
+        public boolean isReportSynchronousAnswers() {
+            return reportSynchronousAnswers;
+        }
+
+        public void setReportSynchronousAnswers(boolean reportSynchronousAnswers) {
+            this.reportSynchronousAnswers = reportSynchronousAnswers;
         }
     }
 }

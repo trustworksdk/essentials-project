@@ -97,13 +97,16 @@ public class ExchangeOrderRouter extends EventProcessor {
 
     @MessageHandler(unitOfWork = UnitOfWorkMode.NONE)
     void on(OrderPlaced e) {
+        log.debug("Submitting order '{}' to the exchange", e.orderId());
         var result = submit(OrderSubmission.of(e));
         if (result.isRejected()) {
             log.debug("Exchange rejected order '{}': {}", e.orderId(), result.rejectReason());
             reports.received(RecordExchangeAnswer.rejected(e.orderId(), result.rejectReason()));
         } else {
+            log.debug("Exchange accepted order '{}'", e.orderId());
             reports.received(RecordExchangeAnswer.submitted(e.orderId(), result.exchangeOrderId()));
         }
+        log.debug("Queued the exchange's answer for order '{}'", e.orderId());
     }
 
     /**

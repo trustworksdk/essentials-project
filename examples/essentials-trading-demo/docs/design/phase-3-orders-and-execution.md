@@ -113,6 +113,12 @@ contention (15 % retries at a 50 % hot share); order placement is far below that
 - **The synchronous answer is an acknowledgement, plus any executions it carries** (Q-2). The `201` already lists the
   executions of a marketable order. Recording them at once — idempotent on `executionId`, like everything from the
   webhook — gives the customer the fill without waiting for a webhook, and the webhook copy then deduplicates.
+  **Revised 2026-10-24:** under the simulators only the submission's outcome is recorded from the `201`; acceptance,
+  fills and cancellations come from the webhooks and the event log alone
+  (`trading-demo.simulators.exchange.report-synchronous-answers`, default `false`). Recording both made
+  `Orders:ExchangeReports` consume every fact twice, and that inbox was the deepest backlog under a market-open rush.
+  Measured in `_demo_harness/CLAUDE.md`, "The order path under a rush". The stub still reports its answers at once - it
+  has no webhooks.
 - **Unreachable exchange.** Retried with backoff; `clientOrderId` makes resubmission safe. After the retry budget the
   order goes `REJECTED` (`EXCHANGE_UNAVAILABLE`) and its hold is released. If the exchange did take it, its events
   still arrive and are booked — an executed trade is a fact (Q-3).
@@ -217,7 +223,7 @@ All seven proposals accepted (2026-10-19).
 | | Question | Decided |
 |---|---|---|
 | **Q-1** | Place an order and hold funds in one unit of work, or as a saga? | One unit of work (§3) |
-| **Q-2** | Book the executions in the synchronous submit answer, or wait for the webhook? | Book them at once; the webhook copy deduplicates |
+| **Q-2** | Book the executions in the synchronous submit answer, or wait for the webhook? | Book them at once; the webhook copy deduplicates. **Revised 2026-10-24**: wait for the webhook (§4) |
 | **Q-3** | When submission gives up, what if the exchange did take the order? | Its events are still booked as facts; the order shows `REJECTED` then a fill as an operator case |
 | **Q-4** | Book fills from the exchange's order events or from `TradeExecuted`? | Order events (they carry `clientOrderId`); `TradeExecuted` is for settlement and reconciliation |
 | **Q-5** | Market-order hold: collar on the best ask, and how wide? | Best ask × 1.05, configurable |

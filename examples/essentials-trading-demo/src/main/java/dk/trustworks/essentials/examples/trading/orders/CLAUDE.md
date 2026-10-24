@@ -97,10 +97,13 @@ limit fills at its limit. Per-instance memory: a restart forgets resting orders.
 `SimulatorExchangeGateway`, on the generated client (`integration/exchange_simulator/client`, from
 `src/main/openapi`). Covered by `SimulatorExchangeGatewayIT` against the real image (skips without it).
 
-- **The synchronous answers are reported at once** (Q-2): the `201`'s acceptance, one `RecordFill` per execution with
-  the exchange's `tradeDate` and `intendedSettlementDate` (SR-29), the `IOC` remainder as `RecordCancellation`
-  `IOC_REMAINDER`, and a `DELETE`'s `200` as `RecordCancellation` `REQUESTED`. The webhooks will report the same again;
-  the order deduplicates. A resting order's later fills and a `DAY` order's expiry arrive only through the webhooks.
+- **Only the submission's outcome comes from the synchronous answer** (Q-2 revised 2026-10-24): `submitted` with the
+  exchange's id, or the rejection. Acceptance, fills and cancellations arrive once, through the webhooks and the event
+  log. `trading-demo.simulators.exchange.report-synchronous-answers=true` restores the first Q-2: the `201`'s acceptance,
+  one `RecordFill` per execution with the exchange's `tradeDate` and `intendedSettlementDate` (SR-29), the `IOC`
+  remainder as `RecordCancellation` `IOC_REMAINDER`, and a `DELETE`'s `200` as `RecordCancellation` `REQUESTED`, which
+  the webhooks then report again and the order deduplicates. Off by default because that doubled what
+  `Orders:ExchangeReports` consumes - its deepest backlog under a rush (`_demo_harness/CLAUDE.md`).
 - **A market order is sent without a time in force**: it is always `IOC` at the exchange, and `DAY`/`GTC` on one is a
   `400`.
 - **Prices go as ticks**: minor units of the instrument's `currencyScale` over its `tickSizeMinor`, both read from
@@ -117,10 +120,9 @@ limit fills at its limit. Per-instance memory: a restart forgets resting orders.
   Both queue the envelope into **`Orders:ExchangeReports` itself**; `ExchangeReports` translates it as it consumes it
   (`ExchangeOrderEventTranslation`, keyed by `clientOrderId` = our `OrderId`). Keep `EVENT_TYPES` and the yaml's
   `event_types` in step. Built on `ApplicationReadyEvent` (the inbox exists only then); earlier deliveries get `503`.
-- **Fills come from the fill events too** (`OrderPartiallyFilled`/`OrderFilled`, SR-31 since simulators 0.3.0):
-  `executionId`, `lastQuantity`, `lastPrice`, trade and settlement dates -> `RecordFill`, in USD (D3). The submit
-  answer reports a marketable order's executions first; the order adds each `executionId` once. A resting order's later
-  fills arrive only this way. A copy missing any of those fields is damaged (`422`, the exchange retries).
+- **Fills come from the fill events** (`OrderPartiallyFilled`/`OrderFilled`, SR-31 since simulators 0.3.0):
+  `executionId`, `lastQuantity`, `lastPrice`, trade and settlement dates -> `RecordFill`, in USD (D3). The order
+  adds each `executionId` once. A copy missing any of those fields is damaged (`422`, the exchange retries).
 - `ExchangeOrderEventsIT` cancels a resting order *at the exchange* so only the inbound path can close it: once via
   catch-up alone, once via a signed webhook to a host port exposed before the containers start; and a `DAY` order the
   exchange expires when the test moves its clock a day on; and a resting order another participant fills later.

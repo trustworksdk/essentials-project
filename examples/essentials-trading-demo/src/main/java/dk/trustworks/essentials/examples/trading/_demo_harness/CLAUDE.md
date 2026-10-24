@@ -470,3 +470,39 @@ head, queue depths, container CPU; `wave-sampler.sh` in the session scratchpad):
   the trading day. The view ceiling of phase 1 (~700-800 events/s per exclusive `ViewEventProcessor`), now visible to
   a customer - the case for the parked batched view handling.
 - The sampler's `cpu:app` (`ps %cpu`) is a lifetime average and useless; read the app's CPU from `top` next time.
+
+### The order path under a rush, 2026-10-23/24
+
+Same 300/s profile, business days only, 7 days, one sample each unless noted. First the batched view handling
+(`987d5c88`/`80bc5185`, compose batch 100), then where placed → submitted actually goes.
+
+| Configuration | Placed → booked p50 / p99 | Placed → submitted p50 / p99 | Checks |
+|---|---|---|---|
+| Views unbatched (business-day run above) | 0.37 s / 12.5 s | 0.26 s / 15.5 s | all pass |
+| Views batched 100, pool 40 - first run | 0.48 s / 17.8 s | 1.23 s / 23.9 s | all pass |
+| Views batched 100, pool 40 - two reruns | 0.37 / 11.6 s, 0.36 / 10.6 s | 0.27 / 15.7 s, 0.25 / 14.4 s | all pass |
+| Views batched 20, pool 40 | 0.34 s / 10.4 s | 0.22 s / 13.5 s | all pass |
+| Views batched 100, pool 60 | 0.35 s / 11.9 s | 0.23 s / 14.7 s | all pass |
+| Views batched 100, pool 40, **synchronous answers not reported** | **0.31 s / 8.1 s** | **0.15 s / 7.0 s** | all pass |
+
+- **Batched views do not slow the order path.** The first batched run was an outlier; two reruns match the unbatched
+  baseline. Threads waited for a connection in under 10 samples per run - not the pool.
+- **The router is not slow; the exchange answers in 11 ms (p99 28 ms).** Split with debug lines in
+  `ExchangeOrderRouter` and `ExchangeReports` plus event timestamps (35 521 orders, before the fix): placed → router
+  handler start p90 3.6 s / p99 10 s, then the router's answer waited in `Orders:ExchangeReports` p90 7.0 s / p99 10.6 s.
+  `OrderSubmitted` is the last thing recorded: `OrderAccepted` p90 3.5 s, `OrderFilled` 3.8 s, `OrderSubmitted` 9.7 s.
+- **Every exchange fact went through `Orders:ExchangeReports` twice** - once from the `201` (Q-2), once from the
+  webhook - about 5.5 messages per order. The inbox drains ~1 400/s on 8 consumers and a 300/s rush needs ~1 650/s:
+  backlog ~2 950. Reporting only the submission's outcome from the `201` (Q-2 revised, now the default) cut its messages
+  40 %, its backlog to 414 and its wait to p90 1.5 s / p99 3.4 s; `OrderAccepted` p90 3.5 → 1.4 s. Cost: a fill records
+  ~80 ms later when quiet (submitted → filled p50 -60 → +20 ms).
+- **What is left is the router's subscription.** Placed → router handler start is still p90 1.3 s / p99 6.1 s: its
+  inbox peaks ~560, but its subscription falls ~2 000+ `Orders` events behind the head at each open - unchanged by the
+  fix. Next to explain.
+- **PostgreSQL's NOTIFY lock shows at peaks.** Snapshots caught 5-13 `COMMIT`s waiting on `object` 1262/0 (the
+  cluster-wide notification-queue lock, held through the commit's WAL flush) in about one in three snapshots. Every
+  shard-owned enqueue transaction sends one `pg_notify` (coalesced per shard per transaction); a single-message inbox
+  enqueue is one each. No setting removes it; fewer notifying commits does. Not the bottleneck yet.
+- Side findings, not chased: ~240 ordered-unit "delivered key_order N after N+2" warnings per run on the settlement
+  queue, each followed by a failed `RecordSettlementReport` (retried; checks pass); ~4 000 more webhook acceptances
+  consumed than orders, so some copies pass the intake's deduplication.

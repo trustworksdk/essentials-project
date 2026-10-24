@@ -48,11 +48,13 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * {@link StubExchangeGateway} stands in.
  * <p>
  * Every order is submitted as the firm's (D8), with our {@code OrderId} as its {@code clientOrderId}, which makes a
- * resubmission answer as the first submission did. The answers the calls carry are reported at once through
- * {@link ExchangeReports}, as the stub reports them (Q-2): the acceptance, one fill per execution of a marketable order,
- * with the exchange's trade and settlement dates (SR-29), the remainder of a market order the exchange cancelled, and a
- * cancellation the exchange confirmed. The exchange's webhooks report the same again and the order deduplicates them;
- * everything that happens later - a resting order filling, a {@code DAY} order expiring - only arrives that way.
+ * resubmission answer as the first submission did. Only the submission's outcome is returned to the router; the
+ * acceptance, the fills, a market order's remainder and a confirmed cancel arrive through the exchange's webhooks and
+ * event log ({@link ExchangeOrderEvents}), once each (Q-2 revised). With
+ * {@code trading-demo.simulators.exchange.report-synchronous-answers=true} the answers the calls carry are also reported
+ * at once through {@link ExchangeReports}, as the stub reports them: the acceptance, one fill per execution of a
+ * marketable order with the exchange's trade and settlement dates (SR-29), the remainder of a market order the exchange
+ * cancelled, and a cancellation the exchange confirmed; the webhook copies then deduplicate on the order.
  * <p>
  * Failure mapping: no answer, a timeout or {@code 503} is {@link ExchangeUnavailableException}, which the router retries
  * and finally rejects as {@code EXCHANGE_UNAVAILABLE}. An order the exchange refuses outright - {@code 400}, {@code 409}
@@ -70,6 +72,7 @@ public class SimulatorExchangeGateway implements ExchangeGateway {
     private final ExchangeReports                   reports;
     private final String                            participantId;
     private final String                            participantName;
+    private final boolean                           reportSynchronousAnswers;
     private final Map<InstrumentId, Instrument>     instruments = new ConcurrentHashMap<>();
 
     public SimulatorExchangeGateway(ApiClient exchangeSimulatorApiClient, SimulatorProperties properties, ExchangeReports reports) {
@@ -81,6 +84,7 @@ public class SimulatorExchangeGateway implements ExchangeGateway {
         this.participantsApi = new ParticipantsApi(exchangeSimulatorApiClient);
         this.participantId = requireNonNull(properties.getExchange().getParticipantId(), "No trading-demo.simulators.exchange.participant-id provided");
         this.participantName = requireNonNull(properties.getExchange().getParticipantName(), "No trading-demo.simulators.exchange.participant-name provided");
+        this.reportSynchronousAnswers = properties.getExchange().isReportSynchronousAnswers();
     }
 
     @Override
@@ -122,7 +126,7 @@ public class SimulatorExchangeGateway implements ExchangeGateway {
             }
             throw e;
         }
-        if (answer.getOrder().getStatus() == OrderStatus.CANCELLED) {
+        if (reportSynchronousAnswers && answer.getOrder().getStatus() == OrderStatus.CANCELLED) {
             reports.received(new RecordCancellation(orderId, "REQUESTED"));
         }
     }
@@ -158,6 +162,10 @@ public class SimulatorExchangeGateway implements ExchangeGateway {
         if (order.getStatus() == OrderStatus.REJECTED) {
             return SubmissionResult.rejected(order.getRejectReason() != null ? order.getRejectReason().getValue() : "REJECTED");
         }
+        var taken = SubmissionResult.taken(ExchangeOrderId.of(order.getOrderId().toString()));
+        if (!reportSynchronousAnswers) {
+            return taken;
+        }
         reports.received(RecordExchangeAnswer.accepted(orderId));
         for (var execution : answer.getExecutions()) {
             reports.received(new RecordFill(orderId,
@@ -171,7 +179,7 @@ public class SimulatorExchangeGateway implements ExchangeGateway {
             // A market order is IOC at the exchange: what it could not fill at once is cancelled
             reports.received(new RecordCancellation(orderId, "IOC_REMAINDER"));
         }
-        return SubmissionResult.taken(ExchangeOrderId.of(order.getOrderId().toString()));
+        return taken;
     }
 
     private OrderRequest orderRequest(OrderSubmission submission, Instrument instrument) {
