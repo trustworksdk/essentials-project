@@ -8,7 +8,7 @@
 #   warn        PostToolUse, UserPromptSubmit - context-usage warning at 70/80/90 %;
 #               for a subagent also the restore (SessionStart never fires for one)
 #   precompact  PreCompact (auto|manual)       - write a fallback snapshot
-#   restore     SessionStart (compact)         - re-inject saved state + snapshot
+#   restore     SessionStart (compact)         - re-inject saved state (once) + snapshot
 #
 # Why not PreCompact alone: PreCompact cannot add context for the model, and once auto
 # compaction triggers the agent gets no further turn. The warning has to come earlier.
@@ -61,6 +61,7 @@ else
 fi
 mkdir -p "$state_dir" 2>/dev/null || exit 0
 state_file=$state_dir/STATE.md
+restored_file=$state_dir/STATE.restored.md # the STATE.md the last restore handed back
 snapshot_file=$state_dir/precompact-snapshot.md
 
 emit() { # $1 event name, $2 text
@@ -133,9 +134,17 @@ used_tokens() { # prints "<tokens> <model>" from the last assistant entry; model
 
 restore_text() {
   local text=""
-  if [ -s "$state_file" ]; then
+  # STATE.md goes back once: a restore copies what it handed back to STATE.restored.md, and a
+  # later restore (the next compaction of the same agent) hands STATE.md back only when it
+  # was written since - its content differs from that copy, or it is newer than the copy.
+  # Otherwise those notes predate an earlier compaction and would send the agent back to a
+  # step it has already done. The content check covers a rewrite within the same second as
+  # the restore, which a one-second mtime cannot tell apart.
+  if [ -s "$state_file" ] && { [ ! -f "$restored_file" ] \
+      || [ "$state_file" -nt "$restored_file" ] || ! cmp -s "$state_file" "$restored_file"; }; then
     text+="CONTEXT GUARD: ${who} was just compacted. The working state you saved before compaction (${state_file}) follows; treat it as your own notes and resume from its next step. Keep the file updated if you change course."$'\n\n'
     text+=$(head -c 20000 "$state_file")$'\n\n'
+    cp "$state_file" "$restored_file" 2>/dev/null
   fi
   [ -s "$snapshot_file" ] && text+=$(head -c 8000 "$snapshot_file")
   printf '%s' "$text"
