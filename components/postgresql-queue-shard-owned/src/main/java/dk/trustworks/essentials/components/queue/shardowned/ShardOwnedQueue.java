@@ -3482,8 +3482,11 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * threw, so a move made before a later move of the same charge throws is named too, and before the release, so a
      * release that then fails still leaves the keys named. {@code before} and {@code after} are what the owner had charged
      * and dead-lettered before and after the hand-back's charge; nothing is logged when it dead-lettered nothing.
+     * <p>
+     * So the WARN names the hand-back it was found in, not its outcome: a later move of the same hand-back may throw, its
+     * release may throw or find the row taken, and the unit is then not handed back by it.
      *
-     * @param from how the unit is being handed back, as the WARN names it: {@code "after a stop kept it"},
+     * @param from which hand-back found them, as the WARN names it: {@code "after a stop kept it"},
      *             {@code "from its dead pump"}, {@code "as the queue stopped"} or {@code "on request"}
      */
     private void reportOwedDeadLettersSettled(LeasedOwner owner, OrderedShardOwner.ReleaseCharge before, OrderedShardOwner.ReleaseCharge after,
@@ -3496,8 +3499,42 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         log.warn("Instance {}, handing back ordered unit {} on queue {}, has made or found, before releasing it, dead-letter move(s) an "
                          + "earlier release of it left owed (made now, or found that release's unanswered attempt had committed): {} message(s) "
                          + "of key(s) {}, which that release's charge brought to their attempt limit, are dead-lettered. Each key is blocked "
-                         + "until every dead letter of the key is resurrected (resurrectKey) or deleted. The unit is handed back {}",
+                         + "until every dead letter of the key is resurrected (resurrectKey) or deleted. Found while handing the unit back {}",
                  instanceId, owner.shard(), queueId, settled.size(), OrderedShardOwner.describeKeys(settled), from);
+    }
+
+    /**
+     * WARN naming the keys whose message a release on request of {@code owner}'s unit, made with the keys {@code inHandler}
+     * read still in a handler ({@link #releaseKeptOrderedUnitWithinNetworkWaitBound}), dead-lettered before its release -
+     * by its charge of the messages in those handlers, or by a dead-letter move an earlier attempt to release the unit left
+     * owed - when the request then did not release the unit: its charge threw after making a move, or its release threw
+     * ({@code failure}), or the release found the row no longer held under the fence the unit was kept under
+     * ({@code failure} {@code null}, answered {@link KeptUnitRelease.Outcome#ALREADY_TAKEN}). Released, the request's own
+     * WARN names them ({@link #reportReleasedOnRequest}); not released, no log line did, and a later request or hand-back
+     * with no key in a handler names only the keys whose move it makes or finds itself ({@link #reportOwedDeadLettersSettled}),
+     * these being in the ledger already. {@code before} and {@code after} are what the owner had charged and dead-lettered
+     * before and after this request's charge; nothing is logged when it dead-lettered nothing.
+     */
+    private void reportDeadLettersOfAnUnreleasedRequest(LeasedOwner owner, OrderedShardOwner.KeysInHandler inHandler, OrderedShardOwner.ReleaseCharge before,
+                                                        OrderedShardOwner.ReleaseCharge after, Throwable failure) {
+        var deadLettered = new ArrayList<>(after.deadLetteredKeys());
+        before.deadLetteredKeys().forEach(deadLettered::remove);
+        if (deadLettered.isEmpty()) {
+            return;
+        }
+        var notReleased = failure != null
+                          ? "the request then failed (" + failure + "), so the unit goes back to being kept, as far as this queue knows "
+                            + "with its row still naming this instance, for a later hand-back or request"
+                          : "its release then found the row no longer held under the fence the unit was kept under - taken over "
+                            + "meanwhile, or released by an earlier attempt whose answer this instance stopped waiting for - so "
+                            + "nothing was released";
+        log.warn("Instance {}, releasing ordered unit {} on queue {} on request while {} key(s) {} were in a handler, dead-lettered "
+                         + "{} message(s) of key(s) {} at their attempt limit before releasing it - by charging the messages in "
+                         + "those handlers an attempt, or by a dead-letter move an earlier attempt to release the unit left owed - "
+                         + "but did not release the unit: {}. Each key is blocked until every dead letter of the key is "
+                         + "resurrected (resurrectKey) or deleted",
+                 instanceId, owner.shard(), queueId, inHandler.keys().size(), inHandler.describeKeys(), deadLettered.size(),
+                 OrderedShardOwner.describeKeys(deadLettered), notReleased);
     }
 
     /**
@@ -3556,7 +3593,10 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * That next owner delivers the key's message again, unless it was dead-lettered, as it was never acknowledged,
      * possibly while the handler still runs it; the handler's acknowledgement, once it returns, is not flushed, as the
      * owner no longer holds the row. One WARN says so, naming the keys, and the answer names the charge
-     * ({@link KeptUnitRelease#charged()}, {@link KeptUnitRelease#deadLetteredKeys()}). Released with none in a handler,
+     * ({@link KeptUnitRelease#charged()}, {@link KeptUnitRelease#deadLetteredKeys()}). Not released after its charge
+     * dead-lettered a message - the charge threw after a move, the release threw, or it found the row taken - a WARN of its
+     * own names the keys this request dead-lettered ({@link #reportDeadLettersOfAnUnreleasedRequest}), as a later request
+     * or hand-back with no key in a handler does not name them. Released with none in a handler,
      * it is an ordinary hand-back ({@link KeptUnit.Phase#HANDED_BACK}), and nothing new is charged, but a dead-letter
      * move an earlier attempt to release it left owed is made before the release, as the hand-back makes it
      * ({@link #handBackKeptUnit}); the answer still names a charge an earlier attempt to release it completed (a request
@@ -3670,18 +3710,32 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                     // owner, which charges nothing for a released unit. Either way the answer names what earlier attempts to
                     // release the unit charged and dead-lettered, which a request that threw never answered with.
                     var settledBefore = releaseChargeSoFar(owner);
+                    Throwable failure = null;
                     try {
-                        charge = chargeKeysInHandlerBeforeRelease(owner, OrderedShardOwner.ReleaseChargeScope.EVERY_KEY_IN_HANDLER, "on request");
+                        try {
+                            charge = chargeKeysInHandlerBeforeRelease(owner, OrderedShardOwner.ReleaseChargeScope.EVERY_KEY_IN_HANDLER, "on request");
+                        } finally {
+                            if (inHandler.isEmpty()) {
+                                // With no key in a handler, the release's own log line is an INFO, so the keys whose owed move
+                                // this request made or found are named in a WARN, as a hand-back names them - whether the charge returned
+                                // or threw, and before the release: a retried request finds them in the ledger and names
+                                // nothing new for them.
+                                reportOwedDeadLettersSettled(owner, settledBefore, releaseChargeSoFar(owner), "on request");
+                            }
+                        }
+                        released = releaseLeaseRows(List.of(owner)) > 0;
+                    } catch (SQLException | RuntimeException | Error e) {
+                        failure = e;
+                        throw e;
                     } finally {
-                        if (inHandler.isEmpty()) {
-                            // With no key in a handler, the release's own log line is an INFO, so the keys whose owed move
-                            // this request made or found are named in a WARN, as a hand-back names them - whether the charge returned
-                            // or threw, and before the release: a retried request finds them in the ledger and names
-                            // nothing new for them. With a key in a handler, the release's WARN names every dead-lettered key.
-                            reportOwedDeadLettersSettled(owner, settledBefore, releaseChargeSoFar(owner), "on request");
+                        // With a key in a handler, the release's WARN names every dead-lettered key (reportReleasedOnRequest),
+                        // but only once the unit is released. Not released - the charge threw after a move, the release threw,
+                        // or the row was found taken - the keys this request dead-lettered are named here: they are in the
+                        // ledger from now on, so a later request or hand-back with no key in a handler does not name them.
+                        if (!released && inHandler.isPresent()) {
+                            reportDeadLettersOfAnUnreleasedRequest(owner, inHandler.get(), settledBefore, releaseChargeSoFar(owner), failure);
                         }
                     }
-                    released = releaseLeaseRows(List.of(owner)) > 0;
                 }
             } finally {
                 kept.endForcedRelease(claimedFrom, owner.holdsLeaseRow(), inHandler.isPresent());

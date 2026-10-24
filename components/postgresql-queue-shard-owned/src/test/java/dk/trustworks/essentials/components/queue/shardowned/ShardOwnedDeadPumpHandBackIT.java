@@ -724,7 +724,7 @@ class ShardOwnedDeadPumpHandBackIT {
                                                                                                              assertThat(warning.getArgumentArray()[1]).as("the unit").isEqualTo(unit);
                                                                                                              assertThat(warning.getFormattedMessage())
                                                                                                                      .contains("1 message(s) of key(s) [HOLD]",
-                                                                                                                               "The unit is handed back from its dead pump");
+                                                                                                                               "Found while handing the unit back from its dead pump");
                                                                                                          });
                 assertThat(deliveries).as("not delivered again: its key is blocked behind the dead letter").hasValue(1);
             } finally {
@@ -971,7 +971,7 @@ class ShardOwnedDeadPumpHandBackIT {
                                                                                                                          assertThat(warning.getArgumentArray()[1]).as("the unit").isEqualTo(unit);
                                                                                                                          assertThat(warning.getFormattedMessage())
                                                                                                                                  .contains("1 message(s) of key(s) [HOLD]",
-                                                                                                                                           "The unit is handed back as the queue stopped");
+                                                                                                                                           "Found while handing the unit back as the queue stopped");
                                                                                                                      });
                         } else {
                             assertThat(warnings(logged, "released unordered shard")).as("one WARN for the stop's release").singleElement()

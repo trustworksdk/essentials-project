@@ -696,8 +696,13 @@ owed. While the move keeps failing, the dead pump's hand-back holds the unit and
 `stop()` leaves its lease unreleased, as when its charge fails, with a WARN either way. When the kept unit is instead
 taken over, the move is not made again, and that dead letter is then reported nowhere, though it blocks its key. A move
 the database refused with an error of its own (an SQL state outside class `08`, such as a trigger's refusal or a
-cancelled statement) was rolled back, and its retry does not look for it.
-(`6337f7d89`, `2fdeb3db0`, `bfa961ec5`, `dbae0986f`, `7dbd517be`, `e699c9d44`, `895b1a498`, `52c5e943e`, `56790ca82`, `b785a52b2`, `ab601d493`, `311efc4ad`, `055e013d6`)
+cancelled statement) was rolled back, and its retry does not look for it. Such a WARN names the hand-back the dead
+letter was found in ("Found while handing the unit back ..."), not that the unit was handed back: a later move of the
+same hand-back, or its release, may still fail and leave the unit held. A `releaseKeptOrderedUnit` made with a key
+still in a handler whose charge dead-letters a message but that then does not release the unit - the charge fails
+after a move, the release fails, or it finds the unit taken over - names the dead-lettered keys in a WARN of its own,
+as a later request or hand-back with no key in a handler does not name them.
+(`6337f7d89`, `2fdeb3db0`, `bfa961ec5`, `dbae0986f`, `7dbd517be`, `e699c9d44`, `895b1a498`, `52c5e943e`, `56790ca82`, `b785a52b2`, `ab601d493`, `311efc4ad`, `055e013d6`, `<!-- fix:U-008 -->`)
 
 **The unordered lane now charges a hung handler's delivery too, past the same bound.** It waits for no handler: a
 fair-share shed and a dead pump's hand-back release an unordered shard at once, and `stop()` once `shedGrace` has run

@@ -1480,6 +1480,8 @@ class ShardOwnedUnsubscribeIT {
                                           .filteredOn(warning -> warning.contains("released ordered unit " + unitOfTheKey + " on queue " + QUEUE_ID + " on request"))
                                           .singleElement()
                                           .satisfies(warning -> assertThat(warning).contains("1 dead-lettered at their attempt limit [ACC-1]"));
+                assertThat(laneWarnings()).as("and only the release does: the unit was released, so no WARN of a request that did not release it")
+                                          .noneMatch(warning -> warning.contains("but did not release the unit"));
             } finally {
                 release.countDown();
             }
@@ -1600,7 +1602,9 @@ class ShardOwnedUnsubscribeIT {
                                           .filteredOn(warning -> warning.contains("handing back ordered unit " + unitOfTheKey + " on queue "
                                                                                           + QUEUE_ID + ", has made or found, before releasing it, dead-letter move(s)"))
                                           .singleElement()
-                                          .satisfies(warning -> assertThat(warning).contains("1 message(s) of key(s) [ACC-1]"));
+                                          .satisfies(warning -> assertThat(warning).contains("1 message(s) of key(s) [ACC-1]")
+                                                                                   .as("naming the hand-back it was found in, not a hand-back that did not happen")
+                                                                                   .endsWith("Found while handing the unit back after a stop kept it"));
             } finally {
                 release.countDown();
                 LeaseReleaseRefusals.failLeaseReleasesOf(dataSource, new short[]{QUEUE_ID}, "ordered", unitOfTheKey, false);
@@ -1674,7 +1678,7 @@ class ShardOwnedUnsubscribeIT {
                                                                                           + QUEUE_ID + ", has made or found, before releasing it, dead-letter move(s)"))
                                           .singleElement()
                                           .satisfies(warning -> assertThat(warning).contains("1 message(s) of key(s) [ACC-1]")
-                                                                                   .endsWith("The unit is handed back on request"));
+                                                                                   .endsWith("Found while handing the unit back on request"));
                 assertThat(metrics.deadLettered.sum()).as("counted once").isEqualTo(1);
                 assertThat(told).as("the observer told once").hasValue(1);
                 assertThat(metrics.takeoverAttemptBumps.sum()).as("charged once, by the first request").isEqualTo(1);
@@ -1766,7 +1770,7 @@ class ShardOwnedUnsubscribeIT {
                 });
                 assertThat(laneWarnings()).as("the release names only the key its own move dead-lettered, the hand-back having named the first")
                                           .filteredOn(warning -> warning.contains("has made or found, before releasing it, dead-letter move(s)")
-                                                                 && warning.endsWith("The unit is handed back on request"))
+                                                                 && warning.endsWith("Found while handing the unit back on request"))
                                           .singleElement()
                                           .satisfies(warning -> assertThat(warning).contains("1 message(s) of key(s) [" + second + "]"));
                 assertThat(metrics.deadLettered.sum()).as("each dead letter counted once").isEqualTo(2);
@@ -2274,6 +2278,85 @@ class ShardOwnedUnsubscribeIT {
                     assertThat(released.deadLetteredKeys()).as("and the key it dead-lettered, now blocked behind its dead letter").containsExactly("ACC-1");
                 });
                 assertThat(ownerOf(kept.shard())).as("the row is released").isNull();
+                assertThat(lanes.getFirst().metrics().takeoverAttemptBumps.sum()).as("charged once").isEqualTo(1);
+            } finally {
+                release.countDown();
+            }
+        }
+    }
+
+    /**
+     * A release on request made with a key in its handler, whose charge dead-letters that key's message and whose release
+     * the database then refuses, names the dead-lettered key in a WARN: the request throws, so it gives no answer, and its
+     * release WARN, which names the keys of a released unit, never comes. Before, no log line named that dead letter, and
+     * a later request or hand-back with no key in a handler left it out too, as it was in the ledger already. Asked again
+     * with the key still in its handler, the request releases the unit and its own WARN names the key; the WARN of a
+     * request that did not release is not written for it.
+     */
+    @Test
+    void a_release_on_request_refused_after_its_charge_dead_lettered_the_message_in_the_handler_names_the_key_in_a_warning() throws Exception {
+        // Far beyond the test, so the stopped instance's membership row cannot age out and let another id take the unit.
+        var leaseTtl = Duration.ofSeconds(20);
+        var entered  = new CountDownLatch(1);
+        var release  = new CountDownLatch(1);
+        var queueIds = new short[]{QUEUE_ID};
+        try (var queue = newQueue(PostgresqlMessageQueue.LifecycleHook.NONE, settingsWith(Duration.ofMillis(300), leaseTtl))) {
+            try {
+                // maxAttempts 1: the refused request's charge brings the message in the handler to its limit.
+                queue.consume((messageId, key, payload, payloadType) -> {
+                    if (key != null) {
+                        entered.countDown();
+                        awaitQuietly(release, Duration.ofSeconds(60));
+                    }
+                }, new ConsumerOptions(8, Integer.MAX_VALUE, 1, RetryBackoff.fixed(Duration.ofMillis(100))));
+                var lanes = queue.registeredConsumers();
+                queue.enqueue(Message.ordered("in-handler".getBytes(StandardCharsets.UTF_8), 1, "ACC-1", 0));
+                assertThat(entered.await(20, TimeUnit.SECONDS)).as("premise: the key is in its handler").isTrue();
+
+                // Stopped, and not started again: nothing but the requests below releases the unit while the handler runs.
+                queue.stop();
+                var kept = keptOrderedFence(INSTANCE_ID);
+                Awaitility.await().atMost(Duration.ofSeconds(5))
+                          .untilAsserted(() -> assertThat(lanes).as("premise: queue.stop()'s budget thread has flushed the kept unit")
+                                                                .noneMatch(ShardOwnedQueue::handBackStillRunning));
+                var notReleased = "on request while 1 key(s) [ACC-1] were in a handler, dead-lettered 1 message(s) of key(s) [ACC-1]";
+                LeaseReleaseRefusals.failLeaseReleasesOf(dataSource, queueIds, "ordered", kept.shard(), true);
+                try {
+                    assertThatThrownBy(() -> queue.releaseKeptOrderedUnit(INSTANCE_ID, kept.shard()).releases())
+                            .as("the request fails with the lane's failure")
+                            .isInstanceOf(SQLException.class)
+                            .hasMessageContaining("simulated failure releasing");
+                    assertThat(LeaseReleaseRefusals.releasesRefused(dataSource, QUEUE_ID, kept.shard()))
+                            .as("premise: the release was attempted and refused by the database").isEqualTo(1);
+                } finally {
+                    LeaseReleaseRefusals.failLeaseReleasesOf(dataSource, queueIds, "ordered", kept.shard(), false);
+                }
+                assertThat(queue.deadLetters(0, 10)).as("premise: the refused request's charge dead-lettered the message in the handler")
+                                                    .singleElement()
+                                                    .satisfies(deadLetter -> assertThat(deadLetter.lastError()).isEqualTo(ShardOwnedStorage.EXHAUSTED_IN_A_RELEASED_HANDLER));
+                assertThat(ownerOf(kept.shard())).as("premise: the row still names the instance").isEqualTo(INSTANCE_ID);
+                assertThat(laneWarnings()).as("the refused request names the key its charge dead-lettered")
+                                          .filteredOn(warning -> warning.contains(notReleased))
+                                          .singleElement()
+                                          .satisfies(warning -> assertThat(warning).contains("releasing ordered unit " + kept.shard() + " on queue " + QUEUE_ID,
+                                                                                             "but did not release the unit: the request then failed",
+                                                                                             "simulated failure releasing"));
+
+                assertThat(queue.releaseKeptOrderedUnit(INSTANCE_ID, kept.shard()).releases())
+                        .as("asked again with the key still in its handler, the unit is released")
+                        .singleElement()
+                        .satisfies(released -> {
+                            assertThat(released.outcome()).isEqualTo(KeptUnitRelease.Outcome.RELEASED);
+                            assertThat(released.keysInHandler()).as("premise: the key is still in its handler").containsExactly("ACC-1");
+                            assertThat(released.deadLetteredKeys()).containsExactly("ACC-1");
+                        });
+                assertThat(laneWarnings()).as("its release WARN names the dead-lettered key")
+                                          .filteredOn(warning -> warning.contains("released ordered unit " + kept.shard() + " on queue " + QUEUE_ID + " on request"))
+                                          .singleElement()
+                                          .satisfies(warning -> assertThat(warning).contains("1 dead-lettered at their attempt limit"));
+                assertThat(laneWarnings()).as("and no WARN of a request that did not release is written for the request that did")
+                                          .filteredOn(warning -> warning.contains(notReleased))
+                                          .hasSize(1);
                 assertThat(lanes.getFirst().metrics().takeoverAttemptBumps.sum()).as("charged once").isEqualTo(1);
             } finally {
                 release.countDown();
