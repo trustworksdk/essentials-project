@@ -373,7 +373,8 @@ class ReleaseChargeLedgerTest {
 
     /**
      * A dead-letter move the database answered with an error of its own - an SQL state outside class {@code 08}, a trigger
-     * refusing it ({@code P0001}) or a statement cancelled ({@code 57014}) - rolled back for certain: the move is not in
+     * refusing it ({@code P0001}), a statement cancelled ({@code 57014}) or a unique constraint violated ({@code 23505}) -
+     * rolled back for certain: the move is not in
      * doubt, as a release failing the same way is not ({@link LeaseRowState#mayHaveGoneThrough}). The later attempt that
      * finds the row gone takes it for gone and does not ask the dead-letter table, whose unfenced lookup could otherwise
      * name a dead letter this owner did not make.
