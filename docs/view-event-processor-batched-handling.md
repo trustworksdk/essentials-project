@@ -150,9 +150,10 @@ throughput suffers. Watch for it while measuring.
    round trip: on the shard-owned engine it took a second pooled connection while the batch's unit of work held the
    first, `idle in transaction`. `DurableQueues.getKeysWithOrderedMessagesQueued` (additive `default`), asked once per
    batch; the shard-owned adapter answers it, and the per-key check, on the unit of work's connection. Demo burst at
-   300 orders/s: booked p99 7.6 -> 5.2 s, filled -> booked p99 4.1 -> 1.1 s (one run each,
-   `examples/essentials-trading-demo/.../_demo_harness/CLAUDE.md`). `PostgresqlDurableQueues` keeps the looping
-   default - its check already runs in the caller's unit of work.
+   300 orders/s, five alternating runs: fewer threads waiting for the pool, no measurable end-to-end change - the
+   demo's JVM is CPU-bound at every rush (`examples/essentials-trading-demo/.../_demo_harness/CLAUDE.md`). The fix is
+   kept for the pool exhaustion `OrderedKeyCheckOnShardOwnedIT` reproduces. `PostgresqlDurableQueues` keeps the
+   looping default - its check already runs in the caller's unit of work.
 3. **`getDirectHandlingBatchSize()` / `getDirectHandlingMaxLatency()`** are the names.
 
 The failure semantics above are accepted, including the one trade: an infrastructure failure the replay cannot get past

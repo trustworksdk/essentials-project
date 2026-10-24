@@ -516,13 +516,14 @@ Same 300/s profile, business days only, 7 days, one sample each unless noted. Fi
   (the safe-watermark query, once per owner per pump cycle), then acknowledgements and reads. Open: pumps that scale
   between a minimum and a maximum instead of holding connections for good, and a cheaper watermark query.
 
-Then, 4 pumps throughout (one sample each; same-config reruns earlier varied ~1 s at p99):
+Then, 4 pumps throughout, one instrumented run each (debug lines for the router, the reports inbox, the processor's
+forwarding and the webhook receiver):
 
 | Change | Placed → booked p50 / p99 | Placed → submitted p99 | Filled → booked p99 | Pool: samples waiting / max waiting |
 |---|---|---|---|---|
 | one horizon probe per pump pass (`3be11d75`) | 321 ms / 7.6 s | 5.6 s | 4.1 s | 16 / 74 |
 | + 16 router consumers (not kept) | 352 ms / 8.3 s | 1.6 s | 5.6 s | 17 / 99 |
-| **+ key check on the caller's connection, once per view batch** | **283 ms / 5.2 s** | 4.5 s | **1.1 s** | **12 / 40** |
+| + key check on the caller's connection, once per view batch | 283 ms / 5.2 s | 4.5 s | 1.1 s | 12 / 40 |
 
 - **The cheaper probe moved the bottleneck, not the end result**: probe stacks 25/40 -> 2/24 in the dumps, the router's
   8 handlers busy instead of idle (mostly in the exchange's HTTP reply). 16 router consumers emptied the router's inbox
@@ -532,10 +533,29 @@ Then, 4 pumps throughout (one sample each; same-config reruns earlier varied ~1 
   and 2-9 active. One cause found: every view processor's per-event `hasOrderedMessageQueuedForKey` took a SECOND
   pooled connection on the shard-owned engine while its batch held the first (~5 at a time). Fixed in the library -
   the adapter asks on the unit of work's connection, and a batched view asks once per batch
-  (`getKeysWithOrderedMessagesQueued`). With it the exchange's webhook delivery fell from p90 0.85 s to 72 ms and the
-  ledger's filled -> booked p99 from 4.1 to 1.1 s.
+  (`getKeysWithOrderedMessagesQueued`). The run after it looked like a large gain (booked p99 5.2 s) - see below for
+  why it was not.
 - Still open: 14-22 sessions `idle in transaction` at peaks from causes not yet named, and the router's inbox
   (p99 3.8 s) behind 8 consumers waiting on the exchange.
+**Single runs were within noise, and the machine is CPU-bound at every rush.** The same code, uninstrumented, gave booked
+p99 8.5 s the run after 5.2 s. Five alternating uninstrumented runs, `3be11d75` (before the key check fix) against the
+fix:
+
+| Run | Booked p50 / p99 | Placed → submitted p99 | Filled → booked p99 | Pool: max waiting / samples waiting |
+|---|---|---|---|---|
+| before 1 | 311 ms / 7.0 s | 5.5 s | 3.3 s | 67 / 13 |
+| before 3 | 343 ms / 8.1 s | 6.1 s | 3.1 s | 77 / 13 |
+| fix 1 | 275 ms / 5.0 s | 2.4 s | 3.6 s | 48 / 10 |
+| fix 2 | 317 ms / 8.1 s | 5.9 s | 3.9 s | 60 / 12 |
+| fix 3 | 318 ms / 7.5 s | 5.6 s | 4.2 s | 59 / 13 |
+
+(before 2 lost its result: the driver's final load-report request timed out.) No measurable end-to-end change; fewer
+threads wait for the pool. The reason is in the JVM's CPU, sampled per interval with `top` (the earlier `ps %cpu` was
+a lifetime average): 100-200 % between rushes, **760-800 % of the 8 cores during every rush** (about 13 % of the
+samples), with PostgreSQL (~200 %), the exchange simulator and the load driver's own JVM on the same cores. The
+`idle in transaction` sessions (18-27 at saturation, with or without debug logging) are threads holding a transaction
+that are waiting for a core. Connection waits are therefore not what bounds a rush on this machine, and comparing
+end-to-end latency needs several alternating runs per arm. Next: what the JVM spends its CPU on during a rush (JFR).
 - Instruments used: `SignedWebhookReceiver` debug lines (arrival before any connection, queued after the intake
   commits) against the router's "Exchange accepted" line; the exchange's own `/api/webhooks/{id}/deliveries?status=`
   counts; thread dumps and `pg_stat_activity` triggered on more than 20 pool waiters. The exchange's `occurredAt` is on
