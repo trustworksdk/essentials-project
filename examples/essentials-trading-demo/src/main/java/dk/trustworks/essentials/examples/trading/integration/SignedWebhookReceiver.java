@@ -103,7 +103,9 @@ public final class SignedWebhookReceiver {
             log.debug("[{}] Damaged '{}' payload for event '{}', asking for a fresh copy", consumer, envelope.eventType(), envelope.eventId());
             return ResponseEntity.status(HttpStatus.valueOf(422)).build();
         }
-        intake.accept(consumer, envelope, inbox);
+        log.debug("[{}] Received '{}' event '{}'", consumer, envelope.eventType(), envelope.eventId());
+        var accepted = intake.accept(consumer, envelope, inbox);
+        log.debug("[{}] {} '{}' event '{}'", consumer, accepted ? "Queued" : "Already had", envelope.eventType(), envelope.eventId());
         return ResponseEntity.noContent().build();
     }
 }
