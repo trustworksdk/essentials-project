@@ -55,6 +55,29 @@ final class ShardPump implements Runnable {
     private final ShardOwnerMetrics                 metrics;
     private final ShardWakeup                       wakeup = new ShardWakeup();
     private final CopyOnWriteArrayList<LeasedOwner> owners = new CopyOnWriteArrayList<>();
+    /**
+     * Owners added since the last pass, visited on the next one whatever their state - see {@link #add(LeasedOwner)}.
+     */
+    private final ConcurrentLinkedQueue<LeasedOwner>              added     = new ConcurrentLinkedQueue<>();
+    /**
+     * Which owner a shard's wake-up belongs to, so a signalled wake-up names the owner to visit. Normally one; two
+     * for the moment a re-acquired unit's new owner is added before the old one has been dropped.
+     */
+    private final Map<ShardWakeup, Set<LeasedOwner>>              byWakeup  = new ConcurrentHashMap<>();
+    /**
+     * Pump thread only. Each owner's next time-based attention ({@link LeasedOwner#nextAttentionNanos()}), soonest
+     * first; an entry is current only while {@link #scheduledAt} still holds its time for that owner.
+     */
+    private final PriorityQueue<Scheduled>                        schedule  = new PriorityQueue<>((a, b) -> Long.compare(a.dueNanos() - b.dueNanos(), 0));
+    private final IdentityHashMap<LeasedOwner, Long>              scheduledAt = new IdentityHashMap<>();
+    /**
+     * Pump thread only. When the last full scan ran; one runs every {@link ShardOwnerSettings#pollBackstopMillis()},
+     * and after every (re)connect.
+     */
+    private       long                                            lastFullScanNanos;
+
+    private record Scheduled(long dueNanos, LeasedOwner owner) {
+    }
     private final AtomicBoolean                     running;
     private final AtomicBoolean                     flushOnExit;
     private final String                            name;
@@ -89,6 +112,8 @@ final class ShardPump implements Runnable {
      */
     public void add(LeasedOwner owner) {
         owners.add(requireNonNull(owner, "No owner provided"));
+        byWakeup.computeIfAbsent(owner.wakeup(), ignored -> ConcurrentHashMap.newKeySet()).add(owner);
+        added.add(owner);
         // So a pump parked on its backstop starts serving the new shard now rather than up to half a
         // second later.
         wakeup.signal();
@@ -105,6 +130,8 @@ final class ShardPump implements Runnable {
                 // Reset per connection, not per owner: after a reconnect every owner has to bump
                 // attempts again, because the takeover it is recovering from may be its own.
                 var takenOver = Collections.newSetFromMap(new IdentityHashMap<LeasedOwner, Boolean>());
+                // And every owner is visited once on the new connection, signalled or not
+                var fullScanDue = true;
 
                 while (running.get()) {
                     var delivered       = 0;
@@ -112,7 +139,15 @@ final class ShardPump implements Runnable {
                     // needsAttention has a side effect — it consumes the shard's wake-up flag — so
                     // it must be asked exactly once per owner per pass.
                     var attentive = new ArrayList<LeasedOwner>();
-                    for (var owner : owners) {
+                    var now       = System.nanoTime();
+                    fullScanDue |= now - lastFullScanNanos >= settings.pollBackstopMillis() * 1_000_000L;
+                    var candidates = candidates(now, fullScanDue);
+                    var fullScan   = fullScanDue;
+                    if (fullScan) {
+                        lastFullScanNanos = now;
+                        fullScanDue = false;
+                    }
+                    for (var owner : fullScan ? owners : candidates) {
                         // Before the first pump, never after. Pumps start before any shard has been
                         // leased and rebalancing adds shards later, so an owner's first iteration is
                         // routinely not the pump's first — and bumping after it had already delivered
@@ -126,13 +161,24 @@ final class ShardPump implements Runnable {
                         }
                         // BEFORE needsAttention, which consumes the shard's wake-up flag. Skipping
                         // after it would swallow the signal and leave the shard waiting for the
-                        // backstop once delivery is permitted again.
+                        // backstop once delivery is permitted again. Rescheduled soon, since nothing signals
+                        // when delivery is permitted again.
                         if (!owner.deliveryPermitted()) {
+                            reschedule(owner, now + settings.pollBackstopMillis() * 1_000_000L);
                             continue;
                         }
                         // The wake-up was for one of this pump's shards, not all of them.
                         if (!owner.needsAttention()) {
+                            if (!candidates.contains(owner)) {
+                                // Visited only for the full scan, and nothing to do: its schedule still stands
+                                continue;
+                            }
+                            reschedule(owner, owner.nextAttentionNanos());
                             continue;
+                        }
+                        if (fullScan && !candidates.contains(owner)) {
+                            owner.ownerMetrics().attentionFoundOnlyByFullScan.increment();
+                            log.debug("{}: shard {} needed attention without having signalled or come due", name, owner.shard());
                         }
                         attentive.add(owner);
                     }
@@ -194,13 +240,18 @@ final class ShardPump implements Runnable {
                                               + "connection; continuing with the other shards", name, owner.shard(), e);
                         }
                     }
-                    owners.removeIf(owner -> {
-                        if (owner.leaseHeld()) {
-                            return false;
+                    // After pumping, so the schedule reflects what each owner has left to do
+                    for (var owner : attentive) {
+                        reschedule(owner, owner.nextAttentionNanos());
+                    }
+                    // Owners whose lease ended signal, so they are among this pass's candidates; the full scan is the
+                    // backstop for one that did not
+                    for (var owner : fullScan ? owners : candidates) {
+                        if (!owner.leaseHeld()) {
+                            drop(owner);
+                            takenOver.remove(owner);
                         }
-                        takenOver.remove(owner);
-                        return true;
-                    });
+                    }
 
                     if (statementFailed) {
                         // Paced like the reconnect path, and for the same reason. A statement that
@@ -247,18 +298,6 @@ final class ShardPump implements Runnable {
     }
 
     /**
-     * Issue this pass's ordered-lane reads once per QUEUE, rather than once per shard. Three
-     * statements per queue per pass instead of three per shard — see {@link BatchReadableOwner} for
-     * why that decides the affordable routing space, and for why it is an idle-cost mechanism.
-     * <p>
-     * <b>Grouped by queue id, not issued on this pump's storage handle.</b> A pump serves every queue
-     * in the process and its handle is bound to queue 0 for opening connections; binding that in a
-     * batched statement queries a queue that does not exist and returns nothing, silently.
-     * <p>
-     * <b>Failure is not failure of the pass.</b> Owners are left without a batch and read for
-     * themselves, exactly as before this existed.
-     */
-    /**
      * One horizon probe for every owner of this pass that needs one, after all of the pass's reads - see
      * {@link HorizonProbingOwner}.
      */
@@ -285,6 +324,18 @@ final class ShardPump implements Runnable {
         }
     }
 
+    /**
+     * Issue this pass's ordered-lane reads once per QUEUE, rather than once per shard. Three
+     * statements per queue per pass instead of three per shard — see {@link BatchReadableOwner} for
+     * why that decides the affordable routing space, and for why it is an idle-cost mechanism.
+     * <p>
+     * <b>Grouped by queue id, not issued on this pump's storage handle.</b> A pump serves every queue
+     * in the process and its handle is bound to queue 0 for opening connections; binding that in a
+     * batched statement queries a queue that does not exist and returns nothing, silently.
+     * <p>
+     * <b>Failure is not failure of the pass.</b> Owners are left without a batch and read for
+     * themselves, exactly as before this existed.
+     */
     private void batchRead(Connection connection, List<LeasedOwner> attentive) {
         var byQueue = new HashMap<Short, List<BatchReadableOwner>>();
         for (var owner : attentive) {
@@ -354,17 +405,72 @@ final class ShardPump implements Runnable {
      * pump's owners has — a retry falling due on one shard must not be delayed by the others being
      * quiet.
      */
+    /**
+     * The owners this pass must ask: those added since the last pass, those whose wake-up was signalled, and those
+     * whose scheduled time has come. Not every owner the pump serves: asking each of a few thousand ordered units on
+     * every pass was most of the pumps' CPU, and grew with the number of units whatever the traffic. A full scan pass
+     * still asks every owner, as every pass used to.
+     */
+    private Set<LeasedOwner> candidates(long now, boolean fullScan) {
+        var candidates = Collections.newSetFromMap(new IdentityHashMap<LeasedOwner, Boolean>());
+        LeasedOwner owner;
+        while ((owner = added.poll()) != null) {
+            candidates.add(owner);
+        }
+        for (var signalled : wakeup.takeSignalledChildren()) {
+            var ownersOf = byWakeup.get(signalled);
+            if (ownersOf != null) {
+                candidates.addAll(ownersOf);
+            }
+        }
+        while (!schedule.isEmpty() && schedule.peek().dueNanos() - now <= 0) {
+            var due = schedule.poll();
+            var current = scheduledAt.get(due.owner());
+            if (current != null && current == due.dueNanos()) {
+                scheduledAt.remove(due.owner());
+                candidates.add(due.owner());
+            }
+        }
+        return candidates;
+    }
+
+    private void reschedule(LeasedOwner owner, long dueNanos) {
+        var previous = scheduledAt.put(owner, dueNanos);
+        if (previous == null || previous != dueNanos) {
+            schedule.add(new Scheduled(dueNanos, owner));
+        }
+    }
+
+    private void drop(LeasedOwner owner) {
+        owners.remove(owner);
+        scheduledAt.remove(owner);
+        var ownersOf = byWakeup.get(owner.wakeup());
+        if (ownersOf != null) {
+            ownersOf.remove(owner);
+            if (ownersOf.isEmpty()) {
+                byWakeup.remove(owner.wakeup(), ownersOf);
+            }
+        }
+    }
+
     private void park() throws InterruptedException {
         // The ceiling, not the backstop. `pollBackstop` used to floor every park at 500ms, which put
         // a fixed query rate under a process however quiet it was; the owners' own deadlines already
         // account for their sweeps, retries and flushes, and a notification wakes this pump
-        // immediately regardless of how long it intended to sleep.
+        // immediately regardless of how long it intended to sleep. The deadlines are the schedule's -
+        // the soonest one is at its head - and the next full scan's.
+        var now  = System.nanoTime();
         var wait = Math.max(settings.pollBackstopMillis(), settings.maxSweepIntervalNanos() / 1_000_000L);
-        for (var owner : owners) {
-            var deadline = owner.parkDeadlineMillis();
-            if (deadline < wait) {
-                wait = Math.max(1L, deadline);
+        wait = Math.min(wait, Math.max(1L, (lastFullScanNanos + settings.pollBackstopMillis() * 1_000_000L - now) / 1_000_000L));
+        while (!schedule.isEmpty()) {
+            var head    = schedule.peek();
+            var current = scheduledAt.get(head.owner());
+            if (current == null || current != head.dueNanos()) {
+                schedule.poll(); // superseded by a later reschedule, or dropped
+                continue;
             }
+            wait = Math.min(wait, Math.max(1L, (head.dueNanos() - now) / 1_000_000L));
+            break;
         }
         // The honoured/backstop counters are kept by the owners now, in needsAttention, where it is
         // known which shard a wake-up was actually for. Counting them here would count one wake-up

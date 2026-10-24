@@ -153,7 +153,7 @@ Full detail and the failure modes: [docs/durable-queue-shard-owned.md](../docs/d
 | `pumpThreads` | 2 | **Held connections = `pumpThreads + 1`.** Also the pump thread count | Raise only if the pumps are the bottleneck; each one costs a permanent connection |
 | `sweepInterval` | 500 ms | Backstop read cadence for a *busy* shard | Rarely |
 | `maxSweepInterval` | 30 s | Cadence a shard backs off to while empty | Lower for faster recovery from a lost notification; raise for thousands of idle shards |
-| `pollBackstop` | 500 ms | Park ceiling | Rarely |
+| `pollBackstop` | 500 ms | Park ceiling, and the interval of the pump's safety-net scan of every owner it serves (between scans it visits only owners that were notified or came due) | Rarely |
 | `keyConcurrency` | 8 | Concurrent keys per **ordered** shard | Raise for many independent keys per shard |
 | `readBatchSize` | 500 | Rows per cursor read | Rarely |
 | `ackBatchSize` / `ackFlushInterval` | 200 / 1 ms | Acknowledgement batching | Rarely |

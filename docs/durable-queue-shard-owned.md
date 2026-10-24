@@ -381,21 +381,27 @@ Measured: 5 connections and 21 threads at 300 queues of 8 shards. A `ShardOwnedQ
 
 ### 3.1 How a pump decides what to do
 
-Each shard has its own `ShardWakeup`, which cascades to the wake-up of the pump serving it. The pump parks on its own wake-up and then asks each of its shards `needsAttention()`, so a notification for one shard does not make the pump read all of them.
+Each shard has its own `ShardWakeup`, which cascades to the wake-up of the pump serving it and queues itself there, so the pump knows which shards were signalled. A pass asks `needsAttention()` only of the owners that need asking: those added since the last pass, those whose wake-up was signalled, and those whose scheduled time has come - each owner is scheduled after it is pumped by `nextAttentionNanos()`, the earliest time a time-based case of `needsAttention()` falls due.
 
 ```java
 while (running) {
-    for (var owner : owners) {
+    var candidates = added + signalled + due;          // every owner on a full-scan pass
+    for (var owner : candidates) {
         if (firstTimeSeen(owner))  owner.onTakeover(connection);  // bulk attempt bump
         if (!owner.leaseHeld())    continue;
-        if (!owner.needsAttention()) continue;
-        delivered += owner.pumpOnce(connection);   // RuntimeException caught per owner
+        if (!owner.needsAttention()) { schedule(owner, owner.nextAttentionNanos()); continue; }
+        attentive.add(owner);
     }
-    if (delivered == 0) park();
+    batchRead(attentive); readAhead(attentive); probeHorizon(attentive);
+    for (var owner : attentive) delivered += owner.pumpOnce(connection);   // RuntimeException caught per owner
+    for (var owner : attentive) schedule(owner, owner.nextAttentionNanos());
+    if (delivered == 0) park();                        // until the soonest scheduled time, or a signal
 }
 ```
 
-`needsAttention()` is true when a wake-up has been signalled, when a local hand-off is waiting, when the sweep is due, when a retry has fallen due, when a hole is ready to chase, or when acknowledgements are due to flush. The park duration is the shortest deadline any of the pump's shards has, capped by `max(pollBackstop, maxSweepInterval)`.
+`needsAttention()` is true when a wake-up has been signalled, when a local hand-off is waiting, when the sweep is due, when a retry has fallen due, when a hole is ready to chase, or when acknowledgements are due to flush. Everything that is not time-based signals the owner's wake-up: a notification, a local hand-off, a finished handler, a shed or drain starting, a lease ending. The park duration is the soonest scheduled time, capped by `max(pollBackstop, maxSweepInterval)`.
+
+A pass that asked every owner - the design until 2026-10 - cost CPU in proportion to the units a pump serves, whatever the traffic: at 2 048 ordered units on two pumps it doubled the pumps' CPU per message against 512 (`docs/durable-queue-measurements.md` §3.13). The full scan survives as a safety net, every `pollBackstop` and after every reconnect; an owner it finds needing attention without having signalled or come due counts as `attentionFoundOnlyByFullScan`, which should stay at zero.
 
 Two rules the pump enforces that are easy to get wrong:
 

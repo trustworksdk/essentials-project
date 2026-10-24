@@ -394,30 +394,45 @@ final class OrderedShardOwner implements BatchReadableOwner, HorizonProbingOwner
     }
 
     @Override
-    public long parkDeadlineMillis() {
-        var now        = System.nanoTime();
-        var untilSweep = (sweepIntervalNanos - (now - lastSweepNanos)) / 1_000_000L;
-        if (nextVisibleAtNanos != Long.MAX_VALUE) {
-            untilSweep = Math.min(untilSweep, Math.max(0L, (nextVisibleAtNanos - now) / 1_000_000L));
+    public long nextAttentionNanos() {
+        var now = System.nanoTime();
+        if (shedding.get() || draining.get()) {
+            return now;
         }
-        var deadline = Math.max(0L, untilSweep);
+        var due = lastSweepNanos + sweepIntervalNanos;
+        if (nextVisibleAtNanos != Long.MAX_VALUE) {
+            due = earliest(due, nextVisibleAtNanos);
+        }
         synchronized (stateLock) {
             if (!retrySchedule.isEmpty()) {
-                var untilRetry = Math.max(0L, (retrySchedule.peek().dueNanos() - now) / 1_000_000L);
-                deadline = Math.min(deadline, untilRetry);
+                due = earliest(due, retrySchedule.peek().dueNanos());
+            }
+            if (!readyByKey.isEmpty() && activeKeys.get() < settings.keyConcurrency()) {
+                return now;
+            }
+            if (!watermarkCandidates.isEmpty()) {
+                due = earliest(due, lastHorizonProbeNanos + settings.chaseDelayNanos());
             }
             if (!pendingAcks.isEmpty()) {
                 // Acknowledgements are a deadline too. Without this the pump could park until the
                 // next sweep — up to maxSweepInterval once it has backed off — while handled
                 // messages sat undeleted, which showed up as a queue that drained tens of seconds
                 // after its last delivery.
-                var untilFlush = Math.max(0L, (settings.ackFlushIntervalNanos() - (now - lastAckFlushNanos)) / 1_000_000L);
-                deadline = Math.min(deadline, untilFlush);
+                due = earliest(due, lastAckFlushNanos + settings.ackFlushIntervalNanos());
             }
         }
-        return deadline;
+        return due;
     }
 
+    /** The earlier of two {@link System#nanoTime()} values, compared by difference as nanoTime requires. */
+    private static long earliest(long a, long b) {
+        return a - b <= 0 ? a : b;
+    }
+
+    @Override
+    public ShardWakeup wakeup() {
+        return wakeup;
+    }
 
     @Override
     public short queueId() {
@@ -1127,6 +1142,8 @@ final class OrderedShardOwner implements BatchReadableOwner, HorizonProbingOwner
             shedDeadlineNanos = System.nanoTime() + settings.shedGraceNanos();
             metrics.shedsStarted.increment();
             log.debug("Ordered unit {}: shedding — draining in-flight keys before releasing", shard);
+            // A shed only progresses when this owner is pumped, and the pump only visits owners that signal or come due
+            wakeup.signal();
             return true;
         }
         return false;
@@ -1255,6 +1272,8 @@ final class OrderedShardOwner implements BatchReadableOwner, HorizonProbingOwner
             // See ShardOwner: per unit and therefore DEBUG, because the caller reports the pass.
             log.debug("Ordered unit {}: lease {} under fence {}, owner stopping",
                       shard, reason == LeaseEnd.TAKEN ? "taken" : "released", fence);
+            // So the pump visits it, finds the lease gone and drops it, as the unordered owner does
+            wakeup.signal();
         }
     }
 }

@@ -603,6 +603,29 @@ saturation) - the base arm's pumps were held back by the round trips, and used n
 handlers burn CPU at saturation pays for the extra passes in CPU. Idle cost is unchanged (`ShardOwnedOrderedIdleCostIT`,
 8 runs per arm, ranges overlapping).
 
+### 3.13 Pump CPU against the number of units
+
+Thread dumps and a JFR profile of the trading demo under a rush put the shard-owned pumps at about 18 % of the JVM's CPU
+samples, more than half of it in asking owners whether they needed attention: every pass asked every owner a pump
+served (`deliveryPermitted`, `needsAttention`) and every park asked them all again (`parkDeadlineMillis`). The demo runs
+about 2 176 ordered units. `ShardOwnedOrderedLoadedCostIT` now reports the pump threads' CPU time (`ThreadMXBean`) under
+load and in an idle window after it. Same 2 000 msg/s, 2 pumps, base = the pump that asks every owner:
+
+| | 8 queues (512 units), base | 8 queues, **visits signalled and due owners** | 32 queues (2 048 units), base | 32 queues, **visits signalled and due owners** |
+|---|---|---|---|---|
+| pump CPU per 1 000 messages | 103 ms | 104 ms | 217 ms | **146 ms** |
+| pump CPU under load / idle (of a core) | 21 % / 3.0 % | 20 % / 2.7 % | 43 % / 7.0 % | **29 % / 5.0 %** |
+| latency p50 / p99 / max | 7.7 / 12.6 / 43 ms | 5.8 / 10.2 / 30 ms | 8.1 / 15.1 / 38 ms | 7.9 / 16.6 / 49 ms |
+| statements per message | 4.90 | 5.49 | 8.69 | 8.74 |
+
+Three alternating runs per arm from worktrees. Quadrupling the units doubled the base pumps' CPU per message for the
+same work; visiting only owners that signalled, came due (`nextAttentionNanos`) or are new takes a third of it off at
+2 048 units. It is not flat yet - the safety-net full scan still runs every `pollBackstop` over every owner. At 8
+queues the CPU is unchanged and statements rise 12 % (more probes and reads per message: smaller passes share the
+batched reads and the horizon probe among fewer owners). The 32-queue tail is within overlapping ranges. Idle cost
+unchanged (`ShardOwnedMultiQueueCostIT` 8.0 vs 8.3 queries/s). A first attempt - skipping the `compareAndSet` in the
+liveness check, which JFR had attributed 3.5 % to - measured no gain beyond noise and was reverted.
+
 ## 4. Environment
 
 | | |

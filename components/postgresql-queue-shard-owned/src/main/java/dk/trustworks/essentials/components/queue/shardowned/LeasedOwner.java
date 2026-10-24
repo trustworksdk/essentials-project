@@ -58,6 +58,28 @@ interface LeasedOwner {
     boolean needsAttention();
 
     /**
+     * When {@link #needsAttention()} next becomes true on time alone - a sweep, a delayed row, a retry, an
+     * acknowledgement flush or a re-check falling due - as a {@link System#nanoTime()} value; now or earlier if it
+     * already is. Everything else that makes an owner need attention signals its {@link #wakeup()}.
+     * <p>
+     * The pump schedules each owner by this after pumping it, and visits only the owners that were signalled or have
+     * come due, instead of asking every owner it serves on every pass: with a few thousand ordered units the asking
+     * itself was most of the pumps' CPU, and it grew with the number of units whatever the traffic. Must mirror every
+     * time-based case of {@link #needsAttention()}; one it misses waits for the pump's periodic full scan.
+     */
+    long nextAttentionNanos();
+
+    /**
+     * The wake-up this owner's notifications, hand-offs, finished handlers and state changes signal.
+     */
+    ShardWakeup wakeup();
+
+    /**
+     * The metrics of this owner's queue.
+     */
+    ShardOwnerMetrics ownerMetrics();
+
+    /**
      * Called once per connection, including after a reconnect.
      */
     void onTakeover(Connection connection) throws SQLException;
@@ -66,13 +88,6 @@ interface LeasedOwner {
      * Flush outstanding acknowledgements while the fence is still valid.
      */
     void flushOnStop(Connection connection) throws SQLException;
-
-    /**
-     * Longest this owner may be parked before it needs attention regardless of notifications — a
-     * retry falling due. {@link Long#MAX_VALUE} when nothing is pending.
-     */
-    long parkDeadlineMillis();
-
 
     int shard();
 

@@ -170,6 +170,12 @@ public final class ShardOwnerMetrics {
     public final LongAdder     wakeupsHonoured                  = new LongAdder();
     public final LongAdder     backstopPolls                    = new LongAdder();
     /**
+     * Owners the pump's periodic full scan found needing attention that it had neither been signalled for nor
+     * scheduled - a state change that did not signal, or a time-based case {@code nextAttentionNanos} does not mirror.
+     * Each cost that owner up to a full-scan interval of latency, never a message. Should stay at zero.
+     */
+    public final LongAdder     attentionFoundOnlyByFullScan     = new LongAdder();
+    /**
      * Messages delivered without ever being read back, because the enqueuing JVM owned the shard.
      */
     public final LongAdder     localHandoffs                    = new LongAdder();
@@ -296,6 +302,7 @@ public final class ShardOwnerMetrics {
         snapshot.put("deadLettered", deadLettered.sum());
         snapshot.put("wakeupsHonoured", wakeupsHonoured.sum());
         snapshot.put("backstopPolls", backstopPolls.sum());
+        snapshot.put("attentionFoundOnlyByFullScan", attentionFoundOnlyByFullScan.sum());
         snapshot.put("localHandoffs", localHandoffs.sum());
         snapshot.put("readsSkippedByHandoff", readsSkippedByHandoff.sum());
         snapshot.put("fencedOutAcks", fencedOutAcks.sum());

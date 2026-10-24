@@ -61,6 +61,7 @@ class ShardOwnedOrderedLoadedCostIT {
     /** A handler waiting a little, as an inbox handler calling out does. */
     private static final long     HANDLER_MICROS  = Long.getLong("cost.handlerMicros", 2_000);
     private static final int      SHARD_COUNT     = 4;
+    private static final Duration IDLE            = Duration.ofSeconds(10);
 
     @Container
     static PostgreSQLContainer postgres = LabPostgres.create("max_connections=300");
@@ -123,6 +124,7 @@ class ShardOwnedOrderedLoadedCostIT {
 
             var before = sum(queues);
             var xactsBefore = transactions();
+            var pumpCpuBefore = pumpCpuNanos();
             var started = System.nanoTime();
 
             // PRODUCERS per queue, each owning a disjoint set of keys and sending single-message transactions at its
@@ -159,6 +161,11 @@ class ShardOwnedOrderedLoadedCostIT {
             Awaitility.await().atMost(Duration.ofMinutes(5)).pollInterval(Duration.ofMillis(50))
                       .until(() -> delivered.get() >= expected.get());
             var elapsedNanos = System.nanoTime() - started;
+            var pumpCpuLoaded = pumpCpuNanos() - pumpCpuBefore;
+            // And with nothing to do: what the pumps cost while the queues they serve sit idle
+            var idleBefore = pumpCpuNanos();
+            TimeUnit.SECONDS.sleep(IDLE.toSeconds());
+            var pumpCpuIdle = pumpCpuNanos() - idleBefore;
 
             var after = sum(queues);
             var xacts = transactions() - xactsBefore;
@@ -168,12 +175,15 @@ class ShardOwnedOrderedLoadedCostIT {
                               "loaded ordered lane: %d queues, %d pumps, %d msg/s offered for %ds, handler %dus, %d producers per queue%n"
                               + "  offered %d, delivered %d in %.1fs (%.0f msg/s), latency p50 %.1f ms p99 %.1f ms max %.1f ms%n"
                               + "  per delivered message: horizon probes %.3f, read statements %.3f, ack flushes %.3f, owner-passes %.3f, "
-                              + "transactions %.3f%n",
+                              + "transactions %.3f%n"
+                              + "  pump CPU: %.1f ms per 1 000 messages under load (%.0f%% of a core), %.0f%% of a core idle%n",
                               QUEUES, PUMP_THREADS, RATE, LOAD.toSeconds(), HANDLER_MICROS, PRODUCERS,
                               expected.get(), delivered.get(), elapsedNanos / 1e9, n / (elapsedNanos / 1e9),
                               percentile(sorted, 0.50) / 1e6, percentile(sorted, 0.99) / 1e6, sorted[sorted.length - 1] / 1e6,
                               (after[0] - before[0]) / n, (after[1] - before[1]) / n, (after[2] - before[2]) / n, (after[3] - before[3]) / n,
-                              xacts / n);
+                              xacts / n,
+                              pumpCpuLoaded / 1e6 / (n / 1000.0), pumpCpuLoaded * 100.0 / elapsedNanos,
+                              pumpCpuIdle * 100.0 / IDLE.toNanos());
 
             assertThat(violations.get()).as("key order").isZero();
             assertThat(delivered.get()).isEqualTo(expected.get());
@@ -194,6 +204,18 @@ class ShardOwnedOrderedLoadedCostIT {
             totals[3] += metrics.cursorReads.sum();
         }
         return totals;
+    }
+
+    /** CPU time of the runtime's pump threads, which do every database round trip and every per-owner check. */
+    private static long pumpCpuNanos() {
+        var threads = java.lang.management.ManagementFactory.getThreadMXBean();
+        var total = 0L;
+        for (var info : threads.getThreadInfo(threads.getAllThreadIds())) {
+            if (info != null && info.getThreadName().startsWith("shard-queue-pump")) {
+                total += Math.max(0, threads.getThreadCpuTime(info.getThreadId()));
+            }
+        }
+        return total;
     }
 
     private long transactions() throws Exception {

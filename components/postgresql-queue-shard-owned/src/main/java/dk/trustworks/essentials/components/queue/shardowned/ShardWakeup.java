@@ -16,6 +16,10 @@
 
 package dk.trustworks.essentials.components.queue.shardowned;
 
+import java.util.*;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.atomic.AtomicBoolean;
+
 /**
  * Per-shard wake-up signal. An owner parks here when it finds nothing and is released either by a
  * notification or by the backstop timeout.
@@ -32,6 +36,16 @@ final class ShardWakeup {
     private final Object      lock = new Object();
     private final ShardWakeup parent;
     private       boolean     signalled;
+    /**
+     * On a pump's wake-up: the shards' wake-ups signalled since the pump last asked - see
+     * {@link #takeSignalledChildren()}.
+     */
+    private final ConcurrentLinkedQueue<ShardWakeup> signalledChildren = new ConcurrentLinkedQueue<>();
+    /**
+     * On a shard's wake-up: whether it is in its parent's {@link #signalledChildren} already, so a shard signalled a
+     * thousand times between two passes - one per finished handler - is queued once.
+     */
+    private final AtomicBoolean                      queuedOnParent    = new AtomicBoolean();
 
     ShardWakeup() {
         this(null);
@@ -42,7 +56,8 @@ final class ShardWakeup {
      *               The pump parks on the parent and then asks each of its shards whether the signal
      *               was for it, so a notification for one shard no longer makes the pump read all of
      *               them. That amplification measured 14.5 cursor reads per message at eight shards
-     *               on two pumps.
+     *               on two pumps. The parent also learns WHICH of its children was signalled
+     *               ({@link #takeSignalledChildren()}), so the pump no longer has to ask every shard.
      */
     ShardWakeup(ShardWakeup parent) {
         this.parent = parent;
@@ -58,6 +73,9 @@ final class ShardWakeup {
             lock.notifyAll();
         }
         if (parent != null) {
+            if (queuedOnParent.compareAndSet(false, true)) {
+                parent.signalledChildren.add(this);
+            }
             parent.signal();
         }
     }
@@ -66,6 +84,24 @@ final class ShardWakeup {
      * Test and clear, without waiting. Used by a pump to ask which of its shards the wake-up it just
      * received was actually for.
      */
+    /**
+     * The children signalled since the last call, each once. A child signalled again after this returned is queued
+     * again, so no signal falls between two calls.
+     */
+    List<ShardWakeup> takeSignalledChildren() {
+        List<ShardWakeup> taken = null;
+        ShardWakeup       child;
+        while ((child = signalledChildren.poll()) != null) {
+            // Cleared BEFORE the owner is asked anything, so a signal arriving while it is being pumped queues it again
+            child.queuedOnParent.set(false);
+            if (taken == null) {
+                taken = new ArrayList<>();
+            }
+            taken.add(child);
+        }
+        return taken == null ? List.of() : taken;
+    }
+
     public boolean consume() {
         synchronized (lock) {
             var was = signalled;

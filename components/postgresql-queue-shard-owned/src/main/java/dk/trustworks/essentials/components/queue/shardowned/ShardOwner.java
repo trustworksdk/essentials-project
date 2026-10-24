@@ -297,30 +297,46 @@ final class ShardOwner implements LeasedOwner {
     }
 
     @Override
-    public long parkDeadlineMillis() {
+    public long nextAttentionNanos() {
         var now = System.nanoTime();
-        // The sweep counts as a deadline too: a pump parked on its backstop must still come back in
-        // time to run each of its shards' sweeps, whatever the backstop happens to be set to.
-        var untilSweep = (sweepIntervalNanos - (now - lastSweepNanos)) / 1_000_000L;
-        var deadline   = Math.max(0L, untilSweep);
+        if (draining.get() || !localHandoffs.isEmpty()) {
+            return now;
+        }
+        var due = lastSweepNanos + sweepIntervalNanos;
         if (nextVisibleAtNanos != Long.MAX_VALUE) {
-            deadline = Math.min(deadline, Math.max(0L, (nextVisibleAtNanos - now) / 1_000_000L));
+            due = earliest(due, nextVisibleAtNanos);
         }
         synchronized (stateLock) {
             if (!retrySchedule.isEmpty()) {
-                var untilRetry = Math.max(0L, (retrySchedule.peek().dueNanos() - now) / 1_000_000L);
-                deadline = Math.min(deadline, untilRetry);
+                due = earliest(due, retrySchedule.peek().dueNanos());
+            }
+            if (!pendingHoles.isEmpty()) {
+                due = earliest(due, lastChaseNanos + settings.chaseDelayNanos());
             }
             if (!pendingAcks.isEmpty()) {
                 // Acknowledgements are a deadline too. Without this the pump could park until the
                 // next sweep — up to maxSweepInterval once it has backed off — while handled
                 // messages sat undeleted, which showed up as a queue that drained tens of seconds
                 // after its last delivery.
-                var untilFlush = Math.max(0L, (settings.ackFlushIntervalNanos() - (now - lastAckFlushNanos)) / 1_000_000L);
-                deadline = Math.min(deadline, untilFlush);
+                due = earliest(due, lastAckFlushNanos + settings.ackFlushIntervalNanos());
             }
         }
-        return deadline;
+        return due;
+    }
+
+    /** The earlier of two {@link System#nanoTime()} values, compared by difference as nanoTime requires. */
+    private static long earliest(long a, long b) {
+        return a - b <= 0 ? a : b;
+    }
+
+    @Override
+    public ShardWakeup wakeup() {
+        return wakeup;
+    }
+
+    @Override
+    public ShardOwnerMetrics ownerMetrics() {
+        return metrics;
     }
 
     /**
