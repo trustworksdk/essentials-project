@@ -708,8 +708,12 @@ letter was found in ("Found while handing the unit back ..."), not that the unit
 same hand-back, or its release, may still fail and leave the unit held. A `releaseKeptOrderedUnit` made with a key
 still in a handler whose charge dead-letters a message but that then does not release the unit - the charge fails
 after a move, the release fails, or it finds the unit taken over - names the dead-lettered keys in a WARN of its own,
-as a later request or hand-back with no key in a handler does not name them.
-(`6337f7d89`, `2fdeb3db0`, `bfa961ec5`, `dbae0986f`, `7dbd517be`, `e699c9d44`, `895b1a498`, `52c5e943e`, `56790ca82`, `b785a52b2`, `ab601d493`, `311efc4ad`, `055e013d6`, `4cce8acbb`, `29e3893d2`)
+as a later request or hand-back with no key in a handler does not name them. Every release of a unit's lease row by
+the owner serving or keeping it now also checks for a dead-letter move still owed: a release that would leave one owed
+leaves that unit unreleased, its lease row still naming the instance, with a WARN that names the unit (at most once a
+minute per unit, the rest at DEBUG), and releases the others; the unit is released by a later release once the move
+is made. A `releaseKeptOrderedUnit` that comes to such a unit answers `BUSY` - ask again.
+(`6337f7d89`, `2fdeb3db0`, `bfa961ec5`, `dbae0986f`, `7dbd517be`, `e699c9d44`, `895b1a498`, `52c5e943e`, `56790ca82`, `b785a52b2`, `ab601d493`, `311efc4ad`, `055e013d6`, `4cce8acbb`, `29e3893d2`, `2c7ab3791`, `<!-- fix:U-024 -->`)
 
 **The unordered lane now charges a hung handler's delivery too, past the same bound.** It waits for no handler: a
 fair-share shed and a dead pump's hand-back release an unordered shard at once, and `stop()` once `shedGrace` has run

@@ -33,8 +33,11 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  *                               instance below its fair share may take it under a new fence; {@code ALREADY_TAKEN} - the
  *                               row no longer named the instance under the fence it was kept under - taken under a newer
  *                               fence meanwhile, or released by an earlier hand-back or release whose answer the instance
- *                               stopped waiting for; nothing released; {@code BUSY} - the stop that kept it is still
- *                               flushing it, or another hand-back or release of it is running, nothing done, ask again
+ *                               stopped waiting for; nothing released; {@code BUSY} - nothing released, ask again: the
+ *                               stop that kept it is still flushing it, or another hand-back or release of it is
+ *                               running, and nothing was done; or a dead-letter move an earlier release's charge left
+ *                               owed was still to be made when its row was to be released (see
+ *                               {@link KeptUnitRelease.Outcome#BUSY})
  * @param keysInHandler          the unit's keys still in a handler, as {@link KeptUnitRelease#keysInHandler()} reads them:
  *                               on {@code RELEASED} when the release's flush took its batch of acknowledgements, so a
  *                               handler that returned before that had its acknowledgement flushed and is not named, and

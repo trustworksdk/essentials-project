@@ -20,6 +20,7 @@ import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.zaxxer.hikari.*;
+import dk.trustworks.essentials.components.queue.shardowned.spi.KeptUnitRelease;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -1783,6 +1784,64 @@ class ShardOwnedDeadPumpHandBackIT {
     }
 
     /**
+     * A release on request of an ordered unit a stop kept, whose owner still owes a dead-letter move when its row is to
+     * be released, answers {@link KeptUnitRelease.Outcome#BUSY} - ask again - and leaves the row held, and a later
+     * request releases it once nothing is owed. It used to throw an {@code IllegalStateException}, which
+     * {@code MessageQueue.releaseKeptOrderedUnit} does not declare: it reached the admin API as a programming error, and
+     * ended {@code PostgresqlMessageQueue}'s loop over its lanes before the rest were asked.
+     * <p>
+     * The stand-in is kept by the stop - a key of it reads as in a handler past {@code shedGrace} - and no release site
+     * makes its move, so it is {@code ShardOwnedQueue.releaseLeaseRows} that leaves it out. A long lease keeps the
+     * heartbeat from running before the stop.
+     */
+    @Test
+    void a_release_on_request_of_a_kept_unit_whose_owner_owes_a_dead_letter_move_answers_busy_and_releases_once_nothing_is_owed() throws Exception {
+        var settings   = settings(2, Duration.ofMillis(200), Duration.ofSeconds(60));
+        var instanceId = "kept-owed-move-request";
+        var unit       = ShardOwnedSchema.ORDERED_UNITS;
+        try (var runtime = new ShardRuntime(dataSource, settings)) {
+            var queue  = queue(runtime, instanceId);
+            var logged = captureQueueLog();
+            var owing  = new OwesDeadLetterMoveOwner("ordered", unit);
+            try {
+                queue.startConsumingOrdered((messageId, key, payload, payloadType) -> { }, settings, SHARD_COUNT);
+                leaseUnitOutsideTheRange(instanceId, "ordered", unit);
+                owing.inFlight.set(1);
+                runtime.pumpFor(QUEUE_ID, "ordered", 0).add(owing);
+                queue.adoptPlacedOwner(owing, false);
+
+                queue.stop();
+                assertThat(owing.leaseRow()).as("premise: the stop kept the unit, ended and not released").isEqualTo(LeasedOwner.LeaseRow.ENDED_ROW_HELD);
+                assertThat(ownerOf("ordered", unit)).as("premise: its lease row still names this instance").isEqualTo(instanceId);
+
+                var askedBefore = owing.asked.get();
+                var answer      = queue.releaseKeptOrderedUnit(instanceId, unit);
+
+                assertThat(owing.asked.get()).as("premise: the release was asked whether a move is owed").isGreaterThan(askedBefore);
+                assertThat(answer).as("an answer, not an exception").isPresent();
+                assertThat(answer.get().outcome()).as("BUSY: ask again").isEqualTo(KeptUnitRelease.Outcome.BUSY);
+                assertThat(answer.get().charged()).as("zero charged: only checks the field, as this stand-in owner charges nothing").isZero();
+                assertThat(owing.leaseRow()).as("the owner owing the move is not released").isEqualTo(LeasedOwner.LeaseRow.ENDED_ROW_HELD);
+                assertThat(ownerOf("ordered", unit)).as("its lease row still names this instance").isEqualTo(instanceId);
+                assertThat(warnings(logged, OWED_MOVE_RELEASE_WARNING)).as("the release that left it out says so").hasSize(1);
+                assertThat(queue.keptOrderedUnitNotHandedBack()).as("the unit is still kept, for a later request").isTrue();
+
+                owing.owes.set(false);
+                var later = queue.releaseKeptOrderedUnit(instanceId, unit);
+
+                assertThat(later).as("an answer to the later request").isPresent();
+                assertThat(later.get().outcome()).as("released once nothing is owed").isEqualTo(KeptUnitRelease.Outcome.RELEASED);
+                assertThat(owing.leaseRow()).as("its row released").isEqualTo(LeasedOwner.LeaseRow.RELEASED);
+                assertThat(ownerOf("ordered", unit)).as("its lease row names nobody").isNull();
+            } finally {
+                releaseQueueLog(logged);
+                owing.inFlight.set(0);
+                queue.stop();
+            }
+        }
+    }
+
+    /**
      * Part of the WARN {@code ShardOwnedQueue.releaseLeaseRows} logs for the owners it leaves out.
      */
     private static final String OWED_MOVE_RELEASE_WARNING = "whose move to the dead-letter table is still to be made, and a unit is released only once";
@@ -1792,12 +1851,21 @@ class ShardOwnedDeadPumpHandBackIT {
      * queue's own leases it - a lease row naming {@code instanceId} under fence 1, a stand-in's.
      */
     private void leaseUnitOutsideTheShardRange(String instanceId) throws Exception {
+        leaseUnitOutsideTheRange(instanceId, "unordered", SHARD_COUNT);
+    }
+
+    /**
+     * Give {@code lane}'s unit {@code unit} of {@link #QUEUE_ID} - outside that lane's range, so no owner of the queue's own
+     * leases it - a lease row naming {@code instanceId} under fence 1, a stand-in's.
+     */
+    private void leaseUnitOutsideTheRange(String instanceId, String lane, int unit) throws Exception {
         try (var connection = dataSource.getConnection();
              var statement = connection.prepareStatement("INSERT INTO " + ShardOwnedSchema.LEASE_TABLE
-                                                                 + " (queue_id, lane, shard, owner, fence) VALUES (?, 'unordered', ?, ?, 1)")) {
+                                                                 + " (queue_id, lane, shard, owner, fence) VALUES (?, ?, ?, ?, 1)")) {
             statement.setShort(1, QUEUE_ID);
-            statement.setInt(2, SHARD_COUNT);
-            statement.setString(3, instanceId);
+            statement.setString(2, lane);
+            statement.setInt(3, unit);
+            statement.setString(4, instanceId);
             assertThat(statement.executeUpdate()).as("premise: the stand-in's lease row inserted").isEqualTo(1);
         }
     }
@@ -2831,13 +2899,15 @@ class ShardOwnedDeadPumpHandBackIT {
     }
 
     /**
-     * An unordered owner of {@link #QUEUE_ID} that charges nothing and reads as owing a dead-letter move
-     * ({@link LeasedOwner#owesDeadLetterMove()}) while {@link #owes} is set, under fence 1, with a lease row state of its own
-     * and a rate limit of its own for the WARN that a release left it out, as the real owners keep. Counts how often it was
-     * asked whether it owes a move ({@link #asked}): once per release that covers it.
+     * An owner of {@link #QUEUE_ID} - unordered unless built for another lane - that charges nothing and reads as owing a
+     * dead-letter move ({@link LeasedOwner#owesDeadLetterMove()}) while {@link #owes} is set, under fence 1, with a lease
+     * row state of its own and a rate limit of its own for the WARN that a release left it out, as the real owners keep.
+     * Reads {@link #inFlight} keys as in a handler, none unless set. Counts how often it was asked whether it owes a move
+     * ({@link #asked}): once per release that covers it.
      */
     private static final class OwesDeadLetterMoveOwner implements LeasedOwner {
         private final ShardOwnerMetrics       metrics  = new ShardOwnerMetrics();
+        private final String                  lane;
         private final int                     shard;
         private final LeaseRowState           leaseRow = new LeaseRowState();
         private final OwedMoveReleaseRefusals refusals = new OwedMoveReleaseRefusals();
@@ -2845,8 +2915,14 @@ class ShardOwnedDeadPumpHandBackIT {
         final         AtomicInteger           asked    = new AtomicInteger();
         final         AtomicInteger           claimed  = new AtomicInteger();
         final         AtomicInteger           ended    = new AtomicInteger();
+        final         AtomicInteger           inFlight = new AtomicInteger();
 
         OwesDeadLetterMoveOwner(int shard) {
+            this("unordered", shard);
+        }
+
+        OwesDeadLetterMoveOwner(String lane, int shard) {
+            this.lane = lane;
             this.shard = shard;
         }
 
@@ -2927,7 +3003,7 @@ class ShardOwnedDeadPumpHandBackIT {
 
         @Override
         public String lane() {
-            return "unordered";
+            return lane;
         }
 
         @Override
@@ -2946,7 +3022,7 @@ class ShardOwnedDeadPumpHandBackIT {
 
         @Override
         public int inFlight() {
-            return 0;
+            return inFlight.get();
         }
 
         @Override

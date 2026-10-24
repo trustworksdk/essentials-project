@@ -98,8 +98,14 @@ public record KeptUnitRelease(int unit,
          */
         ALREADY_TAKEN,
         /**
-         * Nothing was done, as something else is working on the unit right now: the stop that kept it is still
-         * flushing its acknowledgements, or another hand-back or release of it is running. Ask again.
+         * Nothing was released. Either something else is working on the unit right now - the stop that kept it is
+         * still flushing its acknowledgements, or another hand-back or release of it is running - and nothing was done;
+         * or a dead-letter move a charge before an earlier release of it left owed was still to be made when its row
+         * was to be released, and a unit is released only once every such move is made, its lease row, as far as the
+         * instance knows, still naming it. In that case this request may have flushed its acknowledgements and charged
+         * its messages in a handler first: the keys it dead-lettered are named in a WARN, and, should a later request
+         * release the unit, what this one charged is counted in that answer's {@link #charged()}; a hand-back or
+         * takeover that gets there first gives no answer. Ask again.
          */
         BUSY
     }

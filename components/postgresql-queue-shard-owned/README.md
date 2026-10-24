@@ -879,8 +879,10 @@ release's flush took its batch of acknowledgements, and how long the longest had
 returned before that is acknowledged and not named, and a key named is not acknowledged), `ALREADY_TAKEN`
 (the row no longer named the instance under the fence it was kept under - taken under a newer fence
 meanwhile, or released by an earlier hand-back or release whose answer the instance stopped waiting for;
-nothing released) or `BUSY` (the stop that kept it is still flushing it, or another
-hand-back or release of it is running; nothing done, ask again) - except a unit kept longer than
+nothing released) or `BUSY` (nothing released, ask again: the stop that kept it is still flushing
+it, or another hand-back or release of it is running, and nothing was done; or a dead-letter move an
+earlier release's charge left owed was still to be made when the row was to be released, and the
+WARN that the release left the unit out says so) - except a unit kept longer than
 `stuckHandlerTimeout` - or, when that is longer, than 2 s plus the network timeout that stop puts on
 its waits for the database (`leaseTtl`, or 2 s when that is longer) - with that flush still running:
 the release reviews the kept units first, so such a unit is given up and released, not answered
