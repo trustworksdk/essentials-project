@@ -713,7 +713,7 @@ the owner serving or keeping it now also checks for a dead-letter move still owe
 leaves that unit unreleased, its lease row still naming the instance, with a WARN that names the unit (at most once a
 minute per unit, the rest at DEBUG), and releases the others; the unit is released by a later release once the move
 is made. A `releaseKeptOrderedUnit` that comes to such a unit answers `BUSY` - ask again.
-(`6337f7d89`, `2fdeb3db0`, `bfa961ec5`, `dbae0986f`, `7dbd517be`, `e699c9d44`, `895b1a498`, `52c5e943e`, `56790ca82`, `b785a52b2`, `ab601d493`, `311efc4ad`, `055e013d6`, `4cce8acbb`, `29e3893d2`, `2c7ab3791`, `<!-- fix:U-024 -->`)
+(`6337f7d89`, `2fdeb3db0`, `bfa961ec5`, `dbae0986f`, `7dbd517be`, `e699c9d44`, `895b1a498`, `52c5e943e`, `56790ca82`, `b785a52b2`, `ab601d493`, `311efc4ad`, `055e013d6`, `4cce8acbb`, `29e3893d2`, `2c7ab3791`, `6be1d7215`)
 
 **The unordered lane now charges a hung handler's delivery too, past the same bound.** It waits for no handler: a
 fair-share shed and a dead pump's hand-back release an unordered shard at once, and `stop()` once `shedGrace` has run
