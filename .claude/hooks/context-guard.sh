@@ -17,6 +17,14 @@
 # hook input carries the parent's transcript_path plus its own agent_id; its own transcript
 # is <transcript without .jsonl>/subagents/agent-<agent_id>.jsonl. Warn-once guards are
 # mkdir locks, so parallel tool calls in one agent cannot double-warn.
+# Each agent's percentage is taken against its own window, kept in its own state dir. A
+# subagent shares the main session's window only when its own transcript's last assistant
+# entry with a usage block names the main session's model; any other model, or none yet,
+# gets 200000. The main session's model is main/model or, when that is absent, the settings
+# `model`, an alias included: an alias (opus, sonnet, haiku) matches its family's ids, and
+# any other alias ('default', 'opusplan') gets 200000. A transcript names the model without
+# its [1m] suffix, so a 1M subagent on another model is found when its count passes 200000
+# (see warn); from then on its window stays 1000000, also after its compaction.
 #
 # Base dir is fixed rather than taken from the hook input's scratchpad_dir: that field is
 # documented but absent in practice (2.1.310), and the warn and restore paths must agree.
@@ -68,8 +76,7 @@ highest_lock() {
   echo "$m"
 }
 
-context_window() {
-  if [ -n "${CONTEXT_GUARD_WINDOW:-}" ]; then echo "$CONTEXT_GUARD_WINDOW"; return; fi
+main_model() {
   local model=""
   [ -f "$base/main/model" ] && model=$(cat "$base/main/model")
   if [ -z "$model" ]; then
@@ -79,17 +86,40 @@ context_window() {
       [ -f "$f" ] && model=$(jq -r '.model // empty' "$f" 2>/dev/null) && [ -n "$model" ] && break
     done
   fi
+  printf '%s' "$model"
+}
+
+context_window() { # $1: the model named by this agent's own transcript (may be empty)
+  if [ -n "${CONTEXT_GUARD_WINDOW:-}" ]; then echo "$CONTEXT_GUARD_WINDOW"; return; fi
+  local model
+  model=$(main_model)
+  # A subagent runs the main session's window only on the main session's model (the
+  # transcript's id carries no [1m] suffix); otherwise 200000 until its count says more.
+  # A full id must equal the transcript's id; an alias (opus, sonnet, haiku, as settings
+  # hold it) matches the ids of its family: opus matches claude-opus-5-5.
+  if [ -n "$agent" ]; then
+    local m=${model/'[1m]'/} same=""
+    case "$m" in
+      '') ;;
+      claude-*) [ "$1" = "$m" ] && same=1 ;;
+      *) case "$1" in *-"$m"-*|*-"$m") same=1 ;; esac ;;
+    esac
+    if [ -z "$1" ] || [ -z "$same" ]; then
+      echo 200000
+      return
+    fi
+  fi
   case "$model" in *'[1m]'*) echo 1000000 ;; *) echo 200000 ;; esac
 }
 
-used_tokens() {
+used_tokens() { # prints "<tokens> <model>" from the last assistant entry; model may be absent
   [ -f "$transcript" ] || return
   # Main transcript: skip sidechain entries. A subagent transcript is all sidechain.
   local filter='select(.type=="assistant" and .message.usage)'
   [ -z "$agent" ] && filter='select(.type=="assistant" and (.isSidechain|not) and .message.usage)'
   tac "$transcript" 2>/dev/null \
-    | jq -r "$filter"' | .message.usage
-             | ((.input_tokens//0) + (.cache_read_input_tokens//0) + (.cache_creation_input_tokens//0))' 2>/dev/null \
+    | jq -r "$filter"' | .message
+             | "\((.usage.input_tokens//0) + (.usage.cache_read_input_tokens//0) + (.usage.cache_creation_input_tokens//0)) \(.model // "")"' 2>/dev/null \
     | head -1
 }
 
@@ -112,11 +142,16 @@ case "$mode" in
     ;;
 
   warn)
-    used=$(used_tokens)
+    read -r used own_model <<<"$(used_tokens)"
     [ -n "$used" ] && [ "$used" -gt 0 ] 2>/dev/null || exit 0
-    window=$(context_window)
+    window=$(context_window "${own_model:-}")
     # A count past the assumed window proves the window is bigger (e.g. a 1M model).
     [ "$used" -gt "$window" ] && window=1000000
+    # A subagent's model cannot change mid-run, so its window never shrinks back once its
+    # count proved it bigger: after compaction its count is small again, and a shrink here
+    # would clear its warn locks before the restore check below.
+    [ -n "$agent" ] && [ -z "${CONTEXT_GUARD_WINDOW:-}" ] \
+      && [ "$(cat "$state_dir/window" 2>/dev/null)" = 1000000 ] && window=1000000
     # Window re-estimated: earlier levels were measured against the wrong size.
     if [ "$(cat "$state_dir/window" 2>/dev/null)" != "$window" ]; then
       clear_locks
