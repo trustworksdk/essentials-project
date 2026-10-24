@@ -638,7 +638,7 @@ even once the fair share has risen to keep it - so it does not go on serving wit
 release, or the attempt charge made before it, keeps failing, the instance serves the shard on, logs each failure at
 WARN and still takes shards no instance holds, up to its fair share: a heartbeat tick goes on to acquire unless it
 serves more than its fair share, not counting shards whose release is in doubt. What to do: nothing. (`6fd885d93`,
-`66b907912`, `3e719bf2a`, `1afcfabd1`, `9d2007abf`, `<!-- fix:U-002 -->`)
+`66b907912`, `3e719bf2a`, `1afcfabd1`, `9d2007abf`, `042dc5bc2`)
 
 The same `stuckHandlerTimeout` now ends a wait for an ordered handler which 0.60.0 left unbounded: a fair-share shed of an ordered
 unit, which waits for the keys in its handlers and otherwise keeps the unit and retries on the next heartbeat. A
@@ -696,7 +696,7 @@ owed. While the move keeps failing, the dead pump's hand-back holds the unit and
 taken over, the move is not made again, and that dead letter is then reported nowhere, though it blocks its key. A move
 the database refused with an error of its own (an SQL state outside class `08`, such as a trigger's refusal or a
 cancelled statement) was rolled back, and its retry does not look for it.
-(`6337f7d89`, `2fdeb3db0`, `bfa961ec5`, `dbae0986f`, `7dbd517be`, `e699c9d44`, `895b1a498`, `52c5e943e`, `56790ca82`, `b785a52b2`, `ab601d493`, `<!-- fix:U-001 -->`, `<!-- fix:U-003 -->`)
+(`6337f7d89`, `2fdeb3db0`, `bfa961ec5`, `dbae0986f`, `7dbd517be`, `e699c9d44`, `895b1a498`, `52c5e943e`, `56790ca82`, `b785a52b2`, `ab601d493`, `311efc4ad`, `055e013d6`)
 
 **The unordered lane now charges a hung handler's delivery too, past the same bound.** It waits for no handler: a
 fair-share shed and a dead pump's hand-back release an unordered shard at once, and `stop()` once `shedGrace` has run
