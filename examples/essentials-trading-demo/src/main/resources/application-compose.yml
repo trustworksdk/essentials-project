@@ -59,7 +59,12 @@ essentials:
   # fixed space, recorded per queue when the queue is created.
   shard-owned-queue:
     initialize-schema: true
-    pump-threads: 2
+    # Every queue's delivery and acknowledgement runs on these threads, one database round trip at a
+    # time, and each holds a pooled connection for good. At 2 they capped the order router's inbox at
+    # ~230 orders/s under a 300/s rush; 4 measured best (router inbox wait p99 6.4 s -> 4.6 s); at 8 the
+    # router's handlers waited for connections from the 40-connection pool instead
+    # (_demo_harness/CLAUDE.md, "The order path under a rush").
+    pump-threads: 4
     # No `queues:` list. Nothing here needs one: the DurableQueues adapter registers the queues the
     # framework invents, and QueueLoadGenerator registers its own through
     # ShardOwnedQueueFactory.register, so its name lives in that class rather than in two places that

@@ -496,9 +496,25 @@ Same 300/s profile, business days only, 7 days, one sample each unless noted. Fi
   backlog ~2 950. Reporting only the submission's outcome from the `201` (Q-2 revised, now the default) cut its messages
   40 %, its backlog to 414 and its wait to p90 1.5 s / p99 3.4 s; `OrderAccepted` p90 3.5 → 1.4 s. Cost: a fill records
   ~80 ms later when quiet (submitted → filled p50 -60 → +20 ms).
-- **What is left is the router's subscription.** Placed → router handler start is still p90 1.3 s / p99 6.1 s: its
-  inbox peaks ~560, but its subscription falls ~2 000+ `Orders` events behind the head at each open - unchanged by the
-  fix. Next to explain.
+- **The subscription lag the sampler shows is mostly its own artefact.** It reads the *saved* resume point, which the
+  compose profile writes for every subscriber at once every 2 s (`snapshot-resume-points-every`): up to 2 s of events
+  read as lag - hence the identical sawtooth on every `Orders` subscriber. Measured with the processor's
+  `Forwarding-To-Inbox` debug line instead, placed → forwarded to the router's inbox is p99 175 ms.
+- **The rest was the router's inbox, and behind it the shard-owned engine's pumps.** Forwarded → handler start p99
+  6.4 s, while thread dumps found at most one of the router's 8 consumers inside its handler: both `shard-queue-pump`
+  threads, which deliver and acknowledge for every queue, sat in database round trips. The router started at most
+  ~230 orders/s against 300/s arriving. `pump-threads` (A on, one sample each):
+
+| `pump-threads` | Placed → booked p99 | Placed → submitted p99 | Router inbox wait p90 / p99 | Reports inbox wait p99 | Placed → forwarded p99 |
+|---|---|---|---|---|---|
+| 2 | 8.1 s | 7.1 s | 1.2 s / 6.4 s | 3.9 s | 175 ms |
+| **4 (compose default now)** | **6.8 s** | **5.0 s** | **0.56 s / 4.6 s** | 0.52 s | 315 ms |
+| 8 | 7.8 s | 6.3 s | 0.93 s / 5.9 s | 0.14 s | 474 ms |
+
+  At 8 the router's handlers were busy (3-7 of 8 in dumps) and half of them waited in Hikari's `borrow`: eight pumps
+  hold eight connections for good. The pumps themselves spent 25 of 40 sampled stacks in `runningWriteTransactionIds`
+  (the safe-watermark query, once per owner per pump cycle), then acknowledgements and reads. Open: pumps that scale
+  between a minimum and a maximum instead of holding connections for good, and a cheaper watermark query.
 - **PostgreSQL's NOTIFY lock shows at peaks.** Snapshots caught 5-13 `COMMIT`s waiting on `object` 1262/0 (the
   cluster-wide notification-queue lock, held through the commit's WAL flush) in about one in three snapshots. Every
   shard-owned enqueue transaction sends one `pg_notify` (coalesced per shard per transaction); a single-message inbox
