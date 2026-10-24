@@ -1386,4 +1386,4 @@ Not published; listed because they are the reference for how to use the framewor
   helpers and bootstrap lock key come from `foundation` rather than being copied. A project using the engine
   without the adapter or starter now gets `foundation`, `foundation-types`, `types` and `reactive` on its classpath
   (third-party integrations stay optional, as for every other component). `ShardOwnedSchema.ESSENTIALS_BOOTSTRAP_LOCK_KEY`
-  is deprecated: use `PostgresqlUtil.ESSENTIALS_BOOTSTRAP_LOCK_KEY`, which it now equals by definition.
+  is deprecated: use `PostgresqlUtil.ESSENTIALS_BOOTSTRAP_LOCK_KEY`, which it now equals by definition (`336372fa4`).
