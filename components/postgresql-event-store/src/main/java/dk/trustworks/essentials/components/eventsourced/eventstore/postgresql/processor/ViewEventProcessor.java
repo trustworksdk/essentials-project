@@ -217,7 +217,7 @@ public abstract class ViewEventProcessor extends AbstractEventProcessor {
                                                                         new PersistedEventHandler() {
                                                                             @Override
                                                                             public void handle(PersistedEvent event) {
-                                                                                handlePersistedEvent(event, null);
+                                                                                handlePersistedEvent(event, null, false);
                                                                             }
 
                                                                             @Override
@@ -264,10 +264,15 @@ public abstract class ViewEventProcessor extends AbstractEventProcessor {
                 new BatchedPersistedEventHandler() {
                     @Override
                     public int handleBatch(List<PersistedEvent> events) {
-                        // The keys of this batch's events queued so far - see handlePersistedEvent
-                        var keysQueuedInBatch = new HashSet<String>();
+                        // The keys of this batch's events queued, asked of the queue once for the whole batch and kept
+                        // up to date as the batch queues more - see handlePersistedEvent
+                        var keysQueuedInBatch = keysQueuedBeforeBatch(events);
+                        var checkedUpFront    = keysQueuedInBatch != null;
+                        if (!checkedUpFront) {
+                            keysQueuedInBatch = new HashSet<>();
+                        }
                         for (var event : events) {
-                            handlePersistedEvent(event, keysQueuedInBatch);
+                            handlePersistedEvent(event, keysQueuedInBatch, checkedUpFront);
                         }
                         return batchSize;
                     }
@@ -302,7 +307,7 @@ public abstract class ViewEventProcessor extends AbstractEventProcessor {
                         getProcessorName(), events.getFirst().globalEventOrder(), events.getLast().globalEventOrder(), events.size()), batchFailure);
         for (var event : events) {
             try {
-                eventStore.getUnitOfWorkFactory().usingUnitOfWork(() -> handlePersistedEvent(event, null));
+                eventStore.getUnitOfWorkFactory().usingUnitOfWork(() -> handlePersistedEvent(event, null, false));
             } catch (RuntimeException failure) {
                 // The UnitOfWorkFactory wraps what the work threw (UnitOfWorkException)
                 if (!escalated(failure)) {
@@ -388,8 +393,11 @@ public abstract class ViewEventProcessor extends AbstractEventProcessor {
      *                          the other way only - while the batch runs the queue consumer can empty a key, so an event
      *                          is queued that could have been handled; that is harmless, and ordering holds, since only
      *                          this processor's direct path queues on its queue. {@code null} when handling event by event
+     * @param checkedUpFront    {@code keysQueuedInBatch} started from {@link #keysQueuedBeforeBatch(List)}, so it already
+     *                          holds every key of the batch the queue had something for, and the queue is not asked
+     *                          again per event
      */
-    private void handlePersistedEvent(PersistedEvent event, Set<String> keysQueuedInBatch) {
+    private void handlePersistedEvent(PersistedEvent event, Set<String> keysQueuedInBatch, boolean checkedUpFront) {
         if (hasNoHandlerFor(event)) {
             logger.trace("[{}:{}] No handler for event '{}' - passed over", event.aggregateType(), event.aggregateId(), event.event().getEventTypeOrNamePersistenceValue());
             return;
@@ -402,7 +410,7 @@ public abstract class ViewEventProcessor extends AbstractEventProcessor {
 
         try {
             meta = new MessageMetaData(event.metaData().deserialize());
-            if ((keysQueuedInBatch != null && keysQueuedInBatch.contains(key)) || durableQueues.hasOrderedMessageQueuedForKey(durableQueueName, key)) {
+            if ((keysQueuedInBatch != null && keysQueuedInBatch.contains(key)) || (!checkedUpFront && durableQueues.hasOrderedMessageQueuedForKey(durableQueueName, key))) {
                 logger.debug("[{}:{}] The queue already has ordered message queued for key '{}'. Queueing message with event-order '{}'", aggregateType, key, key, order);
                 durableQueues.queueMessage(durableQueueName,
                                            new EventReferenceOrderedMessage(aggregateType, key, event.eventOrder(), meta));
@@ -425,6 +433,34 @@ public abstract class ViewEventProcessor extends AbstractEventProcessor {
             if (keysQueuedInBatch != null) {
                 keysQueuedInBatch.add(key);
             }
+        }
+    }
+
+    /**
+     * The keys of the batch's events - those this processor has a handler for - that the queue already holds an ordered
+     * message for, asked in one {@link DurableQueues#getKeysWithOrderedMessagesQueued(QueueName, Collection)} instead of
+     * once per event. Asked inside the batch's {@link UnitOfWork}, so an implementation answers it on that unit of
+     * work's connection. A batch of 100 used to ask up to 100 times, each a round trip and - on an engine that took its
+     * own connection for it - a second pooled connection while the batch's sat idle in its transaction.
+     *
+     * @return the keys queued, or {@code null} if the queue could not answer, in which case every event asks for itself
+     * as event-by-event handling does
+     */
+    private Set<String> keysQueuedBeforeBatch(List<PersistedEvent> events) {
+        var keys = new LinkedHashSet<String>();
+        for (var event : events) {
+            if (!hasNoHandlerFor(event)) {
+                keys.add(resolveAggregateIdSerializer(event.aggregateType()).serialize(event.aggregateId()));
+            }
+        }
+        if (keys.isEmpty()) {
+            return new HashSet<>();
+        }
+        try {
+            return new HashSet<>(durableQueues.getKeysWithOrderedMessagesQueued(durableQueueName, keys));
+        } catch (RuntimeException e) {
+            logger.debug("[{}] Could not ask the queue for {} key(s) at once; asking per event", getProcessorName(), keys.size(), e);
+            return null;
         }
     }
 
@@ -572,7 +608,7 @@ public abstract class ViewEventProcessor extends AbstractEventProcessor {
     /**
      * The direct handler's failure left the {@link UnitOfWork} unable to commit, or in a state it must not be committed
      * in, so the event cannot be queued in it.
-     * Not caught by {@link #handlePersistedEvent(PersistedEvent, Set)}: it propagates to the subscription.
+     * Not caught by {@link #handlePersistedEvent(PersistedEvent, Set, boolean)}: it propagates to the subscription.
      */
     private static final class UnitOfWorkRequiresRollbackException extends RuntimeException {
         UnitOfWorkRequiresRollbackException(String message, Throwable cause) {

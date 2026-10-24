@@ -752,6 +752,31 @@ public interface DurableQueues extends Lifecycle {
     boolean hasOrderedMessageQueuedForKey(QueueName queueName, String key);
 
     /**
+     * Which of the given keys have ordered messages queued (ignoring the dead letter message flag) in the given queue -
+     * {@link #hasOrderedMessageQueuedForKey(QueueName, String)} asked once for many keys. A batched
+     * {@code ViewEventProcessor} asks it once per batch instead of once per event.
+     * <p>
+     * The default asks {@link #hasOrderedMessageQueuedForKey(QueueName, String)} for each key; an implementation
+     * answers it in one query where it can. Called inside a {@link UnitOfWork}, an implementation should answer it on
+     * that unit of work's connection rather than take a second one from the pool while the first is held.
+     *
+     * @param queueName the name of the queue to check
+     * @param keys      the keys to check for
+     * @return the keys among {@code keys} that have ordered messages queued in the given queue
+     */
+    default Set<String> getKeysWithOrderedMessagesQueued(QueueName queueName, Collection<String> keys) {
+        requireNonNull(queueName, "No queueName provided");
+        requireNonNull(keys, "No keys provided");
+        var queued = new HashSet<String>();
+        for (var key : keys) {
+            if (hasOrderedMessageQueuedForKey(queueName, key)) {
+                queued.add(key);
+            }
+        }
+        return queued;
+    }
+
+    /**
      * Get the total number of messages queued (i.e. not including Dead Letter Messages) for the given queue
      *
      * @param queueName the name of the Queue where we will query for the number of queued messages

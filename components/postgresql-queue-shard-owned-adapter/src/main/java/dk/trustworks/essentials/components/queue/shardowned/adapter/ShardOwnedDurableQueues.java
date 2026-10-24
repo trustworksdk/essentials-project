@@ -582,13 +582,34 @@ public class ShardOwnedDurableQueues implements DurableQueues {
      * The stated objection was also wrong. This is a prefix seek on the ordered table's primary key
      * {@code (queue_id, shard, msg_key, key_order)}, and it runs on the producing thread once per
      * event — not on the delivery path.
+     * <p>
+     * Asked on the connection of the {@link UnitOfWork} in progress, when there is one. The processor
+     * asks from inside its own unit of work, and asking on a connection of the queue's own took a second
+     * one from the pool while the first sat idle in its transaction: the trading demo's view processors
+     * did exactly that at every rush, several connections of a 40-connection pool held idle at a time
+     * waiting for another - and with every holder doing it at once, a pool can deadlock.
      */
     @Override
     public boolean hasOrderedMessageQueuedForKey(QueueName queueName, String key) {
         requireNonNull(queueName, "No queueName provided");
         requireNonNull(key, "No key provided");
         return onQueue(queueName, "check for queued messages on key '" + key + "'",
-                       () -> resolve(queueName).hasOrderedMessagesForKey(key));
+                       () -> resolve(queueName).hasOrderedMessagesForKey(currentTransactionConnection(), key));
+    }
+
+    /**
+     * One statement for all the keys, on the connection of the {@link UnitOfWork} in progress when there
+     * is one - see {@link #hasOrderedMessageQueuedForKey(QueueName, String)}.
+     */
+    @Override
+    public Set<String> getKeysWithOrderedMessagesQueued(QueueName queueName, Collection<String> keys) {
+        requireNonNull(queueName, "No queueName provided");
+        requireNonNull(keys, "No keys provided");
+        if (keys.isEmpty()) {
+            return Set.of();
+        }
+        return onQueue(queueName, "check for queued messages on " + keys.size() + " key(s)",
+                       () -> resolve(queueName).keysWithOrderedMessages(currentTransactionConnection(), keys));
     }
 
     @Override

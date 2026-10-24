@@ -25,6 +25,7 @@ import java.util.*;
 
 import static dk.trustworks.essentials.components.queue.shardowned.ShardOwnedSchema.*;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
+import static dk.trustworks.essentials.shared.FailFast.requireTrue;
 
 /**
  * The storage seam of the shard-owned engine — every statement the design's hot path issues, and
@@ -1557,10 +1558,19 @@ public final class ShardOwnedStorage {
      * there, which happens once per event on the producing thread.
      */
     public boolean hasOrderedMessagesForKey(int shard, String key) throws SQLException {
-        try (var connection = dataSource.getConnection();
-             var statement = connection.prepareStatement(
-                     "SELECT 1 FROM " + ORDERED_TABLE
-                             + " WHERE queue_id = ? AND shard = ? AND msg_key = ? LIMIT 1")) {
+        try (var connection = dataSource.getConnection()) {
+            return hasOrderedMessagesForKey(connection, shard, key);
+        }
+    }
+
+    /**
+     * As {@link #hasOrderedMessagesForKey(int, String)}, on the caller's connection - the one its transaction holds, so
+     * asking from inside that transaction does not take a second connection from the pool while the first sits idle.
+     */
+    public boolean hasOrderedMessagesForKey(Connection connection, int shard, String key) throws SQLException {
+        try (var statement = connection.prepareStatement(
+                "SELECT 1 FROM " + ORDERED_TABLE
+                        + " WHERE queue_id = ? AND shard = ? AND msg_key = ? LIMIT 1")) {
             statement.setShort(1, queueId);
             statement.setInt(2, shard);
             statement.setString(3, key);
@@ -1568,6 +1578,36 @@ public final class ShardOwnedStorage {
                 return resultSet.next();
             }
         }
+    }
+
+    /**
+     * Which of the keys already have anything waiting on the ordered lane, in one statement on the caller's connection:
+     * the prefix seek of {@link #hasOrderedMessagesForKey(Connection, int, String)}, once per {@code (shard, key)} pair,
+     * under {@code EXISTS}.
+     *
+     * @param shards the ordered unit of each key, index for index
+     * @param keys   the keys
+     */
+    public Set<String> keysWithOrderedMessages(Connection connection, int[] shards, String[] keys) throws SQLException {
+        requireTrue(shards.length == keys.length, "shards and keys must pair up");
+        var queued = new HashSet<String>();
+        if (keys.length == 0) {
+            return queued;
+        }
+        try (var statement = connection.prepareStatement(
+                "SELECT k.msg_key FROM unnest(?::int[], ?::text[]) AS k(shard, msg_key)"
+                        + " WHERE EXISTS (SELECT 1 FROM " + ORDERED_TABLE + " o"
+                        + "               WHERE o.queue_id = ? AND o.shard = k.shard AND o.msg_key = k.msg_key)")) {
+            statement.setArray(1, connection.createArrayOf("int4", Arrays.stream(shards).boxed().toArray()));
+            statement.setArray(2, connection.createArrayOf("text", keys));
+            statement.setShort(3, queueId);
+            try (var resultSet = statement.executeQuery()) {
+                while (resultSet.next()) {
+                    queued.add(resultSet.getString(1));
+                }
+            }
+        }
+        return queued;
     }
 
     public long countOrderedRemaining(int shard) throws SQLException {

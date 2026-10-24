@@ -169,6 +169,34 @@ public interface MessageQueue extends Lifecycle, AutoCloseable {
      */
     boolean hasOrderedMessagesForKey(String key) throws SQLException;
 
+    /**
+     * As {@link #hasOrderedMessagesForKey(String)}, on the caller's connection. A caller asking from inside its own
+     * transaction must use this: the connection-less form takes a second connection from the pool while the
+     * transaction's sits idle, which under pool pressure is how a pool runs dry - and, with every holder doing it at
+     * once, deadlocks.
+     *
+     * @param connection the caller's connection; {@code null} to use one of the queue's own
+     */
+    default boolean hasOrderedMessagesForKey(Connection connection, String key) throws SQLException {
+        return hasOrderedMessagesForKey(key);
+    }
+
+    /**
+     * {@link #hasOrderedMessagesForKey(Connection, String)} asked once for many keys.
+     *
+     * @param connection the caller's connection; {@code null} to use one of the queue's own
+     * @return the keys among {@code keys} the ordered lane holds a message for
+     */
+    default Set<String> keysWithOrderedMessages(Connection connection, Collection<String> keys) throws SQLException {
+        var queued = new HashSet<String>();
+        for (var key : keys) {
+            if (hasOrderedMessagesForKey(connection, key)) {
+                queued.add(key);
+            }
+        }
+        return queued;
+    }
+
     QueueStatistics statistics();
 
     QueueDepth depth() throws SQLException;

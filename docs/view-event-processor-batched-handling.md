@@ -146,6 +146,13 @@ throughput suffers. Watch for it while measuring.
    semantics today; the usual escalation is a dropped connection, which a retry fixes.
 2. **The bulk key check (step 3) is staged after step 2**, and only if step 2's measurements show it is worth it: it
    changes the queue engines, which needs before/after measurements against `main`, and those wait for the release.
+   **Built 2026-10-24, earlier than planned**, because the trading demo showed the per-event check was not just a
+   round trip: on the shard-owned engine it took a second pooled connection while the batch's unit of work held the
+   first, `idle in transaction`. `DurableQueues.getKeysWithOrderedMessagesQueued` (additive `default`), asked once per
+   batch; the shard-owned adapter answers it, and the per-key check, on the unit of work's connection. Demo burst at
+   300 orders/s: booked p99 7.6 -> 5.2 s, filled -> booked p99 4.1 -> 1.1 s (one run each,
+   `examples/essentials-trading-demo/.../_demo_harness/CLAUDE.md`). `PostgresqlDurableQueues` keeps the looping
+   default - its check already runs in the caller's unit of work.
 3. **`getDirectHandlingBatchSize()` / `getDirectHandlingMaxLatency()`** are the names.
 
 The failure semantics above are accepted, including the one trade: an infrastructure failure the replay cannot get past

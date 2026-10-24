@@ -693,6 +693,35 @@ public class ViewEventProcessorIT {
     }
 
     /**
+     * A key the queue already holds something for - here a dead letter from an earlier batch - is found by the one check
+     * a batch makes for all its keys up front, so the key's event in a later batch is queued behind it instead of being
+     * handled directly and overtaking it
+     */
+    @Test
+    @WithDirectHandlingBatchSize(50)
+    public void an_event_in_a_later_batch_for_a_key_queued_by_an_earlier_one_queues_behind_it() {
+        var failedId = EventProcessorIT.OrderId.random();
+        unitOfWorkFactory.usingUnitOfWork(uow -> eventStore.appendToStream(TEST_ORDERS, failedId, List.of(new EventProcessorIT.OrderPlacedEvent(failedId, "Fail order details"))));
+        var queueName = testProcessor.getDurableQueueName();
+        Awaitility.waitAtMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(durableQueues.getTotalDeadLetterMessagesQueuedFor(queueName)).isEqualTo(1));
+
+        var others = IntStream.range(0, 5).mapToObj(i -> EventProcessorIT.OrderId.random()).toList();
+        unitOfWorkFactory.usingUnitOfWork(uow -> {
+            others.forEach(orderId -> eventStore.appendToStream(TEST_ORDERS, orderId, List.of(new EventProcessorIT.OrderPlacedEvent(orderId, COUNTED))));
+            eventStore.appendToStream(TEST_ORDERS, failedId, List.of(new EventProcessorIT.OrderPlacedEvent(failedId, COUNTED)));
+        });
+
+        Awaitility.waitAtMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+            assertThat(totalCounted()).isEqualTo(others.size());
+            assertThat(durableQueues.getTotalMessagesQueuedFor(queueName)).isEqualTo(1);
+        });
+        var queued = durableQueues.getQueuedMessages(queueName, DurableQueues.QueueingSortOrder.ASC, 0, 10);
+        assertThat(((OrderedMessage) queued.get(0).getMessage()).getKey()).isEqualTo(failedId.toString());
+        assertThat(((OrderedMessage) queued.get(0).getMessage()).getOrder()).isEqualTo(1);
+        assertThat(countedFor(failedId)).as("queued behind the dead letter, not handled directly").isZero();
+    }
+
+    /**
      * An event whose failure a savepoint cannot undo - here a handler that appended an event - rolls the whole batch back,
      * the events before it included. The {@link SubscriptionErrorPolicy} ({@code SKIP}) gives up on the batch, which is
      * then handled again one event per {@link UnitOfWork}: only the escalating event is queued, every other event is

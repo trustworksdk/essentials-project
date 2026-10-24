@@ -743,6 +743,33 @@ public final class PostgresqlMessageQueue implements MessageQueue {
     }
 
     @Override
+    public boolean hasOrderedMessagesForKey(Connection connection, String key) throws SQLException {
+        requireNonNull(key, "No key provided");
+        if (connection == null) {
+            return hasOrderedMessagesForKey(key);
+        }
+        return storage.hasOrderedMessagesForKey(connection, ShardOwnedSchema.unitForKey(key, orderedUnits()), key);
+    }
+
+    @Override
+    public Set<String> keysWithOrderedMessages(Connection connection, Collection<String> keys) throws SQLException {
+        requireNonNull(keys, "No keys provided");
+        var distinct = new ArrayList<>(new LinkedHashSet<>(keys));
+        var units    = orderedUnits();
+        var shards   = new int[distinct.size()];
+        for (var index = 0; index < shards.length; index++) {
+            shards[index] = ShardOwnedSchema.unitForKey(distinct.get(index), units);
+        }
+        var keyArray = distinct.toArray(String[]::new);
+        if (connection != null) {
+            return storage.keysWithOrderedMessages(connection, shards, keyArray);
+        }
+        try (var own = storage.connection()) {
+            return storage.keysWithOrderedMessages(own, shards, keyArray);
+        }
+    }
+
+    @Override
     public QueueStatistics statistics() {
         synchronized (consumers) {
             var counted = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<ShardOwnerMetrics, Boolean>());
