@@ -109,11 +109,10 @@ public interface MessageQueue extends Lifecycle, AutoCloseable {
      * takes the messages with it, and the wake-up notification goes with them, because it is issued
      * inside the same transaction rather than sent alongside it.
      * <p>
-     * A {@code java.sql.Connection} rather than a unit-of-work type, deliberately. This module depends
-     * on nothing but {@code shared}, and a connection is what every caller can produce — Spring's
-     * {@code DataSourceUtils.getConnection}, a JDBI handle's {@code getConnection}, or a plain
-     * {@code DataSource}. Taking a framework's transaction abstraction here would make the queue
-     * depend on the framework rather than the other way round.
+     * A {@code java.sql.Connection} rather than a unit-of-work type, deliberately. A connection is what
+     * every caller can produce — Spring's {@code DataSourceUtils.getConnection}, a JDBI handle's
+     * {@code getConnection}, or a plain {@code DataSource} — and taking one framework's transaction
+     * abstraction here would shut out callers that use another.
      * <p>
      * The connection must already be in a transaction ({@code autoCommit == false}). A connection in
      * autocommit mode cannot express "together with my business writes", which is the entire point,

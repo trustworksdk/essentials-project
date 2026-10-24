@@ -18,10 +18,13 @@ package dk.trustworks.essentials.components.queue.shardowned;
 
 import dk.trustworks.essentials.components.queue.shardowned.spi.QueueName;
 
+import dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil;
+
 import javax.sql.DataSource;
 import java.sql.SQLException;
 import java.util.*;
 
+import static dk.trustworks.essentials.components.foundation.postgresql.PostgresqlSchemaStatements.*;
 import static dk.trustworks.essentials.shared.FailFast.*;
 
 /**
@@ -86,20 +89,13 @@ public final class ShardOwnedSchema {
     public static final String DLQ_VIEW               = "shard_queue_dead_letter_readable";
 
     /**
-     * The framework's bootstrap advisory-lock key, so this engine's DDL serialises behind the same
-     * lock as every other Essentials component's.
-     * <p>
-     * <b>Deliberately duplicated rather than imported.</b> The canonical definition is
-     * {@code PostgresqlUtil.ESSENTIALS_BOOTSTRAP_LOCK_KEY} in {@code components/foundation}, whose
-     * helper takes a JDBI {@code Handle}; this module depends on {@code shared} alone and speaks
-     * plain JDBC. What matters is that the <em>value</em> matches — a component locking on a
-     * different key is not protected from the components that use this one, and an application
-     * bootstrapping the event store and this queue at the same time is exactly when that bites. If
-     * the constant there ever changes, it has to change here.
+     * The framework's bootstrap advisory-lock key, which this engine's DDL serialises behind like
+     * every other Essentials component's.
+     *
+     * @deprecated use {@link PostgresqlUtil#ESSENTIALS_BOOTSTRAP_LOCK_KEY}, which this is
      */
-    public static final long ESSENTIALS_BOOTSTRAP_LOCK_KEY = 0xE55E_4711_B007_DD15L;
-
-    private static final String UNLESS_PRESENT_QUOTE = "$essentials_schema$";
+    @Deprecated(since = "0.60.1")
+    public static final long ESSENTIALS_BOOTSTRAP_LOCK_KEY = PostgresqlUtil.ESSENTIALS_BOOTSTRAP_LOCK_KEY;
 
     private ShardOwnedSchema() {
     }
@@ -123,7 +119,7 @@ public final class ShardOwnedSchema {
             connection.setAutoCommit(false);
             try {
                 try (var lock = connection.prepareStatement("SELECT pg_advisory_xact_lock(?)")) {
-                    lock.setLong(1, ESSENTIALS_BOOTSTRAP_LOCK_KEY);
+                    lock.setLong(1, PostgresqlUtil.ESSENTIALS_BOOTSTRAP_LOCK_KEY);
                     lock.execute();
                 }
                 try (var statement = connection.createStatement()) {
@@ -386,77 +382,6 @@ public final class ShardOwnedSchema {
                                   + "   FROM " + DLQ_TABLE + " d"
                                   + "   LEFT JOIN " + REGISTRY_TABLE + " r ON r.queue_id = d.queue_id");
         return List.copyOf(statements);
-    }
-
-    /**
-     * Wrap a {@code CREATE INDEX} so it only runs when the table has no index of that name.
-     * <p>
-     * {@link #schemaStatements()} runs on every start, against tables the instances already running keep writing to.
-     * {@code CREATE INDEX IF NOT EXISTS} takes a {@code SHARE} lock on its table even when the index exists, and
-     * {@code ALTER TABLE ... ADD COLUMN IF NOT EXISTS} takes {@code ACCESS EXCLUSIVE} even when the column exists, both
-     * held until the schema transaction commits: every start waited for the enqueues, acknowledgements, dead-letter
-     * moves and heartbeats in flight and blocked the next ones, and a stronger lock taken after a weaker one could
-     * close a lock cycle with a running write, which PostgreSQL breaks with "deadlock detected". The {@code DO} block
-     * looks the index up in the catalog first, which takes no lock on the table.
-     * <p>
-     * <b>Deliberately duplicated rather than imported</b>, as {@link #ESSENTIALS_BOOTSTRAP_LOCK_KEY} is: the canonical
-     * {@code PostgresqlSchemaStatements} lives in {@code components/foundation}, which this module does not depend on.
-     * {@code SchemaStatementsParityTest} keeps the two producing the same statement.
-     *
-     * @param tableName            the indexed table, as written in {@code createIndexStatement}. Concatenated into SQL:
-     *                             only ever pass one of this class' constants
-     * @param indexName            the index's unqualified name, as written in {@code createIndexStatement}. Concatenated
-     *                             into SQL, likewise
-     * @param createIndexStatement the {@code CREATE INDEX IF NOT EXISTS} statement
-     * @return the statement
-     */
-    static String createIndexUnlessPresent(String tableName, String indexName, String createIndexStatement) {
-        return unlessPresent("NOT EXISTS (SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid\n" +
-                                     "                   WHERE i.indrelid = to_regclass('" + identifier(tableName) + "')\n" +
-                                     // Created with an unquoted name, which PostgreSQL stores folded to lower case and cut to 63 characters
-                                     "                     AND c.relname = left(lower('" + identifier(indexName) + "'), 63))",
-                             createIndexStatement);
-    }
-
-    /**
-     * Wrap an {@code ALTER TABLE ... ADD COLUMN} so it only runs when the table has no column of that name - see
-     * {@link #createIndexUnlessPresent(String, String, String)} for why, and for why it is duplicated
-     *
-     * @param tableName          the altered table, as written in {@code addColumnStatement}. Concatenated into SQL:
-     *                           only ever pass one of this class' constants
-     * @param columnName         the added column's unquoted name, as written in {@code addColumnStatement}.
-     *                           Concatenated into SQL, likewise
-     * @param addColumnStatement the {@code ALTER TABLE ... ADD COLUMN IF NOT EXISTS} statement
-     * @return the statement
-     */
-    static String addColumnUnlessPresent(String tableName, String columnName, String addColumnStatement) {
-        return unlessPresent("NOT EXISTS (SELECT 1 FROM pg_attribute\n" +
-                                     "                   WHERE attrelid = to_regclass('" + identifier(tableName) + "')\n" +
-                                     "                     AND attname = left(lower('" + identifier(columnName) + "'), 63)\n" +
-                                     "                     AND NOT attisdropped)",
-                             addColumnStatement);
-    }
-
-    private static String identifier(String name) {
-        requireTrue(requireNonBlank(name, "No name provided").matches("[A-Za-z_][A-Za-z0-9_]*"), "Not an unquoted identifier: '" + name + "'");
-        return name;
-    }
-
-    private static String unlessPresent(String condition, String statement) {
-        requireFalse(requireNonBlank(statement, "No statement provided").contains(UNLESS_PRESENT_QUOTE),
-                     "The statement must not contain '" + UNLESS_PRESENT_QUOTE + "': " + statement);
-        var body = statement.strip();
-        if (body.endsWith(";")) {
-            body = body.substring(0, body.length() - 1).strip();
-        }
-        requireFalse(body.isEmpty(), "The statement is blank");
-        return "DO " + UNLESS_PRESENT_QUOTE + "\n" +
-                "BEGIN\n" +
-                "    IF " + condition + " THEN\n" +
-                "        " + body + ";\n" +
-                "    END IF;\n" +
-                "END\n" +
-                UNLESS_PRESENT_QUOTE;
     }
 
     /**

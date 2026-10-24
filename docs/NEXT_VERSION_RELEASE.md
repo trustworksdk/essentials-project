@@ -1382,3 +1382,8 @@ Not published; listed because they are the reference for how to use the framewor
 - The plugin's must-not-find eval graders name the trap's line and anchor, not only its file, so the judge no
   longer fails a report for a correct finding drawn from another line of the same file.
 - `scripts/prepare-release.py <version>` and the `prepare-release` skill prepare a release up to a local commit: this file becomes `docs/RELEASE-NOTES-<version>.md` and is reset, the plugin version, its CHANGELOG heading and the `essentials.version` pin move, a skeleton of the plugin's migration notes is written and what reads the pin is regenerated. `--check <version>` fails on anything left inconsistent. The skill never tags or pushes.
+- **`postgresql-queue-shard-owned` depends on `foundation`** instead of `shared` alone, so its PostgreSQL schema
+  helpers and bootstrap lock key come from `foundation` rather than being copied. A project using the engine
+  without the adapter or starter now gets `foundation`, `foundation-types`, `types` and `reactive` on its classpath
+  (third-party integrations stay optional, as for every other component). `ShardOwnedSchema.ESSENTIALS_BOOTSTRAP_LOCK_KEY`
+  is deprecated: use `PostgresqlUtil.ESSENTIALS_BOOTSTRAP_LOCK_KEY`, which it now equals by definition.

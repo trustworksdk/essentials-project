@@ -63,7 +63,7 @@ public final class EssentialsSchemaRules {
             "dk.trustworks.essentials.components.foundation.postgresql.api.DefaultPostgresqlQueryStatisticsApi",
             "best-effort CREATE EXTENSION pg_stat_statements, only when available and tolerated when refused - an operator's choice, not application schema",
             "dk.trustworks.essentials.components.queue.shardowned.ShardOwnedSchema",
-            "the shard-owned engine's own schema - the engine depends only on shared; ShardOwnedSchemaContributor carries it into the harness");
+            "the shard-owned engine's own schema - ShardOwnedSchemaContributor, in the adapter, carries it into the harness");
 
     private EssentialsSchemaRules() {
     }

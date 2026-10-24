@@ -436,8 +436,8 @@ public final class ShardRuntime implements Lifecycle, AutoCloseable {
      * left of it, instead of up to thirty seconds. Against an unreachable database a pump sits in a pooled connection
      * checkout for the pool's whole timeout, and waiting for it then only delays every component stopped after this one.
      * <p>
-     * Takes a plain supplier so the engine keeps depending on {@code shared} alone; the Spring starter bridges it from the
-     * application's shutdown signal.
+     * Takes a plain supplier so the engine does not depend on Spring; the Spring starter bridges it from the application's
+     * shutdown signal.
      *
      * @param remainingShutdownTime what is left of the shutdown's time budget, asked for when {@link #stop()} runs
      */
