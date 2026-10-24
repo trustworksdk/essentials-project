@@ -2367,6 +2367,90 @@ class ShardOwnedUnsubscribeIT {
     }
 
     /**
+     * A release on request made with two keys of one unit in their handlers, whose charge dead-letters the first key's
+     * message and then has its move of the second key's refused by the database, names the first key in a WARN: the charge
+     * throws, so the request gives no answer and releases nothing, and its release WARN, which names the keys of a released
+     * unit, never comes. The charge's failure reaches that WARN as the request's, and no WARN of a request with no key in a
+     * handler is written for it. Asked again with both keys still in their handlers, the request makes the move still owed,
+     * releases the unit, and names both keys in its answer.
+     */
+    @Test
+    void a_release_on_request_whose_charge_throws_after_dead_lettering_one_message_in_a_handler_names_that_key_in_a_warning() throws Exception {
+        // Far beyond the test, so the stopped instance's membership row cannot age out and let another id take the unit.
+        var leaseTtl = Duration.ofSeconds(20);
+        var first    = "ACC-1";
+        var unit     = ShardOwnedSchema.unitForKey(first, ShardOwnedSchema.ORDERED_UNITS);
+        var second   = OrderedUnitKeys.keyInUnit("ACC-", unit, ShardOwnedSchema.ORDERED_UNITS, first);
+        var entered  = new CountDownLatch(2);
+        var release  = new CountDownLatch(1);
+        try (var queue = newQueue(PostgresqlMessageQueue.LifecycleHook.NONE, settingsWith(Duration.ofMillis(300), leaseTtl))) {
+            try {
+                // maxAttempts 1: the request's charge brings both messages in their handlers to their limit.
+                queue.consume((messageId, key, payload, payloadType) -> {
+                    if (key != null) {
+                        entered.countDown();
+                        awaitQuietly(release, Duration.ofSeconds(60));
+                    }
+                }, new ConsumerOptions(8, Integer.MAX_VALUE, 1, RetryBackoff.fixed(Duration.ofMillis(100))));
+                var lanes = queue.registeredConsumers();
+                // Enqueued first, the first key's message has the lower seq, and its move is made first
+                for (var key : List.of(first, second)) {
+                    queue.enqueue(Message.ordered(key.getBytes(StandardCharsets.UTF_8), 1, key, 0));
+                }
+                assertThat(entered.await(20, TimeUnit.SECONDS)).as("premise: both keys of one unit are in their handlers").isTrue();
+
+                // Stopped, and not started again: nothing but the requests below releases the unit while the handlers run.
+                queue.stop();
+                assertThat(keptOrderedFence(INSTANCE_ID).shard()).as("premise: the stop kept the unit of the keys in their handlers").isEqualTo(unit);
+                Awaitility.await().atMost(Duration.ofSeconds(5))
+                          .untilAsserted(() -> assertThat(lanes).as("premise: queue.stop()'s budget thread has flushed the kept unit")
+                                                                .noneMatch(ShardOwnedQueue::handBackStillRunning));
+                var notReleased = "releasing ordered unit " + unit + " on queue " + QUEUE_ID + " on request while 2 key(s)";
+                refuseDeadLettersOfKey(second);
+                try {
+                    assertThatThrownBy(() -> queue.releaseKeptOrderedUnit(INSTANCE_ID, unit).releases())
+                            .as("the request fails with the charge's failure")
+                            .isInstanceOf(SQLException.class)
+                            .hasMessageContaining("dead letters of the key refused by the test");
+                } finally {
+                    dropDeadLetterRefusal();
+                }
+                assertThat(queue.deadLetters(0, 10)).as("premise: the charge dead-lettered the first key's message before its move of the second threw")
+                                                    .singleElement()
+                                                    .satisfies(deadLetter -> {
+                                                        assertThat(deadLetter.key()).isEqualTo(first);
+                                                        assertThat(deadLetter.lastError()).isEqualTo(ShardOwnedStorage.EXHAUSTED_IN_A_RELEASED_HANDLER);
+                                                    });
+                assertThat(ownerOf(unit)).as("premise: the row still names the instance").isEqualTo(INSTANCE_ID);
+                assertThat(laneWarnings()).as("the request whose charge threw names the key that charge dead-lettered")
+                                          .filteredOn(warning -> warning.contains(notReleased))
+                                          .singleElement()
+                                          .satisfies(warning -> assertThat(warning).contains("dead-lettered 1 message(s) of key(s) [" + first + "]",
+                                                                                             "but did not release the unit: the request then failed",
+                                                                                             "dead letters of the key refused by the test"));
+                assertThat(laneWarnings()).as("and, with keys in their handlers, no WARN of a request with no key in a handler is written")
+                                          .noneMatch(warning -> warning.contains("has made or found, before releasing it, dead-letter move(s)"));
+
+                assertThat(queue.releaseKeptOrderedUnit(INSTANCE_ID, unit).releases())
+                        .as("asked again with both keys still in their handlers, the unit is released")
+                        .singleElement()
+                        .satisfies(released -> {
+                            assertThat(released.outcome()).isEqualTo(KeptUnitRelease.Outcome.RELEASED);
+                            assertThat(released.keysInHandler()).as("premise: both keys are still in their handlers").containsExactlyInAnyOrder(first, second);
+                            assertThat(released.deadLetteredKeys()).as("the move still owed made by the request asked again").containsExactly(first, second);
+                        });
+                assertThat(laneWarnings()).as("and no WARN of a request that did not release is written for the request that did")
+                                          .filteredOn(warning -> warning.contains(notReleased))
+                                          .hasSize(1);
+                assertThat(queue.deadLetters(0, 10)).as("both messages dead-lettered").hasSize(2);
+                assertThat(ownerOf(unit)).as("the row is released").isNull();
+            } finally {
+                release.countDown();
+            }
+        }
+    }
+
+    /**
      * A handler that fails after a release on request has charged its message and then been refused by the database counts
      * on from the attempt that release charged. The message failed once under the owner before it hung, so the owner had a
      * count of its own for it; a release charge the owner did not count as well left that older count in place, and the
