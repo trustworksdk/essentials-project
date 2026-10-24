@@ -15,6 +15,7 @@
  */
 package dk.trustworks.essentials.components.foundation.postgresql;
 
+import dk.trustworks.essentials.components.foundation.messaging.queue.EnqueueOutsideUnitOfWorkGuard;
 import dk.trustworks.essentials.components.foundation.postgresql.PostgresqlSchemaHistory.ChangeKey;
 import dk.trustworks.essentials.components.foundation.schema.*;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
@@ -22,8 +23,10 @@ import dk.trustworks.essentials.shared.network.Network;
 import org.jdbi.v3.core.*;
 import org.slf4j.*;
 
-import java.time.OffsetDateTime;
+import java.sql.SQLException;
+import java.time.*;
 import java.util.*;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.function.*;
 
 import static dk.trustworks.essentials.shared.FailFast.*;
@@ -44,7 +47,10 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  * <p>
  * <b>Transactions.</b> The ledger table is created in a transaction of its own. Then each {@link SchemaChangeSet} -
  * one contributor's changes - runs in one transaction together with its ledger rows, so a contributor's schema and
- * its record commit or roll back together.
+ * its record commit or roll back together. When PostgreSQL aborts that transaction to break a deadlock - a change that
+ * really has to create an index or column on a table running instances write to locks it - the change set is applied
+ * again, up to {@value #MAX_ATTEMPTS_ON_DEADLOCK} times. Only when this applier began the transaction: one that joined
+ * a unit of work or transaction the caller started cannot be retried, because the abort undid the caller's work too.
  * <p>
  * <b>Identifiers.</b> Every {@link SchemaChange#objectName()} is checked with
  * {@link PostgresqlUtil#checkIsValidTableOrColumnName(String)} before any statement executes. It is a first line of
@@ -52,6 +58,11 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  */
 public final class PostgresqlCreateSchemaApplier implements SchemaApplier {
     private static final Logger log = LoggerFactory.getLogger(PostgresqlCreateSchemaApplier.class);
+
+    /** How often a change set's transaction is tried when PostgreSQL aborts it to break a deadlock */
+    public static final  int      MAX_ATTEMPTS_ON_DEADLOCK = 3;
+    private static final String   DEADLOCK_DETECTED        = "40P01";
+    private static final Duration DEADLOCK_RETRY_DELAY     = Duration.ofMillis(100);
 
     /** The ledger table's name unless configured otherwise */
     public static final String DEFAULT_SCHEMA_HISTORY_TABLE_NAME = "essentials_schema_history";
@@ -164,26 +175,64 @@ public final class PostgresqlCreateSchemaApplier implements SchemaApplier {
         rejectEditedOneShotChanges(changeSets, recorded);
 
         for (var changeSet : changeSets) {
-            transactions.inTransaction(handle -> {
-                PostgresqlUtil.acquireBootstrapLock(handle);
-                // Re-read under the lock: another JVM may have applied this set while we waited for it
-                var current = readLedger(handle, changeSet.moduleId());
-                var executed = 0;
-                for (var change : changeSet.changes()) {
-                    var checksum      = change.checksum();
-                    var recordedEntry = current.get(ChangeKey.of(changeSet, change));
-                    if (!change.repeatable() && recordedEntry != null) {
-                        continue;
-                    }
-                    for (var statement : change.statements()) {
-                        execute(handle, changeSet.moduleId(), change, statement);
-                    }
-                    executed++;
-                    record(handle, changeSet.moduleId(), change, checksum, recordedEntry != null);
-                }
-                log.debug("[{}] {} of {} schema change(s) executed", changeSet.moduleId(), executed, changeSet.changes().size());
-            });
+            applyRetryingOnDeadlock(changeSet);
         }
+    }
+
+    private void applyRetryingOnDeadlock(SchemaChangeSet changeSet) {
+        // Decided before the first attempt: once it runs, the transaction it began is the one that is active
+        var retryable = transactions.beginsItsOwnTransaction();
+        for (var attempt = 1; ; attempt++) {
+            try {
+                applyInOneTransaction(changeSet);
+                return;
+            } catch (RuntimeException e) {
+                if (!retryable || attempt >= MAX_ATTEMPTS_ON_DEADLOCK || !isDeadlock(e)) {
+                    throw e;
+                }
+                log.warn("[{}] Schema change set was aborted by PostgreSQL to break a deadlock with another transaction - attempt {} of {}, applying it again",
+                         changeSet.moduleId(), attempt, MAX_ATTEMPTS_ON_DEADLOCK);
+                try {
+                    Thread.sleep(DEADLOCK_RETRY_DELAY.toMillis() * attempt + ThreadLocalRandom.current().nextLong(DEADLOCK_RETRY_DELAY.toMillis()));
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw e;
+                }
+            }
+        }
+    }
+
+    private static boolean isDeadlock(Throwable e) {
+        // Bounded: a cause chain can be cyclic
+        var depth = 0;
+        for (var cause = e; cause != null && depth < 100; cause = cause.getCause(), depth++) {
+            if (cause instanceof SQLException sqlException && DEADLOCK_DETECTED.equals(sqlException.getSQLState())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void applyInOneTransaction(SchemaChangeSet changeSet) {
+        transactions.inTransaction(handle -> {
+            PostgresqlUtil.acquireBootstrapLock(handle);
+            // Re-read under the lock: another JVM may have applied this set while we waited for it
+            var current = readLedger(handle, changeSet.moduleId());
+            var executed = 0;
+            for (var change : changeSet.changes()) {
+                var checksum      = change.checksum();
+                var recordedEntry = current.get(ChangeKey.of(changeSet, change));
+                if (!change.repeatable() && recordedEntry != null) {
+                    continue;
+                }
+                for (var statement : change.statements()) {
+                    execute(handle, changeSet.moduleId(), change, statement);
+                }
+                executed++;
+                record(handle, changeSet.moduleId(), change, checksum, recordedEntry != null);
+            }
+            log.debug("[{}] {} of {} schema change(s) executed", changeSet.moduleId(), executed, changeSet.changes().size());
+        });
     }
 
     /**
@@ -257,6 +306,12 @@ public final class PostgresqlCreateSchemaApplier implements SchemaApplier {
     private interface Transactions {
         void inTransaction(Consumer<Handle> work);
 
+        /**
+         * @return whether {@link #inTransaction(Consumer)} called now would begin a transaction of its own rather than
+         * join one the caller started
+         */
+        boolean beginsItsOwnTransaction();
+
         <R> R withHandle(Function<Handle, R> work);
 
         static Transactions of(Jdbi jdbi) {
@@ -264,6 +319,11 @@ public final class PostgresqlCreateSchemaApplier implements SchemaApplier {
                 @Override
                 public void inTransaction(Consumer<Handle> work) {
                     jdbi.useTransaction(work::accept);
+                }
+
+                @Override
+                public boolean beginsItsOwnTransaction() {
+                    return true;
                 }
 
                 @Override
@@ -281,6 +341,11 @@ public final class PostgresqlCreateSchemaApplier implements SchemaApplier {
                 }
 
                 @Override
+                public boolean beginsItsOwnTransaction() {
+                    return false;
+                }
+
+                @Override
                 public <R> R withHandle(Function<Handle, R> work) {
                     return work.apply(unitOfWork.handle());
                 }
@@ -292,6 +357,12 @@ public final class PostgresqlCreateSchemaApplier implements SchemaApplier {
                 @Override
                 public void inTransaction(Consumer<Handle> work) {
                     unitOfWorkFactory.usingUnitOfWork(unitOfWork -> work.accept(unitOfWork.handle()));
+                }
+
+                @Override
+                public boolean beginsItsOwnTransaction() {
+                    // Spring-aware: counts a Spring transaction no unit of work is bound to yet
+                    return !EnqueueOutsideUnitOfWorkGuard.isUnitOfWorkActive(unitOfWorkFactory);
                 }
 
                 @Override
