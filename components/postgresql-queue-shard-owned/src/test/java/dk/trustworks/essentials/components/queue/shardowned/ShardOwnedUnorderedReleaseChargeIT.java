@@ -318,6 +318,86 @@ class ShardOwnedUnorderedReleaseChargeIT {
     }
 
     /**
+     * A shard whose shed release failed with no error answer from the database - in doubt, so it is shed again on every
+     * heartbeat whatever the fair share says - and whose charge before that release then keeps failing does not keep the
+     * incumbent from the acquire step: once the joining instance stops, the incumbent takes the shard that instance released
+     * while the charge is still refused. Every tick that shed an owner used to end before the acquire step, so the shard the
+     * departed instance left stayed unowned for as long as the charge failed.
+     * <p>
+     * The incumbent acquired the shards in order, so it sheds the upper half; the release of the last one is refused with SQL
+     * state {@code 08006}, which the engine reads as in doubt. A second message on that shard then hangs in its handler past
+     * {@code stuckHandlerTimeout}, and its charge is refused.
+     */
+    @Test
+    void a_shard_in_doubt_whose_charge_before_its_release_keeps_failing_does_not_keep_a_free_shard_from_being_acquired() throws Exception {
+        var settings    = settings(STUCK_HANDLER_TIMEOUT);
+        var inDoubt     = SHARD_COUNT - 1;
+        var freedShard  = SHARD_COUNT / 2;
+        var queueIds    = new short[]{QUEUE_ID};
+        var entered     = new Semaphore(0);
+        var release     = new CountDownLatch(1);
+        var logged      = captureQueueLog();
+        try (var firstRuntime = new ShardRuntime(dataSource, settings); var secondRuntime = new ShardRuntime(dataSource, settings)) {
+            var first  = queue(firstRuntime, "in-doubt-first");
+            var second = queue(secondRuntime, "in-doubt-second");
+            try {
+                first.startConsuming((messageId, payload, payloadType) -> {
+                    entered.release();
+                    awaitQuietly(release);
+                }, settings, SHARD_COUNT);
+                assertThat(first.shardsHeld()).as("premise: alone, the first instance holds every shard").isEqualTo(SHARD_COUNT);
+                for (var message = 0; message < SHARD_COUNT; message++) {
+                    first.enqueue(List.of(("hangs-" + message).getBytes(StandardCharsets.UTF_8)), 1);
+                }
+                assertThat(entered.tryAcquire(SHARD_COUNT, 20, TimeUnit.SECONDS)).as("premise: a message of every shard is in its handler").isTrue();
+                Thread.sleep(STUCK_HANDLER_TIMEOUT.toMillis() + 300);
+
+                LeaseReleaseRefusals.failLeaseReleasesInDoubtOf(dataSource, queueIds, "unordered", inDoubt);
+                try {
+                    second.startConsuming((messageId, payload, payloadType) -> { }, settings, SHARD_COUNT);
+                    Awaitility.await("premise: the shed released the shard before the refused one, and its release is in doubt")
+                              .atMost(Duration.ofSeconds(30))
+                              .until(() -> LeaseReleaseRefusals.releasesRefused(dataSource, QUEUE_ID, inDoubt) >= 1
+                                      && "in-doubt-second".equals(ownerOf(freedShard)));
+                    assertThat(ownerOf(inDoubt)).as("premise: the refused release was rolled back").isEqualTo("in-doubt-first");
+
+                    // A second message on every shard; the one on the shard in doubt hangs under the incumbent, and its charge
+                    // before the next release is refused.
+                    failUnorderedAttemptChargesOn(inDoubt, true);
+                    for (var message = 0; message < SHARD_COUNT; message++) {
+                        first.enqueue(List.of(("again-" + message).getBytes(StandardCharsets.UTF_8)), 1);
+                    }
+                    Awaitility.await("premise: the charge before the release in doubt is refused").atMost(Duration.ofSeconds(20))
+                              .until(() -> !chargeFailuresOf(logged, inDoubt, "in a fair-share shed").isEmpty());
+                    var fenceInDoubt = fenceOf(inDoubt);
+
+                    // The joining instance leaves: the incumbent's fair share is every shard, and the shard it released is free.
+                    second.stop();
+                    Awaitility.await("the incumbent takes the shard the departed instance released while the charge is refused")
+                              .atMost(Duration.ofSeconds(20))
+                              .until(() -> "in-doubt-first".equals(ownerOf(freedShard)));
+                    var failuresAfterAcquiring = chargeFailuresOf(logged, inDoubt, "in a fair-share shed").size();
+                    Awaitility.await("premise: the charge is still refused after the acquire step ran").atMost(Duration.ofSeconds(20))
+                              .until(() -> chargeFailuresOf(logged, inDoubt, "in a fair-share shed").size() > failuresAfterAcquiring);
+                    assertThat(ownerOf(inDoubt)).as("the shard in doubt is still the incumbent's").isEqualTo("in-doubt-first");
+                    assertThat(fenceOf(inDoubt)).as("and not taken").isEqualTo(fenceInDoubt);
+                    assertThat(first.shardsHeld()).as("every shard served, the one in doubt included").isEqualTo(SHARD_COUNT);
+                } finally {
+                    failUnorderedAttemptChargesOn(inDoubt, false);
+                    LeaseReleaseRefusals.failLeaseReleasesOf(dataSource, queueIds, "unordered", inDoubt, false);
+                }
+            } finally {
+                failUnorderedAttemptChargesOn(inDoubt, false);
+                release.countDown();
+                second.stop();
+                first.stop();
+            }
+        } finally {
+            releaseQueueLog(logged);
+        }
+    }
+
+    /**
      * A shed whose charge brings a message to the redelivery limit and whose dead-letter move of it then fails - refused by
      * the database here - still owes that move, so the shard is held, with a WARN naming it on every attempt: released, the
      * message would be left queued, charged to its limit. The retries on later heartbeats make the move and do not charge the

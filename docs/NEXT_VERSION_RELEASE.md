@@ -634,8 +634,11 @@ its fence, by the heartbeat's lease check or by a refused takeover charge, is no
 WARN, and a refused takeover charge logs it at DEBUG rather than in its "takeover charge rejected ... lease lost" WARN.
 An alert on any of these misses only a unit this instance was giving up. An unordered shard whose fair-share shed
 release failed that way is shed again on later heartbeat ticks, whatever the fair share says, until a release succeeds -
-even once the fair share has risen to keep it - so it does not go on serving with that release in doubt. What to do:
-nothing. (`6fd885d93`, `66b907912`, `3e719bf2a`, `1afcfabd1`, `9d2007abf`)
+even once the fair share has risen to keep it - so it does not go on serving with that release in doubt. While that
+release, or the attempt charge made before it, keeps failing, the instance serves the shard on, logs each failure at
+WARN and still takes shards no instance holds, up to its fair share: a heartbeat tick goes on to acquire unless it
+serves more than its fair share, not counting shards whose release is in doubt. What to do: nothing. (`6fd885d93`,
+`66b907912`, `3e719bf2a`, `1afcfabd1`, `9d2007abf`, `<!-- fix:U-002 -->`)
 
 The same `stuckHandlerTimeout` now ends a wait for an ordered handler which 0.60.0 left unbounded: a fair-share shed of an ordered
 unit, which waits for the keys in its handlers and otherwise keeps the unit and retries on the next heartbeat. A

@@ -233,6 +233,9 @@ class ShardOwnedRebalanceIT {
      * was over its fair share, so with the other instance gone the owner served on with its release in doubt for good, and
      * read every later takeover as its own release: INFO, no {@code leasesLost}. The trigger raising {@code 08006} rolls the
      * release back, so the row still names the first instance until the trigger is dropped.
+     * <p>
+     * While that release keeps failing, the first still takes the shards the departed instance released: a failed release of
+     * an owner in doubt is that owner's alone, and a tick with no excess to shed goes on to the acquire step.
      */
     @Test
     void an_unordered_shard_whose_shed_release_failed_in_doubt_is_released_once_the_fair_share_rose_and_a_later_takeover_is_a_lost_lease() throws Exception {
@@ -244,6 +247,9 @@ class ShardOwnedRebalanceIT {
             Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(first.shardsHeld()).isEqualTo(SHARD_COUNT));
 
             LeaseReleaseRefusals.failLeaseReleasesInDoubtOf(dataSource, queueIds, "unordered", refusedUnit);
+            // Read while the refusal is still in place: once it is dropped, the first may release the shard and take it again
+            // under a new fence before a read after the drop.
+            long fenceWhileInDoubt;
             try {
                 try (var second = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "in-doubt-2")) {
                     second.startConsuming((messageId, payload, payloadType) -> { }, FAST, SHARD_COUNT);
@@ -259,12 +265,32 @@ class ShardOwnedRebalanceIT {
                 Awaitility.await("the shard whose release is in doubt is still shed with the fair share risen to keep it")
                           .atMost(Duration.ofSeconds(10))
                           .until(() -> LeaseReleaseRefusals.releasesRefused(dataSource, QUEUE_ID, refusedUnit) >= refusedAtStop + 2);
+
+                // The release that keeps failing does not keep the first from the shards the second released: a tick that
+                // sheds only an owner in doubt goes on to the acquire step. Ended before it, the first held five shards for as
+                // long as the release failed, and the three the second left were owned by nobody.
+                Awaitility.await("the first takes the shards the second left while the release stays in doubt")
+                          .atMost(Duration.ofSeconds(10))
+                          .until(() -> unitsLeasedTo("in-doubt-1") == SHARD_COUNT);
+                assertThat(first.shardsHeld()).as("every shard served, the one in doubt included").isEqualTo(SHARD_COUNT);
+                fenceWhileInDoubt = fenceOf(refusedUnit);
+                var refusedAfterAcquiring = LeaseReleaseRefusals.releasesRefused(dataSource, QUEUE_ID, refusedUnit);
+                Awaitility.await("the release in doubt is still retried after the acquire step ran")
+                          .atMost(Duration.ofSeconds(10))
+                          .until(() -> LeaseReleaseRefusals.releasesRefused(dataSource, QUEUE_ID, refusedUnit) > refusedAfterAcquiring);
+                assertThat(ownerOf(refusedUnit)).as("premise: every release of it was rolled back").isEqualTo("in-doubt-1");
+                assertThat(fenceOf(refusedUnit)).as("premise: not taken again while the release is refused").isEqualTo(fenceWhileInDoubt);
+                synchronized (logged) {
+                    assertThat(logged.list).as("each failed release of the shard in doubt is logged as that shard's alone")
+                                           .anyMatch(event -> event.getLevel() == Level.WARN
+                                                   && event.getFormattedMessage().startsWith("Instance in-doubt-1 could not release unordered shard " + refusedUnit + " on queue")
+                                                   && event.getThrowableProxy() != null);
+                }
             } finally {
                 LeaseReleaseRefusals.failLeaseReleasesOf(dataSource, queueIds, "unordered", refusedUnit, false);
             }
 
             // Released at last, and taken again by the first under a new fence: a fresh owner, with no release of it in doubt.
-            var fenceWhileInDoubt = fenceOf(refusedUnit);
             Awaitility.await("the first releases the shard and takes it again").atMost(Duration.ofSeconds(10))
                       .until(() -> "in-doubt-1".equals(ownerOf(refusedUnit)) && fenceOf(refusedUnit) > fenceWhileInDoubt
                               && first.shardsHeld() == SHARD_COUNT);

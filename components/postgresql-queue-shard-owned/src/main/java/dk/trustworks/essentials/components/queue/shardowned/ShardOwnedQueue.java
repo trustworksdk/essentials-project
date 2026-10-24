@@ -1806,13 +1806,16 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         // share says, until a release of it succeeds: that release may still have gone through on the server, so from
         // then on its unit found no longer naming it is read as given up, not lost (LeasedOwner#markReleaseInDoubt). Kept
         // serving once the fair share rose, a later takeover of its unit counted no leasesLost and logged no WARN for the
-        // rest of the owner's life. Left out of the fair-share count, as each of them is on its way out.
+        // rest of the owner's life. Left out of the fair-share count, as each of them is on its way out. Their rows still
+        // count towards the acquire step's limit below (holdsLeaseRow), and that step runs on any tick on which the run
+        // serves no more than its fair share (no excess to shed), whatever its owners in doubt do: one whose charge or
+        // release keeps failing is retried on the next tick, and meanwhile the run takes units a departed instance left
+        // free, up to its fair share counted with those rows. Ending such a tick before the acquire step, as after an
+        // excess shed, left them unowned for as long as that one release kept failing.
         var inDoubt = held.stream().filter(LeasedOwner::releaseInDoubt).toList();
         var serving = held.stream().filter(owner -> !owner.releaseInDoubt()).toList();
-        var shedding = new ArrayList<LeasedOwner>();
-        if (serving.size() > fairShare) {
-            shedding.addAll(serving.subList(fairShare, serving.size()));
-        }
+        var excess  = serving.size() > fairShare ? serving.subList(fairShare, serving.size()) : List.<LeasedOwner>of();
+        var shedding = new ArrayList<LeasedOwner>(excess);
         // After the excess: a release that keeps failing does not keep the excess from being shed.
         shedding.addAll(inDoubt);
         if (!shedding.isEmpty()) {
@@ -1836,15 +1839,30 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                     }
                     // One unit at a time: a failed release leaves this owner serving (HELD), and a later tick sheds it again -
                     // the next one while the run is still over its fair share, and later ones, whatever the fair share says,
-                    // until a release succeeds when the failure left the release in doubt (inDoubt above). The owner may dispatch for the moment between the
-                    // release and its end; a successor's acquire bumps the fence, so that is at worst a redelivery, which this
-                    // lane allows.
-                    releaseLeaseRows(List.of(owner));
+                    // until a release succeeds when the failure left the release in doubt (inDoubt above). A failed release
+                    // of the excess ends the tick; one of an owner already in doubt is that owner's alone, and the loop goes
+                    // on. The owner may dispatch for the moment between the release and its end; a successor's acquire bumps
+                    // the fence, so that is at worst a redelivery, which this lane allows.
+                    var wasInDoubt = inDoubt.contains(owner);
+                    if (wasInDoubt) {
+                        try {
+                            releaseLeaseRows(List.of(owner));
+                        } catch (SQLException | RuntimeException | Error e) {
+                            Exceptions.rethrowIfCriticalError(e);
+                            log.warn("Instance {} could not release unordered shard {} on queue {}, whose earlier release failed with no "
+                                             + "error answer from the database; it serves the shard on and retries the release on the next "
+                                             + "heartbeat, whatever the fair share says",
+                                     instanceId, owner.shard(), queueId, e);
+                            continue;
+                        }
+                    } else {
+                        releaseLeaseRows(List.of(owner));
+                    }
                     run.ownedShards.remove(owner.shard(), owner);
                     if (countRelease(run, owner)) {
                         counted.add(owner.shard());
                     }
-                    (inDoubt.contains(owner) ? releasedInDoubt : released).add(owner.shard());
+                    (wasInDoubt ? releasedInDoubt : released).add(owner.shard());
                     log.debug("Instance {} released unordered shard {}", instanceId, owner.shard());
                     releasedPastStuckUnorderedHandlers(owner, charge, "in a fair-share shed");
                 }
@@ -1869,8 +1887,11 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                 }
                 reportReleases(counted, loopFailure);
             }
-            // The acquire step waits for the next tick, as after any shed.
-            return;
+            // With an excess to shed, the acquire step waits for the next tick, as it did before: this run was over its fair
+            // share. One with only owners in doubt to shed goes on to it (inDoubt above says why).
+            if (!excess.isEmpty()) {
+                return;
+            }
         }
 
         if (!shardRuntime.hasLivePump()) {
