@@ -49,7 +49,8 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  *     for and found no longer in the table, the owner still holding its lease, is settled too ({@link #gone}): not
  *     charged, not counted, not asked for again;</li>
  *     <li>its {@link DeadLetterMove}: {@link DeadLetterMove#PENDING} at the redelivery limit until the move is made, then
- *     {@link DeadLetterMove#MOVED} or {@link DeadLetterMove#ROW_GONE}, each in one write, so what was dead-lettered - the
+ *     {@link DeadLetterMove#MOVED} or {@link DeadLetterMove#ROW_GONE} - or {@link DeadLetterMove#HANDLED} once its handler
+ *     has completed (<b>The completion wins</b>, below) - each in one write, so what was dead-lettered - the
  *     sequence values and keys {@link #answer()} reports, {@link #deadLetteredWhileInHandler}, and the row the owner is
  *     handed once it is {@link DeadLetterMove#MOVED} (the constructor's {@code onMoved}) - is derived from that write and
  *     cannot be seen half-made. A move that throws with no answer from the database may have committed all the same (its
@@ -67,6 +68,24 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  *     charged in it, the delivery would be counted twice (by the charge and by its own failure write) or dead-lettered by
  *     the charge while its handler schedules a retry of it.</li>
  * </ul>
+ * <b>The completion wins.</b> A message whose handler completes - returns without an exception and is not interrupted -
+ * while its dead-letter move is still to be made (the charge committed and the move then failed) is not dead-lettered:
+ * {@link #completedInHandler} settles the move {@link DeadLetterMove#HANDLED}, the owner records the message handled, and
+ * the release after it, whichever site makes it and whether the owner's pump is live or dead, releases the unit without
+ * the move. A live owner's acknowledgement deletes the row when it is flushed before the release, as on {@code stop()}
+ * for one queued before its flush ({@code ShardOwnedQueue.handBackWithinBudget} flushes, then charges and releases). A
+ * shed releases without a flush - an ordered owner whose shed completed past {@code stuckHandlerTimeout} flushes no
+ * acknowledgement once complete - and an acknowledgement flushed after the release is refused; a dead pump's owner's
+ * acknowledgements are never flushed (its state is not trusted). There the next owner, finding the unit released,
+ * charges nothing and may deliver the message again at the attempt count the charge left (always on a dead pump; on a
+ * live owner when the release beats the acknowledgement flush): that redelivery is the cost. Made, the move
+ * dead-lettered a message whose handler had completed - counted both {@code delivered} and {@code deadLettered}, its
+ * ordered key blocked until an operator resurrected or deleted the dead letter - on a dead pump, and on a live owner
+ * whose release ran before the acknowledgement was flushed, while a live owner whose acknowledgement was flushed first
+ * found the row gone: one handler history, two outcomes. What stays dead-lettered: a move made before the handler completed (the completion is logged,
+ * not acknowledged), and one in doubt ({@link #movesInDoubt}) that the dead-letter table shows committed. A handler that
+ * threw - a requested redelivery included - or was interrupted has not completed, and its move is still made.
+ * <p>
  * A {@code QueueObserver} told of a message dead-lettered here is told after the move, once {@link #charge} has let go of
  * the monitor, and what it throws is held until every move is made, then thrown: by then nothing is owed ({@link #owes}),
  * so the queue tells that failure from a failed charge and releases the unit all the same. Callers do not run
@@ -79,9 +98,10 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  *     method - each of which may take the owner's state lock ({@code stateLock}): both owners take it in their candidates,
  *     {@code onCharged} and (ordered) {@code onMoved};</li>
  *     <li>so a caller of {@link #charge}, {@link #owes}, {@link #owesDeadLetterMove}, {@link #answer} or
- *     {@link #deadLetteredWhileInHandler} must not hold the owner's state lock, nor any lock those callbacks take:
- *     {@link #owes}, {@link #owesDeadLetterMove} and {@link #answer} take the monitor, and
- *     {@link #deadLetteredWhileInHandler} waits on it while a running charge may move the message. A caller holding one
+ *     {@link #deadLetteredWhileInHandler} or {@link #completedInHandler} must not hold the owner's state lock, nor any lock
+ *     those callbacks take: {@link #owes}, {@link #owesDeadLetterMove} and {@link #answer} take the monitor, and
+ *     {@link #deadLetteredWhileInHandler} and {@link #completedInHandler} wait on it while a running charge may move the
+ *     message or its move is still to be made. A caller holding one
  *     while a charge waits for it in a callback deadlocks with that charge - a handler thread, say, asking
  *     {@link #deadLetteredWhileInHandler} inside its owner's {@code synchronized (stateLock)}. Both owners ask before they
  *     take it ({@code ReleaseChargeHandlerReturnTest} pins a handler returning mid-charge on each lane);</li>
@@ -167,7 +187,15 @@ final class ReleaseChargeLedger {
          * may have committed on the server all the same, so a later attempt that moves nothing asks the dead-letter table
          * ({@link Writes#isDeadLetteredOnRelease}) and is {@link #MOVED} when the message is there.
          */
-        ROW_GONE
+        ROW_GONE,
+        /**
+         * Its handler completed while the move was still to be made ({@link #PENDING}), and the owner records the message
+         * handled ({@link #completedInHandler}): the move is not made, as the completion wins (class javadoc). Unless an
+         * earlier attempt of the move threw with no answer from the database ({@link #movesInDoubt}): that attempt may have
+         * committed, so the next {@link #charge} asks the dead-letter table ({@link Writes#isDeadLetteredOnRelease}), and
+         * the message is {@link #MOVED} when it is there.
+         */
+        HANDLED
     }
 
     /**
@@ -200,6 +228,10 @@ final class ReleaseChargeLedger {
         ChargedRow moved(boolean moved) {
             return new ChargedRow(seq, key, keyOrder, attemptsAfterCharge, moved ? DeadLetterMove.MOVED : DeadLetterMove.ROW_GONE);
         }
+
+        ChargedRow handled() {
+            return new ChargedRow(seq, key, keyOrder, attemptsAfterCharge, DeadLetterMove.HANDLED);
+        }
     }
 
     /**
@@ -220,8 +252,9 @@ final class ReleaseChargeLedger {
     private final Consumer<Map<Long, Integer>>  onCharged;
     private final Consumer<ChargedRow>          onMoved;
     /**
-     * Guards every write to {@link #rows}, and every read but {@link #deadLetteredWhileInHandler}'s, which takes it only to
-     * wait for a running charge.
+     * Guards every write to {@link #rows}, and every read but {@link #deadLetteredWhileInHandler}'s and
+     * {@link #completedInHandler}'s, which take it only to wait for a running charge or to read a move still to be made
+     * (and, {@link #completedInHandler}, to settle it).
      */
     private final Object                        monitor = new Object();
     /**
@@ -325,7 +358,9 @@ final class ReleaseChargeLedger {
 
     /**
      * Whether a message this ledger charged is at the redelivery limit with its dead-letter move still to be made
-     * ({@link DeadLetterMove#PENDING}), whatever the owner's candidates: the half of {@link #owes} no scope changes. Asked
+     * ({@link DeadLetterMove#PENDING}), or its handler completed after a move of it threw with no answer from the database
+     * and the dead-letter table is still to be asked whether that move committed ({@link DeadLetterMove#HANDLED} in
+     * {@link #movesInDoubt}), whatever the owner's candidates: the half of {@link #owes} no scope changes. Asked
      * by {@code ShardOwnedQueue.releaseLeaseRows}, which every release of an owner's row goes through, and which releases
      * no owner while this is {@code true}: released with the move owed, a dead letter that had committed went uncounted and
      * unreported, and a message that had not been moved was handed on at its attempt limit to an owner that charges
@@ -334,8 +369,17 @@ final class ReleaseChargeLedger {
      */
     boolean owesDeadLetterMove() {
         synchronized (monitor) {
-            return rows.values().stream().anyMatch(row -> row.move() == DeadLetterMove.PENDING);
+            return rows.values().stream().anyMatch(this::stillToSettle);
         }
+    }
+
+    /**
+     * Whether {@link #charge} still has a write or a lookup to make for {@code row}: its dead-letter move
+     * ({@link DeadLetterMove#PENDING}), or, its handler having completed after a move of it that is in doubt, the lookup of
+     * the dead-letter table that tells whether that move committed. Called under {@link #monitor}.
+     */
+    private boolean stillToSettle(ChargedRow row) {
+        return row.move() == DeadLetterMove.PENDING || (row.move() == DeadLetterMove.HANDLED && movesInDoubt.contains(row.seq()));
     }
 
     /**
@@ -378,7 +422,7 @@ final class ReleaseChargeLedger {
                 try {
                     var toCharge = notChargedYet(requireNonNull(candidates.get(), "No candidates supplied"));
                     var mayMove  = new HashSet<>(toCharge.keySet());
-                    rows.values().stream().filter(row -> row.move() == DeadLetterMove.PENDING).forEach(row -> mayMove.add(row.seq()));
+                    rows.values().stream().filter(this::stillToSettle).forEach(row -> mayMove.add(row.seq()));
                     running = new RunningCharge(Set.copyOf(mayMove));
                     answer = chargeAndMove(connection, toCharge, moved);
                 } finally {
@@ -455,7 +499,18 @@ final class ReleaseChargeLedger {
             }
         }
         for (var row : rows.values()) {
-            if (row.move() != DeadLetterMove.PENDING) {
+            if (!stillToSettle(row)) {
+                continue;
+            }
+            if (row.move() == DeadLetterMove.HANDLED) {
+                // Its handler completed, and the owner recorded it handled, after a move of it that threw with no answer from
+                // the database: no move is made for it, but that one may have committed, so the dead-letter table is asked.
+                // There, it was dead-lettered before its handler completed, and is reported as any move made here is
+                var deadLettered = writes.isDeadLetteredOnRelease(connection, row.seq(), row.attemptsAfterCharge());
+                movesInDoubt.remove(row.seq());
+                if (deadLettered) {
+                    recordMoved(row.moved(true), moved);
+                }
                 continue;
             }
             boolean movedNow;
@@ -473,18 +528,29 @@ final class ReleaseChargeLedger {
             var made = row.moved(movedNow || (movesInDoubt.contains(row.seq())
                                               && writes.isDeadLetteredOnRelease(connection, row.seq(), row.attemptsAfterCharge())));
             movesInDoubt.remove(row.seq());
-            rows.put(row.seq(), made);
             if (made.move() == DeadLetterMove.MOVED) {
-                // Counted and queued for the observer before the owner is handed it: the move has committed and no later call
-                // reaches this line for the message again, so an onMoved that throws must not leave it uncounted and
-                // unreported. The observer is told once charge() has let go of the monitor; an observer that throws leaves the
-                // move made and remembered all the same.
-                metrics.deadLettered.increment();
-                moved.add(made);
-                onMoved.accept(made);
+                recordMoved(made, moved);
+            } else {
+                rows.put(row.seq(), made);
             }
         }
         return currentAnswer();
+    }
+
+    /**
+     * Record {@code made}, a message found in the dead-letter table as {@link Writes#moveToDeadLetterIfOwned} moves it, count
+     * it, queue it in {@code moved} for {@link #charge} to tell the {@code QueueObserver} of, and hand it to the owner
+     * ({@code onMoved}). Called under {@link #monitor}.
+     */
+    private void recordMoved(ChargedRow made, List<ChargedRow> moved) {
+        rows.put(made.seq(), made);
+        // Counted and queued for the observer before the owner is handed it: the move has committed and no later call
+        // reaches this line for the message again, so an onMoved that throws must not leave it uncounted and
+        // unreported. The observer is told once charge() has let go of the monitor; an observer that throws leaves the
+        // move made and remembered all the same.
+        metrics.deadLettered.increment();
+        moved.add(made);
+        onMoved.accept(made);
     }
 
     /**
@@ -499,7 +565,9 @@ final class ReleaseChargeLedger {
     /**
      * The message of {@code seq} as {@link #charge} dead-lettered it, if it did: its row is gone, so whatever its handler
      * reports later has nothing to acknowledge, no attempt to count and nothing to retry, and its dead letter carries
-     * {@link ShardOwnedStorage#EXHAUSTED_IN_A_RELEASED_HANDLER}, not the handler's outcome.
+     * {@link ShardOwnedStorage#EXHAUSTED_IN_A_RELEASED_HANDLER}, not the handler's outcome. For a handler that has not
+     * completed - it threw, or was interrupted - so a move still to be made stays owed; a handler that completed asks
+     * {@link #completedInHandler} instead.
      * <p>
      * Asked by a handler thread once its handler has returned, before the owner records the outcome, and after the owner
      * has marked the handler returned, so no {@link #charge} that takes its candidates after this call takes this message.
@@ -517,6 +585,32 @@ final class ReleaseChargeLedger {
         if ((charge != null && charge.mayMove(seq)) || (row != null && row.move() == DeadLetterMove.PENDING)) {
             synchronized (monitor) {
                 row = rows.get(seq);
+            }
+        }
+        return row != null && row.move() == DeadLetterMove.MOVED ? Optional.of(row) : Optional.empty();
+    }
+
+    /**
+     * {@link #deadLetteredWhileInHandler} for a handler that completed - returned without an exception and not interrupted
+     * - whose owner records the message handled unless this answers its dead letter: and when the move of the message is
+     * still to be made ({@link DeadLetterMove#PENDING}), it is settled {@link DeadLetterMove#HANDLED} here, under the
+     * monitor, so no {@link #charge} after this call makes it. The completion wins (class javadoc). A move made before the
+     * handler completed stands: that message is answered, as by {@link #deadLetteredWhileInHandler}.
+     * <p>
+     * Asked at the same point as {@link #deadLetteredWhileInHandler} - once the handler has returned, after the owner has
+     * marked it returned, before the owner records the outcome and without the owner's state lock - and waits for a running
+     * charge the same way.
+     */
+    Optional<ChargedRow> completedInHandler(long seq) {
+        var charge = running;
+        var row    = rows.get(seq);
+        if ((charge != null && charge.mayMove(seq)) || (row != null && row.move() == DeadLetterMove.PENDING)) {
+            synchronized (monitor) {
+                row = rows.get(seq);
+                if (row != null && row.move() == DeadLetterMove.PENDING) {
+                    row = row.handled();
+                    rows.put(seq, row);
+                }
             }
         }
         return row != null && row.move() == DeadLetterMove.MOVED ? Optional.of(row) : Optional.empty();

@@ -694,7 +694,13 @@ dead-lettered key in a WARN. So do, on both lanes, a dead pump's hand-back and a
 has returned since an earlier charge of it - the hand-back's own on an earlier heartbeat, or a shed's - left the move
 owed; an unordered shard's messages have no key, so its release WARN names the dead-lettered seq instead. While the
 move keeps failing, the dead pump's hand-back holds the unit and retries on the next heartbeat, and a `stop()` leaves
-its lease unreleased, as when its charge fails, with a WARN either way. When the kept unit is instead
+its lease unreleased, as when its charge fails, with a WARN either way. A handler that completes - returns without an
+exception, its thread not interrupted - while its message's move is owed settles that move: none of these releases
+makes it, the completion is recorded as for any other (counted in `delivered`, its acknowledgement queued) and
+its key is not blocked. Only a handler that threw, a requested redelivery included, or returned interrupted leaves the
+move owed. The cost is that the next owner may deliver that message again (always on a dead pump; on a live owner when
+the release beats the acknowledgement flush). A move that may have gone through on the server before
+the handler completed is still looked for in the dead-letter table, and reported as above when found. When the kept unit is instead
 taken over, the move is not made again, and that dead letter is then reported nowhere, though it blocks its key. A move
 the database refused with an error of its own (an SQL state outside class `08`, such as a trigger's refusal or a
 cancelled statement) was rolled back, and its retry does not look for it. Such a WARN names the hand-back the dead
@@ -703,7 +709,7 @@ same hand-back, or its release, may still fail and leave the unit held. A `relea
 still in a handler whose charge dead-letters a message but that then does not release the unit - the charge fails
 after a move, the release fails, or it finds the unit taken over - names the dead-lettered keys in a WARN of its own,
 as a later request or hand-back with no key in a handler does not name them.
-(`6337f7d89`, `2fdeb3db0`, `bfa961ec5`, `dbae0986f`, `7dbd517be`, `e699c9d44`, `895b1a498`, `52c5e943e`, `56790ca82`, `b785a52b2`, `ab601d493`, `311efc4ad`, `055e013d6`, `<!-- fix:U-008 -->`)
+(`6337f7d89`, `2fdeb3db0`, `bfa961ec5`, `dbae0986f`, `7dbd517be`, `e699c9d44`, `895b1a498`, `52c5e943e`, `56790ca82`, `b785a52b2`, `ab601d493`, `311efc4ad`, `055e013d6`, `<!-- fix:U-008 -->`, `<!-- fix:U-022 -->`)
 
 **The unordered lane now charges a hung handler's delivery too, past the same bound.** It waits for no handler: a
 fair-share shed and a dead pump's hand-back release an unordered shard at once, and `stop()` once `shedGrace` has run

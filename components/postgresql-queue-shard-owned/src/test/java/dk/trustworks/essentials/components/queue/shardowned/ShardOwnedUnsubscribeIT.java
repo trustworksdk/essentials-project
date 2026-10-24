@@ -1491,10 +1491,11 @@ class ShardOwnedUnsubscribeIT {
     /**
      * A release on request whose dead-letter move of the message it charged to its attempt limit throws once it has waited
      * its network wait bound for the {@code COMMIT}'s answer - the {@code COMMIT} held on the server past the bound, then
-     * going through - leaves that move owed. When the kept handler then returns, the hand-back of the unit makes the move
-     * again before releasing the row: it finds the message in the dead-letter table, counts it in {@code deadLettered},
-     * tells the {@code QueueObserver} and names the key in a WARN. The hand-back used to release the row with the move
-     * still owed, and that dead letter was counted nowhere and reported to nobody, though it blocked its key.
+     * going through - leaves that move owed. When the kept handler then returns, the hand-back of the unit, the handler
+     * having completed, makes no move and asks the dead-letter table before releasing the row: it finds the move that
+     * committed, counts it in {@code deadLettered}, tells the {@code QueueObserver} and names the key in a WARN. The
+     * hand-back used to release the row with the move still owed, and that dead letter was counted nowhere and reported
+     * to nobody, though it blocked its key.
      */
     @Test
     void a_dead_letter_move_a_release_on_request_stopped_waiting_for_is_reported_by_the_hand_back_once_the_handler_returns() throws Exception {
@@ -1613,11 +1614,12 @@ class ShardOwnedUnsubscribeIT {
     }
 
     /**
-     * As above, but the hand-back once the kept handler returns fails before its move - a test trigger refuses its
-     * acknowledgement flush - so the unit stays kept with no key in a handler and the move still owed. The next release on
-     * request makes that move before releasing the row, though no key is in a handler: it finds the message in the
-     * dead-letter table, counts it and tells the {@code QueueObserver}, and its answer names the key dead-lettered. With no
-     * key in a handler it used to release the row without the move, answering with no dead-lettered key.
+     * As above, but the hand-back once the kept handler returns fails before its lookup - a test trigger refuses its
+     * acknowledgement flush - so the unit stays kept with no key in a handler, with the lookup still owed. The next
+     * release on request, the handler having completed, makes no move and asks the dead-letter table before releasing
+     * the row, though no key is in a handler: it finds the move that committed, counts it and tells the
+     * {@code QueueObserver}, and its answer names the key dead-lettered. With no key in a handler it used to release the
+     * row without the move, answering with no dead-lettered key.
      */
     @Test
     void a_release_on_request_with_no_key_in_a_handler_makes_the_dead_letter_move_an_earlier_request_stopped_waiting_for() throws Exception {

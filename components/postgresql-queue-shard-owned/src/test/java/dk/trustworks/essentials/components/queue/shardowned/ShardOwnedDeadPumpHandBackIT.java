@@ -638,20 +638,44 @@ class ShardOwnedDeadPumpHandBackIT {
 
     /**
      * A dead pump's ordered unit whose charge past {@code stuckHandlerTimeout} committed, and whose dead-letter move of the
-     * message the charge brought to its attempt limit then failed - refused by the database here - is held. Once the hung
-     * handler has returned, no key is in a handler, and the hand-back still makes that move before it releases the row: the
-     * message is dead-lettered, counted in {@code deadLettered}, the {@code QueueObserver} told, and a WARN names the key.
-     * The hand-back of a unit with no key in a handler used to release the row with the move owed, and the next owner,
-     * finding the unit released, charged nothing and delivered the message again at its attempt limit.
+     * message the charge brought to its attempt limit then failed - refused by the database here - is held. Its hung handler
+     * then completes, and the completion wins (the {@code ReleaseChargeLedger} class javadoc): the move is settled as handled,
+     * so the next hand-back releases the unit without it, the move still refused. Nothing is dead-lettered and the key is not
+     * blocked; the next owner, finding the unit released, delivers the message again - the dead pump's acknowledgement is
+     * never flushed - and then the key's next message. The hand-back used to make the move all the same: the message whose
+     * handler had completed was dead-lettered, counted both {@code delivered} and {@code deadLettered}, and its key blocked
+     * until an operator resurrected or deleted the dead letter, while a live owner's stop flushed the acknowledgement first
+     * and the same handler history dead-lettered nothing.
      */
     @Test
-    void a_dead_pumps_unit_whose_dead_letter_move_failed_makes_that_move_before_its_release_once_its_handler_has_returned() throws Exception {
+    void a_dead_pumps_unit_whose_dead_letter_move_failed_is_handed_back_without_that_move_once_its_handler_has_completed() throws Exception {
+        deadPumpsUnitWhoseDeadLetterMoveFailed(true);
+    }
+
+    /**
+     * As above, but the hung handler returns interrupted: it has not finished, so the message is not handled, and the
+     * hand-back still makes the move before it releases the row, once the database lets it through: the message is
+     * dead-lettered, counted in {@code deadLettered}, the {@code QueueObserver} told, a WARN names the key, and the key is
+     * blocked. The hand-back of a unit with no key in a handler used to release the row with the move owed, and the next
+     * owner, finding the unit released, charged nothing and delivered the message again at its attempt limit.
+     */
+    @Test
+    void a_dead_pumps_unit_whose_dead_letter_move_failed_makes_that_move_before_its_release_once_its_handler_has_returned_unfinished() throws Exception {
+        deadPumpsUnitWhoseDeadLetterMoveFailed(false);
+    }
+
+    /**
+     * A dead pump's ordered unit whose hand-back charged the message of key {@code HOLD} in its hung handler and had the
+     * dead-letter move refused; then the handler returns - completed when {@code handlerCompletes}, else interrupted.
+     */
+    private void deadPumpsUnitWhoseDeadLetterMoveFailed(boolean handlerCompletes) throws Exception {
         var stuckHandlerTimeout = Duration.ofSeconds(1);
         var settings            = settings(2, Duration.ofMillis(300), Duration.ofSeconds(1), stuckHandlerTimeout);
         var entered             = new CountDownLatch(1);
         var release             = new CountDownLatch(1);
         var returned            = new CountDownLatch(1);
         var deliveries          = new AtomicInteger();
+        var nextOfTheKey        = new CountDownLatch(1);
         var heldUnit            = new CompletableFuture<Integer>();
         var told                = new AtomicInteger();
         var logged              = captureQueueLog();
@@ -667,10 +691,19 @@ class ShardOwnedDeadPumpHandBackIT {
                                        .setMetrics(new ShardOwnerMetrics(observer)).build();
             try {
                 queue.startConsumingOrdered((messageId, key, payload, payloadType) -> {
-                    if ("HOLD".equals(key) && deliveries.incrementAndGet() == 1) {
+                    if (!"HOLD".equals(key)) {
+                        return;
+                    }
+                    if ("HOLD-1".equals(new String(payload, StandardCharsets.UTF_8))) {
+                        nextOfTheKey.countDown();
+                    } else if (deliveries.incrementAndGet() == 1) {
                         heldUnit.complete(messageId.shard());
                         entered.countDown();
                         awaitQuietly(release);
+                        if (!handlerCompletes) {
+                            // Returns interrupted: not finished, so not handled
+                            Thread.currentThread().interrupt();
+                        }
                         returned.countDown();
                     }
                 }, settings, SHARD_COUNT, RedeliveryPolicy.fixed(Duration.ofMillis(100), 1));
@@ -698,11 +731,18 @@ class ShardOwnedDeadPumpHandBackIT {
 
                     release.countDown();
                     assertThat(returned.await(10, TimeUnit.SECONDS)).as("premise: the hung handler returned").isTrue();
-                    // A tick after the handler returned has run: the unit, with no key in a handler, is either held with its
-                    // move refused again, or released.
-                    Awaitility.await().atMost(Duration.ofSeconds(20))
-                              .until(() -> !warnings(logged, "could not make the dead-letter move(s) an earlier release of ordered unit").isEmpty()
-                                      || fenceOf("ordered", unit) > fenceBefore);
+                    if (handlerCompletes) {
+                        // With the move still refused: a completion leaves no move to make
+                        Awaitility.await().atMost(Duration.ofSeconds(20)).untilAsserted(
+                                () -> assertThat(fenceOf("ordered", unit)).as("handed back without the move, and taken again")
+                                                                          .isGreaterThan(fenceBefore));
+                    } else {
+                        // A tick after the handler returned has run: the unit, with no key in a handler, is either held with
+                        // its move refused again, or released.
+                        Awaitility.await().atMost(Duration.ofSeconds(20))
+                                  .until(() -> !warnings(logged, "could not make the dead-letter move(s) an earlier release of ordered unit").isEmpty()
+                                          || fenceOf("ordered", unit) > fenceBefore);
+                    }
                 } finally {
                     failDeadLetterMoves(false);
                 }
@@ -711,6 +751,20 @@ class ShardOwnedDeadPumpHandBackIT {
                     assertThat(fenceOf("ordered", unit)).as("handed back and taken again").isGreaterThan(fenceBefore);
                     assertThat(queue.metrics().shardsOnDeadPumps.get()).isZero();
                 });
+                assertThat(queue.metrics().takeoverAttemptBumps.sum()).as("charged once").isEqualTo(1);
+                if (handlerCompletes) {
+                    queue.enqueueOrdered(List.of(new ShardOwnedStorage.OrderedPayload("HOLD", 1, "HOLD-1".getBytes(StandardCharsets.UTF_8), 1)));
+                    assertThat(nextOfTheKey.await(20, TimeUnit.SECONDS)).as("the key is not blocked: its next message is delivered").isTrue();
+                    assertThat(deliveries).as("the handled message delivered again by the next owner: the dead pump's acknowledgement "
+                                              + "is never flushed").hasValue(2);
+                    assertThat(queue.deadLetters()).as("nothing dead-lettered").isEmpty();
+                    assertThat(queue.metrics().deadLettered.sum()).isZero();
+                    assertThat(told).as("the observer told of no dead letter").hasValue(0);
+                    assertThat(warnings(logged, "has made or found, before releasing it, dead-letter move(s)")).as("no dead letter named").isEmpty();
+                    Awaitility.await().atMost(Duration.ofSeconds(10))
+                              .untilAsserted(() -> assertThat(messagesLeft("ordered")).as("both messages handled and acknowledged").isZero());
+                    return;
+                }
                 assertThat(queue.deadLetters()).as("the hand-back made the move the charge left owed").singleElement()
                                                .satisfies(deadLetter -> {
                                                    assertThat(deadLetter.error()).isEqualTo(ShardOwnedStorage.EXHAUSTED_IN_A_RELEASED_HANDLER);
@@ -718,7 +772,6 @@ class ShardOwnedDeadPumpHandBackIT {
                                                });
                 assertThat(queue.metrics().deadLettered.sum()).as("counted").isEqualTo(1);
                 assertThat(told).as("and the observer told").hasValue(1);
-                assertThat(queue.metrics().takeoverAttemptBumps.sum()).as("charged once").isEqualTo(1);
                 assertThat(warnings(logged, "has made or found, before releasing it, dead-letter move(s)")).as("the key named").singleElement()
                                                                                                          .satisfies(warning -> {
                                                                                                              assertThat(warning.getArgumentArray()[1]).as("the unit").isEqualTo(unit);
@@ -738,13 +791,32 @@ class ShardOwnedDeadPumpHandBackIT {
     }
 
     /**
-     * The unordered twin of the test above: a dead pump's shard whose charge committed and whose dead-letter move failed is
-     * held, and once the hung handler has returned, with no message in a handler, the hand-back still makes the move before
-     * it releases the row. It used to release the row with the move owed, and the message was delivered again at its
-     * attempt limit.
+     * The unordered twin of {@link #a_dead_pumps_unit_whose_dead_letter_move_failed_is_handed_back_without_that_move_once_its_handler_has_completed}:
+     * a dead pump's shard whose charge committed and whose dead-letter move failed is held, and once the hung handler has
+     * completed the hand-back releases the row without the move, which is still refused. Nothing is dead-lettered; the next
+     * owner delivers the message again, as the dead pump's acknowledgement is never flushed. The move used to be made all
+     * the same, dead-lettering a message whose handler had completed.
      */
     @Test
-    void a_dead_pumps_unordered_shard_whose_dead_letter_move_failed_makes_that_move_before_its_release_once_its_handler_has_returned() throws Exception {
+    void a_dead_pumps_unordered_shard_whose_dead_letter_move_failed_is_handed_back_without_that_move_once_its_handler_has_completed() throws Exception {
+        deadPumpsUnorderedShardWhoseDeadLetterMoveFailed(true);
+    }
+
+    /**
+     * The unordered twin of {@link #a_dead_pumps_unit_whose_dead_letter_move_failed_makes_that_move_before_its_release_once_its_handler_has_returned_unfinished}:
+     * the hung handler returns interrupted, and the hand-back still makes the move before it releases the row. It used to
+     * release the row with the move owed, and the message was delivered again at its attempt limit.
+     */
+    @Test
+    void a_dead_pumps_unordered_shard_whose_dead_letter_move_failed_makes_that_move_before_its_release_once_its_handler_has_returned_unfinished() throws Exception {
+        deadPumpsUnorderedShardWhoseDeadLetterMoveFailed(false);
+    }
+
+    /**
+     * A dead pump's unordered shard whose hand-back charged the message in its hung handler and had the dead-letter move
+     * refused; then the handler returns - completed when {@code handlerCompletes}, else interrupted.
+     */
+    private void deadPumpsUnorderedShardWhoseDeadLetterMoveFailed(boolean handlerCompletes) throws Exception {
         var stuckHandlerTimeout = Duration.ofSeconds(1);
         var settings            = settings(2, Duration.ofMillis(300), Duration.ofSeconds(1), stuckHandlerTimeout);
         var entered             = new CountDownLatch(1);
@@ -772,6 +844,10 @@ class ShardOwnedDeadPumpHandBackIT {
                         heldSeq.complete(messageId.sequence());
                         entered.countDown();
                         awaitQuietly(release);
+                        if (!handlerCompletes) {
+                            // Returns interrupted: not finished, so not handled
+                            Thread.currentThread().interrupt();
+                        }
                         returned.countDown();
                     }
                 }, settings, SHARD_COUNT, RedeliveryPolicy.fixed(Duration.ofMillis(100), 1));
@@ -796,11 +872,18 @@ class ShardOwnedDeadPumpHandBackIT {
 
                     release.countDown();
                     assertThat(returned.await(10, TimeUnit.SECONDS)).as("premise: the hung handler returned").isTrue();
-                    // Two more failed attempts, or a release: the second began on a tick after the handler returned.
-                    var failuresAtReturn = unorderedChargeFailuresOf(logged, shard).size();
-                    Awaitility.await().atMost(Duration.ofSeconds(20))
-                              .until(() -> unorderedChargeFailuresOf(logged, shard).size() >= failuresAtReturn + 2
-                                      || fenceOf("unordered", shard) > fenceBefore);
+                    if (handlerCompletes) {
+                        // With the move still refused: a completion leaves no move to make
+                        Awaitility.await().atMost(Duration.ofSeconds(20)).untilAsserted(
+                                () -> assertThat(fenceOf("unordered", shard)).as("handed back without the move, and taken again")
+                                                                             .isGreaterThan(fenceBefore));
+                    } else {
+                        // Two more failed attempts, or a release: the second began on a tick after the handler returned.
+                        var failuresAtReturn = unorderedChargeFailuresOf(logged, shard).size();
+                        Awaitility.await().atMost(Duration.ofSeconds(20))
+                                  .until(() -> unorderedChargeFailuresOf(logged, shard).size() >= failuresAtReturn + 2
+                                          || fenceOf("unordered", shard) > fenceBefore);
+                    }
                 } finally {
                     failDeadLetterMoves(false);
                 }
@@ -809,6 +892,18 @@ class ShardOwnedDeadPumpHandBackIT {
                     assertThat(fenceOf("unordered", shard)).as("handed back and taken again").isGreaterThan(fenceBefore);
                     assertThat(queue.metrics().shardsOnDeadPumps.get()).isZero();
                 });
+                assertThat(queue.metrics().takeoverAttemptBumps.sum()).as("charged once").isEqualTo(1);
+                if (handlerCompletes) {
+                    Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+                        assertThat(deliveries).as("the handled message delivered again by the next owner: the dead pump's acknowledgement "
+                                                  + "is never flushed").hasValue(2);
+                        assertThat(messagesLeft("unordered")).as("and acknowledged").isZero();
+                    });
+                    assertThat(queue.deadLetters()).as("nothing dead-lettered").isEmpty();
+                    assertThat(queue.metrics().deadLettered.sum()).isZero();
+                    assertThat(told).as("the observer told of no dead letter").hasValue(0);
+                    return;
+                }
                 assertThat(queue.deadLetters()).as("the hand-back made the move the charge left owed").singleElement()
                                                .satisfies(deadLetter -> {
                                                    assertThat(deadLetter.shard()).isEqualTo(shard);
@@ -818,7 +913,6 @@ class ShardOwnedDeadPumpHandBackIT {
                                                });
                 assertThat(queue.metrics().deadLettered.sum()).as("counted").isEqualTo(1);
                 assertThat(told).as("and the observer told").hasValue(1);
-                assertThat(queue.metrics().takeoverAttemptBumps.sum()).as("charged once").isEqualTo(1);
                 assertThat(warnings(logged, "released unordered shard")).as("one WARN for the hand-back").singleElement()
                                                                         .satisfies(warning -> assertThat(warning.getFormattedMessage())
                                                                                 .contains("on queue " + QUEUE_ID + " from its dead pump having charged 1 message(s)",
@@ -835,9 +929,108 @@ class ShardOwnedDeadPumpHandBackIT {
     }
 
     /**
+     * One handler history, two owners, one outcome: an unordered message in its handler past {@code stuckHandlerTimeout},
+     * charged before a release of its shard - by a fair-share shed on a live owner, or by the hand-back of an owner whose
+     * pump died - to its attempt limit, the dead-letter move refused; then the handler completes, and the shard is
+     * released with the move still refused. On both, the completion wins (the {@code ReleaseChargeLedger} class javadoc):
+     * nothing is dead-lettered and the message is handled. The dead pump's acknowledgement is never flushed, so there the
+     * next owner delivers it again; a live owner's is, when flushed before the release - refused after it, so the live arm
+     * may also see one more delivery. The hand-back used to make the move
+     * once the database let it through, dead-lettering on a dead pump a message a live owner would have acknowledged.
+     * <p>
+     * Only the message of the first shard shed hangs ({@code SHARD_COUNT / 2}: the shed takes the owners last acquired).
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"live", "dead pump"})
+    void a_message_whose_handler_completes_after_its_charges_dead_letter_move_failed_is_handled_alike_on_a_live_owner_and_a_dead_pump(String owner) throws Exception {
+        var stuckHandlerTimeout = Duration.ofSeconds(1);
+        var settings            = settings(2, Duration.ofMillis(300), Duration.ofSeconds(1), stuckHandlerTimeout);
+        var hungShard           = SHARD_COUNT / 2;
+        var reached             = new CountDownLatch(SHARD_COUNT);
+        var release             = new CountDownLatch(1);
+        var returned            = new CountDownLatch(1);
+        var hungSeq             = new CompletableFuture<Long>();
+        var hungDeliveries      = new AtomicInteger();
+        var logged              = captureQueueLog();
+        try (var firstRuntime = new ShardRuntime(dataSource, settings); var secondRuntime = new ShardRuntime(dataSource, settings)) {
+            var first  = queue(firstRuntime, "alike-first");
+            var second = queue(secondRuntime, "alike-second");
+            PayloadHandler handler = (messageId, payload, payloadType) -> {
+                if (messageId.shard() != hungShard) {
+                    reached.countDown();
+                    return;
+                }
+                if (hungDeliveries.incrementAndGet() == 1) {
+                    hungSeq.complete(messageId.sequence());
+                    reached.countDown();
+                    awaitQuietly(release);
+                    returned.countDown();
+                }
+            };
+            try {
+                first.startConsuming(handler, settings, SHARD_COUNT, RedeliveryPolicy.fixed(Duration.ofMillis(100), 1));
+                assertThat(first.shardsHeld()).as("premise: alone, the first instance holds every shard").isEqualTo(SHARD_COUNT);
+                for (var message = 0; message < SHARD_COUNT; message++) {
+                    first.enqueue(List.of(("message-" + message).getBytes(StandardCharsets.UTF_8)), 1);
+                }
+                assertThat(reached.await(20, TimeUnit.SECONDS)).as("premise: every message reached its handler").isTrue();
+                assertThat(hungSeq).as("premise: a message of the first shard shed hangs").isDone();
+                var fenceBefore = fenceOf("unordered", hungShard);
+                Thread.sleep(stuckHandlerTimeout.toMillis() + 300);
+
+                failDeadLetterMoves(true);
+                try {
+                    if ("live".equals(owner)) {
+                        second.startConsuming(handler, settings, SHARD_COUNT, RedeliveryPolicy.fixed(Duration.ofMillis(100), 1));
+                    } else {
+                        kill(firstRuntime.pumpFor(QUEUE_ID, "unordered", hungShard));
+                    }
+                    Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(
+                            () -> assertThat(unorderedChargeFailuresOf(logged, hungShard))
+                                    .as("premise: the charge committed and its dead-letter move was refused")
+                                    .anySatisfy(warning -> assertThat(warning.getThrowableProxy().getMessage())
+                                            .contains("simulated failure moving to the dead-letter table")));
+                    assertThat(first.metrics().takeoverAttemptBumps.sum()).as("premise: the hung message was charged, once").isEqualTo(1);
+                    assertThat(fenceOf("unordered", hungShard)).as("premise: its shard is held").isEqualTo(fenceBefore);
+
+                    release.countDown();
+                    assertThat(returned.await(10, TimeUnit.SECONDS)).as("premise: the hung handler completed").isTrue();
+                    Awaitility.await().atMost(Duration.ofSeconds(20)).untilAsserted(
+                            () -> assertThat(fenceOf("unordered", hungShard)).as("released with the move still refused, and taken again")
+                                                                             .isGreaterThan(fenceBefore));
+                } finally {
+                    failDeadLetterMoves(false);
+                }
+
+                Awaitility.await().atMost(Duration.ofSeconds(10))
+                          .untilAsserted(() -> assertThat(messagesLeft("unordered")).as("the message handled and acknowledged").isZero());
+                assertThat(first.deadLetters()).as("nothing dead-lettered").isEmpty();
+                assertThat(first.metrics().deadLettered.sum()).isZero();
+                assertThat(second.metrics().deadLettered.sum()).isZero();
+                assertThat(first.metrics().takeoverAttemptBumps.sum()).as("charged once").isEqualTo(1);
+                if ("live".equals(owner)) {
+                    assertThat(hungDeliveries).as("delivered once more at most: by the next owner, when the release beat the acknowledgement flush")
+                                              .hasValueBetween(1, 2);
+                } else {
+                    assertThat(hungDeliveries).as("delivered once more: by the next owner, as a dead pump's acknowledgement is never flushed")
+                                              .hasValue(2);
+                }
+            } finally {
+                release.countDown();
+                failDeadLetterMoves(false);
+                second.stop();
+                first.stop();
+            }
+        } finally {
+            releaseQueueLog(logged);
+        }
+    }
+
+    /**
      * A stop releases a unit only once the dead-letter move an earlier charge of it left owed is made, also with nothing in
      * a handler: here a dead pump's hand-back charged the message in the hung handler, its move was refused, and the
-     * handler has returned since. With the move refused again, the stop leaves the unit's lease row as a release that
+     * handler has returned interrupted since - not finished, so the move stays owed (a handler that completed settles it
+     * as handled: the completion wins). With the move refused again, the stop leaves the unit's lease row as a release that
      * fails leaves it, with one WARN naming it. A stop used to ask only whether a message was in a handler (unordered) or
      * nothing at all (ordered), and released the row with the move owed.
      */
@@ -865,7 +1058,7 @@ class ShardOwnedDeadPumpHandBackIT {
 
     /**
      * A dead pump's {@code lane} unit whose hand-back charged the message in its hung handler, had its dead-letter move
-     * refused, and is held, with that handler returned since and two more hand-backs refused; then the queue is stopped,
+     * refused, and is held, with that handler returned interrupted since and two more hand-backs refused; then the queue is stopped,
      * with the move refused once more, or let through on the stop's own thread when {@code moveGoesThroughOnStop}.
      */
     private void stopWhileADeadPumpsUnitOwesADeadLetterMove(String lane, boolean moveGoesThroughOnStop) throws Exception {
@@ -895,6 +1088,9 @@ class ShardOwnedDeadPumpHandBackIT {
                 Runnable holdTheFirst = () -> {
                     entered.countDown();
                     awaitQuietly(release);
+                    // Returns interrupted: not finished, so the move stays owed. A completed handler would settle it as
+                    // handled, leaving the stop nothing to make
+                    Thread.currentThread().interrupt();
                     returned.countDown();
                 };
                 if ("ordered".equals(lane)) {
@@ -2389,6 +2585,15 @@ class ShardOwnedDeadPumpHandBackIT {
             fences.put(unit, fenceOf(queueId, lane, unit));
         }
         return fences;
+    }
+
+    /**
+     * The messages left in {@code lane}'s table of {@link #QUEUE_ID}.
+     */
+    private int messagesLeft(String lane) throws Exception {
+        return queryForInt(dataSource, "Counting the " + lane + " messages left",
+                           "SELECT count(*) FROM " + ("ordered".equals(lane) ? ShardOwnedSchema.ORDERED_TABLE : ShardOwnedSchema.UNORDERED_TABLE)
+                                   + " WHERE queue_id = ?", QUEUE_ID);
     }
 
     private long fenceOf(String lane, int shard) throws Exception {

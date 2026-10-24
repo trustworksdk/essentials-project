@@ -148,8 +148,9 @@ final class OrderedShardOwner implements BatchReadableOwner {
     /**
      * The sequence values of the messages in {@link #keysInFlight} whose handler has returned or thrown, while the owner
      * records the outcome: left out of the candidates of {@link #chargeKeysInHandlerBeforeRelease}. Marked before the handler
-     * thread asks {@link ReleaseChargeLedger#deadLetteredWhileInHandler}, so a charge that takes its candidates after that
-     * leaves the message to the outcome its handler records, and one that took them before is seen running and waited for.
+     * thread asks {@link ReleaseChargeLedger#completedInHandler} or {@link ReleaseChargeLedger#deadLetteredWhileInHandler},
+     * so a charge that takes its candidates after that leaves the message to the outcome its handler records, and one that
+     * took them before is seen running and waited for.
      * Charged regardless, a message whose handler had completed was acknowledged and dead-lettered both.
      * <p>
      * A handler that failed is left out too while it records its failure, and that record is a fenced write: when the
@@ -853,15 +854,20 @@ final class OrderedShardOwner implements BatchReadableOwner {
         try {
             handler.handle(new MessageId(MessageId.Lane.ORDERED, shard, row.seq()),
                            key, keyOrder, row.payload(), row.payloadType());
+            // Read once: what the ledger is told and what is recorded below must agree
+            var interrupted = Thread.currentThread().isInterrupted();
             markReturnedFromHandler(row.seq());
-            // Asked before stateLock is taken: it may wait for a running charge, which takes stateLock itself
-            var deadLettered = releaseChargeLedger.deadLetteredWhileInHandler(row.seq());
+            // Asked before stateLock is taken: it may wait for a running charge, which takes stateLock itself. A completed
+            // handler's message whose dead-letter move is still owed is settled as handled, not moved (the ledger's
+            // "completion wins"): it is acknowledged below
+            var deadLettered = interrupted ? releaseChargeLedger.deadLetteredWhileInHandler(row.seq())
+                                           : releaseChargeLedger.completedInHandler(row.seq());
             if (deadLettered.isPresent()) {
-                returnedAfterItsDeadLetter(key, deadLettered.get(), Thread.currentThread().isInterrupted());
+                returnedAfterItsDeadLetter(key, deadLettered.get(), interrupted);
                 return;
             }
             synchronized (stateLock) {
-                if (Thread.currentThread().isInterrupted()) {
+                if (interrupted) {
                     metrics.abandonedOnInterrupt.increment();
                     requeue(key, keyOrder, row);
                 } else {
@@ -903,7 +909,7 @@ final class OrderedShardOwner implements BatchReadableOwner {
 
     /**
      * Mark the message of {@code seq} as one whose handler has returned ({@link #returnedFromHandler}), before its handler
-     * thread asks {@link ReleaseChargeLedger#deadLetteredWhileInHandler}.
+     * thread asks {@link ReleaseChargeLedger#completedInHandler} or {@link ReleaseChargeLedger#deadLetteredWhileInHandler}.
      */
     private void markReturnedFromHandler(long seq) {
         synchronized (stateLock) {

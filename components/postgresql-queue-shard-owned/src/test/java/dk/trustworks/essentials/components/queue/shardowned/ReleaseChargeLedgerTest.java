@@ -180,6 +180,111 @@ class ReleaseChargeLedgerTest {
         assertThat(ledger.owesDeadLetterMove()).as("nothing owed once the move is made").isFalse();
     }
 
+    /**
+     * The completion wins: a handler that completes while its message's dead-letter move is still owed - the charge
+     * committed, the move refused - settles that move as handled, and no later call makes it. The owner records the
+     * message handled instead (its acknowledgement queued). Made, the move dead-lettered a message whose handler had
+     * completed - on a dead pump, and on a live owner whose release ran before the acknowledgement was flushed - while a
+     * live owner whose acknowledgement was flushed first found the row gone.
+     */
+    @Test
+    void a_handler_completing_while_its_dead_letter_move_is_owed_settles_that_move_as_handled_and_it_is_never_made() throws Exception {
+        var writes = new FakeWrites(Map.of(1L, 1));
+        writes.failMoves = 1;
+        writes.failMovesSqlState = "P0001";
+        var metrics = new ShardOwnerMetrics();
+        var handed  = new ArrayList<ReleaseChargeLedger.ChargedRow>();
+        var ledger  = new ReleaseChargeLedger(MessageId.Lane.ORDERED, SHARD, writes, RedeliveryPolicy.fixed(Duration.ofSeconds(1), 1), metrics, charged -> { },
+                                              handed::add);
+        assertThatThrownBy(() -> ledger.charge(null, () -> candidates(Map.of(1L, "A")))).isInstanceOf(SQLException.class);
+        assertThat(ledger.owesDeadLetterMove()).as("premise: the move is owed").isTrue();
+
+        assertThat(ledger.completedInHandler(1L)).as("not dead-lettered: the owner records it handled").isEmpty();
+
+        assertThat(ledger.owesDeadLetterMove()).as("nothing owed once its handler completed").isFalse();
+        assertThat(ledger.owes(candidates(Map.of(1L, "A")))).isFalse();
+        var answer = ledger.charge(null, Map::of);
+        assertThat(writes.moveCalls).as("the move is not made again").containsExactly(1L);
+        assertThat(writes.deadLetterLookups).as("nor the dead-letter table asked: the move that failed was not in doubt").isEmpty();
+        assertThat(answer.charged()).as("still charged").isEqualTo(1);
+        assertThat(answer.deadLettered()).isEmpty();
+        assertThat(metrics.deadLettered.sum()).isZero();
+        assertThat(handed).as("no key blocked").isEmpty();
+        assertThat(ledger.deadLetteredWhileInHandler(1L)).isEmpty();
+    }
+
+    /**
+     * A handler that has not completed - it threw, or was interrupted - asks {@link ReleaseChargeLedger#deadLetteredWhileInHandler},
+     * which leaves a dead-letter move still to be made owed: the next call makes it.
+     */
+    @Test
+    void a_handler_that_has_not_completed_leaves_its_dead_letter_move_owed() throws Exception {
+        var writes = new FakeWrites(Map.of(1L, 1));
+        writes.failMoves = 1;
+        writes.failMovesSqlState = "P0001";
+        var ledger = ledger(writes, 1, new ShardOwnerMetrics(), new ArrayList<>());
+        assertThatThrownBy(() -> ledger.charge(null, () -> candidates(1L))).isInstanceOf(SQLException.class);
+
+        assertThat(ledger.deadLetteredWhileInHandler(1L)).isEmpty();
+
+        assertThat(ledger.owesDeadLetterMove()).as("the move is still owed").isTrue();
+        assertThat(ledger.charge(null, Map::of).deadLettered()).as("and made by the next call").extracting(ReleaseChargeLedger.ChargedRow::seq)
+                                                             .containsExactly(1L);
+        assertThat(ledger.completedInHandler(1L)).as("a move made before a completion stands").isPresent();
+    }
+
+    /**
+     * A handler completing after a move of its message threw with no answer from the database: that move may have committed
+     * all the same, so the next call asks the dead-letter table rather than settling it unasked. Found there, the message
+     * was dead-lettered before its handler completed, and is reported as any move made here is; the move is not made again.
+     */
+    @Test
+    void a_handler_completing_after_a_move_of_it_in_doubt_has_the_dead_letter_table_asked_and_a_move_that_committed_reported() throws Exception {
+        var writes = new FakeWrites(Map.of(1L, 1));
+        writes.commitThenFailMoves.add(1L);
+        var metrics = new ShardOwnerMetrics();
+        var handed  = new ArrayList<ReleaseChargeLedger.ChargedRow>();
+        var ledger  = new ReleaseChargeLedger(MessageId.Lane.ORDERED, SHARD, writes, RedeliveryPolicy.fixed(Duration.ofSeconds(1), 1), metrics, charged -> { },
+                                              handed::add);
+        assertThatThrownBy(() -> ledger.charge(null, () -> candidates(Map.of(1L, "A")))).isInstanceOf(SQLException.class);
+
+        assertThat(ledger.completedInHandler(1L)).as("not known to be dead-lettered yet").isEmpty();
+
+        assertThat(ledger.owesDeadLetterMove()).as("the lookup is still owed").isTrue();
+        var answer = ledger.charge(null, Map::of);
+        assertThat(writes.moveCalls).as("no move made again").containsExactly(1L);
+        assertThat(writes.deadLetterLookups).as("the dead-letter table asked").containsExactly(1L);
+        assertThat(answer.deadLettered()).extracting(ReleaseChargeLedger.ChargedRow::seq).containsExactly(1L);
+        assertThat(metrics.deadLettered.sum()).isEqualTo(1);
+        assertThat(handed).as("the key blocked behind it").extracting(ReleaseChargeLedger.ChargedRow::key).containsExactly("A");
+        assertThat(ledger.owesDeadLetterMove()).isFalse();
+    }
+
+    /**
+     * As above, with the move in doubt not committed: the dead-letter table does not hold the message, and the completion
+     * stands - nothing dead-lettered, nothing owed.
+     */
+    @Test
+    void a_handler_completing_after_a_move_of_it_in_doubt_that_did_not_commit_is_settled_as_handled() throws Exception {
+        var writes = new FakeWrites(Map.of(1L, 1));
+        writes.failMoves = 1;
+        writes.failMovesSqlState = "08006";
+        var metrics = new ShardOwnerMetrics();
+        var ledger  = ledger(writes, 1, metrics, new ArrayList<>());
+        assertThatThrownBy(() -> ledger.charge(null, () -> candidates(1L))).isInstanceOf(SQLException.class);
+
+        assertThat(ledger.completedInHandler(1L)).isEmpty();
+        var answer = ledger.charge(null, Map::of);
+
+        assertThat(writes.moveCalls).as("no move made again").containsExactly(1L);
+        assertThat(writes.deadLetterLookups).as("the dead-letter table asked").containsExactly(1L);
+        assertThat(answer.deadLettered()).isEmpty();
+        assertThat(metrics.deadLettered.sum()).isZero();
+        assertThat(ledger.owesDeadLetterMove()).as("nothing owed").isFalse();
+        ledger.charge(null, Map::of);
+        assertThat(writes.deadLetterLookups).as("asked once").containsExactly(1L);
+    }
+
     @Test
     void a_message_charged_below_the_limit_owes_no_dead_letter_move() throws Exception {
         var ledger = ledger(new FakeWrites(Map.of(1L, 1)), 2, new ShardOwnerMetrics(), new ArrayList<>());

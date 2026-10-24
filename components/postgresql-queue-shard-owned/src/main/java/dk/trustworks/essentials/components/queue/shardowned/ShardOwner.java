@@ -144,9 +144,9 @@ final class ShardOwner implements LeasedOwner {
     /**
      * The messages in {@link #inFlight} whose handler has returned or thrown, while the owner records the outcome (still
      * inside the in-flight slot): left out of the candidates of {@link #chargeInHandlerBeforeRelease}. Marked before the
-     * handler thread asks {@link ReleaseChargeLedger#deadLetteredWhileInHandler}, so a charge that takes its candidates after
-     * that leaves the message to the outcome its handler records, and one that took them before is seen running and waited
-     * for. Charged regardless, a message whose handler had completed was acknowledged and dead-lettered both.
+     * handler thread asks {@link ReleaseChargeLedger#completedInHandler} or {@link ReleaseChargeLedger#deadLetteredWhileInHandler},
+     * so a charge that takes its candidates after that leaves the message to the outcome its handler records, and one that
+     * took them before is seen running and waited for. Charged regardless, a message whose handler had completed was acknowledged and dead-lettered both.
      * <p>
      * A handler that failed is left out too while it records its failure, and that record is a fenced write: when the
      * release commits before it, the write is refused (the lease is no longer this owner's), and the next owner, finding
@@ -773,8 +773,9 @@ final class ShardOwner implements LeasedOwner {
             }
             if (handled) {
                 // Still inside the in-flight slot, and before stateLock is taken: this may wait for a running charge, which
-                // takes stateLock itself
-                var deadLettered = releaseChargeLedger.deadLetteredWhileInHandler(row.seq());
+                // takes stateLock itself. A message whose dead-letter move is still owed is settled as handled, not moved
+                // (the ledger's "completion wins"): it is acknowledged below
+                var deadLettered = releaseChargeLedger.completedInHandler(row.seq());
                 if (deadLettered.isPresent()) {
                     handled = false;
                     completedAfterItsDeadLetter(deadLettered.get());
@@ -811,7 +812,7 @@ final class ShardOwner implements LeasedOwner {
 
     /**
      * Mark {@code seq} as a message whose handler has returned ({@link #returnedFromHandler}), before its handler thread asks
-     * {@link ReleaseChargeLedger#deadLetteredWhileInHandler}.
+     * {@link ReleaseChargeLedger#completedInHandler} or {@link ReleaseChargeLedger#deadLetteredWhileInHandler}.
      */
     private void markReturnedFromHandler(long seq) {
         synchronized (stateLock) {

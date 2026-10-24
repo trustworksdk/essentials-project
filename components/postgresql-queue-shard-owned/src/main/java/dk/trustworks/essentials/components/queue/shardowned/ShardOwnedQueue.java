@@ -1582,7 +1582,10 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         }
         // An ordered unit with no key in a handler is released only once every dead-letter move an earlier charge of it left
         // owed is made: a charge of this hand-back on an earlier tick, or of a shed, that committed and whose move then threw.
-        // The handler may have returned since, and nothing new is charged then. Released with the move owed, a dead letter
+        // The handler may have returned since, and nothing new is charged then; one that completed settled its move as handled
+        // (ReleaseChargeLedger, "the completion wins": this owner's acknowledgement is never flushed, so the next owner
+        // delivers the message again), and only a move whose handler threw or was interrupted, or one in doubt, is still
+        // owed here. Released with the move owed, a dead letter
         // that had committed went uncounted and unreported though it blocked its key, and a message that had not been moved
         // was handed on at its attempt limit to an owner that charges nothing for a released unit. A unit whose move fails
         // again is held and retried on the next heartbeat, as one whose charge fails.
@@ -3037,7 +3040,8 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             // Also one with no message in a handler whose earlier charge - a shed's, or a dead-pump hand-back's - committed and
             // left a dead-letter move owed: released with the move owed, a dead letter that had committed went uncounted and
             // unreported, and a message that had not been moved was handed on at its attempt limit to an owner that charges
-            // nothing for a released shard.
+            // nothing for a released shard. A move whose handler completed since is not owed: the ledger settled it as
+            // handled (ReleaseChargeLedger, "the completion wins").
             if (owner instanceof ShardOwner unordered && (unordered.inFlight() > 0 || unordered.owesReleaseCharge())) {
                 if (unordered.owesReleaseCharge()) {
                     owing.add(unordered);
@@ -3703,7 +3707,8 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * through on the server: a charge that does leaves its message charged, and a later request may charge it again; a
      * dead-letter move that does leaves its message in the dead-letter table; a later request, or a hand-back of the unit
      * once its handler has returned ({@link #handBackKeptUnit}), makes the move again before releasing the row, finds the
-     * row gone, finds the message in the dead-letter table ({@code ReleaseChargeLedger}) and reports it dead-lettered -
+     * row gone - or, the handler having completed, makes no move and only asks the dead-letter table - finds the message
+     * in the dead-letter table ({@code ReleaseChargeLedger}) and reports it dead-lettered -
      * counted, the {@code QueueObserver} told, its key in a request's {@link KeptUnitRelease#deadLetteredKeys()} and WARN,
      * or in the hand-back's WARN - as this request would have, but a takeover of the unit makes no move, and that dead letter is
      * then reported nowhere, though it blocks its key; a
@@ -3725,7 +3730,8 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      *                      commit. Past the bound, a statement the driver stopped waiting for may still go through on the
      *                      server: a charge that does leaves its message charged, and a later request may charge it
      *                      again; a dead-letter move that does leaves its message dead-lettered, and a later request,
-     *                      or a hand-back once the handler has returned, makes the move again and reports it
+     *                      or a hand-back once the handler has returned, makes the move again (the handler having
+     *                      completed, only asks the dead-letter table) and reports it
      *                      dead-lettered, finding it in the dead-letter table, but a takeover makes no move, and that
      *                      dead letter is then reported nowhere; a
      *                      release that does leaves the row released by this request's own statement, and a
