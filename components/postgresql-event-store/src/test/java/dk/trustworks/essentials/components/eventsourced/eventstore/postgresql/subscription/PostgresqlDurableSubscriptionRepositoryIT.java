@@ -25,11 +25,15 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.te
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
 import dk.trustworks.essentials.components.foundation.types.SubscriberId;
+import org.awaitility.Awaitility;
 import org.jdbi.v3.core.Jdbi;
 import org.jdbi.v3.postgres.PostgresPlugin;
 import org.junit.jupiter.api.*;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
+
+import java.time.Duration;
+import java.util.concurrent.*;
 
 import static dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.PostgresqlDurableSubscriptionRepository.DEFAULT_DURABLE_SUBSCRIPTIONS_TABLE_NAME;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -156,6 +160,42 @@ class PostgresqlDurableSubscriptionRepositoryIT {
         resumePoint.advanceResumeFromAndIncluding(GlobalEventOrder.of(50));
         repository.saveResumePoint(resumePoint);
         assertStored(50, 0);
+    }
+
+    /**
+     * Two subscriptions for the same subscriber - started at the same time, by two threads or two instances - both find
+     * no resume point and both create one. The second insert waits for the first to commit and then inserts nothing,
+     * which made {@code getOrCreateResumePoint} fail with "a ResumePoint already exists" instead of returning the one
+     * the first created
+     */
+    @Test
+    void test_getOrCreateResumePoint_returns_the_resume_point_another_transaction_created_concurrently() throws Exception {
+        var repository = new PostgresqlDurableSubscriptionRepository(jdbi, eventStore);
+        var executor   = Executors.newSingleThreadExecutor();
+        try {
+            var unitOfWorkFactory = eventStore.getUnitOfWorkFactory();
+            var first             = unitOfWorkFactory.getOrCreateNewUnitOfWork();
+            var created           = repository.getOrCreateResumePoint(SUBSCRIBER_ID, ORDERS, GlobalEventOrder.of(5));
+
+            var second = executor.submit(() -> repository.getOrCreateResumePoint(SUBSCRIBER_ID, ORDERS, GlobalEventOrder.of(7)));
+            // The second insert waits on the first one's uncommitted row
+            Awaitility.await()
+                      .atMost(Duration.ofSeconds(30))
+                      .until(() -> second.isDone() || someoneWaitsForATransaction());
+            first.commit();
+
+            var foundBySecond = second.get(30, TimeUnit.SECONDS);
+            assertThat(foundBySecond.getResumeFromAndIncluding()).isEqualTo(created.getResumeFromAndIncluding());
+            assertStored(5, 0);
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    private boolean someoneWaitsForATransaction() {
+        return jdbi.withHandle(handle -> handle.createQuery("SELECT EXISTS (SELECT 1 FROM pg_locks WHERE locktype = 'transactionid' AND NOT granted)")
+                                               .mapTo(Boolean.class)
+                                               .one());
     }
 
     private void assertStored(long resumeFromAndIncluding, long repositionEpoch) {

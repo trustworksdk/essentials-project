@@ -33,6 +33,7 @@ import java.sql.*;
 import java.time.*;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import static dk.trustworks.essentials.components.foundation.postgresql.PostgresqlSchemaStatements.addColumnUnlessPresent;
@@ -191,6 +192,49 @@ public final class PostgresqlDurableSubscriptionRepository implements DurableSub
         requireNonNull(subscriberId, "No subscriberId value provided");
         requireNonNull(forAggregateType, "No forAggregateType value provided");
         requireNonNull(onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder, "No onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder value provided");
+        return insertResumePoint(subscriberId, forAggregateType, onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder)
+                .orElseThrow(() -> new IllegalStateException(msg("Cannot createResumePoint for subscriberId '{}' and aggregateType '{}' since a ResumePoint already exists",
+                                                                  subscriberId,
+                                                                  forAggregateType)));
+    }
+
+    /**
+     * Unlike the interface's default - {@link #getResumePoint(SubscriberId, AggregateType)}, then
+     * {@link #createResumePoint(SubscriberId, AggregateType, GlobalEventOrder)} - this returns the resume point another
+     * transaction created between the two. Two subscriptions for the same subscriber starting at the same time - on two
+     * threads or two instances - both find none and both insert: the second insert waits for the first to commit and then
+     * inserts nothing, and the default then failed with "a ResumePoint already exists". Here it reads the row the first
+     * one committed instead
+     */
+    @Override
+    public SubscriptionResumePoint getOrCreateResumePoint(SubscriberId subscriberId,
+                                                          AggregateType forAggregateType,
+                                                          Function<AggregateType, GlobalEventOrder> onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder) {
+        requireNonNull(subscriberId, "No subscriberId value provided");
+        requireNonNull(forAggregateType, "No forAggregateType value provided");
+        requireNonNull(onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder, "No onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder value provided");
+        return getResumePoint(subscriberId, forAggregateType)
+                .or(() -> insertResumePoint(subscriberId,
+                                            forAggregateType,
+                                            requireNonNull(onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder.apply(forAggregateType),
+                                                           "onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder returned no GlobalEventOrder")))
+                .or(() -> {
+                    log.debug("[{}-{}] ResumePoint was created concurrently by another transaction - using that one", subscriberId, forAggregateType);
+                    // A new statement, so READ COMMITTED sees the row the conflicting insert waited for
+                    return getResumePoint(subscriberId, forAggregateType);
+                })
+                .orElseThrow(() -> new IllegalStateException(msg("Cannot getOrCreateResumePoint for subscriberId '{}' and aggregateType '{}': the insert conflicted with a ResumePoint this transaction cannot see",
+                                                                  subscriberId,
+                                                                  forAggregateType)));
+    }
+
+    /**
+     * @return the created resume point, or {@link Optional#empty()} if a resume point already exists - one another
+     * transaction committed, after waiting for it to commit if it had not yet
+     */
+    private Optional<SubscriptionResumePoint> insertResumePoint(SubscriberId subscriberId,
+                                                                AggregateType forAggregateType,
+                                                                GlobalEventOrder onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder) {
         return unitOfWorkFactory.withUnitOfWork(uow -> {
             var subscribeFromGlobalEventOrder = eventStore.findLowestGlobalEventOrderPersisted(forAggregateType).map(lowestGlobalEventOrderPersisted -> {
                 if (lowestGlobalEventOrderPersisted.isGreaterThan(onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder)) {
@@ -215,17 +259,14 @@ public final class PostgresqlDurableSubscriptionRepository implements DurableSub
                                  .bind("last_updated", now)
                                  .execute();
             if (rowsUpdated == 0) {
-                throw new IllegalStateException(msg("Cannot createResumePoint for subscriberId '{}' and aggregateType '{}' since a ResumePoint already exists",
-                                                    subscriberId,
-                                                    forAggregateType));
-            } else {
-                var subscriptionResumePoint = new SubscriptionResumePoint(subscriberId,
-                                                                          forAggregateType,
-                                                                          subscribeFromGlobalEventOrder,
-                                                                          now);
-                log.debug("Created {}", subscriptionResumePoint);
-                return subscriptionResumePoint;
+                return Optional.<SubscriptionResumePoint>empty();
             }
+            var subscriptionResumePoint = new SubscriptionResumePoint(subscriberId,
+                                                                      forAggregateType,
+                                                                      subscribeFromGlobalEventOrder,
+                                                                      now);
+            log.debug("Created {}", subscriptionResumePoint);
+            return Optional.of(subscriptionResumePoint);
         });
     }
 
