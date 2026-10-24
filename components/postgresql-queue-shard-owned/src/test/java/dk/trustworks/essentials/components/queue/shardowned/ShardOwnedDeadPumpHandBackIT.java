@@ -1784,6 +1784,95 @@ class ShardOwnedDeadPumpHandBackIT {
     }
 
     /**
+     * An unordered fair-share shed that comes to an owner still owing a dead-letter move leaves it serving: its row still
+     * names this instance, it is still listed and its release is not counted, and the shed asks for it again on later
+     * heartbeat ticks, with one WARN across them, until nothing is owed. Here the owner is in the excess: its unit is outside the
+     * shard range, a fifth over one instance's share of four, so it is shed from the first tick; a second instance makes the
+     * shed take shards 2 and 3 with it, and it is listed last, behind them. Counted released or dropped
+     * from the run while its row still named this instance, it was the "dropped with row unreleased" failure: a unit nobody
+     * serves. The stand-in and its lease row are those of the dead-pump test above, on a live pump.
+     */
+    @Test
+    void an_unordered_shed_of_the_excess_leaves_an_owner_owing_a_dead_letter_move_serving_until_the_move_is_no_longer_owed() throws Exception {
+        shedLeavesOutAnOwnerOwingADeadLetterMove(false);
+    }
+
+    /**
+     * As the test above, for an owner whose earlier release failed in doubt ({@link LeasedOwner#markReleaseInDoubt()}),
+     * which the unordered shed sheds again on every tick whatever the fair share says: one instance alone, so there is no
+     * excess, and the shed of that owner is the only release the tick tries.
+     */
+    @Test
+    void an_unordered_shed_of_an_owner_in_doubt_leaves_it_serving_while_it_owes_a_dead_letter_move_until_the_move_is_no_longer_owed() throws Exception {
+        shedLeavesOutAnOwnerOwingADeadLetterMove(true);
+    }
+
+    private void shedLeavesOutAnOwnerOwingADeadLetterMove(boolean inDoubt) throws Exception {
+        var settings   = settings(2);
+        var instanceId = inDoubt ? "shed-owed-move-in-doubt" : "shed-owed-move-excess";
+        try (var runtime = new ShardRuntime(dataSource, settings)) {
+            var queue  = queue(runtime, instanceId);
+            var other  = queue(runtime, instanceId + "-other");
+            var logged = captureQueueLog();
+            try {
+                queue.startConsuming((messageId, payload, payloadType) -> { }, settings, SHARD_COUNT);
+                assertThat(queue.shardsHeld()).as("premise: one instance holds every shard").isEqualTo(SHARD_COUNT);
+                leaseUnitOutsideTheShardRange(instanceId);
+                var owing = new OwesDeadLetterMoveOwner(SHARD_COUNT);
+                if (inDoubt) {
+                    owing.markReleaseInDoubt();
+                }
+                runtime.pumpFor(QUEUE_ID, "unordered", 0).add(owing);
+                queue.adoptPlacedOwner(owing, false);
+                assertThat(queue.owners().getLast()).as("premise: listed last, in the tail the shed of an excess takes").isSameAs(owing);
+                var releasedBefore = queue.metrics().shardsReleased.sum();
+                // The shards the shed releases besides the stand-in: half of them to a second instance, none in doubt
+                var shedBesides = inDoubt ? 0 : SHARD_COUNT / 2;
+                if (!inDoubt) {
+                    other.startConsuming((messageId, payload, payloadType) -> { }, settings, SHARD_COUNT);
+                }
+
+                // A tick before the second instance registers sheds the stand-in alone (it is in the excess from the
+                // start) and logs the WARN, so wait for the other shards' releases too
+                Awaitility.await().atMost(Duration.ofSeconds(10))
+                          .until(() -> owing.leaseRow() == LeasedOwner.LeaseRow.RELEASED
+                                  || (!warnings(logged, OWED_MOVE_RELEASE_WARNING).isEmpty() && queue.metrics().shardsReleased.sum() >= releasedBefore + shedBesides));
+
+                assertThat(owing.leaseRow()).as("the owner owing a dead-letter move is left serving").isEqualTo(LeasedOwner.LeaseRow.HELD);
+                assertThat(ownerOf("unordered", SHARD_COUNT)).as("its lease row still names this instance").isEqualTo(instanceId);
+                assertThat(queue.owners()).as("it is still listed").contains(owing);
+                assertThat(queue.metrics().shardsReleased.sum()).as("its release is not counted; the shed's other releases are")
+                                                               .isEqualTo(releasedBefore + shedBesides);
+
+                // Two more heartbeats' sheds leave it out again: the WARN is not logged again within the minute
+                var askedAtWarning = owing.asked.get();
+                Awaitility.await().atMost(Duration.ofSeconds(10))
+                          .until(() -> owing.asked.get() >= askedAtWarning + 2);
+                assertThat(owing.leaseRow()).as("premise: still left out").isEqualTo(LeasedOwner.LeaseRow.HELD);
+                assertThat(ownerOf("unordered", SHARD_COUNT)).as("its lease row still names this instance").isEqualTo(instanceId);
+                assertThat(queue.owners()).as("it is still listed").contains(owing);
+                assertThat(queue.metrics().shardsReleased.sum()).as("its release is still not counted").isEqualTo(releasedBefore + shedBesides);
+                assertThat(warnings(logged, OWED_MOVE_RELEASE_WARNING)).as("one WARN across the sheds that left it out").hasSize(1);
+
+                owing.owes.set(false);
+
+                Awaitility.await().atMost(Duration.ofSeconds(10))
+                          .untilAsserted(() -> assertThat(owing.leaseRow()).as("released once nothing is owed").isEqualTo(LeasedOwner.LeaseRow.RELEASED));
+                assertThat(ownerOf("unordered", SHARD_COUNT)).as("its lease row released").isNull();
+                Awaitility.await().atMost(Duration.ofSeconds(5))
+                          .untilAsserted(() -> assertThat(queue.owners()).as("dropped once released").doesNotContain(owing));
+                assertThat(queue.metrics().shardsReleased.sum()).as("its release counted once").isEqualTo(releasedBefore + shedBesides + 1);
+                assertThat(owing.claimed.get()).as("the release that went through claimed it first").isPositive();
+                assertThat(owing.ended.get()).as("and ended every claim it took").isEqualTo(owing.claimed.get());
+            } finally {
+                releaseQueueLog(logged);
+                other.stop();
+                queue.stop();
+            }
+        }
+    }
+
+    /**
      * A release on request of an ordered unit a stop kept, whose owner still owes a dead-letter move when its row is to
      * be released, answers {@link KeptUnitRelease.Outcome#BUSY} - ask again - and leaves the row held, and a later
      * request releases it once nothing is owed. It used to throw an {@code IllegalStateException}, which
@@ -2903,7 +2992,8 @@ class ShardOwnedDeadPumpHandBackIT {
      * dead-letter move ({@link LeasedOwner#owesDeadLetterMove()}) while {@link #owes} is set, under fence 1, with a lease
      * row state of its own and a rate limit of its own for the WARN that a release left it out, as the real owners keep.
      * Reads {@link #inFlight} keys as in a handler, none unless set. Counts how often it was asked whether it owes a move
-     * ({@link #asked}): once per release that covers it.
+     * ({@link #asked}): once per release that covers it. A release of it in doubt is kept on its lease row state too
+     * ({@link #markReleaseInDoubt()}).
      */
     private static final class OwesDeadLetterMoveOwner implements LeasedOwner {
         private final ShardOwnerMetrics       metrics  = new ShardOwnerMetrics();
@@ -3014,6 +3104,19 @@ class ShardOwnedDeadPumpHandBackIT {
         @Override
         public void endKeepingLeaseRow() {
             leaseRow.advanceTo(LeaseRow.ENDED_ROW_HELD);
+        }
+
+        /**
+         * On its lease row state, as the real owners keep it; a test marks it to stage a release in doubt.
+         */
+        @Override
+        public void markReleaseInDoubt() {
+            leaseRow.markReleaseInDoubt();
+        }
+
+        @Override
+        public boolean releaseInDoubt() {
+            return leaseRow.releaseInDoubt();
         }
 
         @Override
