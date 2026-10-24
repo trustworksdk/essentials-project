@@ -20,7 +20,7 @@ import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.zaxxer.hikari.*;
-import dk.trustworks.essentials.components.queue.shardowned.spi.KeptUnitRelease;
+import dk.trustworks.essentials.components.queue.shardowned.spi.*;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -1784,6 +1784,170 @@ class ShardOwnedDeadPumpHandBackIT {
     }
 
     /**
+     * A release of an owner's row holds its claim ({@link LeasedOwner#claimReleaseUnlessMoveOwed()}) until the release
+     * statement has returned: a charge of that owner started on another thread meanwhile waits, and takes its candidates
+     * only once the row is released, so no move it leaves owed is released with the row. Ended before the statement - right
+     * after it was taken, or ahead of the statement - the claim held off nothing: the charge ran beside the statement, left
+     * its move owed, and the row was released with the move owed, the race the claim exists for (a stop against a heartbeat
+     * shed or hand-back of the same owner).
+     * <p>
+     * The stand-in's check, claim and end are a real {@code ReleaseChargeLedger}'s, whose dead-letter move always fails; the
+     * release is the dead pump's hand-back of the stand-in, as in
+     * {@link #a_dead_pumps_owner_owing_a_dead_letter_move_is_not_handed_back_until_the_move_is_no_longer_owed}, and a trigger holds that
+     * statement on an advisory lock the test holds. The charge brings its message to the redelivery limit (one attempt), so
+     * a charge that ran beside the statement left the move owed.
+     */
+    @Test
+    void a_release_holds_its_claim_until_its_statement_has_returned_so_a_charge_of_the_owner_on_another_thread_waits_for_the_release() throws Exception {
+        var settings   = settings(2);
+        var instanceId = "dead-pump-claim-held";
+        var ledger = new ReleaseChargeLedger(MessageId.Lane.UNORDERED, SHARD_COUNT, new MoveRefusingWrites(),
+                                             RedeliveryPolicy.fixed(Duration.ofSeconds(1), 1), new ShardOwnerMetrics(), charged -> { }, moved -> { });
+        var ownerAtClaimEnd = new AtomicReference<String>(NOT_READ);
+        var owing           = new OwesDeadLetterMoveOwner(SHARD_COUNT, ledger, () -> ownerAtClaimEnd.set(ownerOrFailure("unordered", SHARD_COUNT)));
+        try (var runtime = new ShardRuntime(dataSource, settings);
+             var lockHolder = dataSource.getConnection()) {
+            var queue  = queue(runtime, instanceId);
+            var logged = captureQueueLog();
+            try {
+                queue.startConsuming((messageId, payload, payloadType) -> { }, settings, SHARD_COUNT);
+                assertThat(queue.shardsHeld()).as("premise: one instance holds every shard").isEqualTo(SHARD_COUNT);
+                leaseUnitOutsideTheShardRange(instanceId);
+                holdReleasesOfTheUnitOutsideTheShardRange(lockHolder);
+                var doomed = runtime.pumpFor(QUEUE_ID, "unordered", 0);
+                kill(doomed);
+                doomed.add(owing);
+                assertThat(runtime.onDeadPump(owing)).as("premise: counted on the dead pump, awaiting hand-back").isTrue();
+                queue.adoptPlacedOwner(owing, false);
+
+                Awaitility.await("the hand-back's release statement held by the trigger").atMost(Duration.ofSeconds(10))
+                          .until(this::releaseHeldOnTheAdvisoryLock);
+                assertThat(owing.claimed.get()).as("premise: the release claimed the stand-in").isPositive();
+
+                var ownerWhenTaken = new AtomicReference<String>(NOT_READ);
+                var taken          = new CountDownLatch(1);
+                var charge = CompletableFuture.runAsync(() -> assertThatThrownBy(() -> ledger.charge(null, () -> {
+                    ownerWhenTaken.set(ownerOrFailure("unordered", SHARD_COUNT));
+                    taken.countDown();
+                    return Map.of(1L, ReleaseChargeLedger.Candidate.UNORDERED);
+                })).as("the charge's dead-letter move is refused").isInstanceOf(java.sql.SQLException.class));
+
+                assertThat(taken.await(500, TimeUnit.MILLISECONDS)).as("the charge does not take its candidates while the release statement runs").isFalse();
+                assertThat(ownerOf("unordered", SHARD_COUNT)).as("premise: the statement is still held, the row names this instance").isEqualTo(instanceId);
+                assertThat(ledger.owesDeadLetterMove()).as("no move owed while the release statement runs").isFalse();
+                assertThat(owing.claimed.get() - owing.ended.get()).as("the claim is held while the release statement runs").isEqualTo(1);
+
+                letReleasesOfTheUnitOutsideTheShardRangeGo(lockHolder);
+                charge.get(10, TimeUnit.SECONDS);
+
+                assertThat(ownerAtClaimEnd.get()).as("the claim ended once the statement had released the row").isNull();
+                assertThat(ownerWhenTaken.get()).as("the charge took its candidates only once the row was released").isNull();
+                assertThat(ledger.owesDeadLetterMove()).as("premise: the charge left its move owed, after the release").isTrue();
+                Awaitility.await().atMost(Duration.ofSeconds(5))
+                          .untilAsserted(() -> assertThat(owing.leaseRow()).as("released, with no move owed when it was").isEqualTo(LeasedOwner.LeaseRow.RELEASED));
+                assertThat(warnings(logged, OWED_MOVE_RELEASE_WARNING)).as("no release left it out: nothing was owed at its check").isEmpty();
+                assertThat(owing.ended.get()).as("every claim it took ended").isEqualTo(owing.claimed.get());
+            } finally {
+                letReleasesOfTheUnitOutsideTheShardRangeGo(lockHolder);
+                releaseQueueLog(logged);
+                queue.stop();
+            }
+        }
+    }
+
+    /**
+     * What {@link #ownerOrFailure} recorded before it was read: nothing.
+     */
+    private static final String NOT_READ = "not read";
+
+    /**
+     * The advisory lock {@link #holdReleasesOfTheUnitOutsideTheShardRange} holds a release of the stand-in's row on.
+     */
+    private static final long RELEASE_HOLD_LOCK = 797;
+
+    /**
+     * Hold every release of the lease row of unordered unit {@link #SHARD_COUNT} - the stand-in's - until
+     * {@link #letReleasesOfTheUnitOutsideTheShardRangeGo}: a trigger on the release waits for an advisory lock that
+     * {@code lockHolder}'s session takes here. No other write of the lease table is held.
+     */
+    private void holdReleasesOfTheUnitOutsideTheShardRange(Connection lockHolder) throws Exception {
+        try (var statement = lockHolder.createStatement()) {
+            statement.execute("SELECT pg_advisory_lock(" + RELEASE_HOLD_LOCK + ")");
+            statement.execute("CREATE OR REPLACE FUNCTION hold_lease_release() RETURNS trigger AS $$ BEGIN "
+                                      + "PERFORM pg_advisory_xact_lock(" + RELEASE_HOLD_LOCK + "); RETURN NEW; END $$ LANGUAGE plpgsql");
+            statement.execute("CREATE TRIGGER hold_lease_release BEFORE UPDATE ON " + ShardOwnedSchema.LEASE_TABLE
+                                      + " FOR EACH ROW WHEN (OLD.queue_id = " + QUEUE_ID + " AND OLD.lane = 'unordered' AND OLD.shard = " + SHARD_COUNT
+                                      + " AND OLD.owner IS NOT NULL AND NEW.owner IS NULL) EXECUTE FUNCTION hold_lease_release()");
+        }
+    }
+
+    /**
+     * Let the releases {@link #holdReleasesOfTheUnitOutsideTheShardRange} holds go on: {@code lockHolder}'s session lets go
+     * of the advisory lock, every hold of it included.
+     */
+    private static void letReleasesOfTheUnitOutsideTheShardRangeGo(Connection lockHolder) throws Exception {
+        try (var statement = lockHolder.createStatement()) {
+            statement.execute("SELECT pg_advisory_unlock_all()");
+        }
+    }
+
+    /**
+     * Whether a session waits for the advisory lock {@link #holdReleasesOfTheUnitOutsideTheShardRange} holds: a release of
+     * the stand-in's row is held in the trigger.
+     */
+    private boolean releaseHeldOnTheAdvisoryLock() throws Exception {
+        try (var connection = dataSource.getConnection();
+             var statement = connection.prepareStatement("SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted"
+                                                                 + " AND classid = 0 AND objid = ?")) {
+            statement.setLong(1, RELEASE_HOLD_LOCK);
+            try (var rows = statement.executeQuery()) {
+                return rows.next() && rows.getLong(1) > 0;
+            }
+        }
+    }
+
+    /**
+     * {@link #ownerOf}, or what the read threw, for a read made where it cannot throw: as a stand-in's claim ends, or in a
+     * charge's candidates.
+     */
+    private String ownerOrFailure(String lane, int shard) {
+        try {
+            return ownerOf(lane, shard);
+        } catch (Exception e) {
+            return "read failed: " + e;
+        }
+    }
+
+    /**
+     * An owner's charge statements in which each row charged is at one attempt and each dead-letter move is refused, as
+     * the P0001 trigger of {@link #failDeadLetterMoves} refuses it: a charge that brings a message to a redelivery limit of
+     * one leaves its move owed.
+     */
+    private static final class MoveRefusingWrites implements ReleaseChargeLedger.Writes {
+        @Override
+        public Map<Long, Integer> chargeRowsInHandler(Connection connection, Collection<Long> seqs) {
+            var charged = new TreeMap<Long, Integer>();
+            seqs.forEach(seq -> charged.put(seq, 1));
+            return charged;
+        }
+
+        @Override
+        public boolean moveToDeadLetterIfOwned(Connection connection, long seq) throws java.sql.SQLException {
+            throw new java.sql.SQLException("simulated failure moving to the dead-letter table", "P0001");
+        }
+
+        @Override
+        public boolean isDeadLetteredOnRelease(Connection connection, long seq, int attempts) {
+            return false;
+        }
+
+        @Override
+        public boolean stillOwns(Connection connection) {
+            return true;
+        }
+    }
+
+    /**
      * An unordered fair-share shed that comes to an owner still owing a dead-letter move leaves it serving: its row still
      * names this instance, it is still listed and its release is not counted, and the shed asks for it again on later
      * heartbeat ticks, with one WARN across them, until nothing is owed. Here the owner is in the excess: its unit is outside the
@@ -2989,7 +3153,8 @@ class ShardOwnedDeadPumpHandBackIT {
 
     /**
      * An owner of {@link #QUEUE_ID} - unordered unless built for another lane - that charges nothing and reads as owing a
-     * dead-letter move ({@link LeasedOwner#owesDeadLetterMove()}) while {@link #owes} is set, under fence 1, with a lease
+     * dead-letter move ({@link LeasedOwner#owesDeadLetterMove()}) while {@link #owes} is set, or, built on a
+     * {@code ReleaseChargeLedger}, while that ledger owes one (its check, claim and end are then the ledger's), under fence 1, with a lease
      * row state of its own and a rate limit of its own for the WARN that a release left it out, as the real owners keep.
      * Reads {@link #inFlight} keys as in a handler, none unless set. Counts how often it was asked whether it owes a move
      * ({@link #asked}): once per release that covers it. A release of it in doubt is kept on its lease row state too
@@ -3006,29 +3171,57 @@ class ShardOwnedDeadPumpHandBackIT {
         final         AtomicInteger           claimed  = new AtomicInteger();
         final         AtomicInteger           ended    = new AtomicInteger();
         final         AtomicInteger           inFlight = new AtomicInteger();
+        /**
+         * The ledger whose check, claim and end this owner's are, as a real owner's are; {@code null}: none, and
+         * {@link #owes} answers.
+         */
+        private final ReleaseChargeLedger     ledger;
+        /**
+         * Run as each claim ends, before the ledger is told.
+         */
+        private final Runnable                atClaimEnd;
 
         OwesDeadLetterMoveOwner(int shard) {
             this("unordered", shard);
         }
 
         OwesDeadLetterMoveOwner(String lane, int shard) {
+            this(lane, shard, null, () -> { });
+        }
+
+        /**
+         * An unordered owner whose check, claim and end are {@code ledger}'s, running {@code atClaimEnd} as each claim
+         * ends; {@link #owes} is not read.
+         */
+        OwesDeadLetterMoveOwner(int shard, ReleaseChargeLedger ledger, Runnable atClaimEnd) {
+            this("unordered", shard, ledger, atClaimEnd);
+        }
+
+        private OwesDeadLetterMoveOwner(String lane, int shard, ReleaseChargeLedger ledger, Runnable atClaimEnd) {
             this.lane = lane;
             this.shard = shard;
+            this.ledger = ledger;
+            this.atClaimEnd = atClaimEnd;
         }
 
         @Override
         public boolean owesDeadLetterMove() {
             asked.incrementAndGet();
-            return owes.get();
+            return ledger == null ? owes.get() : ledger.owesDeadLetterMove();
         }
 
         /**
-         * As the real owners' ledger claims: asks {@link #owesDeadLetterMove()}, and counts a claim ({@link #claimed})
-         * when nothing is owed.
+         * As the real owners' ledger claims: with a ledger, the ledger's claimReleaseUnlessMoveOwed (check and claim in
+         * one); otherwise asks {@link #owesDeadLetterMove()}. Counts a claim ({@link #claimed}) when nothing is owed.
          */
         @Override
         public boolean claimReleaseUnlessMoveOwed() {
-            if (owesDeadLetterMove()) {
+            if (ledger != null) {
+                asked.incrementAndGet();
+                if (!ledger.claimReleaseUnlessMoveOwed()) {
+                    return false;
+                }
+            } else if (owesDeadLetterMove()) {
                 return false;
             }
             claimed.incrementAndGet();
@@ -3036,10 +3229,14 @@ class ShardOwnedDeadPumpHandBackIT {
         }
 
         /**
-         * Counts the claims ended ({@link #ended}).
+         * Runs {@link #atClaimEnd}, ends the ledger's claim when it has one, and counts the claims ended ({@link #ended}).
          */
         @Override
         public void endReleaseClaim() {
+            atClaimEnd.run();
+            if (ledger != null) {
+                ledger.endReleaseClaim();
+            }
             ended.incrementAndGet();
         }
 
