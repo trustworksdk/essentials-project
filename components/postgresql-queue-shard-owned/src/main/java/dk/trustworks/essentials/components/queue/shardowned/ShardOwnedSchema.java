@@ -99,6 +99,8 @@ public final class ShardOwnedSchema {
      */
     public static final long ESSENTIALS_BOOTSTRAP_LOCK_KEY = 0xE55E_4711_B007_DD15L;
 
+    private static final String UNLESS_PRESENT_QUOTE = "$essentials_schema$";
+
     private ShardOwnedSchema() {
     }
 
@@ -194,8 +196,9 @@ public final class ShardOwnedSchema {
                           """.formatted(UNORDERED_TABLE));
 
         // Supports the head sweep and delayed messages. The fast path does not use it.
-        statements.add("CREATE INDEX IF NOT EXISTS %s_visible ON %s (queue_id, shard, visible_at)"
-                                  .formatted(UNORDERED_TABLE, UNORDERED_TABLE));
+        statements.add(createIndexUnlessPresent(UNORDERED_TABLE, UNORDERED_TABLE + "_visible",
+                                                "CREATE INDEX IF NOT EXISTS %s_visible ON %s (queue_id, shard, visible_at)"
+                                                        .formatted(UNORDERED_TABLE, UNORDERED_TABLE)));
 
         // The ordered lane. Its primary key is (queue_id, shard, msg_key, key_order), NOT
         // (queue_id, shard, seq) — which is the whole reason §4.1 splits the lanes into separate
@@ -223,10 +226,12 @@ public final class ShardOwnedSchema {
                           """.formatted(ORDERED_TABLE));
         // Discovery: the owner still needs to find newly arrived work in commit order. This is
         // the index the ordered lane pays for and the unordered lane does not.
-        statements.add("CREATE INDEX IF NOT EXISTS %s_seq ON %s (queue_id, shard, seq)"
-                                  .formatted(ORDERED_TABLE, ORDERED_TABLE));
-        statements.add("CREATE INDEX IF NOT EXISTS %s_visible ON %s (queue_id, shard, visible_at)"
-                                  .formatted(ORDERED_TABLE, ORDERED_TABLE));
+        statements.add(createIndexUnlessPresent(ORDERED_TABLE, ORDERED_TABLE + "_seq",
+                                                "CREATE INDEX IF NOT EXISTS %s_seq ON %s (queue_id, shard, seq)"
+                                                        .formatted(ORDERED_TABLE, ORDERED_TABLE)));
+        statements.add(createIndexUnlessPresent(ORDERED_TABLE, ORDERED_TABLE + "_visible",
+                                                "CREATE INDEX IF NOT EXISTS %s_visible ON %s (queue_id, shard, visible_at)"
+                                                        .formatted(ORDERED_TABLE, ORDERED_TABLE)));
 
         // The cold lane. Dead letters are rare, read by humans, and allowed to be expensive —
         // which is why they live outside the live lanes rather than as a flag on them. Keeping
@@ -252,11 +257,13 @@ public final class ShardOwnedSchema {
                               blocked_by_key_order bigint
                           )
                           """.formatted(DLQ_TABLE));
-        statements.add("CREATE INDEX IF NOT EXISTS %s_queue ON %s (queue_id, shard)".formatted(DLQ_TABLE, DLQ_TABLE));
-        // Added after the table shipped, so an existing installation needs it too. IF NOT EXISTS
+        statements.add(createIndexUnlessPresent(DLQ_TABLE, DLQ_TABLE + "_queue",
+                                                "CREATE INDEX IF NOT EXISTS %s_queue ON %s (queue_id, shard)".formatted(DLQ_TABLE, DLQ_TABLE)));
+        // Added after the table shipped, so an existing installation needs it too. A catalog check
         // rather than a version check: this runs on every boot, behind the bootstrap lock, and a
         // column that is already there is not an error.
-        statements.add("ALTER TABLE %s ADD COLUMN IF NOT EXISTS blocked_by_key_order bigint".formatted(DLQ_TABLE));
+        statements.add(addColumnUnlessPresent(DLQ_TABLE, "blocked_by_key_order",
+                                              "ALTER TABLE %s ADD COLUMN IF NOT EXISTS blocked_by_key_order bigint".formatted(DLQ_TABLE)));
 
         statements.add("""
                           CREATE TABLE IF NOT EXISTS %s (
@@ -304,7 +311,8 @@ public final class ShardOwnedSchema {
                           )
                           """.formatted(INSTANCE_TABLE));
         // The membership table already shipped without it
-        statements.add("ALTER TABLE %s ADD COLUMN IF NOT EXISTS incarnation text".formatted(INSTANCE_TABLE));
+        statements.add(addColumnUnlessPresent(INSTANCE_TABLE, "incarnation",
+                                              "ALTER TABLE %s ADD COLUMN IF NOT EXISTS incarnation text".formatted(INSTANCE_TABLE)));
 
         // The name-to-id registry. The engine addresses a queue by an interned smallint because
         // a two-byte column in every row's primary key is what keeps the hot index dense; the
@@ -378,6 +386,77 @@ public final class ShardOwnedSchema {
                                   + "   FROM " + DLQ_TABLE + " d"
                                   + "   LEFT JOIN " + REGISTRY_TABLE + " r ON r.queue_id = d.queue_id");
         return List.copyOf(statements);
+    }
+
+    /**
+     * Wrap a {@code CREATE INDEX} so it only runs when the table has no index of that name.
+     * <p>
+     * {@link #schemaStatements()} runs on every start, against tables the instances already running keep writing to.
+     * {@code CREATE INDEX IF NOT EXISTS} takes a {@code SHARE} lock on its table even when the index exists, and
+     * {@code ALTER TABLE ... ADD COLUMN IF NOT EXISTS} takes {@code ACCESS EXCLUSIVE} even when the column exists, both
+     * held until the schema transaction commits: every start waited for the enqueues, acknowledgements, dead-letter
+     * moves and heartbeats in flight and blocked the next ones, and a stronger lock taken after a weaker one could
+     * close a lock cycle with a running write, which PostgreSQL breaks with "deadlock detected". The {@code DO} block
+     * looks the index up in the catalog first, which takes no lock on the table.
+     * <p>
+     * <b>Deliberately duplicated rather than imported</b>, as {@link #ESSENTIALS_BOOTSTRAP_LOCK_KEY} is: the canonical
+     * {@code PostgresqlSchemaStatements} lives in {@code components/foundation}, which this module does not depend on.
+     * {@code SchemaStatementsParityTest} keeps the two producing the same statement.
+     *
+     * @param tableName            the indexed table, as written in {@code createIndexStatement}. Concatenated into SQL:
+     *                             only ever pass one of this class' constants
+     * @param indexName            the index's unqualified name, as written in {@code createIndexStatement}. Concatenated
+     *                             into SQL, likewise
+     * @param createIndexStatement the {@code CREATE INDEX IF NOT EXISTS} statement
+     * @return the statement
+     */
+    static String createIndexUnlessPresent(String tableName, String indexName, String createIndexStatement) {
+        return unlessPresent("NOT EXISTS (SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid\n" +
+                                     "                   WHERE i.indrelid = to_regclass('" + identifier(tableName) + "')\n" +
+                                     // Created with an unquoted name, which PostgreSQL stores folded to lower case and cut to 63 characters
+                                     "                     AND c.relname = left(lower('" + identifier(indexName) + "'), 63))",
+                             createIndexStatement);
+    }
+
+    /**
+     * Wrap an {@code ALTER TABLE ... ADD COLUMN} so it only runs when the table has no column of that name - see
+     * {@link #createIndexUnlessPresent(String, String, String)} for why, and for why it is duplicated
+     *
+     * @param tableName          the altered table, as written in {@code addColumnStatement}. Concatenated into SQL:
+     *                           only ever pass one of this class' constants
+     * @param columnName         the added column's unquoted name, as written in {@code addColumnStatement}.
+     *                           Concatenated into SQL, likewise
+     * @param addColumnStatement the {@code ALTER TABLE ... ADD COLUMN IF NOT EXISTS} statement
+     * @return the statement
+     */
+    static String addColumnUnlessPresent(String tableName, String columnName, String addColumnStatement) {
+        return unlessPresent("NOT EXISTS (SELECT 1 FROM pg_attribute\n" +
+                                     "                   WHERE attrelid = to_regclass('" + identifier(tableName) + "')\n" +
+                                     "                     AND attname = left(lower('" + identifier(columnName) + "'), 63)\n" +
+                                     "                     AND NOT attisdropped)",
+                             addColumnStatement);
+    }
+
+    private static String identifier(String name) {
+        requireTrue(requireNonBlank(name, "No name provided").matches("[A-Za-z_][A-Za-z0-9_]*"), "Not an unquoted identifier: '" + name + "'");
+        return name;
+    }
+
+    private static String unlessPresent(String condition, String statement) {
+        requireFalse(requireNonBlank(statement, "No statement provided").contains(UNLESS_PRESENT_QUOTE),
+                     "The statement must not contain '" + UNLESS_PRESENT_QUOTE + "': " + statement);
+        var body = statement.strip();
+        if (body.endsWith(";")) {
+            body = body.substring(0, body.length() - 1).strip();
+        }
+        requireFalse(body.isEmpty(), "The statement is blank");
+        return "DO " + UNLESS_PRESENT_QUOTE + "\n" +
+                "BEGIN\n" +
+                "    IF " + condition + " THEN\n" +
+                "        " + body + ";\n" +
+                "    END IF;\n" +
+                "END\n" +
+                UNLESS_PRESENT_QUOTE;
     }
 
     /**
