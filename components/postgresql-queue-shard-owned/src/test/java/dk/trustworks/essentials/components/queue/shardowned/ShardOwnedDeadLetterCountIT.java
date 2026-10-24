@@ -221,6 +221,7 @@ class ShardOwnedDeadLetterCountIT {
             var successorGrant = storage.acquireLeaseGrant(lane, SHARD, successor, 60_000L).orElseThrow();
             assertThat(successorGrant.fence()).as("premise: the successor holds the unit under another fence").isNotEqualTo(grant.fence());
             var chargedBySuccessor = storage.chargeRowsInHandler(connection, table, SHARD, List.of(seq), successor, successorGrant.fence());
+            assertThat(chargedBySuccessor).as("premise: the successor's charge gave the message another attempt count").containsEntry(seq, MAX_ATTEMPTS + 1);
             assertThat(storage.moveToDeadLetterIfOwned(connection, table, lane, SHARD, seq, ShardOwnedStorage.EXHAUSTED_IN_A_RELEASED_HANDLER,
                                                        successor, successorGrant.fence())).as("premise: the successor dead-lettered the message").isTrue();
 
