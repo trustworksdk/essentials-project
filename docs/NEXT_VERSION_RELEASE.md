@@ -692,8 +692,9 @@ lane's charge, below, does the same. A kept unit's hand-back once its handler re
 once no key of the unit is in a handler, make the move again before releasing the unit too - each names the
 dead-lettered key in a WARN. So do, on both lanes, a dead pump's hand-back and a `stop()` releasing a unit whose handler
 has returned since an earlier charge of it - the hand-back's own on an earlier heartbeat, or a shed's - left the move
-owed. While the move keeps failing, the dead pump's hand-back holds the unit and retries on the next heartbeat, and a
-`stop()` leaves its lease unreleased, as when its charge fails, with a WARN either way. When the kept unit is instead
+owed; an unordered shard's messages have no key, so its release WARN names the dead-lettered seq instead. While the
+move keeps failing, the dead pump's hand-back holds the unit and retries on the next heartbeat, and a `stop()` leaves
+its lease unreleased, as when its charge fails, with a WARN either way. When the kept unit is instead
 taken over, the move is not made again, and that dead letter is then reported nowhere, though it blocks its key. A move
 the database refused with an error of its own (an SQL state outside class `08`, such as a trigger's refusal or a
 cancelled statement) was rolled back, and its retry does not look for it. Such a WARN names the hand-back the dead
