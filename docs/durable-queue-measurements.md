@@ -569,6 +569,40 @@ The suite also asserts, rather than prints, that the ordered lane drains to zero
 not move rows out as fast as a producer put them in, the lane would grow behind the stall and moving
 the poisoning to dispatch would have bought nothing over leaving the messages queued.
 
+### 3.12 Busy ordered queues: one horizon probe per pump pass
+
+Every other ordered-lane figure here is for one queue, or for idle ones. The trading demo found what that missed:
+under a 300 orders/s rush its order router's inbox backed up while its handlers sat idle, and thread dumps put the
+pumps in database round trips - most often the watermark's horizon probe (`runningWriteTransactionIds`,
+`pg_stat_activity`), which every owner behind its watermark issued for itself on every pass. A message's owner is
+pumped three to four times before the watermark passes it, so that was about three probes per delivered message, the
+most frequent statement the pumps issued.
+
+The pump now runs a pass in three steps: every cursor read of the pass (batched, then a read-ahead for the owners that
+read for themselves), ONE probe for every owner left behind its watermark, then each owner's pass, which retires and
+records candidates exactly as before. The probe still follows each owner's read, which is all §3 of the routing design
+asks of it, and is database-wide, so it serves every queue a pump serves. A first version took the probe after the
+whole pass instead; it was dropped for the version here before measuring it cleanly.
+
+`ShardOwnedOrderedLoadedCostIT` (benchmark-gated): 8 ordered queues on 2 pumps, a 2 ms handler that parks (as one
+calling out does), producers sending single-message transactions as an inbox is fed. Base = the engine before, both
+arms from worktrees outside `/workspace`, alternating, 3 runs each, means:
+
+| | 2 000 msg/s, base | 2 000 msg/s, **one probe per pass** | 3 000 msg/s, base | 3 000 msg/s, **one probe per pass** |
+|---|---|---|---|---|
+| delivered | 1 975 msg/s | 1 976 msg/s | 2 963 msg/s | 2 963 msg/s |
+| latency p50 / p99 / max | 7.4 / 20.9 / 65 ms | **6.4 / 13.7 / 32 ms** | 31.7 / 151 / 338 ms | **9.7 / 71 / 150 ms** |
+| horizon probes per message | 2.35 | **0.52** | 2.59 | **0.24** |
+| read statements per message | 2.67 | 2.66 | 1.00 | 1.99 |
+| transactions per message | 6.97 | **5.12** | 5.39 | **4.15** |
+
+Read statements rise at the higher rate because pumps that no longer wait on a probe per owner pass run more passes;
+the transaction total still falls by a quarter. One caveat measured on the way: with a handler that SPINS for its 2 ms the
+runs were CPU-bound on the lab's 8 cores, and there the busier pumps cost the new arm its tail (p99 121 -> 363 ms at
+saturation) - the base arm's pumps were held back by the round trips, and used no CPU waiting. An application whose
+handlers burn CPU at saturation pays for the extra passes in CPU. Idle cost is unchanged (`ShardOwnedOrderedIdleCostIT`,
+8 runs per arm, ranges overlapping).
+
 ## 4. Environment
 
 | | |
@@ -889,6 +923,10 @@ taskset -c 0-3 ./mvnw verify -pl examples/essentials-performance-lab \
 # Ordered routing space: idle cost per unit count (§3.8)
 ./mvnw verify -pl components/postgresql-queue-shard-owned \
   -Dit.test='ShardOwnedRoutingSpaceCostIT' -Dbenchmark.run=true
+
+# Busy ordered queues on a few pumps: probes, reads and acks per delivered message (§3.12)
+./mvnw verify -pl components/postgresql-queue-shard-owned \
+  -Dit.test='ShardOwnedOrderedLoadedCostIT' -Dbenchmark.run=true -Dcost.rate=3000
 
 # Idle cost across queues, incl. lease writes (§3.8), and the ordered-lane gates (§3.9, §3.10)
 ./mvnw verify -pl components/postgresql-queue-shard-owned \

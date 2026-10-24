@@ -189,6 +189,16 @@ Every message is assigned to a shard at enqueue. Each shard has exactly one owni
   pass whose read hit `readBatchSize` advances no further than the last row it read. Cost, measured A/B on 40 000
   messages: drain +1.2 % median (inside the spread), read statements unchanged, watermark lag +21 % (one pass later).
   `sweepRecoveries` is the signal — zero exactly when nothing was stepped over.
+- **One horizon probe per pump pass, after every read of the pass** (`HorizonProbingOwner`). Pass = batched reads →
+  `readAhead` for the rest → one `runningWriteTransactionIds` for every owner behind its watermark → each `pumpOnce`,
+  whose retire/record step is unchanged and falls back to its own probe without one. Was one probe per owner pass,
+  ~3 per delivered message under load, the pumps' most frequent statement. Measured `ShardOwnedOrderedLoadedCostIT`
+  (8 queues, 2 pumps, `docs/durable-queue-measurements.md` §3.12): 3 000 msg/s p99 151 → 71 ms, transactions/message
+  −23 %. Three traps: an owner that reads INSIDE `pumpOnce` must not use the pass's probe (it precedes that read);
+  the probe and the rows are timestamped (`readByNanos` after the read, `passProbeIssuedNanos` before the probe) so a
+  pass broken off by a reconnect cannot pair an old probe with a newer read; and probing after the WHOLE pass instead
+  was the first version, dropped. Benchmark trap: a spinning handler makes saturated runs CPU-bound on 8 cores and
+  blames the arm with busier pumps - handlers park.
 - **A long READ-ONLY transaction does not hold the xid horizon back**, however long it runs — only a writing one does, because only a writer is assigned an xid. Do not cite `pg_dump` or an analytics query as a hazard for anything keyed on `pg_snapshot_xmin`; a 13 s reader is indistinguishable from no reader.
 - **The ordered lane's cursor is a safe watermark, not a high-water mark.** It advances to a value only once every write transaction running when that value was observed has ended — `max(backend_xid)` over `pg_stat_activity`, compared by set identity because `backend_xid` is a wrapping 32-bit `xid` and `pg_snapshot_xmin` is a non-wrapping `xid8` with no cast between them. Probe AFTER the read, never before, and skip it entirely when caught up or the idle poll pays 0.086 ms for nothing. Hole chasing, `holeExpiry`, `maxHolesPerChase` and `chaseDelay` are gone from THIS lane; the unordered lane still uses all of them, so the settings stay.
 - **`watermarkCap` is not `holeExpiry` and must stay far larger.** Both say "stop waiting", but `holeExpiry` was held low by a map entry and a chase query per unresolved value, and the watermark costs one deque entry and no query. Set the cap as low as `holeExpiry` and the two mechanisms become behaviourally identical — the watermark force-advances on the same timer that abandoned a hole, and the exactness is thrown away. A test written against the old, reused setting passed against a deliberately broken implementation for exactly this reason.

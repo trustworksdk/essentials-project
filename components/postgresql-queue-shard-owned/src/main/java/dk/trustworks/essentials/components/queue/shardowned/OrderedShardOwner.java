@@ -49,7 +49,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * it cannot happen. Whether that count is zero under realistic producers is a measurement, not an
  * assumption.
  */
-final class OrderedShardOwner implements BatchReadableOwner {
+final class OrderedShardOwner implements BatchReadableOwner, HorizonProbingOwner {
     private static final Logger log = LoggerFactory.getLogger(OrderedShardOwner.class);
 
     private final ShardOwnedStorage     storage;
@@ -101,10 +101,27 @@ final class OrderedShardOwner implements BatchReadableOwner {
      * Rows the pump read on this owner's behalf, consumed by the next pass. Pump thread only.
      */
     private BatchRead pendingBatch;
+    /**
+     * Rows {@link #readAhead} read for this pass, consumed by the following {@link #pumpOnce}. Pump thread only.
+     */
+    private List<ShardOwnedStorage.OrderedRow> readAheadRows;
+    private long                               readAheadByNanos;
+    /**
+     * The probe the pump took after this pass's reads, or null. Consumed - and cleared - by the following
+     * {@link #pumpOnce}, which probes for itself without it. Pump thread only.
+     */
+    private Set<Long> passProbe;
+    /**
+     * When the pump STARTED {@link #passProbe}'s statement. Only a probe started after the rows were read may stand in
+     * for one taken after them: a pass that broke off (a reconnect) leaves an earlier pass's probe here, and pairing it
+     * with a later read would put the probe before the read - the one ordering the watermark forbids.
+     */
+    private long      passProbeIssuedNanos;
 
     private record BatchRead(List<ShardOwnedStorage.OrderedRow> cursorRows,
                              List<ShardOwnedStorage.OrderedRow> sweptRows,
-                             OptionalLong nextVisibleMillis) {
+                             OptionalLong nextVisibleMillis,
+                             long readByNanos) {
     }
 
     /**
@@ -426,7 +443,43 @@ final class OrderedShardOwner implements BatchReadableOwner {
     public void applyBatchRead(List<ShardOwnedStorage.OrderedRow> cursorRows,
                                List<ShardOwnedStorage.OrderedRow> sweptRows,
                                OptionalLong nextVisibleMillis) {
-        pendingBatch = new BatchRead(cursorRows, sweptRows, nextVisibleMillis);
+        // Stamped after the statements returned, so a probe stamped later was issued after this read
+        pendingBatch = new BatchRead(cursorRows, sweptRows, nextVisibleMillis, System.nanoTime());
+    }
+
+    @Override
+    public void readAhead(Connection connection) throws SQLException {
+        if (shedComplete.get() || pendingBatch != null) {
+            return;
+        }
+        readAheadRows = storage.readOrderedFromCursor(connection, shard, safeCursor, settings.readBatchSize());
+        readAheadByNanos = System.nanoTime();
+        metrics.orderedReadStatements.increment();
+    }
+
+    /**
+     * The same question {@link #advanceWatermark} asks before probing, asked of the rows read for this pass before
+     * {@link #pumpOnce} has taken them in.
+     */
+    @Override
+    public boolean horizonProbeWanted() {
+        if (!watermarkCandidates.isEmpty()) {
+            return true;
+        }
+        var rows = pendingBatch != null ? pendingBatch.cursorRows() : readAheadRows;
+        var highest = maxSeen;
+        if (rows != null) {
+            for (var row : rows) {
+                highest = Math.max(highest, row.seq());
+            }
+        }
+        return highest > safeCursor;
+    }
+
+    @Override
+    public void applyHorizonProbe(Set<Long> running, long issuedNanos) {
+        passProbe = running;
+        passProbeIssuedNanos = issuedNanos;
     }
 
     @Override
@@ -437,12 +490,23 @@ final class OrderedShardOwner implements BatchReadableOwner {
         // Taken once, so a batch cannot be applied twice if a pass repeats for any reason.
         var batch = pendingBatch;
         pendingBatch = null;
+        var readAhead = readAheadRows;
+        readAheadRows = null;
+        var probe = passProbe;
+        passProbe = null;
+        // A probe counts only if issued after the rows this pass takes in were read
+        var rowsReadBy = batch != null ? batch.readByNanos() : readAhead != null ? readAheadByNanos : Long.MAX_VALUE;
+        if (probe != null && passProbeIssuedNanos - rowsReadBy <= 0) {
+            probe = null;
+        }
         // Read from the WATERMARK, not from the highest value seen, so a value whose transaction had
         // not committed when an earlier pass went by is read again rather than chased. The window
         // between the two is bounded by the horizon, not by the backlog, and `seen` deduplicates it.
         List<ShardOwnedStorage.OrderedRow> rows;
         if (batch != null) {
             rows = batch.cursorRows();
+        } else if (readAhead != null) {
+            rows = readAhead;
         } else {
             rows = storage.readOrderedFromCursor(connection, shard, safeCursor, settings.readBatchSize());
             metrics.orderedReadStatements.increment();
@@ -459,7 +523,7 @@ final class OrderedShardOwner implements BatchReadableOwner {
         // The new candidate's probe comes AFTER the read, never before: a transaction that allocates a value after
         // the probe is not in the set, and treating it as retired would step over it. See ShardOwnedStorage. Retiring
         // uses the PREVIOUS probe instead - see runningAtLastProbe.
-        advanceWatermark(connection, rows.size() >= settings.readBatchSize() ? lastSeqRead : Long.MAX_VALUE);
+        advanceWatermark(connection, rows.size() >= settings.readBatchSize() ? lastSeqRead : Long.MAX_VALUE, probe);
 
         var now           = System.nanoTime();
         var sweptThisPass = false;
@@ -920,7 +984,7 @@ final class OrderedShardOwner implements BatchReadableOwner {
      * chase query per unresolved value. Reusing {@code holeExpiry} here would reproduce the mechanism
      * this replaces rather than replacing it.
      */
-    private void advanceWatermark(Connection connection, long readReachedSeq) throws SQLException {
+    private void advanceWatermark(Connection connection, long readReachedSeq, Set<Long> passProbe) throws SQLException {
         if (watermarkCandidates.isEmpty() && maxSeen <= safeCursor) {
             // Fully caught up: nothing to retire and nothing worth recording. This is the idle poll,
             // which is the overwhelming majority of them, and it must not pay for the horizon probe.
@@ -931,10 +995,17 @@ final class OrderedShardOwner implements BatchReadableOwner {
         // committed between the read and that probe is missing from it although the read never saw its rows.
         var runningBeforeRead = runningAtLastProbe;
         var now               = System.nanoTime();
-        var running           = storage.runningWriteTransactionIds(connection);
+        // The pump's probe for this pass when there is one - taken after this pass's read, which is all the rule asks
+        // of it - and otherwise one of our own, after the read just the same.
+        Set<Long> running;
+        if (passProbe != null) {
+            running = passProbe;
+        } else {
+            running = storage.runningWriteTransactionIds(connection);
+            metrics.horizonProbes.increment();
+        }
         runningAtLastProbe = running;
         lastHorizonProbeNanos = now;
-        metrics.horizonProbes.increment();
 
         var advanceTo = -1L;
         var capped    = false;

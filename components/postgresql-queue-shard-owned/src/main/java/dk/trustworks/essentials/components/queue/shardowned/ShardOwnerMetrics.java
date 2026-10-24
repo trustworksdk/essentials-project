@@ -79,8 +79,10 @@ public final class ShardOwnerMetrics {
      * Ordered lane only. The hole counters above describe the unordered lane's mechanism; the ordered
      * lane replaced it with a safe watermark and these describe that one.
      * <p>
-     * {@code horizonProbes} counts the extra round trip a poll pays to ask which write transactions
-     * are running. {@code watermarkAdvances} counts how often that answer let the cursor move.
+     * {@code horizonProbes} counts the round trips taken to ask which write transactions are running.
+     * The pump takes one per pass for every owner that needs it, in every queue it serves, and charges it
+     * to one of them - so a queue's count can be lower than its share, and only the sum over the queues
+     * a runtime serves is the number of statements issued. {@code watermarkAdvances} counts how often that answer let the cursor move.
      * {@code watermarkCapped} counts advances forced by the wall-clock cap instead — an advance the
      * horizon had not authorised, which is the ordered lane's remaining exposure to a late commit and
      * therefore the number to watch. A non-zero value means some transaction outlived

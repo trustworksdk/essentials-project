@@ -138,6 +138,32 @@ final class ShardPump implements Runnable {
                     }
 
                     batchRead(connection, attentive);
+                    // Every read of the pass before its one horizon probe - see HorizonProbingOwner.
+                    for (var owner : attentive) {
+                        if (owner instanceof HorizonProbingOwner probing) {
+                            try {
+                                probing.readAhead(connection);
+                            } catch (RuntimeException e) {
+                                log.error("{}: shard {} threw reading ahead; it reads for itself this pass", name, owner.shard(), e);
+                            } catch (SQLException e) {
+                                if (!connection.isValid(1)) {
+                                    throw e;
+                                }
+                                log.error("{}: shard {} read ahead with a statement that failed on a healthy connection; "
+                                                  + "it reads for itself this pass", name, owner.shard(), e);
+                            }
+                        }
+                    }
+                    try {
+                        probeHorizon(connection, attentive);
+                    } catch (SQLException e) {
+                        // The owners probe for themselves this pass, as they did before the probe was shared.
+                        if (!connection.isValid(1)) {
+                            throw e;
+                        }
+                        log.error("{}: shared horizon probe failed on a healthy connection; owners probe for themselves "
+                                          + "this pass", name, e);
+                    }
 
                     for (var owner : attentive) {
                         try {
@@ -232,6 +258,33 @@ final class ShardPump implements Runnable {
      * <b>Failure is not failure of the pass.</b> Owners are left without a batch and read for
      * themselves, exactly as before this existed.
      */
+    /**
+     * One horizon probe for every owner of this pass that needs one, after all of the pass's reads - see
+     * {@link HorizonProbingOwner}.
+     */
+    private void probeHorizon(Connection connection, List<LeasedOwner> attentive) throws SQLException {
+        List<HorizonProbingOwner> asking = null;
+        for (var owner : attentive) {
+            if (owner instanceof HorizonProbingOwner probing && probing.horizonProbeWanted()) {
+                if (asking == null) {
+                    asking = new ArrayList<>();
+                }
+                asking.add(probing);
+            }
+        }
+        if (asking == null) {
+            return;
+        }
+        // Stamped BEFORE the statement, so an owner can tell it was issued after its rows were read
+        var issued  = System.nanoTime();
+        var running = storage.runningWriteTransactionIds(connection);
+        // Counted once, on one asking owner's queue: the probe is database-wide and serves all of them.
+        asking.get(0).ownerMetrics().horizonProbes.increment();
+        for (var owner : asking) {
+            owner.applyHorizonProbe(running, issued);
+        }
+    }
+
     private void batchRead(Connection connection, List<LeasedOwner> attentive) {
         var byQueue = new HashMap<Short, List<BatchReadableOwner>>();
         for (var owner : attentive) {
