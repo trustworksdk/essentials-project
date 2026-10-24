@@ -1498,6 +1498,13 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * dead-lettered again, possibly beside its handler.
      * Unbounded, a handler that never returned kept the unit leased and unserved until the runtime was restarted.
      * <p>
+     * On either lane, a unit whose earlier charge - this hand-back's on an earlier tick, or a shed's - committed and left a
+     * dead-letter move owed has that move made before its release, also once nothing is in a handler any more
+     * ({@link OrderedShardOwner#owesReleaseCharge}, {@link ShardOwner#owesReleaseCharge()}), and is held, and retried on the
+     * next heartbeat, while it fails. Released with the move owed, a dead letter that had committed went uncounted and
+     * unreported (on the ordered lane, though it blocked its key), and a message that had not been moved was handed on at its attempt limit to an
+     * owner that charges nothing for a released unit.
+     * <p>
      * With no live pump left in the runtime this instance acquires nothing, so the units are released for other instances
      * only, and stay unowned if none runs; the WARN reporting the hand-back says which of the two it is.
      * <p>
@@ -1573,12 +1580,34 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                 ready.remove(owner);
             }
         }
+        // An ordered unit with no key in a handler is released only once every dead-letter move an earlier charge of it left
+        // owed is made: a charge of this hand-back on an earlier tick, or of a shed, that committed and whose move then threw.
+        // The handler may have returned since, and nothing new is charged then. Released with the move owed, a dead letter
+        // that had committed went uncounted and unreported though it blocked its key, and a message that had not been moved
+        // was handed on at its attempt limit to an owner that charges nothing for a released unit. A unit whose move fails
+        // again is held and retried on the next heartbeat, as one whose charge fails.
+        for (var owner : List.copyOf(ready)) {
+            if (owner instanceof OrderedShardOwner ordered && !stuck.containsKey(owner)
+                    && ordered.owesReleaseCharge(OrderedShardOwner.ReleaseChargeScope.PAST_STUCK_HANDLER_TIMEOUT)) {
+                var settledBefore = releaseChargeSoFar(owner);
+                try {
+                    chargeKeysInHandlerBeforeRelease(owner, OrderedShardOwner.ReleaseChargeScope.PAST_STUCK_HANDLER_TIMEOUT, "from its dead pump");
+                } catch (SQLException | RuntimeException | Error e) {
+                    Exceptions.rethrowIfCriticalError(e);
+                    warnOwedDeadLetterMoveFailed(owner, "from its dead pump", e);
+                    ready.remove(owner);
+                } finally {
+                    reportOwedDeadLettersSettled(owner, settledBefore, releaseChargeSoFar(owner), "from its dead pump");
+                }
+            }
+        }
         // An unordered shard is handed back with whatever is in its handlers, as on any release; a message in one longer than
         // stuckHandlerTimeout is charged its attempt first, the same way and for the same reason, and a shard whose charge
-        // fails with a charge still owed is held and retried on the next heartbeat the same way.
+        // fails with a charge still owed is held and retried on the next heartbeat the same way. So is one with no message in
+        // a handler whose earlier charge left a dead-letter move owed (owesReleaseCharge), for the reason given above.
         var unorderedCharges = new HashMap<LeasedOwner, ShardOwner.ReleaseCharge>();
         for (var owner : List.copyOf(ready)) {
-            if (owner instanceof ShardOwner unordered && unordered.inFlight() > 0) {
+            if (owner instanceof ShardOwner unordered && (unordered.inFlight() > 0 || unordered.owesReleaseCharge())) {
                 var charge = chargeInHandlerBeforeReleaseOrWarn(unordered, "from its dead pump");
                 if (charge == null) {
                     ready.remove(owner);
@@ -2839,8 +2868,9 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             Exceptions.rethrowIfCriticalError(e);
             if (owner.owesReleaseCharge()) {
                 log.warn("Instance {} could not charge the messages in a handler of unordered shard {} on queue {} an attempt, or "
-                                 + "dead-letter those the charge brought to their attempt limit, before releasing it {} with a message "
-                                 + "in a handler longer than stuckHandlerTimeout ({}), so it did not "
+                                 + "dead-letter those a charge brought to their attempt limit, before releasing it {} (each message in "
+                                 + "a handler longer than stuckHandlerTimeout ({}) is charged, and the dead-letter moves an earlier "
+                                 + "charge left owed are made), so it did not "
                                  + "release the shard: it stays leased to this instance and the release is retried on the next "
                                  + "heartbeat. Other shards are released as usual",
                          instanceId, owner.shard(), queueId, from, activeSettings.stuckHandlerTimeout(), e);
@@ -2869,28 +2899,42 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
     /**
      * Charge the messages in a handler longer than {@code stuckHandlerTimeout} of each unordered owner a stop is about to
      * release ({@code toRelease}, every owner of the stopped run but the ordered units it keeps), putting each unordered owner
-     * with a message in a handler and its charge in {@code charges} ({@link ShardOwner#chargeInHandlerBeforeRelease}). Every
+     * with a message in a handler, or with a dead-letter move owed, and its charge in {@code charges}
+     * ({@link ShardOwner#chargeInHandlerBeforeRelease}). An owner with no message in a handler whose earlier charge - a
+     * shed's, or a dead-pump hand-back's - left a dead-letter move owed has that move made first, on either lane (ordered:
+     * {@link #settleOwedOrderedDeadLettersOnStop}), as the hand-back of a kept unit makes it ({@link #handBackKeptUnit}). Every
      * owner that owes a charge is charged over one connection, as {@link #releaseHeldLeases} releases over one: a connection
      * per owner made a stop against an unreachable database wait a {@code connectionTimeout} per owner. An owner whose charge
      * fails with a charge still owed is left out of the release, with one WARN, and so is every owner owing one when that
      * connection cannot be had, with one WARN for all of them: the stop does not come back to them, so each row is left as a
      * release that fails leaves it, and the instance that takes the shard over next finds it not released and charges, as
      * after a crash, what its previous owner could have had in a handler
-     * ({@link ShardOwnedStorage#bumpAttemptsOnTakeover(Connection, int, int, int, String, long)}). Released uncharged, the
-     * message would have been delivered again with its count unchanged. A failure that leaves nothing owed is released all
+     * ({@link ShardOwnedStorage#bumpAttemptsOnTakeover(Connection, int, int, int, String, long)} for an unordered shard,
+     * {@link ShardOwnedStorage#bumpOrderedAttemptsOnTakeover(Connection, int, int, String, long)} for an ordered unit).
+     * Released uncharged, an unordered owner's message in a handler would have been delivered again with its count
+     * unchanged; why an owed move is made first, see the comment at its gate below. A failure that leaves nothing owed is released all
      * the same ({@link #chargeFailedWithNothingOwed}).
      *
      * @return the owners to release: {@code toRelease} without those whose charge failed
      */
     private List<LeasedOwner> chargeBeforeReleaseOnStop(List<LeasedOwner> toRelease, Map<LeasedOwner, ShardOwner.ReleaseCharge> charges) {
-        var owing = new ArrayList<ShardOwner>();
+        var owing = new ArrayList<LeasedOwner>();
         for (var owner : toRelease) {
-            if (owner instanceof ShardOwner unordered && unordered.inFlight() > 0) {
+            // Also one with no message in a handler whose earlier charge - a shed's, or a dead-pump hand-back's - committed and
+            // left a dead-letter move owed: released with the move owed, a dead letter that had committed went uncounted and
+            // unreported, and a message that had not been moved was handed on at its attempt limit to an owner that charges
+            // nothing for a released shard.
+            if (owner instanceof ShardOwner unordered && (unordered.inFlight() > 0 || unordered.owesReleaseCharge())) {
                 if (unordered.owesReleaseCharge()) {
                     owing.add(unordered);
                 } else {
                     charges.put(owner, unordered.releaseCharge());
                 }
+            } else if (owner instanceof OrderedShardOwner ordered
+                    && ordered.owesReleaseCharge(OrderedShardOwner.ReleaseChargeScope.PAST_STUCK_HANDLER_TIMEOUT)) {
+                // An ordered unit a stop releases normally has no key in a handler (one that has is kept by the drain), so
+                // all it can then owe is such a move, for the same reason.
+                owing.add(ordered);
             }
         }
         if (owing.isEmpty()) {
@@ -2903,27 +2947,36 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         } catch (SQLException | RuntimeException | Error e) {
             Exceptions.rethrowIfCriticalError(e);
             var shards = owing.stream().map(LeasedOwner::shard).toList();
-            log.warn("Instance {} could not get a connection to charge the messages in a handler of unordered shard(s) [{}] on queue {} "
-                             + "an attempt, or dead-letter those the charge brought to their attempt limit, before releasing them "
-                             + "as the queue stopped, with a message in a handler longer than "
-                             + "stuckHandlerTimeout ({}), so it did not release those shards: their leases are left as a release that "
-                             + "fails leaves them, and whoever takes each shard over next finds it not released and charges the messages "
-                             + "its previous owner could have had in a handler, as after a crash. Other shards are released as usual",
-                     instanceId, summarise(shards), queueId, activeSettings.stuckHandlerTimeout(), e);
+            log.warn("Instance {} could not get a connection to charge the messages in a handler of {} unit(s) [{}] on queue {} "
+                             + "an attempt, or dead-letter those a charge brought to their attempt limit, before releasing them "
+                             + "as the queue stopped (each message in a handler longer than stuckHandlerTimeout ({}) is charged, and "
+                             + "the dead-letter moves an earlier charge left owed are made), so it did not release those units: their "
+                             + "leases are left as a release that fails leaves them, and whoever takes each unit over next finds it not "
+                             + "released and charges the messages its previous owner could have had in a handler, as after a crash. "
+                             + "Other units are released as usual",
+                     instanceId, activeLane, summarise(shards), queueId, activeSettings.stuckHandlerTimeout(), e);
             failed.addAll(owing);
             return toRelease.stream().filter(owner -> !failed.contains(owner)).toList();
         }
         try (connection) {
             for (var owner : owing) {
+                if (owner instanceof OrderedShardOwner ordered) {
+                    if (!settleOwedOrderedDeadLettersOnStop(ordered, connection)) {
+                        failed.add(owner);
+                    }
+                    continue;
+                }
+                var unordered = (ShardOwner) owner;
                 try {
-                    charges.put(owner, owner.chargeInHandlerBeforeRelease(connection));
+                    charges.put(owner, unordered.chargeInHandlerBeforeRelease(connection));
                 } catch (SQLException | RuntimeException | Error e) {
                     Exceptions.rethrowIfCriticalError(e);
-                    if (owner.owesReleaseCharge()) {
+                    if (unordered.owesReleaseCharge()) {
                         log.warn("Instance {} could not charge the messages in a handler of unordered shard {} on queue {} an attempt, "
-                                         + "or dead-letter those the charge brought to their attempt limit, before releasing it as "
-                                         + "the queue stopped, with a message in a handler longer than "
-                                         + "stuckHandlerTimeout ({}), so it did not release the shard: its lease is left as a release that "
+                                         + "or dead-letter those a charge brought to their attempt limit, before releasing it as "
+                                         + "the queue stopped (each message in a handler longer than stuckHandlerTimeout ({}) is "
+                                         + "charged, and the dead-letter moves an earlier charge left owed are made), so it did not "
+                                         + "release the shard: its lease is left as a release that "
                                          + "fails leaves it, and whoever takes the shard over next finds it not released and charges the "
                                          + "messages its previous owner could have had in a handler, as after a crash. Other shards are "
                                          + "released as usual",
@@ -2931,16 +2984,47 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                         failed.add(owner);
                     } else {
                         chargeFailedWithNothingOwed(owner, "as the queue stopped", e);
-                        charges.put(owner, owner.releaseCharge());
+                        charges.put(owner, unordered.releaseCharge());
                     }
                 }
             }
         } catch (SQLException e) {
             // Only closing the connection gets here: each owner's own failure is caught above, and its charge has committed.
-            log.debug("Instance {} could not close the connection it charged unordered shards on queue {} over as the queue stopped",
-                      instanceId, queueId, e);
+            log.debug("Instance {} could not close the connection it charged {} units on queue {} over as the queue stopped",
+                      instanceId, activeLane, queueId, e);
         }
         return failed.isEmpty() ? toRelease : toRelease.stream().filter(owner -> !failed.contains(owner)).toList();
+    }
+
+    /**
+     * Make, over the stop's {@code connection}, the dead-letter move(s) the charge before an earlier release of
+     * {@code ordered}'s unit left owed - a shed's, or a dead-pump hand-back's, that committed and whose move then threw -
+     * before the stop releases the unit with no key in a handler ({@link #chargeBeforeReleaseOnStop}), with a WARN naming
+     * the keys dead-lettered ({@link #reportOwedDeadLettersSettled}). A {@code QueueObserver} told of such a dead letter
+     * that throws leaves nothing owed, so the unit is released all the same ({@link #orderedChargeFailedWithNothingOwed}).
+     *
+     * @return {@code false} when a move is still owed: the unit is then left unreleased, as a release that fails leaves it
+     */
+    private boolean settleOwedOrderedDeadLettersOnStop(OrderedShardOwner ordered, Connection connection) {
+        var settledBefore = ordered.releaseCharge();
+        try {
+            ordered.chargeKeysInHandlerBeforeRelease(connection, OrderedShardOwner.ReleaseChargeScope.PAST_STUCK_HANDLER_TIMEOUT);
+            return true;
+        } catch (SQLException | RuntimeException | Error e) {
+            Exceptions.rethrowIfCriticalError(e);
+            if (!ordered.owesReleaseCharge(OrderedShardOwner.ReleaseChargeScope.PAST_STUCK_HANDLER_TIMEOUT)) {
+                orderedChargeFailedWithNothingOwed(ordered, "as the queue stopped", e);
+                return true;
+            }
+            log.warn("Instance {} could not make the dead-letter move(s) an earlier release of ordered unit {} on queue {} left owed "
+                             + "before releasing it as the queue stopped, so it did not release the unit: its lease is left as a release "
+                             + "that fails leaves it, and whoever takes the unit over next finds it not released and takes it over as "
+                             + "after a crash. Other units are released as usual",
+                     instanceId, ordered.shard(), queueId, e);
+            return false;
+        } finally {
+            reportOwedDeadLettersSettled(ordered, settledBefore, ordered.releaseCharge(), "as the queue stopped");
+        }
     }
 
     /**
@@ -2966,13 +3050,15 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
     /**
      * WARN that the charge before releasing {@code owner}'s unit past {@code stuckHandlerTimeout} ({@code from} a shed or a
      * dead pump) failed with the charge or a dead-letter move still to be made ({@link OrderedShardOwner#owesReleaseCharge}),
-     * so the unit was not released on this heartbeat tick. A failure once nothing is owed never gets here
+     * so the unit was not released on this heartbeat tick. It also fires when the charge committed and a dead-letter move
+     * then failed - this charge's, or one an earlier charge left owed. A failure once nothing is owed never gets here
      * ({@link #orderedChargeFailedWithNothingOwed}).
      */
     private void warnChargeBeforeReleaseFailed(LeasedOwner owner, String from, Throwable failure) {
-        log.warn("Instance {} could not charge the messages in a handler of ordered unit {} on queue {} an attempt before releasing "
-                         + "it {} past stuckHandlerTimeout ({}), so it did not release the unit: it stays leased to this instance and "
-                         + "the release is retried on the next heartbeat. Other units are released as usual",
+        log.warn("Instance {} could not charge the messages in a handler of ordered unit {} on queue {} an attempt, or dead-letter "
+                         + "those a charge brought to their attempt limit, before releasing it {} past stuckHandlerTimeout ({}), so it "
+                         + "did not release the unit: it stays leased to this instance and the release is retried on the next "
+                         + "heartbeat. Other units are released as usual",
                  instanceId, owner.shard(), queueId, from, activeSettings.stuckHandlerTimeout(), failure);
     }
 
@@ -3315,7 +3401,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                     // Named whether the charge returned or threw, and before the release: a move made before a later one
                     // throws, or before the release throws, is in the ledger from then on, so a retried hand-back finds
                     // nothing new to name for it.
-                    reportOwedDeadLettersSettledOnHandBack(owner, settledBefore, releaseChargeSoFar(owner));
+                    reportOwedDeadLettersSettled(owner, settledBefore, releaseChargeSoFar(owner), "after a stop kept it");
                 }
                 releaseLeaseRows(List.of(owner));
                 if (claimedFrom.isGivenUp()) {
@@ -3351,16 +3437,21 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
     }
 
     /**
-     * WARN naming the keys whose message {@link #handBackKeptUnitWithinNetworkWaitBound}, before releasing {@code owner}'s
-     * unit, found dead-lettered by a dead-letter move the charge before an earlier release of the unit left owed, that
-     * release having thrown before completing it: made by the hand-back, or found in the dead-letter table where that
-     * release's attempt had committed after the driver stopped waiting for its answer. Called whether the hand-back's charge
-     * returned or threw, so a move made before a later move of the same charge throws is named too, and before the
-     * release, so a release that then fails still leaves the keys named. {@code before} and {@code after} are what the
-     * owner had charged and dead-lettered before and after the hand-back's charge; nothing is logged when it
-     * dead-lettered nothing.
+     * WARN naming the keys whose message a hand-back of {@code owner}'s unit ({@code from}: of a unit a stop kept,
+     * {@link #handBackKeptUnitWithinNetworkWaitBound}; from its dead pump, {@link #handBackUnitsOnDeadPumps}; or as the
+     * queue stopped, {@link #chargeBeforeReleaseOnStop}), before releasing the unit with no key in a handler, found
+     * dead-lettered by a dead-letter move the charge before an earlier release of the unit left owed, that release having
+     * thrown before completing it: made by the hand-back, or found in the dead-letter table where that release's attempt
+     * had committed after the driver stopped waiting for its answer. Called whether the hand-back's charge returned or
+     * threw, so a move made before a later move of the same charge throws is named too, and before the release, so a
+     * release that then fails still leaves the keys named. {@code before} and {@code after} are what the owner had charged
+     * and dead-lettered before and after the hand-back's charge; nothing is logged when it dead-lettered nothing.
+     *
+     * @param from how the unit is being handed back, as the WARN names it: {@code "after a stop kept it"},
+     *             {@code "from its dead pump"} or {@code "as the queue stopped"}
      */
-    private void reportOwedDeadLettersSettledOnHandBack(LeasedOwner owner, OrderedShardOwner.ReleaseCharge before, OrderedShardOwner.ReleaseCharge after) {
+    private void reportOwedDeadLettersSettled(LeasedOwner owner, OrderedShardOwner.ReleaseCharge before, OrderedShardOwner.ReleaseCharge after,
+                                              String from) {
         var settled = new ArrayList<>(after.deadLetteredKeys());
         before.deadLetteredKeys().forEach(settled::remove);
         if (settled.isEmpty()) {
@@ -3369,8 +3460,21 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         log.warn("Instance {}, handing back ordered unit {} on queue {}, has made or found, before releasing it, dead-letter move(s) an "
                          + "earlier release of it left owed (made now, or found that release's unanswered attempt had committed): {} message(s) "
                          + "of key(s) {}, which that release's charge brought to their attempt limit, are dead-lettered. Each key is blocked "
-                         + "until every dead letter of the key is resurrected (resurrectKey) or deleted",
-                 instanceId, owner.shard(), queueId, settled.size(), OrderedShardOwner.describeKeys(settled));
+                         + "until every dead letter of the key is resurrected (resurrectKey) or deleted. The unit is handed back {}",
+                 instanceId, owner.shard(), queueId, settled.size(), OrderedShardOwner.describeKeys(settled), from);
+    }
+
+    /**
+     * WARN that a hand-back of {@code owner}'s ordered unit with no key in a handler ({@code from} its dead pump) could
+     * not make the dead-letter move(s) the charge before an earlier release of the unit left owed
+     * ({@link OrderedShardOwner#owesReleaseCharge}), so the unit was not released on this heartbeat tick, and is retried on
+     * the next.
+     */
+    private void warnOwedDeadLetterMoveFailed(LeasedOwner owner, String from, Throwable failure) {
+        log.warn("Instance {} could not make the dead-letter move(s) an earlier release of ordered unit {} on queue {} left owed "
+                         + "before releasing it {}, so it did not release the unit: it stays leased to this instance and the release "
+                         + "is retried on the next heartbeat. Other units are released as usual",
+                 instanceId, owner.shard(), queueId, from, failure);
     }
 
     /**
