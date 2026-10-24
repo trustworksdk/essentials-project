@@ -2611,6 +2611,31 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * still naming this instance. The other owners are released. A site that missed the move misses it on every attempt,
      * and the heartbeat's sites attempt it on every tick, so the WARN is logged at most once a minute per owner, naming the
      * releases that left it out since the last one, and the rest at DEBUG ({@link LeasedOwner#owedMoveReleaseRefusals()}).
+     * <p>
+     * The check and the statement are one step as far as a charge is concerned: each owner found owing nothing is claimed
+     * ({@link LeasedOwner#claimReleaseUnlessMoveOwed()}) until the statement has returned or thrown, and a charge of it
+     * that starts meanwhile - a release site of the same owner on another thread - waits for the claim to end
+     * ({@code ReleaseChargeLedger.claimReleaseUnlessMoveOwed}). Checked alone, such a charge could leave a move owed after
+     * the check, and the row was released with it owed all the same. The statement's connection is taken from the pool
+     * before any owner is claimed, so a claim covers the claims of the owners after it in the same call and the statement,
+     * not a wait for the pool: held across that wait, a claim could make a charge wait that holds a pool connection
+     * itself ({@link #chargeBeforeReleaseOnStop} charges over one), while the claim holder waited for a connection. A pool
+     * that gives no connection fails this before any owner is claimed or marked. Each claim is ended in its own try, and
+     * the claims are ended before the owners are told their lease ended and before the WARN for the owners left out; a
+     * charge that runs after a release that went through finds the row no longer the owner's, and its fenced writes
+     * change nothing.
+     * <p>
+     * The guard holds an owner; it makes no move itself. Each site settles an owed move its own way, and with its own report:
+     * on the ordered lane by its own scope ({@code PAST_STUCK_HANDLER_TIMEOUT} for a shed or a dead-pump hand-back,
+     * {@code EVERY_KEY_IN_HANDLER} for a release on request or the hand-back of a kept unit), with its own WARN naming the
+     * keys dead-lettered ({@link #reportOwedDeadLettersSettled}, the WARN of {@link #handBackKeptUnit}); on the unordered
+     * lane through {@link #chargeInHandlerBeforeReleaseOrWarn} and {@link #chargeBeforeReleaseOnStop}; and over the
+     * connection the site holds ({@code stop()} charges every owing owner over one, {@link #chargeBeforeReleaseOnStop}). A move made here would skip
+     * that report and would need a connection of its own, beside the one the release statement takes. So an owner a site
+     * left owing stays held until a site makes the move: the hold shows in this WARN and, for a unit on a dead pump, in
+     * {@link ShardOwnerMetrics#shardsOnDeadPumps}, which counts it until it is handed back. A release on request
+     * ({@link #releaseKeptOrderedUnit}) runs its charge before its release, and that charge makes every move still owed, so
+     * asking again after one left out here settles a move that charge can make.
      *
      * @return the owners released and how many rows the statement released ({@link LeaseRowRelease})
      */
@@ -2619,15 +2644,93 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             return LeaseRowRelease.NONE;
         }
         // Asked outside any lock of the owner's: the ledger takes its monitor, and waits for a charge running on another
-        // thread (ReleaseChargeLedger, Locking)
-        var owing    = new ArrayList<LeasedOwner>();
-        var clearing = new ArrayList<LeasedOwner>();
-        for (var owner : releasing) {
-            (owner.owesDeadLetterMove() ? owing : clearing).add(owner);
+        // thread (ReleaseChargeLedger, Locking). Each owner found owing nothing is claimed until the statement has returned
+        // or thrown: a charge of it starting meanwhile, on another thread, waits for the claim to end, so none leaves a move
+        // owed between this check and the statement. The statement's connection is taken first, so no claim is held while
+        // this waits for the pool
+        var owing         = new ArrayList<LeasedOwner>();
+        var clearing      = new ArrayList<LeasedOwner>();
+        var statementSent = false;
+        int released      = 0;
+        try (var connection = storage.connection()) {
+            Throwable failure = null;
+            try {
+                for (var owner : releasing) {
+                    (owner.claimReleaseUnlessMoveOwed() ? clearing : owing).add(owner);
+                }
+                if (!clearing.isEmpty()) {
+                    var fenceByShard = new HashMap<Integer, Long>();
+                    clearing.forEach(owner -> fenceByShard.put(owner.shard(), owner.fence()));
+                    statementSent = true;
+                    released = storage.releaseFencedLeases(connection, activeLane, fenceByShard, instanceId);
+                }
+            } catch (SQLException | RuntimeException | Error e) {
+                failure = e;
+                throw e;
+            } finally {
+                // A claim covers the later owners' claims and the statement: ended before onLeaseEnded, so no owner code
+                // run from there waits for it
+                endReleaseClaims(clearing, failure);
+            }
+        } catch (SQLException | RuntimeException | Error e) {
+            // The statement or the close of its connection: either may leave the release gone through on the server
+            if (statementSent && LeaseRowState.mayHaveGoneThrough(e)) {
+                clearing.forEach(LeasedOwner::markReleaseInDoubt);
+            }
+            throw e;
+        } finally {
+            warnOwedMoveReleaseRefusals(owing);
         }
+        if (clearing.isEmpty()) {
+            return LeaseRowRelease.NONE;
+        }
+        for (var owner : clearing) {
+            owner.onLeaseEnded(LeasedOwner.LeaseEnd.RELEASED);
+        }
+        return new LeaseRowRelease(List.copyOf(clearing), released);
+    }
+
+    /**
+     * End the release claim of each of {@code claimed} ({@link LeasedOwner#endReleaseClaim()}), each in its own try: a
+     * claim left held makes every later charge of that owner wait for good. An end that throws - the ledger's
+     * {@link IllegalStateException}, which only a bug reaches - is added to {@code failure} as suppressed when the release
+     * already failed, so that failure is the one rethrown, and is otherwise thrown once every claim is ended, any later
+     * one suppressed in it. A critical error is rethrown at once.
+     *
+     * @param claimed the owners {@link #releaseLeaseRows} claimed
+     * @param failure what the release threw, or {@code null} when it did not throw
+     */
+    private static void endReleaseClaims(List<LeasedOwner> claimed, Throwable failure) {
+        Throwable firstEndFailure = null;
+        for (var owner : claimed) {
+            try {
+                owner.endReleaseClaim();
+            } catch (RuntimeException | Error e) {
+                Exceptions.rethrowIfCriticalError(e);
+                if (failure != null) {
+                    failure.addSuppressed(e);
+                } else if (firstEndFailure == null) {
+                    firstEndFailure = e;
+                } else {
+                    firstEndFailure.addSuppressed(e);
+                }
+            }
+        }
+        if (firstEndFailure instanceof RuntimeException runtime) {
+            throw runtime;
+        }
+        if (firstEndFailure instanceof Error error) {
+            throw error;
+        }
+    }
+
+    /**
+     * {@link #releaseLeaseRows}' WARN for each of {@code owing}, left out because a dead-letter move of it is still owed:
+     * rate-limited per owner, as a site that missed the move misses it on every attempt, and the heartbeat's sites attempt
+     * it on every tick.
+     */
+    private void warnOwedMoveReleaseRefusals(List<LeasedOwner> owing) {
         for (var owner : owing) {
-            // Rate-limited per owner: a site that missed the move misses it on every attempt, and the heartbeat's sites attempt it
-            // on every tick
             var leftOutSinceWarning = owner.owedMoveReleaseRefusals().leftOut(System.nanoTime());
             if (leftOutSinceWarning > 0) {
                 log.warn("Instance {} did not release {} unit {} on queue {} ({} release(s) of it left out since its last WARN, this one "
@@ -2642,24 +2745,6 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                           instanceId, activeLane, owner.shard(), queueId);
             }
         }
-        if (clearing.isEmpty()) {
-            return LeaseRowRelease.NONE;
-        }
-        var fenceByShard = new HashMap<Integer, Long>();
-        clearing.forEach(owner -> fenceByShard.put(owner.shard(), owner.fence()));
-        int released;
-        try {
-            released = storage.releaseFencedLeases(activeLane, fenceByShard, instanceId);
-        } catch (SQLException | RuntimeException | Error e) {
-            if (LeaseRowState.mayHaveGoneThrough(e)) {
-                clearing.forEach(LeasedOwner::markReleaseInDoubt);
-            }
-            throw e;
-        }
-        for (var owner : clearing) {
-            owner.onLeaseEnded(LeasedOwner.LeaseEnd.RELEASED);
-        }
-        return new LeaseRowRelease(List.copyOf(clearing), released);
     }
 
     /**

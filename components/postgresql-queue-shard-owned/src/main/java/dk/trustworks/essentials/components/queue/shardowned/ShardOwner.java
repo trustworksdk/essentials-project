@@ -1184,6 +1184,16 @@ final class ShardOwner implements LeasedOwner {
     }
 
     @Override
+    public boolean claimReleaseUnlessMoveOwed() {
+        return releaseChargeLedger.claimReleaseUnlessMoveOwed();
+    }
+
+    @Override
+    public void endReleaseClaim() {
+        releaseChargeLedger.endReleaseClaim();
+    }
+
+    @Override
     public OwedMoveReleaseRefusals owedMoveReleaseRefusals() {
         return owedMoveReleaseRefusals;
     }

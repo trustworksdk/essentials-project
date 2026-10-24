@@ -908,6 +908,31 @@ public final class ShardOwnedStorage {
         if (fenceByShard.isEmpty()) {
             return 0;
         }
+        try (var connection = open()) {
+            return releaseFencedLeases(connection, lane, fenceByShard, owner);
+        }
+    }
+
+    /**
+     * {@link #releaseFencedLeases(String, Map, String)} on a connection the caller holds - one from {@link #connection()},
+     * so it is bounded as {@link #open()} says - and leaves open. For a caller that must hold the connection before it
+     * decides which units to release: {@code ShardOwnedQueue.releaseLeaseRows} takes it before it claims any owner's
+     * release, so a claim is not held across the wait for a pool connection.
+     *
+     * @param connection   the connection to run the statement on; the caller closes it
+     * @param lane         the lane the units belong to
+     * @param fenceByShard each unit to release, with the fence its owner holds it under; empty releases nothing
+     * @param owner        the instance id the rows must name
+     * @return how many leases were actually given up
+     */
+    int releaseFencedLeases(Connection connection, String lane, Map<Integer, Long> fenceByShard, String owner) throws SQLException {
+        requireNonNull(connection, "No connection provided");
+        requireNonNull(lane, "No lane provided");
+        requireNonNull(fenceByShard, "No fences provided");
+        requireNonNull(owner, "No owner provided");
+        if (fenceByShard.isEmpty()) {
+            return 0;
+        }
         var shards = new Integer[fenceByShard.size()];
         var fences = new Long[fenceByShard.size()];
         var index  = 0;
@@ -916,8 +941,7 @@ public final class ShardOwnedStorage {
             fences[index] = entry.getValue();
             index++;
         }
-        try (var connection = open();
-             var statement = connection.prepareStatement(
+        try (var statement = connection.prepareStatement(
                      "UPDATE " + LEASE_TABLE + " l SET owner = NULL"
                              + " FROM unnest(?::int[], ?::bigint[]) AS released(shard, fence)"
                              + " WHERE l.queue_id = ? AND l.lane = ? AND l.owner = ?"

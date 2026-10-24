@@ -292,6 +292,28 @@ interface LeasedOwner {
     }
 
     /**
+     * {@link #owesDeadLetterMove()} as {@code ShardOwnedQueue.releaseLeaseRows} asks it, and, when nothing is owed, a claim
+     * on that release, held until {@link #endReleaseClaim()}: a charge before a release of this owner that starts while it
+     * is held waits for it to end ({@code ReleaseChargeLedger.claimReleaseUnlessMoveOwed}), so no charge on another thread
+     * leaves a move owed between the check and the release statement. Called by {@code ShardOwnedQueue.releaseLeaseRows}
+     * alone, without the owner's state lock.
+     * <p>
+     * Default {@code !owesDeadLetterMove()} and no claim, for a test double that charges nothing.
+     *
+     * @return {@code true} when nothing is owed and the release is claimed; {@code false} when a move is owed, nothing claimed
+     */
+    default boolean claimReleaseUnlessMoveOwed() {
+        return !owesDeadLetterMove();
+    }
+
+    /**
+     * End the claim {@link #claimReleaseUnlessMoveOwed()} gave, once the release statement has returned or thrown. Called by
+     * {@code ShardOwnedQueue.releaseLeaseRows} alone, once for each claim. Default: nothing, as the default claims nothing.
+     */
+    default void endReleaseClaim() {
+    }
+
+    /**
      * The rate limit of {@code ShardOwnedQueue.releaseLeaseRows}' WARN that it left this owner out, a dead-letter move of
      * it still owed ({@link #owesDeadLetterMove()}): this owner's own, the same object on every call, so the WARN is
      * logged at most once a minute for this owner and the rest at DEBUG.

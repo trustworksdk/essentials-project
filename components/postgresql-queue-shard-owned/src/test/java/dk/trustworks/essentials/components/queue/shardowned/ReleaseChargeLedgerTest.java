@@ -181,6 +181,62 @@ class ReleaseChargeLedgerTest {
     }
 
     /**
+     * A release claimed once its check found nothing owed ({@link ReleaseChargeLedger#claimReleaseUnlessMoveOwed}) holds off
+     * a charge that starts after it until every claim has ended: so no charge leaves a move owed between the check and the
+     * release statement. Checked alone ({@link ReleaseChargeLedger#owesDeadLetterMove}), a charge on another thread started
+     * after the check, its move failed, and the row was released with the move owed all the same. Claims are counted: the
+     * charge waits for the last one.
+     */
+    @Test
+    void a_charge_waits_for_every_release_claimed_before_it_and_no_release_is_claimed_while_the_move_it_left_is_owed() throws Exception {
+        var writes = new FakeWrites(Map.of(1L, 1));
+        writes.failMoves = 1;
+        var ledger = ledger(writes, 1, new ShardOwnerMetrics(), new ArrayList<>());
+
+        assertThat(ledger.claimReleaseUnlessMoveOwed()).as("nothing owed: a release is claimed").isTrue();
+        assertThat(ledger.claimReleaseUnlessMoveOwed()).as("and a second release of the owner beside it").isTrue();
+        var charge = CompletableFuture.runAsync(() -> assertThatThrownBy(() -> ledger.charge(null, () -> candidates(1L))).isInstanceOf(SQLException.class));
+
+        assertThatThrownBy(() -> charge.get(300, TimeUnit.MILLISECONDS)).as("the charge waits for the claimed releases")
+                                                                          .isInstanceOf(TimeoutException.class);
+        assertThat(ledger.owesDeadLetterMove()).as("no move left owed while a release is claimed").isFalse();
+        ledger.endReleaseClaim();
+        assertThatThrownBy(() -> charge.get(300, TimeUnit.MILLISECONDS)).as("still waiting for the second claim")
+                                                                          .isInstanceOf(TimeoutException.class);
+        assertThat(ledger.owesDeadLetterMove()).isFalse();
+
+        ledger.endReleaseClaim();
+        charge.get(10, TimeUnit.SECONDS);
+
+        assertThat(writes.chargeCalls).as("charged once the last claim ended").containsExactly(Set.of(1L));
+        assertThat(ledger.owesDeadLetterMove()).as("premise: that charge left the move owed").isTrue();
+        assertThat(ledger.claimReleaseUnlessMoveOwed()).as("no release is claimed while the move is owed").isFalse();
+        assertThatThrownBy(ledger::endReleaseClaim).as("nothing was claimed").isInstanceOf(IllegalStateException.class);
+    }
+
+    /**
+     * A release claimed while a charge runs waits for that charge, and is refused when the charge left a move owed.
+     */
+    @Test
+    void a_release_claimed_while_a_charge_runs_waits_for_it_and_is_refused_when_it_left_a_move_owed() throws Exception {
+        var writes = new FakeWrites(Map.of(1L, 1));
+        writes.holdMoves();
+        writes.failMoves = 1;
+        var ledger = ledger(writes, 1, new ShardOwnerMetrics(), new ArrayList<>());
+
+        var charge = CompletableFuture.runAsync(() -> assertThatThrownBy(() -> ledger.charge(null, () -> candidates(1L))).isInstanceOf(SQLException.class));
+        assertThat(writes.moving.await(10, TimeUnit.SECONDS)).as("premise: the charge is moving the message").isTrue();
+        var claim = CompletableFuture.supplyAsync(ledger::claimReleaseUnlessMoveOwed);
+
+        assertThatThrownBy(() -> claim.get(300, TimeUnit.MILLISECONDS)).as("the claim waits for the running charge")
+                                                                         .isInstanceOf(TimeoutException.class);
+        writes.proceed.countDown();
+
+        assertThat(claim.get(10, TimeUnit.SECONDS)).as("refused: the charge it waited for left the move owed").isFalse();
+        charge.get(10, TimeUnit.SECONDS);
+    }
+
+    /**
      * The completion wins: a handler that completes while its message's dead-letter move is still owed - the charge
      * committed, the move refused - settles that move as handled, and no later call makes it. The owner records the
      * message handled instead (its acknowledgement queued). Made, the move dead-lettered a message whose handler had

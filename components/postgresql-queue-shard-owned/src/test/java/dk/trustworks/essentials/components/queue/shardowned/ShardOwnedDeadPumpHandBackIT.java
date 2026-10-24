@@ -1738,6 +1738,8 @@ class ShardOwnedDeadPumpHandBackIT {
                 assertThat(ownerOf("unordered", SHARD_COUNT)).as("its lease row released").isNull();
                 Awaitility.await().atMost(Duration.ofSeconds(5))
                           .untilAsserted(() -> assertThat(queue.owners()).as("dropped once handed back").doesNotContain(owing));
+                assertThat(owing.claimed.get()).as("the release that went through claimed it first").isPositive();
+                assertThat(owing.ended.get()).as("and ended every claim it took").isEqualTo(owing.claimed.get());
             } finally {
                 releaseQueueLog(logged);
                 queue.stop();
@@ -2841,6 +2843,8 @@ class ShardOwnedDeadPumpHandBackIT {
         private final OwedMoveReleaseRefusals refusals = new OwedMoveReleaseRefusals();
         final         AtomicBoolean           owes     = new AtomicBoolean(true);
         final         AtomicInteger           asked    = new AtomicInteger();
+        final         AtomicInteger           claimed  = new AtomicInteger();
+        final         AtomicInteger           ended    = new AtomicInteger();
 
         OwesDeadLetterMoveOwner(int shard) {
             this.shard = shard;
@@ -2850,6 +2854,27 @@ class ShardOwnedDeadPumpHandBackIT {
         public boolean owesDeadLetterMove() {
             asked.incrementAndGet();
             return owes.get();
+        }
+
+        /**
+         * As the real owners' ledger claims: asks {@link #owesDeadLetterMove()}, and counts a claim ({@link #claimed})
+         * when nothing is owed.
+         */
+        @Override
+        public boolean claimReleaseUnlessMoveOwed() {
+            if (owesDeadLetterMove()) {
+                return false;
+            }
+            claimed.incrementAndGet();
+            return true;
+        }
+
+        /**
+         * Counts the claims ended ({@link #ended}).
+         */
+        @Override
+        public void endReleaseClaim() {
+            ended.incrementAndGet();
         }
 
         @Override

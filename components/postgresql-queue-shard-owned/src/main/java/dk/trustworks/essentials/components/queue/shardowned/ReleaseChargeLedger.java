@@ -97,6 +97,14 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  *     the candidates {@code Supplier}, the constructor's {@code onCharged} and {@code onMoved}, and every {@link Writes}
  *     method - each of which may take the owner's state lock ({@code stateLock}): both owners take it in their candidates,
  *     {@code onCharged} and (ordered) {@code onMoved};</li>
+ *     <li>before any of that, {@link #charge} waits for every release of the owner's row claimed by
+ *     {@link #claimReleaseUnlessMoveOwed} to end ({@link #endReleaseClaim}), letting go of the monitor while it waits. A
+ *     thread holding a claim takes no lock until it ends it but the monitors of the other owners it claims after this one
+ *     for the same statement, each of which it waits for only while a charge is running there, never one waiting for a
+ *     claim; so the wait closes no cycle with a lock the waiting caller holds. Nor does it wait on the pool through the
+ *     claim holder: {@code ShardOwnedQueue.releaseLeaseRows} takes the statement's connection before it claims any owner.
+ *     A waiting charge waits for the claims of those later owners and for the release statement, and keeps its caller's
+ *     connection, when it holds one, meanwhile;</li>
  *     <li>so a caller of {@link #charge}, {@link #owes}, {@link #owesDeadLetterMove}, {@link #answer} or
  *     {@link #deadLetteredWhileInHandler} or {@link #completedInHandler} must not hold the owner's state lock, nor any lock
  *     those callbacks take: {@link #owes}, {@link #owesDeadLetterMove} and {@link #answer} take the monitor, and
@@ -285,6 +293,11 @@ final class ReleaseChargeLedger {
      * only when it may move the handler's message.
      */
     private volatile RunningCharge               running;
+    /**
+     * How many releases of the owner's row hold a claim ({@link #claimReleaseUnlessMoveOwed}) not ended yet
+     * ({@link #endReleaseClaim}): {@link #charge} waits while this is above 0. Read and written under {@link #monitor} only.
+     */
+    private int                                  releasesClaimed;
 
     /**
      * A {@link #charge} running.
@@ -361,15 +374,84 @@ final class ReleaseChargeLedger {
      * ({@link DeadLetterMove#PENDING}), or its handler completed after a move of it threw with no answer from the database
      * and the dead-letter table is still to be asked whether that move committed ({@link DeadLetterMove#HANDLED} in
      * {@link #movesInDoubt}), whatever the owner's candidates: the half of {@link #owes} no scope changes. Asked
-     * by {@code ShardOwnedQueue.releaseLeaseRows}, which every release of an owner's row goes through, and which releases
-     * no owner while this is {@code true}: released with the move owed, a dead letter that had committed went uncounted and
-     * unreported, and a message that had not been moved was handed on at its attempt limit to an owner that charges
-     * nothing for a released unit. Takes the monitor, so it waits for a running {@link #charge} (class javadoc,
-     * <b>Locking</b>).
+     * by {@code ShardOwnedQueue.releaseLeaseRows}, which every release of an owner's row goes through, through
+     * {@link #claimReleaseUnlessMoveOwed}, and which releases no owner while this is {@code true}: released with the move
+     * owed, a dead letter that had committed went uncounted and unreported, and a message that had not been moved was
+     * handed on at its attempt limit to an owner that charges nothing for a released unit. Takes the monitor, so it waits
+     * for a running {@link #charge} (class javadoc, <b>Locking</b>).
      */
     boolean owesDeadLetterMove() {
         synchronized (monitor) {
             return rows.values().stream().anyMatch(this::stillToSettle);
+        }
+    }
+
+    /**
+     * {@link #owesDeadLetterMove} for a release of the owner's row about to be made, and, when nothing is owed, a claim on
+     * that release, held until {@link #endReleaseClaim}: a {@link #charge} that starts while a claim is held waits for every
+     * claim to end before it takes its candidates. So no charge leaves a move owed between this check and the release
+     * statement after it. Asked and checked alone, a charge on another thread - a second release site of the same owner -
+     * could start after the check, leave a move owed (its move failing), and the row was released with it owed all the
+     * same. A charge already running when this is asked is waited for, as {@link #owesDeadLetterMove} waits for it.
+     * <p>
+     * Claims are counted, not exclusive: two releases of the owner may each hold one, and neither waits for the other.
+     * Called by {@code ShardOwnedQueue.releaseLeaseRows} alone, which takes the statement's connection before it claims
+     * any owner, ends the claim in a {@code finally} right after its statement, before it tells the owner its lease ended,
+     * and takes no lock while it holds one but the monitors of the other owners it claims after this one for that
+     * statement (class javadoc, <b>Locking</b>); a charge that waits for it waits for those owners' claims and for the
+     * release statement. A charge that runs after that release finds the row no longer the owner's: its fenced writes
+     * change nothing.
+     *
+     * @return {@code true} when nothing is owed and the release is claimed; {@code false} when a dead-letter move is still
+     *         owed, and nothing is claimed
+     */
+    boolean claimReleaseUnlessMoveOwed() {
+        synchronized (monitor) {
+            if (owesDeadLetterMove()) {
+                return false;
+            }
+            releasesClaimed++;
+            return true;
+        }
+    }
+
+    /**
+     * End a claim {@link #claimReleaseUnlessMoveOwed} gave, once the release statement has returned or thrown: once no
+     * claim is left, a {@link #charge} waiting for one goes on.
+     *
+     * @throws IllegalStateException when no claim is held
+     */
+    void endReleaseClaim() {
+        synchronized (monitor) {
+            if (releasesClaimed == 0) {
+                throw new IllegalStateException("No release of unit " + shard + " on the " + lane + " lane is claimed");
+            }
+            releasesClaimed--;
+            if (releasesClaimed == 0) {
+                monitor.notifyAll();
+            }
+        }
+    }
+
+    /**
+     * Wait while a release of the owner's row holds a claim ({@link #claimReleaseUnlessMoveOwed}), letting go of the
+     * monitor while it waits. The wait lasts as long as the claims it waits for are held, which an interrupt of this
+     * thread would not end: an interrupt is set again on the thread once the wait is over. Called under {@link #monitor}.
+     */
+    private void awaitNoReleaseClaimed() {
+        var interrupted = false;
+        try {
+            while (releasesClaimed > 0) {
+                try {
+                    monitor.wait();
+                } catch (InterruptedException e) {
+                    interrupted = true;
+                }
+            }
+        } finally {
+            if (interrupted) {
+                Thread.currentThread().interrupt();
+            }
         }
     }
 
@@ -384,6 +466,7 @@ final class ReleaseChargeLedger {
 
     /**
      * Charge one attempt to each of {@code candidates} not charged yet, then make every dead-letter move still owed.
+     * Waits first for every release of the owner's row claimed ({@link #claimReleaseUnlessMoveOwed}) to end.
      * <p>
      * The candidates are taken once this call is running, under the monitor: a handler of one of them that returns after they
      * are taken finds the call running ({@link #deadLetteredWhileInHandler}) and waits for it, and one that returned before is left
@@ -418,6 +501,9 @@ final class ReleaseChargeLedger {
         Answer answer;
         try {
             synchronized (monitor) {
+                // A release claimed once its check found nothing owed: charged now, a move this call left owed would be
+                // released with it (claimReleaseUnlessMoveOwed)
+                awaitNoReleaseClaimed();
                 running = RunningCharge.TAKING_CANDIDATES;
                 try {
                     var toCharge = notChargedYet(requireNonNull(candidates.get(), "No candidates supplied"));
