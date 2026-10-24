@@ -21,7 +21,6 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ev
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.EventStoreUnitOfWork;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
-import dk.trustworks.essentials.components.foundation.Lifecycle;
 import dk.trustworks.essentials.components.foundation.causation.CausationContext;
 import dk.trustworks.essentials.components.foundation.fencedlock.*;
 import dk.trustworks.essentials.components.foundation.messaging.*;
@@ -189,7 +188,7 @@ public abstract class ViewEventProcessor extends AbstractEventProcessor {
             var consumer      = durableQueueConsumer;
             var subscriptions = eventStoreSubscriptions;
             // Cleared, so a release that follows (without a re-acquire in between) does not cancel this consumer again.
-            // The (stopped) subscriptions are kept: resetting a processor that does not hold the lock still resets their resume points
+            // The (unsubscribed) subscriptions are kept: resetting a processor that does not hold the lock still resets their resume points
             durableQueueConsumer = null;
             if (consumer == null) {
                 logger.warn("FencedLock '{}' for ViewProcessor '{}' was RELEASED - didn't find an Exclusive DurableQueueConsumer for Queue '{}'!", lockName, processorName, durableQueueName);
@@ -197,8 +196,10 @@ public abstract class ViewEventProcessor extends AbstractEventProcessor {
             }
             try {
                 if (subscriptions != null) {
-                    logger.info("FencedLock '{}' for ViewProcessor '{}' was RELEASED - will stop {} subscriber(s)", lockName, processorName, subscriptions.size());
-                    subscriptions.forEach(Lifecycle::stop);
+                    logger.info("FencedLock '{}' for ViewProcessor '{}' was RELEASED - will unsubscribe {} subscriber(s)", lockName, processorName, subscriptions.size());
+                    // Unsubscribed, not just stopped: the manager hands a subscription it still holds back to the next
+                    // subscribe without starting it, so a re-acquired lock would leave the processor handling no events
+                    subscriptions.forEach(EventStoreSubscription::unsubscribe);
                 }
             } finally {
                 logger.info("FencedLock '{}' for ViewProcessor '{}' and DurableQueue '{}' was RELEASED - will stop Exclusive DurableQueueConsumer: {}", lockName, processorName, durableQueueName, consumer);
@@ -220,7 +221,7 @@ public abstract class ViewEventProcessor extends AbstractEventProcessor {
                                                                   });
                                                               }
                                                              );
-        // Collected one by one, so the subscriptions created before one that fails to subscribe are stopped again
+        // Collected one by one, so the subscriptions created before one that fails to subscribe are unsubscribed again
         var created = new ArrayList<EventStoreSubscription>(subscribeToEventsRelatedTo.size());
         try {
             for (var aggregateType : subscribeToEventsRelatedTo) {
@@ -258,7 +259,7 @@ public abstract class ViewEventProcessor extends AbstractEventProcessor {
                 created.add(subscription);
             }
         } catch (RuntimeException e) {
-            created.forEach(Lifecycle::stop);
+            created.forEach(EventStoreSubscription::unsubscribe);
             throw e;
         }
         eventStoreSubscriptions = Collections.unmodifiableList(created);
