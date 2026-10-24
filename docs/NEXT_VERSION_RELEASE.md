@@ -1390,4 +1390,4 @@ Not published; listed because they are the reference for how to use the framewor
 - **`ShardOwnedSchemaContributor` moved into the engine**, as `dk.trustworks.essentials.components.queue.shardowned.ShardOwnedSchemaContributor`,
   now that the engine depends on `foundation`. The class of that name in `postgresql-queue-shard-owned-adapter` still
   works, deprecated for removal, and delegates to it. The Spring starter's bean is now the engine's class: code that
-  injects the adapter's type by class gets no bean; inject the engine's.
+  injects the adapter's type by class gets no bean; inject the engine's (`a1dfba074`).
