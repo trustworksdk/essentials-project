@@ -29,8 +29,10 @@ import java.util.concurrent.atomic.AtomicLong;
  * than by a pump. And by {@code ShardOwnedQueue.rebalance}'s WARN that the release of an unordered owner in doubt failed
  * again, one window per owner ({@link InDoubtReleaseFailures}), taken by the heartbeat tick. And by
  * {@code ShardOwnedQueue.releaseLeaseRows}' WARN that it left an owner out, a dead-letter move of it still owed, one
- * window per owner ({@link OwedMoveReleaseRefusals}), taken by whichever thread releases.
- * Reuse it for a new once-a-minute log rather than writing the CAS again.
+ * window per owner ({@link OwedMoveReleaseRefusals}), taken by whichever thread releases. Those two take it through
+ * {@link RateLimitedCount}, which also counts the events since the last WARN.
+ * Reuse it for a new once-a-minute log rather than writing the CAS again, and {@link RateLimitedCount} for one that
+ * counts what it held back.
  * <p>
  * Its own class rather than a helper on one of them, so a change to one log's semantics (the takeover window reopening
  * when no shard is stalled, say) cannot silently change the others.

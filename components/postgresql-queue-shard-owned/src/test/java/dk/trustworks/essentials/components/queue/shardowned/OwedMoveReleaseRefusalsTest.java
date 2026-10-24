@@ -21,39 +21,17 @@ import org.junit.jupiter.api.Test;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * {@link OwedMoveReleaseRefusals}: the first release that leaves an owner out is logged at WARN, later ones within the
- * minute at DEBUG, and the next WARN once the minute has passed counts every release that left the owner out since the
- * last one.
+ * {@link OwedMoveReleaseRefusals} counts the releases that left each owner out on a {@link RateLimitedCount} of its own
+ * (the counting itself: {@link RateLimitedCountTest}).
  */
 class OwedMoveReleaseRefusalsTest {
-    private static final long MINUTE = ErrorWindow.EVERY_NANOS;
-
     @Test
-    void the_first_release_left_out_is_a_warning_of_one() {
-        assertThat(new OwedMoveReleaseRefusals().leftOut(1_000L)).isEqualTo(1);
-    }
-
-    @Test
-    void releases_left_out_within_the_minute_are_not_warnings() {
+    void each_owners_releases_left_out_are_counted_on_a_count_of_its_own() {
         var refusals = new OwedMoveReleaseRefusals();
         var first    = 1_000L;
-        refusals.leftOut(first);
 
-        assertThat(refusals.leftOut(first + 1)).isZero();
-        assertThat(refusals.leftOut(first + MINUTE - 1)).isZero();
-    }
-
-    @Test
-    void the_next_warning_once_the_minute_has_passed_counts_every_release_left_out_since_the_last_one() {
-        var refusals = new OwedMoveReleaseRefusals();
-        var first    = 1_000L;
-        refusals.leftOut(first);
-        refusals.leftOut(first + 10);
-        refusals.leftOut(first + 20);
-
-        var second = first + MINUTE;
-        assertThat(refusals.leftOut(second)).as("two at DEBUG, and this one").isEqualTo(3);
-        assertThat(refusals.leftOut(second + 1)).as("the minute runs from the second warning").isZero();
-        assertThat(refusals.leftOut(second + MINUTE)).as("counted from the second warning").isEqualTo(2);
+        assertThat(refusals.leftOut(first)).as("the first release left out is a warning of one").isEqualTo(1);
+        assertThat(refusals.leftOut(first + 1)).as("within the minute").isZero();
+        assertThat(new OwedMoveReleaseRefusals().leftOut(first + 1)).as("another owner's first release left out").isEqualTo(1);
     }
 }

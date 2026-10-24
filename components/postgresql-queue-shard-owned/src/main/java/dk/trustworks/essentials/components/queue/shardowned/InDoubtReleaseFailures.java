@@ -16,8 +16,6 @@
 
 package dk.trustworks.essentials.components.queue.shardowned;
 
-import java.util.concurrent.atomic.*;
-
 /**
  * The rate limit of {@code ShardOwnedQueue.rebalance}'s WARN that a release of an unordered owner already in doubt
  * ({@link LeasedOwner#releaseInDoubt()}) failed again: one per owner, kept on the owner's run
@@ -28,12 +26,11 @@ import java.util.concurrent.atomic.*;
  * minute ({@link ErrorWindow}), which says how many attempts failed since the last one; the rest at DEBUG.
  * <p>
  * Asked by the run's heartbeat ticks alone, which never overlap (one {@code scheduleAtFixedRate} task per run); the
- * window is an {@link AtomicLong} because {@link ErrorWindow#take(AtomicLong, long)} takes one, not because of
- * contention.
+ * {@link RateLimitedCount} it counts on is atomic for its other use, {@link OwedMoveReleaseRefusals}, not because of
+ * contention here.
  */
 final class InDoubtReleaseFailures {
-    private final AtomicLong    warning          = new AtomicLong(ErrorWindow.NEVER_TAKEN);
-    private final AtomicInteger sinceLastWarning = new AtomicInteger();
+    private final RateLimitedCount failures = new RateLimitedCount();
 
     /**
      * Record one more failed release attempt of the owner, at {@code now} ({@code System.nanoTime()}, or an injected
@@ -43,11 +40,6 @@ final class InDoubtReleaseFailures {
      * logged at WARN with its stack trace; {@code 0} when it is to be logged at DEBUG
      */
     int failed(long now) {
-        var failures = sinceLastWarning.incrementAndGet();
-        if (ErrorWindow.take(warning, now)) {
-            sinceLastWarning.addAndGet(-failures);
-            return failures;
-        }
-        return 0;
+        return failures.record(now);
     }
 }

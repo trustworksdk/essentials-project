@@ -16,8 +16,6 @@
 
 package dk.trustworks.essentials.components.queue.shardowned;
 
-import java.util.concurrent.atomic.*;
-
 /**
  * The rate limit of {@code ShardOwnedQueue.releaseLeaseRows}' WARN that it left an owner out of a release because a
  * dead-letter move of the owner's was still owed ({@link LeasedOwner#owesDeadLetterMove()}): one per owner, kept on the
@@ -26,12 +24,11 @@ import java.util.concurrent.atomic.*;
  * tick, so the WARN was logged on every tick for as long as the unit was held. Now at most one WARN a minute per owner
  * ({@link ErrorWindow}), which says how many releases left the owner out since the last one; the rest at DEBUG.
  * <p>
- * Asked from whichever thread releases - a heartbeat tick, {@code stop()}, a release on request - so the counter and the
- * window are atomics, and {@link ErrorWindow#take(AtomicLong, long)} lets one caller take the window.
+ * Asked from whichever thread releases - a heartbeat tick, {@code stop()}, a release on request - which the
+ * {@link RateLimitedCount} it counts on allows: its counter and window are atomics.
  */
 final class OwedMoveReleaseRefusals {
-    private final AtomicLong    warning          = new AtomicLong(ErrorWindow.NEVER_TAKEN);
-    private final AtomicInteger sinceLastWarning = new AtomicInteger();
+    private final RateLimitedCount leftOut = new RateLimitedCount();
 
     /**
      * Record one more release that left the owner out, at {@code now} ({@code System.nanoTime()}, or an injected clock).
@@ -40,11 +37,6 @@ final class OwedMoveReleaseRefusals {
      * to be logged at WARN; {@code 0} when it is to be logged at DEBUG
      */
     int leftOut(long now) {
-        var leftOut = sinceLastWarning.incrementAndGet();
-        if (ErrorWindow.take(warning, now)) {
-            sinceLastWarning.addAndGet(-leftOut);
-            return leftOut;
-        }
-        return 0;
+        return leftOut.record(now);
     }
 }
