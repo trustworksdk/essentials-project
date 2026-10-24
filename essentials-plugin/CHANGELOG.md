@@ -268,6 +268,10 @@ targets, with a `-N` suffix for plugin-only releases.
   warns once `warnAfter` has passed without the lock instead of blocking silently, then waits in `lock()` itself,
   keeping a fair lock's queue order, and `Locks.tryLockDeferringPendingInterrupt`, a bounded wait that an interrupt
   pending on entry does not cut short.
+- **Docs: the shard-owned schema contributor moved into the engine for Essentials 0.60.1**
+  (`LLM-postgresql-queue-shard-owned.md`). `ShardOwnedSchemaContributor` is now
+  `dk.trustworks.essentials.components.queue.shardowned.ShardOwnedSchemaContributor`; the adapter module's class of
+  that name is deprecated and delegates to it.
 
 ## 0.60.0-6 — targets Essentials 0.60.0
 - **`/essentials:upgrade` now moves a project to the plugin's Essentials release, code included.** A

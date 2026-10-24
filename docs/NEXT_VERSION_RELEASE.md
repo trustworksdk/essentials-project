@@ -1387,3 +1387,7 @@ Not published; listed because they are the reference for how to use the framewor
   without the adapter or starter now gets `foundation`, `foundation-types`, `types` and `reactive` on its classpath
   (third-party integrations stay optional, as for every other component). `ShardOwnedSchema.ESSENTIALS_BOOTSTRAP_LOCK_KEY`
   is deprecated: use `PostgresqlUtil.ESSENTIALS_BOOTSTRAP_LOCK_KEY`, which it now equals by definition (`336372fa4`).
+- **`ShardOwnedSchemaContributor` moved into the engine**, as `dk.trustworks.essentials.components.queue.shardowned.ShardOwnedSchemaContributor`,
+  now that the engine depends on `foundation`. The class of that name in `postgresql-queue-shard-owned-adapter` still
+  works, deprecated for removal, and delegates to it. The Spring starter's bean is now the engine's class: code that
+  injects the adapter's type by class gets no bean; inject the engine's.

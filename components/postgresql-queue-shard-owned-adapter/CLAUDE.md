@@ -14,7 +14,7 @@ Inbox, Outbox and `DurableLocalCommandBus` touch a handful of `DurableQueues`' ~
 | Class | Responsibility |
 |---|---|
 | `ShardOwnedDurableQueues` | The adapter. Builder-constructed |
-| `ShardOwnedSchemaContributor` | The engine's schema as a schema-harness `DynamicSchemaContributor`. Lives here because the engine depended only on `shared` when it was written; it could move now that the engine depends on `foundation`. Fixed schema = one change; each queue's sequences = one change per queue id, applied as the queue registers through `registerQueue`/`growShardCount`/`queueDdl()`. Queues register after the harness ran - the registry table is part of the fixed schema. Takes the engine's `DataSource`: when the attached sink does not create the schema (validate/emit/external) the queue sequences are created directly via `ShardOwnedSchema.lockedQueueDdl`, left out of the contribution and the ledger, and one WARN says the DB user needs to create sequences at runtime |
+| `ShardOwnedSchemaContributor` | Deprecated: delegates to the engine's `ShardOwnedSchemaContributor`, where it moved once the engine depended on `foundation`. Use that one |
 | `ShardOwnedDurableQueueConsumer` | `DurableQueueConsumer` over a `Subscription` |
 | `ShardOwnedQueuedMessage` | `QueuedMessage`, in a full and a partial shape |
 | `MessageEnvelope` | The persisted payload format |

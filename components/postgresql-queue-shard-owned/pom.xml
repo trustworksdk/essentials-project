@@ -140,6 +140,12 @@
             <artifactId>HikariCP</artifactId>
             <scope>test</scope>
         </dependency>
+        <!-- ShardOwnedSchemaContributorIT drives the contributor through foundation's JDBI-based schema harness -->
+        <dependency>
+            <groupId>org.jdbi</groupId>
+            <artifactId>jdbi3-core</artifactId>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>ch.qos.logback</groupId>
             <artifactId>logback-classic</artifactId>
