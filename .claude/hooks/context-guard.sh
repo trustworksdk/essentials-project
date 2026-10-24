@@ -17,14 +17,18 @@
 # hook input carries the parent's transcript_path plus its own agent_id; its own transcript
 # is <transcript without .jsonl>/subagents/agent-<agent_id>.jsonl. Warn-once guards are
 # mkdir locks, so parallel tool calls in one agent cannot double-warn.
-# Each agent's percentage is taken against its own window, kept in its own state dir. A
-# subagent shares the main session's window only when its own transcript's last assistant
-# entry with a usage block names the main session's model; any other model, or none yet,
-# gets 200000. The main session's model is main/model or, when that is absent, the settings
-# `model`, an alias included: an alias (opus, sonnet, haiku) matches its family's ids, and
-# any other alias ('default', 'opusplan') gets 200000. A transcript names the model without
-# its [1m] suffix, so a 1M subagent on another model is found when its count passes 200000
-# (see warn); from then on its window stays 1000000, also after its compaction.
+# Each agent's percentage is taken against its own window, kept in its own state dir. The
+# main session's model is main/model or, when that is absent, the settings `model`; its
+# window is 1000000 when that names a [1m] model, else 200000. A subagent shares the main
+# session's 1M window only when its own transcript's last assistant entry with a usage block
+# names the main session's exact model id; any other model, or none yet, gets 200000. That
+# id is the main model without its [1m] suffix when it is a full id (claude-opus-5-5[1m]);
+# an alias (opus[1m]) names a whole family, so it is resolved to the model the main
+# transcript's last assistant entry with a usage block names, a `<synthetic>` one (an API
+# error placeholder) skipped, and with no such entry the subagent gets 200000. A transcript
+# names the model without its [1m] suffix, so a 1M subagent on another model is found when
+# its count passes 200000 (see warn); from then on its window stays 1000000, also after its
+# compaction. Tested by scripts/test-context-guard.sh.
 #
 # Base dir is fixed rather than taken from the hook input's scratchpad_dir: that field is
 # documented but absent in practice (2.1.310), and the warn and restore paths must agree.
@@ -33,9 +37,9 @@
 #        CONTEXT_GUARD_LEVELS (default "70 80 90"),
 #        CONTEXT_GUARD_DIR (default /tmp/claude-<uid>/context-guard).
 # Never fails the hook: every path exits 0.
-# Needs bash and jq (without jq it does nothing). The transcript is read by jq (warn's usage
-# check first takes its last 500 lines with POSIX `tail -n`), so no GNU-only tool (tac, GNU
-# sed) is involved: it works on a stock macOS userland as well.
+# Needs bash and jq (without jq it does nothing). Transcripts are read by jq (warn's usage
+# and main-model checks first take the last 500 lines with POSIX `tail -n`), so no GNU-only
+# tool (tac, GNU sed) is involved: it works on a stock macOS userland as well.
 set -u
 command -v jq >/dev/null 2>&1 || exit 0
 
@@ -45,6 +49,7 @@ field() { jq -r --arg k "$1" '.[$k] // empty' <<<"$input" 2>/dev/null; }
 
 session=$(field session_id)
 transcript=$(field transcript_path)
+main_transcript=$transcript # a subagent's hook input names the main session's transcript
 agent=$(field agent_id)
 cwd=$(field cwd)
 cwd=${cwd:-${CLAUDE_PROJECT_DIR:-.}}
@@ -97,23 +102,34 @@ context_window() { # $1: the model named by this agent's own transcript (may be 
   if [ -n "${CONTEXT_GUARD_WINDOW:-}" ]; then echo "$CONTEXT_GUARD_WINDOW"; return; fi
   local model
   model=$(main_model)
-  # A subagent runs the main session's window only on the main session's model (the
-  # transcript's id carries no [1m] suffix); otherwise 200000 until its count says more.
-  # A full id must equal the transcript's id; an alias (opus, sonnet, haiku, as settings
-  # hold it) matches the ids of its family: opus matches claude-opus-5-5.
+  case "$model" in *'[1m]'*) ;; *) echo 200000; return ;; esac
+  # A subagent runs the main session's 1M window only on the main session's exact model id
+  # (a transcript's id carries no [1m] suffix); otherwise 200000 until its count says more.
+  # A full id (it has a '-') is taken as it is. An alias (opus, as settings hold it) names a
+  # family, not a model - claude-opus-4-1 is an opus too - so it is resolved to the id the
+  # main transcript's last assistant entry with a usage block names, a `<synthetic>` one (an
+  # API error placeholder) skipped; with none yet, the subagent gets 200000.
   if [ -n "$agent" ]; then
-    local m=${model/'[1m]'/} same=""
-    case "$m" in
-      '') ;;
-      claude-*) [ "$1" = "$m" ] && same=1 ;;
-      *) case "$1" in *-"$m"-*|*-"$m") same=1 ;; esac ;;
-    esac
-    if [ -z "$1" ] || [ -z "$same" ]; then
+    local id=${model/'[1m]'/}
+    case "$id" in *-*) ;; *) id=$(main_transcript_model) ;; esac
+    if [ -z "$1" ] || [ "$1" != "$id" ]; then
       echo 200000
       return
     fi
   fi
-  case "$model" in *'[1m]'*) echo 1000000 ;; *) echo 200000 ;; esac
+  echo 1000000
+}
+
+main_transcript_model() { # the model id named by the main transcript's last assistant entry
+  # with a usage block, a `<synthetic>` one (an API error placeholder) skipped
+  [ -f "$main_transcript" ] || return
+  local prog='[inputs | fromjson? | objects
+             | select(.type=="assistant" and (.isSidechain|not) and .message.usage) | .message.model
+             | select(type=="string" and . != "" and (startswith("<")|not))] | last // empty'
+  local out
+  out=$(tail -n 500 "$main_transcript" 2>/dev/null | jq -nrR "$prog" 2>/dev/null)
+  [ -n "$out" ] || out=$(jq -nrR "$prog" "$main_transcript" 2>/dev/null)
+  printf '%s' "$out"
 }
 
 used_tokens() { # prints "<tokens> <model>" from the last assistant entry; model may be absent

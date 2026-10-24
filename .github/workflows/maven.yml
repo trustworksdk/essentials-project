@@ -170,6 +170,17 @@ jobs:
       - name: Every example module is excluded from the release
         run: python3 scripts/check-release-exclusions.py
 
+  # The context-guard hook (.claude/hooks/context-guard.sh) sizes each agent's context window and hands its saved state
+  # back after compaction; nothing else exercises it, so a regression would only show as a missed or wrong warning in a
+  # live session. bash and jq (both on the runner), seconds.
+  context-guard:
+    name: context-guard hook
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: context-guard window sizing, restore and snapshot (test-context-guard.sh)
+        run: bash scripts/test-context-guard.sh
+
   # Integration tests only (-DskipUTs): the `unit` job below runs every unit test, on this JDK too, so running them
   # here again only lengthened the critical path. The unit and integration layers report in separate jobs.
   verify:
