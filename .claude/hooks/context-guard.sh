@@ -194,7 +194,7 @@ case "$mode" in
     for l in ${CONTEXT_GUARD_LEVELS:-70 80 90}; do [ "$pct" -ge "$l" ] && level=$l; done
     [ "$level" -gt 0 ] || exit 0
     mkdir "$state_dir/warned.$level" 2>/dev/null || exit 0
-    emit "$event" "CONTEXT GUARD: context for ${who} is at ${pct}% (${used}/${window} tokens); auto-compaction will summarise it soon and detail will be lost. Before continuing, write your working state to ${state_file} (overwrite it; keep it under ~150 lines): the task and its acceptance criteria, decisions made and why, what is done (commits, files), what is in progress and the exact next step, open questions, and anything you verified that must not be re-derived. It will be handed back to you after compaction. Then carry on with the task."
+    emit "$event" "CONTEXT GUARD: context for ${who} is at ${pct}% (${used}/${window} tokens); auto-compaction will summarise it soon and detail will be lost. Before continuing, if you can write files, write your working state to ${state_file} (overwrite it; keep it under ~150 lines): the task and its acceptance criteria, decisions made and why, what is done (commits, files), what is in progress and the exact next step, open questions, and anything you verified that must not be re-derived. It will be handed back to you after compaction. If that write is refused (a write-scope guard, a permission check), do not retry it. Then carry on with the task."
     ;;
 
   precompact)
