@@ -33,6 +33,9 @@
 #        CONTEXT_GUARD_LEVELS (default "70 80 90"),
 #        CONTEXT_GUARD_DIR (default /tmp/claude-<uid>/context-guard).
 # Never fails the hook: every path exits 0.
+# Needs bash and jq (without jq it does nothing). The transcript is read by jq (warn's usage
+# check first takes its last 500 lines with POSIX `tail -n`), so no GNU-only tool (tac, GNU
+# sed) is involved: it works on a stock macOS userland as well.
 set -u
 command -v jq >/dev/null 2>&1 || exit 0
 
@@ -117,10 +120,15 @@ used_tokens() { # prints "<tokens> <model>" from the last assistant entry; model
   # Main transcript: skip sidechain entries. A subagent transcript is all sidechain.
   local filter='select(.type=="assistant" and .message.usage)'
   [ -z "$agent" ] && filter='select(.type=="assistant" and (.isSidechain|not) and .message.usage)'
-  tac "$transcript" 2>/dev/null \
-    | jq -r "$filter"' | .message
-             | "\((.usage.input_tokens//0) + (.usage.cache_read_input_tokens//0) + (.usage.cache_creation_input_tokens//0)) \(.model // "")"' 2>/dev/null \
-    | head -1
+  # jq takes the last match itself. The transcript's tail is read first, as this runs
+  # on every tool call; the whole file only when the tail holds no usage entry.
+  local prog='[inputs | fromjson? | objects | '"$filter"' | .message
+             | "\((.usage.input_tokens//0) + (.usage.cache_read_input_tokens//0) + (.usage.cache_creation_input_tokens//0)) \(.model // "")"]
+             | last // empty'
+  local out
+  out=$(tail -n 500 "$transcript" 2>/dev/null | jq -nrR "$prog" 2>/dev/null)
+  [ -n "$out" ] || out=$(jq -nrR "$prog" "$transcript" 2>/dev/null)
+  printf '%s\n' "$out"
 }
 
 restore_text() {
@@ -199,17 +207,24 @@ case "$mode" in
         echo
         echo "## Files edited by ${who} (most recent last)"
         echo
-        jq -r 'select(.type=="assistant") | .message.content[]?
+        # Each path once, at its last edit; the 30 most recently edited.
+        jq -nrR '[inputs | fromjson? | objects | select(.type=="assistant") | .message.content[]?
                | select(.type=="tool_use" and (.name=="Edit" or .name=="Write" or .name=="NotebookEdit"))
-               | .input.file_path // .input.notebook_path // empty' "$transcript" 2>/dev/null \
-          | awk '!seen[$0]++' | tail -30 | sed 's/^/- /'
+               | .input.file_path // .input.notebook_path // empty]
+               | reverse
+               | reduce .[] as $p ({seen: {}, out: []};
+                   if .seen[$p] then . else .seen[$p] = true | .out += [$p] end)
+               | .out[:30] | reverse | .[] | "- " + .' "$transcript" 2>/dev/null
         echo
         echo "## Last prompts"
         echo
-        jq -r 'select(.type=="user" and (.isMeta|not)) | .message.content
+        # The last five prompts, each cut to 500 characters, quoted line by line and
+        # followed by a blank line.
+        jq -nrR '[inputs | fromjson? | objects | select(.type=="user" and (.isMeta|not)) | .message.content
                | if type=="string" then . else ([.[]? | select(.type=="text") | .text] | join("\n")) end
-               | select(length>0 and (startswith("<")|not))' "$transcript" 2>/dev/null \
-          | tail -5 | cut -c1-500 | sed 's/^/> /;s/$/\n/'
+               | select(length>0 and (startswith("<")|not))]
+               | .[-5:][] | .[0:500] | split("\n") | map("> " + .) | join("\n") + "\n"' \
+          "$transcript" 2>/dev/null
       fi
     } >"$snapshot_file" 2>/dev/null
     ;;
