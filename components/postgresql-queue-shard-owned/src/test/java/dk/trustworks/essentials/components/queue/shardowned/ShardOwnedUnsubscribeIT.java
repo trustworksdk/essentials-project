@@ -1669,6 +1669,12 @@ class ShardOwnedUnsubscribeIT {
                     assertThat(released.charged()).as("the answer names the earlier request's charge").isEqualTo(1);
                     assertThat(released.deadLetteredKeys()).as("and the key the move it owed dead-lettered").containsExactly("ACC-1");
                 });
+                assertThat(laneWarnings()).as("the request names the dead-lettered key in a WARN, as a hand-back does")
+                                          .filteredOn(warning -> warning.contains("handing back ordered unit " + unitOfTheKey + " on queue "
+                                                                                          + QUEUE_ID + ", has made or found, before releasing it, dead-letter move(s)"))
+                                          .singleElement()
+                                          .satisfies(warning -> assertThat(warning).contains("1 message(s) of key(s) [ACC-1]")
+                                                                                   .endsWith("The unit is handed back on request"));
                 assertThat(metrics.deadLettered.sum()).as("counted once").isEqualTo(1);
                 assertThat(told).as("the observer told once").hasValue(1);
                 assertThat(metrics.takeoverAttemptBumps.sum()).as("charged once, by the first request").isEqualTo(1);
@@ -1758,6 +1764,11 @@ class ShardOwnedUnsubscribeIT {
                     assertThat(released.outcome()).isEqualTo(KeptUnitRelease.Outcome.RELEASED);
                     assertThat(released.deadLetteredKeys()).as("the second move made by the next release").containsExactly(first, second);
                 });
+                assertThat(laneWarnings()).as("the release names only the key its own move dead-lettered, the hand-back having named the first")
+                                          .filteredOn(warning -> warning.contains("has made or found, before releasing it, dead-letter move(s)")
+                                                                 && warning.endsWith("The unit is handed back on request"))
+                                          .singleElement()
+                                          .satisfies(warning -> assertThat(warning).contains("1 message(s) of key(s) [" + second + "]"));
                 assertThat(metrics.deadLettered.sum()).as("each dead letter counted once").isEqualTo(2);
                 assertThat(told).as("and told once").hasValue(2);
             } finally {

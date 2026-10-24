@@ -688,7 +688,7 @@ later owner of the unit made of the same message is not taken for this one's unl
 meanwhile, and the message is counted in `deadLettered`, `QueueObserver.deadLettered` is told of it, and its key is
 blocked and, on a release on request, named in the answer's `deadLetteredKeys`, as for any other move. The unordered
 lane's charge, below, does the same. A kept unit's hand-back once its handler returns, and a release on request made
-once no key of the unit is in a handler, make the move again before releasing the unit too - the hand-back names the
+once no key of the unit is in a handler, make the move again before releasing the unit too - each names the
 dead-lettered key in a WARN. So do, on both lanes, a dead pump's hand-back and a `stop()` releasing a unit whose handler
 has returned since an earlier charge of it - the hand-back's own on an earlier heartbeat, or a shed's - left the move
 owed. While the move keeps failing, the dead pump's hand-back holds the unit and retries on the next heartbeat, and a
@@ -696,7 +696,7 @@ owed. While the move keeps failing, the dead pump's hand-back holds the unit and
 taken over, the move is not made again, and that dead letter is then reported nowhere, though it blocks its key. A move
 the database refused with an error of its own (an SQL state outside class `08`, such as a trigger's refusal or a
 cancelled statement) was rolled back, and its retry does not look for it.
-(`6337f7d89`, `2fdeb3db0`, `bfa961ec5`, `dbae0986f`, `7dbd517be`, `e699c9d44`, `895b1a498`, `52c5e943e`, `56790ca82`, `b785a52b2`, `ab601d493`, `<!-- fix:U-001 -->`)
+(`6337f7d89`, `2fdeb3db0`, `bfa961ec5`, `dbae0986f`, `7dbd517be`, `e699c9d44`, `895b1a498`, `52c5e943e`, `56790ca82`, `b785a52b2`, `ab601d493`, `<!-- fix:U-001 -->`, `<!-- fix:U-003 -->`)
 
 **The unordered lane now charges a hung handler's delivery too, past the same bound.** It waits for no handler: a
 fair-share shed and a dead pump's hand-back release an unordered shard at once, and `stop()` once `shedGrace` has run

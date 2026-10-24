@@ -3459,8 +3459,9 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
 
     /**
      * WARN naming the keys whose message a hand-back of {@code owner}'s unit ({@code from}: of a unit a stop kept,
-     * {@link #handBackKeptUnitWithinNetworkWaitBound}; from its dead pump, {@link #handBackUnitsOnDeadPumps}; or as the
-     * queue stopped, {@link #chargeBeforeReleaseOnStop}), before releasing the unit with no key in a handler, found
+     * {@link #handBackKeptUnitWithinNetworkWaitBound}; from its dead pump, {@link #handBackUnitsOnDeadPumps}; as the
+     * queue stopped, {@link #chargeBeforeReleaseOnStop}; or on request, {@link #releaseKeptOrderedUnitWithinNetworkWaitBound}),
+     * before releasing the unit with no key in a handler, found
      * dead-lettered by a dead-letter move the charge before an earlier release of the unit left owed, that release having
      * thrown before completing it: made by the hand-back, or found in the dead-letter table where that release's attempt
      * had committed after the driver stopped waiting for its answer. Called whether the hand-back's charge returned or
@@ -3469,7 +3470,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * and dead-lettered before and after the hand-back's charge; nothing is logged when it dead-lettered nothing.
      *
      * @param from how the unit is being handed back, as the WARN names it: {@code "after a stop kept it"},
-     *             {@code "from its dead pump"} or {@code "as the queue stopped"}
+     *             {@code "from its dead pump"}, {@code "as the queue stopped"} or {@code "on request"}
      */
     private void reportOwedDeadLettersSettled(LeasedOwner owner, OrderedShardOwner.ReleaseCharge before, OrderedShardOwner.ReleaseCharge after,
                                               String from) {
@@ -3546,7 +3547,9 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * move an earlier attempt to release it left owed is made before the release, as the hand-back makes it
      * ({@link #handBackKeptUnit}); the answer still names a charge an earlier attempt to release it completed (a request
      * whose release was refused once its charge had committed, its handler having returned since), and the keys such a
-     * move dead-lettered. A {@code BUSY} entry, not claimed, names the keys as they stand
+     * move dead-lettered. The keys a move made or found by this request dead-lettered are also named in a WARN, as the
+     * hand-back names them ({@link #reportOwedDeadLettersSettled}), whether the charge returned or threw; the release's
+     * own line is an INFO. A {@code BUSY} entry, not claimed, names the keys as they stand
      * when asked. Not counted as a release ({@link #countRelease}): the stop that kept the unit counted it.
      * <p>
      * Asked for another instance id than this queue's ({@code requestedInstanceId}), this touches nothing - not even the
@@ -3564,8 +3567,8 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * dead-letter move that does leaves its message in the dead-letter table; a later request, or a hand-back of the unit
      * once its handler has returned ({@link #handBackKeptUnit}), makes the move again before releasing the row, finds the
      * row gone, finds the message in the dead-letter table ({@code ReleaseChargeLedger}) and reports it dead-lettered -
-     * counted, the {@code QueueObserver} told, its key in a request's {@link KeptUnitRelease#deadLetteredKeys()} or in the
-     * hand-back's WARN - as this request would have, but a takeover of the unit makes no move, and that dead letter is
+     * counted, the {@code QueueObserver} told, its key in a request's {@link KeptUnitRelease#deadLetteredKeys()} and WARN,
+     * or in the hand-back's WARN - as this request would have, but a takeover of the unit makes no move, and that dead letter is
      * then reported nowhere, though it blocks its key; a
      * release of the row that does leaves the row released by the earlier request's own
      * statement, and a later request finds nothing left to release: it answers {@code ALREADY_TAKEN}, or, once a
@@ -3652,7 +3655,18 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                     // had committed was never reported, and one that had not left a message at its attempt limit to the next
                     // owner, which charges nothing for a released unit. Either way the answer names what earlier attempts to
                     // release the unit charged and dead-lettered, which a request that threw never answered with.
-                    charge = chargeKeysInHandlerBeforeRelease(owner, OrderedShardOwner.ReleaseChargeScope.EVERY_KEY_IN_HANDLER, "on request");
+                    var settledBefore = releaseChargeSoFar(owner);
+                    try {
+                        charge = chargeKeysInHandlerBeforeRelease(owner, OrderedShardOwner.ReleaseChargeScope.EVERY_KEY_IN_HANDLER, "on request");
+                    } finally {
+                        if (inHandler.isEmpty()) {
+                            // With no key in a handler, the release's own log line is an INFO, so the keys whose owed move
+                            // this request made or found are named in a WARN, as a hand-back names them - whether the charge returned
+                            // or threw, and before the release: a retried request finds them in the ledger and names
+                            // nothing new for them. With a key in a handler, the release's WARN names every dead-lettered key.
+                            reportOwedDeadLettersSettled(owner, settledBefore, releaseChargeSoFar(owner), "on request");
+                        }
+                    }
                     released = releaseLeaseRows(List.of(owner)) > 0;
                 }
             } finally {
@@ -3702,6 +3716,8 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * its claim still in a handler - a WARN when there are any, naming the attempts {@code charge} made on their messages,
      * as whoever takes the unit next delivers those not dead-lettered again - and give the answer, which names that charge
      * too: the keys it dead-lettered are blocked behind their dead letters until an operator resurrects or deletes them.
+     * Released with no key in a handler, the line is an INFO: the keys a dead-letter move made or found by this request
+     * dead-lettered were named before the release, in {@link #reportOwedDeadLettersSettled}'s WARN.
      */
     private KeptUnitRelease reportReleasedOnRequest(int unit, Optional<OrderedShardOwner.KeysInHandler> inHandler, OrderedShardOwner.ReleaseCharge charge) {
         var answer = keptUnitRelease(unit, KeptUnitRelease.Outcome.RELEASED, inHandler, charge);
