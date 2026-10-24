@@ -89,6 +89,14 @@ class AdminApiSerializationTest {
     }
 
     @Test
+    void a_shard_owned_queue_name_serializes_as_a_json_string() {
+        var release = new dk.trustworks.essentials.components.queue.shardowned.api.ApiShardOwnedKeptUnitRelease(
+                dk.trustworks.essentials.components.queue.shardowned.spi.QueueName.of("orders"), 7, "node-1", "RELEASED", List.of(), 0L, 0, List.of());
+
+        assertThat(mapper.writeValueAsString(release)).contains("\"queueName\":\"orders\"");
+    }
+
+    @Test
     void a_null_value_type_does_not_break_serialization() {
         // An unheld lock has no token and no holder — the contract marks those properties optional.
         var lock = new ApiDBFencedLock(LockName.of("my-lock"), null, null, null, null);

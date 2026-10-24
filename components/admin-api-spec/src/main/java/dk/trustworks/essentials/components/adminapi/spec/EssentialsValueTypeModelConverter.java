@@ -17,6 +17,7 @@
 package dk.trustworks.essentials.components.adminapi.spec;
 
 import com.fasterxml.jackson.databind.JavaType;
+import dk.trustworks.essentials.components.queue.shardowned.spi.QueueName;
 import dk.trustworks.essentials.types.*;
 import io.swagger.v3.core.converter.*;
 import io.swagger.v3.core.util.Json;
@@ -36,6 +37,8 @@ import java.util.Iterator;
  * Mapping:
  * <ul>
  *     <li>{@link CharSequenceType} &rarr; {@code string}</li>
+ *     <li>the shard-owned engine's {@link QueueName} &rarr; {@code string}: a record rather than a
+ *     {@code CharSequenceType}, but a queue name like every other</li>
  *     <li>{@link LongType} &rarr; {@code integer} ({@code int64})</li>
  *     <li>{@link IntegerType} &rarr; {@code integer} ({@code int32})</li>
  *     <li>{@link BigDecimalType} / any other {@link NumberType} &rarr; {@code number}</li>
@@ -49,7 +52,7 @@ public class EssentialsValueTypeModelConverter implements ModelConverter {
         JavaType javaType = Json.mapper().constructType(type.getType());
         if (javaType != null) {
             Class<?> raw = javaType.getRawClass();
-            if (CharSequenceType.class.isAssignableFrom(raw)) {
+            if (CharSequenceType.class.isAssignableFrom(raw) || QueueName.class.equals(raw)) {
                 return new StringSchema();
             }
             if (LongType.class.isAssignableFrom(raw)) {

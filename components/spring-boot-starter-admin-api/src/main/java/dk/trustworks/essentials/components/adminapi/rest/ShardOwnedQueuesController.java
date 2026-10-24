@@ -62,15 +62,9 @@ public class ShardOwnedQueuesController {
         this.principalResolver = requireNonNull(principalResolver, "No principalResolver provided");
     }
 
-    /**
-     * The contract declares plain strings. {@link QueueName} is a record, not a {@code CharSequenceType}, so
-     * {@link AdminApiJacksonModule} does not flatten it: returned as is, each name went out as {@code {"value": "..."}}.
-     */
     @GetMapping("/shard-owned-queues")
-    public List<String> getQueueNames() {
-        return shardOwnedQueuesApi.getQueueNames(principal()).stream()
-                                  .map(QueueName::value)
-                                  .toList();
+    public List<QueueName> getQueueNames() {
+        return shardOwnedQueuesApi.getQueueNames(principal());
     }
 
     @GetMapping("/shard-owned-queues/{queueName}/status")
