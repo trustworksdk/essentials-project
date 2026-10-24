@@ -279,6 +279,31 @@ interface LeasedOwner {
     }
 
     /**
+     * Whether a charge this owner made before a release of its row left a dead-letter move to be made: a message charged to
+     * the redelivery limit and not moved to the dead-letter table yet ({@code ReleaseChargeLedger.owesDeadLetterMove}),
+     * whatever is in a handler now. {@code ShardOwnedQueue.releaseLeaseRows} leaves such an owner out of the release, its
+     * row held, whichever site asked for it: each release site makes the moves still owed before it asks, and this is the
+     * guard for one that did not. Must not be asked while holding the owner's state lock (the ledger's <b>Locking</b>).
+     * <p>
+     * Default {@code false}, for a test double that charges nothing.
+     */
+    default boolean owesDeadLetterMove() {
+        return false;
+    }
+
+    /**
+     * The rate limit of {@code ShardOwnedQueue.releaseLeaseRows}' WARN that it left this owner out, a dead-letter move of
+     * it still owed ({@link #owesDeadLetterMove()}): this owner's own, the same object on every call, so the WARN is
+     * logged at most once a minute for this owner and the rest at DEBUG.
+     * <p>
+     * Default a new one on every call, so every release that leaves the owner out logs the WARN: for a test double that
+     * charges nothing, which is never left out. An owner that overrides {@link #owesDeadLetterMove()} overrides this too.
+     */
+    default OwedMoveReleaseRefusals owedMoveReleaseRefusals() {
+        return new OwedMoveReleaseRefusals();
+    }
+
+    /**
      * May this owner dispatch work right now?
      * <p>
      * Distinct from {@link #leaseHeld()}, which answers whether this owner still <em>has</em> its

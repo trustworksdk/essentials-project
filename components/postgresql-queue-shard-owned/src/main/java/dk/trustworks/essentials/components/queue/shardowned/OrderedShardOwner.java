@@ -359,6 +359,11 @@ final class OrderedShardOwner implements BatchReadableOwner {
      * ({@link #returnedAfterItsDeadLetter}, {@link #failedAfterItsDeadLetter}).
      */
     private final ReleaseChargeLedger releaseChargeLedger;
+    /**
+     * The rate limit of the WARN that a release left this owner out, a dead-letter move of it still owed
+     * ({@link #owedMoveReleaseRefusals()}).
+     */
+    private final OwedMoveReleaseRefusals owedMoveReleaseRefusals = new OwedMoveReleaseRefusals();
 
     /**
      * What to run once no key is in a handler ({@link #whenNoKeyInHandler}); {@code null} unless this owner's queue kept
@@ -1814,6 +1819,16 @@ final class OrderedShardOwner implements BatchReadableOwner {
     boolean owesReleaseCharge(ReleaseChargeScope scope) {
         requireNonNull(scope, "No scope provided");
         return releaseChargeLedger.owes(releaseChargeCandidates(scope));
+    }
+
+    @Override
+    public boolean owesDeadLetterMove() {
+        return releaseChargeLedger.owesDeadLetterMove();
+    }
+
+    @Override
+    public OwedMoveReleaseRefusals owedMoveReleaseRefusals() {
+        return owedMoveReleaseRefusals;
     }
 
     /**

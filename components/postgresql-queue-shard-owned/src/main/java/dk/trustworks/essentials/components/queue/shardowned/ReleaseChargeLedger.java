@@ -78,8 +78,9 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  *     the candidates {@code Supplier}, the constructor's {@code onCharged} and {@code onMoved}, and every {@link Writes}
  *     method - each of which may take the owner's state lock ({@code stateLock}): both owners take it in their candidates,
  *     {@code onCharged} and (ordered) {@code onMoved};</li>
- *     <li>so a caller of {@link #charge}, {@link #owes}, {@link #answer} or {@link #deadLetteredWhileInHandler} must not hold
- *     the owner's state lock, nor any lock those callbacks take: {@link #owes} and {@link #answer} take the monitor, and
+ *     <li>so a caller of {@link #charge}, {@link #owes}, {@link #owesDeadLetterMove}, {@link #answer} or
+ *     {@link #deadLetteredWhileInHandler} must not hold the owner's state lock, nor any lock those callbacks take:
+ *     {@link #owes}, {@link #owesDeadLetterMove} and {@link #answer} take the monitor, and
  *     {@link #deadLetteredWhileInHandler} waits on it while a running charge may move the message. A caller holding one
  *     while a charge waits for it in a callback deadlocks with that charge - a handler thread, say, asking
  *     {@link #deadLetteredWhileInHandler} inside its owner's {@code synchronized (stateLock)}. Both owners ask before they
@@ -318,7 +319,22 @@ final class ReleaseChargeLedger {
     boolean owes(Map<Long, Candidate> candidates) {
         requireNonNull(candidates, "No candidates provided");
         synchronized (monitor) {
-            return !notChargedYet(candidates).isEmpty() || rows.values().stream().anyMatch(row -> row.move() == DeadLetterMove.PENDING);
+            return !notChargedYet(candidates).isEmpty() || owesDeadLetterMove();
+        }
+    }
+
+    /**
+     * Whether a message this ledger charged is at the redelivery limit with its dead-letter move still to be made
+     * ({@link DeadLetterMove#PENDING}), whatever the owner's candidates: the half of {@link #owes} no scope changes. Asked
+     * by {@code ShardOwnedQueue.releaseLeaseRows}, which every release of an owner's row goes through, and which releases
+     * no owner while this is {@code true}: released with the move owed, a dead letter that had committed went uncounted and
+     * unreported, and a message that had not been moved was handed on at its attempt limit to an owner that charges
+     * nothing for a released unit. Takes the monitor, so it waits for a running {@link #charge} (class javadoc,
+     * <b>Locking</b>).
+     */
+    boolean owesDeadLetterMove() {
+        synchronized (monitor) {
+            return rows.values().stream().anyMatch(row -> row.move() == DeadLetterMove.PENDING);
         }
     }
 

@@ -163,6 +163,34 @@ class ReleaseChargeLedgerTest {
     }
 
     @Test
+    void a_dead_letter_move_owed_is_owed_whatever_the_candidates_until_it_is_made() throws Exception {
+        var writes = new FakeWrites(Map.of(1L, 1));
+        writes.failMoves = 1;
+        var ledger = ledger(writes, 1, new ShardOwnerMetrics(), new ArrayList<>());
+        assertThat(ledger.owesDeadLetterMove()).as("nothing charged, nothing owed").isFalse();
+
+        assertThatThrownBy(() -> ledger.charge(null, () -> candidates(1L))).isInstanceOf(SQLException.class);
+
+        assertThat(ledger.owesDeadLetterMove()).as("the move of 1 is still to be made").isTrue();
+        assertThat(ledger.owes(Map.of())).as("premise: owed with no candidate either").isTrue();
+
+        ledger.charge(null, Map::of);
+
+        assertThat(writes.moveCalls).as("premise: a call with no candidate makes the move").containsExactly(1L, 1L);
+        assertThat(ledger.owesDeadLetterMove()).as("nothing owed once the move is made").isFalse();
+    }
+
+    @Test
+    void a_message_charged_below_the_limit_owes_no_dead_letter_move() throws Exception {
+        var ledger = ledger(new FakeWrites(Map.of(1L, 1)), 2, new ShardOwnerMetrics(), new ArrayList<>());
+
+        ledger.charge(null, () -> candidates(1L));
+
+        assertThat(ledger.answer().charged()).as("premise: charged").isEqualTo(1);
+        assertThat(ledger.owesDeadLetterMove()).isFalse();
+    }
+
+    @Test
     void an_observer_that_throws_is_held_until_every_move_is_made_and_leaves_nothing_owed() throws Exception {
         var writes = new FakeWrites(Map.of(1L, 1, 2L, 1));
         var told   = new ArrayList<MessageId>();

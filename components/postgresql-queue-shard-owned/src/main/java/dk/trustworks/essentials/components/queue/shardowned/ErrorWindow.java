@@ -27,7 +27,9 @@ import java.util.concurrent.atomic.AtomicLong;
  * {@code ShardOwnedQueue}'s WARN that an ordered unit a stop kept is held up by a handler past {@code leaseTtl}, one
  * window per kept unit ({@code KeptUnit.warningDue}), taken by {@code ShardOwnedQueue.reviewStuckKeptUnits} rather
  * than by a pump. And by {@code ShardOwnedQueue.rebalance}'s WARN that the release of an unordered owner in doubt failed
- * again, one window per owner ({@link InDoubtReleaseFailures}), taken by the heartbeat tick.
+ * again, one window per owner ({@link InDoubtReleaseFailures}), taken by the heartbeat tick. And by
+ * {@code ShardOwnedQueue.releaseLeaseRows}' WARN that it left an owner out, a dead-letter move of it still owed, one
+ * window per owner ({@link OwedMoveReleaseRefusals}), taken by whichever thread releases.
  * Reuse it for a new once-a-minute log rather than writing the CAS again.
  * <p>
  * Its own class rather than a helper on one of them, so a change to one log's semantics (the takeover window reopening

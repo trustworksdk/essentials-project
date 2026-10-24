@@ -3310,8 +3310,8 @@ class ShardOwnedLifecycleIT {
      * the request's release waits on it as on a connection that never answers: it throws once it has waited that long and
      * lets go of its claim of the unit. A second request, made while the row is still held, claims the unit again - it is
      * not answered {@code BUSY} - and ends the same way. Once the row is let go, the release the driver stopped waiting
-     * for goes through on the server - the abandoned statements are queued on the row's lock before any later one - so
-     * the row no longer names the instance, and a later request answers {@code ALREADY_TAKEN} rather than {@code BUSY}.
+     * for goes through on the server, so the row no longer names the instance, and a later request, made once it has,
+     * answers {@code ALREADY_TAKEN} rather than {@code BUSY}.
      * The request used to wait until the row was let go - on a half-open socket with no
      * {@code socketTimeout}, for the life of the process - holding the caller's thread and the claim, so every later
      * hand-back or request of the unit found it already claimed.
@@ -3364,12 +3364,16 @@ class ShardOwnedLifecycleIT {
                     locking.rollback();
                     locking.setAutoCommit(true);
                 }
+                // Premise: a release the driver stopped waiting for goes through on the server. Waited for before the next
+                // request: a woken lock waiter is not guaranteed to update the row before a statement issued after the
+                // rollback, so a request made at once could release the row itself.
+                Awaitility.await("the abandoned release committing").atMost(Duration.ofSeconds(10)).until(() -> orderedUnitsOwnedBy(instanceId) == 0);
+                assertThat(fenceOf("ordered", kept.shard())).as("premise: released, not taken under a newer fence").isEqualTo(kept.fence());
 
                 var answer = queue.releaseKeptOrderedUnit(instanceId, kept.shard());
                 assertThat(answer).as("once the row is let go, a request is answered").isPresent();
                 assertThat(answer.get().outcome())
-                        .as("the unit is claimed again - not BUSY - and its row found released by the first request's abandoned "
-                                    + "statement, queued on the row's lock before this request's own")
+                        .as("the unit is claimed again - not BUSY - and its row found released by an earlier request's abandoned statement")
                         .isEqualTo(KeptUnitRelease.Outcome.ALREADY_TAKEN);
                 assertThat(orderedUnitsOwnedBy(instanceId)).as("its lease row no longer names this instance").isZero();
             } finally {

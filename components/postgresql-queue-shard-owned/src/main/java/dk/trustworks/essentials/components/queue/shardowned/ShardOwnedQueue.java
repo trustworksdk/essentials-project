@@ -1622,10 +1622,15 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         // If it throws, nothing below has run: every owner is still in the run's `owners` with its row held (holdsLeaseRow),
         // and the next heartbeat retries. Neither acquire loop takes the unit again meanwhile: both count it towards the
         // fair share through holdsLeaseRow, and skip it (acquireFreeOrderedShards through its held set, the unordered loop
-        // through the run's ownedShards).
-        releaseLeaseRows(ready);
+        // through the run's ownedShards). An owner releaseLeaseRows leaves out, a dead-letter move of it still owed, is held
+        // the same way.
+        var release = releaseLeaseRows(ready);
+        var handedBack = release.owners();
+        if (handedBack.isEmpty()) {
+            return;
+        }
         var released = new ArrayList<Integer>();
-        for (var owner : ready) {
+        for (var owner : handedBack) {
             shardRuntime.handedBack(owner);
             run.owners.remove(owner);
             if (owner instanceof ShardOwner unordered) {
@@ -1635,25 +1640,33 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         // The observer last, after the bookkeeping for every owner: one that throws part-way leaves no owner released in
         // the database and still listed here. Only the releases this call is the first to report: a stop() of this run
         // running meanwhile releases these owners too (countRelease).
-        for (var owner : ready) {
+        for (var owner : handedBack) {
             if (countRelease(run, owner)) {
                 released.add(owner.shard());
             }
         }
-        stuck.forEach((owner, inHandler) -> releasedPastStuckHandler(owner, inHandler, charges.get(owner), "from its dead pump"));
-        unorderedCharges.forEach((owner, charge) -> releasedPastStuckUnorderedHandlers(owner, charge, "from its dead pump"));
+        stuck.forEach((owner, inHandler) -> {
+            if (release.released(owner)) {
+                releasedPastStuckHandler(owner, inHandler, charges.get(owner), "from its dead pump");
+            }
+        });
+        unorderedCharges.forEach((owner, charge) -> {
+            if (release.released(owner)) {
+                releasedPastStuckUnorderedHandlers(owner, charge, "from its dead pump");
+            }
+        });
         // Who takes them over depends on whether this instance has a live pump left: with none it acquires nothing (rebalance
         // and acquireFreeOrderedShards are guarded on hasLivePump), so promising a live pump here would be false.
         if (shardRuntime.hasLivePump()) {
             log.warn("Instance {} handed back {} {} unit(s) [{}] on queue {} whose pump had died; another instance, or a live pump "
                              + "here, takes them over under a new fence, and redelivers what they had handled but not acknowledged",
-                     instanceId, ready.size(), activeLane, summarise(ready.stream().map(LeasedOwner::shard).toList()), queueId);
+                     instanceId, handedBack.size(), activeLane, summarise(handedBack.stream().map(LeasedOwner::shard).toList()), queueId);
         } else {
             log.warn("Instance {} handed back {} {} unit(s) [{}] on queue {} whose pump had died, for other instances only: no pump "
                              + "of this instance's ShardRuntime is alive, so it acquires nothing until the runtime (or the application) "
                              + "is restarted. Another instance takes them over under a new fence and redelivers what they had handled "
                              + "but not acknowledged; with none running they stay unowned (QueueHealth.unownedShards)",
-                     instanceId, ready.size(), activeLane, summarise(ready.stream().map(LeasedOwner::shard).toList()), queueId);
+                     instanceId, handedBack.size(), activeLane, summarise(handedBack.stream().map(LeasedOwner::shard).toList()), queueId);
         }
         reportReleases(released);
     }
@@ -1845,10 +1858,14 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                     // of the excess ends the tick; one of an owner already in doubt is that owner's alone, and the loop goes
                     // on. The owner may dispatch for the moment between the release and its end; a successor's acquire bumps
                     // the fence, so that is at worst a redelivery, which this lane allows.
+                    // An owner releaseLeaseRows leaves out, a dead-letter move of it still owed, is left serving (HELD) the same
+                    // way, and shed again on a later tick.
                     var wasInDoubt = inDoubt.contains(owner);
                     if (wasInDoubt) {
                         try {
-                            releaseLeaseRows(List.of(owner));
+                            if (!releaseLeaseRows(List.of(owner)).released(owner)) {
+                                continue;
+                            }
                         } catch (SQLException | RuntimeException | Error e) {
                             Exceptions.rethrowIfCriticalError(e);
                             // Retried on every tick for as long as the cause lasts (a trigger refusing it, a database that keeps
@@ -1869,8 +1886,8 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                             continue;
                         }
                         run.inDoubtReleaseFailures.remove(owner);
-                    } else {
-                        releaseLeaseRows(List.of(owner));
+                    } else if (!releaseLeaseRows(List.of(owner)).released(owner)) {
+                        continue;
                     }
                     run.ownedShards.remove(owner.shard(), owner);
                     if (countRelease(run, owner)) {
@@ -2018,8 +2035,11 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                         }
                     }
                     // One unit at a time, as the unordered shed. A shed-complete owner dispatches nothing, so ending it after
-                    // the release costs nothing.
-                    releaseLeaseRows(List.of(ordered));
+                    // the release costs nothing. One releaseLeaseRows leaves out, a dead-letter move of it still owed, stays
+                    // held, shed-complete, and is retried on the next heartbeat, as one whose charge fails.
+                    if (!releaseLeaseRows(List.of(ordered)).released(ordered)) {
+                        continue;
+                    }
                     // A unit that finished its shed before its pump died, and whose hand-back failed this tick, is released
                     // here instead. Dropped from `owners` below, it would never be handed back, and stay counted in
                     // shardsOnDeadPumps (and shardsAwaitingTakeover) until the runtime stops. A no-op on a live pump.
@@ -2575,28 +2595,87 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * fenced write of the owner refused, or the lease check finding its unit gone, is then read as this release's doing,
      * not as a lease lost: a refused acknowledgement flush counted no {@code fencedOutAcks} and logged no "lease lost" for
      * a row this instance had released itself.
+     * <p>
+     * No owner is released while a charge it made before an earlier release attempt left a dead-letter move to be made
+     * ({@link LeasedOwner#owesDeadLetterMove()}, {@code ReleaseChargeLedger}): released with the move owed, a dead letter that
+     * had committed went uncounted and unreported (on the ordered lane, though it blocked its key), and a message that had not been moved was
+     * handed on at its attempt limit to an owner that charges nothing for a released unit. Each release site makes the
+     * moves still owed before it gets here - the sheds, the dead-pump hand-back, {@code stop()}, the hand-back of a kept
+     * unit and a release on request each settle them their own way - and a site that missed it released with a move owed
+     * and said nothing, so the rule is checked here too, where every release goes through, and a new release site
+     * inherits it. Such an
+     * owner is left out of the statement with a WARN, and left as a failed release leaves it: its state unmoved, its row
+     * still naming this instance. The other owners are released. A site that missed the move misses it on every attempt,
+     * and the heartbeat's sites attempt it on every tick, so the WARN is logged at most once a minute per owner, naming the
+     * releases that left it out since the last one, and the rest at DEBUG ({@link LeasedOwner#owedMoveReleaseRefusals()}).
      *
-     * @return how many rows the statement released: fewer than {@code releasing} when some had been taken meanwhile
+     * @return the owners released and how many rows the statement released ({@link LeaseRowRelease})
      */
-    private int releaseLeaseRows(List<? extends LeasedOwner> releasing) throws SQLException {
+    private LeaseRowRelease releaseLeaseRows(List<? extends LeasedOwner> releasing) throws SQLException {
         if (releasing.isEmpty()) {
-            return 0;
+            return LeaseRowRelease.NONE;
+        }
+        // Asked outside any lock of the owner's: the ledger takes its monitor, and waits for a charge running on another
+        // thread (ReleaseChargeLedger, Locking)
+        var owing    = new ArrayList<LeasedOwner>();
+        var clearing = new ArrayList<LeasedOwner>();
+        for (var owner : releasing) {
+            (owner.owesDeadLetterMove() ? owing : clearing).add(owner);
+        }
+        for (var owner : owing) {
+            // Rate-limited per owner: a site that missed the move misses it on every attempt, and the heartbeat's sites attempt it
+            // on every tick
+            var leftOutSinceWarning = owner.owedMoveReleaseRefusals().leftOut(System.nanoTime());
+            if (leftOutSinceWarning > 0) {
+                log.warn("Instance {} did not release {} unit {} on queue {} ({} release(s) of it left out since its last WARN, this one "
+                                 + "included; the others at DEBUG, at most one WARN a minute per unit): a charge made before an earlier "
+                                 + "release of it left a message at its redelivery limit whose move to the dead-letter table is still to "
+                                 + "be made, and a unit is released only once every such move is made. The site releasing it should have "
+                                 + "made the move first; the unit is left as a failed release leaves it, its lease row still naming this instance",
+                         instanceId, activeLane, owner.shard(), queueId, leftOutSinceWarning);
+            } else {
+                log.debug("Instance {} again did not release {} unit {} on queue {}: a dead-letter move a charge before an earlier "
+                                  + "release of it left owed is still to be made",
+                          instanceId, activeLane, owner.shard(), queueId);
+            }
+        }
+        if (clearing.isEmpty()) {
+            return LeaseRowRelease.NONE;
         }
         var fenceByShard = new HashMap<Integer, Long>();
-        releasing.forEach(owner -> fenceByShard.put(owner.shard(), owner.fence()));
+        clearing.forEach(owner -> fenceByShard.put(owner.shard(), owner.fence()));
         int released;
         try {
             released = storage.releaseFencedLeases(activeLane, fenceByShard, instanceId);
         } catch (SQLException | RuntimeException | Error e) {
             if (LeaseRowState.mayHaveGoneThrough(e)) {
-                releasing.forEach(LeasedOwner::markReleaseInDoubt);
+                clearing.forEach(LeasedOwner::markReleaseInDoubt);
             }
             throw e;
         }
-        for (var owner : releasing) {
+        for (var owner : clearing) {
             owner.onLeaseEnded(LeasedOwner.LeaseEnd.RELEASED);
         }
-        return released;
+        return new LeaseRowRelease(List.copyOf(clearing), released);
+    }
+
+    /**
+     * What {@link #releaseLeaseRows} did.
+     *
+     * @param owners the owners whose rows the statement covered, each moved to {@link LeasedOwner.LeaseRow#RELEASED}: every
+     *               owner asked for except those left out because a dead-letter move of theirs was still owed
+     *               ({@link LeasedOwner#owesDeadLetterMove()}), which are left as they were
+     * @param rows   how many rows the statement released: fewer than {@code owners} when some had been taken meanwhile
+     */
+    private record LeaseRowRelease(List<LeasedOwner> owners, int rows) {
+        static final LeaseRowRelease NONE = new LeaseRowRelease(List.of(), 0);
+
+        /**
+         * Whether {@code owner} was among those released, rather than left out.
+         */
+        boolean released(LeasedOwner owner) {
+            return owners.contains(owner);
+        }
     }
 
     /**
@@ -3438,7 +3517,11 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                     // nothing new to name for it.
                     reportOwedDeadLettersSettled(owner, settledBefore, releaseChargeSoFar(owner), "after a stop kept it");
                 }
-                releaseLeaseRows(List.of(owner));
+                if (!releaseLeaseRows(List.of(owner)).released(owner)) {
+                    // Left out, a dead-letter move of it still owed (releaseLeaseRows WARNed): nothing is released, and the
+                    // unit goes back where it was claimed from, as on a failure here.
+                    return;
+                }
                 if (claimedFrom.isGivenUp()) {
                     // The fenced release changed nothing if the unit was taken over since, by this instance id too.
                     log.info("Instance {} released ordered unit {} on queue {} under the fence a stop kept it under: this queue "
@@ -3648,6 +3731,10 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      *                      release that does leaves the row released by this request's own statement, and a
      *                      later request then finds nothing to release ({@code ALREADY_TAKEN}, or nothing once a
      *                      hand-back has found the row released first)
+     * @throws IllegalStateException when {@link #releaseLeaseRows} leaves the unit out because a dead-letter move a
+     *                      charge before an earlier release of it left owed is still to be made
+     *                      ({@link LeasedOwner#owesDeadLetterMove()}); the unit is then left kept, as on a failed release,
+     *                      for a later hand-back or request
      */
     Optional<KeptUnitRelease> releaseKeptOrderedUnit(String requestedInstanceId, int unit) throws SQLException {
         requireNonNull(requestedInstanceId, "No requestedInstanceId provided");
@@ -3723,7 +3810,16 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                                 reportOwedDeadLettersSettled(owner, settledBefore, releaseChargeSoFar(owner), "on request");
                             }
                         }
-                        released = releaseLeaseRows(List.of(owner)) > 0;
+                        var release = releaseLeaseRows(List.of(owner));
+                        if (!release.released(owner)) {
+                            // Left out, a dead-letter move of it still owed (releaseLeaseRows WARNed): not taken, so not
+                            // ALREADY_TAKEN. Nothing is released, and the unit goes back where it was claimed from, as on a
+                            // failure here; a later request makes the move before it releases.
+                            throw new IllegalStateException("Ordered unit " + unit + " on queue " + queueId + " was not released on "
+                                                                    + "request: a dead-letter move a charge before its release "
+                                                                    + "left owed is still to be made. Ask again");
+                        }
+                        released = release.rows() > 0;
                     } catch (SQLException | RuntimeException | Error e) {
                         failure = e;
                         throw e;

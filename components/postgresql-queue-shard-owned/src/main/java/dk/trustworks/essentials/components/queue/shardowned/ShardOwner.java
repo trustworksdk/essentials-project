@@ -206,6 +206,11 @@ final class ShardOwner implements LeasedOwner {
      * ({@link #completedAfterItsDeadLetter}, {@link #failedAfterItsDeadLetter}).
      */
     private final ReleaseChargeLedger releaseChargeLedger;
+    /**
+     * The rate limit of the WARN that a release left this owner out, a dead-letter move of it still owed
+     * ({@link #owedMoveReleaseRefusals()}).
+     */
+    private final OwedMoveReleaseRefusals owedMoveReleaseRefusals = new OwedMoveReleaseRefusals();
 
     ShardOwner(ShardOwnedStorage storage,
                int shard,
@@ -1170,6 +1175,16 @@ final class ShardOwner implements LeasedOwner {
      */
     boolean owesReleaseCharge() {
         return releaseChargeLedger.owes(inHandlerPastStuckHandlerTimeout());
+    }
+
+    @Override
+    public boolean owesDeadLetterMove() {
+        return releaseChargeLedger.owesDeadLetterMove();
+    }
+
+    @Override
+    public OwedMoveReleaseRefusals owedMoveReleaseRefusals() {
+        return owedMoveReleaseRefusals;
     }
 
     /**

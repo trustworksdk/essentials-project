@@ -1486,6 +1486,125 @@ class ShardOwnedDeadPumpHandBackIT {
     }
 
     /**
+     * A dead pump's owner that still owes a dead-letter move when the heartbeat hands its pump's units back is not
+     * released, while the pump's other shards are, and is released by a later heartbeat once the move is no longer owed.
+     * <p>
+     * Every release of an owner's row goes through {@code ShardOwnedQueue.releaseLeaseRows}, which releases no owner whose
+     * charge before an earlier release left a dead-letter move to be made ({@link LeasedOwner#owesDeadLetterMove()}). Each
+     * release site makes such moves first; one that missed it released with the dead letter uncounted and unreported, or
+     * the message handed on at its attempt limit. The stand-in is an owner no site makes the move for -
+     * it is neither lane's owner - so it is the release that missed it. Its unit is outside the queue's shard range and is
+     * given a lease row naming this instance under the stand-in's fence, so the heartbeat's lease check finds it held and
+     * the release has a row to give up.
+     */
+    @Test
+    void a_dead_pumps_owner_owing_a_dead_letter_move_is_not_handed_back_until_the_move_is_no_longer_owed() throws Exception {
+        var settings   = settings(2);
+        var instanceId = "dead-pump-owed-move";
+        try (var runtime = new ShardRuntime(dataSource, settings)) {
+            var queue  = queue(runtime, instanceId);
+            var logged = captureQueueLog();
+            try {
+                queue.startConsuming((messageId, payload, payloadType) -> { }, settings, SHARD_COUNT);
+                assertThat(queue.shardsHeld()).as("premise: one instance holds every shard").isEqualTo(SHARD_COUNT);
+                leaseUnitOutsideTheShardRange(instanceId);
+                var doomed         = runtime.pumpFor(QUEUE_ID, "unordered", 0);
+                var doomedShards   = unitsOn(runtime, doomed, "unordered", SHARD_COUNT);
+                var releasedBefore = queue.metrics().shardsReleased.sum();
+                kill(doomed);
+                var owing = new OwesDeadLetterMoveOwner(SHARD_COUNT);
+                doomed.add(owing);
+                assertThat(runtime.onDeadPump(owing)).as("premise: counted on the dead pump, awaiting hand-back").isTrue();
+                assertThat(owing.leaseRow()).as("premise: ended on arrival at the dead pump").isEqualTo(LeasedOwner.LeaseRow.ENDED_ROW_HELD);
+                queue.adoptPlacedOwner(owing, false);
+
+                Awaitility.await().atMost(Duration.ofSeconds(10))
+                          .until(() -> !warnings(logged, OWED_MOVE_RELEASE_WARNING).isEmpty() || owing.leaseRow() == LeasedOwner.LeaseRow.RELEASED);
+
+                assertThat(owing.leaseRow()).as("the owner owing a dead-letter move is not released").isEqualTo(LeasedOwner.LeaseRow.ENDED_ROW_HELD);
+                assertThat(ownerOf("unordered", SHARD_COUNT)).as("its lease row still names this instance").isEqualTo(instanceId);
+                assertThat(queue.owners()).as("it is still listed, to be handed back later").contains(owing);
+                assertThat(runtime.onDeadPump(owing)).as("it is still counted on the dead pump").isTrue();
+                assertThat(queue.metrics().shardsReleased.sum()).as("the dead pump's other shards are handed back all the same")
+                                                               .isGreaterThanOrEqualTo(releasedBefore + doomedShards.size());
+
+                // Two more heartbeats' hand-backs leave it out again: the WARN is not logged again within the minute
+                var askedAtWarning = owing.asked.get();
+                Awaitility.await().atMost(Duration.ofSeconds(10))
+                          .until(() -> owing.asked.get() >= askedAtWarning + 2);
+                assertThat(owing.leaseRow()).as("premise: still left out").isEqualTo(LeasedOwner.LeaseRow.ENDED_ROW_HELD);
+                assertThat(warnings(logged, OWED_MOVE_RELEASE_WARNING)).as("one WARN across the heartbeats that left it out").hasSize(1);
+
+                owing.owes.set(false);
+
+                Awaitility.await().atMost(Duration.ofSeconds(10))
+                          .untilAsserted(() -> assertThat(owing.leaseRow()).as("released once nothing is owed").isEqualTo(LeasedOwner.LeaseRow.RELEASED));
+                assertThat(ownerOf("unordered", SHARD_COUNT)).as("its lease row released").isNull();
+                Awaitility.await().atMost(Duration.ofSeconds(5))
+                          .untilAsserted(() -> assertThat(queue.owners()).as("dropped once handed back").doesNotContain(owing));
+            } finally {
+                releaseQueueLog(logged);
+                queue.stop();
+            }
+        }
+    }
+
+    /**
+     * A queue stopped while one of its owners still owes a dead-letter move releases every other owner and leaves that one's
+     * row as a failed release leaves it, naming this instance, for the next owner's takeover. The stand-in is on a live
+     * pump, and a long lease keeps the heartbeat from running before the stop; otherwise as in the test above.
+     */
+    @Test
+    void a_queue_stopped_while_an_owner_owes_a_dead_letter_move_releases_the_others_and_not_that_one() throws Exception {
+        var settings   = settings(2, ShardOwnerSettings.defaults().shedGrace(), Duration.ofSeconds(60));
+        var instanceId = "dead-pump-owed-move-stop";
+        try (var runtime = new ShardRuntime(dataSource, settings)) {
+            var queue  = queue(runtime, instanceId);
+            var logged = captureQueueLog();
+            try {
+                queue.startConsuming((messageId, payload, payloadType) -> { }, settings, SHARD_COUNT);
+                var others = queue.owners();
+                assertThat(others).as("premise: one instance holds every shard").hasSize(SHARD_COUNT);
+                leaseUnitOutsideTheShardRange(instanceId);
+                var owing = new OwesDeadLetterMoveOwner(SHARD_COUNT);
+                runtime.pumpFor(QUEUE_ID, "unordered", 0).add(owing);
+                queue.adoptPlacedOwner(owing, false);
+
+                queue.stop();
+
+                assertThat(owing.leaseRow()).as("the owner owing a dead-letter move is ended, not released").isEqualTo(LeasedOwner.LeaseRow.ENDED_ROW_HELD);
+                assertThat(ownerOf("unordered", SHARD_COUNT)).as("its lease row still names this instance").isEqualTo(instanceId);
+                assertThat(others).as("every other owner released").allMatch(owner -> owner.leaseRow() == LeasedOwner.LeaseRow.RELEASED);
+                assertThat(unitsOwnedBy("unordered", instanceId)).as("only the owing owner's row is left").isEqualTo(1);
+                assertThat(warnings(logged, OWED_MOVE_RELEASE_WARNING)).as("the release that left it out says so").hasSize(1);
+            } finally {
+                releaseQueueLog(logged);
+                queue.stop();
+            }
+        }
+    }
+
+    /**
+     * Part of the WARN {@code ShardOwnedQueue.releaseLeaseRows} logs for the owners it leaves out.
+     */
+    private static final String OWED_MOVE_RELEASE_WARNING = "whose move to the dead-letter table is still to be made, and a unit is released only once";
+
+    /**
+     * Give unordered unit {@link #SHARD_COUNT} of {@link #QUEUE_ID} - outside the queue's shard range, so no owner of the
+     * queue's own leases it - a lease row naming {@code instanceId} under fence 1, a stand-in's.
+     */
+    private void leaseUnitOutsideTheShardRange(String instanceId) throws Exception {
+        try (var connection = dataSource.getConnection();
+             var statement = connection.prepareStatement("INSERT INTO " + ShardOwnedSchema.LEASE_TABLE
+                                                                 + " (queue_id, lane, shard, owner, fence) VALUES (?, 'unordered', ?, ?, 1)")) {
+            statement.setShort(1, QUEUE_ID);
+            statement.setInt(2, SHARD_COUNT);
+            statement.setString(3, instanceId);
+            assertThat(statement.executeUpdate()).as("premise: the stand-in's lease row inserted").isEqualTo(1);
+        }
+    }
+
+    /**
      * A queue stopped after another instance took one of its dead pump's shards, before a rebalance dropped that shard,
      * stops counting it in {@code shardsOnDeadPumps} on a runtime that outlives the queue.
      * <p>
@@ -2486,6 +2605,108 @@ class ShardOwnedDeadPumpHandBackIT {
             if (throwsLeft.getAndUpdate(left -> Math.max(0, left - 1)) > 0) {
                 throw new IllegalStateException("simulated failure ending the owner");
             }
+            leaseRow.advanceTo(LeaseRow.ENDED_ROW_HELD);
+        }
+
+        @Override
+        public void beginDraining() {
+        }
+
+        @Override
+        public int inFlight() {
+            return 0;
+        }
+
+        @Override
+        public void onLeaseEnded(LeaseEnd reason) {
+            leaseRow.advanceTo(LeaseRow.RELEASED);
+        }
+    }
+
+    /**
+     * An unordered owner of {@link #QUEUE_ID} that charges nothing and reads as owing a dead-letter move
+     * ({@link LeasedOwner#owesDeadLetterMove()}) while {@link #owes} is set, under fence 1, with a lease row state of its own
+     * and a rate limit of its own for the WARN that a release left it out, as the real owners keep. Counts how often it was
+     * asked whether it owes a move ({@link #asked}): once per release that covers it.
+     */
+    private static final class OwesDeadLetterMoveOwner implements LeasedOwner {
+        private final ShardOwnerMetrics       metrics  = new ShardOwnerMetrics();
+        private final int                     shard;
+        private final LeaseRowState           leaseRow = new LeaseRowState();
+        private final OwedMoveReleaseRefusals refusals = new OwedMoveReleaseRefusals();
+        final         AtomicBoolean           owes     = new AtomicBoolean(true);
+        final         AtomicInteger           asked    = new AtomicInteger();
+
+        OwesDeadLetterMoveOwner(int shard) {
+            this.shard = shard;
+        }
+
+        @Override
+        public boolean owesDeadLetterMove() {
+            asked.incrementAndGet();
+            return owes.get();
+        }
+
+        @Override
+        public OwedMoveReleaseRefusals owedMoveReleaseRefusals() {
+            return refusals;
+        }
+
+        @Override
+        public int pumpOnce(Connection connection) {
+            return 0;
+        }
+
+        @Override
+        public boolean needsAttention() {
+            return false;
+        }
+
+        @Override
+        public void onTakeover(Connection connection) {
+        }
+
+        @Override
+        public void flushOnStop(Connection connection) {
+        }
+
+        @Override
+        public long parkDeadlineMillis() {
+            return Long.MAX_VALUE;
+        }
+
+        @Override
+        public int shard() {
+            return shard;
+        }
+
+        @Override
+        public short queueId() {
+            return QUEUE_ID;
+        }
+
+        @Override
+        public ShardOwnerMetrics ownerMetrics() {
+            return metrics;
+        }
+
+        @Override
+        public long fence() {
+            return 1;
+        }
+
+        @Override
+        public String lane() {
+            return "unordered";
+        }
+
+        @Override
+        public LeaseRow leaseRow() {
+            return leaseRow.get();
+        }
+
+        @Override
+        public void endKeepingLeaseRow() {
             leaseRow.advanceTo(LeaseRow.ENDED_ROW_HELD);
         }
 
