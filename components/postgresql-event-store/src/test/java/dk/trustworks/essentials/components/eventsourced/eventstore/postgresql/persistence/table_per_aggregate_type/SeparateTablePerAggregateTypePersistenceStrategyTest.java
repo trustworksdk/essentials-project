@@ -29,6 +29,7 @@ import org.junit.jupiter.api.Test;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.regex.Pattern;
 
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -221,6 +222,55 @@ class SeparateTablePerAggregateTypePersistenceStrategyTest {
                            .allSatisfy(change -> assertThat(change.description()).isEqualTo(change.objectName().equals("orders_events")
                                                                                             ? "AggregateType 'Orders'"
                                                                                             : "AggregateType 'Products'"));
+    }
+
+    @Test
+    void causationIndexStatement_keeps_its_documented_name_and_predicate() {
+        // Public: users run this exact statement by hand, CONCURRENTLY, before enableCausationIndex() - its index name is part of the contract
+        assertThat(SeparateTablePerAggregateTypePersistenceStrategy.causationIndexStatement(configurationFor(AggregateType.of("Orders"), "orders_events")))
+                .isEqualTo("CREATE INDEX IF NOT EXISTS orders_events_caused_by_event_id ON orders_events (caused_by_event_id) WHERE caused_by_event_id IS NOT NULL");
+    }
+
+    @Test
+    void each_index_is_looked_up_under_the_name_its_create_index_statement_gives_it() {
+        var strategy = harnessOwnedStrategy();
+        strategy.enableCausationIndex();
+        // Long enough that both of this table's index names cross PostgreSQL's 63-character identifier limit
+        var longTableName = "a_long_event_stream_table_name_for_the_orders_aggregate_type_x";
+        assertThat(longTableName).hasSize(PostgresqlUtil.MAX_IDENTIFIER_LENGTH - 1);
+        strategy.addAggregateEventStreamConfiguration(configurationFor(AggregateType.of("Orders"), "orders_events"));
+        strategy.addAggregateEventStreamConfiguration(configurationFor(AggregateType.of("Products"), longTableName));
+
+        var indexChanges = strategy.contribute(mock(SchemaContext.class))
+                                   .stream()
+                                   .filter(change -> change.changeId().endsWith("-index"))
+                                   .toList();
+
+        assertThat(indexChanges).extracting(SchemaChange::changeId)
+                                .containsExactly("event-stream-tenant-index", "event-stream-caused-by-index",
+                                                 "event-stream-tenant-index", "event-stream-caused-by-index");
+        assertThat(indexChanges).extracting(change -> checkedIndexName(change.statements()))
+                                .containsExactly(longTableName + "_tenant", longTableName + "_caused_by_event_id",
+                                                 "orders_events_tenant", "orders_events_caused_by_event_id");
+        assertThat(indexChanges).allSatisfy(change -> assertThat(checkedIndexName(change.statements())).isEqualTo(createdIndexName(change.statements())));
+    }
+
+    /**
+     * The index name the {@code createIndexUnlessPresent} catalog check looks for
+     */
+    private static String checkedIndexName(List<String> statements) {
+        var matcher = Pattern.compile("c\\.relname = left\\(lower\\('(\\w+)'\\), 63\\)").matcher(String.join("\n", statements));
+        assertThat(matcher.find()).as("catalog check in %s", statements).isTrue();
+        return matcher.group(1);
+    }
+
+    /**
+     * The index name the wrapped {@code CREATE INDEX IF NOT EXISTS} statement creates
+     */
+    private static String createdIndexName(List<String> statements) {
+        var matcher = Pattern.compile("CREATE INDEX IF NOT EXISTS (\\w+) ON ").matcher(String.join("\n", statements));
+        assertThat(matcher.find()).as("CREATE INDEX in %s", statements).isTrue();
+        return matcher.group(1);
     }
 
     private static SeparateTablePerAggregateTypePersistenceStrategy harnessOwnedStrategy() {

@@ -533,9 +533,25 @@ public final class SeparateTablePerAggregateTypePersistenceStrategy implements A
      */
     public static String causationIndexStatement(SeparateTablePerAggregateEventStreamConfiguration eventStreamConfiguration) {
         requireNonNull(eventStreamConfiguration, "No eventStreamConfiguration provided");
-        return bind("CREATE INDEX IF NOT EXISTS {:tableName}_{:causedByColumn} ON {:tableName} ({:causedByColumn}) WHERE {:causedByColumn} IS NOT NULL",
+        return bind("CREATE INDEX IF NOT EXISTS {:indexName} ON {:tableName} ({:causedByColumn}) WHERE {:causedByColumn} IS NOT NULL",
+                    arg("indexName", causationIndexName(eventStreamConfiguration)),
                     arg("tableName", eventStreamConfiguration.eventStreamTableName),
                     arg("causedByColumn", eventStreamConfiguration.eventStreamTableColumnNames.causedByEventIdColumn));
+    }
+
+    /**
+     * The one source for the caused-by-event-id index's name, used both in {@link #causationIndexStatement(SeparateTablePerAggregateEventStreamConfiguration)}
+     * and by the check that skips that statement when the index is in place - so the two cannot drift apart
+     */
+    static String causationIndexName(SeparateTablePerAggregateEventStreamConfiguration eventStreamConfiguration) {
+        return eventStreamConfiguration.eventStreamTableName + "_" + eventStreamConfiguration.eventStreamTableColumnNames.causedByEventIdColumn;
+    }
+
+    /**
+     * The one source for the tenant index's name, used both in {@code createTenantIndexStatement} and by the check that skips that statement when the index is in place - so the two cannot drift apart
+     */
+    static String tenantIndexName(SeparateTablePerAggregateEventStreamConfiguration eventStreamConfiguration) {
+        return eventStreamConfiguration.eventStreamTableName + "_" + eventStreamConfiguration.eventStreamTableColumnNames.tenantColumn;
     }
 
     @Override
@@ -580,17 +596,16 @@ public final class SeparateTablePerAggregateTypePersistenceStrategy implements A
         // Each index is only created when it is missing: CREATE INDEX IF NOT EXISTS alone locks the table on every start,
         // and the tables of every aggregate type are one transaction, so a running unit of work appending to two of them
         // in the other order could deadlock with it - see PostgresqlSchemaStatements
-        var columnNames = eventStreamConfiguration.eventStreamTableColumnNames;
         changes.add(SchemaChange.repeatable("event-stream-tenant-index",
                                             eventStreamTableName,
                                             createIndexUnlessPresent(eventStreamTableName,
-                                                                     eventStreamTableName + "_" + columnNames.tenantColumn,
+                                                                     tenantIndexName(eventStreamConfiguration),
                                                                      createTenantIndexStatement(eventStreamConfiguration))));
         if (causationIndexEnabled.get()) {
             changes.add(SchemaChange.repeatable("event-stream-caused-by-index",
                                                 eventStreamTableName,
                                                 createIndexUnlessPresent(eventStreamTableName,
-                                                                         eventStreamTableName + "_" + columnNames.causedByEventIdColumn,
+                                                                         causationIndexName(eventStreamConfiguration),
                                                                          causationIndexStatement(eventStreamConfiguration))));
         }
         if (notifyTriggerListener.get() != null) {
@@ -681,7 +696,8 @@ public final class SeparateTablePerAggregateTypePersistenceStrategy implements A
     }
 
     private static String createTenantIndexStatement(SeparateTablePerAggregateEventStreamConfiguration eventStreamConfiguration) {
-        return bind("CREATE INDEX IF NOT EXISTS {:tableName}_{:tenantColumn} ON {:tableName} ({:tenantColumn})",
+        return bind("CREATE INDEX IF NOT EXISTS {:indexName} ON {:tableName} ({:tenantColumn})",
+                    arg("indexName", tenantIndexName(eventStreamConfiguration)),
                     arg("tableName", eventStreamConfiguration.eventStreamTableName),
                     arg("tenantColumn", eventStreamConfiguration.eventStreamTableColumnNames.tenantColumn));
     }

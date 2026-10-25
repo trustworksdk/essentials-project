@@ -161,7 +161,7 @@ public class CdcInboxRepository implements EssentialsSchemaContributor {
                        SchemaChange.repeatable("cdc-inbox-status-index",
                                                cdcSql.getCdcTableName(),
                                                createIndexUnlessPresent(cdcSql.getCdcTableName(),
-                                                                        "idx_" + cdcSql.getCdcTableName() + "_inbox_status",
+                                                                        cdcSql.getCdcIndexName(),
                                                                         cdcSql.getCreateCdcIndexSql())));
     }
 
