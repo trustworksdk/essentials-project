@@ -54,7 +54,6 @@ import static org.assertj.core.api.Assertions.*;
  *     claim end, or a claim end throwing the release statement's own failure, is not added to itself, and every claim
  *     after it is still ended.</li>
  * </ul>
- * The method is private, so it is called by reflection.
  */
 class ShardOwnedQueueReleaseLeaseRowsTest {
 
@@ -66,7 +65,7 @@ class ShardOwnedQueueReleaseLeaseRowsTest {
     private static final String OWED_MOVE_RELEASE_WARNING = "whose move to the dead-letter table is still to be made, and a unit is released only once";
 
     @Test
-    void a_release_whose_every_owner_owes_a_dead_letter_move_takes_no_connection_and_warns_even_when_the_pool_has_none() throws Throwable {
+    void a_release_whose_every_owner_owes_a_dead_letter_move_takes_no_connection_and_warns_even_when_the_pool_has_none() throws SQLException {
         var dataSource = new AnsweringDataSource(false);
         var queue      = queue(dataSource);
         var owing      = new StandInOwner(0);
@@ -75,10 +74,10 @@ class ShardOwnedQueueReleaseLeaseRowsTest {
         otherOwing.owes.set(true);
         var logged = captureQueueLog();
         try {
-            var release = releaseLeaseRows(queue, List.of(owing, otherOwing));
+            var release = queue.releaseLeaseRows(List.of(owing, otherOwing));
 
             assertThat(dataSource.connectionsAsked.get()).as("no connection asked for: no owner is to be released").isZero();
-            assertThat(releasedOwners(release)).as("nothing released").isEmpty();
+            assertThat(release.owners()).as("nothing released").isEmpty();
             assertThat(warnings(logged)).as("each owner left out is WARNed of").hasSize(2);
             assertThat(List.of(owing, otherOwing)).as("left as they were: held, not in doubt, nothing claimed")
                                                   .allSatisfy(owner -> {
@@ -100,7 +99,7 @@ class ShardOwnedQueueReleaseLeaseRowsTest {
         var clear  = new StandInOwner(1);
         var logged = captureQueueLog();
         try {
-            assertThatThrownBy(() -> releaseLeaseRows(queue, List.of(owing, clear)))
+            assertThatThrownBy(() -> queue.releaseLeaseRows(List.of(owing, clear)))
                     .as("the pool's refusal is rethrown").isInstanceOf(SQLException.class);
 
             assertThat(dataSource.connectionsAsked.get()).as("premise: a connection was asked for").isEqualTo(1);
@@ -121,7 +120,7 @@ class ShardOwnedQueueReleaseLeaseRowsTest {
         failing.endFailure.set(new IllegalStateException("simulated unbalanced release claim"));
         var other = new StandInOwner(1);
 
-        assertThatThrownBy(() -> releaseLeaseRows(queue, List.of(failing, other)))
+        assertThatThrownBy(() -> queue.releaseLeaseRows(List.of(failing, other)))
                 .as("the claim-ending failure still propagates").isInstanceOf(IllegalStateException.class)
                 .hasMessage("simulated unbalanced release claim");
 
@@ -150,7 +149,7 @@ class ShardOwnedQueueReleaseLeaseRowsTest {
         later.endFailure.set(laterFailure);
         var owners = List.of(earlier, critical, after, later);
 
-        assertThatThrownBy(() -> releaseLeaseRows(queue, owners))
+        assertThatThrownBy(() -> queue.releaseLeaseRows(owners))
                 .as("the critical error is the one rethrown").isSameAs(criticalError);
 
         assertThat(dataSource.statementsRun.get()).as("premise: the release statement ran and returned").isEqualTo(1);
@@ -172,7 +171,7 @@ class ShardOwnedQueueReleaseLeaseRowsTest {
         var after  = new StandInOwner(2);
         var owners = List.of(first, second, after);
 
-        assertThatThrownBy(() -> releaseLeaseRows(queue, owners))
+        assertThatThrownBy(() -> queue.releaseLeaseRows(owners))
                 .as("the critical error itself is the one rethrown, not an IllegalArgumentException of adding it to itself")
                 .isSameAs(criticalError);
 
@@ -194,7 +193,7 @@ class ShardOwnedQueueReleaseLeaseRowsTest {
         var after  = new StandInOwner(1);
         var owners = List.of(critical, after);
 
-        assertThatThrownBy(() -> releaseLeaseRows(queue, owners))
+        assertThatThrownBy(() -> queue.releaseLeaseRows(owners))
                 .as("the critical error is the one rethrown").isSameAs(criticalError);
 
         assertThat(dataSource.statementsRun.get()).as("premise: the release statement ran and threw").isEqualTo(1);
@@ -214,7 +213,7 @@ class ShardOwnedQueueReleaseLeaseRowsTest {
         var after  = new StandInOwner(1);
         var owners = List.of(critical, after);
 
-        assertThatThrownBy(() -> releaseLeaseRows(queue, owners))
+        assertThatThrownBy(() -> queue.releaseLeaseRows(owners))
                 .as("the critical error itself is the one rethrown, not an IllegalArgumentException of adding it to itself")
                 .isSameAs(criticalError);
 
@@ -236,7 +235,7 @@ class ShardOwnedQueueReleaseLeaseRowsTest {
         var after  = new StandInOwner(2);
         var owners = List.of(first, second, after);
 
-        assertThatThrownBy(() -> releaseLeaseRows(queue, owners))
+        assertThatThrownBy(() -> queue.releaseLeaseRows(owners))
                 .as("the end failure itself is the one rethrown, not an IllegalArgumentException of adding it to itself")
                 .isSameAs(endFailure);
 
@@ -257,7 +256,7 @@ class ShardOwnedQueueReleaseLeaseRowsTest {
         var after  = new StandInOwner(1);
         var owners = List.of(first, after);
 
-        assertThatThrownBy(() -> releaseLeaseRows(queue, owners))
+        assertThatThrownBy(() -> queue.releaseLeaseRows(owners))
                 .as("the release's failure itself is the one rethrown, not an IllegalArgumentException of adding it to itself")
                 .isSameAs(failure);
 
@@ -274,26 +273,6 @@ class ShardOwnedQueueReleaseLeaseRowsTest {
                               .setShardCount(4)
                               .setInstanceId("release-lease-rows")
                               .build();
-    }
-
-    /**
-     * Call the queue's private {@code releaseLeaseRows}, rethrowing what it threw.
-     */
-    private static Object releaseLeaseRows(ShardOwnedQueue queue, List<? extends LeasedOwner> owners) throws Throwable {
-        var method = ShardOwnedQueue.class.getDeclaredMethod("releaseLeaseRows", List.class);
-        method.setAccessible(true);
-        try {
-            return method.invoke(queue, owners);
-        } catch (InvocationTargetException e) {
-            throw e.getCause();
-        }
-    }
-
-    @SuppressWarnings("unchecked")
-    private static List<LeasedOwner> releasedOwners(Object release) throws Exception {
-        var owners = release.getClass().getDeclaredMethod("owners");
-        owners.setAccessible(true);
-        return (List<LeasedOwner>) owners.invoke(release);
     }
 
     private static ListAppender<ILoggingEvent> captureQueueLog() {

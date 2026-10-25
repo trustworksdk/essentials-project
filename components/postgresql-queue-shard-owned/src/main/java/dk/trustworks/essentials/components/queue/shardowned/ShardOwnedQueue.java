@@ -2646,10 +2646,11 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * unit on a dead pump, in {@link ShardOwnerMetrics#shardsOnDeadPumps}, which counts it until it is handed back. A
      * release on request ({@link #releaseKeptOrderedUnit}) runs its charge before its release, and that charge makes every
      * move still owed, so asking again after one left out here settles a move that charge can make.
+     * Package-private for tests.
      *
      * @return the owners released and how many rows the statement released ({@link LeaseRowRelease})
      */
-    private LeaseRowRelease releaseLeaseRows(List<? extends LeasedOwner> releasing) throws SQLException {
+    LeaseRowRelease releaseLeaseRows(List<? extends LeasedOwner> releasing) throws SQLException {
         if (releasing.isEmpty()) {
             return LeaseRowRelease.NONE;
         }
@@ -2822,14 +2823,14 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
     }
 
     /**
-     * What {@link #releaseLeaseRows} did.
+     * What {@link #releaseLeaseRows} did. Package-private for tests.
      *
      * @param owners the owners whose rows the statement covered, each moved to {@link LeasedOwner.LeaseRow#RELEASED}: every
      *               owner asked for except those left out because a dead-letter move of theirs was still owed
      *               ({@link LeasedOwner#owesDeadLetterMove()}), which are left as they were
      * @param rows   how many rows the statement released: fewer than {@code owners} when some had been taken meanwhile
      */
-    private record LeaseRowRelease(List<LeasedOwner> owners, int rows) {
+    record LeaseRowRelease(List<LeasedOwner> owners, int rows) {
         static final LeaseRowRelease NONE = new LeaseRowRelease(List.of(), 0);
 
         /**
