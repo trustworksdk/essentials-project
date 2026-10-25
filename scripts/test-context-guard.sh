@@ -339,6 +339,64 @@ out=$(run restore s4 "")
 case "$out" in *STATE-MARKER-2*) ;; *) fail "restore after a same-content rewrite lacks STATE.md: ${out:0:200}" ;; esac
 pass
 
+case_name="restore of a STATE.md over 20000 bytes says it was cut and where the rest is"
+mkdir -p "$CONTEXT_GUARD_DIR/s21/main"
+state=$CONTEXT_GUARD_DIR/s21/main/STATE.md
+{ printf 'STATE-HEAD\n'; head -c 25000 /dev/zero | tr '\0' 'x'; printf '\nSTATE-TAIL\n'; } >"$state"
+out=$(run restore s21 "")
+case "$out" in *STATE-HEAD*) ;; *) fail "restore lacks the start of STATE.md" ;; esac
+case "$out" in *STATE-TAIL*) fail "restore handed back more than 20000 bytes" ;; esac
+case "$out" in *"cut at 20000 bytes"*"$state"*) ;; *) fail "restore does not say STATE.md was cut: ${out: -200}" ;; esac
+pass
+
+# --- Off switch, private state, pruning -------------------------------------------------------
+
+case_name="CONTEXT_GUARD=off|0|false|no: nothing printed, no state written"
+for v in off 0 false no; do
+  s=s22-$v
+  assistant_entry "$(main_transcript $s)" claude-opus-5-5 950000 false
+  out=$(hook_input $s "" | CONTEXT_GUARD=$v bash "$hook" warn)
+  expect_nothing "$out" "CONTEXT_GUARD=$v still warned"
+  [ ! -e "$CONTEXT_GUARD_DIR/$s" ] || fail "CONTEXT_GUARD=$v still wrote $CONTEXT_GUARD_DIR/$s"
+done
+pass
+
+case_name="state directories are private: 700, files 600, whatever the umask"
+assistant_entry "$(main_transcript s23)" claude-opus-5-5 950000 false
+out=$(hook_input s23 "" | (umask 000; bash "$hook" warn) | jq -r '.hookSpecificOutput.additionalContext // empty')
+expect_warning "$out" 950000/1000000
+for d in "$CONTEXT_GUARD_DIR" "$CONTEXT_GUARD_DIR/s23" "$CONTEXT_GUARD_DIR/s23/main"; do
+  [ "$(ls -ld "$d" | cut -c1-10)" = drwx------ ] || fail "$d is $(ls -ld "$d" | cut -c1-10), expected drwx------"
+done
+[ "$(ls -l "$CONTEXT_GUARD_DIR/s23/main/window" | cut -c1-10)" = -rw------- ] \
+  || fail "window is $(ls -l "$CONTEXT_GUARD_DIR/s23/main/window" | cut -c1-10), expected -rw-------"
+pass
+
+case_name="a state directory that is a symlink is refused: nothing printed, nothing written through it"
+elsewhere=$tmp/elsewhere
+mkdir -p "$elsewhere/main"
+printf '%s\n' "PLANTED-STATE" >"$elsewhere/main/STATE.md"
+ln -s "$elsewhere" "$CONTEXT_GUARD_DIR/s24"
+assistant_entry "$(main_transcript s24)" claude-opus-5-5 950000 false
+expect_nothing "$(run warn s24 "")" "warned through a symlinked session directory"
+expect_nothing "$(run restore s24 "")" "restore injected a STATE.md from a symlinked session directory"
+[ "$(ls "$elsewhere/main")" = STATE.md ] || fail "wrote through the symlink: $(ls "$elsewhere/main" | tr '\n' ' ')"
+rm -f "$CONTEXT_GUARD_DIR/s24"
+pass
+
+case_name="start prunes sessions with nothing written for 7 days, keeps a live one and its own"
+mkdir -p "$CONTEXT_GUARD_DIR/stale/main" "$CONTEXT_GUARD_DIR/live/main" "$CONTEXT_GUARD_DIR/s25/main"
+for p in "$CONTEXT_GUARD_DIR/stale" "$CONTEXT_GUARD_DIR/stale/main" "$CONTEXT_GUARD_DIR/live" \
+         "$CONTEXT_GUARD_DIR/live/main" "$CONTEXT_GUARD_DIR/s25" "$CONTEXT_GUARD_DIR/s25/main"; do
+  touch -t 202001010000 "$p"
+done
+: >"$CONTEXT_GUARD_DIR/live/main/live" # written now, inside directories that look old
+jq -nc --arg s s25 --arg t "$(main_transcript s25)" '{session_id: $s, transcript_path: $t}' | bash "$hook" start >/dev/null
+[ ! -e "$CONTEXT_GUARD_DIR/stale" ] || fail "stale session directory not pruned"
+[ -d "$CONTEXT_GUARD_DIR/live" ] || fail "a session with a recent write was pruned"
+[ -d "$CONTEXT_GUARD_DIR/s25" ] || fail "start pruned its own session directory"
+pass
+
 # --- Snapshot without GNU-only tools ---------------------------------------------------------
 
 case_name="precompact without tac, sed and awk: each edited path once, at most 30, oldest first"

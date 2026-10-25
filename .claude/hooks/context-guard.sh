@@ -42,14 +42,25 @@
 # Base dir is fixed rather than taken from the hook input's scratchpad_dir: that field is
 # documented but absent in practice (2.1.310), and the warn and restore paths must agree.
 #
-# Knobs: CONTEXT_GUARD_WINDOW (tokens; overrides model detection),
+# Knobs: CONTEXT_GUARD (off|0|false|no switches the guard off without removing the hooks),
+#        CONTEXT_GUARD_WINDOW (tokens; overrides model detection),
 #        CONTEXT_GUARD_LEVELS (default "70 80 90"),
 #        CONTEXT_GUARD_DIR (default /tmp/claude-<uid>/context-guard).
+# State is private: files are created with umask 077, every state directory must be a real
+# directory owned by this user (else the hook does nothing) and is chmod 700, so on a shared
+# host no other user can read STATE.md or plant one for a restore to inject. `start` prunes
+# session directories with nothing written in them for 7 days; `warn` marks its state dir
+# live on every call, so a long-running session is never pruned.
+# Known limit: a /model switch in the main conversation is not followed - main/model is
+# written at SessionStart only, so a switch from a [1m] model to a 200k one keeps the 1M
+# window (the upward switch is caught by a count past the window).
 # Never fails the hook: every path exits 0.
 # Needs bash and jq (without jq it does nothing). Transcripts are read by jq (warn's usage
 # and main-model checks first take the last 500, then 5000 lines with POSIX `tail -n`), so no
 # GNU-only tool (tac, GNU sed) is involved: it works on a stock macOS userland as well.
 set -u
+case "${CONTEXT_GUARD:-on}" in off|0|false|no) exit 0 ;; esac
+umask 077
 command -v jq >/dev/null 2>&1 || exit 0
 
 mode=${1:-}
@@ -64,7 +75,8 @@ cwd=$(field cwd)
 cwd=${cwd:-${CLAUDE_PROJECT_DIR:-.}}
 [ -n "$session" ] || exit 0
 
-base=${CONTEXT_GUARD_DIR:-/tmp/claude-$(id -u)/context-guard}/$session
+root=${CONTEXT_GUARD_DIR:-/tmp/claude-$(id -u)/context-guard}
+base=$root/$session
 if [ -n "$agent" ]; then
   state_dir=$base/agents/$agent
   transcript=${transcript%.jsonl}/subagents/agent-$agent.jsonl
@@ -74,6 +86,11 @@ else
   who="this conversation"
 fi
 mkdir -p "$state_dir" 2>/dev/null || exit 0
+# Refuse state another user could have pre-created or swapped for a symlink.
+for d in "$root" "$base" ${agent:+"$base/agents"} "$state_dir"; do
+  [ -d "$d" ] && [ ! -L "$d" ] && [ -O "$d" ] || exit 0
+  chmod 700 "$d" 2>/dev/null
+done
 state_file=$state_dir/STATE.md
 restored_file=$state_dir/STATE.restored.md # the STATE.md the last restore handed back
 snapshot_file=$state_dir/precompact-snapshot.md
@@ -206,6 +223,8 @@ restore_text() {
       || [ "$state_file" -nt "$restored_file" ] || ! cmp -s "$state_file" "$restored_file"; }; then
     text+="CONTEXT GUARD: ${who} was just compacted. The working state you saved before compaction (${state_file}) follows; treat it as your own notes and resume from its next step. Keep the file updated if you change course."$'\n\n'
     text+=$(head -c 20000 "$state_file")$'\n\n'
+    [ "$(wc -c <"$state_file")" -gt 20000 ] \
+      && text+="(STATE.md was cut at 20000 bytes here - read ${state_file} for the rest.)"$'\n\n'
     cp "$state_file" "$restored_file" 2>/dev/null
   fi
   [ -s "$snapshot_file" ] && text+=$(head -c 8000 "$snapshot_file")
@@ -218,9 +237,19 @@ case "$mode" in
     model=$(field model)
     [ -n "$model" ] && printf '%s' "$model" >"$state_dir/model"
     clear_locks
+    # Prune other sessions' state with nothing written for 7 days. A session directory's own
+    # mtime does not track activity (it changes only when main/ or agents/ is created), so a
+    # directory is kept while any entry in it is newer; warn refreshes main/live and each
+    # agent's live on every call.
+    for d in "$root"/*/; do
+      d=${d%/}
+      [ -d "$d" ] && [ ! -L "$d" ] && [ "$d" != "$base" ] || continue
+      find "$d" -mtime -7 2>/dev/null | read -r _ || rm -rf "$d" 2>/dev/null
+    done
     ;;
 
   warn)
+    : >"$state_dir/live" 2>/dev/null # marks this state live for start's pruning
     read -r used own_model <<<"$(used_tokens)"
     [ -n "$used" ] && [ "$used" -gt 0 ] 2>/dev/null || exit 0
     window=$(context_window "${own_model:-}")
@@ -243,7 +272,10 @@ case "$mode" in
     # Window re-estimated: earlier levels were measured against the wrong size.
     if [ "$(cat "$state_dir/window" 2>/dev/null)" != "$window" ]; then
       clear_locks
-      echo "$window" >"$state_dir/window"
+      # Written to a temporary file and renamed onto window, not truncated in place.
+      printf '%s' "$window" >"$state_dir/window.$$" 2>/dev/null \
+        && mv -f "$state_dir/window.$$" "$state_dir/window" 2>/dev/null
+      rm -f "$state_dir/window.$$" 2>/dev/null
     fi
     pct=$(( used * 100 / window ))
     event=$(field hook_event_name)
@@ -280,7 +312,12 @@ case "$mode" in
         echo "Branch: $(git -C "$cwd" branch --show-current 2>/dev/null)"
         echo
         echo '```'
-        git -C "$cwd" status --short 2>/dev/null | head -40
+        # Read to the end rather than piped into head, which would leave git to die of SIGPIPE.
+        n=0
+        git -C "$cwd" status --short 2>/dev/null | while IFS= read -r line; do
+          n=$((n + 1))
+          [ "$n" -le 40 ] && printf '%s\n' "$line"
+        done
         echo '```'
       fi
       if [ -f "$transcript" ]; then
