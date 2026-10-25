@@ -98,7 +98,7 @@ Jackson 3 (`tools.jackson`) only — Jackson 2 support dropped in 0.60.
 - `EssentialsObjectMappersWireFormatTest` = compatibility gate: asserts persisted format against golden docs (`wire-format/queue-payload.json`, `wire-format/persisted-shapes.json`) written by 0.50's Jackson 2 mapper. Proves 0.60 reads what 0.50 wrote. Never regenerate them — Jackson 2 writer gone; a diff there is a format break, fix the mapper.
 - **CDC**: WAL converters/extractor parse via `JSONEventSerializer.deserialize(..., Object.class)` into plain maps/lists. Take the interface, never concrete serializer class.
 - **WAL pre-filter**: `DefaultWalMessageFilter` scans tokens via Jackson 3 streaming API without materializing payload.
-- **`canonicalJson` fidelity**: `PgOutputToPersistedEventConverter` re-serializes the payload it persists, through untyped binding. `EssentialsObjectMappers` enables `USE_BIG_DECIMAL_FOR_FLOATS` for exactly this reason — without it `1.10` would be rewritten as `1.1` in persisted events.
+- **CDC hands out payload/metadata as column text, unparsed** — same as polling path (`{"a": 1}`, jsonb spacing). `PgOutputToPersistedEventConverter` once parsed + re-serialized it (`canonicalJson`) to "normalise formatting": nothing persists that text, it cost a full JSON round trip per event (~0.65 % demo CPU), made CDC and polling text differ, and was correct only because `USE_BIG_DECIMAL_FOR_FLOATS` kept `1.10` from becoming `1.1`. Do not reintroduce.
 
 ## Gotchas
 
