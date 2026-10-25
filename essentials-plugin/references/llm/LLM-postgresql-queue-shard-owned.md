@@ -162,8 +162,12 @@ serving its unit through is not bounded by this). Only a unit a stop kept whose 
 is touched. Each entry of `releases` reports `RELEASED` (with the keys in a handler), `ALREADY_TAKEN` (the row no longer
 named the instance under the fence it was kept under - taken under a newer fence meanwhile, or released by an earlier
 hand-back or release whose answer the instance stopped waiting for; nothing released) or `BUSY` (the stop is still
-flushing it or another hand-back or release of it runs, or a dead-letter move an earlier release's charge left owed
-was still to be made when the row was to be released; nothing released, ask again), and how many messages the release charged an
+flushing it or another hand-back or release of it runs - nothing released, ask again - or a dead-letter move an
+earlier release's charge left owed was still to be made when the row was to be released - a guard behind the release
+sites that a release on request does not normally reach, as it makes every owed move before it releases, so a `BUSY`
+that comes back on every request (its WARN that the instance did not release the unit logged at most once a minute per
+unit, the repeats at DEBUG) points at a defect in the engine, to be investigated, not retried), and how many messages
+the release charged an
 attempt (`charged`) and which keys that charge dead-lettered (`deadLetteredKeys`; zero and empty on `BUSY`). A key in
 `deadLetteredKeys` is blocked behind its dead letter until its dead letters are resurrected (`resurrectKey`) or
 deleted - follow up on those keys.

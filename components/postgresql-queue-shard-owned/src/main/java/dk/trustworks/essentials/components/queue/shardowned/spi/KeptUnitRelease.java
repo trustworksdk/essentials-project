@@ -99,13 +99,20 @@ public record KeptUnitRelease(int unit,
         ALREADY_TAKEN,
         /**
          * Nothing was released. Either something else is working on the unit right now - the stop that kept it is
-         * still flushing its acknowledgements, or another hand-back or release of it is running - and nothing was done;
-         * or a dead-letter move a charge before an earlier release of it left owed was still to be made when its row
-         * was to be released, and a unit is released only once every such move is made, its lease row, as far as the
-         * instance knows, still naming it. In that case this request may have flushed its acknowledgements and charged
-         * its messages in a handler first: the keys it dead-lettered are named in a WARN, and, should a later request
-         * release the unit, what this one charged is counted in that answer's {@link #charged()}; a hand-back or
-         * takeover that gets there first gives no answer. Ask again.
+         * still flushing its acknowledgements, or another hand-back or release of it is running - and nothing was done:
+         * ask again. Or a dead-letter move a charge before an earlier release of it left owed was still to be made when
+         * its row was to be released, and a unit is released only once every such move is made, its lease row, as far as
+         * the instance knows, still naming it. That second case is a guard behind the release sites, not a state a
+         * release on request normally reaches: before it releases the row, a release on request makes every dead-letter
+         * move still owed, and throws when one fails rather than answering {@code BUSY}. So the guard finds a move owed
+         * only when the unit's messages were charged again between that request's charge and its release, which the
+         * engine is built to rule out, and the WARN logged with it - that the instance did not release the unit, and
+         * that the site releasing it should have made the move first; at most once a minute per unit, the repeats at
+         * DEBUG - points at a defect in the engine. In that case this request may have flushed its acknowledgements and
+         * charged its messages in a handler first: the keys it dead-lettered are named in a WARN, and, should a later
+         * request release the unit, what this one charged is counted in that answer's {@link #charged()}; a hand-back or
+         * takeover that gets there first gives no answer. A {@code BUSY} that comes back on every request (that WARN
+         * logged at most once a minute per unit, the repeats at DEBUG) is to be investigated, not retried.
          */
         BUSY
     }

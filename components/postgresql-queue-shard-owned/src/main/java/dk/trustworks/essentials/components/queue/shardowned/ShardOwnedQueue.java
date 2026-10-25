@@ -3964,8 +3964,9 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                         }
                         var release = releaseLeaseRows(List.of(owner));
                         // Left out, a dead-letter move of it still owed (releaseLeaseRows WARNed): not taken, so not
-                        // ALREADY_TAKEN, but BUSY - ask again. Nothing is released, and the unit goes back where it was
-                        // claimed from, as on a failure here; a later request makes the move before it releases.
+                        // ALREADY_TAKEN, but BUSY. Not normally reached, as the charge above made every owed move or threw;
+                        // only a charge of the owner between it and the release leaves one owed, which the KeptUnit claim
+                        // rules out. Nothing is released, and the unit goes back where it was claimed from, as on a failure here.
                         leftOutOwingMove = !release.released(owner);
                         released = !leftOutOwingMove && release.rows() > 0;
                     } catch (SQLException | RuntimeException | Error e) {
@@ -4010,7 +4011,8 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         if (owingMove != null) {
             log.info("Instance {} did not release ordered unit {} on queue {} on request: a dead-letter move a charge made before "
                              + "an earlier release of it left owed was still to be made when its lease row was to be released, so, as "
-                             + "far as this instance knows, the row still names it. Ask again",
+                             + "far as this instance knows, the row still names it. A release on request makes every owed move before "
+                             + "it releases, so this is not normally reached: if it comes back on every request, investigate rather than ask again",
                      instanceId, unit, queueId);
             return Optional.of(owingMove);
         }
