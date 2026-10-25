@@ -171,23 +171,38 @@ public abstract class AbstractEventProcessor implements Lifecycle {
      * @throws RuntimeException the first failure, with each later one added as suppressed, once every subscription was tried
      */
     static void unsubscribeEach(List<EventStoreSubscription> subscriptions) {
+        var failure = new AtomicReference<RuntimeException>();
+        unsubscribeEach(subscriptions, (subscription, e) -> {
+            if (!failure.compareAndSet(null, e)) {
+                failure.get().addSuppressed(e);
+            }
+        });
+        if (failure.get() != null) {
+            throw failure.get();
+        }
+    }
+
+    /**
+     * Unsubscribes each of the subscriptions, handing every failure to {@code onFailure} and going on with the next one,
+     * so one that fails to unsubscribe does not leave the ones after it subscribed. Throws nothing itself: what becomes of
+     * the failures is up to {@code onFailure} - see {@link #unsubscribeEach(List)} for why a subscription is unsubscribed
+     * and not just stopped.
+     *
+     * @param subscriptions the subscriptions - nothing is done when {@code null} (no subscription was created)
+     * @param onFailure     called, on the calling thread, with each subscription whose {@code unsubscribe()} threw and
+     *                      what it threw
+     */
+    static void unsubscribeEach(List<EventStoreSubscription> subscriptions, BiConsumer<EventStoreSubscription, RuntimeException> onFailure) {
+        requireNonNull(onFailure, "onFailure is null");
         if (subscriptions == null) {
             return;
         }
-        RuntimeException failure = null;
         for (var subscription : subscriptions) {
             try {
                 subscription.unsubscribe();
             } catch (RuntimeException e) {
-                if (failure == null) {
-                    failure = e;
-                } else {
-                    failure.addSuppressed(e);
-                }
+                onFailure.accept(subscription, e);
             }
-        }
-        if (failure != null) {
-            throw failure;
         }
     }
 
