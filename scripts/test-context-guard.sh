@@ -14,8 +14,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-# Tests .claude/hooks/context-guard.sh: the context window each agent is measured against (and
-# that a subagent reads the main transcript's model from its tail, once), the restore after a
+# Tests .claude/hooks/context-guard.sh: the context window each agent, the main conversation
+# included, is measured against (and that a subagent reads the main transcript's model from its
+# tail, once, and the whole file only when its last 5000 lines name none), the restore after a
 # subagent's compaction, STATE.md handed back once per write, and the pre-compaction snapshot
 # without GNU-only tools.
 #
@@ -159,6 +160,19 @@ expect_nothing "$out" "16% of 1000000 is below every level"
 [ "$(main_reads "$m")" = "0 0" ] || fail "the main transcript was read again (tail, whole: $(main_reads "$m"))"
 pass
 
+case_name="alias main model, last main usage entry beyond the 5000-line tail: whole file read, 1000000"
+m=$(main_transcript s9)
+assistant_entry "$m" claude-opus-5-5 40000 false
+jq -nc 'range(1; 5101) | {type: "user", message: {content: [{type: "tool_result", content: "r\(.)"}]}}' >>"$m"
+assistant_entry "$(agent_transcript s9 a1)" claude-opus-5-5 150000 true
+rm -f "$reads"
+out=$(hook_input s9 a1 | PATH=$shim:$PATH bash "$hook" warn | jq -r '.hookSpecificOutput.additionalContext // empty')
+expect_nothing "$out" "15% of 1000000 is below every level"
+[ "$(window_of s9 a1)" = 1000000 ] || fail "window is '$(window_of s9 a1)', expected 1000000"
+read -r tails wholes <<<"$(main_reads "$m")"
+[ "$wholes" = 1 ] || fail "the main transcript was read whole $wholes time(s), expected once: its last 5000 lines name no model"
+pass
+
 case_name="alias main model, no id found yet: nothing kept, a later call finds it"
 assistant_entry "$(main_transcript s8)" '<synthetic>' 0 false # read, but names no model
 assistant_entry "$(agent_transcript s8 a1)" claude-opus-5-5 150000 true
@@ -181,6 +195,57 @@ pass
 case_name="full id in main/model, subagent on another id: 200000"
 assistant_entry "$(agent_transcript s3 a2)" claude-opus-4-1 150000 true
 expect_warning "$(run warn s3 a2)" 150000/200000
+pass
+
+# A main model without [1m] sizes every agent at 200000, even one on the main session's own id.
+case_name="alias main model without [1m], subagent on the main transcript's id: 200000"
+settings_model 'opus'
+assistant_entry "$(main_transcript s10)" claude-opus-5-5 40000 false
+assistant_entry "$(agent_transcript s10 a1)" claude-opus-5-5 150000 true
+expect_warning "$(run warn s10 a1)" 150000/200000
+pass
+
+case_name="full id without [1m] in main/model, subagent on that id: 200000"
+settings_model 'opus[1m]' # main/model is read before the settings, so this one is not used
+jq -nc --arg s s11 --arg t "$(main_transcript s11)" '{session_id: $s, transcript_path: $t, model: "claude-opus-5-5"}' \
+  | bash "$hook" start >/dev/null
+assistant_entry "$(agent_transcript s11 a1)" claude-opus-5-5 150000 true
+expect_warning "$(run warn s11 a1)" 150000/200000
+pass
+
+# --- Window sizing for the main conversation ------------------------------------------------
+
+main_window_of() { cat "$CONTEXT_GUARD_DIR/$1/main/window" 2>/dev/null; } # $1 session
+
+case_name="main conversation, alias main model with [1m]: 1000000"
+settings_model 'opus[1m]'
+assistant_entry "$(main_transcript s12)" claude-opus-5-5 150000 false
+expect_nothing "$(run warn s12 "")" "15% of 1000000 is below every level"
+[ "$(main_window_of s12)" = 1000000 ] || fail "window is '$(main_window_of s12)', expected 1000000"
+pass
+
+case_name="main conversation, full id with [1m] in main/model: 1000000"
+settings_model 'opus' # main/model is read before the settings, so this one is not used
+jq -nc --arg s s13 --arg t "$(main_transcript s13)" '{session_id: $s, transcript_path: $t, model: "claude-opus-5-5[1m]"}' \
+  | bash "$hook" start >/dev/null
+assistant_entry "$(main_transcript s13)" claude-opus-5-5 150000 false
+expect_nothing "$(run warn s13 "")" "15% of 1000000 is below every level"
+[ "$(main_window_of s13)" = 1000000 ] || fail "window is '$(main_window_of s13)', expected 1000000"
+pass
+
+case_name="main conversation, alias main model without [1m]: 200000"
+settings_model 'opus'
+assistant_entry "$(main_transcript s14)" claude-opus-5-5 150000 false
+expect_warning "$(run warn s14 "")" 150000/200000
+[ "$(main_window_of s14)" = 200000 ] || fail "window is '$(main_window_of s14)', expected 200000"
+pass
+
+case_name="main conversation, no model in main/model or any settings file: 200000"
+rm -f "$CLAUDE_PROJECT_DIR/.claude/settings.json"
+assistant_entry "$(main_transcript s15)" claude-opus-5-5 150000 false
+expect_warning "$(run warn s15 "")" 150000/200000
+[ "$(main_window_of s15)" = 200000 ] || fail "window is '$(main_window_of s15)', expected 200000"
+settings_model 'opus[1m]' # the cases below run under the alias with [1m] again
 pass
 
 # --- A subagent on another family: window grows, never shrinks, restore once ----------------
