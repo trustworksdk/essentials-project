@@ -125,7 +125,8 @@ public class NonExclusiveInTransactionSubscription extends AbstractEventStoreSub
 
     @Override
     protected void onErrorHandlingEvent(PersistedEvent e, Throwable cause) {
-        // TODO: Add better retry mechanism, poison event handling, etc.
+        // Rethrown, never skipped: the handler runs inside the appending unit of work, so its failure fails that
+        // appendToStream call (Flush) or rolls back that commit (BeforeCommit) - retrying is the appender's to do
         super.onErrorHandlingEvent(e, cause);
         Exceptions.sneakyThrow(cause);
     }
