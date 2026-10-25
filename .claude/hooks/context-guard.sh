@@ -139,17 +139,29 @@ main_model() {
   printf '%s' "$model"
 }
 
+integer_or_empty() { # $1: a value; prints it when it is a decimal integer of at most 18 digits
+  # Digits only, and at most 18 of them, which always fit bash's 64-bit integers: a longer one may
+  # not, and then `[ -gt ]` prints "integer expression expected" instead of comparing.
+  case "$1" in ''|*[!0-9]*) return ;; esac
+  [ "${#1}" -le 18 ] && printf '%s' "$1"
+}
+
 autocompact_window() { # $1: the main session's model id; prints its auto-compact window, if set
   # Settings are read as Claude Code ranks them: local, project, then user; within one file a
-  # window saved for the model outranks the top-level key.
-  local v=${CLAUDE_CODE_AUTO_COMPACT_WINDOW:-}
-  case "$v" in *[!0-9]*) v="" ;; esac
+  # window saved for the model outranks the top-level key. A settings value is any JSON number
+  # and jq keeps its literal (300000.0, 3E+5), so an integral one is printed as an integer
+  # (floor) and a fractional one dropped; a value that is still no integer bash can compare is
+  # ignored, like one that is not a number.
+  local v
+  v=$(integer_or_empty "${CLAUDE_CODE_AUTO_COMPACT_WINDOW:-}")
   if [ -z "$v" ]; then
     local cfg=${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json
     local proj=${CLAUDE_PROJECT_DIR:-.}/.claude
     for f in "$proj/settings.local.json" "$proj/settings.json" "$cfg"; do
       [ -f "$f" ] || continue
-      v=$(jq -r --arg m "$1" '(.modelSettings[$m].autoCompactWindow // .autoCompactWindow // empty) | numbers' "$f" 2>/dev/null)
+      v=$(jq -r --arg m "$1" '(.modelSettings[$m].autoCompactWindow // .autoCompactWindow // empty)
+                             | numbers | select(. == floor) | floor' "$f" 2>/dev/null)
+      v=$(integer_or_empty "$v")
       [ -n "$v" ] && break
     done
   fi

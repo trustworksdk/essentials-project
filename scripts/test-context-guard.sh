@@ -279,6 +279,47 @@ expect_warning "$(hook_input s19 "" | CLAUDE_CODE_AUTO_COMPACT_WINDOW=200000 bas
   | jq -r '.hookSpecificOutput.additionalContext // empty')" 155000/200000
 pass
 
+# A settings window is any JSON number: jq keeps its literal (300000.0, 3E+5), and a value that
+# is not an integer bash can compare must never reach its numeric tests.
+hook_err=$tmp/hook-stderr.log
+warn_main() { # $1 session; runs warn for the main conversation, its stderr in $hook_err
+  hook_input "$1" "" | bash "$hook" warn 2>"$hook_err" | jq -r '.hookSpecificOutput.additionalContext // empty'
+}
+expect_no_stderr() { [ ! -s "$hook_err" ] || fail "the hook wrote to stderr: $(head -c 200 "$hook_err")"; }
+
+case_name="main conversation, autoCompactWindow 300000.0 or 3e5: that window, nothing on stderr"
+i=0
+for w in 300000.0 3e5 3.0E5; do
+  i=$((i + 1))
+  user_settings "{\"autoCompactWindow\": $w}"
+  assistant_entry "$(main_transcript s34-$i)" claude-opus-5-5 250000 false
+  out=$(warn_main s34-$i)
+  expect_no_stderr
+  expect_warning "$out" 250000/300000
+done
+pass
+
+case_name="main conversation, autoCompactWindow fractional or past bash's integers: ignored, nothing on stderr"
+i=0
+for w in 300000.5 1e20 99999999999999999999; do
+  i=$((i + 1))
+  user_settings "{\"autoCompactWindow\": $w}"
+  assistant_entry "$(main_transcript s35-$i)" claude-opus-5-5 220000 false
+  out=$(warn_main s35-$i)
+  expect_no_stderr
+  expect_nothing "$out" "22% of 1000000 is short of every warning point (autoCompactWindow $w)"
+  [ "$(main_window_of s35-$i)" = 1000000 ] || fail "window is '$(main_window_of s35-$i)' for $w, expected 1000000"
+done
+pass
+
+case_name="main conversation, CLAUDE_CODE_AUTO_COMPACT_WINDOW past bash's integers: the settings window, nothing on stderr"
+user_settings '{"autoCompactWindow": 300000}'
+assistant_entry "$(main_transcript s36)" claude-opus-5-5 250000 false
+out=$(CLAUDE_CODE_AUTO_COMPACT_WINDOW=99999999999999999999 warn_main s36)
+expect_no_stderr
+expect_warning "$out" 250000/300000
+pass
+
 case_name="subagent ignores the main session's auto-compact window: 1000000"
 user_settings '{"modelSettings": {"claude-opus-5-5": {"autoCompactWindow": 300000}}}'
 assistant_entry "$(main_transcript s20)" claude-opus-5-5 40000 false
