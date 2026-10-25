@@ -58,9 +58,12 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  * <b>Repeatable statements that lock their table.</b> A {@link SchemaChange#repeatable() repeatable} change runs on
  * every start, against tables the instances already running keep writing to. A {@code CREATE INDEX} or
  * {@code ALTER TABLE ... ADD COLUMN} in one, not wrapped by {@link PostgresqlSchemaStatements#createIndexUnlessPresent}
- * or {@link PostgresqlSchemaStatements#addColumnUnlessPresent}, locks its table even when the index or column exists
- * ({@link PostgresqlSchemaStatements#takesTableLockEvenWhenPresent(String)} tells). The applier runs it all the same
- * and logs a WARN, once per {@code (module, changeId, objectName)} in the JVM, naming the wrappers.
+ * or {@link PostgresqlSchemaStatements#addColumnUnlessPresent}, or a top-level {@code CREATE [OR REPLACE] TRIGGER},
+ * locks its table even when the index, column or trigger exists
+ * ({@link PostgresqlSchemaStatements#takesTableLockEvenWhenPresent(String)} tells; it does not look inside {@code DO}
+ * blocks, so one that skips the catalog check is not caught). The applier runs it all the same
+ * and logs a WARN, once per {@code (module, changeId, objectName)} in the JVM, naming the statement's lock and what to
+ * do instead.
  * <p>
  * <b>Identifiers.</b> Every {@link SchemaChange#objectName()} is checked with
  * {@link PostgresqlUtil#checkIsValidTableOrColumnName(String)} before any statement executes. It is a first line of
@@ -213,14 +216,20 @@ public final class PostgresqlCreateSchemaApplier implements SchemaApplier {
                 if (!change.repeatable()) {
                     continue;
                 }
-                var lockingStatement = change.statements().stream().filter(PostgresqlSchemaStatements::takesTableLockEvenWhenPresent).findFirst();
+                var lockingStatement = change.statements()
+                                             .stream()
+                                             .flatMap(statement -> PostgresqlSchemaStatements.tableLockingStatement(statement)
+                                                                                             .map(kind -> Map.entry(statement, kind))
+                                                                                             .stream())
+                                             .findFirst();
                 if (lockingStatement.isPresent() && WARNED_TABLE_LOCKING_CHANGES.add(changeSet.moduleId() + '\0' + change.changeId() + '\0' + change.objectName())) {
-                    log.warn("[{}] Repeatable schema change '{}' on '{}' creates an index or adds a column without checking the catalog first. " +
-                                     "It runs on every start, and PostgreSQL locks the statement's table even when the index or column already exists " +
-                                     "(SHARE for an index, ACCESS EXCLUSIVE for a column) until the change set's transaction commits: the start waits for, " +
+                    var kind = lockingStatement.get().getValue();
+                    log.warn("[{}] Repeatable schema change '{}' on '{}' {} without checking the catalog first. " +
+                                     "It runs on every start, and PostgreSQL takes {} on the statement's table even when {} already exists, " +
+                                     "until the change set's transaction commits: the start waits for, " +
                                      "then blocks, the writes of the instances already running, and can deadlock with them. " +
-                                     "Wrap the statement in PostgresqlSchemaStatements.createIndexUnlessPresent / addColumnUnlessPresent. Statement: {}",
-                             changeSet.moduleId(), change.changeId(), change.objectName(), lockingStatement.get());
+                                     "{} Statement: {}",
+                             changeSet.moduleId(), change.changeId(), change.objectName(), kind.does, kind.lock, kind.ensures, kind.remedy, lockingStatement.get().getKey());
                     warned.add(changeSet.moduleId() + "/" + change.changeId() + "/" + change.objectName());
                 }
             }

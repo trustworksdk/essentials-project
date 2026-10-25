@@ -39,9 +39,13 @@ import static dk.trustworks.essentials.shared.MessageFormatter.*;
  * <p>
  * Each statement here is a {@code DO} block that looks the index or column up in the catalog first, which takes no lock
  * on the table, and runs the given statement only when it is missing. Valid on every supported PostgreSQL version.
+ * There is no such statement for a trigger: {@code CREATE [OR REPLACE] TRIGGER} takes {@code SHARE ROW EXCLUSIVE} on
+ * its table even when the trigger exists, so a repeatable change runs it from a {@code DO} block that looks the
+ * trigger up in {@code pg_trigger} first - {@link ListenNotify#changeNotificationTriggerStatements} is one.
  * <p>
- * {@link #takesTableLockEvenWhenPresent(String)} recognises a statement written without them.
- * {@link PostgresqlCreateSchemaApplier} WARNs once per repeatable change that has one.
+ * {@link #takesTableLockEvenWhenPresent(String)} recognises a top-level index, column or trigger statement; a
+ * {@code DO} block is not looked inside. {@link PostgresqlCreateSchemaApplier} WARNs once per repeatable change that
+ * has one.
  */
 public final class PostgresqlSchemaStatements {
     private static final String  DOLLAR_QUOTE           = "$essentials_schema$";
@@ -49,34 +53,88 @@ public final class PostgresqlSchemaStatements {
     private static final Pattern CREATE_INDEX           = Pattern.compile("^CREATE\\s+(UNIQUE\\s+)?INDEX\\b");
     // ADD without COLUMN is the same command; without IF NOT EXISTS a second run would fail rather than lock
     private static final Pattern ALTER_TABLE_ADD_COLUMN = Pattern.compile("^ALTER\\s+TABLE\\b.*\\bADD\\s+(COLUMN\\b|IF\\s+NOT\\s+EXISTS\\b)", Pattern.DOTALL);
+    // Without OR REPLACE a second run fails unless a DROP TRIGGER before it removed the trigger - which then takes
+    // ACCESS EXCLUSIVE. A DROP TRIGGER IF EXISTS of its own is not matched: when the trigger is gone it takes no lock
+    private static final Pattern CREATE_TRIGGER         = Pattern.compile("^CREATE\\s+(OR\\s+REPLACE\\s+)?(CONSTRAINT\\s+)?TRIGGER\\b");
+
+    /**
+     * The kinds of statement {@link #takesTableLockEvenWhenPresent(String)} recognises, each with what it holds on its
+     * table until the transaction commits - for {@link PostgresqlCreateSchemaApplier}'s WARN
+     */
+    enum TableLockingStatement {
+        INDEX("creates an index", "the index", "SHARE",
+              "Wrap the statement in PostgresqlSchemaStatements.createIndexUnlessPresent."),
+        COLUMN("adds a column", "the column", "ACCESS EXCLUSIVE",
+               "Wrap the statement in PostgresqlSchemaStatements.addColumnUnlessPresent."),
+        TRIGGER("creates or replaces a trigger", "the trigger", "SHARE ROW EXCLUSIVE (ACCESS EXCLUSIVE for a DROP TRIGGER that removes it first)",
+                "PostgresqlSchemaStatements has no wrapper for a trigger: run the statement from a DO block that looks the trigger up in pg_trigger " +
+                        "first and creates it only when it is missing, as ListenNotify.changeNotificationTriggerStatements does.");
+
+        /** What the statement does, as in "the change ... creates an index" */
+        final String does;
+        /** What it ensures, as in "even when the index already exists" */
+        final String ensures;
+        /** The lock it takes on its table */
+        final String lock;
+        /** What to do instead */
+        final String remedy;
+
+        TableLockingStatement(String does, String ensures, String lock, String remedy) {
+            this.does = does;
+            this.ensures = ensures;
+            this.lock = lock;
+            this.remedy = remedy;
+        }
+    }
 
     private PostgresqlSchemaStatements() {
     }
 
     /**
      * Whether a statement, run against a database where what it ensures is already in place, still locks its table:
-     * it holds a {@code CREATE [UNIQUE] INDEX} or an {@code ALTER TABLE ... ADD COLUMN} (or {@code ADD IF NOT EXISTS}) as a statement of its own,
-     * outside any dollar-quoted body - so not one wrapped by {@link #createIndexUnlessPresent(String, String, String)}
-     * or {@link #addColumnUnlessPresent(String, String, String)}. A {@link SchemaChange#repeatable() repeatable}
-     * change runs its statements on every start, so a statement this answers {@code true} for takes {@code SHARE} (an
-     * index) or {@code ACCESS EXCLUSIVE} (a column) on its table at every start.
+     * it holds a {@code CREATE [UNIQUE] INDEX}, an {@code ALTER TABLE ... ADD COLUMN} (or {@code ADD IF NOT EXISTS}) or
+     * a {@code CREATE [OR REPLACE] [CONSTRAINT] TRIGGER} as a statement of its own, outside any dollar-quoted body - so
+     * not one wrapped by {@link #createIndexUnlessPresent(String, String, String)} or
+     * {@link #addColumnUnlessPresent(String, String, String)}, nor one a {@code DO} block runs after a catalog check. A
+     * {@link SchemaChange#repeatable() repeatable} change runs its statements on every start, so a statement this
+     * answers {@code true} for takes {@code SHARE} (an index), {@code ACCESS EXCLUSIVE} (a column) or
+     * {@code SHARE ROW EXCLUSIVE} (a trigger) on its table at every start.
+     * <p>
+     * Only those three kinds are recognised; {@code false} does not mean a statement takes no lock. Any other
+     * {@code ALTER TABLE} - {@code ADD CONSTRAINT}, {@code DROP COLUMN IF EXISTS} - locks its table too, but is not
+     * looked for. A {@code DROP TRIGGER IF EXISTS} on its own is not matched, as it takes no lock on its table once the
+     * trigger is gone; when it removes a trigger the change then creates again, that {@code CREATE TRIGGER} is matched.
      * <p>
      * Every {@code ;}-separated statement in the text is looked at; quoted literals and identifiers, comments and
      * dollar-quoted bodies ({@code DO} blocks, function bodies) are skipped. A text heuristic, not a SQL parser: it
      * knows nothing of {@code E'...'} backslash escapes or nested block comments.
      *
      * @param statement the statement, as a schema change carries it
-     * @return {@code true} when it creates an index or adds a column without a catalog check first
+     * @return {@code true} when it creates an index, adds a column or creates a trigger without a catalog check first
      */
     public static boolean takesTableLockEvenWhenPresent(String statement) {
+        return tableLockingStatement(statement).isPresent();
+    }
+
+    /**
+     * @param statement the statement, as a schema change carries it
+     * @return the kind of the first statement in the text that {@link #takesTableLockEvenWhenPresent(String)}
+     */
+    static Optional<TableLockingStatement> tableLockingStatement(String statement) {
         requireNonNull(statement, "No statement provided");
         for (var topLevel : topLevelStatements(statement)) {
             var normalised = topLevel.strip().toUpperCase(Locale.ROOT);
-            if (CREATE_INDEX.matcher(normalised).find() || ALTER_TABLE_ADD_COLUMN.matcher(normalised).find()) {
-                return true;
+            if (CREATE_INDEX.matcher(normalised).find()) {
+                return Optional.of(TableLockingStatement.INDEX);
+            }
+            if (ALTER_TABLE_ADD_COLUMN.matcher(normalised).find()) {
+                return Optional.of(TableLockingStatement.COLUMN);
+            }
+            if (CREATE_TRIGGER.matcher(normalised).find()) {
+                return Optional.of(TableLockingStatement.TRIGGER);
             }
         }
-        return false;
+        return Optional.empty();
     }
 
     /**

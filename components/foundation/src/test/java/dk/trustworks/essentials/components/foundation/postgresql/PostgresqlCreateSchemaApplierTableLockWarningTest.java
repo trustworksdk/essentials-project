@@ -15,8 +15,12 @@
  */
 package dk.trustworks.essentials.components.foundation.postgresql;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import dk.trustworks.essentials.components.foundation.schema.*;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 
 import java.util.List;
 
@@ -51,6 +55,34 @@ class PostgresqlCreateSchemaApplierTableLockWarningTest {
         assertThat(PostgresqlCreateSchemaApplier.warnOfRepeatableChangesLockingTheirTable(changeSets))
                 .containsExactly("lock-warning-d/queue-indexes/orders_queue", "lock-warning-d/queue-indexes/invoices_queue");
         assertThat(PostgresqlCreateSchemaApplier.warnOfRepeatableChangesLockingTheirTable(changeSets)).as("each is warned about once").isEmpty();
+    }
+
+    @Test
+    void a_repeatable_change_with_a_bare_trigger_statement_is_warned_about() {
+        var changeSets = List.of(new SchemaChangeSet("lock-warning-e", SchemaOrder.ORDER_APPLICATION, List.of(
+                SchemaChange.repeatable("orders-trigger", "orders",
+                                        "DROP TRIGGER IF EXISTS orders_changed ON orders",
+                                        "CREATE TRIGGER orders_changed AFTER INSERT ON orders FOR EACH ROW EXECUTE FUNCTION notify_orders()"),
+                SchemaChange.repeatable("orders-notify-trigger", "orders",
+                                        ListenNotify.changeNotificationTriggerStatements("orders", List.of(ListenNotify.SqlOperation.INSERT)).toArray(String[]::new)))));
+
+        var logger      = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(PostgresqlCreateSchemaApplier.class);
+        var logAppender = new ListAppender<ILoggingEvent>();
+        logAppender.start();
+        logger.addAppender(logAppender);
+        try {
+            assertThat(PostgresqlCreateSchemaApplier.warnOfRepeatableChangesLockingTheirTable(changeSets)).containsExactly("lock-warning-e/orders-trigger/orders");
+        } finally {
+            logger.detachAppender(logAppender);
+        }
+
+        assertThat(logAppender.list).filteredOn(event -> event.getLevel() == Level.WARN)
+                                    .singleElement()
+                                    .extracting(ILoggingEvent::getFormattedMessage).asString()
+                                    .startsWith("[lock-warning-e] Repeatable schema change 'orders-trigger' on 'orders' creates or replaces a trigger without checking the catalog first")
+                                    .contains("PostgreSQL takes SHARE ROW EXCLUSIVE (ACCESS EXCLUSIVE for a DROP TRIGGER that removes it first) on the statement's table even when the trigger already exists")
+                                    .contains("PostgresqlSchemaStatements has no wrapper for a trigger")
+                                    .endsWith("Statement: CREATE TRIGGER orders_changed AFTER INSERT ON orders FOR EACH ROW EXECUTE FUNCTION notify_orders()");
     }
 
     @Test

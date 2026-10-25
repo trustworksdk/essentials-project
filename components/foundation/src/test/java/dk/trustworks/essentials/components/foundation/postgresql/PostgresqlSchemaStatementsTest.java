@@ -17,6 +17,8 @@ package dk.trustworks.essentials.components.foundation.postgresql;
 
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
+
 import static org.assertj.core.api.Assertions.*;
 
 class PostgresqlSchemaStatementsTest {
@@ -74,6 +76,47 @@ class PostgresqlSchemaStatementsTest {
         assertThat(PostgresqlSchemaStatements.takesTableLockEvenWhenPresent("ALTER TABLE orders ADD COLUMN IF NOT EXISTS status TEXT")).isTrue();
         assertThat(PostgresqlSchemaStatements.takesTableLockEvenWhenPresent("alter table orders\n    add if not exists status text")).isTrue();
         assertThat(PostgresqlSchemaStatements.takesTableLockEvenWhenPresent("ALTER TABLE orders ALTER COLUMN id SET NOT NULL, ADD COLUMN IF NOT EXISTS status TEXT")).isTrue();
+    }
+
+    @Test
+    void a_bare_trigger_statement_takes_a_table_lock_even_when_present() {
+        assertThat(PostgresqlSchemaStatements.takesTableLockEvenWhenPresent("CREATE OR REPLACE TRIGGER orders_changed AFTER INSERT ON orders FOR EACH ROW EXECUTE FUNCTION notify_orders()")).isTrue();
+        assertThat(PostgresqlSchemaStatements.takesTableLockEvenWhenPresent("create trigger orders_changed after insert on orders for each row execute function notify_orders()")).isTrue();
+        assertThat(PostgresqlSchemaStatements.takesTableLockEvenWhenPresent("CREATE CONSTRAINT TRIGGER orders_checked AFTER INSERT ON orders DEFERRABLE FOR EACH ROW EXECUTE FUNCTION check_orders()")).isTrue();
+        assertThat(PostgresqlSchemaStatements.takesTableLockEvenWhenPresent("DROP TRIGGER IF EXISTS orders_changed ON orders;\n" +
+                                                                                    "CREATE TRIGGER orders_changed AFTER INSERT ON orders FOR EACH ROW EXECUTE FUNCTION notify_orders()")).isTrue();
+        assertThat(PostgresqlSchemaStatements.tableLockingStatement("CREATE OR REPLACE TRIGGER orders_changed AFTER INSERT ON orders FOR EACH ROW EXECUTE FUNCTION notify_orders()"))
+                .contains(PostgresqlSchemaStatements.TableLockingStatement.TRIGGER);
+    }
+
+    @Test
+    void a_trigger_statement_run_from_a_catalog_checking_do_block_or_a_lone_drop_trigger_is_not_matched() {
+        assertThat(PostgresqlSchemaStatements.takesTableLockEvenWhenPresent("DO $$\n" +
+                                                                                    "BEGIN\n" +
+                                                                                    "    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = to_regclass('orders') AND tgname = 'orders_changed') THEN\n" +
+                                                                                    "        DROP TRIGGER IF EXISTS orders_changed ON orders;\n" +
+                                                                                    "        CREATE OR REPLACE TRIGGER orders_changed AFTER INSERT ON orders FOR EACH ROW EXECUTE FUNCTION notify_orders();\n" +
+                                                                                    "    END IF;\n" +
+                                                                                    "END\n" +
+                                                                                    "$$")).isFalse();
+        assertThat(PostgresqlSchemaStatements.takesTableLockEvenWhenPresent(ListenNotify.changeNotificationTriggerStatements("orders", List.of(ListenNotify.SqlOperation.INSERT))
+                                                                                       .getLast())).isFalse();
+        assertThat(PostgresqlSchemaStatements.takesTableLockEvenWhenPresent(ListenNotify.changeNotificationTriggerStatements("orders", List.of(ListenNotify.SqlOperation.INSERT))
+                                                                                       .getFirst()))
+                .as("the trigger function, whose 'RETURNS trigger' is no trigger statement").isFalse();
+        // Takes no lock on its table once the trigger is gone, which is every start but the one that removes it
+        assertThat(PostgresqlSchemaStatements.takesTableLockEvenWhenPresent("DROP TRIGGER IF EXISTS orders_changed ON orders")).isFalse();
+    }
+
+    @Test
+    void a_do_block_is_not_looked_inside_so_one_that_skips_the_catalog_check_is_not_matched_either() {
+        // A known limit, not a verdict that the block is safe: it locks orders on every start, and the DO block has to do the pg_trigger check itself
+        assertThat(PostgresqlSchemaStatements.takesTableLockEvenWhenPresent("DO $$\n" +
+                                                                                    "BEGIN\n" +
+                                                                                    "    DROP TRIGGER IF EXISTS orders_changed ON orders;\n" +
+                                                                                    "    CREATE TRIGGER orders_changed AFTER INSERT ON orders FOR EACH ROW EXECUTE FUNCTION notify_orders();\n" +
+                                                                                    "END\n" +
+                                                                                    "$$")).isFalse();
     }
 
     @Test

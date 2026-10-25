@@ -88,8 +88,9 @@ public final class SchemaReapplyLockProbe {
                                                           .map(statement -> change.changeId() + " on " + change.objectName() + ": " + statement))
                                  .toList();
         if (!locking.isEmpty()) {
-            fail("'" + contributor.moduleId() + "' has repeatable statement(s) that create an index or add a column without checking the catalog first, " +
-                         "so they lock their table on every start - wrap them in PostgresqlSchemaStatements.createIndexUnlessPresent / addColumnUnlessPresent:\n  " +
+            fail("'" + contributor.moduleId() + "' has repeatable statement(s) that create an index, add a column or create a trigger without checking the catalog first, " +
+                         "so they lock their table on every start - wrap an index or a column in PostgresqlSchemaStatements.createIndexUnlessPresent / addColumnUnlessPresent, " +
+                         "and run a trigger from a DO block that looks it up in pg_trigger first, as ListenNotify.changeNotificationTriggerStatements does:\n  " +
                          String.join("\n  ", locking));
         }
     }

@@ -820,13 +820,20 @@ not during them, as on the ordered lane.
 - **A WARN for a repeatable schema change that locks its table on every start.** `PostgresqlCreateSchemaApplier`
   (`create` mode) now logs one WARN per module, change id and object name, once per JVM, for a `SchemaChange.repeatable(...)`
   change that has a `CREATE [UNIQUE] INDEX` or `ALTER TABLE ... ADD COLUMN` (or `ADD IF NOT EXISTS`) not wrapped in
-  `PostgresqlSchemaStatements.createIndexUnlessPresent` / `addColumnUnlessPresent`. Such a statement runs on every
-  start and PostgreSQL locks its table even when the index or column exists, so the start waits for, then blocks,
+  `PostgresqlSchemaStatements.createIndexUnlessPresent` / `addColumnUnlessPresent`, or a top-level
+  `CREATE [OR REPLACE] TRIGGER` (a statement inside a `DO` block or function body is not looked at, so a `DO` block
+  must do the `pg_trigger` check itself). Such a statement runs on every start and PostgreSQL locks
+  its table even when the index, column or trigger exists (SHARE, ACCESS EXCLUSIVE, SHARE ROW EXCLUSIVE; a `DROP
+  TRIGGER IF EXISTS` that removes the trigger to recreate it, ACCESS EXCLUSIVE), so the start waits for, then blocks,
   the writes of the instances already running and can deadlock with them (the startup deadlock fixes in §3). The
-  statement still runs as before. To silence the WARN, wrap the statement in your own contributor with
-  `createIndexUnlessPresent` / `addColumnUnlessPresent`.
+  statement still runs as before; the WARN names its lock and what to do instead. To silence it, wrap an index or
+  column statement in your own contributor with `createIndexUnlessPresent` / `addColumnUnlessPresent`; there is no
+  wrapper for a trigger, so look it up in `pg_trigger` from a `DO` block first, as
+  `ListenNotify.changeNotificationTriggerStatements` does.
   `PostgresqlSchemaStatements.takesTableLockEvenWhenPresent(String)` is the check, for a test of your own
-  contributor's statements. (`9ba215bd7`, `<!-- fix:U-026 -->`)
+  contributor's statements. It recognises those three kinds of statement only: `false` does not mean a statement takes
+  no lock - any other `ALTER TABLE`, such as `ADD CONSTRAINT`, locks its table too. (`9ba215bd7`, `<!-- fix:U-026 -->`,
+  `<!-- fix:U-028 -->`)
 - **`essentials.durable-queues.require-active-unit-of-work-for-enqueue`** (default `false`), also
   `setRequireActiveUnitOfWorkForEnqueue(...)` on the PostgreSQL, MongoDB and shard-owned builders. When `true`, an
   enqueue with no active `UnitOfWork` or Spring transaction throws `NoActiveUnitOfWorkException`, so an `Outbox`

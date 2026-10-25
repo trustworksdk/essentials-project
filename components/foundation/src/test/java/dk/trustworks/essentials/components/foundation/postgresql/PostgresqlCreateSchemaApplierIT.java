@@ -127,8 +127,9 @@ class PostgresqlCreateSchemaApplierIT {
             assertThat(logAppender.list).filteredOn(event -> event.getLevel() == Level.WARN)
                                         .singleElement()
                                         .extracting(ILoggingEvent::getFormattedMessage).asString()
-                                        .startsWith("[lock-warning-it] Repeatable schema change 'orders-status-index' on 'orders' creates an index or adds a column without checking the catalog first")
-                                        .contains("PostgresqlSchemaStatements.createIndexUnlessPresent / addColumnUnlessPresent")
+                                        .startsWith("[lock-warning-it] Repeatable schema change 'orders-status-index' on 'orders' creates an index without checking the catalog first")
+                                        .contains("PostgreSQL takes SHARE on the statement's table even when the index already exists")
+                                        .contains("Wrap the statement in PostgresqlSchemaStatements.createIndexUnlessPresent.")
                                         .endsWith("Statement: CREATE INDEX IF NOT EXISTS orders_status_idx ON orders (status)");
         } finally {
             logger.detachAppender(logAppender);
