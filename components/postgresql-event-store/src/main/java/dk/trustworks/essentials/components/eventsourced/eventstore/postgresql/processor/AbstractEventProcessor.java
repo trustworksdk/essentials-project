@@ -35,6 +35,7 @@ import dk.trustworks.essentials.components.foundation.transaction.*;
 import dk.trustworks.essentials.components.foundation.types.SubscriberId;
 import dk.trustworks.essentials.reactive.Handler;
 import dk.trustworks.essentials.reactive.command.*;
+import dk.trustworks.essentials.shared.Exceptions;
 import dk.trustworks.essentials.shared.Lifecycle;
 import dk.trustworks.essentials.shared.functional.*;
 import dk.trustworks.essentials.types.LongRange;
@@ -165,45 +166,37 @@ public abstract class AbstractEventProcessor implements Lifecycle {
      * Unsubscribed, not just stopped: the {@link EventStoreSubscriptionManager} keeps a subscription that was only stopped
      * and hands it, unstarted, to the next subscribe with the same {@link SubscriberId} and {@link AggregateType}, so a
      * processor started again would handle no events. Each subscription is unsubscribed on its own, so one that fails does
-     * not leave the ones after it subscribed.
+     * not leave the ones after it subscribed - the shared rule, {@link Exceptions#forEachThenThrowFirst(Iterable, Consumer)}.
      *
      * @param subscriptions the processor's subscriptions - nothing is done when {@code null} (no subscription was created)
-     * @throws RuntimeException the first failure, with each later one added as suppressed, once every subscription was tried
+     * @throws RuntimeException the first failure (a non-critical {@link Error} counts too), with each later, distinct one
+     *                          added as suppressed, once every subscription was tried; a critical error
+     *                          ({@link Exceptions#isCriticalError(Throwable)}) is rethrown at once
      */
     static void unsubscribeEach(List<EventStoreSubscription> subscriptions) {
-        var failure = new AtomicReference<RuntimeException>();
-        unsubscribeEach(subscriptions, (subscription, e) -> {
-            if (!failure.compareAndSet(null, e)) {
-                failure.get().addSuppressed(e);
-            }
-        });
-        if (failure.get() != null) {
-            throw failure.get();
-        }
-    }
-
-    /**
-     * Unsubscribes each of the subscriptions, handing every failure to {@code onFailure} and going on with the next one,
-     * so one that fails to unsubscribe does not leave the ones after it subscribed. Throws nothing itself: what becomes of
-     * the failures is up to {@code onFailure} - see {@link #unsubscribeEach(List)} for why a subscription is unsubscribed
-     * and not just stopped.
-     *
-     * @param subscriptions the subscriptions - nothing is done when {@code null} (no subscription was created)
-     * @param onFailure     called, on the calling thread, with each subscription whose {@code unsubscribe()} threw and
-     *                      what it threw
-     */
-    static void unsubscribeEach(List<EventStoreSubscription> subscriptions, BiConsumer<EventStoreSubscription, RuntimeException> onFailure) {
-        requireNonNull(onFailure, "onFailure is null");
         if (subscriptions == null) {
             return;
         }
-        for (var subscription : subscriptions) {
-            try {
-                subscription.unsubscribe();
-            } catch (RuntimeException e) {
-                onFailure.accept(subscription, e);
-            }
+        Exceptions.forEachThenThrowFirst(subscriptions, EventStoreSubscription::unsubscribe);
+    }
+
+    /**
+     * Unsubscribes each of the subscriptions a start created before it failed, adding every failure to that start's
+     * {@code failure} as suppressed and going on with the next one, so a failing unsubscribe neither replaces the start's
+     * failure nor leaves the ones after it subscribed - the shared rule,
+     * {@link Exceptions#forEachCollectingFailures(Iterable, Consumer, Throwable)}. Throws nothing itself but a critical
+     * error, which it rethrows at once with {@code failure} added to it - see {@link #unsubscribeEach(List)} for why a
+     * subscription is unsubscribed and not just stopped.
+     *
+     * @param subscriptions the subscriptions - nothing is done when {@code null} (no subscription was created)
+     * @param failure       the failure of the start, which the caller throws afterwards
+     */
+    static void unsubscribeEachAddingFailuresTo(List<EventStoreSubscription> subscriptions, Throwable failure) {
+        requireNonNull(failure, "failure is null");
+        if (subscriptions == null) {
+            return;
         }
+        Exceptions.forEachCollectingFailures(subscriptions, EventStoreSubscription::unsubscribe, failure);
     }
 
     /**

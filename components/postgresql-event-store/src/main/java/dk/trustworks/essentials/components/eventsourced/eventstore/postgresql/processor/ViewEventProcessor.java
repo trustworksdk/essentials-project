@@ -199,17 +199,16 @@ public abstract class ViewEventProcessor extends AbstractEventProcessor {
                     logger.info("FencedLock '{}' for ViewProcessor '{}' was RELEASED - will unsubscribe {} subscriber(s)", lockName, processorName, subscriptions.size());
                     // Unsubscribed, not just stopped: the manager hands a subscription it still holds back to the next
                     // subscribe without starting it, so a re-acquired lock would leave the processor handling no events.
-                    // Each one on its own: a failing unsubscribe must not leave the ones after it polling on an instance that lost the lock
-                    var failures = new ArrayList<RuntimeException>();
-                    unsubscribeEach(subscriptions, (EventStoreSubscription subscription, RuntimeException failure) -> {
-                        logger.error("FencedLock '{}' for ViewProcessor '{}' was RELEASED - failed to unsubscribe subscriber {}", lockName, processorName, subscription, failure);
-                        failures.add(failure);
+                    // Each one on its own: a failing unsubscribe must not leave the ones after it polling on an instance that lost the lock.
+                    // Collected by the shared rule (Exceptions.forEachThenThrowFirst), each failure logged with its subscription
+                    Exceptions.forEachThenThrowFirst(subscriptions, (EventStoreSubscription subscription) -> {
+                        try {
+                            subscription.unsubscribe();
+                        } catch (RuntimeException | Error failure) {
+                            logger.error("FencedLock '{}' for ViewProcessor '{}' was RELEASED - failed to unsubscribe subscriber {}", lockName, processorName, subscription, failure);
+                            throw failure;
+                        }
                     });
-                    if (!failures.isEmpty()) {
-                        var first = failures.getFirst();
-                        failures.subList(1, failures.size()).forEach(first::addSuppressed);
-                        throw first;
-                    }
                 }
             } finally {
                 logger.info("FencedLock '{}' for ViewProcessor '{}' and DurableQueue '{}' was RELEASED - will stop Exclusive DurableQueueConsumer: {}", lockName, processorName, durableQueueName, consumer);
@@ -270,7 +269,7 @@ public abstract class ViewEventProcessor extends AbstractEventProcessor {
             }
         } catch (RuntimeException e) {
             // Each one on its own, so a failing unsubscribe neither replaces the subscribe failure nor leaves the ones after it subscribed
-            unsubscribeEach(created, (subscription, failure) -> e.addSuppressed(failure));
+            unsubscribeEachAddingFailuresTo(created, e);
             throw e;
         }
         eventStoreSubscriptions = Collections.unmodifiableList(created);

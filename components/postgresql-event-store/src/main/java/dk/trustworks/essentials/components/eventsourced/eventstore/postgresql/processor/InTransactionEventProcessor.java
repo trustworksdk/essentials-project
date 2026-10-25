@@ -306,7 +306,7 @@ public abstract class InTransactionEventProcessor implements Lifecycle {
             subscribeToEventsRelatedTo.forEach(aggregateType -> created.add(createEventStoreSubscription(aggregateType)));
         } catch (RuntimeException e) {
             // Each one on its own, so a failing unsubscribe neither replaces the subscribe failure nor leaves the ones after it subscribed
-            AbstractEventProcessor.unsubscribeEach(created, (subscription, failure) -> e.addSuppressed(failure));
+            AbstractEventProcessor.unsubscribeEachAddingFailuresTo(created, e);
             // Left not started, so start() may be called again
             started = false;
             throw e;

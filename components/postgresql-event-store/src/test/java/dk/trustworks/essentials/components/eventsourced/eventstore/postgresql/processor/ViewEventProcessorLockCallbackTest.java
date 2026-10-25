@@ -218,6 +218,74 @@ class ViewEventProcessorLockCallbackTest {
     }
 
     @Test
+    void a_release_whose_unsubscribes_throw_one_failure_instance_rethrows_it_without_suppressing_it_into_itself() {
+        var subscriptionManager = mock(EventStoreSubscriptionManager.class);
+        when(subscriptionManager.getEventStore()).thenReturn(mock(EventStore.class));
+        var fencedLockManager = mock(FencedLockManager.class);
+        var durableQueues     = mock(DurableQueues.class);
+        var consumer          = mock(DurableQueueConsumer.class);
+        when(durableQueues.consumeFromQueue(any(QueueName.class), any(RedeliveryPolicy.class), anyInt(), any(QueuedMessageHandler.class))).thenReturn(consumer);
+        var thingsSubscription = mock(EventStoreSubscription.class);
+        var othersSubscription = mock(EventStoreSubscription.class);
+        var moreSubscription   = mock(EventStoreSubscription.class);
+        var sharedFailure      = new IllegalStateException("unsubscribe failed");
+        doThrow(sharedFailure).when(thingsSubscription).unsubscribe();
+        doThrow(sharedFailure).when(othersSubscription).unsubscribe();
+        when(subscriptionManager.subscribeToAggregateEventsAsynchronously(any(), eq(THINGS), any(Function.class), any(PersistedEventHandler.class)))
+                .thenReturn(thingsSubscription);
+        when(subscriptionManager.subscribeToAggregateEventsAsynchronously(any(), eq(OTHERS), any(Function.class), any(PersistedEventHandler.class)))
+                .thenReturn(othersSubscription);
+        when(subscriptionManager.subscribeToAggregateEventsAsynchronously(any(), eq(MORE), any(Function.class), any(PersistedEventHandler.class)))
+                .thenReturn(moreSubscription);
+
+        var processor = new ThingsViewProcessor(subscriptionManager, fencedLockManager, durableQueues, List.of(THINGS, OTHERS, MORE));
+        processor.start();
+        var callbackCaptor = ArgumentCaptor.forClass(LockCallback.class);
+        verify(fencedLockManager).acquireLockAsync(any(LockName.class), callbackCaptor.capture());
+        var callback = callbackCaptor.getValue();
+        var lock     = mock(FencedLock.class);
+        callback.lockAcquired(lock);
+
+        assertThatThrownBy(() -> callback.lockReleased(lock)).isSameAs(sharedFailure);
+        assertThat(sharedFailure.getSuppressed()).isEmpty();
+        verify(moreSubscription).unsubscribe();
+        verify(consumer).cancel();
+    }
+
+    @Test
+    void a_failed_subscribe_whose_rollback_unsubscribes_throw_one_failure_instance_adds_it_to_the_subscribe_failure_once() {
+        var subscriptionManager = mock(EventStoreSubscriptionManager.class);
+        when(subscriptionManager.getEventStore()).thenReturn(mock(EventStore.class));
+        var fencedLockManager = mock(FencedLockManager.class);
+        var durableQueues     = mock(DurableQueues.class);
+        var consumer          = mock(DurableQueueConsumer.class);
+        when(durableQueues.consumeFromQueue(any(QueueName.class), any(RedeliveryPolicy.class), anyInt(), any(QueuedMessageHandler.class))).thenReturn(consumer);
+        var thingsSubscription = mock(EventStoreSubscription.class);
+        var othersSubscription = mock(EventStoreSubscription.class);
+        var unsubscribeFailure = new IllegalStateException("unsubscribe failed");
+        var subscribeFailure   = new IllegalStateException("Cannot subscribe");
+        doThrow(unsubscribeFailure).when(thingsSubscription).unsubscribe();
+        doThrow(unsubscribeFailure).when(othersSubscription).unsubscribe();
+        when(subscriptionManager.subscribeToAggregateEventsAsynchronously(any(), eq(THINGS), any(Function.class), any(PersistedEventHandler.class)))
+                .thenReturn(thingsSubscription);
+        when(subscriptionManager.subscribeToAggregateEventsAsynchronously(any(), eq(OTHERS), any(Function.class), any(PersistedEventHandler.class)))
+                .thenReturn(othersSubscription);
+        when(subscriptionManager.subscribeToAggregateEventsAsynchronously(any(), eq(MORE), any(Function.class), any(PersistedEventHandler.class)))
+                .thenThrow(subscribeFailure);
+
+        var processor = new ThingsViewProcessor(subscriptionManager, fencedLockManager, durableQueues, List.of(THINGS, OTHERS, MORE));
+        processor.start();
+        var callbackCaptor = ArgumentCaptor.forClass(LockCallback.class);
+        verify(fencedLockManager).acquireLockAsync(any(LockName.class), callbackCaptor.capture());
+        var callback = callbackCaptor.getValue();
+        var lock     = mock(FencedLock.class);
+
+        assertThatThrownBy(() -> callback.lockAcquired(lock)).isSameAs(subscribeFailure);
+        assertThat(subscribeFailure.getSuppressed()).containsExactly(unsubscribeFailure);
+        verify(othersSubscription).unsubscribe();
+    }
+
+    @Test
     void a_failed_subscribe_whose_rollback_unsubscribe_fails_rethrows_the_subscribe_failure_and_unsubscribes_the_others() {
         var subscriptionManager = mock(EventStoreSubscriptionManager.class);
         when(subscriptionManager.getEventStore()).thenReturn(mock(EventStore.class));

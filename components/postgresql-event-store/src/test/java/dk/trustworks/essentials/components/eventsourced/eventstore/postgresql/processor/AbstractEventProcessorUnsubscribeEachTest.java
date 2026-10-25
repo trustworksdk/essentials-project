@@ -63,6 +63,21 @@ class AbstractEventProcessorUnsubscribeEachTest {
     }
 
     @Test
+    void a_failure_instance_thrown_by_several_subscriptions_is_rethrown_without_suppressing_it_into_itself_and_every_subscription_is_unsubscribed() {
+        var first         = mock(EventStoreSubscription.class);
+        var second        = mock(EventStoreSubscription.class);
+        var third         = mock(EventStoreSubscription.class);
+        var sharedFailure = new IllegalStateException("unsubscribe failed");
+        doThrow(sharedFailure).when(first).unsubscribe();
+        doThrow(sharedFailure).when(second).unsubscribe();
+
+        assertThatThrownBy(() -> AbstractEventProcessor.unsubscribeEach(List.of(first, second, third)))
+                .isSameAs(sharedFailure);
+        assertThat(sharedFailure.getSuppressed()).isEmpty();
+        verify(third).unsubscribe();
+    }
+
+    @Test
     void every_subscription_is_unsubscribed_when_none_fails() {
         var first  = mock(EventStoreSubscription.class);
         var second = mock(EventStoreSubscription.class);

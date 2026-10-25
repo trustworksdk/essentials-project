@@ -325,7 +325,7 @@ public abstract class EventProcessor extends AbstractEventProcessor {
             } catch (RuntimeException e) {
                 // Each one on its own, so a failing unsubscribe neither replaces the subscribe failure nor leaves the ones after it subscribed.
                 // Left not started, so start() may be called again - and stop() then does nothing, so the Inbox consumption is undone here too
-                unsubscribeEach(created, (subscription, failure) -> e.addSuppressed(failure));
+                unsubscribeEachAddingFailuresTo(created, e);
                 try {
                     inbox.stopConsuming();
                 } catch (RuntimeException failure) {
