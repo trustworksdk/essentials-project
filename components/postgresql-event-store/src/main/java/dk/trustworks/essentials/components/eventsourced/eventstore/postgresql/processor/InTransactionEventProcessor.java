@@ -298,8 +298,20 @@ public abstract class InTransactionEventProcessor implements Lifecycle {
     }
 
     private void subscribeInTransaction(List<AggregateType> subscribeToEventsRelatedTo) {
-        eventStoreSubscriptions = subscribeToEventsRelatedTo.stream()
-                                                            .map(this::createEventStoreSubscription).toList();
+        // Collected one by one, so the subscriptions created before one that fails to subscribe are unsubscribed again,
+        // and assigned only once all are created: a failed start must not leave subscriptions running that nothing
+        // refers to, while eventStoreSubscriptions still holds the (unsubscribed) ones of an earlier run
+        var created = new ArrayList<EventStoreSubscription>(subscribeToEventsRelatedTo.size());
+        try {
+            subscribeToEventsRelatedTo.forEach(aggregateType -> created.add(createEventStoreSubscription(aggregateType)));
+        } catch (RuntimeException e) {
+            // Each one on its own, so a failing unsubscribe neither replaces the subscribe failure nor leaves the ones after it subscribed
+            AbstractEventProcessor.unsubscribeEach(created, (subscription, failure) -> e.addSuppressed(failure));
+            // Left not started, so start() may be called again
+            started = false;
+            throw e;
+        }
+        eventStoreSubscriptions = Collections.unmodifiableList(created);
     }
 
 

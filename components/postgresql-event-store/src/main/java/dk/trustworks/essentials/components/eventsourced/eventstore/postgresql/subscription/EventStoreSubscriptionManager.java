@@ -624,7 +624,9 @@ public interface EventStoreSubscriptionManager extends Lifecycle {
     /**
      * Stops the subscription and removes it from this manager, so a later subscribe for its {@link SubscriberId} and
      * {@link AggregateType} creates a new subscription, started at once when this manager is started - see "Subscribing again" in the
-     * {@link EventStoreSubscriptionManager} javadoc. Called by {@link EventStoreSubscription#unsubscribe()}
+     * {@link EventStoreSubscriptionManager} javadoc. Called by {@link EventStoreSubscription#unsubscribe()}.<br>
+     * Does nothing for a subscription this manager does not hold - one already unsubscribed, even when the manager
+     * holds a newer subscription for the same {@link SubscriberId} and {@link AggregateType}, which is left as it is
      *
      * @param eventStoreSubscription the subscription to unsubscribe
      */

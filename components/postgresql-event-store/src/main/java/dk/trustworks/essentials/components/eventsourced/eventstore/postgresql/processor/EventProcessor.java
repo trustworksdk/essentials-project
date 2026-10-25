@@ -316,59 +316,77 @@ public abstract class EventProcessor extends AbstractEventProcessor {
             }
             durableQueueName = inbox.name().asQueueName();
 
-            eventStoreSubscriptions = subscribeToEventsRelatedTo.stream()
-                                                                .map(aggregateType -> {
-                                                                    var subscriberId = resolveSubscriberId(aggregateType, processorName);
-                                                                    var subscription = eventStoreSubscriptionManager.exclusivelySubscribeToAggregateEventsAsynchronously(
-                                                                            subscriberId,
-                                                                            aggregateType,
-                                                                            resolveStartSubscriptionFromGlobalEventOrder(),
-                                                                            Optional.empty(),
-                                                                            new FencedLockAwareSubscriber() {
-                                                                                @Override
-                                                                                public void onLockAcquired(FencedLock fencedLock, SubscriptionResumePoint resumeFromAndIncluding) {
-                                                                                    log.info("⚙️ [{}] Subscriber '{}' acquired lock. Will resumeFromAndIncluding: {}",
-                                                                                             processorName,
-                                                                                             subscriberId,
-                                                                                             resumeFromAndIncluding);
-                                                                                }
-
-                                                                                @Override
-                                                                                public void onLockReleased(FencedLock fencedLock) {
-                                                                                    log.info("⚙️ [{}] Subscriber '{}''s lock was released",
-                                                                                             processorName,
-                                                                                             subscriberId);
-
-                                                                                }
-                                                                            },
-                                                                            new PersistedEventHandler() {
-                                                                                @Override
-                                                                                public void handle(PersistedEvent event) {
-                                                                                    forwardEventToInbox(event, inbox);
-                                                                                }
-
-                                                                                @Override
-                                                                                public Optional<SubscriptionErrorPolicy> subscriptionErrorPolicy() {
-                                                                                    return getSubscriptionErrorPolicy();
-                                                                                }
-
-                                                                                @Override
-                                                                                public String toString() {
-                                                                                    return processorName;
-                                                                                }
-                                                                            });
-                                                                    log.info("⚙️ [{}] Created exclusive '{}' subscription: {}",
-                                                                             processorName,
-                                                                             aggregateType,
-                                                                             subscription);
-                                                                    return subscription;
-                                                                })
-                                                                .toList();
+            // Collected one by one, so the subscriptions created before one that fails to subscribe are unsubscribed again,
+            // and assigned only once all are created: a failed start must not leave subscriptions running that nothing
+            // refers to, while eventStoreSubscriptions still holds the (unsubscribed) ones of an earlier run
+            var created = new ArrayList<EventStoreSubscription>(subscribeToEventsRelatedTo.size());
+            try {
+                subscribeToEventsRelatedTo.forEach(aggregateType -> created.add(subscribe(processorName, aggregateType)));
+            } catch (RuntimeException e) {
+                // Each one on its own, so a failing unsubscribe neither replaces the subscribe failure nor leaves the ones after it subscribed.
+                // Left not started, so start() may be called again - and stop() then does nothing, so the Inbox consumption is undone here too
+                unsubscribeEach(created, (subscription, failure) -> e.addSuppressed(failure));
+                try {
+                    inbox.stopConsuming();
+                } catch (RuntimeException failure) {
+                    e.addSuppressed(failure);
+                }
+                started = false;
+                throw e;
+            }
+            eventStoreSubscriptions = Collections.unmodifiableList(created);
 
             log.info("⚙️ [{}] Started. # of undelivered Inbox messages: {}",
                      processorName,
                      inbox.getNumberOfUndeliveredMessages());
         }
+    }
+
+    private EventStoreSubscription subscribe(String processorName, AggregateType aggregateType) {
+        var subscriberId = resolveSubscriberId(aggregateType, processorName);
+        var subscription = eventStoreSubscriptionManager.exclusivelySubscribeToAggregateEventsAsynchronously(
+                subscriberId,
+                aggregateType,
+                resolveStartSubscriptionFromGlobalEventOrder(),
+                Optional.empty(),
+                new FencedLockAwareSubscriber() {
+                    @Override
+                    public void onLockAcquired(FencedLock fencedLock, SubscriptionResumePoint resumeFromAndIncluding) {
+                        log.info("⚙️ [{}] Subscriber '{}' acquired lock. Will resumeFromAndIncluding: {}",
+                                 processorName,
+                                 subscriberId,
+                                 resumeFromAndIncluding);
+                    }
+
+                    @Override
+                    public void onLockReleased(FencedLock fencedLock) {
+                        log.info("⚙️ [{}] Subscriber '{}''s lock was released",
+                                 processorName,
+                                 subscriberId);
+
+                    }
+                },
+                new PersistedEventHandler() {
+                    @Override
+                    public void handle(PersistedEvent event) {
+                        forwardEventToInbox(event, inbox);
+                    }
+
+                    @Override
+                    public Optional<SubscriptionErrorPolicy> subscriptionErrorPolicy() {
+                        return getSubscriptionErrorPolicy();
+                    }
+
+                    @Override
+                    public String toString() {
+                        return processorName;
+                    }
+                });
+        log.info("⚙️ [{}] Created exclusive '{}' subscription: {}",
+                 processorName,
+                 aggregateType,
+                 subscription);
+        return subscription;
     }
 
     @Override

@@ -147,6 +147,25 @@ class DefaultEventStoreSubscriptionManagerTest {
         }
     }
 
+    @Test
+    void unsubscribing_a_subscription_the_manager_no_longer_holds_leaves_the_held_one_subscribed_and_started() {
+        var manager = startedManager();
+        try {
+            var stale = manager.subscribeToAggregateEventsInTransaction(SUBSCRIBER, THINGS, Optional.empty(), (event, unitOfWork) -> {});
+            stale.unsubscribe();
+            var held = manager.subscribeToAggregateEventsInTransaction(SUBSCRIBER, THINGS, Optional.empty(), (event, unitOfWork) -> {});
+            assertThat(held).isNotSameAs(stale);
+
+            // Same subscriber id and aggregate type as the held one, but not the instance the manager holds
+            stale.unsubscribe();
+
+            assertThat(manager.getSubscription(SUBSCRIBER, THINGS)).containsSame(held);
+            assertThat(held.isStarted()).isTrue();
+        } finally {
+            manager.stop();
+        }
+    }
+
     private List<ILoggingEvent> warnings() {
         return logAppender.list.stream()
                                .filter(event -> event.getLevel() == Level.WARN)

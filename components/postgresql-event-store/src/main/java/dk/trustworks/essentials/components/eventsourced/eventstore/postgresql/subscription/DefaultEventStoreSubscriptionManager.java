@@ -622,13 +622,20 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
     @Override
     public void unsubscribe(EventStoreSubscription eventStoreSubscription) {
         requireNonNull(eventStoreSubscription, "No eventStoreSubscription provided");
-        var removedSubscription = subscribers.remove(Pair.of(eventStoreSubscription.subscriberId(), eventStoreSubscription.aggregateType()));
-        if (removedSubscription != null) {
-            log.info("[{}-{}] Unsubscribing", removedSubscription.subscriberId(), removedSubscription.aggregateType());
+        // Removed only when the held subscription is this instance: an earlier, already unsubscribed one for the same
+        // subscriber id and aggregate type (e.g. kept by an event processor across a stop) must not remove the one
+        // subscribed since, which would leave it running with nothing left to stop it
+        var subscriberIdAggregateType = Pair.of(eventStoreSubscription.subscriberId(), eventStoreSubscription.aggregateType());
+        if (subscribers.remove(subscriberIdAggregateType, eventStoreSubscription)) {
+            log.info("[{}-{}] Unsubscribing", eventStoreSubscription.subscriberId(), eventStoreSubscription.aggregateType());
             stopEventStoreSubscriber(eventStoreSubscription);
-            startClaimed.remove(removedSubscription);
+            startClaimed.remove(eventStoreSubscription);
             // Nothing is owed to a subscription that is gone - see EventStore#forgetGapMiddlesAwaitedInMemory
-            eventStore.forgetGapMiddlesAwaitedInMemory(removedSubscription.subscriberId(), removedSubscription.aggregateType());
+            eventStore.forgetGapMiddlesAwaitedInMemory(eventStoreSubscription.subscriberId(), eventStoreSubscription.aggregateType());
+        } else {
+            log.debug("[{}-{}] Unsubscribe of a subscription this manager does not hold: nothing to do",
+                      eventStoreSubscription.subscriberId(),
+                      eventStoreSubscription.aggregateType());
         }
     }
 
