@@ -63,6 +63,18 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
      * callback - is seen by both. Whichever claims it here first starts it, so it is started once
      */
     private final    Set<EventStoreSubscription>                                              startClaimed = ConcurrentHashMap.newKeySet();
+    /**
+     * The subscriptions whose start by this manager has returned - normally or by throwing - since its last {@link #start()}.
+     * A held subscription that is not started is only worth a WARN on a repeated subscribe once it is in here: before that
+     * this manager is still to start it (its {@link #start()} has not reached it yet, or the thread starting it has not
+     * returned from its {@code start()} yet). {@link #startClaimed} cannot tell such a subscription from one that was
+     * stopped directly, since it holds a subscription from the moment its start is claimed, and keeps it after a direct stop.
+     * When {@link #start()} throws on one subscription, it does not reach the ones after it, and a repeated {@link #start()}
+     * does nothing until this manager is stopped, so before rethrowing, {@link #start()} adds every held subscription it has not claimed, and a repeated
+     * subscribe for one of them WARNs. A subscription another thread adds in that instant may be added here before its
+     * own start returns, so a repeated subscribe for it in that window may WARN once
+     */
+    private final    Set<EventStoreSubscription>                                              startReturned = ConcurrentHashMap.newKeySet();
     private          ScheduledFuture<?>                                                       saveResumePointsFuture;
     private          ScheduledFuture<?>                                                       saveAdvancedResumePointsFuture;
     private final    boolean                                                                  startLifeCycles;
@@ -294,7 +306,18 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
             }
             started = true;
             // Start any subscribers added prior to us starting
-            subscribers.values().forEach(this::startEventStoreSubscriber);
+            try {
+                subscribers.values().forEach(this::startEventStoreSubscriber);
+            } catch (RuntimeException | Error e) {
+                // The walk ended at a subscription whose start threw, and the started flag stays set, so a repeated start()
+                // does not reach the ones after it: mark them, so a repeated subscribe for one of them WARNs
+                subscribers.values().forEach(eventStoreSubscription -> {
+                    if (!startClaimed.contains(eventStoreSubscription)) {
+                        startReturned.add(eventStoreSubscription);
+                    }
+                });
+                throw e;
+            }
         } else {
             log.debug("[{}] EventStore Subscription Manager was already started", fencedLockManager.getLockManagerInstanceId());
         }
@@ -314,6 +337,11 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
             // Not started, so a later attempt may start it
             startClaimed.remove(eventStoreSubscription);
             throw e;
+        } finally {
+            // Not for a subscription unsubscribed while it was starting: this manager no longer holds it
+            if (subscribers.get(Pair.of(eventStoreSubscription.subscriberId(), eventStoreSubscription.aggregateType())) == eventStoreSubscription) {
+                startReturned.add(eventStoreSubscription);
+            }
         }
         log.info("[{}] Started EventStoreSubscription '{}' in {} ms.", fencedLockManager.getLockManagerInstanceId(), eventStoreSubscription.subscriberId(), startDuration.toMillis());
         eventStoreSubscriptionObserver.startedSubscriber(eventStoreSubscription, startDuration);
@@ -369,6 +397,7 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
 
             started = false;
             startClaimed.clear();
+            startReturned.clear();
             log.info("[{}] Stopped EventStore Subscription Manager", fencedLockManager.getLockManagerInstanceId());
         } else {
             log.info("[{}] EventStore Subscription Manager was already stopped", fencedLockManager.getLockManagerInstanceId());
@@ -504,11 +533,14 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
             }
             return eventStoreSubscription;
         } else {
-            if (started && !previousEventStoreSubscription.isStarted()) {
-                // This manager runs and the subscription it holds is not started (e.g. its own stop() was called): this
-                // subscribe does not start it, so a caller that stop()s and subscribes again would otherwise get a
-                // subscription that handles no events, with nothing logged. While this manager is stopped there is
-                // nothing to warn about: its start() starts every subscription it holds
+            // startReturned is read before isStarted(): a start that returned before the read set the started flag first
+            var startOfHeldReturned = startReturned.contains(previousEventStoreSubscription);
+            if (started && startOfHeldReturned && !previousEventStoreSubscription.isStarted()) {
+                // This manager runs, its start of the held subscription returned, and the subscription is not started
+                // (e.g. its own stop() was called, or its start failed): this subscribe does not start it, so a caller that
+                // stop()s and subscribes again would otherwise get a subscription that handles no events, with nothing
+                // logged. While this manager is stopped there is nothing to warn about: its start() starts every
+                // subscription it holds. Nor while this manager is still to start the held subscription
                 log.warn("[{}-{}] Subscribe for a subscription this manager already holds, and the held {} is not started: " +
                                  "returning it as it is, without starting it, and this call's arguments (its event handler included) were not used. " +
                                  "It handles no events until something starts it. To subscribe again, call EventStoreSubscription#unsubscribe() " +
@@ -516,6 +548,10 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
                          subscriberId,
                          forAggregateType,
                          previousEventStoreSubscription.getClass().getSimpleName());
+            } else if (started && !startOfHeldReturned) {
+                log.info("[{}-{}] Event Store subscription was already added, and this manager has not finished starting it: returning it, without using this call's arguments",
+                         subscriberId,
+                         forAggregateType);
             } else {
                 log.info("[{}-{}] Event Store subscription was already added",
                          subscriberId,
@@ -630,6 +666,7 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
             log.info("[{}-{}] Unsubscribing", eventStoreSubscription.subscriberId(), eventStoreSubscription.aggregateType());
             stopEventStoreSubscriber(eventStoreSubscription);
             startClaimed.remove(eventStoreSubscription);
+            startReturned.remove(eventStoreSubscription);
             // Nothing is owed to a subscription that is gone - see EventStore#forgetGapMiddlesAwaitedInMemory
             eventStore.forgetGapMiddlesAwaitedInMemory(eventStoreSubscription.subscriberId(), eventStoreSubscription.aggregateType());
         } else {
