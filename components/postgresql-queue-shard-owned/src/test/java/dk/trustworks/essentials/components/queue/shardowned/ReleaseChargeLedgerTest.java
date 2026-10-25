@@ -17,7 +17,7 @@
 package dk.trustworks.essentials.components.queue.shardowned;
 
 import dk.trustworks.essentials.components.queue.shardowned.spi.*;
-import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.*;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
@@ -38,6 +38,20 @@ import static org.assertj.core.api.Assertions.*;
 class ReleaseChargeLedgerTest {
 
     private static final int SHARD = 7;
+
+    /**
+     * Runs the charges a test starts while it holds a release claim. A charge with no network wait bound waits for the claim
+     * for as long as it is held, and an interrupt does not end that wait, so such a charge runs here rather than on the
+     * common pool, and each test ends every claim it still holds on its way out ({@link ReleaseClaims}): a failing assertion
+     * then leaves no thread parked behind it.
+     */
+    private final ExecutorService claimWaiters = Executors.newCachedThreadPool(Thread.ofPlatform().daemon().name("release-claim-waiter-", 0).factory());
+
+    @AfterEach
+    void stopClaimWaiters() throws InterruptedException {
+        claimWaiters.shutdownNow();
+        assertThat(claimWaiters.awaitTermination(10, TimeUnit.SECONDS)).as("no charge is left waiting for a release claim").isTrue();
+    }
 
     @Test
     void each_message_is_charged_once_as_soon_as_its_charge_commits_and_a_new_candidate_alone_is_charged_later() throws Exception {
@@ -193,25 +207,28 @@ class ReleaseChargeLedgerTest {
         writes.failMoves = 1;
         var ledger = ledger(writes, 1, new ShardOwnerMetrics(), new ArrayList<>());
 
-        assertThat(ledger.claimReleaseUnlessMoveOwed()).as("nothing owed: a release is claimed").isTrue();
-        assertThat(ledger.claimReleaseUnlessMoveOwed()).as("and a second release of the owner beside it").isTrue();
-        var charge = CompletableFuture.runAsync(() -> assertThatThrownBy(() -> ledger.charge(null, () -> candidates(1L))).isInstanceOf(SQLException.class));
+        try (var claims = new ReleaseClaims(ledger)) {
+            assertThat(claims.claim()).as("nothing owed: a release is claimed").isTrue();
+            assertThat(claims.claim()).as("and a second release of the owner beside it").isTrue();
+            var charge = CompletableFuture.runAsync(() -> assertThatThrownBy(() -> ledger.charge(null, () -> candidates(1L))).isInstanceOf(SQLException.class),
+                                                    claimWaiters);
 
-        assertThatThrownBy(() -> charge.get(300, TimeUnit.MILLISECONDS)).as("the charge waits for the claimed releases")
-                                                                          .isInstanceOf(TimeoutException.class);
-        assertThat(ledger.owesDeadLetterMove()).as("no move left owed while a release is claimed").isFalse();
-        ledger.endReleaseClaim();
-        assertThatThrownBy(() -> charge.get(300, TimeUnit.MILLISECONDS)).as("still waiting for the second claim")
-                                                                          .isInstanceOf(TimeoutException.class);
-        assertThat(ledger.owesDeadLetterMove()).isFalse();
+            assertThatThrownBy(() -> charge.get(300, TimeUnit.MILLISECONDS)).as("the charge waits for the claimed releases")
+                                                                              .isInstanceOf(TimeoutException.class);
+            assertThat(ledger.owesDeadLetterMove()).as("no move left owed while a release is claimed").isFalse();
+            claims.end();
+            assertThatThrownBy(() -> charge.get(300, TimeUnit.MILLISECONDS)).as("still waiting for the second claim")
+                                                                              .isInstanceOf(TimeoutException.class);
+            assertThat(ledger.owesDeadLetterMove()).isFalse();
 
-        ledger.endReleaseClaim();
-        charge.get(10, TimeUnit.SECONDS);
+            claims.end();
+            charge.get(10, TimeUnit.SECONDS);
 
-        assertThat(writes.chargeCalls).as("charged once the last claim ended").containsExactly(Set.of(1L));
-        assertThat(ledger.owesDeadLetterMove()).as("premise: that charge left the move owed").isTrue();
-        assertThat(ledger.claimReleaseUnlessMoveOwed()).as("no release is claimed while the move is owed").isFalse();
-        assertThatThrownBy(ledger::endReleaseClaim).as("nothing was claimed").isInstanceOf(IllegalStateException.class);
+            assertThat(writes.chargeCalls).as("charged once the last claim ended").containsExactly(Set.of(1L));
+            assertThat(ledger.owesDeadLetterMove()).as("premise: that charge left the move owed").isTrue();
+            assertThat(claims.claim()).as("no release is claimed while the move is owed").isFalse();
+            assertThatThrownBy(ledger::endReleaseClaim).as("nothing was claimed").isInstanceOf(IllegalStateException.class);
+        }
     }
 
     /**
@@ -249,38 +266,40 @@ class ReleaseChargeLedgerTest {
         var writes = new FakeWrites(Map.of(1L, 1));
         var ledger = ledger(writes, 3, new ShardOwnerMetrics(), new ArrayList<>());
         var bound  = Duration.ofMillis(300);
-        assertThat(ledger.claimReleaseUnlessMoveOwed()).as("premise: a release is claimed").isTrue();
+        try (var claims = new ReleaseClaims(ledger)) {
+            assertThat(claims.claim()).as("premise: a release is claimed").isTrue();
 
-        var unbounded = CompletableFuture.supplyAsync(() -> charge(ledger, candidates(1L)));
-        var waited    = new AtomicReference<Duration>();
-        var bounded = CompletableFuture.supplyAsync(() -> {
-            var started = System.nanoTime();
-            try {
-                NetworkWaitBound.call(bound, () -> ledger.charge(null, () -> candidates(1L)));
-                return null;
-            } catch (SQLException e) {
-                return e;
-            } finally {
-                waited.set(Duration.ofNanos(System.nanoTime() - started));
-            }
-        });
+            var unbounded = CompletableFuture.supplyAsync(() -> charge(ledger, candidates(1L)), claimWaiters);
+            var waited    = new AtomicReference<Duration>();
+            var bounded = CompletableFuture.supplyAsync(() -> {
+                var started = System.nanoTime();
+                try {
+                    NetworkWaitBound.call(bound, () -> ledger.charge(null, () -> candidates(1L)));
+                    return null;
+                } catch (SQLException e) {
+                    return e;
+                } finally {
+                    waited.set(Duration.ofNanos(System.nanoTime() - started));
+                }
+            }, claimWaiters);
 
-        var failure = bounded.get(10, TimeUnit.SECONDS);
-        assertThat((Throwable) failure).as("the bounded charge gives up on the claim").isInstanceOf(SQLException.class);
-        assertThat(waited.get()).as("after about the bound").isGreaterThanOrEqualTo(bound.minusMillis(20)).isLessThan(Duration.ofSeconds(5));
-        assertThat(failure.getSQLState()).as("not in doubt: nothing was sent").isNotNull().doesNotStartWith("08");
-        assertThat(LeaseRowState.mayHaveGoneThrough(failure)).isFalse();
-        assertThat(failure.getMessage()).contains("unit " + SHARD).contains(bound.toString());
-        assertThat(writes.chargeCalls).as("nothing charged").isEmpty();
-        assertThat(ledger.answer()).isEqualTo(ReleaseChargeLedger.Answer.NONE);
-        assertThat(ledger.owes(candidates(1L))).as("the candidate is still owed").isTrue();
-        assertThatThrownBy(() -> unbounded.get(300, TimeUnit.MILLISECONDS)).as("a charge with no bound still waits for the claim")
-                                                                           .isInstanceOf(TimeoutException.class);
+            var failure = bounded.get(10, TimeUnit.SECONDS);
+            assertThat((Throwable) failure).as("the bounded charge gives up on the claim").isInstanceOf(SQLException.class);
+            assertThat(waited.get()).as("after about the bound").isGreaterThanOrEqualTo(bound.minusMillis(20)).isLessThan(Duration.ofSeconds(5));
+            assertThat(failure.getSQLState()).as("not in doubt: nothing was sent").isNotNull().doesNotStartWith("08");
+            assertThat(LeaseRowState.mayHaveGoneThrough(failure)).isFalse();
+            assertThat(failure.getMessage()).contains("unit " + SHARD).contains(bound.toString());
+            assertThat(writes.chargeCalls).as("nothing charged").isEmpty();
+            assertThat(ledger.answer()).isEqualTo(ReleaseChargeLedger.Answer.NONE);
+            assertThat(ledger.owes(candidates(1L))).as("the candidate is still owed").isTrue();
+            assertThatThrownBy(() -> unbounded.get(300, TimeUnit.MILLISECONDS)).as("a charge with no bound still waits for the claim")
+                                                                               .isInstanceOf(TimeoutException.class);
 
-        ledger.endReleaseClaim();
+            claims.end();
 
-        assertThat(unbounded.get(10, TimeUnit.SECONDS).charged()).as("charged once the claim ended").isEqualTo(1);
-        assertThat(writes.chargeCalls).containsExactly(Set.of(1L));
+            assertThat(unbounded.get(10, TimeUnit.SECONDS).charged()).as("charged once the claim ended").isEqualTo(1);
+            assertThat(writes.chargeCalls).containsExactly(Set.of(1L));
+        }
     }
 
     /**
@@ -291,15 +310,17 @@ class ReleaseChargeLedgerTest {
     void a_charge_under_a_network_wait_bound_goes_on_once_the_release_claimed_before_it_ends_within_the_bound() throws Exception {
         var writes = new FakeWrites(Map.of(1L, 1));
         var ledger = ledger(writes, 3, new ShardOwnerMetrics(), new ArrayList<>());
-        assertThat(ledger.claimReleaseUnlessMoveOwed()).as("premise: a release is claimed").isTrue();
+        try (var claims = new ReleaseClaims(ledger)) {
+            assertThat(claims.claim()).as("premise: a release is claimed").isTrue();
 
-        var charge = CompletableFuture.supplyAsync(() -> NetworkWaitBound.call(Duration.ofSeconds(30), () -> charge(ledger, candidates(1L))));
-        assertThatThrownBy(() -> charge.get(300, TimeUnit.MILLISECONDS)).as("the charge waits for the claimed release")
-                                                                          .isInstanceOf(TimeoutException.class);
-        ledger.endReleaseClaim();
+            var charge = CompletableFuture.supplyAsync(() -> NetworkWaitBound.call(Duration.ofSeconds(30), () -> charge(ledger, candidates(1L))), claimWaiters);
+            assertThatThrownBy(() -> charge.get(300, TimeUnit.MILLISECONDS)).as("the charge waits for the claimed release")
+                                                                              .isInstanceOf(TimeoutException.class);
+            claims.end();
 
-        assertThat(charge.get(10, TimeUnit.SECONDS).charged()).isEqualTo(1);
-        assertThat(writes.chargeCalls).containsExactly(Set.of(1L));
+            assertThat(charge.get(10, TimeUnit.SECONDS).charged()).isEqualTo(1);
+            assertThat(writes.chargeCalls).containsExactly(Set.of(1L));
+        }
     }
 
     /**
@@ -893,6 +914,48 @@ class ReleaseChargeLedgerTest {
             return ledger.charge(null, () -> candidates);
         } catch (SQLException e) {
             throw new IllegalStateException(e);
+        }
+    }
+
+    /**
+     * The release claims a test holds on a ledger, each ended at most once: {@link #close()} ends those the test did not end
+     * itself, so a charge waiting for them goes on and finishes however the test ends.
+     */
+    private static final class ReleaseClaims implements AutoCloseable {
+        private final ReleaseChargeLedger ledger;
+        private int                       held;
+
+        ReleaseClaims(ReleaseChargeLedger ledger) {
+            this.ledger = ledger;
+        }
+
+        /**
+         * {@link ReleaseChargeLedger#claimReleaseUnlessMoveOwed}, counting the claim when it is given.
+         */
+        boolean claim() {
+            var claimed = ledger.claimReleaseUnlessMoveOwed();
+            if (claimed) {
+                held++;
+            }
+            return claimed;
+        }
+
+        /**
+         * {@link ReleaseChargeLedger#endReleaseClaim} on one claim this test holds.
+         */
+        void end() {
+            if (held == 0) {
+                throw new IllegalStateException("this test holds no release claim to end");
+            }
+            held--;
+            ledger.endReleaseClaim();
+        }
+
+        @Override
+        public void close() {
+            while (held > 0) {
+                end();
+            }
         }
     }
 
