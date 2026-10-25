@@ -889,7 +889,15 @@ points at a defect in the engine, to be investigated, not retried) - except a un
 `stuckHandlerTimeout` - or, when that is longer, than 2 s plus the network timeout that stop puts on
 its waits for the database (`leaseTtl`, or 2 s when that is longer) - with that flush still running:
 the release reviews the kept units first, so such a unit is given up and released, not answered
-`BUSY`. A release with a key in its handler is logged as a WARN naming
+`BUSY`. Instead of an answer, the request can fail with SQL state `55P03`
+(`KeptUnitRelease.RELEASE_CLAIM_WAIT_TIMED_OUT_SQL_STATE`): `MessageQueue.releaseKeptOrderedUnit` throws
+the `SQLException`, `ShardOwnedQueuesApi.releaseKeptOrderedUnit` a `MessageQueueException` with it as
+the cause and a message that names the state, and over HTTP the request answers 500, that message in
+the server's ERROR log. Its charge waited for another release of the unit's lease row to end for longer
+than the request's network wait bound and did not start: nothing was charged, dead-lettered or
+released, and asking again is safe. PostgreSQL gives the same state to a statement that gave up
+waiting for a lock (`lock_timeout`); that statement was rolled back, and asking again is safe then
+too: a later request does not charge again a message this one charged. A release with a key in its handler is logged as a WARN naming
 the unit and the keys. Once released, the unit no longer keeps an unsubscribed subscription's instance
 id out of use, and a later stop does not stay registered for it.
 

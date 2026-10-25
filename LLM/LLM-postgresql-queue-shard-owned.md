@@ -171,6 +171,13 @@ the release charged an
 attempt (`charged`) and which keys that charge dead-lettered (`deadLetteredKeys`; zero and empty on `BUSY`). A key in
 `deadLetteredKeys` is blocked behind its dead letter until its dead letters are resurrected (`resurrectKey`) or
 deleted - follow up on those keys.
+Instead of an answer the request can fail with SQL state `55P03` (`KeptUnitRelease.RELEASE_CLAIM_WAIT_TIMED_OUT_SQL_STATE`):
+`MessageQueue.releaseKeptOrderedUnit` throws the `SQLException`, `ShardOwnedQueuesApi.releaseKeptOrderedUnit` a
+`MessageQueueException` with it as the cause and a message naming the state, and over HTTP it answers 500 (that message
+in the server's ERROR log). Its charge waited for another release of the unit's lease row to end longer than the
+request's network wait bound and did not start: nothing was charged, dead-lettered or released - ask again. PostgreSQL
+gives the same state to a statement that gave up waiting for a lock (`lock_timeout`); it was rolled back and asking
+again is safe too, as a later request does not charge again a message this one charged.
 Once released the unit no longer keeps an unsubscribed subscription's id out of use. The same
 bound covers a fair-share shed of an ordered unit and the hand-back of a unit whose pump died, which wait
 for the keys in their handlers: past it each releases the unit with every key still in a handler — the one
