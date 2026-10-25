@@ -60,7 +60,7 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  * {@code ALTER TABLE ... ADD COLUMN} in one, not wrapped by {@link PostgresqlSchemaStatements#createIndexUnlessPresent}
  * or {@link PostgresqlSchemaStatements#addColumnUnlessPresent}, locks its table even when the index or column exists
  * ({@link PostgresqlSchemaStatements#takesTableLockEvenWhenPresent(String)} tells). The applier runs it all the same
- * and logs a WARN, once per {@code (module, changeId)} in the JVM, naming the wrappers.
+ * and logs a WARN, once per {@code (module, changeId, objectName)} in the JVM, naming the wrappers.
  * <p>
  * <b>Identifiers.</b> Every {@link SchemaChange#objectName()} is checked with
  * {@link PostgresqlUtil#checkIsValidTableOrColumnName(String)} before any statement executes. It is a first line of
@@ -77,7 +77,7 @@ public final class PostgresqlCreateSchemaApplier implements SchemaApplier {
     /** The ledger table's name unless configured otherwise */
     public static final String DEFAULT_SCHEMA_HISTORY_TABLE_NAME = "essentials_schema_history";
 
-    /** {@code module + '\0' + changeId} of every repeatable change already warned about in this JVM */
+    /** {@code module + '\0' + changeId + '\0' + objectName} of every repeatable change already warned about in this JVM */
     private static final Set<String> WARNED_TABLE_LOCKING_CHANGES = ConcurrentHashMap.newKeySet();
 
     private final Transactions transactions;
@@ -199,11 +199,12 @@ public final class PostgresqlCreateSchemaApplier implements SchemaApplier {
     }
 
     /**
-     * WARN, once per {@code (module, changeId)} in the JVM, of each repeatable change holding a statement that
-     * {@link PostgresqlSchemaStatements#takesTableLockEvenWhenPresent(String)}. Only a WARN: an application's own
+     * WARN, once per {@code (module, changeId, objectName)} in the JVM, of each repeatable change holding a statement
+     * that {@link PostgresqlSchemaStatements#takesTableLockEvenWhenPresent(String)}. Keyed like a change's ledger row:
+     * a contributor that emits one change id per table has each table warned about. Only a WARN: an application's own
      * contributor goes through this applier too, and refusing its start would break it.
      *
-     * @return the changes warned about by this call, as {@code module/changeId}
+     * @return the changes warned about by this call, as {@code module/changeId/objectName}
      */
     static List<String> warnOfRepeatableChangesLockingTheirTable(List<SchemaChangeSet> changeSets) {
         var warned = new ArrayList<String>();
@@ -213,14 +214,14 @@ public final class PostgresqlCreateSchemaApplier implements SchemaApplier {
                     continue;
                 }
                 var lockingStatement = change.statements().stream().filter(PostgresqlSchemaStatements::takesTableLockEvenWhenPresent).findFirst();
-                if (lockingStatement.isPresent() && WARNED_TABLE_LOCKING_CHANGES.add(changeSet.moduleId() + '\0' + change.changeId())) {
+                if (lockingStatement.isPresent() && WARNED_TABLE_LOCKING_CHANGES.add(changeSet.moduleId() + '\0' + change.changeId() + '\0' + change.objectName())) {
                     log.warn("[{}] Repeatable schema change '{}' on '{}' creates an index or adds a column without checking the catalog first. " +
                                      "It runs on every start, and PostgreSQL locks the statement's table even when the index or column already exists " +
                                      "(SHARE for an index, ACCESS EXCLUSIVE for a column) until the change set's transaction commits: the start waits for, " +
                                      "then blocks, the writes of the instances already running, and can deadlock with them. " +
                                      "Wrap the statement in PostgresqlSchemaStatements.createIndexUnlessPresent / addColumnUnlessPresent. Statement: {}",
                              changeSet.moduleId(), change.changeId(), change.objectName(), lockingStatement.get());
-                    warned.add(changeSet.moduleId() + "/" + change.changeId());
+                    warned.add(changeSet.moduleId() + "/" + change.changeId() + "/" + change.objectName());
                 }
             }
         }

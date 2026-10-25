@@ -28,7 +28,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class PostgresqlCreateSchemaApplierTableLockWarningTest {
 
     @Test
-    void a_repeatable_change_with_a_bare_index_or_column_statement_is_warned_about_once_per_module_and_change() {
+    void a_repeatable_change_with_a_bare_index_or_column_statement_is_warned_about_once_per_module_change_and_object() {
         var changeSets = List.of(new SchemaChangeSet("lock-warning-a", SchemaOrder.ORDER_APPLICATION, List.of(
                                          SchemaChange.repeatable("orders-table", "orders", "CREATE TABLE IF NOT EXISTS orders (id BIGINT, status TEXT)"),
                                          SchemaChange.repeatable("orders-status-index", "orders", "CREATE INDEX IF NOT EXISTS orders_status_idx ON orders (status)"),
@@ -37,7 +37,19 @@ class PostgresqlCreateSchemaApplierTableLockWarningTest {
                                          SchemaChange.repeatable("orders-status-index", "orders", "CREATE INDEX IF NOT EXISTS orders_status_idx ON orders (status)"))));
 
         assertThat(PostgresqlCreateSchemaApplier.warnOfRepeatableChangesLockingTheirTable(changeSets))
-                .containsExactly("lock-warning-a/orders-status-index", "lock-warning-a/orders-total-column", "lock-warning-b/orders-status-index");
+                .containsExactly("lock-warning-a/orders-status-index/orders", "lock-warning-a/orders-total-column/orders", "lock-warning-b/orders-status-index/orders");
+        assertThat(PostgresqlCreateSchemaApplier.warnOfRepeatableChangesLockingTheirTable(changeSets)).as("each is warned about once").isEmpty();
+    }
+
+    @Test
+    void changes_sharing_one_change_id_on_different_tables_are_each_warned_about() {
+        // The shape of a contributor that emits one change id per table, as the durable queues' queue-indexes does
+        var changeSets = List.of(new SchemaChangeSet("lock-warning-d", SchemaOrder.ORDER_APPLICATION, List.of(
+                SchemaChange.repeatable("queue-indexes", "orders_queue", "CREATE INDEX IF NOT EXISTS orders_queue_ready_idx ON orders_queue (ready)"),
+                SchemaChange.repeatable("queue-indexes", "invoices_queue", "CREATE INDEX IF NOT EXISTS invoices_queue_ready_idx ON invoices_queue (ready)"))));
+
+        assertThat(PostgresqlCreateSchemaApplier.warnOfRepeatableChangesLockingTheirTable(changeSets))
+                .containsExactly("lock-warning-d/queue-indexes/orders_queue", "lock-warning-d/queue-indexes/invoices_queue");
         assertThat(PostgresqlCreateSchemaApplier.warnOfRepeatableChangesLockingTheirTable(changeSets)).as("each is warned about once").isEmpty();
     }
 
