@@ -556,6 +556,26 @@ samples), with PostgreSQL (~200 %), the exchange simulator and the load driver's
 `idle in transaction` sessions (18-27 at saturation, with or without debug logging) are threads holding a transaction
 that are waiting for a core. Connection waits are therefore not what bounds a rush on this machine, and comparing
 end-to-end latency needs several alternating runs per arm. Next: what the JVM spends its CPU on during a rush (JFR).
+**Where the JVM's CPU went, and the pump that visits only owners with work.** A JFR profile across a rush
+(`settings=profile`, which itself slowed the run to booked p99 ~12 s - shares only): HTTP request threads 36 % of the
+samples, `shard-queue-pump` threads 18 % (10.6 % in asking every owner whether it needed attention), Jackson ~11 %,
+subscription gap handling ~6-7 %, reflection in `AggregateRoot.initialize` 2.8 %. bcrypt (6.6 %) was the monitoring
+scripts' HTTP Basic polls, not the driver, whose customers keep a session. The pump now visits only owners that
+signalled or came due (`752c4fa2`, `docs/durable-queue-measurements.md` §3.13). Alternating uninstrumented runs,
+before (`a106dae6`) against it:
+
+| | Before, 6 runs | One-visit pump, 5 runs |
+|---|---|---|
+| Placed → booked p99, median (each run) | 5.0 s (3.8, 4.0, 5.0, 5.1, 5.4, 6.0) | **2.9 s** (2.6, 2.8, 2.9, 4.5, 5.6) |
+| Placed → submitted p99, median | 2.6 s | 1.4 s |
+| Filled → booked p99, median | 3.2 s | 1.7 s |
+| Placed → booked p50 | 273-286 ms | 271-283 ms |
+
+Probably better, not proven: three of the five runs beat every run before, but the arms overlap and a rank test on
+the eleven stops short of significance. The JVM is still at 630-700 % of the 8 cores during rushes in both arms. Two
+of the eighteen runs over these two days lost their result to the driver's final load-report request timing out;
+`drain()` now asks again until its deadline (`report-retried` in the step counts).
+
 - Instruments used: `SignedWebhookReceiver` debug lines (arrival before any connection, queued after the intake
   commits) against the router's "Exchange accepted" line; the exchange's own `/api/webhooks/{id}/deliveries?status=`
   counts; thread dumps and `pg_stat_activity` triggered on more than 20 pool waiters. The exchange's `occurredAt` is on

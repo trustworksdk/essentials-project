@@ -463,7 +463,20 @@ public final class LoadDriver {
         var deadline = System.nanoTime() + settings.drainTimeout().toNanos();
         JsonNode report;
         while (true) {
-            report = serverReport();
+            try {
+                report = serverReport();
+            } catch (IllegalStateException e) {
+                // The report reads the run's event tables; at the end of a long run, with the settlement wave still
+                // landing, it outlasted the 30 s request timeout in 2 of 18 runs and took the whole run's result with
+                // it. The data is still there - ask again until the drain deadline.
+                if (System.nanoTime() > deadline) {
+                    throw e;
+                }
+                stats.count("report-retried");
+                log("load report failed (%s); asking again", e.getMessage());
+                Thread.sleep(5_000);
+                continue;
+            }
             var orders  = report.path("orders");
             var pending = orders.path("nonTerminal").asLong() + orders.path("fillsNotBooked").asLong() + pendingPayments(report);
             if (pending == 0) {
