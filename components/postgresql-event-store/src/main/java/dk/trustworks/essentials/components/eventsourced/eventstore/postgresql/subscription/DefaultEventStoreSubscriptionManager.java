@@ -504,9 +504,23 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
             }
             return eventStoreSubscription;
         } else {
-            log.info("[{}-{}] Event Store subscription was already added",
-                     subscriberId,
-                     forAggregateType);
+            if (started && !previousEventStoreSubscription.isStarted()) {
+                // This manager runs and the subscription it holds is not started (e.g. its own stop() was called): this
+                // subscribe does not start it, so a caller that stop()s and subscribes again would otherwise get a
+                // subscription that handles no events, with nothing logged. While this manager is stopped there is
+                // nothing to warn about: its start() starts every subscription it holds
+                log.warn("[{}-{}] Subscribe for a subscription this manager already holds, and the held {} is not started: " +
+                                 "returning it as it is, without starting it, and this call's arguments (its event handler included) were not used. " +
+                                 "It handles no events until something starts it. To subscribe again, call EventStoreSubscription#unsubscribe() " +
+                                 "instead of EventStoreSubscription#stop() - see 'Subscribing again' on EventStoreSubscriptionManager",
+                         subscriberId,
+                         forAggregateType,
+                         previousEventStoreSubscription.getClass().getSimpleName());
+            } else {
+                log.info("[{}-{}] Event Store subscription was already added",
+                         subscriberId,
+                         forAggregateType);
+            }
             return previousEventStoreSubscription;
         }
     }
