@@ -15,9 +15,9 @@
  */
 package dk.trustworks.essentials.components.foundation.postgresql;
 
-import dk.trustworks.essentials.components.foundation.messaging.queue.EnqueueOutsideUnitOfWorkGuard;
 import dk.trustworks.essentials.components.foundation.postgresql.PostgresqlSchemaHistory.ChangeKey;
 import dk.trustworks.essentials.components.foundation.schema.*;
+import dk.trustworks.essentials.components.foundation.transaction.TransactionProbe;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
 import dk.trustworks.essentials.shared.network.Network;
 import org.jdbi.v3.core.*;
@@ -377,7 +377,7 @@ public final class PostgresqlCreateSchemaApplier implements SchemaApplier {
                     // A Jdbi built on Spring's TransactionAwareDataSourceProxy (spring-boot-starter-postgresql's
                     // jdbi bean) joins an active Spring transaction. Whether this one does cannot be told from the
                     // Jdbi, so an active Spring transaction counts as joined: at worst a deadlock is not retried
-                    return !EnqueueOutsideUnitOfWorkGuard.isSpringTransactionActive();
+                    return !TransactionProbe.isSpringTransactionActive();
                 }
 
                 @Override
@@ -416,7 +416,7 @@ public final class PostgresqlCreateSchemaApplier implements SchemaApplier {
                 @Override
                 public boolean beginsItsOwnTransaction() {
                     // Spring-aware: counts a Spring transaction no unit of work is bound to yet
-                    return !EnqueueOutsideUnitOfWorkGuard.isUnitOfWorkActive(unitOfWorkFactory);
+                    return !TransactionProbe.isUnitOfWorkActive(unitOfWorkFactory);
                 }
 
                 @Override
