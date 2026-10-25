@@ -2219,6 +2219,8 @@ class ShardOwnedUnsubscribeIT {
      * gave up charged nothing for the one asked again to add to.
      */
     @Test
+    // awaitCallEnded shuts the request's executor down with a bound; close() would wait for it with none
+    @SuppressWarnings("PMD.CloseResource")
     void a_release_on_request_whose_charge_outwaits_another_release_of_the_units_lease_row_fails_with_nothing_charged_and_asked_again_releases_the_unit() throws Exception {
         // The request's network wait bound is max(leaseTtl, SHUTDOWN_BUDGET). No other instance runs here, so nothing takes
         // the unit once the stopped instance's membership row is older than leaseTtl.
@@ -2226,6 +2228,7 @@ class ShardOwnedUnsubscribeIT {
         var         entered      = new CountDownLatch(1);
         var         release      = new CountDownLatch(1);
         LeasedOwner claimedOwner = null;
+        var         requests     = threadOfItsOwn("release-on-request");
         try (var queue = newQueue(PostgresqlMessageQueue.LifecycleHook.NONE, settingsWith(Duration.ofMillis(300), leaseTtl))) {
             try {
                 queue.consume((messageId, key, payload, payloadType) -> {
@@ -2252,14 +2255,16 @@ class ShardOwnedUnsubscribeIT {
 
                 var bound   = ordered.stopNetworkWaitBound();
                 var started = System.nanoTime();
-                // On a thread of its own, so a request that waited for the claim with no bound fails this test rather than hanging it
+                // On a thread of the test's own, so a request that waited for the claim with no bound fails this test rather
+                // than hanging it, and the finally below, once the claim has ended, fails the test unless it has returned
+                // before the queue closes
                 var request = CompletableFuture.supplyAsync(() -> {
                     try {
                         return queue.releaseKeptOrderedUnit(INSTANCE_ID, kept.shard());
                     } catch (SQLException e) {
                         throw new CompletionException(e);
                     }
-                });
+                }, requests);
                 assertThatThrownBy(() -> request.get(bound.plusSeconds(10).toMillis(), TimeUnit.MILLISECONDS))
                         .as("the request fails with the charge's failure")
                         .isInstanceOf(ExecutionException.class)
@@ -2293,6 +2298,7 @@ class ShardOwnedUnsubscribeIT {
                     claimedOwner.endReleaseClaim();
                 }
                 release.countDown();
+                awaitCallEnded(requests, "the release on request");
             }
         }
     }
@@ -3288,6 +3294,8 @@ class ShardOwnedUnsubscribeIT {
      * waiting behind the same lock as the abandoned deregistration.
      */
     @Test
+    // awaitCallEnded shuts the consume's executor down with a bound; close() would wait for it with none
+    @SuppressWarnings("PMD.CloseResource")
     void an_unsubscribe_whose_stop_gave_up_on_its_hand_back_keeps_its_instance_id_out_of_use_until_the_hand_back_finished() throws Exception {
         // A heartbeat every 20 s: none upserts the locked row while the test runs.
         try (var queue = newQueue(PostgresqlMessageQueue.LifecycleHook.NONE, settingsWith(Duration.ofMillis(300), Duration.ofSeconds(60)));
@@ -3298,6 +3306,7 @@ class ShardOwnedUnsubscribeIT {
             assertThat(lanes).as("premise: the first subscription's two lanes").hasSize(2);
 
             locking.setAutoCommit(false);
+            var consumes = threadOfItsOwn("next-consume");
             try {
                 assertThat(lockMembershipRowOf(locking, INSTANCE_ID)).as("premise: the test holds the subscription's membership row").isTrue();
                 first.unsubscribe();
@@ -3306,7 +3315,10 @@ class ShardOwnedUnsubscribeIT {
                 assertThat(lanes).as("premise: that hand-back is still running").anyMatch(ShardOwnedQueue::handBackStillRunning);
                 assertThat(registeredInstances()).as("premise: it has not deregistered the instance id yet").containsExactly(INSTANCE_ID);
 
-                var next = CompletableFuture.supplyAsync(() -> consumeUnchecked(queue)).get(15, TimeUnit.SECONDS);
+                // On a thread of the test's own, so a consume() that waited behind the lock fails this test rather than hanging
+                // it, and the finally below, once the lock is let go, fails the test unless it has returned before the queue
+                // closes
+                var next = CompletableFuture.supplyAsync(() -> consumeUnchecked(queue), consumes).get(15, TimeUnit.SECONDS);
                 assertThat(next.isStarted()).as("the next consume() did not wait behind the abandoned deregistration").isTrue();
                 assertThat(registeredInstances()).as("the next consume() registered under the next instance id")
                                                  .containsExactly(INSTANCE_ID, INSTANCE_ID + "-1");
@@ -3318,6 +3330,7 @@ class ShardOwnedUnsubscribeIT {
                                                                       .doesNotContain("out of use for "));
             } finally {
                 locking.rollback();
+                awaitCallEnded(consumes, "the next consume()");
             }
 
             Awaitility.await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
@@ -3475,6 +3488,26 @@ class ShardOwnedUnsubscribeIT {
         } catch (SQLException e) {
             throw new IllegalStateException(e);
         }
+    }
+
+    /**
+     * A daemon thread of the test's own, for a call that would hang the test if it regressed to waiting with no bound. The
+     * test ends it with {@link #awaitCallEnded} before the queue closes, so a call whose bounded {@code get} timed out is
+     * interrupted once what it waited for is let go, and fails the test unless it has returned before the queue closes -
+     * rather than going on unseen, as it would on the common pool, while the queue closes and after the next test has
+     * started.
+     */
+    private static ExecutorService threadOfItsOwn(String name) {
+        return Executors.newSingleThreadExecutor(Thread.ofPlatform().daemon().name(name).factory());
+    }
+
+    /**
+     * Ends a {@link #threadOfItsOwn} once what its call waited for has been let go: interrupts the call if it is still
+     * running, and fails the test unless it has returned within 30 s.
+     */
+    private static void awaitCallEnded(ExecutorService thread, String call) throws InterruptedException {
+        thread.shutdownNow();
+        assertThat(thread.awaitTermination(30, TimeUnit.SECONDS)).as("%s has returned before the queue closes", call).isTrue();
     }
 
     private static void awaitBothLanesHoldUnits(Subscription subscription) {
