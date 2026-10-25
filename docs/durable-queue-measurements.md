@@ -624,7 +624,14 @@ same work; visiting only owners that signalled, came due (`nextAttentionNanos`) 
 queues the CPU is unchanged and statements rise 12 % (more probes and reads per message: smaller passes share the
 batched reads and the horizon probe among fewer owners). The 32-queue tail is within overlapping ranges. Idle cost
 unchanged (`ShardOwnedMultiQueueCostIT` 8.0 vs 8.3 queries/s). A first attempt - skipping the `compareAndSet` in the
-liveness check, which JFR had attributed 3.5 % to - measured no gain beyond noise and was reverted.
+liveness check, which JFR had attributed 3.5 % to - measured no gain beyond noise and was reverted. Lengthening the
+full scan's interval tenfold (500 ms → 5 s) did not lower the 32-queue pump CPU either (140-147 against 156-162 ms per
+1 000 messages), so the remaining growth is per-owner work on busy owners, not the safety net.
+
+In the trading demo (300 orders/s rushes, ~2 176 ordered units, 4 pumps), alternating uninstrumented runs before and
+after: placed → booked p99 median 5.0 s over 6 runs against 2.9 s over 5 (placed → submitted 2.6 → 1.4 s, filled →
+booked 3.2 → 1.7 s), p50 unchanged. The arms overlap (2.6-5.6 against 3.8-6.0 s), so this is probable rather than
+established; the demo's JVM is CPU-bound during every rush in both arms (`_demo_harness/CLAUDE.md`).
 
 ## 4. Environment
 
