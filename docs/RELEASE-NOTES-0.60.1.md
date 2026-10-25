@@ -142,7 +142,7 @@ did under polling. Dropping the round trip saves a JSON parse and write per even
 The shard-owned `DurableQueues` adapter stores each message as an envelope in the engine's `bytea` payload. In
 0.60.0 (format 1) the payload and metadata were held as JSON strings inside it, so every message was serialized twice
 on the way in and parsed twice on the way out. 0.60.1 writes format 2, which embeds them as JSON:
-`{"payloadType":"<class name>","payload":{...},"metaData":{...}}`. Measured on a typical event, that is about 30%
+`{"payloadType":"<class name>","payload":{...},"metaData":{...}}`. Measured on a typical event, that is about 35%
 less CPU to write and read a message and 9% fewer bytes, and the payload is no longer escaped in the
 `shard_queue_*_readable` views.
 
@@ -154,6 +154,10 @@ less CPU to write and read a message and 9% fewer bytes, and the payload is no l
   without a release that only reads it first; a future change to a format in use will get that step.
 - `MessageEnvelope.deserialize(jsonSerializer, bytes, key, order)` is deprecated for removal: it cannot tell the
   formats apart. Use the overload that takes the row's format version.
+- The envelope is read with a new `JSONSerializer.readProperties` (`foundation`): it reads a JSON object's top-level
+  properties one at a time, in document order, so a document whose shape depends on one of its own properties can be
+  read in a single pass. `Jackson3JSONSerializer` streams; any other implementation inherits a default that works
+  through its own `deserialize`. It is a new default method, so existing implementations keep compiling.
 
 ## 2. Fixes
 

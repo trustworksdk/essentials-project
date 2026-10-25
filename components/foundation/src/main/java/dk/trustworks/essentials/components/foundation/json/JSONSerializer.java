@@ -97,6 +97,26 @@ public interface JSONSerializer {
     <T> T deserialize(byte[] json, Class<T> javaType);
 
     /**
+     * Reads the top-level properties of a JSON object one at a time, in document order, handing each to {@code reader},
+     * which decides per property how to read its value - or not to, in which case it is skipped. This is how to read a
+     * document whose shape depends on one of its own properties - a type name, a version - without deserializing it
+     * twice or knowing its type up front: read the deciding property first, then the rest with what it said. The
+     * deciding property has to come first in the document.
+     * <p>
+     * The default implementation scans the bytes for where each value ends and deserializes exactly those bytes with
+     * this serializer, so it works for any implementation; one with a streaming parser should override it to read in
+     * a single pass, as {@link Jackson3JSONSerializer} does.
+     *
+     * @param json   the JSON document, which must be an object
+     * @param reader called once per top-level property
+     * @throws JSONDeserializationException if {@code json} is not a well-formed JSON object, or a value cannot be read
+     *                                      as asked
+     */
+    default void readProperties(byte[] json, JSONPropertyReader reader) {
+        JSONPropertyScanner.readProperties(this, json, reader);
+    }
+
+    /**
      * Get the {@link ClassLoader} used for serializing to JSON and deserializing from JSON<br>
      * <b>Note: MUST not be null</b>
      * @return the {@link ClassLoader} used for serializing to JSON and deserializing from JSON

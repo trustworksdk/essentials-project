@@ -1006,6 +1006,26 @@ Order order = serializer.deserialize(json, Order.class);
 Object event = serializer.deserialize(json, "com.example.OrderCreatedEvent");
 ```
 
+`readProperties(byte[] json, JSONPropertyReader reader)` reads a JSON object's top-level properties one at a time, in
+document order, for a document whose shape depends on one of its own properties - a type name, a version. Read the
+deciding property first, then the rest with what it said; a value the reader does not ask for is skipped. The deciding
+property must come first in the document. `Jackson3JSONSerializer` reads in a single pass; every other implementation
+inherits a default that deserializes each requested value on its own, through that implementation's `deserialize`.
+
+```java
+serializer.readProperties(bytes, (name, value) -> {
+    switch (name) {
+        case "type" -> type = value.asString();
+        case "body" -> body = value.as(type);           // or value.as(Order.class)
+        default -> { }                                  // skipped
+    }
+});
+```
+
+A `JSONPropertyValue` is readable once, and only during its `read` call. A malformed document or a value that does not
+fit the requested type throws `JSONDeserializationException`; an exception thrown by the reader reaches the caller
+unwrapped.
+
 ⚠️ `EssentialsJacksonModules.modules()` (used by `EssentialsObjectMappers`) throws `IllegalStateException` when a
 0.50-era Jackson 2 `types-jackson` / `immutable-jackson` jar is on the classpath (same FQCNs, wrong Jackson major) —
 depend on `types-jackson3` / `immutable-jackson3`.

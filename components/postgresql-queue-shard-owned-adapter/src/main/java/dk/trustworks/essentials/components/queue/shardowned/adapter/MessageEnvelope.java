@@ -17,13 +17,12 @@
 
 package dk.trustworks.essentials.components.queue.shardowned.adapter;
 
-import dk.trustworks.essentials.components.foundation.json.JSONSerializer;
+import dk.trustworks.essentials.components.foundation.json.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
 
 import java.nio.charset.StandardCharsets;
-import java.util.Arrays;
 
-import static dk.trustworks.essentials.shared.FailFast.*;
+import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
  * How a {@link Message} is stored in a shard-owned queue's {@code bytea} payload.
@@ -48,18 +47,16 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  *     <li><b>{@value #FORMAT_VERSION}</b>, written by this version — the payload and metadata embedded as JSON:
  *         {@code {"payloadType":"<class name>","payload":{...},"metaData":{...}}}, always in that order and
  *         with no whitespace between the envelope's own tokens. The {@link JSONSerializer} writes the payload
- *         and the metadata, and reads them back from exactly their bytes: the envelope is assembled and
- *         taken apart around them, so it needs no JSON library of its own and a custom serializer stays in
- *         charge of the application's types. Taking it apart only has to find where the payload ends,
- *         which a string-aware scan does without building anything.</li>
+ *         and the metadata, and the envelope is assembled around their bytes, so it needs no JSON library of its
+ *         own and a custom serializer stays in charge of the application's types. It is read with
+ *         {@link JSONSerializer#readProperties}: {@code payloadType} first, then the payload as that type, in one
+ *         pass where the serializer can stream ({@link Jackson3JSONSerializer} does).</li>
  *     <li><b>{@value #FORMAT_VERSION_1}</b>, written by 0.60.0 — the payload and metadata held as JSON
  *         <em>strings</em> inside a flat object of three strings. Every message was therefore serialized
  *         twice on the way in and parsed twice on the way out, and its payload appeared escaped in
  *         {@code shard_queue_unordered_readable}. Measured on a typical event with three metadata entries,
- *         {@value #FORMAT_VERSION} takes about 30% less CPU to write and read (write 1 450 to 900 ns, read 2 800
- *         to 2 050 ns) and 9% fewer bytes. Reading it in one pass through Jackson would save about 135 ns more a
- *         read, not enough to give this adapter a Jackson dependency and take the payload away from a custom
- *         serializer.</li>
+ *         {@value #FORMAT_VERSION} takes about 35% less CPU to write and read (write 1 420 to 860 ns, read 2 780
+ *         to 1 870 ns) and 9% fewer bytes.</li>
  * </ul>
  * The format changed without a release that only reads it first because the adapter shipped in 0.60.0 off
  * by default and unused: no cluster runs it at mixed versions. A future change to a format that is in use
@@ -144,7 +141,8 @@ public record MessageEnvelope(String payloadType, String payload, String metaDat
      * @param formatVersion the engine's {@code payloadType} for the row - the format it was written in
      * @param key           the ordering key, or {@code null} for an unordered message
      * @param order         the ordering sequence; ignored when {@code key} is {@code null}
-     * @throws IllegalArgumentException when {@code formatVersion} is not one {@link #isReadable(int) this adapter reads}
+     * @throws IllegalArgumentException     when {@code formatVersion} is not one {@link #isReadable(int) this adapter reads}
+     * @throws JSONDeserializationException when the bytes are not a well-formed envelope of that format
      */
     public static Message deserialize(JSONSerializer jsonSerializer, byte[] bytes, int formatVersion, String key, long order) {
         requireNonNull(jsonSerializer, "No jsonSerializer provided");
@@ -152,16 +150,13 @@ public record MessageEnvelope(String payloadType, String payload, String metaDat
         Object          payload;
         MessageMetaData metaData;
         if (formatVersion == FORMAT_VERSION) {
-            var typeStart   = expect(bytes, 0, TYPE_PREFIX);
-            var typeEnd     = indexOf(bytes, typeStart, (byte) '"');
-            var type        = new String(bytes, typeStart, typeEnd - typeStart, StandardCharsets.UTF_8);
-            var payloadFrom = expect(bytes, typeEnd, PAYLOAD_PREFIX);
-            var payloadTo   = endOfValue(bytes, payloadFrom);
-            var metaFrom    = expect(bytes, payloadTo, METADATA_PREFIX);
-            var metaTo      = bytes.length - 1;
-            requireTrue(metaTo >= metaFrom && bytes[metaTo] == '}', "Envelope does not end after its metaData");
-            payload = jsonSerializer.deserialize(Arrays.copyOfRange(bytes, payloadFrom, payloadTo), type);
-            metaData = jsonSerializer.deserialize(Arrays.copyOfRange(bytes, metaFrom, metaTo), MessageMetaData.class);
+            var read = new FormatTwo();
+            jsonSerializer.readProperties(bytes, read);
+            if (read.payload == null || read.metaData == null) {
+                throw new JSONDeserializationException("Envelope is malformed: it lacks its payload or its metaData");
+            }
+            payload = read.payload;
+            metaData = read.metaData;
         } else if (formatVersion == FORMAT_VERSION_1) {
             var envelope = jsonSerializer.deserialize(bytes, MessageEnvelope.class);
             payload = jsonSerializer.deserialize(envelope.payload(), envelope.payloadType());
@@ -194,82 +189,29 @@ public record MessageEnvelope(String payloadType, String payload, String metaDat
     }
 
     /**
-     * @return the index after {@code expected}, which must start at {@code at}
+     * Reads a format-{@value #FORMAT_VERSION} envelope's properties as {@link JSONSerializer#readProperties} hands
+     * them over. The payload's type has to be known before the payload is read, which is why it is written first.
      */
-    private static int expect(byte[] bytes, int at, byte[] expected) {
-        // Not requireTrue: its message would be built on every call, which measured ~450 ns of a ~2 300 ns read
-        if (at + expected.length > bytes.length || !Arrays.equals(bytes, at, at + expected.length, expected, 0, expected.length)) {
-            throw new IllegalArgumentException("Envelope is malformed: expected " + new String(expected, StandardCharsets.UTF_8) + " at byte " + at);
-        }
-        return at + expected.length;
-    }
+    private static final class FormatTwo implements JSONPropertyReader {
+        private String          payloadType;
+        private Object          payload;
+        private MessageMetaData metaData;
 
-    private static int indexOf(byte[] bytes, int from, byte wanted) {
-        for (var i = from; i < bytes.length; i++) {
-            if (bytes[i] == wanted) {
-                return i;
-            }
-        }
-        throw new IllegalArgumentException("Envelope is malformed: no closing quote after byte " + from);
-    }
-
-    /**
-     * The index just past the JSON value starting at {@code from} (after any whitespace on either side of it). Only
-     * strings can hide a bracket, and inside a string only an escaped character can hide its closing quote, so
-     * tracking those two is enough to find where an object or array ends. The {@link JSONSerializer} validates the
-     * value itself when it reads it.
-     */
-    private static int endOfValue(byte[] bytes, int from) {
-        var i = skipWhitespace(bytes, from);
-        requireTrue(i < bytes.length, "Envelope is malformed: no payload value");
-        var first = bytes[i];
-        if (first == '{' || first == '[') {
-            var depth    = 0;
-            var inString = false;
-            for (; i < bytes.length; i++) {
-                var b = bytes[i];
-                if (inString) {
-                    if (b == '\\') {
-                        i++;
-                    } else if (b == '"') {
-                        inString = false;
+        @Override
+        public void read(String name, JSONPropertyValue value) {
+            switch (name) {
+                case "payloadType" -> payloadType = value.asString();
+                case "payload" -> {
+                    if (payloadType == null) {
+                        throw new JSONDeserializationException("Envelope is malformed: its payload comes before its payloadType");
                     }
-                } else if (b == '"') {
-                    inString = true;
-                } else if (b == '{' || b == '[') {
-                    depth++;
-                } else if ((b == '}' || b == ']') && --depth == 0) {
-                    return skipWhitespace(bytes, i + 1);
+                    payload = value.as(payloadType);
+                }
+                case "metaData" -> metaData = value.as(MessageMetaData.class);
+                default -> {
+                    // Unknown properties are skipped, so a later version may add one without breaking this reader
                 }
             }
-            throw new IllegalArgumentException("Envelope is malformed: payload is not closed");
         }
-        if (first == '"') {
-            for (i++; i < bytes.length; i++) {
-                if (bytes[i] == '\\') {
-                    i++;
-                } else if (bytes[i] == '"') {
-                    return skipWhitespace(bytes, i + 1);
-                }
-            }
-            throw new IllegalArgumentException("Envelope is malformed: payload string is not closed");
-        }
-        // A number, true, false or null runs to the next separator
-        while (i < bytes.length && bytes[i] != ',' && bytes[i] != '}' && !isWhitespace(bytes[i])) {
-            i++;
-        }
-        return skipWhitespace(bytes, i);
-    }
-
-    private static int skipWhitespace(byte[] bytes, int from) {
-        var i = from;
-        while (i < bytes.length && isWhitespace(bytes[i])) {
-            i++;
-        }
-        return i;
-    }
-
-    private static boolean isWhitespace(byte b) {
-        return b == ' ' || b == '\n' || b == '\r' || b == '\t';
     }
 }

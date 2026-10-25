@@ -150,17 +150,19 @@ class MessageEnvelopeTest {
 
     @Test
     void a_malformed_envelope_is_refused_rather_than_misread() {
-        var valid = MessageEnvelope.serialize(jsonSerializer, new Message(new OrderPlaced("o-1", BigDecimal.ONE, List.of())));
+        var valid     = MessageEnvelope.serialize(jsonSerializer, new Message(new OrderPlaced("o-1", BigDecimal.ONE, List.of())));
         var truncated = Arrays.copyOf(valid, valid.length - 20);
-        var format1   = "{\"payloadType\":\"x\",\"payload\":\"{}\",\"metaData\":null}".getBytes(StandardCharsets.UTF_8);
+        var noPayload = "{\"payloadType\":\"x\",\"metaData\":{}}".getBytes(StandardCharsets.UTF_8);
+        var typeAfter = ("{\"payload\":{},\"payloadType\":\"" + OrderPlaced.class.getName() + "\",\"metaData\":{}}").getBytes(StandardCharsets.UTF_8);
+        // A format-1 row read as the current format: its payload is a JSON string, which is not an OrderPlaced
+        var format1 = ("{\"payloadType\":\"" + OrderPlaced.class.getName() + "\",\"payload\":\"{\\\"orderId\\\":\\\"o-1\\\"}\",\"metaData\":null}")
+                .getBytes(StandardCharsets.UTF_8);
 
-        assertThatThrownBy(() -> MessageEnvelope.deserialize(jsonSerializer, truncated, MessageEnvelope.FORMAT_VERSION, null, 0))
-                .isInstanceOf(IllegalArgumentException.class);
-        // A format-1 row read as the current format: its payload is a string, so the metaData that follows it is not found
-        assertThatThrownBy(() -> MessageEnvelope.deserialize(jsonSerializer, "{\"wrong\":1}".getBytes(StandardCharsets.UTF_8), MessageEnvelope.FORMAT_VERSION, null, 0))
-                .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> MessageEnvelope.deserialize(jsonSerializer, format1, MessageEnvelope.FORMAT_VERSION, null, 0))
-                .isInstanceOf(RuntimeException.class);
+        for (var bytes : List.of(truncated, noPayload, typeAfter, format1)) {
+            assertThatThrownBy(() -> MessageEnvelope.deserialize(jsonSerializer, bytes, MessageEnvelope.FORMAT_VERSION, null, 0))
+                    .as(new String(bytes, StandardCharsets.UTF_8))
+                    .isInstanceOf(JSONDeserializationException.class);
+        }
     }
 
     private Message roundTrip(Message message) {
