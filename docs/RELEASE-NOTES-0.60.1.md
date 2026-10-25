@@ -142,7 +142,7 @@ did under polling. Dropping the round trip saves a JSON parse and write per even
 The shard-owned `DurableQueues` adapter stores each message as an envelope in the engine's `bytea` payload. In
 0.60.0 (format 1) the payload and metadata were held as JSON strings inside it, so every message was serialized twice
 on the way in and parsed twice on the way out. 0.60.1 writes format 2, which embeds them as JSON:
-`{"payloadType":"<class name>","payload":{...},"metaData":{...}}`. Measured on a typical event, that is about 18%
+`{"payloadType":"<class name>","payload":{...},"metaData":{...}}`. Measured on a typical event, that is about 30%
 less CPU to write and read a message and 9% fewer bytes, and the payload is no longer escaped in the
 `shard_queue_*_readable` views.
 

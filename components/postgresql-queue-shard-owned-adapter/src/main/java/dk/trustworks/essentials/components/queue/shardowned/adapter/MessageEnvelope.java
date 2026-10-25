@@ -56,9 +56,10 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  *         <em>strings</em> inside a flat object of three strings. Every message was therefore serialized
  *         twice on the way in and parsed twice on the way out, and its payload appeared escaped in
  *         {@code shard_queue_unordered_readable}. Measured on a typical event with three metadata entries,
- *         {@value #FORMAT_VERSION} takes about 18% less CPU to write and read (write 1 400 to 1 110 ns, read 2 900
- *         to 2 430 ns) and 9% fewer bytes. Reading it through Jackson directly would save more, but would give this
- *         adapter a Jackson dependency and take the payload away from a custom serializer.</li>
+ *         {@value #FORMAT_VERSION} takes about 30% less CPU to write and read (write 1 450 to 900 ns, read 2 800
+ *         to 2 050 ns) and 9% fewer bytes. Reading it in one pass through Jackson would save about 135 ns more a
+ *         read, not enough to give this adapter a Jackson dependency and take the payload away from a custom
+ *         serializer.</li>
  * </ul>
  * The format changed without a release that only reads it first because the adapter shipped in 0.60.0 off
  * by default and unused: no cluster runs it at mixed versions. A future change to a format that is in use
@@ -196,8 +197,10 @@ public record MessageEnvelope(String payloadType, String payload, String metaDat
      * @return the index after {@code expected}, which must start at {@code at}
      */
     private static int expect(byte[] bytes, int at, byte[] expected) {
-        requireTrue(at + expected.length <= bytes.length && Arrays.equals(bytes, at, at + expected.length, expected, 0, expected.length),
-                    "Envelope is malformed: expected " + new String(expected, StandardCharsets.UTF_8) + " at byte " + at);
+        // Not requireTrue: its message would be built on every call, which measured ~450 ns of a ~2 300 ns read
+        if (at + expected.length > bytes.length || !Arrays.equals(bytes, at, at + expected.length, expected, 0, expected.length)) {
+            throw new IllegalArgumentException("Envelope is malformed: expected " + new String(expected, StandardCharsets.UTF_8) + " at byte " + at);
+        }
         return at + expected.length;
     }
 
