@@ -237,6 +237,72 @@ class ReleaseChargeLedgerTest {
     }
 
     /**
+     * A charge on a thread whose waits for the database are bounded ({@link NetworkWaitBound}) - a stop's budget thread, the
+     * hand-back of a kept unit, a release on request - waits for a release claimed before it no longer than that bound, then
+     * throws with nothing charged and nothing recorded, with an SQL state outside class {@code 08}, as nothing was sent. A
+     * release statement on a heartbeat tick runs with no bound, so waiting for its claim unbounded held such a charge, and
+     * the thread the bound was to free, for as long as that statement ran. A charge with no bound still waits for the claim
+     * to end.
+     */
+    @Test
+    void a_charge_under_a_network_wait_bound_waits_for_a_release_claimed_before_it_no_longer_than_that_bound_and_charges_nothing() throws Exception {
+        var writes = new FakeWrites(Map.of(1L, 1));
+        var ledger = ledger(writes, 3, new ShardOwnerMetrics(), new ArrayList<>());
+        var bound  = Duration.ofMillis(300);
+        assertThat(ledger.claimReleaseUnlessMoveOwed()).as("premise: a release is claimed").isTrue();
+
+        var unbounded = CompletableFuture.supplyAsync(() -> charge(ledger, candidates(1L)));
+        var waited    = new AtomicReference<Duration>();
+        var bounded = CompletableFuture.supplyAsync(() -> {
+            var started = System.nanoTime();
+            try {
+                NetworkWaitBound.call(bound, () -> ledger.charge(null, () -> candidates(1L)));
+                return null;
+            } catch (SQLException e) {
+                return e;
+            } finally {
+                waited.set(Duration.ofNanos(System.nanoTime() - started));
+            }
+        });
+
+        var failure = bounded.get(10, TimeUnit.SECONDS);
+        assertThat((Throwable) failure).as("the bounded charge gives up on the claim").isInstanceOf(SQLException.class);
+        assertThat(waited.get()).as("after about the bound").isGreaterThanOrEqualTo(bound.minusMillis(20)).isLessThan(Duration.ofSeconds(5));
+        assertThat(failure.getSQLState()).as("not in doubt: nothing was sent").isNotNull().doesNotStartWith("08");
+        assertThat(LeaseRowState.mayHaveGoneThrough(failure)).isFalse();
+        assertThat(failure.getMessage()).contains("unit " + SHARD).contains(bound.toString());
+        assertThat(writes.chargeCalls).as("nothing charged").isEmpty();
+        assertThat(ledger.answer()).isEqualTo(ReleaseChargeLedger.Answer.NONE);
+        assertThat(ledger.owes(candidates(1L))).as("the candidate is still owed").isTrue();
+        assertThatThrownBy(() -> unbounded.get(300, TimeUnit.MILLISECONDS)).as("a charge with no bound still waits for the claim")
+                                                                           .isInstanceOf(TimeoutException.class);
+
+        ledger.endReleaseClaim();
+
+        assertThat(unbounded.get(10, TimeUnit.SECONDS).charged()).as("charged once the claim ended").isEqualTo(1);
+        assertThat(writes.chargeCalls).containsExactly(Set.of(1L));
+    }
+
+    /**
+     * A charge under a network wait bound whose claimed release ends within the bound goes on and charges, as one with no
+     * bound does.
+     */
+    @Test
+    void a_charge_under_a_network_wait_bound_goes_on_once_the_release_claimed_before_it_ends_within_the_bound() throws Exception {
+        var writes = new FakeWrites(Map.of(1L, 1));
+        var ledger = ledger(writes, 3, new ShardOwnerMetrics(), new ArrayList<>());
+        assertThat(ledger.claimReleaseUnlessMoveOwed()).as("premise: a release is claimed").isTrue();
+
+        var charge = CompletableFuture.supplyAsync(() -> NetworkWaitBound.call(Duration.ofSeconds(30), () -> charge(ledger, candidates(1L))));
+        assertThatThrownBy(() -> charge.get(300, TimeUnit.MILLISECONDS)).as("the charge waits for the claimed release")
+                                                                          .isInstanceOf(TimeoutException.class);
+        ledger.endReleaseClaim();
+
+        assertThat(charge.get(10, TimeUnit.SECONDS).charged()).isEqualTo(1);
+        assertThat(writes.chargeCalls).containsExactly(Set.of(1L));
+    }
+
+    /**
      * The completion wins: a handler that completes while its message's dead-letter move is still owed - the charge
      * committed, the move refused - settles that move as handled, and no later call makes it. The owner records the
      * message handled instead (its acknowledgement queued). Made, the move dead-lettered a message whose handler had

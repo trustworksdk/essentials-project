@@ -21,6 +21,7 @@ import org.slf4j.*;
 import java.lang.reflect.*;
 import java.sql.*;
 import java.time.Duration;
+import java.util.Optional;
 
 import static dk.trustworks.essentials.shared.FailFast.*;
 
@@ -41,7 +42,9 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  * And for a release on request of such a unit ({@code ShardOwnedQueue}'s {@code releaseKeptOrderedUnit}), which takes
  * the same claim on the caller's thread - an admin request's among them - and held it, and that thread, the same way.
  * Past the bound the driver stops waiting and throws, as on a socket timeout. The bound applies to each
- * wait for an answer, not to the work as a whole.
+ * wait for an answer, not to the work as a whole. A charge before a release ({@code ReleaseChargeLedger.charge}) made in
+ * that work bounds by it, too, its wait for a release of the same owner's lease row to end ({@link #current}), as that
+ * release - a heartbeat tick's, say - may run with no bound.
  * <p>
  * A connection on which the bound cannot be read or set - a driver without it ({@link SQLFeatureNotSupportedException}),
  * or any other failure - is handed over as it is, with no bound, and its work waits as long as it did before.
@@ -74,6 +77,15 @@ final class NetworkWaitBound {
         requireNonNull(work, "No work provided");
         requireTrue(bound.isPositive(), "The bound must be positive");
         return ScopedValue.where(BOUND, bound).call(work);
+    }
+
+    /**
+     * The bound {@link #during} or {@link #call} set for the work the calling thread is running, if it runs inside either;
+     * empty otherwise. For a wait of that thread that is not on a connection but should not outlast the bound either:
+     * {@code ReleaseChargeLedger}'s wait for a release of its owner's lease row to end before it charges.
+     */
+    static Optional<Duration> current() {
+        return BOUND.isBound() ? Optional.of(BOUND.get()) : Optional.empty();
     }
 
     /**

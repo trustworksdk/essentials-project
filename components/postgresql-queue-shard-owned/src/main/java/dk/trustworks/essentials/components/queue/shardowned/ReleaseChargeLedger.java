@@ -20,8 +20,9 @@ import dk.trustworks.essentials.components.queue.shardowned.spi.MessageId;
 import dk.trustworks.essentials.shared.Exceptions;
 
 import java.sql.*;
+import java.time.Duration;
 import java.util.*;
-import java.util.concurrent.ConcurrentSkipListMap;
+import java.util.concurrent.*;
 import java.util.function.*;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
@@ -104,7 +105,11 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  *     claim; so the wait closes no cycle with a lock the waiting caller holds. Nor does it wait on the pool through the
  *     claim holder: {@code ShardOwnedQueue.releaseLeaseRows} takes the statement's connection before it claims any owner.
  *     A waiting charge waits for the claims of those later owners and for the release statement, and keeps its caller's
- *     connection, when it holds one, meanwhile;</li>
+ *     connection, when it holds one, meanwhile. On a thread whose waits for the database are bounded
+ *     ({@link NetworkWaitBound}: a stop's budget thread, the hand-back of a kept unit, a release on request) it waits no
+ *     longer than that bound, then throws with nothing charged ({@link #RELEASE_CLAIM_WAIT_TIMED_OUT}), as the release
+ *     statement it waits for may run with no bound (a heartbeat tick's); with no bound, for as long as the claims are
+ *     held;</li>
  *     <li>so a caller of {@link #charge}, {@link #owes}, {@link #owesDeadLetterMove}, {@link #answer} or
  *     {@link #deadLetteredWhileInHandler} or {@link #completedInHandler} must not hold the owner's state lock, nor any lock
  *     those callbacks take: {@link #owes}, {@link #owesDeadLetterMove} and {@link #answer} take the monitor, and
@@ -252,6 +257,14 @@ final class ReleaseChargeLedger {
         static final Answer NONE = new Answer(0, List.of());
     }
 
+    /**
+     * The SQL state of the {@link SQLException} {@link #charge} throws when a release's claim outlasts the calling thread's
+     * network wait bound: PostgreSQL's {@code lock_not_available}, which a {@code lock_timeout} raises, as this is a wait
+     * for a lock - the claim - given up. Outside class {@code 08}, so the failure is not taken for one that may have gone
+     * through on the server ({@link LeaseRowState#mayHaveGoneThrough}): no statement was sent.
+     */
+    static final String RELEASE_CLAIM_WAIT_TIMED_OUT = "55P03";
+
     private final MessageId.Lane                lane;
     private final int                           shard;
     private final Writes                        writes;
@@ -389,10 +402,11 @@ final class ReleaseChargeLedger {
     /**
      * {@link #owesDeadLetterMove} for a release of the owner's row about to be made, and, when nothing is owed, a claim on
      * that release, held until {@link #endReleaseClaim}: a {@link #charge} that starts while a claim is held waits for every
-     * claim to end before it takes its candidates. So no charge leaves a move owed between this check and the release
-     * statement after it. Asked and checked alone, a charge on another thread - a second release site of the same owner -
-     * could start after the check, leave a move owed (its move failing), and the row was released with it owed all the
-     * same. A charge already running when this is asked is waited for, as {@link #owesDeadLetterMove} waits for it.
+     * claim to end before it takes its candidates, or, past its thread's network wait bound, throws without taking them.
+     * So no charge leaves a move owed between this check and the release statement after it. Asked and checked alone, a
+     * charge on another thread - a second release site of the same owner - could start after the check, leave a move owed
+     * (its move failing), and the row was released with it owed all the same. A charge already running when this is asked
+     * is waited for, as {@link #owesDeadLetterMove} waits for it.
      * <p>
      * Claims are counted, not exclusive: two releases of the owner may each hold one, and neither waits for the other.
      * Called by {@code ShardOwnedQueue.releaseLeaseRows} alone, which takes the statement's connection before it claims
@@ -435,15 +449,38 @@ final class ReleaseChargeLedger {
 
     /**
      * Wait while a release of the owner's row holds a claim ({@link #claimReleaseUnlessMoveOwed}), letting go of the
-     * monitor while it waits. The wait lasts as long as the claims it waits for are held, which an interrupt of this
-     * thread would not end: an interrupt is set again on the thread once the wait is over. Called under {@link #monitor}.
+     * monitor while it waits. On a thread whose waits for the database are bounded ({@link NetworkWaitBound#current}: a
+     * stop's budget thread, the hand-back of a kept unit, a release on request), no longer than that bound: the release
+     * holding the claim may run with no bound (a heartbeat tick's), and waited for unbounded, it held this thread past the
+     * bound that was to free it. With no bound, as long as the claims it waits for are held. An interrupt of this thread
+     * ends neither wait: it is set again on the thread once the wait is over. Called under {@link #monitor}.
+     *
+     * @throws SQLException when the bound runs out with a claim still held. Nothing has been charged or recorded, so the
+     *                      ledger is as it was, and the SQL state ({@link #RELEASE_CLAIM_WAIT_TIMED_OUT}) is outside class
+     *                      {@code 08}: nothing was sent to the database ({@link LeaseRowState#mayHaveGoneThrough})
      */
-    private void awaitNoReleaseClaimed() {
+    private void awaitNoReleaseClaimed() throws SQLException {
+        var bound       = NetworkWaitBound.current();
+        var boundNanos  = bound.map(ReleaseChargeLedger::saturatedNanos).orElse(0L);
+        var started     = System.nanoTime();
         var interrupted = false;
         try {
             while (releasesClaimed > 0) {
                 try {
-                    monitor.wait();
+                    if (bound.isEmpty()) {
+                        monitor.wait();
+                        continue;
+                    }
+                    var remaining = boundNanos - (System.nanoTime() - started);
+                    if (remaining <= 0) {
+                        throw new SQLException("Did not charge or dead-letter anything for unit " + shard + " on the " + lane
+                                                       + " lane before its release: a release of its lease row held its claim on "
+                                                       + "the unit for longer than this thread's network wait bound ("
+                                                       + bound.get() + "), so this charge did not start: nothing was charged "
+                                                       + "and no dead-letter move was made",
+                                               RELEASE_CLAIM_WAIT_TIMED_OUT);
+                    }
+                    TimeUnit.NANOSECONDS.timedWait(monitor, remaining);
                 } catch (InterruptedException e) {
                     interrupted = true;
                 }
@@ -452,6 +489,17 @@ final class ReleaseChargeLedger {
             if (interrupted) {
                 Thread.currentThread().interrupt();
             }
+        }
+    }
+
+    /**
+     * {@code duration} in nanoseconds, {@link Long#MAX_VALUE} when it is longer than that holds.
+     */
+    private static long saturatedNanos(Duration duration) {
+        try {
+            return duration.toNanos();
+        } catch (ArithmeticException e) {
+            return Long.MAX_VALUE;
         }
     }
 
@@ -466,7 +514,9 @@ final class ReleaseChargeLedger {
 
     /**
      * Charge one attempt to each of {@code candidates} not charged yet, then make every dead-letter move still owed.
-     * Waits first for every release of the owner's row claimed ({@link #claimReleaseUnlessMoveOwed}) to end.
+     * Waits first for every release of the owner's row claimed ({@link #claimReleaseUnlessMoveOwed}) to end: no longer than
+     * the calling thread's network wait bound when it has one ({@link NetworkWaitBound#current}), for as long as the
+     * claims are held when it has none.
      * <p>
      * The candidates are taken once this call is running, under the monitor: a handler of one of them that returns after they
      * are taken finds the call running ({@link #deadLetteredWhileInHandler}) and waits for it, and one that returned before is left
@@ -480,7 +530,10 @@ final class ReleaseChargeLedger {
      *                   {@code key_order} go into its {@link ChargedRow}); asked once, under the monitor, so it may take the
      *                   owner's state lock, never the other way round
      * @return what this ledger has charged and dead-lettered so far, this call included
-     * @throws SQLException     when the charge, the lease lookup after a charge that left a row out, a dead-letter move, or
+     * @throws SQLException     when the calling thread's network wait bound runs out with a release of the owner's row
+     *                          still claimed: thrown before the candidates are taken, with SQL state
+     *                          {@link #RELEASE_CLAIM_WAIT_TIMED_OUT}, nothing charged and the ledger as it was. Or when the
+     *                          charge, the lease lookup after a charge that left a row out, a dead-letter move, or
      *                          the dead-letter lookup after a move that threw fails; {@link #owes} then answers {@code true}.
      *                          A move that threw with no answer from the database may have committed on the server all the
      *                          same; the later call that makes it again finds the row gone, asks the dead-letter table, and
