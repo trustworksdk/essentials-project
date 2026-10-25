@@ -30,6 +30,7 @@ import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
 
+import static dk.trustworks.essentials.components.foundation.postgresql.PostgresqlSchemaStatements.createIndexUnlessPresent;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 import static dk.trustworks.essentials.shared.MessageFormatter.NamedArgumentBinding.arg;
 import static dk.trustworks.essentials.shared.MessageFormatter.bind;
@@ -118,12 +119,15 @@ public class PostgresqlAggregateArchiveRegistry implements AggregateArchiveRegis
                                                     """, arg("tableName", tableName))),
                        SchemaChange.repeatable("archive-archived-ts-index",
                                                tableName,
-                                               bind("""
-                                                    CREATE INDEX IF NOT EXISTS {:indexName}
-                                                    ON {:tableName} (aggregate_type, archived_ts DESC)
-                                                    """,
-                                                    arg("indexName", archivedTsIndexName),
-                                                    arg("tableName", tableName))));
+                                               // Only when missing: CREATE INDEX IF NOT EXISTS alone locks the table on every start - see PostgresqlSchemaStatements
+                                               createIndexUnlessPresent(tableName,
+                                                                        archivedTsIndexName,
+                                                                        bind("""
+                                                                             CREATE INDEX IF NOT EXISTS {:indexName}
+                                                                             ON {:tableName} (aggregate_type, archived_ts DESC)
+                                                                             """,
+                                                                             arg("indexName", archivedTsIndexName),
+                                                                             arg("tableName", tableName)))));
     }
 
     @Override

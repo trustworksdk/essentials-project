@@ -166,13 +166,12 @@ favour of `enableNotifyTriggers(Consumer<String>)`: the `pg_notify` trigger beco
 with the change listener (`LISTEN` does not need the trigger to exist). The two methods exclude each other.
 The Spring starter's `EventStoreNotifyPollingBootstrap` uses the new one.
 
-`ShardOwnedSchema` (row 15) is the second dynamic contributor, keyed by queue id. Decided 2026-09-24: the
-engine stays dependent on `shared` only, so it does not implement the SPI itself. It exposes its DDL as plain
+`ShardOwnedSchema` (row 15) is the second dynamic contributor, keyed by queue id. It does not implement the SPI
+itself, so the engine also runs without a harness. It exposes its DDL as plain
 statements - `schemaStatements()` (exactly what `initialize` executes) and
 `queueSequenceStatements(queueId, shardCount)` - and every registration method has an overload taking a
-`QueueDdlExecutor`, whose default runs the statements under the engine's copy of the bootstrap lock, as
-before. `ShardOwnedSchemaContributor` in `postgresql-queue-shard-owned-adapter` (which already depends on
-`foundation`) carries them into the harness: the fixed schema is one `engine-schema` change, and each queue's
+`QueueDdlExecutor`, whose default runs the statements under the bootstrap lock, as
+before. `ShardOwnedSchemaContributor`, beside it in the engine, carries them into the harness: the fixed schema is one `engine-schema` change, and each queue's
 sequences are a `queue-sequences` change on object `shard_queue_q<id>`, applied as the queue registers.
 The registry row and lease rows stay data written by the engine. Two consequences:
 
@@ -181,7 +180,12 @@ The registry row and lease rows stay data written by the engine. Two consequence
 - Registration writes to the registry table, which is part of the fixed schema, so queues register after the
   harness ran. `growShardCount` re-records the same change with the larger statement set.
 
-The engine keeps its own copy of the bootstrap-lock key, for use without a harness.
+Without a harness the engine takes the same bootstrap lock (`PostgresqlUtil.ESSENTIALS_BOOTSTRAP_LOCK_KEY`) itself.
+
+Decided 2026-09-24 with the engine depending on `shared` only, which put the contributor in
+`postgresql-queue-shard-owned-adapter` and gave the engine its own copy of the lock key. Since 2026-10-24 the
+engine depends on `foundation`: the contributor moved into the engine, the adapter's class is a deprecated
+delegate to it, and the copy is gone.
 
 Decided 2026-09-25: **the shard-owned engine needs the right to create sequences at runtime.** In a mode that
 does not create the schema (`validate`, `emit`, `external`) `ShardOwnedSchemaContributor` contributes only the fixed

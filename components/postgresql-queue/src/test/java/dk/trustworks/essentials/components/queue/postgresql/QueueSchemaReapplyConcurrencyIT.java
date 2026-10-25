@@ -19,6 +19,7 @@ package dk.trustworks.essentials.components.queue.postgresql;
 import dk.trustworks.essentials.components.foundation.json.EssentialsObjectMappers;
 import dk.trustworks.essentials.components.foundation.postgresql.*;
 import dk.trustworks.essentials.components.foundation.test.EssentialsTestContainers;
+import dk.trustworks.essentials.components.foundation.test.schema.SchemaReapplyLockProbe;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.JdbiUnitOfWorkFactory;
 import dk.trustworks.essentials.reactive.LocalEventBus;
 import org.awaitility.Awaitility;
@@ -112,6 +113,16 @@ class QueueSchemaReapplyConcurrencyIT {
         }
 
         assertThat(notifyTriggerType()).isEqualTo(NOTIFY_TRIGGER_TYPE);
+    }
+
+    /**
+     * {@code CREATE INDEX IF NOT EXISTS} takes a {@code SHARE} lock even when the index exists, so every start waited
+     * for the enqueues, claims and acknowledgements in flight on other instances and blocked the next ones until the
+     * queue's schema transaction committed
+     */
+    @Test
+    void reapplying_the_schema_does_not_wait_for_queue_operations_in_flight() {
+        SchemaReapplyLockProbe.assertReapplyDoesNotWaitForWritersOnItsTables(unitOfWorkFactory.getJdbi(), durableQueues);
     }
 
     @Test

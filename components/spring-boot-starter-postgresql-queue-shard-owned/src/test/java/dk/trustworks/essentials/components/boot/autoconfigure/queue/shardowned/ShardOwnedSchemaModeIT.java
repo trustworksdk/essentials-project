@@ -17,7 +17,7 @@ package dk.trustworks.essentials.components.boot.autoconfigure.queue.shardowned;
 
 import dk.trustworks.essentials.components.foundation.schema.SchemaValidationException;
 import dk.trustworks.essentials.components.queue.shardowned.ShardOwnedSchema;
-import dk.trustworks.essentials.components.queue.shardowned.adapter.ShardOwnedSchemaContributor;
+import dk.trustworks.essentials.components.queue.shardowned.ShardOwnedSchemaContributor;
 import org.junit.jupiter.api.*;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration;

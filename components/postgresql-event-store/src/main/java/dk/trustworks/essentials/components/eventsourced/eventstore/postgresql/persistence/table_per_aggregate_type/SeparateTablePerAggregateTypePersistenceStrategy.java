@@ -46,6 +46,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.stream.*;
 
+import static dk.trustworks.essentials.components.foundation.postgresql.PostgresqlSchemaStatements.createIndexUnlessPresent;
 import static dk.trustworks.essentials.shared.FailFast.*;
 import static dk.trustworks.essentials.shared.MessageFormatter.NamedArgumentBinding.arg;
 import static dk.trustworks.essentials.shared.MessageFormatter.*;
@@ -576,9 +577,21 @@ public final class SeparateTablePerAggregateTypePersistenceStrategy implements A
         var eventStreamTableName = eventStreamConfiguration.eventStreamTableName;
         var changes = new ArrayList<SchemaChange>(3);
         changes.add(SchemaChange.repeatable("event-stream-table", eventStreamTableName, createEventStreamTableStatement(eventStreamConfiguration)));
-        changes.add(SchemaChange.repeatable("event-stream-tenant-index", eventStreamTableName, createTenantIndexStatement(eventStreamConfiguration)));
+        // Each index is only created when it is missing: CREATE INDEX IF NOT EXISTS alone locks the table on every start,
+        // and the tables of every aggregate type are one transaction, so a running unit of work appending to two of them
+        // in the other order could deadlock with it - see PostgresqlSchemaStatements
+        var columnNames = eventStreamConfiguration.eventStreamTableColumnNames;
+        changes.add(SchemaChange.repeatable("event-stream-tenant-index",
+                                            eventStreamTableName,
+                                            createIndexUnlessPresent(eventStreamTableName,
+                                                                     eventStreamTableName + "_" + columnNames.tenantColumn,
+                                                                     createTenantIndexStatement(eventStreamConfiguration))));
         if (causationIndexEnabled.get()) {
-            changes.add(SchemaChange.repeatable("event-stream-caused-by-index", eventStreamTableName, causationIndexStatement(eventStreamConfiguration)));
+            changes.add(SchemaChange.repeatable("event-stream-caused-by-index",
+                                                eventStreamTableName,
+                                                createIndexUnlessPresent(eventStreamTableName,
+                                                                         eventStreamTableName + "_" + columnNames.causedByEventIdColumn,
+                                                                         causationIndexStatement(eventStreamConfiguration))));
         }
         if (notifyTriggerListener.get() != null) {
             changes.add(SchemaChange.repeatable("change-notification-trigger",

@@ -22,6 +22,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ev
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
 import dk.trustworks.essentials.components.foundation.causation.CausationContext;
 import dk.trustworks.essentials.components.foundation.types.*;
+import dk.trustworks.essentials.reactive.EventHandler;
 import dk.trustworks.essentials.shared.Exceptions;
 import dk.trustworks.essentials.shared.time.StopWatch;
 
@@ -42,6 +43,11 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  */
 public class NonExclusiveInTransactionSubscription extends AbstractEventStoreSubscription {
     private final TransactionalPersistedEventHandler eventHandler;
+    /**
+     * Registered on, and removed from, the local event bus as this one instance: the bus finds a handler to remove by
+     * equality, and every {@code this::onEvent} is a new object, so removing one never removed the registered handler
+     */
+    private final EventHandler                       localEventBusHandler = this::onEvent;
 
     /**
      * @param context      the arguments shared by every subscription — see {@link EventStoreSubscriptionContext#builder()}
@@ -63,7 +69,7 @@ public class NonExclusiveInTransactionSubscription extends AbstractEventStoreSub
                     aggregateType);
 
             eventStore.localEventBus()
-                    .addSyncSubscriber(this::onEvent);
+                    .addSyncSubscriber(localEventBusHandler);
 
         } else {
             log.debug("[{}-{}] Subscription was already started",
@@ -135,7 +141,7 @@ public class NonExclusiveInTransactionSubscription extends AbstractEventStoreSub
                         subscriberId,
                         aggregateType);
                 eventStore.localEventBus()
-                        .removeSyncSubscriber(this::onEvent);
+                        .removeSyncSubscriber(localEventBusHandler);
             } catch (Exception e) {
                 log.error(msg("[{}-{}] Failed to dispose subscription flux",
                         subscriberId,

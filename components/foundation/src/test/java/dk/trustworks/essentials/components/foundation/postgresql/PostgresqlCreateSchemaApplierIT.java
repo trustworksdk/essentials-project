@@ -16,11 +16,15 @@
 package dk.trustworks.essentials.components.foundation.postgresql;
 
 import dk.trustworks.essentials.components.foundation.schema.*;
+import dk.trustworks.essentials.components.foundation.transaction.jdbi.JdbiUnitOfWorkFactory;
+import org.awaitility.Awaitility;
 import org.jdbi.v3.core.Jdbi;
 import org.junit.jupiter.api.*;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
+import java.sql.SQLException;
+import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
 
@@ -167,6 +171,88 @@ class PostgresqlCreateSchemaApplierIT {
         }
 
         assertThat(ledger()).containsExactlyInAnyOrder("orders/orders-table/orders", "orders/orders-index/orders_idx");
+    }
+
+    /**
+     * A schema change set that needs a table a running transaction writes to, while that transaction then needs a table
+     * the change set already locked - a lock cycle PostgreSQL breaks by aborting one side
+     */
+    private static final SchemaChangeSet LOCKS_ORDERS_THEN_SHIPMENTS = set("orders", SchemaOrder.ORDER_APPLICATION,
+                                                                          SchemaChange.repeatable("lock-both", "orders",
+                                                                                                  "LOCK TABLE orders IN SHARE MODE",
+                                                                                                  "LOCK TABLE shipments IN SHARE MODE"));
+
+    @Test
+    void a_change_set_aborted_as_a_deadlock_victim_is_applied_again() throws Exception {
+        var applying = deadlockTheFirstAttemptOf(() -> apply(LOCKS_ORDERS_THEN_SHIPMENTS));
+
+        assertThatCode(() -> applying.get(30, TimeUnit.SECONDS)).doesNotThrowAnyException();
+        assertThat(ledger()).contains("orders/lock-both/orders");
+    }
+
+    @Test
+    void a_change_set_aborted_as_a_deadlock_victim_is_applied_again_through_a_unit_of_work_factory() throws Exception {
+        var unitOfWorkFactory = new JdbiUnitOfWorkFactory(jdbi);
+
+        var applying = deadlockTheFirstAttemptOf(() -> new PostgresqlCreateSchemaApplier(unitOfWorkFactory).apply(List.of(LOCKS_ORDERS_THEN_SHIPMENTS)));
+
+        assertThatCode(() -> applying.get(30, TimeUnit.SECONDS)).doesNotThrowAnyException();
+        assertThat(ledger()).contains("orders/lock-both/orders");
+    }
+
+    /**
+     * The deadlock aborted the caller's transaction, and with it whatever the caller did before: only the caller can
+     * start over
+     */
+    @Test
+    void a_change_set_applied_in_a_unit_of_work_the_caller_started_is_not_applied_again() throws Exception {
+        var unitOfWorkFactory = new JdbiUnitOfWorkFactory(jdbi);
+
+        var applying = deadlockTheFirstAttemptOf(() -> unitOfWorkFactory.usingUnitOfWork(unitOfWork -> new PostgresqlCreateSchemaApplier(unitOfWorkFactory).apply(List.of(LOCKS_ORDERS_THEN_SHIPMENTS))));
+
+        assertThatThrownBy(() -> applying.get(30, TimeUnit.SECONDS)).satisfies(thrown -> assertThat(sqlStatesIn(thrown)).contains("40P01")
+                                                                                                                         .doesNotContain("25P02"));
+        // The ledger table was created in the caller's transaction too
+        assertThat(tableExists(PostgresqlCreateSchemaApplier.DEFAULT_SCHEMA_HISTORY_TABLE_NAME)).isFalse();
+    }
+
+    /**
+     * Run the apply while a transaction holds {@code ROW EXCLUSIVE} on {@code shipments}, then make that transaction
+     * lock {@code orders} once the apply holds {@code SHARE} on it and waits for {@code shipments}. The transaction waits
+     * longer than PostgreSQL's deadlock timeout before it checks for a deadlock, so the apply is the side aborted.
+     *
+     * @return the apply, which the transaction no longer blocks
+     */
+    private Future<?> deadlockTheFirstAttemptOf(Runnable apply) {
+        jdbi.useHandle(handle -> handle.execute("CREATE TABLE orders (id BIGINT); CREATE TABLE shipments (id BIGINT)"));
+        var executor = Executors.newSingleThreadExecutor();
+        try (var runningTransaction = jdbi.open()) {
+            runningTransaction.begin();
+            runningTransaction.execute("SET LOCAL deadlock_timeout = '60s'");
+            runningTransaction.execute("LOCK TABLE shipments IN ROW EXCLUSIVE MODE");
+
+            var applying = executor.submit(apply);
+            Awaitility.await()
+                      .atMost(Duration.ofSeconds(10))
+                      .until(() -> applying.isDone() || count("SELECT count(*) FROM pg_locks WHERE relation = to_regclass('shipments') AND NOT granted") > 0);
+
+            // Waits until PostgreSQL aborts the apply
+            runningTransaction.execute("LOCK TABLE orders IN ROW EXCLUSIVE MODE");
+            runningTransaction.commit();
+            return applying;
+        } finally {
+            executor.shutdown();
+        }
+    }
+
+    private static List<String> sqlStatesIn(Throwable thrown) {
+        var sqlStates = new ArrayList<String>();
+        for (var cause = thrown; cause != null; cause = cause.getCause()) {
+            if (cause instanceof SQLException sqlException) {
+                sqlStates.add(sqlException.getSQLState());
+            }
+        }
+        return sqlStates;
     }
 
     private void apply(SchemaChangeSet... changeSets) {

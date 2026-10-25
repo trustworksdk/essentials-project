@@ -28,6 +28,7 @@ import dk.trustworks.essentials.components.foundation.messaging.queue.DurableQue
 import dk.trustworks.essentials.components.foundation.messaging.queue.EnqueueOutsideUnitOfWorkGuard;
 import dk.trustworks.essentials.components.foundation.transaction.*;
 import dk.trustworks.essentials.components.foundation.schema.*;
+import dk.trustworks.essentials.components.queue.shardowned.ShardOwnedSchemaContributor;
 import dk.trustworks.essentials.components.queue.shardowned.adapter.*;
 import dk.trustworks.essentials.components.boot.autoconfigure.queue.shardowned.rest.*;
 import dk.trustworks.essentials.components.queue.shardowned.*;

@@ -135,8 +135,12 @@ public abstract class DefaultDurableQueueConsumer<DURABLE_QUEUES extends Durable
 
     }
 
+    /**
+     * Synchronized with {@link #stop()}: the queues start a consumer both from their own {@code start()} and from
+     * {@code consumeFromQueue} once started, without coordinating, and two starts at once must schedule the pollers once
+     */
     @Override
-    public void start() {
+    public synchronized void start() {
         if (!started) {
 
             LOG.info("[{}] {} - Starting {} DurableQueueConsumer threads with polling interval {} ms",
@@ -164,7 +168,7 @@ public abstract class DefaultDurableQueueConsumer<DURABLE_QUEUES extends Durable
     }
 
     @Override
-    public void stop() {
+    public synchronized void stop() {
         if (started) {
             LOG.info("[{}] {} - Stopping DurableQueueConsumer",
                      queueName,

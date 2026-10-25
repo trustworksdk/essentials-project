@@ -13,12 +13,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package dk.trustworks.essentials.components.queue.shardowned.adapter;
+package dk.trustworks.essentials.components.queue.shardowned;
 
 import com.zaxxer.hikari.*;
 import dk.trustworks.essentials.components.foundation.postgresql.*;
 import dk.trustworks.essentials.components.foundation.schema.*;
-import dk.trustworks.essentials.components.queue.shardowned.ShardOwnedSchema;
 import dk.trustworks.essentials.components.queue.shardowned.spi.QueueName;
 import org.jdbi.v3.core.Jdbi;
 import org.junit.jupiter.api.*;

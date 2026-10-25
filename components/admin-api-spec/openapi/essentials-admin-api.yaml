@@ -3943,7 +3943,7 @@ components:
       type: object
       properties:
         queueName:
-          $ref: "#/components/schemas/QueueName"
+          type: string
         unit:
           type: integer
           format: int32
@@ -3988,7 +3988,7 @@ components:
         id:
           type: string
         queueName:
-          $ref: "#/components/schemas/QueueName"
+          type: string
         lane:
           type: string
         shard:
@@ -4039,7 +4039,7 @@ components:
       type: object
       properties:
         queueName:
-          $ref: "#/components/schemas/QueueName"
+          type: string
         runningInThisInstance:
           type: boolean
         delivered:
@@ -4099,7 +4099,7 @@ components:
       type: object
       properties:
         queueName:
-          $ref: "#/components/schemas/QueueName"
+          type: string
         shardCount:
           type: integer
           format: int32
@@ -4647,11 +4647,6 @@ components:
           type: integer
           format: int32
       description: Number of messages removed by a purge.
-    QueueName:
-      type: object
-      properties:
-        value:
-          type: string
     QueueNameResult:
       required:
       - queueName

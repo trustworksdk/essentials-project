@@ -219,6 +219,18 @@ class AdminApiEndpointsTest {
         }
 
         @Test
+        void shard_owned_queue_names_are_listed_as_strings_as_the_contract_declares() throws Exception {
+            when(shardOwnedQueuesApi.getQueueNames(any()))
+                    .thenReturn(List.of(dk.trustworks.essentials.components.queue.shardowned.spi.QueueName.of("orders"),
+                                        dk.trustworks.essentials.components.queue.shardowned.spi.QueueName.of("shipments")));
+
+            mockMvc.perform(get(BASE + "/shard-owned-queues"))
+                   .andExpect(status().isOk())
+                   .andExpect(jsonPath("$[0]").value("orders"))
+                   .andExpect(jsonPath("$[1]").value("shipments"));
+        }
+
+        @Test
         void releasing_a_kept_ordered_unit_reports_who_answered_and_what_was_released() throws Exception {
             var orders = dk.trustworks.essentials.components.queue.shardowned.spi.QueueName.of("orders");
             when(shardOwnedQueuesApi.releaseKeptOrderedUnit(any(), eq(orders), eq("node-1"), eq(7)))

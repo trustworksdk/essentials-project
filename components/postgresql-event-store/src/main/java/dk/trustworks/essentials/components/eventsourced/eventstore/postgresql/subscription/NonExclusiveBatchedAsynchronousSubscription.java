@@ -81,51 +81,67 @@ public class NonExclusiveBatchedAsynchronousSubscription extends AbstractEventSt
     public synchronized void start() {
         if (!started) {
             started = true;
-            log.info("[{}-{}] Looking up subscription resumePoint",
-                    subscriberId,
-                    aggregateType);
-            var resolveResumePointTiming = StopWatch.start("resolveResumePoint (" + subscriberId + ", " + aggregateType + ")");
-            resumePoint = durableSubscriptionRepository.getOrCreateResumePoint(subscriberId,
-                    aggregateType,
-                    onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder);
-            log.info("[{}-{}] Starting subscription from globalEventOrder: {}",
-                    subscriberId,
-                    aggregateType,
-                    resumePoint.getResumeFromAndIncluding());
-            eventStoreSubscriptionObserver.resolveResumePoint(resumePoint,
-                    onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder,
-                    NonExclusiveBatchedAsynchronousSubscription.this,
-                    resolveResumePointTiming.stop().getDuration());
-
-            // The subscriber reports what it handled, and the event store resolves a gap fill's gap only then
-            var acknowledgement = SubscriberAcknowledgement.create();
-            subscription = BatchedPersistedEventSubscriber.builder()
-                                                          .setEventHandler(eventHandler)
-                                                          .setEventStoreSubscription(this)
-                                                          .setOnErrorHandler(this::onErrorHandlingEvent)
-                                                          .setEventStorePollingBatchSize(eventStoreSubscriptionManagerSettings.eventStorePollingBatchSize())
-                                                          .setEventStore(eventStore)
-                                                          .setMaxBatchSize(maxBatchSize)
-                                                          .setMaxLatency(maxLatency)
-                                                          .setSubscriptionErrorPolicy(eventStoreSubscriptionManagerSettings.subscriptionErrorPolicyFor(eventHandler))
-                                                          .setSubscriberAcknowledgement(acknowledgement)
-                                                          .setAutoResumer(autoResumer)
-                                                          .build();
-            eventStore.pollEvents(aggregateType,
-                            resumePoint.getResumeFromAndIncluding(),
-                            Optional.of(eventStoreSubscriptionManagerSettings.eventStorePollingBatchSize()),
-                            Optional.of(eventStoreSubscriptionManagerSettings.eventStorePollingInterval()),
-                            onlyIncludeEventsForTenant(),
-                            Optional.of(subscriberId),
-                            Optional.of(eventStorePollingOptimizerFactory),
-                            acknowledgement)
-                    .limitRate(eventStoreSubscriptionManagerSettings.eventStorePollingBatchSize())
-                    .subscribe(subscription);
+            try {
+                subscribeFromResumePoint();
+            } catch (RuntimeException e) {
+                // Not started: marked started with nothing polling, it would skip every later start, and its stop would find
+                // no resume point to save
+                started = false;
+                if (subscription != null) {
+                    subscription.dispose();
+                }
+                subscription = null;
+                resumePoint = null;
+                throw e;
+            }
         } else {
             log.debug("[{}-{}] Subscription was already started",
                     subscriberId,
                     aggregateType);
         }
+    }
+
+    private void subscribeFromResumePoint() {
+        log.info("[{}-{}] Looking up subscription resumePoint",
+                subscriberId,
+                aggregateType);
+        var resolveResumePointTiming = StopWatch.start("resolveResumePoint (" + subscriberId + ", " + aggregateType + ")");
+        resumePoint = durableSubscriptionRepository.getOrCreateResumePoint(subscriberId,
+                aggregateType,
+                onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder);
+        log.info("[{}-{}] Starting subscription from globalEventOrder: {}",
+                subscriberId,
+                aggregateType,
+                resumePoint.getResumeFromAndIncluding());
+        eventStoreSubscriptionObserver.resolveResumePoint(resumePoint,
+                onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder,
+                NonExclusiveBatchedAsynchronousSubscription.this,
+                resolveResumePointTiming.stop().getDuration());
+
+        // The subscriber reports what it handled, and the event store resolves a gap fill's gap only then
+        var acknowledgement = SubscriberAcknowledgement.create();
+        subscription = BatchedPersistedEventSubscriber.builder()
+                                                      .setEventHandler(eventHandler)
+                                                      .setEventStoreSubscription(this)
+                                                      .setOnErrorHandler(this::onErrorHandlingEvent)
+                                                      .setEventStorePollingBatchSize(eventStoreSubscriptionManagerSettings.eventStorePollingBatchSize())
+                                                      .setEventStore(eventStore)
+                                                      .setMaxBatchSize(maxBatchSize)
+                                                      .setMaxLatency(maxLatency)
+                                                      .setSubscriptionErrorPolicy(eventStoreSubscriptionManagerSettings.subscriptionErrorPolicyFor(eventHandler))
+                                                      .setSubscriberAcknowledgement(acknowledgement)
+                                                      .setAutoResumer(autoResumer)
+                                                      .build();
+        eventStore.pollEvents(aggregateType,
+                        resumePoint.getResumeFromAndIncluding(),
+                        Optional.of(eventStoreSubscriptionManagerSettings.eventStorePollingBatchSize()),
+                        Optional.of(eventStoreSubscriptionManagerSettings.eventStorePollingInterval()),
+                        onlyIncludeEventsForTenant(),
+                        Optional.of(subscriberId),
+                        Optional.of(eventStorePollingOptimizerFactory),
+                        acknowledgement)
+                .limitRate(eventStoreSubscriptionManagerSettings.eventStorePollingBatchSize())
+                .subscribe(subscription);
     }
 
     @Override

@@ -1056,6 +1056,12 @@ As a Spring bean it is applied with the Essentials ones. Rules that hold everywh
 - `objectName` is a validated identifier and part of the ledger key; for an index change use its table.
 - Keep repeatable changes repeatable: prefer `IF [NOT] EXISTS` over `once(...)`. `once` is for what must not run
   twice (a backfill, a type change); editing a `once` change after release fails startup - ship a new change id.
+- A repeatable index or column on a table running instances write to: wrap the statement in
+  `PostgresqlSchemaStatements.createIndexUnlessPresent(table, index, sql)` / `addColumnUnlessPresent(table, column,
+  sql)`. `CREATE INDEX IF NOT EXISTS` takes SHARE and `ADD COLUMN IF NOT EXISTS` ACCESS EXCLUSIVE on the table *even
+  when it exists*, held until the module's schema transaction commits: every start blocks the writers, and with two
+  tables in one module it can deadlock with them. The wrappers check the catalog first and lock nothing when present.
+  `SchemaReapplyLockProbe` (`foundation-test`) asserts it in an IT.
 - DDL outside a contributor fails the `EssentialsSchemaRules` guard in `foundation-test` - see
   [LLM-foundation-test.md](./LLM-foundation-test.md).
 

@@ -32,6 +32,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.se
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
+import dk.trustworks.essentials.components.foundation.fencedlock.LockName;
 import dk.trustworks.essentials.components.foundation.messaging.*;
 import dk.trustworks.essentials.components.foundation.messaging.eip.store_and_forward.MessageHandlerInterceptor;
 import dk.trustworks.essentials.components.foundation.messaging.eip.store_and_forward.operation.InvokeMessageHandlerMethod;
@@ -430,6 +431,38 @@ public class ViewEventProcessorIT {
         assertThat(testProcessor.getSqlFailureAttempts(orderId)).isEqualTo(2);
         assertThat(orderViewStatuses(orderId)).containsExactly("done");
         assertThat(durableQueues.hasOrderedMessageQueuedForKey(testProcessor.getDurableQueueName(), orderId.toString())).isFalse();
+    }
+
+    /**
+     * Losing the fenced lock stops the processor's subscriptions; acquiring it again subscribes once more. The
+     * subscription manager still held the stopped subscriptions and handed them back without starting them, so a
+     * processor that had lost and re-acquired its lock - a missed lock confirmation is enough - kept the lock while
+     * handling no further events, and no other instance could take over
+     */
+    @Test
+    public void verify_events_appended_after_the_processor_lost_and_reacquired_its_lock_are_handled() {
+        var lockName = LockName.of(testProcessor.getProcessorName() + ":lock");
+        appendOrderPlaced("Load order placed before the lock was released");
+        Awaitility.waitAtMost(Duration.ofSeconds(15))
+                  .untilAsserted(() -> assertThat(testProcessor.getOrderPlacedEventCounter()).hasValue(1));
+
+        // The lock manager returns the lock it holds, and releasing it releases it for the processor too
+        fencedLockManager.tryAcquireLock(lockName).orElseThrow().release();
+        // It keeps trying to acquire the lock, and acquires it again on its next attempt
+        Awaitility.waitAtMost(Duration.ofSeconds(15))
+                  .until(() -> fencedLockManager.isLockedByThisLockManagerInstance(lockName));
+        appendOrderPlaced("Load order placed after the lock was acquired again");
+
+        Awaitility.waitAtMost(Duration.ofSeconds(15))
+                  .untilAsserted(() -> assertThat(testProcessor.getOrderPlacedEventCounter()).hasValue(2));
+        assertThat(eventStoreSubscriptionManager.getSubscription(AbstractEventProcessor.resolveSubscriberId(TEST_ORDERS, testProcessor.getProcessorName()), TEST_ORDERS)
+                                                .map(EventStoreSubscription::isStarted))
+                .hasValue(true);
+    }
+
+    private void appendOrderPlaced(String orderDetails) {
+        var orderId = EventProcessorIT.OrderId.random();
+        unitOfWorkFactory.usingUnitOfWork(uow -> eventStore.appendToStream(TEST_ORDERS, orderId, List.of(new EventProcessorIT.OrderPlacedEvent(orderId, orderDetails))));
     }
 
     @Test

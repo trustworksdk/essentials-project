@@ -98,7 +98,7 @@ class ViewEventProcessorLockCallbackTest {
                 .describedAs("lockReleased must not fail when it races lockAcquired")
                 .isNull();
         verify(consumer).cancel();
-        verify(subscription).stop();
+        verify(subscription).unsubscribe();
     }
 
     @Test
@@ -146,8 +146,8 @@ class ViewEventProcessorLockCallbackTest {
 
         verify(firstConsumer, times(1)).cancel();
         verify(secondConsumer, times(1)).cancel();
-        verify(firstSubscription, times(1)).stop();
-        verify(secondSubscription, times(1)).stop();
+        verify(firstSubscription, times(1)).unsubscribe();
+        verify(secondSubscription, times(1)).unsubscribe();
     }
 
     @Test
@@ -173,7 +173,7 @@ class ViewEventProcessorLockCallbackTest {
 
         // A throwing lock-acquired callback makes the lock manager release the lock again
         assertThatThrownBy(() -> callback.lockAcquired(lock)).isInstanceOf(IllegalStateException.class);
-        verify(thingsSubscription).stop();
+        verify(thingsSubscription).unsubscribe();
         callback.lockReleased(lock);
 
         verify(consumer).cancel();
