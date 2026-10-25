@@ -161,6 +161,10 @@ less CPU to write and read a message and 9% fewer bytes, and the payload is no l
 - `Jackson3JSONSerializer` now caches the classes it resolves by name, which saves 200-290 ns on every
   `deserialize(json, "<class name>")` - every message `postgresql-queue` and the Mongo queue read, and every envelope.
   The cache follows `getClassLoader()`, so a Spring Boot DevTools restart, which swaps the class loader, is safe.
+  Events use it too: `EventJSON` resolves an event's class through the new `JSONSerializer.resolveClass(name)` when
+  deserializing it and in `getEventTypeAsJavaClass()`, which `EventProcessor` and `ViewEventProcessor` call for every
+  event to decide whether they handle it (117 to 30 ns per call). `resolveClass` is a new default method that resolves
+  a name the way the by-name `deserialize` methods do.
 
 ## 2. Fixes
 

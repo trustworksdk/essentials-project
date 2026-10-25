@@ -216,7 +216,11 @@ public class Jackson3JSONSerializer implements JSONSerializer {
         }
     }
 
-    private Class<?> resolveClass(String javaType) {
+    /**
+     * Cached per class loader - see {@link #classesByName}
+     */
+    @Override
+    public Class<?> resolveClass(String javaType) {
         requireNonNull(javaType, "No javaType provided");
         var loader = getClassLoader();
         var cache  = classesByName;

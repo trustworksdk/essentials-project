@@ -16,6 +16,10 @@
 
 package dk.trustworks.essentials.components.foundation.json;
 
+import dk.trustworks.essentials.shared.reflection.*;
+
+import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
+
 /**
  * JSON serializer and deserializer
  */
@@ -95,6 +99,20 @@ public interface JSONSerializer {
      * @throws JSONDeserializationException in case the json couldn't be deserialized to the specified java type
      */
     <T> T deserialize(byte[] json, Class<T> javaType);
+
+    /**
+     * Resolves a Fully Qualified Class Name the way the {@code deserialize} methods taking a {@code String javaType}
+     * do: with {@link #getClassLoader()}. Use it to turn a stored type name into a {@link Class} for anything other
+     * than deserializing - an implementation may cache the result, as {@link Jackson3JSONSerializer} does, and calling
+     * {@code Class.forName} directly would bypass that.
+     *
+     * @param javaType the Fully Qualified Class Name
+     * @return the class
+     * @throws LoadingClassFailedException if the class cannot be loaded
+     */
+    default Class<?> resolveClass(String javaType) {
+        return Classes.forName(requireNonNull(javaType, "No javaType provided"), getClassLoader());
+    }
 
     /**
      * Reads the top-level properties of a JSON object one at a time, in document order, handing each to {@code reader},

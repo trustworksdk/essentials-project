@@ -85,6 +85,43 @@ class Jackson3JSONSerializerClassLookupTest {
     }
 
     @Test
+    void resolve_class_answers_what_the_by_name_reads_use_and_follows_the_loader_too() {
+        var serializer = (Jackson3JSONSerializer) EssentialsObjectMappers.createJSONSerializer();
+        var original   = serializer.getClassLoader();
+
+        assertThat(serializer.resolveClass(NAME)).isEqualTo(Payload.class);
+        assertThat(serializer.resolveClass(NAME)).isEqualTo(Payload.class);
+
+        serializer.setClassLoader(jdkOnly);
+        assertThatThrownBy(() -> serializer.resolveClass(NAME)).isInstanceOf(LoadingClassFailedException.class);
+
+        serializer.setClassLoader(original);
+        assertThat(serializer.resolveClass(NAME)).isEqualTo(Payload.class);
+    }
+
+    /**
+     * Every other implementation inherits the uncached default, which must resolve through its class loader as well
+     */
+    @Test
+    void the_default_resolve_class_uses_the_serializers_class_loader() {
+        var serializer = new Jackson3JSONSerializer(EssentialsObjectMappers.createJackson3ObjectMapper());
+        JSONSerializer defaultOnly = new JSONSerializer() {
+            public String serialize(Object obj) { return serializer.serialize(obj); }
+            public byte[] serializeAsBytes(Object obj) { return serializer.serializeAsBytes(obj); }
+            public <T> T deserialize(String json, String javaType) { return serializer.deserialize(json, javaType); }
+            public <T> T deserialize(String json, Class<T> javaType) { return serializer.deserialize(json, javaType); }
+            public <T> T deserialize(byte[] json, String javaType) { return serializer.deserialize(json, javaType); }
+            public <T> T deserialize(byte[] json, Class<T> javaType) { return serializer.deserialize(json, javaType); }
+            public ClassLoader getClassLoader() { return serializer.getClassLoader(); }
+            public void setClassLoader(ClassLoader classLoader) { serializer.setClassLoader(classLoader); }
+        };
+
+        assertThat(defaultOnly.resolveClass(NAME)).isEqualTo(Payload.class);
+        defaultOnly.setClassLoader(jdkOnly);
+        assertThatThrownBy(() -> defaultOnly.resolveClass(NAME)).isInstanceOf(LoadingClassFailedException.class);
+    }
+
+    @Test
     void a_class_that_does_not_load_is_not_remembered() {
         var serializer = (Jackson3JSONSerializer) EssentialsObjectMappers.createJSONSerializer();
 

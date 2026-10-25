@@ -1026,6 +1026,10 @@ A `JSONPropertyValue` is readable once, and only during its `read` call. A malfo
 fit the requested type throws `JSONDeserializationException`; an exception thrown by the reader reaches the caller
 unwrapped.
 
+`resolveClass(String javaType)` turns a stored type name into a `Class` the way the by-name `deserialize` methods do,
+with the serializer's class loader (Spring Boot DevTools safe). `Jackson3JSONSerializer` caches the result per class
+loader, so prefer it over `Class.forName` for a name read from storage.
+
 ⚠️ `EssentialsJacksonModules.modules()` (used by `EssentialsObjectMappers`) throws `IllegalStateException` when a
 0.50-era Jackson 2 `types-jackson` / `immutable-jackson` jar is on the classpath (same FQCNs, wrong Jackson major) —
 depend on `types-jackson3` / `immutable-jackson3`.

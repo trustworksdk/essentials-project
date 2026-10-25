@@ -17,8 +17,6 @@
 
 package dk.trustworks.essentials.components.foundation.json;
 
-import dk.trustworks.essentials.shared.reflection.Classes;
-
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 
@@ -108,7 +106,7 @@ final class JSONPropertyScanner {
         @SuppressWarnings("unchecked")
         public <T> T as(String javaType) {
             requireNonNull(javaType, "No javaType provided");
-            return (T) as(Classes.forName(javaType, serializer.getClassLoader()));
+            return (T) as(serializer.resolveClass(javaType));
         }
 
         private boolean isNull() {
