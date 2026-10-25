@@ -2612,18 +2612,28 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * and the heartbeat's sites attempt it on every tick, so the WARN is logged at most once a minute per owner, naming the
      * releases that left it out since the last one, and the rest at DEBUG ({@link LeasedOwner#owedMoveReleaseRefusals()}).
      * <p>
-     * The check and the statement are one step as far as a charge is concerned: each owner found owing nothing is claimed
-     * ({@link LeasedOwner#claimReleaseUnlessMoveOwed()}) until the statement has returned or thrown, and a charge of it
-     * that starts meanwhile - a release site of the same owner on another thread - waits for the claim to end
+     * The check and the statement are one step as far as a charge is concerned. A first check claims nothing: each owner
+     * that owes a move ({@link LeasedOwner#owesDeadLetterMove()}) is left out there, and a call that leaves every owner out
+     * takes no connection and answers with nothing released, its WARN logged all the same, whether or not the pool has a
+     * connection to give. Then each owner found owing nothing is claimed ({@link LeasedOwner#claimReleaseUnlessMoveOwed()},
+     * which checks again: one it finds owing is left out as well) until the statement has returned or thrown, and a charge
+     * of it that starts meanwhile - a release site of the same owner on another thread - waits for the claim to end
      * ({@code ReleaseChargeLedger.claimReleaseUnlessMoveOwed}). Checked alone, such a charge could leave a move owed after
-     * the check, and the row was released with it owed all the same. The statement's connection is taken from the pool
-     * before any owner is claimed, so a claim covers the claims of the owners after it in the same call and the statement,
-     * not a wait for the pool: held across that wait, a claim could make a charge wait that holds a pool connection
-     * itself ({@link #chargeBeforeReleaseOnStop} charges over one), while the claim holder waited for a connection. A pool
-     * that gives no connection fails this before any owner is claimed or marked. Each claim is ended in its own try, and
-     * the claims are ended before the owners are told their lease ended and before the WARN for the owners left out; a
-     * charge that runs after a release that went through finds the row no longer the owner's, and its fenced writes
-     * change nothing.
+     * the check, and the row was released with it owed all the same; a first check out of date is harmless either way: a
+     * move owed since is found by the claim, and an owner whose move was settled since is left out of this call, as an
+     * owner owing a move is. The statement's connection is taken from the pool after the first check and before any owner
+     * is claimed, so a claim covers the claims of the owners after it in the same call and the statement, not a wait for
+     * the pool: held across that wait, a claim could make a charge wait that holds a pool connection itself
+     * ({@link #chargeBeforeReleaseOnStop} charges over one), while the claim holder waited for a connection. A pool that
+     * gives no connection fails this before any owner is claimed or marked, and the owners the first check left out are
+     * WARNed of all the same. Each claim is ended in its own try, and the claims are ended before the owners are told
+     * their lease ended and before the WARN for the owners left out; a charge that runs after a release that went through
+     * finds the row no longer the owner's, and its fenced writes change nothing. An end of a claim that throws after the
+     * statement has returned - a bug's {@link IllegalStateException} ({@link #endReleaseClaims}) - marks no owner in
+     * doubt: the statement went through, so each owner it covered is told its lease ended
+     * ({@link LeasedOwner.LeaseRow#RELEASED}) before that failure is rethrown. A caller can so see a throw with those
+     * owners already {@code RELEASED}; an owner still in a run's owners (the sheds, the dead-pump hand-back) is then dropped
+     * from the run and counted released by the next rebalance.
      * <p>
      * The guard holds an owner; it makes no move itself. Each site settles an owed move its own way, and with its own report:
      * on the ordered lane by its own scope ({@code PAST_STUCK_HANDLER_TIMEOUT} for a shed or a dead-pump hand-back,
@@ -2644,38 +2654,68 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             return LeaseRowRelease.NONE;
         }
         // Asked outside any lock of the owner's: the ledger takes its monitor, and waits for a charge running on another
-        // thread (ReleaseChargeLedger, Locking). Each owner found owing nothing is claimed until the statement has returned
-        // or thrown: a charge of it starting meanwhile, on another thread, waits for the claim to end, so none leaves a move
-        // owed between this check and the statement. The statement's connection is taken first, so no claim is held while
-        // this waits for the pool
-        var owing         = new ArrayList<LeasedOwner>();
-        var clearing      = new ArrayList<LeasedOwner>();
+        // thread (ReleaseChargeLedger, Locking). First a check that claims nothing, so a call whose every owner owes a move
+        // takes no connection, and still WARNs when the pool has none to give. Each owner found owing nothing then is
+        // claimed until the statement has returned or thrown: a charge of it starting meanwhile, on another thread, waits for
+        // the claim to end, so none leaves a move owed between the claim and the statement. The statement's connection is
+        // taken before any claim, so no claim is held while this waits for the pool
+        var owing      = new ArrayList<LeasedOwner>();
+        var candidates = new ArrayList<LeasedOwner>();
+        var clearing   = new ArrayList<LeasedOwner>();
         var statementSent = false;
         int released      = 0;
-        try (var connection = storage.connection()) {
-            Throwable failure = null;
-            try {
-                for (var owner : releasing) {
-                    (owner.claimReleaseUnlessMoveOwed() ? clearing : owing).add(owner);
+        // What ending the claims threw after the statement had returned: not the statement's failure, so no owner is
+        // marked in doubt for it; rethrown once the owners are told their rows were released
+        Throwable claimEndFailure = null;
+        try {
+            for (var owner : releasing) {
+                (owner.owesDeadLetterMove() ? owing : candidates).add(owner);
+            }
+            if (candidates.isEmpty()) {
+                return LeaseRowRelease.NONE;
+            }
+            try (var connection = storage.connection()) {
+                Throwable failure = null;
+                try {
+                    for (var owner : candidates) {
+                        (owner.claimReleaseUnlessMoveOwed() ? clearing : owing).add(owner);
+                    }
+                    if (!clearing.isEmpty()) {
+                        var fenceByShard = new HashMap<Integer, Long>();
+                        clearing.forEach(owner -> fenceByShard.put(owner.shard(), owner.fence()));
+                        statementSent = true;
+                        released = storage.releaseFencedLeases(connection, activeLane, fenceByShard, instanceId);
+                    }
+                } catch (SQLException | RuntimeException | Error e) {
+                    failure = e;
+                    throw e;
+                } finally {
+                    // A claim covers the later owners' claims and the statement: ended before onLeaseEnded, so no owner code
+                    // run from there waits for it
+                    try {
+                        endReleaseClaims(clearing, failure);
+                    } catch (RuntimeException | Error e) {
+                        // A critical error is rethrown at once. With the release failed, endReleaseClaims adds every other
+                        // end failure to that failure itself, and one reaching here is added the same way; with nothing
+                        // failed, the statement has returned, so it is kept for after the owners are told
+                        Exceptions.rethrowIfCriticalError(e);
+                        if (failure == null) {
+                            claimEndFailure = e;
+                        } else {
+                            failure.addSuppressed(e);
+                        }
+                    }
                 }
-                if (!clearing.isEmpty()) {
-                    var fenceByShard = new HashMap<Integer, Long>();
-                    clearing.forEach(owner -> fenceByShard.put(owner.shard(), owner.fence()));
-                    statementSent = true;
-                    released = storage.releaseFencedLeases(connection, activeLane, fenceByShard, instanceId);
-                }
-            } catch (SQLException | RuntimeException | Error e) {
-                failure = e;
-                throw e;
-            } finally {
-                // A claim covers the later owners' claims and the statement: ended before onLeaseEnded, so no owner code
-                // run from there waits for it
-                endReleaseClaims(clearing, failure);
             }
         } catch (SQLException | RuntimeException | Error e) {
-            // The statement or the close of its connection: either may leave the release gone through on the server
+            // The pool, a claim, the statement or the close of its connection - the last two may leave the release gone
+            // through on the server - or a critical error ending a claim; never a claim ending that threw after the
+            // statement returned, which is claimEndFailure
             if (statementSent && LeaseRowState.mayHaveGoneThrough(e)) {
                 clearing.forEach(LeasedOwner::markReleaseInDoubt);
+            }
+            if (claimEndFailure != null) {
+                e.addSuppressed(claimEndFailure);
             }
             throw e;
         } finally {
@@ -2686,6 +2726,14 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         }
         for (var owner : clearing) {
             owner.onLeaseEnded(LeasedOwner.LeaseEnd.RELEASED);
+        }
+        // Every row the statement covered is released and its owner told so; only then the claim-ending failure, a bug's
+        // (endReleaseClaims), is rethrown
+        if (claimEndFailure instanceof RuntimeException runtime) {
+            throw runtime;
+        }
+        if (claimEndFailure instanceof Error error) {
+            throw error;
         }
         return new LeaseRowRelease(List.copyOf(clearing), released);
     }

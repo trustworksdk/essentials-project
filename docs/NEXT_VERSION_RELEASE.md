@@ -725,12 +725,14 @@ as a later request or hand-back with no key in a handler does not name them. Eve
 the owner serving or keeping it now also checks for a dead-letter move still owed: a release that would leave one owed
 leaves that unit unreleased, its lease row still naming the instance, with a WARN that names the unit (at most once a
 minute per unit, the rest at DEBUG), and releases the others; the unit is released by a later release once the move
-is made. A `releaseKeptOrderedUnit` that comes to such a unit answers `BUSY` - ask again. A charge that starts while
-another release of the same unit's lease row is running waits for that release's statement to return; a
-`releaseKeptOrderedUnit`, a kept unit's hand-back and a `stop()` wait for it no longer than their network wait bound,
-then fail with nothing charged, as when their charge fails: the request throws its `SQLException` - ask again - the
-hand-back is retried later, and a `stop()` leaves that unit's lease unreleased, with a WARN.
-(`6337f7d89`, `2fdeb3db0`, `bfa961ec5`, `dbae0986f`, `7dbd517be`, `e699c9d44`, `895b1a498`, `52c5e943e`, `56790ca82`, `b785a52b2`, `ab601d493`, `311efc4ad`, `055e013d6`, `4cce8acbb`, `29e3893d2`, `2c7ab3791`, `6be1d7215`, `<!-- fix:U-002 -->`)
+is made. A release that leaves every unit it was asked for out takes no pool connection, so its WARN is logged also
+while the pool or the database cannot give one. A `releaseKeptOrderedUnit` that comes to such a unit answers `BUSY` -
+ask again. A charge that starts while another release of the same unit's lease row is running waits for that release's
+statement to return; a `releaseKeptOrderedUnit`, a kept unit's hand-back and a `stop()` wait for it no longer than
+their network wait bound, then fail with nothing charged, as when their charge fails: the request throws its
+`SQLException` - ask again - the hand-back is retried later, and a `stop()` leaves that unit's lease unreleased, with
+a WARN.
+(`6337f7d89`, `2fdeb3db0`, `bfa961ec5`, `dbae0986f`, `7dbd517be`, `e699c9d44`, `895b1a498`, `52c5e943e`, `56790ca82`, `b785a52b2`, `ab601d493`, `311efc4ad`, `055e013d6`, `4cce8acbb`, `29e3893d2`, `2c7ab3791`, `6be1d7215`, `<!-- fix:U-002 -->`, `<!-- fix:U-014 -->`)
 
 **The unordered lane now charges a hung handler's delivery too, past the same bound.** It waits for no handler: a
 fair-share shed and a dead pump's hand-back release an unordered shard at once, and `stop()` once `shedGrace` has run
