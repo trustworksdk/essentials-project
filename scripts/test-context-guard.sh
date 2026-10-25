@@ -417,6 +417,10 @@ done
   || fail "window is $(ls -l "$CONTEXT_GUARD_DIR/s23/main/window" | cut -c1-10), expected -rw-------"
 pass
 
+expect_empty_dir() { # $1 dir, $2 what was symlinked to it
+  [ -z "$(ls -A "$1")" ] || fail "created through a symlinked $2: $(ls -A "$1" | tr '\n' ' ')"
+}
+
 case_name="a state directory that is a symlink is refused: nothing printed, nothing written through it"
 elsewhere=$tmp/elsewhere
 mkdir -p "$elsewhere/main"
@@ -427,6 +431,54 @@ expect_nothing "$(run warn s24 "")" "warned through a symlinked session director
 expect_nothing "$(run restore s24 "")" "restore injected a STATE.md from a symlinked session directory"
 [ "$(ls "$elsewhere/main")" = STATE.md ] || fail "wrote through the symlink: $(ls "$elsewhere/main" | tr '\n' ' ')"
 rm -f "$CONTEXT_GUARD_DIR/s24"
+pass
+
+# The directories below the link do not exist yet: the hook must not create them in its target.
+case_name="a symlinked session directory: nothing created in its target"
+elsewhere=$tmp/elsewhere-session
+mkdir -p "$elsewhere"
+ln -s "$elsewhere" "$CONTEXT_GUARD_DIR/s30"
+assistant_entry "$(main_transcript s30)" claude-opus-5-5 950000 false
+assistant_entry "$(agent_transcript s30 a1)" claude-opus-5-5 150000 true
+expect_nothing "$(run warn s30 "")" "warned through a symlinked session directory"
+expect_nothing "$(run restore s30 "")" "restored through a symlinked session directory"
+expect_nothing "$(run warn s30 a1)" "a subagent warned through a symlinked session directory"
+expect_empty_dir "$elsewhere" "session directory"
+rm -f "$CONTEXT_GUARD_DIR/s30"
+pass
+
+case_name="a symlinked agents directory: nothing created in its target"
+elsewhere=$tmp/elsewhere-agents
+mkdir -p "$elsewhere" "$CONTEXT_GUARD_DIR/s31"
+ln -s "$elsewhere" "$CONTEXT_GUARD_DIR/s31/agents"
+assistant_entry "$(main_transcript s31)" claude-opus-5-5 150000 false
+assistant_entry "$(agent_transcript s31 a1)" claude-opus-5-5 150000 true
+expect_nothing "$(run warn s31 a1)" "a subagent warned through a symlinked agents directory"
+expect_empty_dir "$elsewhere" "agents directory"
+rm -f "$CONTEXT_GUARD_DIR/s31/agents"
+pass
+
+case_name="a symlinked root: nothing created in its target"
+elsewhere=$tmp/elsewhere-root
+mkdir -p "$elsewhere"
+ln -s "$elsewhere" "$tmp/guard-link"
+assistant_entry "$(main_transcript s32)" claude-opus-5-5 950000 false
+for r in "$tmp/guard-link" "$tmp/guard-link/" "$tmp/guard-link//"; do
+  expect_nothing "$(CONTEXT_GUARD_DIR=$r run warn s32 "")" "warned through a symlinked root $r"
+  expect_nothing "$(CONTEXT_GUARD_DIR=$r run restore s32 "")" "restored through a symlinked root $r"
+  hook_input s32 "" | CONTEXT_GUARD_DIR=$r bash "$hook" start >/dev/null
+  expect_empty_dir "$elsewhere" "root $r"
+done
+rm -f "$tmp/guard-link"
+pass
+
+case_name="a missing root is created with its missing parents, each state directory 700"
+r=$tmp/fresh/parent/guard
+assistant_entry "$(main_transcript s33)" claude-opus-5-5 950000 false
+expect_warning "$(CONTEXT_GUARD_DIR=$r run warn s33 "")" 950000/1000000
+for d in "$r" "$r/s33" "$r/s33/main"; do
+  [ "$(ls -ld "$d" | cut -c1-10)" = drwx------ ] || fail "$d is $(ls -ld "$d" | cut -c1-10), expected drwx------"
+done
 pass
 
 case_name="start prunes sessions with nothing written for 7 days, keeps a live one and its own"

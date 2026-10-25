@@ -56,7 +56,8 @@
 #        CONTEXT_GUARD_RESERVE (default 33000: tokens short of the window Claude Code compacts at),
 #        CONTEXT_GUARD_DIR (default /tmp/claude-<uid>/context-guard).
 # State is private: files are created with umask 077, every state directory must be a real
-# directory owned by this user (else the hook does nothing) and is chmod 700, so on a shared
+# directory owned by this user (else the hook does nothing; each is checked before anything is
+# created in it, a missing one created a level at a time) and is chmod 700, so on a shared
 # host no other user can read STATE.md or plant one for a restore to inject. `start` prunes
 # session directories with nothing written in them for 7 days; `warn` marks its state dir
 # live on every call, so a long-running session is never pruned.
@@ -85,6 +86,8 @@ cwd=${cwd:-${CLAUDE_PROJECT_DIR:-.}}
 [ -n "$session" ] || exit 0
 
 root=${CONTEXT_GUARD_DIR:-/tmp/claude-$(id -u)/context-guard}
+# Trailing slashes dropped: with one, `[ -L ]` below tests the link's target, not the link.
+while case "$root" in ?*/) ;; *) false ;; esac; do root=${root%/}; done
 base=$root/$session
 if [ -n "$agent" ]; then
   state_dir=$base/agents/$agent
@@ -94,9 +97,16 @@ else
   state_dir=$base/main
   who="this conversation"
 fi
-mkdir -p "$state_dir" 2>/dev/null || exit 0
-# Refuse state another user could have pre-created or swapped for a symlink.
+# Refuse state another user could have pre-created or swapped for a symlink. Each state
+# directory, from the root down, is checked before anything is created in it, and a missing
+# one is created a single level at a time: `mkdir -p` would follow a planted link and create
+# the rest in its target before any check ran. The root's parent is created when missing,
+# unchecked.
+parent=${root%/*}
+case "$root" in */*) ;; *) parent=. ;; esac
+[ -d "${parent:-/}" ] || mkdir -p "$parent" 2>/dev/null || exit 0
 for d in "$root" "$base" ${agent:+"$base/agents"} "$state_dir"; do
+  [ -e "$d" ] || [ -L "$d" ] || mkdir "$d" 2>/dev/null
   [ -d "$d" ] && [ ! -L "$d" ] && [ -O "$d" ] || exit 0
   chmod 700 "$d" 2>/dev/null
 done
