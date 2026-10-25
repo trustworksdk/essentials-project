@@ -804,6 +804,16 @@ not during them, as on the ordered lane.
   changes that differ only in their description are no longer equal. Nothing in Essentials compares changes that
   way: duplicate contributions are still matched on module, change id and object name, and checked by checksum.
   (RN-5, `07d23d7d`)
+- **A WARN for a repeatable schema change that locks its table on every start.** `PostgresqlCreateSchemaApplier`
+  (`create` mode) now logs one WARN per module and change id, once per JVM, for a `SchemaChange.repeatable(...)`
+  change that has a `CREATE [UNIQUE] INDEX` or `ALTER TABLE ... ADD COLUMN` (or `ADD IF NOT EXISTS`) not wrapped in
+  `PostgresqlSchemaStatements.createIndexUnlessPresent` / `addColumnUnlessPresent`. Such a statement runs on every
+  start and PostgreSQL locks its table even when the index or column exists, so the start waits for, then blocks,
+  the writes of the instances already running and can deadlock with them (the startup deadlock fixes in §3). The
+  statement still runs as before. To silence the WARN, wrap the statement in your own contributor with
+  `createIndexUnlessPresent` / `addColumnUnlessPresent`.
+  `PostgresqlSchemaStatements.takesTableLockEvenWhenPresent(String)` is the check, for a test of your own
+  contributor's statements. (`<!-- fix:U-005 -->`)
 - **`essentials.durable-queues.require-active-unit-of-work-for-enqueue`** (default `false`), also
   `setRequireActiveUnitOfWorkForEnqueue(...)` on the PostgreSQL, MongoDB and shard-owned builders. When `true`, an
   enqueue with no active `UnitOfWork` or Spring transaction throws `NoActiveUnitOfWorkException`, so an `Outbox`

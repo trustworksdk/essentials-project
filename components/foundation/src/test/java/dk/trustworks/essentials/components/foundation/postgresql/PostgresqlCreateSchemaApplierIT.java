@@ -15,11 +15,15 @@
  */
 package dk.trustworks.essentials.components.foundation.postgresql;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import dk.trustworks.essentials.components.foundation.schema.*;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.JdbiUnitOfWorkFactory;
 import org.awaitility.Awaitility;
 import org.jdbi.v3.core.Jdbi;
 import org.junit.jupiter.api.*;
+import org.slf4j.LoggerFactory;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
@@ -100,6 +104,35 @@ class PostgresqlCreateSchemaApplierIT {
                                           "ALTER TABLE orders ADD COLUMN IF NOT EXISTS total NUMERIC")));
 
         assertThat(count("SELECT count(*) FROM information_schema.columns WHERE table_name = 'orders' AND column_name = 'total'")).isEqualTo(1);
+    }
+
+    @Test
+    void a_repeatable_change_that_creates_an_index_without_checking_the_catalog_is_applied_and_warned_about_once() {
+        var logger      = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(PostgresqlCreateSchemaApplier.class);
+        var logAppender = new ListAppender<ILoggingEvent>();
+        logAppender.start();
+        logger.addAppender(logAppender);
+        try {
+            var changes = set("lock-warning-it", SchemaOrder.ORDER_APPLICATION,
+                              SchemaChange.repeatable("orders-table", "orders", "CREATE TABLE IF NOT EXISTS orders (id BIGINT, status TEXT)"),
+                              SchemaChange.repeatable("orders-status-index", "orders", "CREATE INDEX IF NOT EXISTS orders_status_idx ON orders (status)"),
+                              SchemaChange.repeatable("orders-id-index", "orders",
+                                                      PostgresqlSchemaStatements.createIndexUnlessPresent("orders", "orders_id_idx",
+                                                                                                          "CREATE INDEX IF NOT EXISTS orders_id_idx ON orders (id)")));
+
+            apply(changes);
+            apply(changes);
+
+            assertThat(count("SELECT count(*) FROM pg_indexes WHERE tablename = 'orders'")).as("both indexes are created").isEqualTo(2);
+            assertThat(logAppender.list).filteredOn(event -> event.getLevel() == Level.WARN)
+                                        .singleElement()
+                                        .extracting(ILoggingEvent::getFormattedMessage).asString()
+                                        .startsWith("[lock-warning-it] Repeatable schema change 'orders-status-index' on 'orders' creates an index or adds a column without checking the catalog first")
+                                        .contains("PostgresqlSchemaStatements.createIndexUnlessPresent / addColumnUnlessPresent")
+                                        .endsWith("Statement: CREATE INDEX IF NOT EXISTS orders_status_idx ON orders (status)");
+        } finally {
+            logger.detachAppender(logAppender);
+        }
     }
 
     @Test

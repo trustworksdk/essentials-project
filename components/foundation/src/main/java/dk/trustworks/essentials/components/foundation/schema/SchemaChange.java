@@ -29,6 +29,9 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  * {@code CREATE ... IF NOT EXISTS}, {@code DROP ... IF EXISTS}, {@code ADD COLUMN IF NOT EXISTS}. That is how a
  * database created by an Essentials release older than the schema harness is adopted: on first boot the statements
  * run, change nothing, and the ledger records them (see {@code docs/database-schema-harness.md} §7).
+ * <p>
+ * <b>A repeatable change must take no table lock when its objects already exist.</b> It runs on every start, against
+ * tables the instances already running keep writing to - see {@link #repeatable(String, String, String...)}.
  *
  * @param changeId   stable identifier of the change within its module, e.g. {@code "queue-table"}. Never reuse one
  *                   for different statements: a one-shot change is recognised by it
@@ -37,7 +40,8 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  *                   aggregate type, or differently configured table names in one database
  * @param statements executed in order, in the same transaction as the rest of the contributor's changes
  * @param repeatable  {@code true}: runs on every boot, which is how every Essentials DDL statement behaved before the
- *                    harness. {@code false}: runs once per {@code (module, changeId, objectName)} and is then skipped;
+ *                    harness - so its statements must take no table lock once their objects exist, see
+ *                    {@link #repeatable(String, String, String...)}. {@code false}: runs once per {@code (module, changeId, objectName)} and is then skipped;
  *                    editing its statements afterwards fails startup
  * @param description what the object is for, in the application's terms - e.g. {@code "AggregateType 'Orders'"} for
  *                    an event-stream table. Empty when the contributor gave none. Shown next to the object name in the
@@ -80,6 +84,18 @@ public record SchemaChange(String changeId, String objectName, List<String> stat
     }
 
     /**
+     * A change that runs on every boot - against tables the instances already running keep writing to. So its
+     * statements must take no lock on a table when what they ensure is already in place. On PostgreSQL,
+     * {@code CREATE INDEX IF NOT EXISTS} takes {@code SHARE} on its table even when the index exists, and
+     * {@code ALTER TABLE ... ADD COLUMN IF NOT EXISTS} takes {@code ACCESS EXCLUSIVE} even when the column exists, both
+     * held until the change set's transaction commits: every start then waits for, and blocks, the running instances'
+     * writes, and can deadlock with them. Wrap such a statement in
+     * {@link dk.trustworks.essentials.components.foundation.postgresql.PostgresqlSchemaStatements#createIndexUnlessPresent(String, String, String)}
+     * or
+     * {@link dk.trustworks.essentials.components.foundation.postgresql.PostgresqlSchemaStatements#addColumnUnlessPresent(String, String, String)},
+     * which check the catalog first. {@code PostgresqlCreateSchemaApplier} runs an unwrapped one all the same, with a
+     * WARN.
+     *
      * @return a change that runs on every boot
      */
     public static SchemaChange repeatable(String changeId, String objectName, String... statements) {

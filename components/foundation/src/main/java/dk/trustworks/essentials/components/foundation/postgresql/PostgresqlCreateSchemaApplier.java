@@ -26,7 +26,7 @@ import org.slf4j.*;
 import java.sql.SQLException;
 import java.time.*;
 import java.util.*;
-import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.*;
 import java.util.function.*;
 
 import static dk.trustworks.essentials.shared.FailFast.*;
@@ -55,6 +55,13 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  * its connection joins (it is for a {@code Jdbi} built on Spring's {@code TransactionAwareDataSourceProxy}), so while
  * one is active a deadlock is not retried there either.
  * <p>
+ * <b>Repeatable statements that lock their table.</b> A {@link SchemaChange#repeatable() repeatable} change runs on
+ * every start, against tables the instances already running keep writing to. A {@code CREATE INDEX} or
+ * {@code ALTER TABLE ... ADD COLUMN} in one, not wrapped by {@link PostgresqlSchemaStatements#createIndexUnlessPresent}
+ * or {@link PostgresqlSchemaStatements#addColumnUnlessPresent}, locks its table even when the index or column exists
+ * ({@link PostgresqlSchemaStatements#takesTableLockEvenWhenPresent(String)} tells). The applier runs it all the same
+ * and logs a WARN, once per {@code (module, changeId)} in the JVM, naming the wrappers.
+ * <p>
  * <b>Identifiers.</b> Every {@link SchemaChange#objectName()} is checked with
  * {@link PostgresqlUtil#checkIsValidTableOrColumnName(String)} before any statement executes. It is a first line of
  * defence, not a guarantee - see that method.
@@ -69,6 +76,9 @@ public final class PostgresqlCreateSchemaApplier implements SchemaApplier {
 
     /** The ledger table's name unless configured otherwise */
     public static final String DEFAULT_SCHEMA_HISTORY_TABLE_NAME = "essentials_schema_history";
+
+    /** {@code module + '\0' + changeId} of every repeatable change already warned about in this JVM */
+    private static final Set<String> WARNED_TABLE_LOCKING_CHANGES = ConcurrentHashMap.newKeySet();
 
     private final Transactions transactions;
     private final String       schemaHistoryTableName;
@@ -173,6 +183,7 @@ public final class PostgresqlCreateSchemaApplier implements SchemaApplier {
     public void apply(List<SchemaChangeSet> changeSets) {
         requireNonNull(changeSets, "No changeSets provided");
         changeSets.forEach(changeSet -> changeSet.changes().forEach(change -> PostgresqlUtil.checkIsValidTableOrColumnName(change.objectName())));
+        warnOfRepeatableChangesLockingTheirTable(changeSets);
 
         transactions.inTransaction(handle -> {
             PostgresqlUtil.acquireBootstrapLock(handle);
@@ -185,6 +196,35 @@ public final class PostgresqlCreateSchemaApplier implements SchemaApplier {
         for (var changeSet : changeSets) {
             applyRetryingOnDeadlock(changeSet);
         }
+    }
+
+    /**
+     * WARN, once per {@code (module, changeId)} in the JVM, of each repeatable change holding a statement that
+     * {@link PostgresqlSchemaStatements#takesTableLockEvenWhenPresent(String)}. Only a WARN: an application's own
+     * contributor goes through this applier too, and refusing its start would break it.
+     *
+     * @return the changes warned about by this call, as {@code module/changeId}
+     */
+    static List<String> warnOfRepeatableChangesLockingTheirTable(List<SchemaChangeSet> changeSets) {
+        var warned = new ArrayList<String>();
+        for (var changeSet : changeSets) {
+            for (var change : changeSet.changes()) {
+                if (!change.repeatable()) {
+                    continue;
+                }
+                var lockingStatement = change.statements().stream().filter(PostgresqlSchemaStatements::takesTableLockEvenWhenPresent).findFirst();
+                if (lockingStatement.isPresent() && WARNED_TABLE_LOCKING_CHANGES.add(changeSet.moduleId() + '\0' + change.changeId())) {
+                    log.warn("[{}] Repeatable schema change '{}' on '{}' creates an index or adds a column without checking the catalog first. " +
+                                     "It runs on every start, and PostgreSQL locks the statement's table even when the index or column already exists " +
+                                     "(SHARE for an index, ACCESS EXCLUSIVE for a column) until the change set's transaction commits: the start waits for, " +
+                                     "then blocks, the writes of the instances already running, and can deadlock with them. " +
+                                     "Wrap the statement in PostgresqlSchemaStatements.createIndexUnlessPresent / addColumnUnlessPresent. Statement: {}",
+                             changeSet.moduleId(), change.changeId(), change.objectName(), lockingStatement.get());
+                    warned.add(changeSet.moduleId() + "/" + change.changeId());
+                }
+            }
+        }
+        return warned;
     }
 
     private void applyRetryingOnDeadlock(SchemaChangeSet changeSet) {

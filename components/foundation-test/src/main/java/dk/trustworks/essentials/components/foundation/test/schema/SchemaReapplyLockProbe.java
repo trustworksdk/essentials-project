@@ -15,7 +15,7 @@
  */
 package dk.trustworks.essentials.components.foundation.test.schema;
 
-import dk.trustworks.essentials.components.foundation.postgresql.PostgresqlCreateSchemaApplier;
+import dk.trustworks.essentials.components.foundation.postgresql.*;
 import dk.trustworks.essentials.components.foundation.schema.*;
 import org.jdbi.v3.core.Jdbi;
 
@@ -34,7 +34,9 @@ import static org.assertj.core.api.Assertions.fail;
  * <p>
  * {@code CREATE INDEX IF NOT EXISTS} takes a {@code SHARE} lock on its table even when the index exists, and
  * {@code ALTER TABLE ... ADD COLUMN IF NOT EXISTS} takes {@code ACCESS EXCLUSIVE} even when the column exists, so
- * neither may be a repeatable change's statement as it stands.
+ * neither may be a repeatable change's statement as it stands. {@link #assertNoRepeatableStatementLocksItsTable} checks
+ * the statements for them, and every re-apply probe here runs it first; at runtime {@link PostgresqlCreateSchemaApplier}
+ * WARNs of them.
  */
 public final class SchemaReapplyLockProbe {
     private static final Duration REAPPLY_TIMEOUT = Duration.ofSeconds(10);
@@ -67,15 +69,40 @@ public final class SchemaReapplyLockProbe {
     }
 
     /**
-     * Apply the contributor's schema, then apply it again while another transaction holds {@code ROW EXCLUSIVE} - what
-     * every in-flight insert, update or delete holds - on each of the given tables, and fail if the re-apply has to
-     * wait for that transaction.
+     * Fail when a {@link SchemaChange#repeatable() repeatable} change of the contributor holds a statement that
+     * {@link PostgresqlSchemaStatements#takesTableLockEvenWhenPresent(String) locks its table even when what it ensures
+     * is already in place} - on any table, not only the ones a re-apply probe has a writer on. The statements are those
+     * {@code contribute(SchemaContext.empty())} returns.
+     *
+     * @param contributor the component
+     */
+    public static void assertNoRepeatableStatementLocksItsTable(EssentialsSchemaContributor contributor) {
+        var locking = contributor.contribute(SchemaContext.empty())
+                                 .stream()
+                                 .filter(SchemaChange::repeatable)
+                                 .flatMap(change -> change.statements()
+                                                          .stream()
+                                                          .filter(PostgresqlSchemaStatements::takesTableLockEvenWhenPresent)
+                                                          .map(statement -> change.changeId() + " on " + change.objectName() + ": " + statement))
+                                 .toList();
+        if (!locking.isEmpty()) {
+            fail("'" + contributor.moduleId() + "' has repeatable statement(s) that create an index or add a column without checking the catalog first, " +
+                         "so they lock their table on every start - wrap them in PostgresqlSchemaStatements.createIndexUnlessPresent / addColumnUnlessPresent:\n  " +
+                         String.join("\n  ", locking));
+        }
+    }
+
+    /**
+     * {@link #assertNoRepeatableStatementLocksItsTable(EssentialsSchemaContributor)}, then apply the contributor's
+     * schema and apply it again while another transaction holds {@code ROW EXCLUSIVE} - what every in-flight insert,
+     * update or delete holds - on each of the given tables, and fail if the re-apply has to wait for that transaction.
      *
      * @param jdbi        the database
      * @param contributor the component whose schema is re-applied
      * @param tables      the tables other instances write to while the re-apply runs
      */
     public static void assertReapplyDoesNotWaitForWritersOn(Jdbi jdbi, EssentialsSchemaContributor contributor, Collection<String> tables) {
+        assertNoRepeatableStatementLocksItsTable(contributor);
         PostgresqlCreateSchemaApplier.applyOwnSchema(jdbi, contributor);
 
         var executor = Executors.newSingleThreadExecutor();

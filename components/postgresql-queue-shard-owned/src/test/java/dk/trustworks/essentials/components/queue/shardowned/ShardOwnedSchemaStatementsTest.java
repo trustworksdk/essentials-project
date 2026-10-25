@@ -16,6 +16,7 @@
 
 package dk.trustworks.essentials.components.queue.shardowned;
 
+import dk.trustworks.essentials.components.foundation.postgresql.PostgresqlSchemaStatements;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -29,8 +30,6 @@ class ShardOwnedSchemaStatementsTest {
 
     @Test
     void no_schema_statement_creates_an_index_or_adds_a_column_unguarded() {
-        assertThat(ShardOwnedSchema.schemaStatements())
-                .noneMatch(statement -> statement.strip().toUpperCase().startsWith("CREATE INDEX"))
-                .noneMatch(statement -> statement.strip().toUpperCase().matches("(?s)ALTER TABLE .* ADD COLUMN .*"));
+        assertThat(ShardOwnedSchema.schemaStatements()).noneMatch(PostgresqlSchemaStatements::takesTableLockEvenWhenPresent);
     }
 }

@@ -67,6 +67,44 @@ class PostgresqlSchemaStatementsTest {
     }
 
     @Test
+    void a_bare_index_or_column_statement_takes_a_table_lock_even_when_present() {
+        assertThat(PostgresqlSchemaStatements.takesTableLockEvenWhenPresent("CREATE INDEX IF NOT EXISTS idx_orders_status ON orders (status)")).isTrue();
+        assertThat(PostgresqlSchemaStatements.takesTableLockEvenWhenPresent("  create unique index if not exists idx_orders_id ON orders (id);")).isTrue();
+        assertThat(PostgresqlSchemaStatements.takesTableLockEvenWhenPresent("CREATE\n    INDEX idx ON orders (id)")).isTrue();
+        assertThat(PostgresqlSchemaStatements.takesTableLockEvenWhenPresent("ALTER TABLE orders ADD COLUMN IF NOT EXISTS status TEXT")).isTrue();
+        assertThat(PostgresqlSchemaStatements.takesTableLockEvenWhenPresent("alter table orders\n    add if not exists status text")).isTrue();
+        assertThat(PostgresqlSchemaStatements.takesTableLockEvenWhenPresent("ALTER TABLE orders ALTER COLUMN id SET NOT NULL, ADD COLUMN IF NOT EXISTS status TEXT")).isTrue();
+    }
+
+    @Test
+    void a_bare_index_or_column_statement_after_another_statement_in_the_same_text_is_found() {
+        assertThat(PostgresqlSchemaStatements.takesTableLockEvenWhenPresent("CREATE TABLE IF NOT EXISTS orders (id BIGINT); CREATE INDEX IF NOT EXISTS idx ON orders (id)")).isTrue();
+        assertThat(PostgresqlSchemaStatements.takesTableLockEvenWhenPresent("-- the status index\nCREATE INDEX IF NOT EXISTS idx ON orders (status)")).isTrue();
+        assertThat(PostgresqlSchemaStatements.takesTableLockEvenWhenPresent("/* the status index */ CREATE INDEX IF NOT EXISTS idx ON orders (status)")).isTrue();
+    }
+
+    @Test
+    void a_wrapped_statement_takes_no_table_lock_when_present() {
+        assertThat(PostgresqlSchemaStatements.takesTableLockEvenWhenPresent(
+                PostgresqlSchemaStatements.createIndexUnlessPresent("orders", "idx_orders_status", "CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_status ON orders (status)"))).isFalse();
+        assertThat(PostgresqlSchemaStatements.takesTableLockEvenWhenPresent(
+                PostgresqlSchemaStatements.addColumnUnlessPresent("orders", "status", "ALTER TABLE orders ADD COLUMN IF NOT EXISTS status TEXT"))).isFalse();
+    }
+
+    @Test
+    void index_and_column_text_inside_literals_comments_and_function_bodies_is_not_a_statement() {
+        assertThat(PostgresqlSchemaStatements.takesTableLockEvenWhenPresent("CREATE TABLE IF NOT EXISTS orders (\n" +
+                                                                                    "    id BIGINT, -- ; CREATE INDEX on id is not needed\n" +
+                                                                                    "    note TEXT DEFAULT 'x; CREATE INDEX y ON orders (id)'\n" +
+                                                                                    ")")).isFalse();
+        assertThat(PostgresqlSchemaStatements.takesTableLockEvenWhenPresent("CREATE OR REPLACE FUNCTION f() RETURNS void AS $$ BEGIN EXECUTE 'x'; CREATE INDEX i ON t (c); END $$ LANGUAGE plpgsql")).isFalse();
+        assertThat(PostgresqlSchemaStatements.takesTableLockEvenWhenPresent("COMMENT ON TABLE orders IS 'it''s; ALTER TABLE orders ADD COLUMN x INT'")).isFalse();
+        assertThat(PostgresqlSchemaStatements.takesTableLockEvenWhenPresent("CREATE TABLE IF NOT EXISTS \"create index\" (id BIGINT)")).isFalse();
+        assertThat(PostgresqlSchemaStatements.takesTableLockEvenWhenPresent("ALTER TABLE orders ADD CONSTRAINT orders_pk PRIMARY KEY (id)")).isFalse();
+        assertThat(PostgresqlSchemaStatements.takesTableLockEvenWhenPresent("DROP INDEX IF EXISTS idx_orders_status")).isFalse();
+    }
+
+    @Test
     void a_blank_statement_is_rejected() {
         assertThatThrownBy(() -> PostgresqlSchemaStatements.addColumnUnlessPresent("orders", "status", " "))
                 .isInstanceOf(IllegalArgumentException.class);
