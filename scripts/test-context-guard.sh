@@ -14,9 +14,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-# Tests .claude/hooks/context-guard.sh: the context window each agent is measured against, the
-# restore after a subagent's compaction, STATE.md handed back once per write, and the
-# pre-compaction snapshot without GNU-only tools.
+# Tests .claude/hooks/context-guard.sh: the context window each agent is measured against (and
+# that a subagent reads the main transcript's model from its tail, once), the restore after a
+# subagent's compaction, STATE.md handed back once per write, and the pre-compaction snapshot
+# without GNU-only tools.
 #
 # Every case runs the hook as Claude Code does - hook JSON on stdin, the mode as $1 - against
 # fake transcripts in a temp dir. CONTEXT_GUARD_DIR, CLAUDE_CONFIG_DIR and CLAUDE_PROJECT_DIR
@@ -110,6 +111,63 @@ assistant_entry "$(main_transcript s6)" '<synthetic>' 0 false # an API error pla
 assistant_entry "$(agent_transcript s6 a1)" claude-opus-5-5 150000 true
 expect_nothing "$(run warn s6 a1)" "15% of 1000000 is below every level"
 [ "$(window_of s6 a1)" = 1000000 ] || fail "window is '$(window_of s6 a1)', expected 1000000"
+pass
+
+# tail and jq wrapped to log every argument list: a read of the main transcript names its path.
+shim=$tmp/shim
+reads=$tmp/main-transcript-reads.log
+mkdir -p "$shim"
+for t in tail jq; do
+  printf '%s\n' '#!/usr/bin/env bash' "printf '%s\n' \"\$*\" >>'$reads'" "exec '$(command -v "$t")' \"\$@\"" >"$shim/$t"
+  chmod +x "$shim/$t"
+done
+main_reads() { # $1 main transcript; prints "<tail reads> <whole-file reads>" logged so far
+  local t=0 w=0 line
+  [ -f "$reads" ] || { echo "0 0"; return; }
+  while IFS= read -r line; do
+    case "$line" in
+      "-n "*" $1") t=$((t + 1)) ;;
+      *" $1") w=$((w + 1)) ;;
+    esac
+  done <"$reads"
+  echo "$t $w"
+}
+
+case_name="alias main model, last 500+ main transcript lines hold no usage entry: 1000000, no whole-file read"
+m=$(main_transcript s7)
+assistant_entry "$m" claude-opus-5-5 40000 false
+for i in $(seq 1 600); do # tool results and the like: no assistant entry with a usage block
+  jq -nc --argjson i "$i" '{type: "user", message: {content: [{type: "tool_result", content: "r\($i)"}]}}' >>"$m"
+done
+assistant_entry "$(agent_transcript s7 a1)" claude-opus-5-5 150000 true
+rm -f "$reads"
+out=$(hook_input s7 a1 | PATH=$shim:$PATH bash "$hook" warn | jq -r '.hookSpecificOutput.additionalContext // empty')
+expect_nothing "$out" "15% of 1000000 is below every level"
+[ "$(window_of s7 a1)" = 1000000 ] || fail "window is '$(window_of s7 a1)', expected 1000000"
+read -r tails wholes <<<"$(main_reads "$m")"
+[ "$wholes" = 0 ] || fail "the main transcript was read whole $wholes time(s); its last 5000 lines name the model"
+[ "$tails" -gt 0 ] || fail "the main transcript's tail was never read"
+[ "$(cat "$CONTEXT_GUARD_DIR/s7/agents/a1/main_model_id" 2>/dev/null)" = claude-opus-5-5 ] \
+  || fail "main_model_id holds '$(cat "$CONTEXT_GUARD_DIR/s7/agents/a1/main_model_id" 2>/dev/null)', expected claude-opus-5-5"
+pass
+
+case_name="alias main model, the subagent's next call does not read the main transcript again"
+rm -f "$reads"
+assistant_entry "$(agent_transcript s7 a1)" claude-opus-5-5 160000 true
+out=$(hook_input s7 a1 | PATH=$shim:$PATH bash "$hook" warn | jq -r '.hookSpecificOutput.additionalContext // empty')
+expect_nothing "$out" "16% of 1000000 is below every level"
+[ "$(main_reads "$m")" = "0 0" ] || fail "the main transcript was read again (tail, whole: $(main_reads "$m"))"
+pass
+
+case_name="alias main model, no id found yet: nothing kept, a later call finds it"
+assistant_entry "$(main_transcript s8)" '<synthetic>' 0 false # read, but names no model
+assistant_entry "$(agent_transcript s8 a1)" claude-opus-5-5 150000 true
+expect_warning "$(run warn s8 a1)" 150000/200000
+[ -e "$CONTEXT_GUARD_DIR/s8/agents/a1/main_model_id" ] && fail "an empty main_model_id was kept"
+assistant_entry "$(main_transcript s8)" claude-opus-5-5 40000 false
+assistant_entry "$(agent_transcript s8 a1)" claude-opus-5-5 160000 true
+expect_nothing "$(run warn s8 a1)" "16% of 1000000 is below every level"
+[ "$(window_of s8 a1)" = 1000000 ] || fail "window is '$(window_of s8 a1)', expected 1000000"
 pass
 
 case_name="full id in main/model, subagent on that id: 1000000"

@@ -25,7 +25,9 @@
 # id is the main model without its [1m] suffix when it is a full id (claude-opus-5-5[1m]);
 # an alias (opus[1m]) names a whole family, so it is resolved to the model the main
 # transcript's last assistant entry with a usage block names, a `<synthetic>` one (an API
-# error placeholder) skipped, and with no such entry the subagent gets 200000. A transcript
+# error placeholder) skipped, found by the subagent's first call that finds one and kept for
+# the rest of its run (main_model_id in its state dir), so a later model switch in the main
+# session is not followed; with no such entry the subagent gets 200000. A transcript
 # names the model without its [1m] suffix, so a 1M subagent on another model is found when
 # its count passes 200000 (see warn); from then on its window stays 1000000, also after its
 # compaction. Tested by scripts/test-context-guard.sh.
@@ -38,8 +40,8 @@
 #        CONTEXT_GUARD_DIR (default /tmp/claude-<uid>/context-guard).
 # Never fails the hook: every path exits 0.
 # Needs bash and jq (without jq it does nothing). Transcripts are read by jq (warn's usage
-# and main-model checks first take the last 500 lines with POSIX `tail -n`), so no GNU-only
-# tool (tac, GNU sed) is involved: it works on a stock macOS userland as well.
+# and main-model checks first take the last 500, then 5000 lines with POSIX `tail -n`), so no
+# GNU-only tool (tac, GNU sed) is involved: it works on a stock macOS userland as well.
 set -u
 command -v jq >/dev/null 2>&1 || exit 0
 
@@ -108,7 +110,9 @@ context_window() { # $1: the model named by this agent's own transcript (may be 
   # A full id (it has a '-') is taken as it is. An alias (opus, as settings hold it) names a
   # family, not a model - claude-opus-4-1 is an opus too - so it is resolved to the id the
   # main transcript's last assistant entry with a usage block names, a `<synthetic>` one (an
-  # API error placeholder) skipped; with none yet, the subagent gets 200000.
+  # API error placeholder) skipped, found by the subagent's first call that finds one and kept
+  # for the rest of its run (main_model_id in its state dir), so a later model switch in the
+  # main session is not followed; with none yet, the subagent gets 200000.
   if [ -n "$agent" ]; then
     local id=${model/'[1m]'/}
     case "$id" in *-*) ;; *) id=$(main_transcript_model) ;; esac
@@ -120,15 +124,34 @@ context_window() { # $1: the model named by this agent's own transcript (may be 
   echo 1000000
 }
 
+last_match() { # $1 transcript, $2 jq program over its raw lines that prints the last match
+  # The tail is read first - the last 500 lines, then the last 5000 - and the whole file only
+  # when neither holds a match: a long session's transcript runs to tens of MB.
+  local n out
+  for n in 500 5000; do
+    out=$(tail -n "$n" "$1" 2>/dev/null | jq -nrR "$2" 2>/dev/null)
+    [ -n "$out" ] && { printf '%s' "$out"; return; }
+  done
+  jq -nrR "$2" "$1" 2>/dev/null
+}
+
 main_transcript_model() { # the model id named by the main transcript's last assistant entry
-  # with a usage block, a `<synthetic>` one (an API error placeholder) skipped
+  # with a usage block, a `<synthetic>` one (an API error placeholder) skipped. Called for a
+  # subagent only. A subagent's model cannot change mid-run, so the main model id its first
+  # call finds is the one it is compared with for the rest of its run: the id is kept in its
+  # state dir (main_model_id) and the main transcript is not read again by its later calls;
+  # with no id found yet nothing is kept, and the next call reads the transcript again.
+  local cache=$state_dir/main_model_id
+  if [ -s "$cache" ]; then cat "$cache"; return; fi
   [ -f "$main_transcript" ] || return
   local prog='[inputs | fromjson? | objects
              | select(.type=="assistant" and (.isSidechain|not) and .message.usage) | .message.model
              | select(type=="string" and . != "" and (startswith("<")|not))] | last // empty'
   local out
-  out=$(tail -n 500 "$main_transcript" 2>/dev/null | jq -nrR "$prog" 2>/dev/null)
-  [ -n "$out" ] || out=$(jq -nrR "$prog" "$main_transcript" 2>/dev/null)
+  out=$(last_match "$main_transcript" "$prog")
+  # Written to a temporary file and renamed onto main_model_id, not truncated in place.
+  [ -n "$out" ] && printf '%s' "$out" >"$cache.$$" 2>/dev/null && mv -f "$cache.$$" "$cache" 2>/dev/null
+  rm -f "$cache.$$" 2>/dev/null
   printf '%s' "$out"
 }
 
@@ -137,14 +160,13 @@ used_tokens() { # prints "<tokens> <model>" from the last assistant entry; model
   # Main transcript: skip sidechain entries. A subagent transcript is all sidechain.
   local filter='select(.type=="assistant" and .message.usage)'
   [ -z "$agent" ] && filter='select(.type=="assistant" and (.isSidechain|not) and .message.usage)'
-  # jq takes the last match itself. The transcript's tail is read first, as this runs
-  # on every tool call; the whole file only when the tail holds no usage entry.
+  # jq takes the last match itself. The transcript's tail is read first (last_match), as
+  # this runs on every tool call; the whole file only when the tail holds no usage entry.
   local prog='[inputs | fromjson? | objects | '"$filter"' | .message
              | "\((.usage.input_tokens//0) + (.usage.cache_read_input_tokens//0) + (.usage.cache_creation_input_tokens//0)) \(.model // "")"]
              | last // empty'
   local out
-  out=$(tail -n 500 "$transcript" 2>/dev/null | jq -nrR "$prog" 2>/dev/null)
-  [ -n "$out" ] || out=$(jq -nrR "$prog" "$transcript" 2>/dev/null)
+  out=$(last_match "$transcript" "$prog")
   printf '%s\n' "$out"
 }
 
