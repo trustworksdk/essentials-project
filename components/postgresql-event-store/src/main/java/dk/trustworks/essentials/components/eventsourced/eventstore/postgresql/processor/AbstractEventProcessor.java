@@ -169,9 +169,12 @@ public abstract class AbstractEventProcessor implements Lifecycle {
      * not leave the ones after it subscribed - the shared rule, {@link Exceptions#forEachThenThrowFirst(Iterable, Consumer)}.
      *
      * @param subscriptions the processor's subscriptions - nothing is done when {@code null} (no subscription was created)
-     * @throws RuntimeException the first failure (a non-critical {@link Error} counts too), with each later, distinct one
-     *                          added as suppressed, once every subscription was tried; a critical error
-     *                          ({@link Exceptions#isCriticalError(Throwable)}) is rethrown at once
+     * @throws RuntimeException the first failure, when it is a {@link RuntimeException}, with each later, distinct one
+     *                          added as suppressed, once every subscription was tried
+     * @throws Error            the first failure, when it is a non-critical {@link Error} (an {@link AssertionError}, say),
+     *                          with each later, distinct one added as suppressed, once every subscription was tried; or a
+     *                          critical error ({@link Exceptions#isCriticalError(Throwable)}), rethrown at once without
+     *                          trying the subscriptions after it
      */
     static void unsubscribeEach(List<EventStoreSubscription> subscriptions) {
         if (subscriptions == null) {
@@ -197,6 +200,49 @@ public abstract class AbstractEventProcessor implements Lifecycle {
             return;
         }
         Exceptions.forEachCollectingFailures(subscriptions, EventStoreSubscription::unsubscribe, failure);
+    }
+
+    /**
+     * Subscribes to each of a processor's aggregate types in turn, when the processor starts (or, for a
+     * {@link ViewEventProcessor}, acquires its lock) - used by {@link EventProcessor#start()},
+     * {@link InTransactionEventProcessor#start()} and {@link ViewEventProcessor}. When one fails to subscribe, the
+     * subscriptions created before it are unsubscribed again through
+     * {@link #unsubscribeEachAddingFailuresTo(List, Throwable)} and the subscribe failure is rethrown: a failed start must
+     * not leave subscriptions running that nothing refers to. The subscriptions are returned, not assigned, so the
+     * processor's {@code eventStoreSubscriptions} keep the (unsubscribed) ones of an earlier run until every subscribe
+     * succeeded. Undoing anything else the start did (its {@code started} flag, an {@code Inbox} consumption) is left to the
+     * caller.
+     * <p>
+     * A {@link RuntimeException} and a non-critical {@link Error} are rolled back alike, as
+     * {@link Exceptions#forEachCollectingFailures(Iterable, Consumer, Throwable)} treats them; a critical error
+     * ({@link Exceptions#isCriticalError(Throwable)}) is rethrown at once, without the rollback.
+     *
+     * @param aggregateTypes the aggregate types to subscribe to, in their order
+     * @param subscribe      subscribes to one aggregate type and returns the subscription
+     * @param <T>            the type of the aggregate types
+     * @return the subscriptions, one per aggregate type in its order, as an unmodifiable list
+     * @throws RuntimeException the subscribe failure, when it is a {@link RuntimeException}, with each failure to unsubscribe
+     *                          one of the subscriptions created before it added as suppressed
+     * @throws Error            the subscribe failure, when it is a non-critical {@link Error}, with each failure to
+     *                          unsubscribe added as suppressed; or a critical error, rethrown at once - by the subscribe,
+     *                          without the rollback, or by an unsubscribe during the rollback, with the subscribe failure
+     *                          added to it as suppressed
+     */
+    static <T> List<EventStoreSubscription> subscribeEachOrUnsubscribe(List<T> aggregateTypes, Function<? super T, EventStoreSubscription> subscribe) {
+        requireNonNull(aggregateTypes, "aggregateTypes is null");
+        requireNonNull(subscribe, "subscribe is null");
+        var created = new ArrayList<EventStoreSubscription>(aggregateTypes.size());
+        try {
+            for (var aggregateType : aggregateTypes) {
+                created.add(subscribe.apply(aggregateType));
+            }
+        } catch (RuntimeException | Error e) {
+            Exceptions.rethrowIfCriticalError(e);
+            // Each one on its own, so a failing unsubscribe neither replaces the subscribe failure nor leaves the ones after it subscribed
+            unsubscribeEachAddingFailuresTo(created, e);
+            throw e;
+        }
+        return Collections.unmodifiableList(created);
     }
 
     /**

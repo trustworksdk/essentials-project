@@ -35,6 +35,7 @@ import dk.trustworks.essentials.components.foundation.transaction.*;
 import dk.trustworks.essentials.components.foundation.types.SubscriberId;
 import dk.trustworks.essentials.reactive.Handler;
 import dk.trustworks.essentials.reactive.command.*;
+import dk.trustworks.essentials.shared.Exceptions;
 import org.slf4j.*;
 import reactor.core.publisher.Mono;
 
@@ -269,14 +270,23 @@ public abstract class InTransactionEventProcessor implements Lifecycle {
             }
 
             started = true;
-            log.info("⚙️ [{}] Starting InTransactionEventProcessor - will subscribe '{}' to events related to these AggregatesType's: {}",
-                     processorName,
-                     useExclusively ? "exclusively" : "non-exclusively",
-                     subscribeToEventsRelatedTo);
-            UnhandledEventTypes.logHandledMessageTypes(processorName, this);
-            unhandledEventTypes = new UnhandledEventTypes(processorName, eventStore, this, patternMatchingHandlerDelegate, UnhandledEventTypes.Reporting.DEBUG);
+            try {
+                log.info("⚙️ [{}] Starting InTransactionEventProcessor - will subscribe '{}' to events related to these AggregatesType's: {}",
+                         processorName,
+                         useExclusively ? "exclusively" : "non-exclusively",
+                         subscribeToEventsRelatedTo);
+                UnhandledEventTypes.logHandledMessageTypes(processorName, this);
+                unhandledEventTypes = new UnhandledEventTypes(processorName, eventStore, this, patternMatchingHandlerDelegate, UnhandledEventTypes.Reporting.DEBUG);
 
-            subscribeInTransaction(subscribeToEventsRelatedTo);
+                // Assigned only once every subscribe succeeded, so eventStoreSubscriptions holds the (unsubscribed) ones of an earlier run until then
+                eventStoreSubscriptions = AbstractEventProcessor.subscribeEachOrUnsubscribe(subscribeToEventsRelatedTo, this::createEventStoreSubscription);
+            } catch (RuntimeException | Error e) {
+                // subscribeEachOrUnsubscribe has unsubscribed what it created. Left not started, so start() may be called again.
+                // A critical error is rethrown as it is, as Exceptions#forEachCollectingFailures does
+                Exceptions.rethrowIfCriticalError(e);
+                started = false;
+                throw e;
+            }
         }
     }
 
@@ -296,24 +306,6 @@ public abstract class InTransactionEventProcessor implements Lifecycle {
     public boolean isStarted() {
         return started;
     }
-
-    private void subscribeInTransaction(List<AggregateType> subscribeToEventsRelatedTo) {
-        // Collected one by one, so the subscriptions created before one that fails to subscribe are unsubscribed again,
-        // and assigned only once all are created: a failed start must not leave subscriptions running that nothing
-        // refers to, while eventStoreSubscriptions still holds the (unsubscribed) ones of an earlier run
-        var created = new ArrayList<EventStoreSubscription>(subscribeToEventsRelatedTo.size());
-        try {
-            subscribeToEventsRelatedTo.forEach(aggregateType -> created.add(createEventStoreSubscription(aggregateType)));
-        } catch (RuntimeException e) {
-            // Each one on its own, so a failing unsubscribe neither replaces the subscribe failure nor leaves the ones after it subscribed
-            AbstractEventProcessor.unsubscribeEachAddingFailuresTo(created, e);
-            // Left not started, so start() may be called again
-            started = false;
-            throw e;
-        }
-        eventStoreSubscriptions = Collections.unmodifiableList(created);
-    }
-
 
     private EventStoreSubscription createEventStoreSubscription(AggregateType aggregateType) {
         var subscriberId = SubscriberId.of(getProcessorName() + ":" + aggregateType + ":sync");

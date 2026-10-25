@@ -147,30 +147,39 @@ public abstract class ViewEventProcessor extends AbstractEventProcessor {
     @Override
     public void start() {
         if (started) return;
-        started = true;
         var processorName              = requireNonNull(getProcessorName(), "getProcessorName() returned null");
         var subscribeToEventsRelatedTo = requireNonNull(reactsToEventsRelatedToAggregateTypes(), "reactsToEventsRelatedToAggregateTypes() returned null");
         // A ViewEventProcessor deliberately handles each queued message inside a single UnitOfWork, so that the view
         // update and the message acknowledgement commit together. There is therefore no UnitOfWork-free window to
         // offer a UnitOfWorkMode.NONE handler - reject it instead of silently running the blocking call in a transaction.
+        // Checked before 'started' is set, so a rejected processor still reports isStarted() == false and a second
+        // start() attempt throws again instead of silently doing nothing
         if (patternMatchingMessageHandlerDelegate.hasNonTransactionalMessageHandlers()) {
             throw new IllegalStateException(msg("ViewEventProcessor '{}' declares one or more @MessageHandler methods with UnitOfWorkMode.NONE, which a ViewEventProcessor doesn't support - " +
                                                 "it handles every message inside a single UnitOfWork. Use an EventProcessor for handlers that need to perform blocking I/O",
                                                 processorName));
         }
-        logger.info("🎑⚙️  [{}] Starting ViewEventProcessor - will subscribe to events related to these AggregatesType's: {}",
-                    processorName,
-                    subscribeToEventsRelatedTo);
-        this.durableQueueName = QueueName.of(processorName + ":queue");
-        this.lockName = LockName.of(processorName + ":lock");
-        UnhandledEventTypes.logViewSummary(processorName, this, patternMatchingMessageHandlerDelegate);
-        warnOnceIfEventStoreIsNoAwaitedGapInspector();
-        this.unhandledEventTypes = new UnhandledEventTypes(processorName, eventStore, this, patternMatchingMessageHandlerDelegate, UnhandledEventTypes.Reporting.WARN);
-        fencedLockManager.acquireLockAsync(lockName,
-                                           LockCallback.builder()
-                                                       .onLockAcquired(lock -> onLockAcquired(processorName, subscribeToEventsRelatedTo, lock))
-                                                       .onLockReleased(lock -> onLockReleased(processorName))
-                                                       .build());
+        started = true;
+        try {
+            logger.info("🎑⚙️  [{}] Starting ViewEventProcessor - will subscribe to events related to these AggregatesType's: {}",
+                        processorName,
+                        subscribeToEventsRelatedTo);
+            this.durableQueueName = QueueName.of(processorName + ":queue");
+            this.lockName = LockName.of(processorName + ":lock");
+            UnhandledEventTypes.logViewSummary(processorName, this, patternMatchingMessageHandlerDelegate);
+            warnOnceIfEventStoreIsNoAwaitedGapInspector();
+            this.unhandledEventTypes = new UnhandledEventTypes(processorName, eventStore, this, patternMatchingMessageHandlerDelegate, UnhandledEventTypes.Reporting.WARN);
+            fencedLockManager.acquireLockAsync(lockName,
+                                               LockCallback.builder()
+                                                           .onLockAcquired(lock -> onLockAcquired(processorName, subscribeToEventsRelatedTo, lock))
+                                                           .onLockReleased(lock -> onLockReleased(processorName))
+                                                           .build());
+        } catch (RuntimeException | Error e) {
+            // Left not started, so start() may be called again. A critical error is rethrown as it is, as Exceptions#forEachCollectingFailures does
+            Exceptions.rethrowIfCriticalError(e);
+            started = false;
+            throw e;
+        }
     }
 
     private void onLockAcquired(String processorName, List<AggregateType> subscribeToEventsRelatedTo, FencedLock lock) {
@@ -230,49 +239,44 @@ public abstract class ViewEventProcessor extends AbstractEventProcessor {
                                                                   });
                                                               }
                                                              );
-        // Collected one by one, so the subscriptions created before one that fails to subscribe are unsubscribed again
-        var created = new ArrayList<EventStoreSubscription>(subscribeToEventsRelatedTo.size());
-        try {
-            for (var aggregateType : subscribeToEventsRelatedTo) {
-                var subscriberId = AbstractEventProcessor.resolveSubscriberId(aggregateType, processorName);
-                var subscription = eventStoreSubscriptionManager.subscribeToAggregateEventsAsynchronously(
-                        subscriberId,
+        // The subscriptions created before one that fails to subscribe are unsubscribed again - see subscribeEachOrUnsubscribe.
+        // Nothing else is undone here: the consumer started above is left to onLockReleased, which cancels it - DBFencedLockManager
+        // releases the lock when this callback throws a RuntimeException; a non-critical Error escapes its tick without a release,
+        // so this failure does not cancel the consumer: it runs until the lock is released later (stop() releases it)
+        eventStoreSubscriptions = subscribeEachOrUnsubscribe(subscribeToEventsRelatedTo, aggregateType -> {
+            var subscriberId = AbstractEventProcessor.resolveSubscriberId(aggregateType, processorName);
+            var subscription = eventStoreSubscriptionManager.subscribeToAggregateEventsAsynchronously(
+                    subscriberId,
+                    aggregateType,
+                    resolveStartSubscriptionFromGlobalEventOrder(),
+                    new PersistedEventHandler() {
+                        @Override
+                        public void handle(PersistedEvent event) {
+                            handlePersistedEvent(event);
+                        }
+
+                        @Override
+                        public boolean handOffFailedEvent(PersistedEvent event, Throwable failure) {
+                            queueAfterRollback(event, failure);
+                            return true;
+                        }
+
+                        @Override
+                        public Optional<SubscriptionErrorPolicy> subscriptionErrorPolicy() {
+                            return getSubscriptionErrorPolicy();
+                        }
+
+                        @Override
+                        public String toString() {
+                            return processorName;
+                        }
+                    });
+            logger.info("🎑⚙️ [{}] Created non-exclusive async '{}' subscription: {}",
+                        processorName,
                         aggregateType,
-                        resolveStartSubscriptionFromGlobalEventOrder(),
-                        new PersistedEventHandler() {
-                            @Override
-                            public void handle(PersistedEvent event) {
-                                handlePersistedEvent(event);
-                            }
-
-                            @Override
-                            public boolean handOffFailedEvent(PersistedEvent event, Throwable failure) {
-                                queueAfterRollback(event, failure);
-                                return true;
-                            }
-
-                            @Override
-                            public Optional<SubscriptionErrorPolicy> subscriptionErrorPolicy() {
-                                return getSubscriptionErrorPolicy();
-                            }
-
-                            @Override
-                            public String toString() {
-                                return processorName;
-                            }
-                        });
-                logger.info("🎑⚙️ [{}] Created non-exclusive async '{}' subscription: {}",
-                            processorName,
-                            aggregateType,
-                            subscription);
-                created.add(subscription);
-            }
-        } catch (RuntimeException e) {
-            // Each one on its own, so a failing unsubscribe neither replaces the subscribe failure nor leaves the ones after it subscribed
-            unsubscribeEachAddingFailuresTo(created, e);
-            throw e;
-        }
-        eventStoreSubscriptions = Collections.unmodifiableList(created);
+                        subscription);
+            return subscription;
+        });
 
         logger.info("🎑⚙️  [{}] Started. There are #{} undelivered queue messages",
                     processorName,

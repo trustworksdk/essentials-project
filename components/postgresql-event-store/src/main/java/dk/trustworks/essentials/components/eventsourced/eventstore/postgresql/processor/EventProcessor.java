@@ -29,6 +29,7 @@ import dk.trustworks.essentials.components.foundation.reactive.command.*;
 import dk.trustworks.essentials.components.foundation.transaction.*;
 import dk.trustworks.essentials.reactive.Handler;
 import dk.trustworks.essentials.reactive.command.*;
+import dk.trustworks.essentials.shared.Exceptions;
 import org.slf4j.*;
 
 import java.time.Duration;
@@ -291,54 +292,62 @@ public abstract class EventProcessor extends AbstractEventProcessor {
     @Override
     public void start() {
         if (!started) {
-            started = true;
             var processorName              = requireNonNull(getProcessorName(), "getProcessorName() returned null");
             var subscribeToEventsRelatedTo = requireNonNull(reactsToEventsRelatedToAggregateTypes(), "reactsToEventsRelatedToAggregateTypes() returned null");
-            log.info("⚙️ [{}] Starting EventProcessor - will subscribe to events related to these AggregatesType's: {}",
-                     processorName,
-                     subscribeToEventsRelatedTo);
-
-            setupMessageHandlerDelegate();
-            warnOnceIfEventStoreIsNoAwaitedGapInspector();
-            UnhandledEventTypes.logHandledMessageTypes(processorName, this);
-            unhandledEventTypes = new UnhandledEventTypes(processorName, eventStore, this, patternMatchingInboxMessageHandlerDelegate, UnhandledEventTypes.Reporting.DEBUG);
-            inbox = inboxes.getOrCreateInbox(InboxConfig.builder()
-                                                        .inboxName(InboxName.of(processorName))
-                                                        .messageConsumptionMode(getInboxMessageConsumptionMode())
-                                                        .numberOfParallelMessageConsumers(getNumberOfParallelInboxMessageConsumers())
-                                                        .redeliveryPolicy(getInboxRedeliveryPolicy())
-                                                        .build(),
-                                             inboxMessageHandlerDelegate);
-            // The Inbox outlives a stop(): Inbox#stopConsuming() drops its message consumer, and getOrCreateInbox
-            // returns the existing Inbox as it is, so a processor started again consumes from it again here
-            if (!inbox.hasAMessageConsumer()) {
-                inbox.consume(inboxMessageHandlerDelegate);
-            }
-            durableQueueName = inbox.name().asQueueName();
-
-            // Collected one by one, so the subscriptions created before one that fails to subscribe are unsubscribed again,
-            // and assigned only once all are created: a failed start must not leave subscriptions running that nothing
-            // refers to, while eventStoreSubscriptions still holds the (unsubscribed) ones of an earlier run
-            var created = new ArrayList<EventStoreSubscription>(subscribeToEventsRelatedTo.size());
+            started = true;
+            // The Inbox whose consumption this start holds, once it does - stopped again when a later step fails
+            Inbox consumingInbox = null;
             try {
-                subscribeToEventsRelatedTo.forEach(aggregateType -> created.add(subscribe(processorName, aggregateType)));
-            } catch (RuntimeException e) {
-                // Each one on its own, so a failing unsubscribe neither replaces the subscribe failure nor leaves the ones after it subscribed.
-                // Left not started, so start() may be called again - and stop() then does nothing, so the Inbox consumption is undone here too
-                unsubscribeEachAddingFailuresTo(created, e);
-                try {
-                    inbox.stopConsuming();
-                } catch (RuntimeException failure) {
-                    e.addSuppressed(failure);
+                log.info("⚙️ [{}] Starting EventProcessor - will subscribe to events related to these AggregatesType's: {}",
+                         processorName,
+                         subscribeToEventsRelatedTo);
+
+                setupMessageHandlerDelegate();
+                warnOnceIfEventStoreIsNoAwaitedGapInspector();
+                UnhandledEventTypes.logHandledMessageTypes(processorName, this);
+                unhandledEventTypes = new UnhandledEventTypes(processorName, eventStore, this, patternMatchingInboxMessageHandlerDelegate, UnhandledEventTypes.Reporting.DEBUG);
+                inbox = inboxes.getOrCreateInbox(InboxConfig.builder()
+                                                            .inboxName(InboxName.of(processorName))
+                                                            .messageConsumptionMode(getInboxMessageConsumptionMode())
+                                                            .numberOfParallelMessageConsumers(getNumberOfParallelInboxMessageConsumers())
+                                                            .redeliveryPolicy(getInboxRedeliveryPolicy())
+                                                            .build(),
+                                                 inboxMessageHandlerDelegate);
+                // The Inbox outlives a stop(): Inbox#stopConsuming() drops its message consumer, and getOrCreateInbox
+                // returns the existing Inbox as it is, so a processor started again consumes from it again here
+                if (!inbox.hasAMessageConsumer()) {
+                    inbox.consume(inboxMessageHandlerDelegate);
+                }
+                consumingInbox = inbox;
+                durableQueueName = inbox.name().asQueueName();
+
+                // Assigned only once every subscribe succeeded, so eventStoreSubscriptions holds the (unsubscribed) ones of an earlier run until then
+                eventStoreSubscriptions = subscribeEachOrUnsubscribe(subscribeToEventsRelatedTo, aggregateType -> subscribe(processorName, aggregateType));
+            } catch (RuntimeException | Error e) {
+                // Any step may fail (getOrCreateInbox, the Inbox's consume, a subscribe), and subscribeEachOrUnsubscribe has unsubscribed
+                // what it created. Left not started, so start() may be called again - and stop() then does nothing, so the Inbox
+                // consumption this start holds is undone here too. A critical error is rethrown as it is, as Exceptions#forEachCollectingFailures does
+                Exceptions.rethrowIfCriticalError(e);
+                if (consumingInbox != null) {
+                    Exceptions.forEachCollectingFailures(List.of(consumingInbox), Inbox::stopConsuming, e);
                 }
                 started = false;
                 throw e;
             }
-            eventStoreSubscriptions = Collections.unmodifiableList(created);
 
+            // The count is a database query. Read in its own try, so a start that subscribed everything does not fail on its log line
+            // and leave the processor started with its caller told it failed
+            long undeliveredMessages;
+            try {
+                undeliveredMessages = inbox.getNumberOfUndeliveredMessages();
+            } catch (RuntimeException | Error e) {
+                Exceptions.rethrowIfCriticalError(e);
+                log.warn("⚙️ [{}] Started. Failed to read the # of undelivered Inbox messages", processorName, e);
+                return;
+            }
             log.info("⚙️ [{}] Started. # of undelivered Inbox messages: {}",
                      processorName,
-                     inbox.getNumberOfUndeliveredMessages());
+                     undeliveredMessages);
         }
     }
 
