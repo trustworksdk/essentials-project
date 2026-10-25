@@ -127,6 +127,15 @@ What a builder user sees:
 
 Spring Boot applications see no change.
 
+### 1.7 CDC hands out event JSON as stored (`postgresql-event-store`)
+
+On the CDC delivery path, `PersistedEvent.event().getJson()` and `metaData().getJson()` used to be parsed and
+re-serialized, which removed the whitespace from PostgreSQL's `jsonb` rendering (`{"orderId":"o-1"}`). They are now
+the column text as stored (`{"orderId": "o-1"}`), the same text the polling path has always returned. Values,
+order and types are unchanged, and nothing persisted is affected. Code that compares this text byte for byte, for
+example a pattern-matching handler taking the JSON as a `String`, sees PostgreSQL's spacing under CDC as it already
+did under polling. Dropping the round trip saves a JSON parse and write per event.
+
 ## 2. Fixes
 
 ### 2.0 A busy queue is no longer held to one poll per interval (`postgresql-queue`)
