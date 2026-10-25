@@ -75,6 +75,9 @@ class DefaultDurableQueueConsumerConcurrentStartTest {
         } finally {
             executor.shutdownNow();
             consumer.stop();
+            // close() waits for the interrupted start calls to end; stop() shuts the scheduler down only when the consumer started
+            executor.close();
+            scheduler.close();
         }
     }
 
