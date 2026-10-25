@@ -16,11 +16,12 @@
 
 package dk.trustworks.essentials.jackson.types;
 
-import tools.jackson.core.JacksonException;
-import tools.jackson.core.JsonParser;
+import tools.jackson.core.*;
 import tools.jackson.databind.*;
 import tools.jackson.databind.deser.std.StdDeserializer;
 import dk.trustworks.essentials.types.*;
+
+import java.math.BigDecimal;
 
 public final class MoneyDeserializer extends StdDeserializer<Money> {
     public MoneyDeserializer() {
@@ -29,11 +30,29 @@ public final class MoneyDeserializer extends StdDeserializer<Money> {
 
     @Override
     public Money deserialize(JsonParser p, DeserializationContext ctxt) throws JacksonException {
-        JsonNode node = p.readValueAsTree();
-
-        var    amount       = node.get("amount").decimalValue();
-        String currencyCode = node.get("currency").asText();
-
+        // Read as a stream: building a JsonNode tree per Money to read two properties out of it was 1.2 % of the
+        // trading demo's CPU under load. Accepts what the tree version accepted: a numeric amount, kept at the scale it
+        // was written with, the properties in any order, and any other property ignored
+        var        token        = p.currentToken() == JsonToken.START_OBJECT ? p.nextToken() : p.currentToken();
+        BigDecimal amount       = null;
+        String     currencyCode = null;
+        for (; token == JsonToken.PROPERTY_NAME; token = p.nextToken()) {
+            var name  = p.currentName();
+            var value = p.nextToken();
+            switch (name) {
+                case "amount" -> {
+                    if (!value.isNumeric()) {
+                        return (Money) ctxt.reportInputMismatch(this, "Money 'amount' must be a JSON number, but was %s", value);
+                    }
+                    amount = p.getDecimalValue();
+                }
+                case "currency" -> currencyCode = p.getString();
+                default -> p.skipChildren();
+            }
+        }
+        if (amount == null || currencyCode == null) {
+            return (Money) ctxt.reportInputMismatch(this, "Money needs both 'amount' and 'currency', but got amount=%s currency=%s", amount, currencyCode);
+        }
         return new Money(Amount.of(amount),
                          CurrencyCode.of(currencyCode));
     }
