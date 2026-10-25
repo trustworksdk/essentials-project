@@ -24,11 +24,13 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.se
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.test_data.OrderId;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
+import dk.trustworks.essentials.components.foundation.transaction.UnitOfWork;
 import dk.trustworks.essentials.components.foundation.types.SubscriberId;
 import org.awaitility.Awaitility;
 import org.jdbi.v3.core.Jdbi;
 import org.jdbi.v3.postgres.PostgresPlugin;
 import org.junit.jupiter.api.*;
+import org.slf4j.*;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
@@ -45,6 +47,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 @Testcontainers
 class PostgresqlDurableSubscriptionRepositoryIT {
+    private static final Logger        log           = LoggerFactory.getLogger(PostgresqlDurableSubscriptionRepositoryIT.class);
     private static final AggregateType ORDERS        = AggregateType.of("Orders");
     private static final SubscriberId  SUBSCRIBER_ID = SubscriberId.of("OrdersSub1");
 
@@ -171,11 +174,10 @@ class PostgresqlDurableSubscriptionRepositoryIT {
     @Test
     void test_getOrCreateResumePoint_returns_the_resume_point_another_transaction_created_concurrently() throws Exception {
         var repository = new PostgresqlDurableSubscriptionRepository(jdbi, eventStore);
+        var first      = eventStore.getUnitOfWorkFactory().getOrCreateNewUnitOfWork();
         var executor   = Executors.newSingleThreadExecutor();
         try {
-            var unitOfWorkFactory = eventStore.getUnitOfWorkFactory();
-            var first             = unitOfWorkFactory.getOrCreateNewUnitOfWork();
-            var created           = repository.getOrCreateResumePoint(SUBSCRIBER_ID, ORDERS, GlobalEventOrder.of(5));
+            var created = repository.getOrCreateResumePoint(SUBSCRIBER_ID, ORDERS, GlobalEventOrder.of(5));
 
             var second = executor.submit(() -> repository.getOrCreateResumePoint(SUBSCRIBER_ID, ORDERS, GlobalEventOrder.of(7)));
             // The second insert waits on the first one's uncommitted row
@@ -188,7 +190,22 @@ class PostgresqlDurableSubscriptionRepositoryIT {
             assertThat(foundBySecond.getResumeFromAndIncluding()).isEqualTo(created.getResumeFromAndIncluding());
             assertStored(5, 0);
         } finally {
+            // A failure before the commit leaves `first` open, holding its row and its table lock: the second insert waits on
+            // it, and so would the next test's DROP TABLE in the shared container. Release it before stopping the executor
+            rollbackIfStillOpen(first);
             executor.shutdownNow();
+        }
+    }
+
+    private static void rollbackIfStillOpen(UnitOfWork unitOfWork) {
+        if (unitOfWork.status().isCompleted()) {
+            return;
+        }
+        try {
+            unitOfWork.rollback();
+        } catch (RuntimeException rollbackFailure) {
+            // Thrown from a finally block it would replace the test's own failure
+            log.warn("Rolling back the test's open UnitOfWork failed", rollbackFailure);
         }
     }
 
