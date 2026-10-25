@@ -490,33 +490,21 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
                               MAX_AWAITED_ORDERS_PER_GAP_END);
                 }
                 if (!newGaps.recorded().isEmpty()) {
-                    // Verify if the transient gap is already marked permanent by another subscriber (permanent gaps are defined across subscribers per aggregate type).
-                    // Only the permanent gaps within the awaited ranges are read - all of the aggregate type's were read before
-                    var permanentGapsAmongTheNewTransientGaps = permanentGapsWithin(aggregateType, newGaps.recorded());
-                    if (!permanentGapsAmongTheNewTransientGaps.isEmpty()) {
-                        log.debug("[{}] Removed {} permanent gaps among the newly discovered transient gaps for {}: {}",
-                                  subscriberId,
-                                  permanentGapsAmongTheNewTransientGaps.size(),
-                                  aggregateType,
-                                  permanentGapsAmongTheNewTransientGaps);
-                    }
-                    var newTransientGapsToAdd = newGaps.recorded()
-                                                       .stream()
-                                                       .flatMapToLong(LongRange::stream)
-                                                       .filter(globalEventOrder -> !permanentGapsAmongTheNewTransientGaps.contains(globalEventOrder))
-                                                       .mapToObj(GlobalEventOrder::of)
-                                                       .collect(Collectors.toList());
-                    log.debug("[{}] Detected {} New Transient '{}' gaps within {} based on {} persisted events",
+                    log.debug("[{}] Detected new Transient '{}' gaps within {} based on {} persisted events",
                               subscriberId,
-                              newTransientGapsToAdd.size(),
                               aggregateType,
                               newGaps.recorded(),
                               persistedEvents.size());
-                    newCount = addNewTransientGaps(aggregateType, newTransientGapsToAdd);
+                    newCount = recordNewTransientGaps(aggregateType, newGaps.recorded());
                 }
             }
 
-            // Promote Transient Gaps to Permanent Gaps
+            // Promote Transient Gaps to Permanent Gaps - only ever gaps this query asked for (see below), so with none asked
+            // for there is nothing to evaluate. The CDC event store asks for none on every batch it delivers, and evaluating the
+            // promotion strategy over every transient gap only to discard the result was a fifth of the gap handler's CPU there
+            if (transientGapsIncludedInQuery.isEmpty()) {
+                return new GapReconciliation(newCount, resolvedCount, 0);
+            }
             log.trace("[{}] Looking for Transient '{}' gaps that can be promoted to Permanent Gaps. All Transient Gaps: {}",
                       subscriberId,
                       aggregateType,
@@ -679,34 +667,13 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
             requireNonNull(aggregateType, "No aggregateType provided");
             requireNonNull(gaps, "No gaps provided");
             requireTrue(gaps.isClosedRange(), msg("Range {} is not closed", gaps));
-            return inUnitOfWorkOfThisGapHandler(() -> {
-                var permanentGaps = permanentGapsWithin(aggregateType, List.of(gaps));
-                var newTransientGaps = gaps.stream()
-                                           .filter(order -> !permanentGaps.contains(order))
-                                           .mapToObj(GlobalEventOrder::of)
-                                           .toList();
-                return new GapReconciliation(addNewTransientGaps(aggregateType, newTransientGaps), 0, 0);
-            });
+            return inUnitOfWorkOfThisGapHandler(() -> new GapReconciliation(recordNewTransientGaps(aggregateType, List.of(gaps)), 0, 0));
         }
 
         /**
          * The permanent gaps of the aggregate type within {@code ranges} - closed - read in the current unit of work, in
          * one statement with two array parameters however many ranges there are
          */
-        private Set<Long> permanentGapsWithin(AggregateType aggregateType, List<LongRange> ranges) {
-            return unitOfWorkFactory.getRequiredUnitOfWork()
-                                    .handle()
-                                    .createQuery("SELECT permanent.gap_global_event_order FROM " + PERMANENT_GAPS_TABLE_NAME + " permanent\n" +
-                                                         "    JOIN unnest(CAST(:from_inclusive AS bigint[]), CAST(:to_inclusive AS bigint[])) AS within_range(from_inclusive, to_inclusive)\n" +
-                                                         "      ON permanent.gap_global_event_order BETWEEN within_range.from_inclusive AND within_range.to_inclusive\n" +
-                                                         "    WHERE permanent.aggregate_type = :aggregate_type")
-                                    .bind("aggregate_type", aggregateType)
-                                    .bindArray("from_inclusive", Long.class, ranges.stream().map(range -> range.fromInclusive).toList())
-                                    .bindArray("to_inclusive", Long.class, ranges.stream().map(LongRange::getToInclusive).toList())
-                                    .mapTo(Long.class)
-                                    .collect(Collectors.toSet());
-        }
-
         /**
          * Deletes those of {@code givenUp} that are transient gaps of this subscriber and records exactly those as
          * permanent gaps - deleting at most {@link #MAX_GLOBAL_ORDERS_PER_STATEMENT} per statement, all in the current
@@ -827,64 +794,86 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
          * @return how many transient gaps were actually registered - fewer than asked when a concurrent reconciliation
          * registered some of them first
          */
-        private int addNewTransientGaps(AggregateType aggregateType, List<GlobalEventOrder> newTransientGapsToAdd) {
-            if (newTransientGapsToAdd.isEmpty()) return 0;
-            var distinctTransientGapsToAdd = newTransientGapsToAdd.stream()
-                                                                  .distinct()
-                                                                  .collect(Collectors.toList());
-            if (distinctTransientGapsToAdd.isEmpty()) return 0;
+        /**
+         * Records the orders of {@code ranges} as this subscriber's transient gaps, except those already permanent gaps of
+         * the aggregate type (permanent gaps are shared by every subscriber), in ONE statement: it reads which of them are
+         * permanent and inserts the rest, returning what it inserted. Two statements before - the permanent-gap check, then
+         * the insert - and in memory a set of every known transient gap rebuilt per call to tell new from known: with a
+         * hole in the sequence for every append that lost an optimistic-concurrency race, each subscriber holds hundreds of
+         * open gaps under load, and that rebuild, per subscriber per delivered batch, was half of the gap handler's CPU.
+         * <p>
+         * In memory, a gap the statement inserted was not this subscriber's before, so it is appended without a lookup; only
+         * a gap that was already in the table - which another instance of a non-exclusive subscription reconciling the same
+         * events can cause - is looked up, and appended if this instance did not hold it yet, as before.
+         *
+         * @return how many gaps this call inserted
+         */
+        private int recordNewTransientGaps(AggregateType aggregateType, List<LongRange> ranges) {
+            var candidates = ranges.stream().flatMapToLong(LongRange::stream).distinct().boxed().toList();
+            if (candidates.isEmpty()) return 0;
 
-            var unitOfWork = unitOfWorkFactory.getRequiredUnitOfWork();
-            var now        = now();
-
-            var gaps  = internalGetTransientGapsFor(aggregateType);
-            var known = gaps.stream().map(gap -> gap._1).collect(Collectors.toSet());
-            gaps.addAll(distinctTransientGapsToAdd.stream()
-                                                  .filter(globalEventOrder -> !known.contains(globalEventOrder))
-                                                  .map(globalEventOrder -> Pair.of(globalEventOrder,
-                                                                                   now))
-                                                  .collect(Collectors.toList()));
-
-            // One statement and one array parameter however many gaps: a batch made a round trip per row
-            var rowsUpdated = unitOfWork.handle().createUpdate("INSERT INTO " + TRANSIENT_SUBSCRIBER_GAPS_TABLE_NAME + "\n" +
-                                                                       "(subscriber_id, aggregate_type, gap_global_event_order, first_discovered) " +
-                                                                       "SELECT :subscriber_id, :aggregate_type, gap_global_event_order, :first_discovered " +
-                                                                       "FROM unnest(CAST(:gap_global_event_orders AS bigint[])) AS gap_global_event_order " +
-                                                                       "ON CONFLICT DO NOTHING")
-                                        .bind("subscriber_id", subscriberId)
-                                        .bind("aggregate_type", aggregateType)
-                                        .bind("first_discovered", now)
-                                        .bindArray("gap_global_event_orders", Long.class, distinctTransientGapsToAdd.stream().map(GlobalEventOrder::longValue).toList())
-                                        .execute();
-            if (rowsUpdated == distinctTransientGapsToAdd.size()) {
-                log.debug("[{}] Added {} New Transient '{}' Gaps {}\nAll Transient '{}' Gaps: {}",
+            // Loaded (or refreshed) BEFORE the statement, so a refresh cannot already contain what this call inserts
+            var gaps = internalGetTransientGapsFor(aggregateType);
+            var now  = now();
+            var permanent = new HashSet<Long>();
+            var inserted  = new HashSet<Long>();
+            unitOfWorkFactory.getRequiredUnitOfWork()
+                             .handle()
+                             .createQuery("WITH candidates AS (SELECT gap FROM unnest(CAST(:gap_global_event_orders AS bigint[])) AS gap),\n" +
+                                                  // One primary-key probe per candidate: a LATERAL with LIMIT 1 cannot be answered any other way.
+                                                  // A plain join read every permanent gap of the aggregate type when the table had been analysed
+                                                  // while near empty (3.9 ms with 6 423 of them, against 0.2 ms)
+                                                  "     permanent AS (SELECT candidates.gap FROM candidates\n" +
+                                                  "                     CROSS JOIN LATERAL (SELECT 1 FROM " + PERMANENT_GAPS_TABLE_NAME + " permanent\n" +
+                                                  "                                          WHERE permanent.aggregate_type = :aggregate_type\n" +
+                                                  "                                            AND permanent.gap_global_event_order = candidates.gap LIMIT 1) AS is_permanent),\n" +
+                                                  "     inserted AS (INSERT INTO " + TRANSIENT_SUBSCRIBER_GAPS_TABLE_NAME + " (subscriber_id, aggregate_type, gap_global_event_order, first_discovered)\n" +
+                                                  "                  SELECT :subscriber_id, :aggregate_type, candidates.gap, :first_discovered FROM candidates\n" +
+                                                  "                  WHERE NOT EXISTS (SELECT 1 FROM permanent WHERE permanent.gap = candidates.gap)\n" +
+                                                  "                  ON CONFLICT DO NOTHING\n" +
+                                                  "                  RETURNING gap_global_event_order AS gap)\n" +
+                                                  "SELECT TRUE AS is_permanent, gap FROM permanent UNION ALL SELECT FALSE, gap FROM inserted")
+                             .bind("subscriber_id", subscriberId)
+                             .bind("aggregate_type", aggregateType)
+                             .bind("first_discovered", now)
+                             .bindArray("gap_global_event_orders", Long.class, candidates)
+                             .map((rs, ctx) -> {
+                                 (rs.getBoolean("is_permanent") ? permanent : inserted).add(rs.getLong("gap"));
+                                 return null;
+                             })
+                             .list();
+            if (!permanent.isEmpty()) {
+                log.debug("[{}] Removed {} permanent gaps among the newly discovered transient gaps for {}: {}",
                           subscriberId,
-                          distinctTransientGapsToAdd.size(),
+                          permanent.size(),
                           aggregateType,
-                          distinctTransientGapsToAdd,
-                          aggregateType,
-                          allTransientGaps);
-            } else if (rowsUpdated > distinctTransientGapsToAdd.size()) {
-                log.warn("[{}] Added {} out of {} new Transient '{}' Gaps.\n" +
-                                 "This indicates unexpected row-count behavior for subscriber '{}'.\n" +
-                                 "New Transient Gaps to add: {}",
-                         subscriberId,
-                         rowsUpdated,
-                         distinctTransientGapsToAdd.size(),
-                         aggregateType,
-                         subscriberId,
-                         distinctTransientGapsToAdd);
-            } else {
-                log.debug("[{}] Added {} out of {} new Transient '{}' Gaps.\n" +
-                                 "This can happen under non-exclusive subscriptions where transient gaps are reconciled concurrently.\n" +
-                                 "New Transient Gaps to add: {}",
-                         subscriberId,
-                         rowsUpdated,
-                         distinctTransientGapsToAdd.size(),
-                         aggregateType,
-                         distinctTransientGapsToAdd);
+                          permanent);
             }
-            return Math.min(rowsUpdated, distinctTransientGapsToAdd.size());
+
+            for (var gap : candidates) {
+                if (inserted.contains(gap)) {
+                    gaps.add(Pair.of(GlobalEventOrder.of(gap), now));
+                }
+            }
+            if (inserted.size() + permanent.size() < candidates.size()) {
+                // Already in the table - another instance of this subscription recorded them. Held here unless known
+                var known = gaps.stream().map(gap -> gap._1.longValue()).collect(Collectors.toSet());
+                for (var gap : candidates) {
+                    if (!inserted.contains(gap) && !permanent.contains(gap) && !known.contains(gap)) {
+                        gaps.add(Pair.of(GlobalEventOrder.of(gap), now));
+                    }
+                }
+                log.debug("[{}] Added {} out of {} new Transient '{}' Gaps - the others were permanent ({}) or already recorded, " +
+                                  "as under a non-exclusive subscription reconciling concurrently",
+                          subscriberId,
+                          inserted.size(),
+                          candidates.size(),
+                          aggregateType,
+                          permanent.size());
+            } else {
+                log.debug("[{}] Added {} New Transient '{}' Gaps", subscriberId, inserted.size(), aggregateType);
+            }
+            return inserted.size();
         }
 
         /**

@@ -576,6 +576,16 @@ the eleven stops short of significance. The JVM is still at 630-700 % of the 8 c
 of the eighteen runs over these two days lost their result to the driver's final load-report request timing out;
 `drain()` now asks again until its deadline (`report-retried` in the step counts).
 
+**Subscription gap handling.** JFR (`settings=default`, 1 GB, whole run) plus `pg_stat_statements`: the gap handler
+was 10.5 % of the JVM's CPU samples while trading (12-13 % at the busiest minutes) and ~540 000 statements per run.
+Cause: ~6 400 `Orders` sequence holes per run - one per append that loses an optimistic-concurrency race - each
+recorded, held and promoted by every subscriber of the aggregate type. 69 % of the handler's samples ended in JDK
+collections code: a set of all known gaps rebuilt per batch, and the promotion strategy streamed over every gap on the
+CDC path, where its result is always discarded. After the fix (skip that promotion; record new gaps in one statement):
+4.7 % of the samples, record statements 490 882 → 266 826, their DB time 12.2 → 8.2 s; booked p99 4.3 s, all checks
+pass. A rewrite of the give-up statement was reverted: fast on two synthetic ranges, 5-9 s a call on real ones, it
+stopped every `Orders` subscriber for 65 s (booked p99 94.5 s, a dead letter).
+
 - Instruments used: `SignedWebhookReceiver` debug lines (arrival before any connection, queued after the intake
   commits) against the router's "Exchange accepted" line; the exchange's own `/api/webhooks/{id}/deliveries?status=`
   counts; thread dumps and `pg_stat_activity` triggered on more than 20 pool waiters. The exchange's `occurredAt` is on
