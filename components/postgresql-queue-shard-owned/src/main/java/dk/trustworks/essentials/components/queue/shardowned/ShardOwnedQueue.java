@@ -2640,12 +2640,12 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * {@code EVERY_KEY_IN_HANDLER} for a release on request or the hand-back of a kept unit), with its own WARN naming the
      * keys dead-lettered ({@link #reportOwedDeadLettersSettled}, the WARN of {@link #handBackKeptUnit}); on the unordered
      * lane through {@link #chargeInHandlerBeforeReleaseOrWarn} and {@link #chargeBeforeReleaseOnStop}; and over the
-     * connection the site holds ({@code stop()} charges every owing owner over one, {@link #chargeBeforeReleaseOnStop}). A move made here would skip
-     * that report and would need a connection of its own, beside the one the release statement takes. So an owner a site
-     * left owing stays held until a site makes the move: the hold shows in this WARN and, for a unit on a dead pump, in
-     * {@link ShardOwnerMetrics#shardsOnDeadPumps}, which counts it until it is handed back. A release on request
-     * ({@link #releaseKeptOrderedUnit}) runs its charge before its release, and that charge makes every move still owed, so
-     * asking again after one left out here settles a move that charge can make.
+     * connection the site holds ({@code stop()} charges every owing owner over one, {@link #chargeBeforeReleaseOnStop}). A
+     * move made here would skip that report and would need a connection of its own, beside the one the release statement
+     * takes. So an owner a site left owing stays held until a site makes the move: the hold shows in this WARN and, for a
+     * unit on a dead pump, in {@link ShardOwnerMetrics#shardsOnDeadPumps}, which counts it until it is handed back. A
+     * release on request ({@link #releaseKeptOrderedUnit}) runs its charge before its release, and that charge makes every
+     * move still owed, so asking again after one left out here settles a move that charge can make.
      *
      * @return the owners released and how many rows the statement released ({@link LeaseRowRelease})
      */
@@ -3975,8 +3975,9 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                     } finally {
                         // With a key in a handler, the release's WARN names every dead-lettered key (reportReleasedOnRequest),
                         // but only once the unit is released. Not released - the charge threw after a move, the release threw,
-                        // the release left the unit out owing a move, or the row was found taken - the keys this request dead-lettered are named here: they are in the
-                        // ledger from now on, so a later request or hand-back with no key in a handler does not name them.
+                        // the release left the unit out owing a move, or the row was found taken - the keys this request
+                        // dead-lettered are named here: they are in the ledger from now on, so a later request or hand-back
+                        // with no key in a handler does not name them.
                         if (!released && inHandler.isPresent()) {
                             reportDeadLettersOfAnUnreleasedRequest(owner, inHandler.get(), settledBefore, releaseChargeSoFar(owner), failure,
                                                                    leftOutOwingMove);
