@@ -20,10 +20,12 @@ The open fixes and improvements planned for the 0.6x line. Every item here was c
 **Scope of 0.60.1** (decided 2026-10-08): everything in section 0 and P1, plus three P2 items: ES-4
 (`awaitProcessed`), DD-2 (the reserved-word check) and CB-4 (unhandled event types). Two P1 items ship softened,
 because a patch must not reject a setup that works today:
+
 - N-15's "the shard-owned builder requires a UnitOfWork factory" becomes a WARN.
 - QL-3's redelivery-policy validation WARNs in 0.60.1 and fails from 0.61.
 
 Added to 0.60.1 on 2026-10-08:
+
 - **CB-4 per processor type:** only `ViewEventProcessor` WARNs about an ignored event type (with an
   `@IgnoresEventTypes` opt-out); `EventProcessor` and `InTransactionEventProcessor` log at DEBUG and count, because
   skipping is normal there. A view's handled and unhandled types are summarised at startup.
@@ -49,6 +51,7 @@ creation fails naming it when it is missing (SB-2).
 Bug fixes only; no API breaks. Everything planned here shipped in 0.60.1.
 
 **`afterRollback` is never called on the Spring event-store unit of work (RW-1).**
+
 - **Problem:** `SpringTransactionAwareEventStoreUnitOfWorkFactory` does not override
   `afterRollbackAfterCallingLifecycleCallbackResources`, so `PersistedEventsCommitLifecycleCallback#afterRollback` is
   never called on the Spring path, for any rollback. `EventStoreManagedUnitOfWork` (the JDBI path) calls it, and
@@ -62,6 +65,7 @@ Bug fixes only; no API breaks. Everything planned here shipped in 0.60.1.
   `afterRollbackEvents` list). User-visible: release-notes entry under bug fixes.
 
 **A stop while the fenced lock is still being acquired can strand the lock (RW-11; review F-843).**
+
 - **Problem:** `DBFencedLockManager.cancelAsyncLockAcquiring` (`components/foundation/.../fencedlock/DBFencedLockManager.java:1025`)
   removes and cancels the acquiring future, then releases the lock only if `locksAcquiredByThisLockManager` holds it
   at that moment. It does not take `reentrantLock`, so it does not wait for an acquiring tick that is already running
@@ -99,6 +103,7 @@ Additive features.
 ### Turn the 0.60.1 warnings into failures
 
 0.60.1 shipped two checks as a WARN, because a patch must not reject a setup that works today. In 0.61 they fail:
+
 - **The shard-owned queue builder requires a UnitOfWork factory (N-15).** Without one, every enqueue commits on its
   own, outside the caller's transaction. 0.60.1 logs a WARN at build time.
 - **Redelivery-policy builders reject an incomplete policy (QL-3).** Unset delays, a multiplier below 1.0 or unset,
@@ -127,6 +132,7 @@ JVM: a `ViewEventProcessor` whose fenced lock another instance holds times out. 
 resume point and the shared durable queue when the lock is held elsewhere, so a caller on any instance can wait.
 
 **Typed event-order ranges (ES-1).**
+
 - **Problem:** the event-store read APIs take an untyped `LongRange` for both per-stream `EventOrder` and cross-stream
   `GlobalEventOrder` ranges. Mixing them up compiles, and the result is a silent wrong read.
 - **Fix:**
@@ -153,6 +159,7 @@ It changes what a custom strategy receives, so it belongs in a minor with a rele
 `AsyncAggregateSnapshotRepositoryAfterCommitIT` (F-121).
 
 **One type-argument resolver, in `shared` (RW-5; review F-093, F-095, F-096).**
+
 - **Problem:** 0.60.1 fixed command-type resolution for deciders in a module-local helper,
   `EventStreamDeciderCommandTypes.resolveCommandTypeArgument`, which walks superclasses and sub-interfaces and maps type
   variables through each parameterisation. The general resolver it replaced,
@@ -175,6 +182,7 @@ health signal, and nothing reports fenced-lock ownership. A stalled projection o
 shows up only as stale data.
 
 **Fix:**
+
 - Add an opt-in `SubscriptionLagHealthIndicator`, modelled on `DurableQueuesHealthIndicator`, with thresholds unset
   by default. On an instance that does not own the subscription it reports UNKNOWN, never DOWN, because the current
   event order is local to an instance.
@@ -210,6 +218,7 @@ first; if confirmed, apply each table's changes in its own transaction, or take 
 ### Messaging
 
 **Application LISTEN/NOTIFY channels (LN-1).**
+
 - **Problem:** an application cannot use PostgreSQL LISTEN/NOTIFY for its own signals (for example, evicting caches
   across instances) without bending `MultiTableChangeListener`. That listener shares one poll thread, one connection
   and one duplicate filter with the framework's wake-ups.
@@ -277,12 +286,14 @@ fenced-lock ITs on PostgreSQL and MongoDB, and a test with a slow storage that s
 ### Value types
 
 **OpenAPI and AssertJ support (SJ-6).** Two problems:
+
 - Single-value types (`CharSequenceType`, `NumberType`, ...) appear in generated OpenAPI schemas as objects instead
   of primitives.
 - AssertJ's `assertThat(...)` is ambiguous for a `CharSequenceType`, which is both a `CharSequence` and a
   `Comparable`, so users need casts.
 
 **Fix:**
+
 - Promote the swagger-core `EssentialsValueTypeModelConverter` from `admin-api-spec` into a consumer module,
   `types-openapi`. It needs an exemption from the `ban-jackson-2` enforcer rule.
 - Add a `types-assertj` module with an `EssentialsAssertions.assertThat(CharSequenceType)` entry point.
@@ -291,6 +302,7 @@ fenced-lock ITs on PostgreSQL and MongoDB, and a test with a slow storage that s
 
 **Reject and commit on the UnitOfWork command interceptor (CB-1).** `UnitOfWorkControllingCommandBusInterceptor`
 rolls back on any exception:
+
 - A handler that rejects a command by throwing loses any work it meant to keep.
 - Under `sendAndDontWait`, the rejection is redelivered by the default redelivery policy.
 
