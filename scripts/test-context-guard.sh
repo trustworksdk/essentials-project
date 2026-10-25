@@ -38,7 +38,7 @@ trap 'rm -rf "$tmp"' EXIT
 export CONTEXT_GUARD_DIR=$tmp/guard
 export CLAUDE_CONFIG_DIR=$tmp/config
 export CLAUDE_PROJECT_DIR=$tmp/project
-unset CONTEXT_GUARD_WINDOW CONTEXT_GUARD_LEVELS
+unset CONTEXT_GUARD_WINDOW CONTEXT_GUARD_HEADROOM CONTEXT_GUARD_RESERVE
 mkdir -p "$CLAUDE_CONFIG_DIR" "$CLAUDE_PROJECT_DIR/.claude" "$tmp/sessions"
 
 case_name=""
@@ -91,27 +91,27 @@ settings_model 'opus[1m]'
 assistant_entry "$(main_transcript s1)" claude-opus-5-5 40000 false
 f=$(agent_transcript s1 a1)
 assistant_entry "$f" claude-opus-5-5 150000 true
-expect_nothing "$(run warn s1 a1)" "15% of 1000000 is below every level"
+expect_nothing "$(run warn s1 a1)" "15% of 1000000 is short of every warning point"
 [ "$(window_of s1 a1)" = 1000000 ] || fail "window is '$(window_of s1 a1)', expected 1000000"
-assistant_entry "$f" claude-opus-5-5 750000 true
-expect_warning "$(run warn s1 a1)" 750000/1000000
+assistant_entry "$f" claude-opus-5-5 900000 true
+expect_warning "$(run warn s1 a1)" 900000/1000000
 pass
 
 case_name="alias main model, subagent on another id of the same family: 200000"
-assistant_entry "$(agent_transcript s1 a2)" claude-opus-4-1 150000 true
-expect_warning "$(run warn s1 a2)" 150000/200000
+assistant_entry "$(agent_transcript s1 a2)" claude-opus-4-1 155000 true
+expect_warning "$(run warn s1 a2)" 155000/200000
 pass
 
 case_name="alias main model, no main transcript model yet: 200000"
-assistant_entry "$(agent_transcript s2 a1)" claude-opus-5-5 150000 true
-expect_warning "$(run warn s2 a1)" 150000/200000
+assistant_entry "$(agent_transcript s2 a1)" claude-opus-5-5 155000 true
+expect_warning "$(run warn s2 a1)" 155000/200000
 pass
 
 case_name="alias main model, main transcript ends in a <synthetic> entry: still 1000000"
 assistant_entry "$(main_transcript s6)" claude-opus-5-5 40000 false
 assistant_entry "$(main_transcript s6)" '<synthetic>' 0 false # an API error placeholder
 assistant_entry "$(agent_transcript s6 a1)" claude-opus-5-5 150000 true
-expect_nothing "$(run warn s6 a1)" "15% of 1000000 is below every level"
+expect_nothing "$(run warn s6 a1)" "15% of 1000000 is short of every warning point"
 [ "$(window_of s6 a1)" = 1000000 ] || fail "window is '$(window_of s6 a1)', expected 1000000"
 pass
 
@@ -144,7 +144,7 @@ done
 assistant_entry "$(agent_transcript s7 a1)" claude-opus-5-5 150000 true
 rm -f "$reads"
 out=$(hook_input s7 a1 | PATH=$shim:$PATH bash "$hook" warn | jq -r '.hookSpecificOutput.additionalContext // empty')
-expect_nothing "$out" "15% of 1000000 is below every level"
+expect_nothing "$out" "15% of 1000000 is short of every warning point"
 [ "$(window_of s7 a1)" = 1000000 ] || fail "window is '$(window_of s7 a1)', expected 1000000"
 read -r tails wholes <<<"$(main_reads "$m")"
 [ "$wholes" = 0 ] || fail "the main transcript was read whole $wholes time(s); its last 5000 lines name the model"
@@ -157,7 +157,7 @@ case_name="alias main model, the subagent's next call does not read the main tra
 rm -f "$reads"
 assistant_entry "$(agent_transcript s7 a1)" claude-opus-5-5 160000 true
 out=$(hook_input s7 a1 | PATH=$shim:$PATH bash "$hook" warn | jq -r '.hookSpecificOutput.additionalContext // empty')
-expect_nothing "$out" "16% of 1000000 is below every level"
+expect_nothing "$out" "16% of 1000000 is short of every warning point"
 [ "$(main_reads "$m")" = "0 0" ] || fail "the main transcript was read again (tail, whole: $(main_reads "$m"))"
 pass
 
@@ -168,7 +168,7 @@ jq -nc 'range(1; 5101) | {type: "user", message: {content: [{type: "tool_result"
 assistant_entry "$(agent_transcript s9 a1)" claude-opus-5-5 150000 true
 rm -f "$reads"
 out=$(hook_input s9 a1 | PATH=$shim:$PATH bash "$hook" warn | jq -r '.hookSpecificOutput.additionalContext // empty')
-expect_nothing "$out" "15% of 1000000 is below every level"
+expect_nothing "$out" "15% of 1000000 is short of every warning point"
 [ "$(window_of s9 a1)" = 1000000 ] || fail "window is '$(window_of s9 a1)', expected 1000000"
 read -r tails wholes <<<"$(main_reads "$m")"
 [ "$wholes" = 1 ] || fail "the main transcript was read whole $wholes time(s), expected once: its last 5000 lines name no model"
@@ -176,12 +176,12 @@ pass
 
 case_name="alias main model, no id found yet: nothing kept, a later call finds it"
 assistant_entry "$(main_transcript s8)" '<synthetic>' 0 false # read, but names no model
-assistant_entry "$(agent_transcript s8 a1)" claude-opus-5-5 150000 true
-expect_warning "$(run warn s8 a1)" 150000/200000
+assistant_entry "$(agent_transcript s8 a1)" claude-opus-5-5 155000 true
+expect_warning "$(run warn s8 a1)" 155000/200000
 [ -e "$CONTEXT_GUARD_DIR/s8/agents/a1/main_model_id" ] && fail "an empty main_model_id was kept"
 assistant_entry "$(main_transcript s8)" claude-opus-5-5 40000 false
 assistant_entry "$(agent_transcript s8 a1)" claude-opus-5-5 160000 true
-expect_nothing "$(run warn s8 a1)" "16% of 1000000 is below every level"
+expect_nothing "$(run warn s8 a1)" "16% of 1000000 is short of every warning point"
 [ "$(window_of s8 a1)" = 1000000 ] || fail "window is '$(window_of s8 a1)', expected 1000000"
 pass
 
@@ -189,29 +189,29 @@ case_name="full id in main/model, subagent on that id: 1000000"
 jq -nc --arg s s3 --arg t "$(main_transcript s3)" '{session_id: $s, transcript_path: $t, model: "claude-opus-5-5[1m]"}' \
   | bash "$hook" start >/dev/null
 assistant_entry "$(agent_transcript s3 a1)" claude-opus-5-5 150000 true
-expect_nothing "$(run warn s3 a1)" "15% of 1000000 is below every level"
+expect_nothing "$(run warn s3 a1)" "15% of 1000000 is short of every warning point"
 [ "$(window_of s3 a1)" = 1000000 ] || fail "window is '$(window_of s3 a1)', expected 1000000"
 pass
 
 case_name="full id in main/model, subagent on another id: 200000"
-assistant_entry "$(agent_transcript s3 a2)" claude-opus-4-1 150000 true
-expect_warning "$(run warn s3 a2)" 150000/200000
+assistant_entry "$(agent_transcript s3 a2)" claude-opus-4-1 155000 true
+expect_warning "$(run warn s3 a2)" 155000/200000
 pass
 
 # A main model without [1m] sizes every agent at 200000, even one on the main session's own id.
 case_name="alias main model without [1m], subagent on the main transcript's id: 200000"
 settings_model 'opus'
 assistant_entry "$(main_transcript s10)" claude-opus-5-5 40000 false
-assistant_entry "$(agent_transcript s10 a1)" claude-opus-5-5 150000 true
-expect_warning "$(run warn s10 a1)" 150000/200000
+assistant_entry "$(agent_transcript s10 a1)" claude-opus-5-5 155000 true
+expect_warning "$(run warn s10 a1)" 155000/200000
 pass
 
 case_name="full id without [1m] in main/model, subagent on that id: 200000"
 settings_model 'opus[1m]' # main/model is read before the settings, so this one is not used
 jq -nc --arg s s11 --arg t "$(main_transcript s11)" '{session_id: $s, transcript_path: $t, model: "claude-opus-5-5"}' \
   | bash "$hook" start >/dev/null
-assistant_entry "$(agent_transcript s11 a1)" claude-opus-5-5 150000 true
-expect_warning "$(run warn s11 a1)" 150000/200000
+assistant_entry "$(agent_transcript s11 a1)" claude-opus-5-5 155000 true
+expect_warning "$(run warn s11 a1)" 155000/200000
 pass
 
 # --- Window sizing for the main conversation ------------------------------------------------
@@ -221,7 +221,7 @@ main_window_of() { cat "$CONTEXT_GUARD_DIR/$1/main/window" 2>/dev/null; } # $1 s
 case_name="main conversation, alias main model with [1m]: 1000000"
 settings_model 'opus[1m]'
 assistant_entry "$(main_transcript s12)" claude-opus-5-5 150000 false
-expect_nothing "$(run warn s12 "")" "15% of 1000000 is below every level"
+expect_nothing "$(run warn s12 "")" "15% of 1000000 is short of every warning point"
 [ "$(main_window_of s12)" = 1000000 ] || fail "window is '$(main_window_of s12)', expected 1000000"
 pass
 
@@ -230,21 +230,21 @@ settings_model 'opus' # main/model is read before the settings, so this one is n
 jq -nc --arg s s13 --arg t "$(main_transcript s13)" '{session_id: $s, transcript_path: $t, model: "claude-opus-5-5[1m]"}' \
   | bash "$hook" start >/dev/null
 assistant_entry "$(main_transcript s13)" claude-opus-5-5 150000 false
-expect_nothing "$(run warn s13 "")" "15% of 1000000 is below every level"
+expect_nothing "$(run warn s13 "")" "15% of 1000000 is short of every warning point"
 [ "$(main_window_of s13)" = 1000000 ] || fail "window is '$(main_window_of s13)', expected 1000000"
 pass
 
 case_name="main conversation, alias main model without [1m]: 200000"
 settings_model 'opus'
-assistant_entry "$(main_transcript s14)" claude-opus-5-5 150000 false
-expect_warning "$(run warn s14 "")" 150000/200000
+assistant_entry "$(main_transcript s14)" claude-opus-5-5 155000 false
+expect_warning "$(run warn s14 "")" 155000/200000
 [ "$(main_window_of s14)" = 200000 ] || fail "window is '$(main_window_of s14)', expected 200000"
 pass
 
 case_name="main conversation, no model in main/model or any settings file: 200000"
 rm -f "$CLAUDE_PROJECT_DIR/.claude/settings.json"
-assistant_entry "$(main_transcript s15)" claude-opus-5-5 150000 false
-expect_warning "$(run warn s15 "")" 150000/200000
+assistant_entry "$(main_transcript s15)" claude-opus-5-5 155000 false
+expect_warning "$(run warn s15 "")" 155000/200000
 [ "$(main_window_of s15)" = 200000 ] || fail "window is '$(main_window_of s15)', expected 200000"
 settings_model 'opus[1m]' # the cases below run under the alias with [1m] again
 pass
@@ -255,35 +255,80 @@ user_settings() { printf '%s' "$1" >"$CLAUDE_CONFIG_DIR/settings.json"; } # $1: 
 
 case_name="main conversation, 1M model with an auto-compact window saved for its id: that window"
 user_settings '{"model": "opus[1m]", "modelSettings": {"claude-opus-5-5": {"autoCompactWindow": 300000}}}'
-assistant_entry "$(main_transcript s16)" claude-opus-5-5 220000 false
-expect_warning "$(run warn s16 "")" 220000/300000
+assistant_entry "$(main_transcript s16)" claude-opus-5-5 250000 false
+expect_warning "$(run warn s16 "")" 250000/300000
 [ "$(main_window_of s16)" = 300000 ] || fail "window is '$(main_window_of s16)', expected 300000"
 pass
 
 case_name="main conversation, window saved for another model id only: 1000000"
 user_settings '{"modelSettings": {"claude-sonnet-5-5": {"autoCompactWindow": 300000}}}'
 assistant_entry "$(main_transcript s17)" claude-opus-5-5 220000 false
-expect_nothing "$(run warn s17 "")" "22% of 1000000 is below every level"
+expect_nothing "$(run warn s17 "")" "22% of 1000000 is short of every warning point"
 [ "$(main_window_of s17)" = 1000000 ] || fail "window is '$(main_window_of s17)', expected 1000000"
 pass
 
 case_name="main conversation, top-level autoCompactWindow: that window"
 user_settings '{"autoCompactWindow": 400000}'
-assistant_entry "$(main_transcript s18)" claude-opus-5-5 290000 false
-expect_warning "$(run warn s18 "")" 290000/400000
+assistant_entry "$(main_transcript s18)" claude-opus-5-5 340000 false
+expect_warning "$(run warn s18 "")" 340000/400000
 pass
 
 case_name="main conversation, CLAUDE_CODE_AUTO_COMPACT_WINDOW outranks the settings"
-assistant_entry "$(main_transcript s19)" claude-opus-5-5 150000 false
+assistant_entry "$(main_transcript s19)" claude-opus-5-5 155000 false
 expect_warning "$(hook_input s19 "" | CLAUDE_CODE_AUTO_COMPACT_WINDOW=200000 bash "$hook" warn \
-  | jq -r '.hookSpecificOutput.additionalContext // empty')" 150000/200000
+  | jq -r '.hookSpecificOutput.additionalContext // empty')" 155000/200000
 pass
 
 case_name="subagent ignores the main session's auto-compact window: 1000000"
 user_settings '{"modelSettings": {"claude-opus-5-5": {"autoCompactWindow": 300000}}}'
 assistant_entry "$(main_transcript s20)" claude-opus-5-5 40000 false
 assistant_entry "$(agent_transcript s20 a1)" claude-opus-5-5 220000 true
-expect_nothing "$(run warn s20 a1)" "22% of 1000000 is below every level"
+expect_nothing "$(run warn s20 a1)" "22% of 1000000 is short of every warning point"
+rm -f "$CLAUDE_CONFIG_DIR/settings.json"
+pass
+
+# --- Warning points: headroom before the compaction point (window - 33000) ------------------
+
+case_name="300000 window: warns at 8% and again at 5% left before ~267000, once each"
+user_settings '{"modelSettings": {"claude-opus-5-5": {"autoCompactWindow": 300000}}}'
+f=$(main_transcript s26)
+assistant_entry "$f" claude-opus-5-5 240000 false
+expect_nothing "$(run warn s26 "")" "27000 left before compaction is more than 8% of 300000"
+assistant_entry "$f" claude-opus-5-5 245000 false
+out=$(run warn s26 "")
+expect_warning "$out" 245000/300000
+case "$out" in *"about 267000 tokens, 22000 from now"*) ;; *) fail "warning does not name the compaction point: ${out:0:300}" ;; esac
+assistant_entry "$f" claude-opus-5-5 248000 false
+expect_nothing "$(run warn s26 "")" "the 8% warning came twice"
+assistant_entry "$f" claude-opus-5-5 253000 false
+expect_warning "$(run warn s26 "")" 253000/300000
+assistant_entry "$f" claude-opus-5-5 260000 false
+expect_nothing "$(run warn s26 "")" "the 5% warning came twice"
+pass
+
+case_name="a jump straight past 8% warns once, at 5%, and the 8% warning never follows"
+f=$(main_transcript s27)
+assistant_entry "$f" claude-opus-5-5 260000 false
+expect_warning "$(run warn s27 "")" 260000/300000
+assistant_entry "$f" claude-opus-5-5 262000 false
+expect_nothing "$(run warn s27 "")" "warned again after the tightest level"
+pass
+
+case_name="CONTEXT_GUARD_RESERVE moves the compaction point"
+assistant_entry "$(main_transcript s28)" claude-opus-5-5 230000 false
+out=$(hook_input s28 "" | CONTEXT_GUARD_RESERVE=50000 bash "$hook" warn | jq -r '.hookSpecificOutput.additionalContext // empty')
+expect_warning "$out" 230000/300000
+case "$out" in *"about 250000 tokens"*) ;; *) fail "reserve not applied: ${out:0:300}" ;; esac
+pass
+
+case_name="after a warning, a count below half the compaction point means compaction: warns again later"
+f=$(main_transcript s29)
+assistant_entry "$f" claude-opus-5-5 245000 false
+expect_warning "$(run warn s29 "")" 245000/300000
+assistant_entry "$f" claude-opus-5-5 30000 false
+expect_nothing "$(run warn s29 "")" "a compacted main conversation was warned"
+assistant_entry "$f" claude-opus-5-5 246000 false
+expect_warning "$(run warn s29 "")" 246000/300000
 rm -f "$CLAUDE_CONFIG_DIR/settings.json"
 pass
 
@@ -291,19 +336,19 @@ pass
 
 case_name="other family at 150000: 200000"
 f=$(agent_transcript s1 a3)
-assistant_entry "$f" claude-sonnet-5 150000 true
-expect_warning "$(run warn s1 a3)" 150000/200000
+assistant_entry "$f" claude-sonnet-5 155000 true
+expect_warning "$(run warn s1 a3)" 155000/200000
 pass
 
 case_name="other family at 250000: window becomes 1000000"
 assistant_entry "$f" claude-sonnet-5 250000 true
-expect_nothing "$(run warn s1 a3)" "25% of 1000000 is below every level"
+expect_nothing "$(run warn s1 a3)" "25% of 1000000 is short of every warning point"
 [ "$(window_of s1 a3)" = 1000000 ] || fail "window is '$(window_of s1 a3)', expected 1000000"
 pass
 
-case_name="other family at 750000: warns against 1000000"
-assistant_entry "$f" claude-sonnet-5 750000 true
-expect_warning "$(run warn s1 a3)" 750000/1000000
+case_name="other family at 900000: warns against 1000000"
+assistant_entry "$f" claude-sonnet-5 900000 true
+expect_warning "$(run warn s1 a3)" 900000/1000000
 pass
 
 case_name="other family compacted to 20000: window stays 1000000, restore emitted once"

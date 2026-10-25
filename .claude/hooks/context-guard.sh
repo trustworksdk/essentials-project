@@ -5,7 +5,8 @@
 # number of parallel sessions.
 #
 #   start       SessionStart (startup|resume|clear|fork) - remember the session's model
-#   warn        PostToolUse, UserPromptSubmit - context-usage warning at 70/80/90 %;
+#   warn        PostToolUse, UserPromptSubmit - warning when 8 % and again 5 % of the window
+#               is left before the compaction point;
 #               for a subagent also the restore (SessionStart never fires for one)
 #   precompact  PreCompact (auto|manual)       - write a fallback snapshot
 #   restore     SessionStart (compact)         - re-inject saved state (once) + snapshot
@@ -37,6 +38,12 @@
 # its window is that value when it is smaller than the model's: a 1M session with a 300000
 # window compacts near 270000 and would never reach a warning measured against 1000000. The
 # --autocompact launch flag leaves no trace a hook can read; CONTEXT_GUARD_WINDOW covers it.
+# Claude Code compacts a fixed reserve short of the window, not at the window: ~267000 on a
+# 300000 window in our sessions, ~967000 on 1M per its docs - both 33000 short. The warnings
+# are measured against that compaction point (window - CONTEXT_GUARD_RESERVE), as headroom
+# left in % of the window, so they come equally close before compaction on every window size.
+# The count is the last API call's, so the tool result just returned is not in it yet: one
+# large result can cross a warning point, or reach compaction, unannounced.
 # Tested by scripts/test-context-guard.sh.
 #
 # Base dir is fixed rather than taken from the hook input's scratchpad_dir: that field is
@@ -44,7 +51,9 @@
 #
 # Knobs: CONTEXT_GUARD (off|0|false|no switches the guard off without removing the hooks),
 #        CONTEXT_GUARD_WINDOW (tokens; overrides model detection),
-#        CONTEXT_GUARD_LEVELS (default "70 80 90"),
+#        CONTEXT_GUARD_HEADROOM (default "8 5": warn once at each, when that % of the window or
+#          less is left before the compaction point),
+#        CONTEXT_GUARD_RESERVE (default 33000: tokens short of the window Claude Code compacts at),
 #        CONTEXT_GUARD_DIR (default /tmp/claude-<uid>/context-guard).
 # State is private: files are created with umask 077, every state directory must be a real
 # directory owned by this user (else the hook does nothing) and is chmod 700, so on a shared
@@ -101,14 +110,10 @@ emit() { # $1 event name, $2 text
 
 clear_locks() { rm -rf "$state_dir"/warned.* 2>/dev/null; }
 
-highest_lock() {
-  local m=0 d l
-  for d in "$state_dir"/warned.*; do
-    [ -d "$d" ] || continue
-    l=${d##*.}
-    [ "$l" -gt "$m" ] 2>/dev/null && m=$l
-  done
-  echo "$m"
+has_lock() {
+  local d
+  for d in "$state_dir"/warned.*; do [ -d "$d" ] && return 0; done
+  return 1
 }
 
 main_model() {
@@ -277,14 +282,17 @@ case "$mode" in
         && mv -f "$state_dir/window.$$" "$state_dir/window" 2>/dev/null
       rm -f "$state_dir/window.$$" 2>/dev/null
     fi
+    reserve=${CONTEXT_GUARD_RESERVE:-33000}
+    case "$reserve" in ''|*[!0-9]*) reserve=33000 ;; esac
+    trigger=$(( window - reserve ))
+    [ "$trigger" -gt $(( window / 2 )) ] || trigger=$(( window / 2 ))
     pct=$(( used * 100 / window ))
     event=$(field hook_event_name)
     event=${event:-PostToolUse}
 
-    # Usage fell well below a level already warned at: compaction happened. The main
-    # conversation gets its restore from SessionStart(compact); a subagent gets it here.
-    peak=$(highest_lock)
-    if [ "$peak" -gt 0 ] && [ "$pct" -lt $(( peak - 25 )) ]; then
+    # Warned already, and usage is now below half the compaction point: compaction happened.
+    # The main conversation gets its restore from SessionStart(compact); a subagent gets it here.
+    if has_lock && [ "$used" -lt $(( trigger / 2 )) ]; then
       clear_locks
       if [ -n "$agent" ]; then
         text=$(restore_text)
@@ -293,11 +301,17 @@ case "$mode" in
       exit 0
     fi
 
-    level=0
-    for l in ${CONTEXT_GUARD_LEVELS:-70 80 90}; do [ "$pct" -ge "$l" ] && level=$l; done
-    [ "$level" -gt 0 ] || exit 0
+    # The tightest headroom level reached; each warns once (a jump past one skips it).
+    left=$(( trigger - used ))
+    [ "$left" -gt 0 ] || left=0
+    level=""
+    for h in ${CONTEXT_GUARD_HEADROOM:-8 5}; do
+      case "$h" in ''|*[!0-9]*) continue ;; esac
+      [ $(( left * 100 )) -le $(( h * window )) ] && { [ -z "$level" ] || [ "$h" -lt "$level" ]; } && level=$h
+    done
+    [ -n "$level" ] || exit 0
     mkdir "$state_dir/warned.$level" 2>/dev/null || exit 0
-    emit "$event" "CONTEXT GUARD: context for ${who} is at ${pct}% (${used}/${window} tokens); auto-compaction will summarise it soon and detail will be lost. Before continuing, if you can write files, write your working state to ${state_file} (overwrite it; keep it under ~150 lines): the task and its acceptance criteria, decisions made and why, what is done (commits, files), what is in progress and the exact next step, open questions, and anything you verified that must not be re-derived. It will be handed back to you after compaction. If that write is refused (a write-scope guard, a permission check), do not retry it. Then carry on with the task."
+    emit "$event" "CONTEXT GUARD: context for ${who} is at ${pct}% (${used}/${window} tokens); auto-compaction triggers at about ${trigger} tokens, ${left} from now, and will summarise it, losing detail. Before continuing, if you can write files, write your working state to ${state_file} (overwrite it; keep it under ~150 lines): the task and its acceptance criteria, decisions made and why, what is done (commits, files), what is in progress and the exact next step, open questions, and anything you verified that must not be re-derived. It will be handed back to you after compaction. If that write is refused (a write-scope guard, a permission check), do not retry it. Then carry on with the task."
     ;;
 
   precompact)
