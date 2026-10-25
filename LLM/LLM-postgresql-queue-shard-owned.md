@@ -10,7 +10,7 @@
 - **Storage**: three lanes (`shard_queue_unordered`, `shard_queue_ordered`, `shard_queue_dead_letter`) plus `shard_queue_lease`, `shard_queue_instance` and `shard_queue_registry`; `bytea` payloads
 - **Locking**: none on the delivery path — a shard lease establishes ownership, so there is no claim write
 - **Notifications**: LISTEN/NOTIFY on one global channel, payload `queueId:lane:shard`
-- **Dependencies**: PostgreSQL driver, Micrometer (both `provided`), `shared`
+- **Dependencies**: PostgreSQL driver, Micrometer (both `provided`), `foundation` (brings `shared` and `types` with it)
 - **Status**: **Published**, and new. No production use yet. `MessageQueue` freezes at the release that ships it — additive in minor, breaking only in a major — but it is **not frozen on this branch**: the dead-letter work widened it on purpose (`resurrectKey`, two `QueueStatistics` counters, `DeadLetter.blockedByKeyOrder`) while that is still free.
 
 ## TOC
