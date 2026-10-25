@@ -30,7 +30,14 @@
 # session is not followed; with no such entry the subagent gets 200000. A transcript
 # names the model without its [1m] suffix, so a 1M subagent on another model is found when
 # its count passes 200000 (see warn); from then on its window stays 1000000, also after its
-# compaction. Tested by scripts/test-context-guard.sh.
+# compaction.
+# The main conversation compacts at its auto-compact window when one is set (/autocompact saves
+# it as modelSettings[<model id>].autoCompactWindow in the user settings; a top-level
+# autoCompactWindow sets it for every model; CLAUDE_CODE_AUTO_COMPACT_WINDOW overrides both), so
+# its window is that value when it is smaller than the model's: a 1M session with a 300000
+# window compacts near 270000 and would never reach a warning measured against 1000000. The
+# --autocompact launch flag leaves no trace a hook can read; CONTEXT_GUARD_WINDOW covers it.
+# Tested by scripts/test-context-guard.sh.
 #
 # Base dir is fixed rather than taken from the hook input's scratchpad_dir: that field is
 # documented but absent in practice (2.1.310), and the warn and restore paths must agree.
@@ -98,6 +105,23 @@ main_model() {
     done
   fi
   printf '%s' "$model"
+}
+
+autocompact_window() { # $1: the main session's model id; prints its auto-compact window, if set
+  # Settings are read as Claude Code ranks them: local, project, then user; within one file a
+  # window saved for the model outranks the top-level key.
+  local v=${CLAUDE_CODE_AUTO_COMPACT_WINDOW:-}
+  case "$v" in *[!0-9]*) v="" ;; esac
+  if [ -z "$v" ]; then
+    local cfg=${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json
+    local proj=${CLAUDE_PROJECT_DIR:-.}/.claude
+    for f in "$proj/settings.local.json" "$proj/settings.json" "$cfg"; do
+      [ -f "$f" ] || continue
+      v=$(jq -r --arg m "$1" '(.modelSettings[$m].autoCompactWindow // .autoCompactWindow // empty) | numbers' "$f" 2>/dev/null)
+      [ -n "$v" ] && break
+    done
+  fi
+  printf '%s' "$v"
 }
 
 context_window() { # $1: the model named by this agent's own transcript (may be empty)
@@ -202,6 +226,15 @@ case "$mode" in
     window=$(context_window "${own_model:-}")
     # A count past the assumed window proves the window is bigger (e.g. a 1M model).
     [ "$used" -gt "$window" ] && window=1000000
+    # The main conversation compacts at its auto-compact window when that is smaller. Its model
+    # id is the settings model without [1m] when that is a full id, else its transcript's.
+    if [ -z "$agent" ] && [ -z "${CONTEXT_GUARD_WINDOW:-}" ]; then
+      id=$(main_model)
+      id=${id/'[1m]'/}
+      case "$id" in *-*) ;; *) id=${own_model:-} ;; esac
+      cap=$(autocompact_window "$id")
+      [ -n "$cap" ] && [ "$cap" -gt 0 ] && [ "$cap" -lt "$window" ] && window=$cap
+    fi
     # A subagent's model cannot change mid-run, so its window never shrinks back once its
     # count proved it bigger: after compaction its count is small again, and a shrink here
     # would clear its warn locks before the restore check below.

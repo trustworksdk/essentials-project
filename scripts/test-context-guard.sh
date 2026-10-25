@@ -15,7 +15,8 @@
 # limitations under the License.
 #
 # Tests .claude/hooks/context-guard.sh: the context window each agent, the main conversation
-# included, is measured against (and that a subagent reads the main transcript's model from its
+# included, is measured against (the main conversation's capped at its auto-compact window when
+# one is set; and that a subagent reads the main transcript's model from its
 # tail, once, and the whole file only when its last 5000 lines name none), the restore after a
 # subagent's compaction, STATE.md handed back once per write, and the pre-compaction snapshot
 # without GNU-only tools.
@@ -246,6 +247,44 @@ assistant_entry "$(main_transcript s15)" claude-opus-5-5 150000 false
 expect_warning "$(run warn s15 "")" 150000/200000
 [ "$(main_window_of s15)" = 200000 ] || fail "window is '$(main_window_of s15)', expected 200000"
 settings_model 'opus[1m]' # the cases below run under the alias with [1m] again
+pass
+
+# /autocompact saves the window under the model id in the user settings; a 1M session with a
+# 300000 window compacts near 270000, so 70% of 1000000 would never be reached.
+user_settings() { printf '%s' "$1" >"$CLAUDE_CONFIG_DIR/settings.json"; } # $1: JSON
+
+case_name="main conversation, 1M model with an auto-compact window saved for its id: that window"
+user_settings '{"model": "opus[1m]", "modelSettings": {"claude-opus-5-5": {"autoCompactWindow": 300000}}}'
+assistant_entry "$(main_transcript s16)" claude-opus-5-5 220000 false
+expect_warning "$(run warn s16 "")" 220000/300000
+[ "$(main_window_of s16)" = 300000 ] || fail "window is '$(main_window_of s16)', expected 300000"
+pass
+
+case_name="main conversation, window saved for another model id only: 1000000"
+user_settings '{"modelSettings": {"claude-sonnet-5-5": {"autoCompactWindow": 300000}}}'
+assistant_entry "$(main_transcript s17)" claude-opus-5-5 220000 false
+expect_nothing "$(run warn s17 "")" "22% of 1000000 is below every level"
+[ "$(main_window_of s17)" = 1000000 ] || fail "window is '$(main_window_of s17)', expected 1000000"
+pass
+
+case_name="main conversation, top-level autoCompactWindow: that window"
+user_settings '{"autoCompactWindow": 400000}'
+assistant_entry "$(main_transcript s18)" claude-opus-5-5 290000 false
+expect_warning "$(run warn s18 "")" 290000/400000
+pass
+
+case_name="main conversation, CLAUDE_CODE_AUTO_COMPACT_WINDOW outranks the settings"
+assistant_entry "$(main_transcript s19)" claude-opus-5-5 150000 false
+expect_warning "$(hook_input s19 "" | CLAUDE_CODE_AUTO_COMPACT_WINDOW=200000 bash "$hook" warn \
+  | jq -r '.hookSpecificOutput.additionalContext // empty')" 150000/200000
+pass
+
+case_name="subagent ignores the main session's auto-compact window: 1000000"
+user_settings '{"modelSettings": {"claude-opus-5-5": {"autoCompactWindow": 300000}}}'
+assistant_entry "$(main_transcript s20)" claude-opus-5-5 40000 false
+assistant_entry "$(agent_transcript s20 a1)" claude-opus-5-5 220000 true
+expect_nothing "$(run warn s20 a1)" "22% of 1000000 is below every level"
+rm -f "$CLAUDE_CONFIG_DIR/settings.json"
 pass
 
 # --- A subagent on another family: window grows, never shrinks, restore once ----------------
