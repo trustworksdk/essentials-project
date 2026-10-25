@@ -263,6 +263,16 @@ trading demo's ledger load test, where it cost a cycle's release and settlement 
 before the read. Measured cost: none beyond noise in drain time and read statements; the watermark trails one pass
 longer.
 
+### 2.10 An aggregate update no longer re-queries the newest snapshot (`eventsourced-aggregates`)
+
+To decide whether to add a snapshot, every snapshot repository (`PostgresqlAggregateSnapshotRepository`,
+`AsyncAggregateSnapshotRepository`, `DurableAsyncAggregateSnapshotRepository`) asked the database for the aggregate's
+newest snapshot on every update, inside the command's transaction. The repository asked the same question a moment
+earlier, when the aggregate was loaded, so it now uses that answer and queries only when it has none (a new aggregate,
+for example). That is one query and round trip fewer per aggregate update. The answer can only be stale if another
+instance adds or deletes a snapshot of the same aggregate in between; a snapshot is then added a little early, or at
+most one policy interval late. Snapshots deleted through the repository are never taken from a load.
+
 ## 3. Documentation
 
 - The polling-optimizer docs describe the new defaults, and the stale-statistics guidance is next to the claim

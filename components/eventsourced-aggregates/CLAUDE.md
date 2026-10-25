@@ -42,6 +42,7 @@ Aggregate patterns (stateful, flex, decider, event-stream) layered on top of the
 | `AddNewAggregateSnapshotStrategy` | Decides when to snapshot (e.g. every N events) |
 | `AggregateSnapshotDeletionStrategy` | Decides how many historic snapshots to keep |
 | `BrokenSnapshot` | Sentinel stored when deserialization fails; triggers auto-cleanup on next load |
+| `LoadedSnapshotOrders` | Newest snapshot order found by `loadSnapshot(…, MAX_EVENT_ORDER, …)`, used once by the following `aggregateUpdated` instead of `findMostRecentLastIncludedEventOrder` — one query + round trip per aggregate update saved, in all three repositories. Stale only toward older (snapshot early) or deleted (≤ policy interval late); repo deletes forget; bounded LRU 10k; no entry → query. `…_newestSnapshotFromLoadIT` counts the query |
 | `AggregateSnapshotStore` | Storage abstraction under the policy-driven repositories; `PostgresqlAggregateSnapshotStore` is the impl. `saveSnapshot` is version-guarded (`WHERE NOT EXISTS (newer)`), deletion is bounded via `deleteSnapshotsOlderThan` |
 | `AsyncAggregateSnapshotRepository` | `Lifecycle`; serves `SYNC` (caller thread, no executor) and `ASYNC_IN_MEMORY` (fixed daemon-thread pool) |
 | `DurableAsyncAggregateSnapshotRepository` | `ASYNC_DURABLE`; enqueues an `AggregateSnapshotJob` from a `UnitOfWorkLifecycleCallback` so the job is only registered after the user UoW commits |
