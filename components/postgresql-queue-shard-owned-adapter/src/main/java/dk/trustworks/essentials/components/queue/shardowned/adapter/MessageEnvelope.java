@@ -55,8 +55,8 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  *         <em>strings</em> inside a flat object of three strings. Every message was therefore serialized
  *         twice on the way in and parsed twice on the way out, and its payload appeared escaped in
  *         {@code shard_queue_unordered_readable}. Measured on a typical event with three metadata entries,
- *         {@value #FORMAT_VERSION} takes about 35% less CPU to write and read (write 1 420 to 860 ns, read 2 780
- *         to 1 870 ns) and 9% fewer bytes.</li>
+ *         {@value #FORMAT_VERSION} takes 35-40% less CPU to write and read (read 2 650 to 1 500 ns, write
+ *         1 400 to 900-1 070 ns across runs) and 9% fewer bytes.</li>
  * </ul>
  * The format changed without a release that only reads it first because the adapter shipped in 0.60.0 off
  * by default and unused: no cluster runs it at mixed versions. A future change to a format that is in use

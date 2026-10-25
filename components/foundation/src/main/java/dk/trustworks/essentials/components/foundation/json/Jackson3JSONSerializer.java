@@ -20,6 +20,8 @@ import dk.trustworks.essentials.shared.reflection.Classes;
 import tools.jackson.core.*;
 import tools.jackson.databind.*;
 
+import java.util.concurrent.ConcurrentHashMap;
+
 import static dk.trustworks.essentials.shared.Exceptions.rethrowIfCriticalError;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 import static dk.trustworks.essentials.shared.MessageFormatter.msg;
@@ -45,6 +47,14 @@ public class Jackson3JSONSerializer implements JSONSerializer {
         }
     };
     private ClassLoader classLoader;
+    /**
+     * Classes resolved by name, for the class loader they were resolved with. A queue message or an envelope names
+     * its payload's class on every read, and {@code Class.forName} costs ~115 ns each time. Rebuilt whenever
+     * {@link #getClassLoader()} answers a different loader - {@link #setClassLoader} (Spring Boot DevTools swaps it
+     * on restart) or a subclass overriding the getter - so a class from a discarded loader is never handed out. Only
+     * classes that loaded are kept, so the map holds at most the payload types the application has.
+     */
+    private volatile ClassesByName classesByName;
 
     public Jackson3JSONSerializer(ObjectMapper objectMapper) {
         this.objectMapper = requireNonNull(objectMapper, "No object mapper instance provided");
@@ -93,7 +103,7 @@ public class Jackson3JSONSerializer implements JSONSerializer {
     @Override
     public <T> T deserialize(String json, String javaType) {
         return deserialize(json,
-                           (Class<T>) Classes.forName(requireNonNull(javaType, "No javaType provided"), getClassLoader()));
+                           (Class<T>) resolveClass(javaType));
     }
 
     @Override
@@ -112,7 +122,7 @@ public class Jackson3JSONSerializer implements JSONSerializer {
     @Override
     public <T> T deserialize(byte[] json, String javaType) {
         return deserialize(json,
-                           (Class<T>) Classes.forName(requireNonNull(javaType, "No javaType provided"), getClassLoader()));
+                           (Class<T>) resolveClass(javaType));
     }
 
     @Override
@@ -195,7 +205,7 @@ public class Jackson3JSONSerializer implements JSONSerializer {
         @SuppressWarnings("unchecked")
         public <T> T as(String javaType) {
             requireNonNull(javaType, "No javaType provided");
-            return (T) as(Classes.forName(javaType, getClassLoader()));
+            return (T) as(resolveClass(javaType));
         }
 
         private void take() {
@@ -204,6 +214,25 @@ public class Jackson3JSONSerializer implements JSONSerializer {
             }
             read = true;
         }
+    }
+
+    private Class<?> resolveClass(String javaType) {
+        requireNonNull(javaType, "No javaType provided");
+        var loader = getClassLoader();
+        var cache  = classesByName;
+        if (cache == null || cache.classLoader() != loader) {
+            cache = new ClassesByName(loader, new ConcurrentHashMap<>());
+            classesByName = cache;
+        }
+        var resolved = cache.classes().get(javaType);
+        if (resolved == null) {
+            resolved = Classes.forName(javaType, loader);
+            cache.classes().put(javaType, resolved);
+        }
+        return resolved;
+    }
+
+    private record ClassesByName(ClassLoader classLoader, ConcurrentHashMap<String, Class<?>> classes) {
     }
 
     @Override
