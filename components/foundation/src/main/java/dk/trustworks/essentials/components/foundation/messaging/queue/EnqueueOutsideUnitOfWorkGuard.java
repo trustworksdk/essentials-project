@@ -120,6 +120,11 @@ public final class EnqueueOutsideUnitOfWorkGuard {
             "dk.trustworks.essentials.components.foundation.transaction.spring.SpringTransactionAwareUnitOfWorkFactory";
 
     /**
+     * Whether Spring's {@code spring-tx} is on the classpath - looked up by name, without initialising it
+     */
+    private static final boolean SPRING_TX_PRESENT = isClassPresent("org.springframework.transaction.support.TransactionSynchronizationManager");
+
+    /**
      * The innermost frame of a call site with no frames - "an unknown call site"
      */
     private static final CallSiteFrame UNKNOWN_FRAME = new CallSiteFrame("", "", -1);
@@ -393,6 +398,32 @@ public final class EnqueueOutsideUnitOfWorkGuard {
         return isSpringTransactionAware(unitOfWorkFactory.getClass()) && SpringTransactions.isActualTransactionActive();
     }
 
+    /**
+     * Is a Spring transaction active on the calling thread ({@code TransactionSynchronizationManager.isActualTransactionActive()})?
+     * <p>
+     * Unlike {@link #isUnitOfWorkActive(UnitOfWorkFactory)} this asks no factory whether it is Spring-aware: it is for
+     * a caller that cannot tell whether its connections join a Spring transaction (a plain {@code Jdbi} built on a
+     * {@code TransactionAwareDataSourceProxy} does, one built on the raw pool does not).
+     *
+     * @return whether a Spring transaction is active; {@code false} when {@code spring-tx} is not on the classpath
+     */
+    public static boolean isSpringTransactionActive() {
+        // SpringTransactions is only resolved once spring-tx is known to be present
+        return SPRING_TX_PRESENT && SpringTransactions.isActualTransactionActive();
+    }
+
+    // This class's loader is the one that resolves SpringTransactions' reference, so asking the context loader could
+    // say 'present' when that reference fails
+    @SuppressWarnings("PMD.UseProperClassLoader")
+    private static boolean isClassPresent(String className) {
+        try {
+            Class.forName(className, false, EnqueueOutsideUnitOfWorkGuard.class.getClassLoader());
+            return true;
+        } catch (ClassNotFoundException | LinkageError e) {
+            return false;
+        }
+    }
+
     private static boolean isSpringTransactionAware(Class<?> type) {
         for (var candidate = type; candidate != null; candidate = candidate.getSuperclass()) {
             if (SPRING_TRANSACTION_AWARE_UNIT_OF_WORK_FACTORY.equals(candidate.getName())) {
@@ -403,7 +434,8 @@ public final class EnqueueOutsideUnitOfWorkGuard {
     }
 
     /**
-     * Holder so {@code TransactionSynchronizationManager} is only resolved when a Spring-aware factory is in use.
+     * Holder so {@code TransactionSynchronizationManager} is only resolved when a Spring-aware factory is in use, or
+     * {@code spring-tx} is known to be on the classpath.
      */
     private static final class SpringTransactions {
         static boolean isActualTransactionActive() {

@@ -638,6 +638,15 @@ class EnqueueOutsideUnitOfWorkGuardTest {
         assertThat(EnqueueOutsideUnitOfWorkGuard.isUnitOfWorkActive(factoryWith(null))).isFalse();
     }
 
+    @Test
+    void a_spring_transaction_is_reported_active_only_while_one_is() {
+        assertThat(EnqueueOutsideUnitOfWorkGuard.isSpringTransactionActive()).isFalse();
+
+        TransactionSynchronizationManager.setActualTransactionActive(true);
+
+        assertThat(EnqueueOutsideUnitOfWorkGuard.isSpringTransactionActive()).isTrue();
+    }
+
     @SuppressWarnings("unchecked")
     private static UnitOfWorkFactory<UnitOfWork> factoryWith(UnitOfWork current) {
         UnitOfWorkFactory<UnitOfWork> factory = mock(UnitOfWorkFactory.class);

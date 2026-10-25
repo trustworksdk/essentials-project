@@ -51,6 +51,9 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  * really has to create an index or column on a table running instances write to locks it - the change set is applied
  * again, up to {@value #MAX_ATTEMPTS_ON_DEADLOCK} times. Only when this applier began the transaction: one that joined
  * a unit of work or transaction the caller started cannot be retried, because the abort undid the caller's work too.
+ * Through a {@link Jdbi} the applier cannot tell whether a Spring transaction active on the calling thread is the one
+ * its connection joins (it is for a {@code Jdbi} built on Spring's {@code TransactionAwareDataSourceProxy}), so while
+ * one is active a deadlock is not retried there either.
  * <p>
  * <b>Identifiers.</b> Every {@link SchemaChange#objectName()} is checked with
  * {@link PostgresqlUtil#checkIsValidTableOrColumnName(String)} before any statement executes. It is a first line of
@@ -72,7 +75,9 @@ public final class PostgresqlCreateSchemaApplier implements SchemaApplier {
     private final String       appliedBy;
 
     /**
-     * Records into {@link #DEFAULT_SCHEMA_HISTORY_TABLE_NAME}, as this machine's host name.
+     * Records into {@link #DEFAULT_SCHEMA_HISTORY_TABLE_NAME}, as this machine's host name. A change set PostgreSQL
+     * aborts to break a deadlock is applied again - unless a Spring transaction is active on the calling thread, which
+     * a {@code Jdbi} on a Spring transaction-aware {@code DataSource} joins.
      *
      * @param jdbi where the schema is created
      */
@@ -81,6 +86,9 @@ public final class PostgresqlCreateSchemaApplier implements SchemaApplier {
     }
 
     /**
+     * A change set PostgreSQL aborts to break a deadlock is applied again - unless a Spring transaction is active on
+     * the calling thread, which a {@code Jdbi} on a Spring transaction-aware {@code DataSource} joins.
+     *
      * @param jdbi                   where the schema is created
      * @param schemaHistoryTableName the ledger table. <b>Concatenated into SQL</b>: validated with
      *                               {@link PostgresqlUtil#checkIsValidTableOrColumnName(String)}, but only ever pass a
@@ -196,6 +204,8 @@ public final class PostgresqlCreateSchemaApplier implements SchemaApplier {
                     Thread.sleep(DEADLOCK_RETRY_DELAY.toMillis() * attempt + ThreadLocalRandom.current().nextLong(DEADLOCK_RETRY_DELAY.toMillis()));
                 } catch (InterruptedException interrupted) {
                     Thread.currentThread().interrupt();
+                    // The deadlock stays the exception thrown: it is what the caller acts on
+                    e.addSuppressed(interrupted);
                     throw e;
                 }
             }
@@ -323,7 +333,10 @@ public final class PostgresqlCreateSchemaApplier implements SchemaApplier {
 
                 @Override
                 public boolean beginsItsOwnTransaction() {
-                    return true;
+                    // A Jdbi built on Spring's TransactionAwareDataSourceProxy (spring-boot-starter-postgresql's
+                    // jdbi bean) joins an active Spring transaction. Whether this one does cannot be told from the
+                    // Jdbi, so an active Spring transaction counts as joined: at worst a deadlock is not retried
+                    return !EnqueueOutsideUnitOfWorkGuard.isSpringTransactionActive();
                 }
 
                 @Override
