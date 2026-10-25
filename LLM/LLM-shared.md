@@ -85,6 +85,7 @@ String prependRootCauseSummary(Throwable t, String description)                 
 <T> void forEachThenThrowFirst(Iterable<? extends T> items, Consumer<? super T> action)            // since 0.60.1
 <T> Throwable forEachCollectingFailures(Iterable<? extends T> items, Consumer<? super T> action,
                                         Throwable failure)                                         // since 0.60.1
+void addSuppressedOnce(Throwable holder, Throwable suppressed)                                    // since 0.60.1
 
 // Usage - Root cause
 Throwable root = Exceptions.getRootCause(e);
@@ -122,6 +123,7 @@ try {
 
 - `forEachThenThrowFirst` / `forEachCollectingFailures` collect a `RuntimeException` and a non-critical `Error` (an `AssertionError`, say) alike. A critical error (`isCriticalError`) is rethrown at once, the items after it not run, with the failure collected so far added to it as suppressed.
 - A failure is added once, by identity: an instance thrown for several items, or one the failure already carries as suppressed, is not added again.
+- `addSuppressedOnce(holder, suppressed)` is that rule on its own, for a cleanup loop of your own: it adds `suppressed` unless it is `holder` itself (where `Throwable.addSuppressed` throws `IllegalArgumentException`) or `holder` already carries it, both by identity.
 - `forEachCollectingFailures` returns `failure` when it is not null, else the action's first failure (later ones suppressed on it), else null - it does not throw the action's non-critical failures, so the caller throws the result with its own type.
 - The root-cause summary is the root cause's `toString()` verbatim, so it spans several lines when that message does (PostgreSQL `Detail:` / `Where:` lines): do not take only the first line as the whole root cause.
 

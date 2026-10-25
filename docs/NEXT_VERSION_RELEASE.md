@@ -793,6 +793,10 @@ not during them, as on the ordered lane.
   non-critical `Error` is collected like a `RuntimeException`; a critical one (`Exceptions.isCriticalError`) is
   rethrown at once, with the failure collected so far added to it as suppressed, unless it already carries it (a
   nested call with the same `failure` that hit the error added it first). (`62ad7367e`)
+- **`Exceptions.addSuppressedOnce(holder, suppressed)`** (`shared`) is that add-once rule on its own, for a cleanup
+  loop of your own: it adds `suppressed` to `holder` as suppressed unless it is `holder` itself - where
+  `Throwable.addSuppressed` throws `IllegalArgumentException` - or `holder` already carries it, both by identity. The
+  shard-owned queue's release-claim cleanup uses it instead of a copy of its own. (`<!-- fix:U-031 -->`)
 - **`Locks.lockWarningOnce(lock, warnAfter, warn)`** (`shared`, package `dk.trustworks.essentials.shared.concurrent`)
   takes a `Lock`, waiting as long as `ReentrantLock.lock()` would - an interrupt deferred, and set on the thread again
   once the lock is held (after the warning, by the lock's own `lock()`, as every `java.util.concurrent` lock does) -

@@ -2768,22 +2768,22 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                 owner.endReleaseClaim();
             } catch (RuntimeException | Error e) {
                 if (criticalError != null) {
-                    addSuppressedOnce(criticalError, e);
+                    Exceptions.addSuppressedOnce(criticalError, e);
                 } else if (Exceptions.isCriticalError(e)) {
                     criticalError = e;
                 } else if (failure != null) {
-                    failure.addSuppressed(e);
+                    Exceptions.addSuppressedOnce(failure, e);
                 } else if (firstEndFailure == null) {
                     firstEndFailure = e;
                 } else {
-                    firstEndFailure.addSuppressed(e);
+                    Exceptions.addSuppressedOnce(firstEndFailure, e);
                 }
             }
         }
         if (criticalError != null) {
             var collected = failure != null ? failure : firstEndFailure;
             if (collected != null) {
-                addSuppressedOnce(criticalError, collected);
+                Exceptions.addSuppressedOnce(criticalError, collected);
             }
             if (criticalError instanceof Error error) {
                 throw error;
@@ -2796,26 +2796,6 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         if (firstEndFailure instanceof Error error) {
             throw error;
         }
-    }
-
-    /**
-     * Adds {@code suppressed} to {@code holder} as suppressed, unless it is {@code holder} itself or {@code holder} carries
-     * it as suppressed already, as {@code Exceptions.addSuppressedOnce} does for {@link Exceptions#forEachCollectingFailures}.
-     * By identity: {@link Throwable#addSuppressed(Throwable)} throws {@link IllegalArgumentException} for the throwable
-     * itself, so an owner throwing the critical error {@link #endReleaseClaims} keeps again (a JVM can throw one
-     * {@link OutOfMemoryError} instance more than once) would otherwise end its loop there, with the claims after it held.
-     */
-    @SuppressWarnings("PMD.CompareObjectsWithEquals")
-    private static void addSuppressedOnce(Throwable holder, Throwable suppressed) {
-        if (holder == suppressed) {
-            return;
-        }
-        for (var carried : holder.getSuppressed()) {
-            if (carried == suppressed) {
-                return;
-            }
-        }
-        holder.addSuppressed(suppressed);
     }
 
     /**

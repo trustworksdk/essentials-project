@@ -50,6 +50,9 @@ import static org.assertj.core.api.Assertions.*;
  *     of the owners after it held, so every later charge of those owners waited for a claim nothing would end. The same
  *     instance thrown again - by a later claim end, or by the release statement before it - is not added to itself, which
  *     {@link Throwable#addSuppressed(Throwable)} refuses with an {@link IllegalArgumentException}.</li>
+ *     <li>The same holds for a failure that is not critical: an end failure thrown again as the same instance by a later
+ *     claim end, or a claim end throwing the release statement's own failure, is not added to itself, and every claim
+ *     after it is still ended.</li>
  * </ul>
  * The method is private, so it is called by reflection.
  */
@@ -219,6 +222,49 @@ class ShardOwnedQueueReleaseLeaseRowsTest {
         assertThat(owners).as("every claim is ended")
                           .allSatisfy(owner -> assertThat(owner.ended.get()).isEqualTo(owner.claimed.get()).isEqualTo(1));
         assertThat(criticalError.getSuppressed()).as("the critical error does not carry itself").isEmpty();
+    }
+
+    @Test
+    void a_claim_end_failure_thrown_again_by_a_later_claim_end_still_ends_every_claim_after_it_and_is_the_one_rethrown() {
+        var dataSource = new AnsweringDataSource(true);
+        var queue      = queue(dataSource);
+        var endFailure = new IllegalStateException("simulated unbalanced release claim, one instance for two owners");
+        var first      = new StandInOwner(0);
+        first.endFailure.set(endFailure);
+        var second = new StandInOwner(1);
+        second.endFailure.set(endFailure);
+        var after  = new StandInOwner(2);
+        var owners = List.of(first, second, after);
+
+        assertThatThrownBy(() -> releaseLeaseRows(queue, owners))
+                .as("the end failure itself is the one rethrown, not an IllegalArgumentException of adding it to itself")
+                .isSameAs(endFailure);
+
+        assertThat(dataSource.statementsRun.get()).as("premise: the release statement ran and returned").isEqualTo(1);
+        assertThat(owners).as("every claim is ended, the one after the second throw included")
+                          .allSatisfy(owner -> assertThat(owner.ended.get()).isEqualTo(owner.claimed.get()).isEqualTo(1));
+        assertThat(endFailure.getSuppressed()).as("the end failure does not carry itself").isEmpty();
+    }
+
+    @Test
+    void a_failure_a_release_threw_and_a_claim_end_threw_again_is_the_one_rethrown_and_does_not_carry_itself() {
+        var dataSource = new AnsweringDataSource(true);
+        var failure    = new IllegalStateException("simulated failure from the release statement and a claim end, one instance");
+        dataSource.statementFailure.set(failure);
+        var queue  = queue(dataSource);
+        var first  = new StandInOwner(0);
+        first.endFailure.set(failure);
+        var after  = new StandInOwner(1);
+        var owners = List.of(first, after);
+
+        assertThatThrownBy(() -> releaseLeaseRows(queue, owners))
+                .as("the release's failure itself is the one rethrown, not an IllegalArgumentException of adding it to itself")
+                .isSameAs(failure);
+
+        assertThat(dataSource.statementsRun.get()).as("premise: the release statement ran and threw").isEqualTo(1);
+        assertThat(owners).as("every claim is ended, the one after the throw included")
+                          .allSatisfy(owner -> assertThat(owner.ended.get()).isEqualTo(owner.claimed.get()).isEqualTo(1));
+        assertThat(failure.getSuppressed()).as("the release's failure does not carry itself").isEmpty();
     }
 
     private static ShardOwnedQueue queue(DataSource dataSource) {

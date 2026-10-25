@@ -476,4 +476,72 @@ public class ExceptionsTest {
         assertThatThrownBy(() -> Exceptions.forEachCollectingFailures(List.of("a"), null, null))
                 .isInstanceOf(IllegalArgumentException.class);
     }
+
+    @Test
+    void addSuppressedOnce_addsANewThrowableAsSuppressed() {
+        var holder     = new IllegalStateException("holder");
+        var suppressed = new IllegalArgumentException("suppressed");
+
+        Exceptions.addSuppressedOnce(holder, suppressed);
+
+        assertThat(holder.getSuppressed()).containsExactly(suppressed);
+    }
+
+    @Test
+    void addSuppressedOnce_doesNotAddTheHolderToItself() {
+        var holder = new OutOfMemoryError("thrown again as the same instance");
+
+        Exceptions.addSuppressedOnce(holder, holder);
+
+        assertThat(holder.getSuppressed()).isEmpty();
+    }
+
+    @Test
+    void addSuppressedOnce_doesNotAddAThrowableTheHolderAlreadyCarries() {
+        var holder     = new IllegalStateException("holder");
+        var suppressed = new IllegalArgumentException("suppressed");
+        holder.addSuppressed(suppressed);
+
+        Exceptions.addSuppressedOnce(holder, suppressed);
+
+        assertThat(holder.getSuppressed()).containsExactly(suppressed);
+    }
+
+    @Test
+    void addSuppressedOnce_addsAnEqualButDistinctInstance() {
+        var holder = new IllegalStateException("holder");
+        var first  = new EqualByMessageException("same message");
+        var second = new EqualByMessageException("same message");
+        holder.addSuppressed(first);
+
+        Exceptions.addSuppressedOnce(holder, second);
+
+        assertThat(holder.getSuppressed()).hasSize(2);
+        assertThat(holder.getSuppressed()[0]).isSameAs(first);
+        assertThat(holder.getSuppressed()[1]).isSameAs(second);
+    }
+
+    @Test
+    void addSuppressedOnce_rejectsMissingArguments() {
+        assertThatThrownBy(() -> Exceptions.addSuppressedOnce(null, new IllegalStateException()))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> Exceptions.addSuppressedOnce(new IllegalStateException(), null))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    private static final class EqualByMessageException extends RuntimeException {
+        EqualByMessageException(String message) {
+            super(message);
+        }
+
+        @Override
+        public boolean equals(Object other) {
+            return other instanceof EqualByMessageException that && Objects.equals(getMessage(), that.getMessage());
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hashCode(getMessage());
+        }
+    }
 }

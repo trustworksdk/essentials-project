@@ -230,16 +230,23 @@ public final class Exceptions {
     }
 
     /**
-     * Adds <code>suppressed</code> to <code>holder</code> as suppressed, unless it is <code>holder</code> itself or
-     * <code>holder</code> carries it as suppressed already - read when it is about to be added, not when the loop of
-     * {@link #forEachCollectingFailures(Iterable, Consumer, Throwable)} began, since an action may add to
-     * <code>holder</code> through a nested call while that loop runs. By identity, not <code>equals()</code>:
-     * {@link Throwable#addSuppressed(Throwable)} throws {@link IllegalArgumentException} for the throwable itself, which it
-     * tells by identity - an action throwing the collected instance again would otherwise end the loop there, with the
-     * items after it not run.
+     * Adds <code>suppressed</code> to <code>holder</code> as suppressed ({@link Throwable#addSuppressed(Throwable)}), unless
+     * it is <code>holder</code> itself or <code>holder</code> carries it as suppressed already - read at the time of the
+     * call, so one added to <code>holder</code> after an earlier read (by a nested call, say) is not added again.
+     * <p>
+     * By identity, not <code>equals()</code>: {@link Throwable#addSuppressed(Throwable)} throws
+     * {@link IllegalArgumentException} for the throwable itself, which it tells by identity, so a cleanup loop that adds
+     * each failure to the one it keeps would otherwise end at a failure thrown again as the same instance (a JVM can
+     * throw one {@link OutOfMemoryError} instance more than once), leaving the items after it not run.
+     * {@link #forEachCollectingFailures(Iterable, Consumer, Throwable)} adds every failure through it.
+     *
+     * @param holder     the throwable to add <code>suppressed</code> to
+     * @param suppressed the throwable to add to <code>holder</code> as suppressed
      */
     @SuppressWarnings("PMD.CompareObjectsWithEquals")
-    private static void addSuppressedOnce(Throwable holder, Throwable suppressed) {
+    public static void addSuppressedOnce(Throwable holder, Throwable suppressed) {
+        requireNonNull(holder, "You must supply the holder");
+        requireNonNull(suppressed, "You must supply the throwable to suppress");
         if (holder == suppressed) {
             return;
         }
