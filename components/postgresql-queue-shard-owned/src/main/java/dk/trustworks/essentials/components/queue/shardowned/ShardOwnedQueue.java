@@ -2695,9 +2695,10 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                     try {
                         endReleaseClaims(clearing, failure);
                     } catch (RuntimeException | Error e) {
-                        // A critical error is rethrown at once. With the release failed, endReleaseClaims adds every other
-                        // end failure to that failure itself, and one reaching here is added the same way; with nothing
-                        // failed, the statement has returned, so it is kept for after the owners are told
+                        // A critical error - which endReleaseClaims throws only once every claim is ended - is rethrown
+                        // at once. With the release failed, endReleaseClaims adds every other end failure to that failure
+                        // itself, and one reaching here is added the same way; with nothing failed, the statement has
+                        // returned, so it is kept for after the owners are told
                         Exceptions.rethrowIfCriticalError(e);
                         if (failure == null) {
                             claimEndFailure = e;
@@ -2743,19 +2744,34 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * claim left held makes every later charge of that owner wait for good. An end that throws - the ledger's
      * {@link IllegalStateException}, which only a bug reaches - is added to {@code failure} as suppressed when the release
      * already failed, so that failure is the one rethrown, and is otherwise thrown once every claim is ended, any later
-     * one suppressed in it. A critical error is rethrown at once.
+     * one suppressed in it.
+     * <p>
+     * A critical error ({@link Exceptions#isCriticalError}) does not end the loop either, and in that this cleanup departs
+     * from the shared rule ({@link Exceptions#forEachCollectingFailures}), which rethrows one at once and runs nothing for
+     * the items after it: the first is kept, every later claim is still ended, each later end failure is added to it as
+     * suppressed, and it is thrown once the loop is done, with {@code failure} - or, when the release did not fail, the
+     * first end failure before it - added to it as suppressed. A claim left held is never ended by anything else, so
+     * every later charge of that owner waits for it: on a thread with no network wait bound (a heartbeat tick's) for
+     * good, an interrupt not ending the wait, and on one with a bound ({@link NetworkWaitBound#current()}) until that
+     * bound runs out, each time ({@code ReleaseChargeLedger.awaitNoReleaseClaimed}). Ending a claim is a counter
+     * decrement and a {@code notifyAll} under the ledger's monitor, as safe to run past a critical error as the rest of
+     * this cleanup.
      *
      * @param claimed the owners {@link #releaseLeaseRows} claimed
      * @param failure what the release threw, or {@code null} when it did not throw
      */
     private static void endReleaseClaims(List<LeasedOwner> claimed, Throwable failure) {
         Throwable firstEndFailure = null;
+        Throwable criticalError   = null;
         for (var owner : claimed) {
             try {
                 owner.endReleaseClaim();
             } catch (RuntimeException | Error e) {
-                Exceptions.rethrowIfCriticalError(e);
-                if (failure != null) {
+                if (criticalError != null) {
+                    addSuppressedOnce(criticalError, e);
+                } else if (Exceptions.isCriticalError(e)) {
+                    criticalError = e;
+                } else if (failure != null) {
                     failure.addSuppressed(e);
                 } else if (firstEndFailure == null) {
                     firstEndFailure = e;
@@ -2764,12 +2780,42 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                 }
             }
         }
+        if (criticalError != null) {
+            var collected = failure != null ? failure : firstEndFailure;
+            if (collected != null) {
+                addSuppressedOnce(criticalError, collected);
+            }
+            if (criticalError instanceof Error error) {
+                throw error;
+            }
+            throw (RuntimeException) criticalError;
+        }
         if (firstEndFailure instanceof RuntimeException runtime) {
             throw runtime;
         }
         if (firstEndFailure instanceof Error error) {
             throw error;
         }
+    }
+
+    /**
+     * Adds {@code suppressed} to {@code holder} as suppressed, unless it is {@code holder} itself or {@code holder} carries
+     * it as suppressed already, as {@code Exceptions.addSuppressedOnce} does for {@link Exceptions#forEachCollectingFailures}.
+     * By identity: {@link Throwable#addSuppressed(Throwable)} throws {@link IllegalArgumentException} for the throwable
+     * itself, so an owner throwing the critical error {@link #endReleaseClaims} keeps again (a JVM can throw one
+     * {@link OutOfMemoryError} instance more than once) would otherwise end its loop there, with the claims after it held.
+     */
+    @SuppressWarnings("PMD.CompareObjectsWithEquals")
+    private static void addSuppressedOnce(Throwable holder, Throwable suppressed) {
+        if (holder == suppressed) {
+            return;
+        }
+        for (var carried : holder.getSuppressed()) {
+            if (carried == suppressed) {
+                return;
+            }
+        }
+        holder.addSuppressed(suppressed);
     }
 
     /**

@@ -45,6 +45,11 @@ import static org.assertj.core.api.Assertions.*;
  *     returned marks no owner in doubt: the rows were released, so every owner the statement covered reaches
  *     {@link LeasedOwner.LeaseRow#RELEASED}, and the failure is rethrown after that. It used to be caught with the
  *     statement's own failures, so every owner was marked in doubt and left {@code HELD} while its row was released.</li>
+ *     <li>A critical error ending one owner's release claim still lets every later owner's claim end, and is rethrown
+ *     once they have, carrying the other end failures as suppressed. It used to be rethrown at once, leaving the claims
+ *     of the owners after it held, so every later charge of those owners waited for a claim nothing would end. The same
+ *     instance thrown again - by a later claim end, or by the release statement before it - is not added to itself, which
+ *     {@link Throwable#addSuppressed(Throwable)} refuses with an {@link IllegalArgumentException}.</li>
  * </ul>
  * The method is private, so it is called by reflection.
  */
@@ -126,6 +131,96 @@ class ShardOwnedQueueReleaseLeaseRowsTest {
         assertThat(other.ended.get()).as("the other owner's claim ended too").isEqualTo(other.claimed.get()).isEqualTo(1);
     }
 
+    @Test
+    void a_critical_error_ending_one_claim_still_ends_every_later_claim_and_is_rethrown_carrying_the_other_end_failures() {
+        var dataSource     = new AnsweringDataSource(true);
+        var queue          = queue(dataSource);
+        var earlier        = new StandInOwner(0);
+        var earlierFailure = new IllegalStateException("simulated unbalanced release claim before the critical error");
+        earlier.endFailure.set(earlierFailure);
+        var critical      = new StandInOwner(1);
+        var criticalError = new LinkageError("simulated critical error ending a release claim");
+        critical.endFailure.set(criticalError);
+        var after        = new StandInOwner(2);
+        var later        = new StandInOwner(3);
+        var laterFailure = new IllegalStateException("simulated unbalanced release claim after the critical error");
+        later.endFailure.set(laterFailure);
+        var owners = List.of(earlier, critical, after, later);
+
+        assertThatThrownBy(() -> releaseLeaseRows(queue, owners))
+                .as("the critical error is the one rethrown").isSameAs(criticalError);
+
+        assertThat(dataSource.statementsRun.get()).as("premise: the release statement ran and returned").isEqualTo(1);
+        assertThat(owners).as("every claim is ended, those after the critical error included")
+                          .allSatisfy(owner -> assertThat(owner.ended.get()).isEqualTo(owner.claimed.get()).isEqualTo(1));
+        assertThat(criticalError.getSuppressed()).as("the end failures before and after it are carried by it")
+                                                 .containsExactlyInAnyOrder(earlierFailure, laterFailure);
+    }
+
+    @Test
+    void a_critical_error_thrown_again_by_a_later_claim_end_still_ends_every_claim_after_it_and_is_the_one_rethrown() {
+        var dataSource    = new AnsweringDataSource(true);
+        var queue         = queue(dataSource);
+        var criticalError = new LinkageError("simulated critical error ending two release claims, one instance");
+        var first         = new StandInOwner(0);
+        first.endFailure.set(criticalError);
+        var second = new StandInOwner(1);
+        second.endFailure.set(criticalError);
+        var after  = new StandInOwner(2);
+        var owners = List.of(first, second, after);
+
+        assertThatThrownBy(() -> releaseLeaseRows(queue, owners))
+                .as("the critical error itself is the one rethrown, not an IllegalArgumentException of adding it to itself")
+                .isSameAs(criticalError);
+
+        assertThat(dataSource.statementsRun.get()).as("premise: the release statement ran and returned").isEqualTo(1);
+        assertThat(owners).as("every claim is ended, the one after the second throw included")
+                          .allSatisfy(owner -> assertThat(owner.ended.get()).isEqualTo(owner.claimed.get()).isEqualTo(1));
+        assertThat(criticalError.getSuppressed()).as("the critical error does not carry itself").isEmpty();
+    }
+
+    @Test
+    void a_critical_error_ending_a_claim_of_a_failed_release_is_rethrown_carrying_the_releases_failure() {
+        var dataSource     = new AnsweringDataSource(true);
+        var releaseFailure = new SQLException("simulated release statement refused", "P0001");
+        dataSource.statementFailure.set(releaseFailure);
+        var queue         = queue(dataSource);
+        var critical      = new StandInOwner(0);
+        var criticalError = new LinkageError("simulated critical error ending a release claim");
+        critical.endFailure.set(criticalError);
+        var after  = new StandInOwner(1);
+        var owners = List.of(critical, after);
+
+        assertThatThrownBy(() -> releaseLeaseRows(queue, owners))
+                .as("the critical error is the one rethrown").isSameAs(criticalError);
+
+        assertThat(dataSource.statementsRun.get()).as("premise: the release statement ran and threw").isEqualTo(1);
+        assertThat(owners).as("every claim is ended")
+                          .allSatisfy(owner -> assertThat(owner.ended.get()).isEqualTo(owner.claimed.get()).isEqualTo(1));
+        assertThat(criticalError.getSuppressed()).as("the release's failure is carried by it").containsExactly(releaseFailure);
+    }
+
+    @Test
+    void a_critical_error_a_release_threw_and_a_claim_end_threw_again_is_the_one_rethrown_and_does_not_carry_itself() {
+        var dataSource    = new AnsweringDataSource(true);
+        var criticalError = new LinkageError("simulated critical error from the release statement and a claim end, one instance");
+        dataSource.statementFailure.set(criticalError);
+        var queue    = queue(dataSource);
+        var critical = new StandInOwner(0);
+        critical.endFailure.set(criticalError);
+        var after  = new StandInOwner(1);
+        var owners = List.of(critical, after);
+
+        assertThatThrownBy(() -> releaseLeaseRows(queue, owners))
+                .as("the critical error itself is the one rethrown, not an IllegalArgumentException of adding it to itself")
+                .isSameAs(criticalError);
+
+        assertThat(dataSource.statementsRun.get()).as("premise: the release statement ran and threw").isEqualTo(1);
+        assertThat(owners).as("every claim is ended")
+                          .allSatisfy(owner -> assertThat(owner.ended.get()).isEqualTo(owner.claimed.get()).isEqualTo(1));
+        assertThat(criticalError.getSuppressed()).as("the critical error does not carry itself").isEmpty();
+    }
+
     private static ShardOwnedQueue queue(DataSource dataSource) {
         return ShardOwnedQueue.builder()
                               .setDataSource(dataSource)
@@ -188,7 +283,7 @@ class ShardOwnedQueueReleaseLeaseRowsTest {
         final         AtomicBoolean                         owes       = new AtomicBoolean();
         final         AtomicInteger                         claimed    = new AtomicInteger();
         final         AtomicInteger                         ended      = new AtomicInteger();
-        final         AtomicReference<RuntimeException>     endFailure = new AtomicReference<>();
+        final         AtomicReference<Throwable>            endFailure = new AtomicReference<>();
 
         StandInOwner(int shard) {
             this.shard = shard;
@@ -212,8 +307,11 @@ class ShardOwnedQueueReleaseLeaseRowsTest {
         public void endReleaseClaim() {
             ended.incrementAndGet();
             var failure = endFailure.get();
+            if (failure instanceof Error error) {
+                throw error;
+            }
             if (failure != null) {
-                throw failure;
+                throw (RuntimeException) failure;
             }
         }
 
@@ -313,6 +411,10 @@ class ShardOwnedQueueReleaseLeaseRowsTest {
         private final boolean       answers;
         final         AtomicInteger connectionsAsked = new AtomicInteger();
         final         AtomicInteger statementsRun    = new AtomicInteger();
+        /**
+         * When set, what the release statement throws instead of returning
+         */
+        final         AtomicReference<Throwable> statementFailure = new AtomicReference<>();
 
         AnsweringDataSource(boolean answers) {
             this.answers = answers;
@@ -328,6 +430,10 @@ class ShardOwnedQueueReleaseLeaseRowsTest {
                 case "prepareStatement" -> proxy(PreparedStatement.class, (statementMethod, statementArgs) -> switch (statementMethod.getName()) {
                     case "executeUpdate" -> {
                         statementsRun.incrementAndGet();
+                        var failure = statementFailure.get();
+                        if (failure != null) {
+                            throw failure;
+                        }
                         yield 2;
                     }
                     default -> neutral(statementMethod);
@@ -377,7 +483,7 @@ class ShardOwnedQueueReleaseLeaseRowsTest {
         }
 
         private interface Answer {
-            Object answer(Method method, Object... args);
+            Object answer(Method method, Object... args) throws Throwable;
         }
 
         // The interface's own loader, not the thread's context loader: a proxy class must be defined in a loader that
