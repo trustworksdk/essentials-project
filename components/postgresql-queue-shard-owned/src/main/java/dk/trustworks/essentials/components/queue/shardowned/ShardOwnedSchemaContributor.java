@@ -23,7 +23,7 @@ import org.slf4j.*;
 import javax.sql.DataSource;
 import java.sql.SQLException;
 import java.util.*;
-import java.util.concurrent.ConcurrentSkipListMap;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
@@ -61,10 +61,10 @@ public final class ShardOwnedSchemaContributor implements DynamicSchemaContribut
      */
     public static final String MODULE_ID = "postgresql-queue-shard-owned";
 
-    private final DataSource                                 dataSource;
-    private final ConcurrentSkipListMap<Short, List<String>> queueSequences = new ConcurrentSkipListMap<>();
-    private final AtomicReference<SchemaChangeSink>          sink           = new AtomicReference<>();
-    private final AtomicBoolean                              warned         = new AtomicBoolean();
+    private final DataSource                                  dataSource;
+    private final ConcurrentNavigableMap<Short, List<String>> queueSequences = new ConcurrentSkipListMap<>();
+    private final AtomicReference<SchemaChangeSink>           sink           = new AtomicReference<>();
+    private final AtomicBoolean                               warned         = new AtomicBoolean();
 
     /**
      * @param dataSource the engine's database - queues are registered against it, and it is where the queue
