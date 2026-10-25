@@ -264,10 +264,10 @@ targets, with a `-N` suffix for plugin-only releases.
   and the fenced-lock and shard-owned docs point at it instead of the old 9.5+ and 13+.
 - **Docs: `shared` helpers for Essentials 0.60.1** (`LLM-shared.md`). § Exceptions lists `ROOT_CAUSE_PREFIX`,
   `prependRootCauseSummary`, `forEachThenThrowFirst` and `forEachCollectingFailures`, with examples for stopping
-  every part and undoing a failed start; § Locks documents `Locks.lockWarningOnce`, a lock wait, like `lock()`, that
-  warns once `warnAfter` has passed without the lock instead of blocking silently, then waits in `lock()` itself,
-  keeping a fair lock's queue order, and `Locks.tryLockDeferringPendingInterrupt`, a bounded wait that an interrupt
-  pending on entry does not cut short.
+  every part and undoing a failed start, and `addSuppressedOnce`, their add-each-failure-once rule on its own;
+  § Locks documents `Locks.lockWarningOnce`, a lock wait, like `lock()`, that warns once `warnAfter` has passed
+  without the lock instead of blocking silently, then waits in `lock()` itself, keeping a fair lock's queue order, and
+  `Locks.tryLockDeferringPendingInterrupt`, a bounded wait that an interrupt pending on entry does not cut short.
 - **Docs: the shard-owned schema contributor moved into the engine for Essentials 0.60.1**
   (`LLM-postgresql-queue-shard-owned.md`). `ShardOwnedSchemaContributor` is now
   `dk.trustworks.essentials.components.queue.shardowned.ShardOwnedSchemaContributor`; the adapter module's class of
