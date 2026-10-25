@@ -199,12 +199,11 @@ public final class PostgresqlDurableSubscriptionRepository implements DurableSub
     }
 
     /**
-     * Unlike the interface's default - {@link #getResumePoint(SubscriberId, AggregateType)}, then
-     * {@link #createResumePoint(SubscriberId, AggregateType, GlobalEventOrder)} - this returns the resume point another
-     * transaction created between the two. Two subscriptions for the same subscriber starting at the same time - on two
-     * threads or two instances - both find none and both insert: the second insert waits for the first to commit and then
-     * inserts nothing, and the default then failed with "a ResumePoint already exists". Here it reads the row the first
-     * one committed instead
+     * Returns the resume point another transaction created between this one's get and its insert, as the interface's
+     * concurrency contract requires, without going through {@link #createResumePoint(SubscriberId, AggregateType, GlobalEventOrder)}'s
+     * exception. Two subscriptions for the same subscriber starting at the same time - on two threads or two instances -
+     * both find none and both insert: the second insert waits for the first to commit and then inserts nothing
+     * ({@code ON CONFLICT DO NOTHING}), and this then reads the row the first one committed
      */
     @Override
     public SubscriptionResumePoint getOrCreateResumePoint(SubscriberId subscriberId,

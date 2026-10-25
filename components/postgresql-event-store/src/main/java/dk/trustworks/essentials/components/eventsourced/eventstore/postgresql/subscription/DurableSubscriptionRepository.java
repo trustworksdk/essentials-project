@@ -56,7 +56,8 @@ public interface DurableSubscriptionRepository {
      * @param forAggregateType                                        the aggregate type
      * @param onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder the {@link GlobalEventOrder} resume point
      * @return the resume point
-     * @throws IllegalStateException in case the resume point already exists. Consider using {@link #getOrCreateResumePoint(SubscriberId, AggregateType, GlobalEventOrder)}
+     * @throws IllegalStateException in case the resume point already exists - the default {@link #getOrCreateResumePoint(SubscriberId, AggregateType, Function)}
+     *                               relies on this to recognise a resume point another caller created. Consider using {@link #getOrCreateResumePoint(SubscriberId, AggregateType, GlobalEventOrder)}
      */
     SubscriptionResumePoint createResumePoint(SubscriberId subscriberId,
                                               AggregateType forAggregateType,
@@ -128,8 +129,7 @@ public interface DurableSubscriptionRepository {
 
     /**
      * Get or Create a Resume point for the combination of {@link SubscriberId} and {@link AggregateType} which uniquely define a resume point<br>
-     * Logic is:<br>
-     * {@link #getResumePoint(SubscriberId, AggregateType)} and if the resume point doesn't exist then {@link #createResumePoint(SubscriberId, AggregateType, GlobalEventOrder)}
+     * Same contract as {@link #getOrCreateResumePoint(SubscriberId, AggregateType, Function)}, which this delegates to
      *
      * @param subscriberId                                            the subscriber id
      * @param forAggregateType                                        the aggregate type
@@ -144,8 +144,18 @@ public interface DurableSubscriptionRepository {
 
     /**
      * Get or Create a Resume point for the combination of {@link SubscriberId} and {@link AggregateType} which uniquely define a resume point<br>
-     * Logic is:<br>
-     * {@link #getResumePoint(SubscriberId, AggregateType)} and if the resume point doesn't exist then {@link #createResumePoint(SubscriberId, AggregateType, GlobalEventOrder)}
+     * <b>Concurrency contract:</b> implementations must be safe when two callers get-or-create the same resume point at the same
+     * time - two subscription starts for the same subscriber, on two threads or two instances. Both find none and both create
+     * one; each caller must get the stored resume point back, and neither may fail because the other created it first.<br>
+     * The default: {@link #getResumePoint(SubscriberId, AggregateType)}; if the resume point doesn't exist then
+     * {@link #createResumePoint(SubscriberId, AggregateType, GlobalEventOrder)}; if that throws {@link IllegalStateException}
+     * (the resume point already exists, as its contract says) then {@link #getResumePoint(SubscriberId, AggregateType)} again,
+     * returning the resume point the other caller stored, or rethrowing the {@link IllegalStateException} when there still is none.
+     * The default is only safe for a store whose {@code createResumePoint} throws {@link IllegalStateException} on a duplicate and
+     * leaves the caller able to read afterwards; a store that fails a duplicate any other way (another exception, or an aborted
+     * transaction the re-read then runs in) must override this method.<br>
+     * Reference shape: {@link PostgresqlDurableSubscriptionRepository#getOrCreateResumePoint(SubscriberId, AggregateType, Function)} -
+     * get, insert-if-absent ({@code ON CONFLICT DO NOTHING}), and when the insert stored nothing read again
      *
      * @param subscriberId                                            the subscriber id
      * @param forAggregateType                                        the aggregate type
@@ -157,9 +167,16 @@ public interface DurableSubscriptionRepository {
                                                            Function<AggregateType, GlobalEventOrder> onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder) {
         return getResumePoint(subscriberId,
                 forAggregateType)
-                .orElseGet(() -> createResumePoint(subscriberId,
-                        forAggregateType,
-                        onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder.apply(forAggregateType)));
+                .orElseGet(() -> {
+                    try {
+                        return createResumePoint(subscriberId,
+                                forAggregateType,
+                                onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder.apply(forAggregateType));
+                    } catch (IllegalStateException alreadyExists) {
+                        // Another caller created it between our get and our create - return the one it stored
+                        return getResumePoint(subscriberId, forAggregateType).orElseThrow(() -> alreadyExists);
+                    }
+                });
     }
 
     /**
