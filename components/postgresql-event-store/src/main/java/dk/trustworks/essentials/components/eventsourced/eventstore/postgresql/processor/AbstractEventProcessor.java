@@ -160,6 +160,38 @@ public abstract class AbstractEventProcessor implements Lifecycle {
     }
 
     /**
+     * Unsubscribes each of a processor's subscriptions when the processor stops - used by {@link EventProcessor#stop()} and
+     * {@link InTransactionEventProcessor#stop()}.<br>
+     * Unsubscribed, not just stopped: the {@link EventStoreSubscriptionManager} keeps a subscription that was only stopped
+     * and hands it, unstarted, to the next subscribe with the same {@link SubscriberId} and {@link AggregateType}, so a
+     * processor started again would handle no events. Each subscription is unsubscribed on its own, so one that fails does
+     * not leave the ones after it subscribed.
+     *
+     * @param subscriptions the processor's subscriptions - nothing is done when {@code null} (no subscription was created)
+     * @throws RuntimeException the first failure, with each later one added as suppressed, once every subscription was tried
+     */
+    static void unsubscribeEach(List<EventStoreSubscription> subscriptions) {
+        if (subscriptions == null) {
+            return;
+        }
+        RuntimeException failure = null;
+        for (var subscription : subscriptions) {
+            try {
+                subscription.unsubscribe();
+            } catch (RuntimeException e) {
+                if (failure == null) {
+                    failure = e;
+                } else {
+                    failure.addSuppressed(e);
+                }
+            }
+        }
+        if (failure != null) {
+            throw failure;
+        }
+    }
+
+    /**
      * Creates and returns a {@link Consumer} to handle queued messages. The consumer processes the
      * given message by distinguishing between ordered messages containing event references and
      * other generic messages. For event references, it fetches the associated event from the

@@ -287,7 +287,8 @@ public abstract class InTransactionEventProcessor implements Lifecycle {
             log.info("⚙️ [{}] Stopping InTransactionEventProcessor",
                      getProcessorName());
 
-            eventStoreSubscriptions.forEach(Lifecycle::stop);
+            // Unsubscribed, not just stopped, so start() subscribes anew - see AbstractEventProcessor#unsubscribeEach
+            AbstractEventProcessor.unsubscribeEach(eventStoreSubscriptions);
         }
     }
 

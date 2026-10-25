@@ -21,7 +21,6 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ev
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.EventJSON;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.*;
-import dk.trustworks.essentials.components.foundation.Lifecycle;
 import dk.trustworks.essentials.components.foundation.fencedlock.*;
 import dk.trustworks.essentials.components.foundation.messaging.*;
 import dk.trustworks.essentials.components.foundation.messaging.eip.store_and_forward.*;
@@ -310,6 +309,11 @@ public abstract class EventProcessor extends AbstractEventProcessor {
                                                         .redeliveryPolicy(getInboxRedeliveryPolicy())
                                                         .build(),
                                              inboxMessageHandlerDelegate);
+            // The Inbox outlives a stop(): Inbox#stopConsuming() drops its message consumer, and getOrCreateInbox
+            // returns the existing Inbox as it is, so a processor started again consumes from it again here
+            if (!inbox.hasAMessageConsumer()) {
+                inbox.consume(inboxMessageHandlerDelegate);
+            }
             durableQueueName = inbox.name().asQueueName();
 
             eventStoreSubscriptions = subscribeToEventsRelatedTo.stream()
@@ -373,8 +377,13 @@ public abstract class EventProcessor extends AbstractEventProcessor {
             started = false;
             log.info("⚙️ [{}] Stopping EventProcessor",
                      getProcessorName());
-            eventStoreSubscriptions.forEach(Lifecycle::stop);
-            inbox.stopConsuming();
+            // Unsubscribed, not just stopped, so start() subscribes anew - see AbstractEventProcessor#unsubscribeEach.
+            // The (unsubscribed) subscriptions are kept: resetAllSubscriptions/resetSubscriptions still find them
+            try {
+                unsubscribeEach(eventStoreSubscriptions);
+            } finally {
+                inbox.stopConsuming();
+            }
         }
     }
 

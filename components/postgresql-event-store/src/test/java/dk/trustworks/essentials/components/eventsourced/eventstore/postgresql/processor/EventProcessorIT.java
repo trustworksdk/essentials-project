@@ -280,6 +280,82 @@ public class EventProcessorIT {
     }
 
     /**
+     * A stopped processor that is started again subscribes again with the same subscriber ids. Its stop() must therefore
+     * unsubscribe, not just stop, its subscriptions - the manager hands a subscription it still holds back to that
+     * subscribe call without starting it - and its start() must consume from the Inbox its stop() stopped consuming
+     */
+    @Test
+    void an_event_processor_that_is_stopped_and_started_again_handles_an_event_appended_after_the_restart() {
+        // Running before it stops: the subscription holds its fenced lock and the Inbox consumes. Not straight after
+        // start(): a stop before the first lock-acquiring tick is a separate known race, which this test does not cover
+        Awaitility.waitAtMost(Duration.ofSeconds(10))
+                  .until(() -> testProcessor.isActive() && testProcessor.getInboxForTesting().isConsumingMessages());
+        testProcessor.stop();
+        testProcessor.start();
+        assertThat(testProcessor.isStarted()).isTrue();
+
+        var orderId = OrderId.random();
+        var placed = unitOfWorkFactory.withUnitOfWork(() -> eventStore.startStream(TEST_ORDERS, orderId, List.of(new OrderPlacedEvent(orderId, "Test order details")))
+                                                                      .firstEvent());
+
+        testProcessor.awaitProcessed(placed, Duration.ofSeconds(10));
+        Awaitility.waitAtMost(Duration.ofSeconds(10))
+                  .untilAsserted(() -> assertThat(testProcessor.getOrderPlacedEventCounter().get()).isEqualTo(1));
+    }
+
+    /**
+     * The {@link InTransactionEventProcessor} counterpart of
+     * {@link #an_event_processor_that_is_stopped_and_started_again_handles_an_event_appended_after_the_restart()}
+     */
+    @Test
+    void an_in_transaction_processor_that_is_stopped_and_started_again_handles_an_event_appended_after_the_restart() {
+        var inTransactionProcessor = new TestInTransactionOrderProcessor(new EventProcessorDependencies(eventStoreSubscriptionManager, inboxes, commandBus, List.of()));
+        inTransactionProcessor.start();
+        try {
+            inTransactionProcessor.stop();
+            inTransactionProcessor.start();
+            assertThat(inTransactionProcessor.isStarted()).isTrue();
+
+            var orderId = OrderId.random();
+            unitOfWorkFactory.usingUnitOfWork(() -> eventStore.startStream(TEST_ORDERS, orderId, List.of(new OrderPlacedEvent(orderId, "Test order details"))));
+
+            assertThat(inTransactionProcessor.ordersPlaced).containsExactly(orderId);
+        } finally {
+            inTransactionProcessor.stop();
+        }
+    }
+
+    /**
+     * The exclusive ({@link InTransactionEventProcessor#isUseExclusively()}) variant of
+     * {@link #an_in_transaction_processor_that_is_stopped_and_started_again_handles_an_event_appended_after_the_restart()}:
+     * its subscriptions hand events to the handler only while they hold their fenced lock
+     */
+    @Test
+    void an_exclusive_in_transaction_processor_that_is_stopped_and_started_again_handles_an_event_appended_after_the_restart() {
+        var inTransactionProcessor = new TestInTransactionOrderProcessor(new EventProcessorDependencies(eventStoreSubscriptionManager, inboxes, commandBus, List.of()), true);
+        inTransactionProcessor.start();
+        try {
+            // Holding its fenced lock before it stops. Not straight after start(): a stop before the first lock-acquiring
+            // tick is a separate known race, which this test does not cover
+            Awaitility.waitAtMost(Duration.ofSeconds(10))
+                      .until(inTransactionProcessor::isActive);
+            inTransactionProcessor.stop();
+            inTransactionProcessor.start();
+            assertThat(inTransactionProcessor.isStarted()).isTrue();
+            // The restarted subscription acquires the fenced lock again before it hands events on
+            Awaitility.waitAtMost(Duration.ofSeconds(10))
+                      .until(inTransactionProcessor::isActive);
+
+            var orderId = OrderId.random();
+            unitOfWorkFactory.usingUnitOfWork(() -> eventStore.startStream(TEST_ORDERS, orderId, List.of(new OrderPlacedEvent(orderId, "Test order details"))));
+
+            assertThat(inTransactionProcessor.ordersPlaced).containsExactly(orderId);
+        } finally {
+            inTransactionProcessor.stop();
+        }
+    }
+
+    /**
      * Scenario 3A:
      * Send a FailingCommandSentUsingAsyncAndDontWaitViaCommandBus via the CommandBus. Its handler always throws an exception.
      * This test also verifies that such a command does not prevent the integration test from shutting down.
@@ -518,6 +594,10 @@ public class EventProcessorIT {
 
         public TestInTransactionOrderProcessor(EventProcessorDependencies eventProcessorDependencies) {
             super(eventProcessorDependencies);
+        }
+
+        public TestInTransactionOrderProcessor(EventProcessorDependencies eventProcessorDependencies, boolean useExclusively) {
+            super(eventProcessorDependencies, useExclusively);
         }
 
         @Override

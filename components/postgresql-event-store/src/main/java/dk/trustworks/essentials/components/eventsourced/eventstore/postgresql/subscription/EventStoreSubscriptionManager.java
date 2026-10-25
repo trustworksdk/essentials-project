@@ -42,6 +42,18 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * If a subscription is added, the {@link EventStoreSubscriptionManager} will ensure that the subscriber resumes from where
  * it left of the last time, or ensure that they start from the specified <code>onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder</code>
  * in case it's the very first time the subscriber is subscribing
+ * <p>
+ * <b>Subscribing again</b><br>
+ * The manager holds one subscription per {@link SubscriberId} and {@link AggregateType} from the subscribe call that
+ * created it until {@link EventStoreSubscription#unsubscribe()} (or {@link #unsubscribe(EventStoreSubscription)}) removes it.
+ * A subscribe call for a {@link SubscriberId} and {@link AggregateType} the manager already holds creates nothing: it
+ * returns the subscription the manager holds, as it is - its arguments (event handler included) are not used.
+ * Stopping a subscription directly ({@link EventStoreSubscription#stop()}) does not remove it, so a later subscribe returns
+ * that stopped subscription without starting it, and it stays stopped until something starts it: its own
+ * {@link EventStoreSubscription#start()}, or this manager being stopped and started again.
+ * To subscribe again, call {@link EventStoreSubscription#unsubscribe()} instead of {@link EventStoreSubscription#stop()} -
+ * as {@code EventProcessor}, {@code InTransactionEventProcessor} and {@code ViewEventProcessor} do.
+ * Unsubscribing also drops the in-memory gap middles the subscription awaited - see {@link EventStore#forgetGapMiddlesAwaitedInMemory}
  */
 @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
 public interface EventStoreSubscriptionManager extends Lifecycle {
@@ -78,7 +90,8 @@ public interface EventStoreSubscriptionManager extends Lifecycle {
      *                                                                for skipping instead ({@link SubscriptionErrorPolicy.Mode#SKIP}, {@link SubscriptionErrorPolicy.Mode#RETRY_N_THEN_SKIP}).
      *                                                                If you need a durable per-event retry capability
      *                                                                please use {@link #subscribeToAggregateEventsAsynchronously(SubscriberId, AggregateType, GlobalEventOrder, Optional, Inbox)}
-     * @return the subscription handle
+     * @return the subscription handle - the one this manager already holds for {@code subscriberId} and {@code forAggregateType}, as it is,
+     * when there is one (see "Subscribing again" in the {@link EventStoreSubscriptionManager} javadoc)
      */
     EventStoreSubscription subscribeToAggregateEventsAsynchronously(SubscriberId subscriberId,
                                                                     AggregateType forAggregateType,
@@ -112,7 +125,8 @@ public interface EventStoreSubscriptionManager extends Lifecycle {
      *                                                                Exceptions thrown from the eventHandler are handled according to the manager's {@link SubscriptionErrorPolicy}, applied to the
      *                                                                batch as a whole - by default ({@link SubscriptionErrorPolicy#defaultPolicy()}) the batch is retried, then the subscription stops
      *                                                                at it and resumes by itself until it succeeds. See {@link EventStoreSubscriptionManagerBuilder#setSubscriptionErrorPolicy(SubscriptionErrorPolicy)}.
-     * @return the subscription handle
+     * @return the subscription handle - the one this manager already holds for {@code subscriberId} and {@code forAggregateType}, as it is,
+     * when there is one (see "Subscribing again" in the {@link EventStoreSubscriptionManager} javadoc)
      */
     EventStoreSubscription batchSubscribeToAggregateEventsAsynchronously(SubscriberId subscriberId,
                                                                          AggregateType forAggregateType,
@@ -135,7 +149,8 @@ public interface EventStoreSubscriptionManager extends Lifecycle {
      *                                                                the {@link PersistedEvent#event()}'s {@link EventJSON#getJsonDeserialized()} as payload and the {@link PersistedEvent#aggregateId()} as {@link OrderedMessage#getKey()}
      *                                                                and the {@link PersistedEvent#eventOrder()} as {@link OrderedMessage#getOrder()}.<br>
      *                                                                This reuses the {@link Inbox} ability to retry event deliveries
-     * @return the subscription handle
+     * @return the subscription handle - the one this manager already holds for {@code subscriberId} and {@code forAggregateType}, as it is,
+     * when there is one (see "Subscribing again" in the {@link EventStoreSubscriptionManager} javadoc)
      */
     default EventStoreSubscription subscribeToAggregateEventsAsynchronously(SubscriberId subscriberId,
                                                                             AggregateType forAggregateType,
@@ -164,7 +179,8 @@ public interface EventStoreSubscriptionManager extends Lifecycle {
      *                                                                the {@link PersistedEvent#event()}'s {@link EventJSON#getJsonDeserialized()} as payload and the {@link PersistedEvent#aggregateId()} as {@link OrderedMessage#getKey()}
      *                                                                and the {@link PersistedEvent#eventOrder()} as {@link OrderedMessage#getOrder()}.<br>
      *                                                                This reuses the {@link Inbox} ability to retry event deliveries
-     * @return the subscription handle
+     * @return the subscription handle - the one this manager already holds for {@code subscriberId} and {@code forAggregateType}, as it is,
+     * when there is one (see "Subscribing again" in the {@link EventStoreSubscriptionManager} javadoc)
      */
     default EventStoreSubscription subscribeToAggregateEventsAsynchronously(SubscriberId subscriberId,
                                                                             AggregateType forAggregateType,
@@ -194,7 +210,8 @@ public interface EventStoreSubscriptionManager extends Lifecycle {
      *                                                                for skipping instead ({@link SubscriptionErrorPolicy.Mode#SKIP}, {@link SubscriptionErrorPolicy.Mode#RETRY_N_THEN_SKIP}).
      *                                                                If you need a durable per-event retry capability
      *                                                                please use {@link #subscribeToAggregateEventsAsynchronously(SubscriberId, AggregateType, GlobalEventOrder, Inbox)}
-     * @return the subscription handle
+     * @return the subscription handle - the one this manager already holds for {@code subscriberId} and {@code forAggregateType}, as it is,
+     * when there is one (see "Subscribing again" in the {@link EventStoreSubscriptionManager} javadoc)
      */
     default EventStoreSubscription subscribeToAggregateEventsAsynchronously(SubscriberId subscriberId,
                                                                             AggregateType forAggregateType,
@@ -222,7 +239,8 @@ public interface EventStoreSubscriptionManager extends Lifecycle {
      *                                                                for skipping instead ({@link SubscriptionErrorPolicy.Mode#SKIP}, {@link SubscriptionErrorPolicy.Mode#RETRY_N_THEN_SKIP}).
      *                                                                If you need a durable per-event retry capability
      *                                                                please use {@link #subscribeToAggregateEventsAsynchronously(SubscriberId, AggregateType, GlobalEventOrder, Inbox)}
-     * @return A subscription object that manages the lifecycle of the subscription.
+     * @return A subscription object that manages the lifecycle of the subscription - the one this manager already holds for {@code subscriberId}
+     * and {@code forAggregateType}, as it is, when there is one (see "Subscribing again" in the {@link EventStoreSubscriptionManager} javadoc)
      */
     default EventStoreSubscription subscribeToAggregateEventsAsynchronously(SubscriberId subscriberId,
                                                                             AggregateType forAggregateType,
@@ -254,7 +272,8 @@ public interface EventStoreSubscriptionManager extends Lifecycle {
      *                                                                for skipping instead ({@link SubscriptionErrorPolicy.Mode#SKIP}, {@link SubscriptionErrorPolicy.Mode#RETRY_N_THEN_SKIP}).
      *                                                                If you need a durable per-event retry capability
      *                                                                please use {@link #exclusivelySubscribeToAggregateEventsAsynchronously(SubscriberId, AggregateType, GlobalEventOrder, Optional, FencedLockAwareSubscriber, Inbox)}
-     * @return the subscription handle
+     * @return the subscription handle - the one this manager already holds for {@code subscriberId} and {@code forAggregateType}, as it is,
+     * when there is one (see "Subscribing again" in the {@link EventStoreSubscriptionManager} javadoc)
      */
     default EventStoreSubscription exclusivelySubscribeToAggregateEventsAsynchronously(SubscriberId subscriberId,
                                                                                        AggregateType forAggregateType,
@@ -291,7 +310,8 @@ public interface EventStoreSubscriptionManager extends Lifecycle {
      *                                                                for skipping instead ({@link SubscriptionErrorPolicy.Mode#SKIP}, {@link SubscriptionErrorPolicy.Mode#RETRY_N_THEN_SKIP}).
      *                                                                If you need a durable per-event retry capability
      *                                                                please use {@link #exclusivelySubscribeToAggregateEventsAsynchronously(SubscriberId, AggregateType, GlobalEventOrder, Optional, FencedLockAwareSubscriber, Inbox)}
-     * @return the subscription handle
+     * @return the subscription handle - the one this manager already holds for {@code subscriberId} and {@code forAggregateType}, as it is,
+     * when there is one (see "Subscribing again" in the {@link EventStoreSubscriptionManager} javadoc)
      */
     EventStoreSubscription exclusivelySubscribeToAggregateEventsAsynchronously(SubscriberId subscriberId,
                                                                                AggregateType forAggregateType,
@@ -318,7 +338,8 @@ public interface EventStoreSubscriptionManager extends Lifecycle {
      *                                                                for skipping instead ({@link SubscriptionErrorPolicy.Mode#SKIP}, {@link SubscriptionErrorPolicy.Mode#RETRY_N_THEN_SKIP}).
      *                                                                If you need a durable per-event retry capability
      *                                                                please use {@link #exclusivelySubscribeToAggregateEventsAsynchronously(SubscriberId, AggregateType, GlobalEventOrder, FencedLockAwareSubscriber, Inbox)}
-     * @return the subscription handle
+     * @return the subscription handle - the one this manager already holds for {@code subscriberId} and {@code forAggregateType}, as it is,
+     * when there is one (see "Subscribing again" in the {@link EventStoreSubscriptionManager} javadoc)
      */
     default EventStoreSubscription exclusivelySubscribeToAggregateEventsAsynchronously(SubscriberId subscriberId,
                                                                                        AggregateType forAggregateType,
@@ -349,7 +370,8 @@ public interface EventStoreSubscriptionManager extends Lifecycle {
      *                                                                the {@link PersistedEvent#event()}'s {@link EventJSON#getJsonDeserialized()} as payload and the {@link PersistedEvent#aggregateId()} as {@link OrderedMessage#getKey()}
      *                                                                and the {@link PersistedEvent#eventOrder()} as {@link OrderedMessage#getOrder()}.<br>
      *                                                                This reuses the {@link Inbox} ability to retry event deliveries
-     * @return the subscription handle
+     * @return the subscription handle - the one this manager already holds for {@code subscriberId} and {@code forAggregateType}, as it is,
+     * when there is one (see "Subscribing again" in the {@link EventStoreSubscriptionManager} javadoc)
      */
     default EventStoreSubscription exclusivelySubscribeToAggregateEventsAsynchronously(SubscriberId subscriberId,
                                                                                        AggregateType forAggregateType,
@@ -383,7 +405,8 @@ public interface EventStoreSubscriptionManager extends Lifecycle {
      *                                                                the {@link PersistedEvent#event()}'s {@link EventJSON#getJsonDeserialized()} as payload and the {@link PersistedEvent#aggregateId()} as {@link OrderedMessage#getKey()}
      *                                                                and the {@link PersistedEvent#eventOrder()} as {@link OrderedMessage#getOrder()}.<br>
      *                                                                This reuses the {@link Inbox} ability to retry event deliveries
-     * @return the subscription handle
+     * @return the subscription handle - the one this manager already holds for {@code subscriberId} and {@code forAggregateType}, as it is,
+     * when there is one (see "Subscribing again" in the {@link EventStoreSubscriptionManager} javadoc)
      */
     default EventStoreSubscription exclusivelySubscribeToAggregateEventsAsynchronously(SubscriberId subscriberId,
                                                                                        AggregateType forAggregateType,
@@ -416,7 +439,8 @@ public interface EventStoreSubscriptionManager extends Lifecycle {
      *                                                                for skipping instead ({@link SubscriptionErrorPolicy.Mode#SKIP}, {@link SubscriptionErrorPolicy.Mode#RETRY_N_THEN_SKIP}).
      *                                                                If you need a durable per-event retry capability
      *                                                                please use {@link #exclusivelySubscribeToAggregateEventsAsynchronously(SubscriberId, AggregateType, GlobalEventOrder, FencedLockAwareSubscriber, Inbox)}
-     * @return the subscription handle
+     * @return the subscription handle - the one this manager already holds for {@code subscriberId} and {@code forAggregateType}, as it is,
+     * when there is one (see "Subscribing again" in the {@link EventStoreSubscriptionManager} javadoc)
      */
     default <HANDLER extends PersistedEventHandler & FencedLockAwareSubscriber> EventStoreSubscription exclusivelySubscribeToAggregateEventsAsynchronously(SubscriberId subscriberId,
                                                                                                                                                            AggregateType forAggregateType,
@@ -447,7 +471,8 @@ public interface EventStoreSubscriptionManager extends Lifecycle {
      *                                                                for skipping instead ({@link SubscriptionErrorPolicy.Mode#SKIP}, {@link SubscriptionErrorPolicy.Mode#RETRY_N_THEN_SKIP}).
      *                                                                If you need a durable per-event retry capability
      *                                                                please use {@link #exclusivelySubscribeToAggregateEventsAsynchronously(SubscriberId, AggregateType, GlobalEventOrder, Optional, FencedLockAwareSubscriber, Inbox)}
-     * @return the subscription handle
+     * @return the subscription handle - the one this manager already holds for {@code subscriberId} and {@code forAggregateType}, as it is,
+     * when there is one (see "Subscribing again" in the {@link EventStoreSubscriptionManager} javadoc)
      */
     default <HANDLER extends PersistedEventHandler & FencedLockAwareSubscriber> EventStoreSubscription exclusivelySubscribeToAggregateEventsAsynchronously(SubscriberId subscriberId,
                                                                                                                                                            AggregateType forAggregateType,
@@ -469,7 +494,8 @@ public interface EventStoreSubscriptionManager extends Lifecycle {
      * @param subscriberId     the unique id for the subscriber
      * @param forAggregateType the type of aggregate that we're subscribing for {@link PersistedEvent}'s related to
      * @param eventHandler     the event handler that will receive the published {@link PersistedEvent}'s. Exceptions thrown by this handler will cause the {@link UnitOfWork} to rollback
-     * @return the subscription handle
+     * @return the subscription handle - the one this manager already holds for {@code subscriberId} and {@code forAggregateType}, as it is,
+     * when there is one (see "Subscribing again" in the {@link EventStoreSubscriptionManager} javadoc)
      */
     default EventStoreSubscription subscribeToAggregateEventsInTransaction(SubscriberId subscriberId,
                                                                            AggregateType forAggregateType,
@@ -489,7 +515,8 @@ public interface EventStoreSubscriptionManager extends Lifecycle {
      * @param forAggregateType           the type of aggregate that we're subscribing for {@link PersistedEvent}'s related to
      * @param onlyIncludeEventsForTenant if {@link Optional#isPresent()} then only include events that belong to the specified {@link Tenant}, otherwise all Events matching the criteria are returned
      * @param eventHandler               the event handler that will receive the published {@link PersistedEvent}'s. Exceptions thrown by this handler will cause the {@link UnitOfWork} to rollback
-     * @return the subscription handle
+     * @return the subscription handle - the one this manager already holds for {@code subscriberId} and {@code forAggregateType}, as it is,
+     * when there is one (see "Subscribing again" in the {@link EventStoreSubscriptionManager} javadoc)
      */
     EventStoreSubscription exclusivelySubscribeToAggregateEventsInTransaction(SubscriberId subscriberId,
                                                                               AggregateType forAggregateType,
@@ -504,7 +531,8 @@ public interface EventStoreSubscriptionManager extends Lifecycle {
      * @param forAggregateType           the type of aggregate that we're subscribing for {@link PersistedEvent}'s related to
      * @param onlyIncludeEventsForTenant if {@link Optional#isPresent()} then only include events that belong to the specified {@link Tenant}, otherwise all Events matching the criteria are returned
      * @param eventHandler               the event handler that will receive the published {@link PersistedEvent}'s. Exceptions thrown by this handler will cause the {@link UnitOfWork} to rollback
-     * @return the subscription handle
+     * @return the subscription handle - the one this manager already holds for {@code subscriberId} and {@code forAggregateType}, as it is,
+     * when there is one (see "Subscribing again" in the {@link EventStoreSubscriptionManager} javadoc)
      */
     EventStoreSubscription subscribeToAggregateEventsInTransaction(SubscriberId subscriberId,
                                                                    AggregateType forAggregateType,
@@ -522,7 +550,8 @@ public interface EventStoreSubscriptionManager extends Lifecycle {
      *                                   the {@link PersistedEvent#event()}'s {@link EventJSON#getJsonDeserialized()} as payload and the {@link PersistedEvent#aggregateId()} as {@link OrderedMessage#getKey()}
      *                                   and the {@link PersistedEvent#eventOrder()} as {@link OrderedMessage#getOrder()}.<br>
      *                                   This reuses the {@link Inbox} ability to retry event deliveries
-     * @return the subscription handle
+     * @return the subscription handle - the one this manager already holds for {@code subscriberId} and {@code forAggregateType}, as it is,
+     * when there is one (see "Subscribing again" in the {@link EventStoreSubscriptionManager} javadoc)
      */
     default EventStoreSubscription subscribeToAggregateEventsInTransaction(SubscriberId subscriberId,
                                                                            AggregateType forAggregateType,
@@ -548,7 +577,8 @@ public interface EventStoreSubscriptionManager extends Lifecycle {
      *                         the {@link PersistedEvent#event()}'s {@link EventJSON#getJsonDeserialized()} as payload and the {@link PersistedEvent#aggregateId()} as {@link OrderedMessage#getKey()}
      *                         and the {@link PersistedEvent#eventOrder()} as {@link OrderedMessage#getOrder()}.<br>
      *                         This reuses the {@link Inbox} ability to retry event deliveries
-     * @return the subscription handle
+     * @return the subscription handle - the one this manager already holds for {@code subscriberId} and {@code forAggregateType}, as it is,
+     * when there is one (see "Subscribing again" in the {@link EventStoreSubscriptionManager} javadoc)
      */
     default EventStoreSubscription subscribeToAggregateEventsInTransaction(SubscriberId subscriberId,
                                                                            AggregateType forAggregateType,
@@ -591,6 +621,13 @@ public interface EventStoreSubscriptionManager extends Lifecycle {
                         .build();
     }
 
+    /**
+     * Stops the subscription and removes it from this manager, so a later subscribe for its {@link SubscriberId} and
+     * {@link AggregateType} creates a new subscription, started at once when this manager is started - see "Subscribing again" in the
+     * {@link EventStoreSubscriptionManager} javadoc. Called by {@link EventStoreSubscription#unsubscribe()}
+     *
+     * @param eventStoreSubscription the subscription to unsubscribe
+     */
     void unsubscribe(EventStoreSubscription eventStoreSubscription);
 
     default boolean hasSubscription(EventStoreSubscription subscription) {
