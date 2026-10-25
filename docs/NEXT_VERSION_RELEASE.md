@@ -9,16 +9,18 @@ _Add an entry in the same commit as the change. Cite the commit or PR. Write it 
 changes for them, and what they must do, if anything. Purely internal refactors, test-only changes and CI
 plumbing that no user sees go in §7 at most, as one line._
 
-**So far:** no public API removed, but six changes can break code written against 0.60.0 (§1): two additions that
+**So far:** no public API removed, but seven changes can break code written against 0.60.0 (§1): two additions that
 can stop a processor subclass or `CommandHandler` implementation of your own compiling, a new `ShardOwnerSettings`
 record component that stops a record pattern over that record compiling (its 0.60.0 constructor still works,
-deprecated), and two runtime breaks: direct callers of `ShardOwnedStorage`'s 0.60.0 takeover-charge methods, which
-now throw, and `Subscription.close()` on the shard-owned engine, which now unsubscribes: a `PostgresqlMessageQueue`
+deprecated), and three runtime breaks: direct callers of `ShardOwnedStorage`'s 0.60.0 takeover-charge methods, which
+now throw, `Subscription.close()` on the shard-owned engine, which now unsubscribes: a `PostgresqlMessageQueue`
 subscription closed to pause it is silently left stopped by the queue's `start()`, with no exception and nothing
-logged, and its own `start()` throws `IllegalStateException` (§1.1.23), and one admin API contract change: the
+logged, and its own `start()` throws `IllegalStateException` (§1.1.23), and the shard-owned Spring starter's schema
+contributor bean, whose type is now the engine's `ShardOwnedSchemaContributor`, so injecting the adapter's class of
+that name finds no bean; and one admin API contract change: the
 `queueName` of the shard-owned responses is now a string, not an object wrapping `value`. Twenty-four framework changes
 with a behaviour change (§1.1, §1.1.13–§1.1.24 in the durable queues and units of work), additive features (§2), bug
-fixes (§3), plugin releases `0.60.0-6` and `0.60.0-7`, and example and tooling updates. Beyond those six, the only
+fixes (§3), plugin releases `0.60.0-6` and `0.60.0-7`, and example and tooling updates. Beyond those seven, the only
 migration step is for `essentials.schema.mode=validate` deployments: re-run `emit` and apply the script before the
 first start (§1). Supported PostgreSQL is now 15+ (§1). The persisted
 format changes for one shape only, back to what 0.50 wrote: a type with a public `is`-getter (§1.1.2).
@@ -70,6 +72,13 @@ one of two ways. The queue's `start()` silently leaves the closed subscription s
 nothing, because that subscription is no longer registered with the queue. The subscription's own `start()` throws
 `IllegalStateException`. Pause a subscription you mean to start again with `Subscription.stop()`, which still keeps it
 registered.
+
+The shard-owned Spring starter (`spring-boot-starter-postgresql-queue-shard-owned`) now registers its schema contributor
+bean as the engine's `dk.trustworks.essentials.components.queue.shardowned.ShardOwnedSchemaContributor`; in 0.60.0 it
+was `postgresql-queue-shard-owned-adapter`'s class of the same name, which stays, deprecated for removal, but is a
+separate class, not a subtype of the engine's (§7). Code that injects the adapter's `ShardOwnedSchemaContributor` by
+type now gets no bean, and a bean of the adapter's type that you declare yourself no longer stands in for the
+starter's, which registers its own beside it. Inject, and declare, the engine's class instead (`a1dfba074`).
 
 The admin API contract declares the `queueName` of the shard-owned queue status, statistics, message and
 kept-unit-release responses (`ApiShardOwnedQueueStatus`, `ApiShardOwnedQueueStatistics`, `ApiShardOwnedMessage`,
@@ -1443,5 +1452,5 @@ Not published; listed because they are the reference for how to use the framewor
   is deprecated: use `PostgresqlUtil.ESSENTIALS_BOOTSTRAP_LOCK_KEY`, which it now equals by definition (`336372fa4`).
 - **`ShardOwnedSchemaContributor` moved into the engine**, as `dk.trustworks.essentials.components.queue.shardowned.ShardOwnedSchemaContributor`,
   now that the engine depends on `foundation`. The class of that name in `postgresql-queue-shard-owned-adapter` still
-  works, deprecated for removal, and delegates to it. The Spring starter's bean is now the engine's class: code that
-  injects the adapter's type by class gets no bean; inject the engine's (`a1dfba074`).
+  works, deprecated for removal, and delegates to it. The Spring starter's bean is now the engine's class, which
+  breaks injecting the adapter's (§1) (`a1dfba074`).

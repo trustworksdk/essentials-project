@@ -200,8 +200,9 @@ first; if confirmed, apply each table's changes in its own transaction, or take 
 (`RowLeaseQueueSession.fail`, `ShardQueueSession`) counts an attempt but discards the error, because the live lanes have
 no `last_error` column. When such a message later reaches its limit at a takeover, the takeover's dead-letter pass can
 only store the generic `EXHAUSTED_BY_TAKEOVERS` text (reworded in 0.60.1 so it no longer claims that no failure was
-recorded). **Fix:** add `last_error text` to both live tables (`ALTER TABLE ... ADD COLUMN IF NOT EXISTS` in
-`ShardOwnedSchema`, and the adapter's `ShardOwnedSchemaContributor`); have the session fail paths and the owner's retry
+recorded). **Fix:** add `last_error text` to both live tables (foundation's `PostgresqlSchemaStatements.addColumnUnlessPresent` in
+`ShardOwnedSchema`'s statements, which the engine's `ShardOwnedSchemaContributor` carries into the schema harness);
+have the session fail paths and the owner's retry
 path store `DeliveryErrorText` (`failSessionRow`, `countAndScheduleRetryIfOwned`); and have the takeover move write
 `COALESCE(stored error, EXHAUSTED_BY_TAKEOVERS)`. Check the schema golden tests and the WAL cost of the wider row on the
 failure path only.
