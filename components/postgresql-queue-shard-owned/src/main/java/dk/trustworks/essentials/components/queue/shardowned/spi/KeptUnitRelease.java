@@ -38,8 +38,10 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  *                         flush took its batch, or without a flush when the row was already found taken; as the row no
  *                         longer named the instance under the fence it was kept under, that flush may have been refused
  *                         and acknowledged nothing, so these keys do not say which messages are delivered again. On
- *                         {@link Outcome#BUSY} as they stood when asked. On {@link Outcome#RELEASED} their messages are
- *                         delivered again by whoever takes the unit next, possibly while these handlers still run them
+ *                         {@link Outcome#BUSY} as they stood when asked. On {@link Outcome#CLAIM_WAIT_TIMED_OUT} read
+ *                         when the request's flush took its batch, the unit still kept. On {@link Outcome#RELEASED} their
+ *                         messages are delivered again by whoever takes the unit next, possibly while these handlers
+ *                         still run them
  * @param longestInHandler how long the key handed to its handler first had been there, {@link Duration#ZERO} when no key
  *                         was in a handler
  * @param charged          how many messages in a handler were charged an attempt before the release, as a takeover
@@ -48,12 +50,14 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  *                         every other this entry has charged: a request asked again after a release that failed reports
  *                         the charge the earlier request committed, also once the handler has returned; asked again
  *                         while a key is still in its handler, the request makes the dead-letter moves that charge left
- *                         to make. {@code 0} on {@link Outcome#BUSY}, and when no key was in a handler and no earlier
+ *                         to make. {@code 0} on {@link Outcome#BUSY} and {@link Outcome#CLAIM_WAIT_TIMED_OUT}, and when
+ *                         no key was in a handler and no earlier
  *                         attempt to release the unit committed a charge. On
  *                         {@link Outcome#ALREADY_TAKEN} what was charged before the release found the row taken - nothing
  *                         when the row was already taken when the charge was made, as the charge is fenced too
  * @param deadLetteredKeys the keys whose message that charge brought to {@code maxAttempts}, and which were dead-lettered
- *                         by it, empty when none was (and on {@link Outcome#BUSY}). A key named here is blocked behind
+ *                         by it, empty when none was (and on {@link Outcome#BUSY} and {@link Outcome#CLAIM_WAIT_TIMED_OUT}).
+ *                         A key named here is blocked behind
  *                         its dead letter - its later messages are dead-lettered behind it rather than delivered - until
  *                         its dead letters are resurrected ({@link MessageQueue#resurrectKey}) or deleted
  */
@@ -64,15 +68,6 @@ public record KeptUnitRelease(int unit,
                               Duration longestInHandler,
                               int charged,
                               List<String> deadLetteredKeys) {
-
-    /**
-     * The SQL state of the {@link java.sql.SQLException} {@link MessageQueue#releaseKeptOrderedUnit} throws when the
-     * request's charge waited for another release of the unit's lease row to end for longer than the calling thread's
-     * network wait bound: PostgreSQL's {@code lock_not_available}. The request then charged, dead-lettered and released
-     * nothing, and asking again is safe, as on {@link Outcome#BUSY}'s first case. PostgreSQL raises the same state for a
-     * {@code lock_timeout}; see {@link MessageQueue#releaseKeptOrderedUnit}.
-     */
-    public static final String RELEASE_CLAIM_WAIT_TIMED_OUT_SQL_STATE = "55P03";
 
     /**
      * Keeps unmodifiable copies of {@code keysInHandler} and {@code deadLetteredKeys}, and refuses a charge that cannot
@@ -123,6 +118,17 @@ public record KeptUnitRelease(int unit,
          * takeover that gets there first gives no answer. A {@code BUSY} that comes back on every request (that WARN
          * logged at most once a minute per unit, the repeats at DEBUG) is to be investigated, not retried.
          */
-        BUSY
+        BUSY,
+        /**
+         * Nothing was charged, dead-lettered or released: the request flushed the unit's acknowledgements under the fence
+         * it was kept under, then, before its charge, waited for another release of the unit's
+         * lease row, whose statement was still running, to end for longer than the request's own wait bound for the
+         * database, and gave up. The unit stays kept, its lease row, as far as the instance knows, still naming it: ask
+         * again. Kept apart from {@link #BUSY}, whose first case did nothing because something else was working on the
+         * unit, and whose second points at a defect in the engine: this request got as far as the charge, and only its
+         * wait for that other release ran out. A statement that fails on the database - a PostgreSQL {@code lock_timeout} among them - is not
+         * answered with this: {@link MessageQueue#releaseKeptOrderedUnit} throws its {@link java.sql.SQLException}.
+         */
+        CLAIM_WAIT_TIMED_OUT
     }
 }

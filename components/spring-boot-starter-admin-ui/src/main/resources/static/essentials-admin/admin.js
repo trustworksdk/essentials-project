@@ -1529,7 +1529,8 @@ let shardOwnedState = { queue: null, lastRelease: null };
 const keptReleaseOutcome = {
     RELEASED: () => badge('warning', 'Released'),
     ALREADY_TAKEN: () => badge('neutral', 'Already taken - nothing released'),
-    BUSY: () => badge('neutral', 'Busy - nothing done, ask again')
+    BUSY: () => badge('neutral', 'Busy - nothing done, ask again'),
+    CLAIM_WAIT_TIMED_OUT: () => badge('neutral', 'Waited too long for another release of its lease row - nothing charged or released, ask again')
 };
 
 const keptReleaseNotice = (release) => `<div class="notice">

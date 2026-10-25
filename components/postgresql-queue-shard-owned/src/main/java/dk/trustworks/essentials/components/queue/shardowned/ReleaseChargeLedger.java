@@ -107,7 +107,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  *     A waiting charge waits for the claims of those later owners and for the release statement, and keeps its caller's
  *     connection, when it holds one, meanwhile. On a thread whose waits for the database are bounded
  *     ({@link NetworkWaitBound}: a stop's budget thread, the hand-back of a kept unit, a release on request) it waits no
- *     longer than that bound, then throws with nothing charged ({@link #RELEASE_CLAIM_WAIT_TIMED_OUT}), as the release
+ *     longer than that bound, then throws with nothing charged ({@link ReleaseClaimWaitTimedOutException}), as the release
  *     statement it waits for may run with no bound (a heartbeat tick's); with no bound, for as long as the claims are
  *     held;</li>
  *     <li>so a caller of {@link #charge}, {@link #owes}, {@link #owesDeadLetterMove}, {@link #answer} or
@@ -258,13 +258,14 @@ final class ReleaseChargeLedger {
     }
 
     /**
-     * The SQL state of the {@link SQLException} {@link #charge} throws when a release's claim outlasts the calling thread's
-     * network wait bound: PostgreSQL's {@code lock_not_available}, which a {@code lock_timeout} raises, as this is a wait
-     * for a lock - the claim - given up. Outside class {@code 08}, so the failure is not taken for one that may have gone
-     * through on the server ({@link LeaseRowState#mayHaveGoneThrough}): no statement was sent. Public on the SPI as
-     * {@link KeptUnitRelease#RELEASE_CLAIM_WAIT_TIMED_OUT_SQL_STATE}, as a release on request throws it to its caller.
+     * The SQL state of the {@link ReleaseClaimWaitTimedOutException} {@link #charge} throws when a release's claim outlasts
+     * the calling thread's network wait bound: PostgreSQL's {@code lock_not_available}, which a {@code lock_timeout} raises,
+     * as this is a wait for a lock - the claim - given up. Outside class {@code 08}, so the failure is not taken for one
+     * that may have gone through on the server ({@link LeaseRowState#mayHaveGoneThrough}): no statement was sent. The
+     * engine tells this wait from a {@code lock_timeout} by the exception's type, never by this state: a release on request
+     * answers it as {@link KeptUnitRelease.Outcome#CLAIM_WAIT_TIMED_OUT}.
      */
-    static final String RELEASE_CLAIM_WAIT_TIMED_OUT = KeptUnitRelease.RELEASE_CLAIM_WAIT_TIMED_OUT_SQL_STATE;
+    static final String RELEASE_CLAIM_WAIT_TIMED_OUT = "55P03";
 
     private final MessageId.Lane                lane;
     private final int                           shard;
@@ -456,11 +457,12 @@ final class ReleaseChargeLedger {
      * bound that was to free it. With no bound, as long as the claims it waits for are held. An interrupt of this thread
      * ends neither wait: it is set again on the thread once the wait is over. Called under {@link #monitor}.
      *
-     * @throws SQLException when the bound runs out with a claim still held. Nothing has been charged or recorded, so the
-     *                      ledger is as it was, and the SQL state ({@link #RELEASE_CLAIM_WAIT_TIMED_OUT}) is outside class
-     *                      {@code 08}: nothing was sent to the database ({@link LeaseRowState#mayHaveGoneThrough})
+     * @throws ReleaseClaimWaitTimedOutException when the bound runs out with a claim still held. Nothing has been charged
+     *                                           or recorded, so the ledger is as it was, and the SQL state
+     *                                           ({@link #RELEASE_CLAIM_WAIT_TIMED_OUT}) is outside class {@code 08}: nothing
+     *                                           was sent to the database ({@link LeaseRowState#mayHaveGoneThrough})
      */
-    private void awaitNoReleaseClaimed() throws SQLException {
+    private void awaitNoReleaseClaimed() throws ReleaseClaimWaitTimedOutException {
         var bound       = NetworkWaitBound.current();
         var boundNanos  = bound.map(ReleaseChargeLedger::saturatedNanos).orElse(0L);
         var started     = System.nanoTime();
@@ -474,12 +476,11 @@ final class ReleaseChargeLedger {
                     }
                     var remaining = boundNanos - (System.nanoTime() - started);
                     if (remaining <= 0) {
-                        throw new SQLException("Did not charge or dead-letter anything for unit " + shard + " on the " + lane
-                                                       + " lane before its release: a release of its lease row held its claim on "
-                                                       + "the unit for longer than this thread's network wait bound ("
-                                                       + bound.get() + "), so this charge did not start: nothing was charged "
-                                                       + "and no dead-letter move was made",
-                                               RELEASE_CLAIM_WAIT_TIMED_OUT);
+                        throw new ReleaseClaimWaitTimedOutException("Did not charge or dead-letter anything for unit " + shard + " on the "
+                                                                    + lane + " lane before its release: a release of its lease row "
+                                                                    + "held its claim on the unit for longer than this thread's "
+                                                                    + "network wait bound (" + bound.get() + "), so this charge did "
+                                                                    + "not start: nothing was charged and no dead-letter move was made");
                     }
                     TimeUnit.NANOSECONDS.timedWait(monitor, remaining);
                 } catch (InterruptedException e) {
@@ -532,8 +533,8 @@ final class ReleaseChargeLedger {
      *                   owner's state lock, never the other way round
      * @return what this ledger has charged and dead-lettered so far, this call included
      * @throws SQLException     when the calling thread's network wait bound runs out with a release of the owner's row
-     *                          still claimed: thrown before the candidates are taken, with SQL state
-     *                          {@link #RELEASE_CLAIM_WAIT_TIMED_OUT}, nothing charged and the ledger as it was. Or when the
+     *                          still claimed: a {@link ReleaseClaimWaitTimedOutException}, thrown before the candidates
+     *                          are taken, nothing charged and the ledger as it was. Or when the
      *                          charge, the lease lookup after a charge that left a row out, a dead-letter move, or
      *                          the dead-letter lookup after a move that threw fails; {@link #owes} then answers {@code true}.
      *                          A move that threw with no answer from the database may have committed on the server all the

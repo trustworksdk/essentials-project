@@ -2212,16 +2212,16 @@ class ShardOwnedUnsubscribeIT {
     /**
      * A release on request whose charge waits for another release of the kept unit's lease row to end - its claim on the
      * kept owner ({@link LeasedOwner#claimReleaseUnlessMoveOwed()}) held by the test here, as a release whose statement is
-     * still running holds it - for longer than the request's network wait bound: the request throws its
-     * {@link SQLException} with SQL state {@link KeptUnitRelease#RELEASE_CLAIM_WAIT_TIMED_OUT_SQL_STATE} once it has waited
-     * that long, having charged nothing, and the unit is left kept, its row naming the instance under the fence it was kept
-     * under. Asked again once that claim has ended, the unit is released and its message charged once: the request that
-     * gave up charged nothing for the one asked again to add to.
+     * still running holds it - for longer than the request's network wait bound: the request answers
+     * {@link KeptUnitRelease.Outcome#CLAIM_WAIT_TIMED_OUT}, rather than throwing, once it has waited that long, having
+     * charged nothing, and the unit is left kept, its row naming the instance under the fence it was kept under. Asked
+     * again once that claim has ended, the unit is released and its message charged once: the request that gave up
+     * charged nothing for the one asked again to add to.
      */
     @Test
     // awaitCallEnded shuts the request's executor down with a bound; close() would wait for it with none
     @SuppressWarnings("PMD.CloseResource")
-    void a_release_on_request_whose_charge_outwaits_another_release_of_the_units_lease_row_fails_with_nothing_charged_and_asked_again_releases_the_unit() throws Exception {
+    void a_release_on_request_whose_charge_outwaits_another_release_of_the_units_lease_row_answers_claim_wait_timed_out_with_nothing_charged_and_asked_again_releases_the_unit() throws Exception {
         // The request's network wait bound is max(leaseTtl, SHUTDOWN_BUDGET). No other instance runs here, so nothing takes
         // the unit once the stopped instance's membership row is older than leaseTtl.
         var         leaseTtl     = Duration.ofSeconds(3);
@@ -2265,13 +2265,17 @@ class ShardOwnedUnsubscribeIT {
                         throw new CompletionException(e);
                     }
                 }, requests);
-                assertThatThrownBy(() -> request.get(bound.plusSeconds(10).toMillis(), TimeUnit.MILLISECONDS))
-                        .as("the request fails with the charge's failure")
-                        .isInstanceOf(ExecutionException.class)
-                        .cause()
-                        .isInstanceOfSatisfying(SQLException.class, failure -> assertThat(failure.getSQLState())
-                                .isEqualTo(KeptUnitRelease.RELEASE_CLAIM_WAIT_TIMED_OUT_SQL_STATE))
-                        .hasMessageContaining("this charge did not start: nothing was charged");
+                assertThat(request.get(bound.plusSeconds(10).toMillis(), TimeUnit.MILLISECONDS).releases())
+                        .as("the request answers that its charge gave up waiting for the other release, rather than throwing")
+                        .singleElement()
+                        .satisfies(timedOut -> {
+                            assertThat(timedOut.outcome()).isEqualTo(KeptUnitRelease.Outcome.CLAIM_WAIT_TIMED_OUT);
+                            assertThat(timedOut.instanceId()).isEqualTo(INSTANCE_ID);
+                            assertThat(timedOut.unit()).isEqualTo(kept.shard());
+                            assertThat(timedOut.keysInHandler()).containsExactly("ACC-1");
+                            assertThat(timedOut.charged()).as("nothing charged").isZero();
+                            assertThat(timedOut.deadLetteredKeys()).isEmpty();
+                        });
                 assertThat(Duration.ofNanos(System.nanoTime() - started)).as("it waited for the claim as long as its network wait bound")
                                                                          .isGreaterThanOrEqualTo(bound);
                 assertThat(ordered.metrics().takeoverAttemptBumps.sum()).as("nothing charged").isZero();

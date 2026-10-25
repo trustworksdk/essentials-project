@@ -166,18 +166,18 @@ flushing it or another hand-back or release of it runs - nothing released, ask a
 earlier release's charge left owed was still to be made when the row was to be released - a guard behind the release
 sites that a release on request does not normally reach, as it makes every owed move before it releases, so a `BUSY`
 that comes back on every request (its WARN that the instance did not release the unit logged at most once a minute per
-unit, the repeats at DEBUG) points at a defect in the engine, to be investigated, not retried), and how many messages
-the release charged an
-attempt (`charged`) and which keys that charge dead-lettered (`deadLetteredKeys`; zero and empty on `BUSY`). A key in
+unit, the repeats at DEBUG) points at a defect in the engine, to be investigated, not retried) or `CLAIM_WAIT_TIMED_OUT`
+(its charge waited for another release of the unit's lease row to end longer than the request's network wait bound and
+did not start: nothing charged, dead-lettered or released, the unit still kept - ask again; over HTTP a 200 answer like
+the others), and how many messages the release charged an
+attempt (`charged`) and which keys that charge dead-lettered (`deadLetteredKeys`; zero and empty on `BUSY` and
+`CLAIM_WAIT_TIMED_OUT`). A key in
 `deadLetteredKeys` is blocked behind its dead letter until its dead letters are resurrected (`resurrectKey`) or
 deleted - follow up on those keys.
-Instead of an answer the request can fail with SQL state `55P03` (`KeptUnitRelease.RELEASE_CLAIM_WAIT_TIMED_OUT_SQL_STATE`):
-`MessageQueue.releaseKeptOrderedUnit` throws the `SQLException`, `ShardOwnedQueuesApi.releaseKeptOrderedUnit` a
-`MessageQueueException` with it as the cause and a message naming the state, and over HTTP it answers 500 (that message
-in the server's ERROR log). Its charge waited for another release of the unit's lease row to end longer than the
-request's network wait bound and did not start: nothing was charged, dead-lettered or released - ask again. PostgreSQL
-gives the same state to a statement that gave up waiting for a lock (`lock_timeout`); it was rolled back and asking
-again is safe too, as a later request does not charge again a message this one charged.
+A step that fails on the database - a statement that gave up waiting for a lock (`lock_timeout`) among them - still
+throws: `MessageQueue.releaseKeptOrderedUnit` its `SQLException`, `ShardOwnedQueuesApi.releaseKeptOrderedUnit` a
+`MessageQueueException` with it as the cause, and over HTTP it answers 500. A `lock_timeout` was rolled back and asking
+again is safe, as a later request does not charge again a message this one charged.
 Once released the unit no longer keeps an unsubscribed subscription's id out of use. The same
 bound covers a fair-share shed of an ordered unit and the hand-back of a unit whose pump died, which wait
 for the keys in their handlers: past it each releases the unit with every key still in a handler — the one

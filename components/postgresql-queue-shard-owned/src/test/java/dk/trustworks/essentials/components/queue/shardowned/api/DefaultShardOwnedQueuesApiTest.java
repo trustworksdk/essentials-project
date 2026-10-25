@@ -22,13 +22,14 @@ import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Proxy;
 import java.sql.SQLException;
+import java.time.Duration;
 import java.util.*;
 
 import static org.assertj.core.api.Assertions.*;
 
 /**
- * How {@link DefaultShardOwnedQueuesApi} reports a {@link MessageQueue#releaseKeptOrderedUnit} that threw, without a
- * database: the queue is a stand-in that throws the {@link SQLException} it is given. The rest of the API is covered
+ * How {@link DefaultShardOwnedQueuesApi} reports what {@link MessageQueue#releaseKeptOrderedUnit} answered or threw,
+ * without a database: the queue is a stand-in that answers, or throws, what it is given. The rest of the API is covered
  * against a real database by {@code ShardOwnedQueuesApiIT}.
  */
 class DefaultShardOwnedQueuesApiTest {
@@ -36,23 +37,40 @@ class DefaultShardOwnedQueuesApiTest {
     private static final QueueName QUEUE = QueueName.of("api-kept-unit");
 
     @Test
-    void a_release_on_request_that_gave_up_waiting_for_another_release_of_the_units_row_is_reported_as_safe_to_ask_again() {
-        var timedOut = new SQLException("a release of its lease row held its claim", KeptUnitRelease.RELEASE_CLAIM_WAIT_TIMED_OUT_SQL_STATE);
-        var api      = apiOverAQueueThrowing(timedOut);
+    void a_release_on_request_that_gave_up_waiting_for_another_release_of_the_units_row_is_answered_with_its_outcome_not_thrown() {
+        var timedOut = new KeptUnitRelease(3, "instance-1", KeptUnitRelease.Outcome.CLAIM_WAIT_TIMED_OUT, List.of("ACC-1"),
+                                           Duration.ofMillis(1500), 0, List.of());
+        var api = apiOverAQueue(new KeptUnitReleases(List.of("instance-1"), List.of(timedOut)), null);
 
-        assertThatThrownBy(() -> api.releaseKeptOrderedUnit(new Object(), QUEUE, "instance-1", 3))
-                .isInstanceOf(MessageQueueException.class)
-                .hasMessageContaining("Failed to release kept ordered unit 3 of instance 'instance-1' of queue 'api-kept-unit'")
-                .hasMessageContaining("SQL state 55P03")
-                .hasMessageContaining("released nothing")
-                .hasMessageContaining("Asking again is safe")
-                .cause().isSameAs(timedOut);
+        var answer = api.releaseKeptOrderedUnit(new Object(), QUEUE, "instance-1", 3);
+
+        assertThat(answer.answeredBy()).containsExactly("instance-1");
+        assertThat(answer.releases()).singleElement().satisfies(release -> {
+            assertThat(release.outcome()).isEqualTo("CLAIM_WAIT_TIMED_OUT");
+            assertThat(release.queueName()).isEqualTo(QUEUE);
+            assertThat(release.unit()).isEqualTo(3);
+            assertThat(release.keysInHandler()).containsExactly("ACC-1");
+            assertThat(release.charged()).as("nothing charged").isZero();
+            assertThat(release.deadLetteredKeys()).isEmpty();
+        });
     }
 
     @Test
-    void a_release_on_request_that_failed_otherwise_is_not_reported_as_safe_to_ask_again() {
+    void a_release_on_request_whose_statement_gave_up_waiting_for_a_lock_on_the_database_is_thrown() {
+        // PostgreSQL's lock_timeout: the same SQL state the engine's own claim wait once carried, still a failure
+        var lockTimeout = new SQLException("canceling statement due to lock timeout", "55P03");
+        var api         = apiOverAQueue(null, lockTimeout);
+
+        assertThatThrownBy(() -> api.releaseKeptOrderedUnit(new Object(), QUEUE, "instance-1", 3))
+                .isInstanceOf(MessageQueueException.class)
+                .hasMessage("Failed to release kept ordered unit 3 of instance 'instance-1' of queue 'api-kept-unit'")
+                .cause().isSameAs(lockTimeout);
+    }
+
+    @Test
+    void a_release_on_request_that_failed_otherwise_is_thrown() {
         var lost = new SQLException("connection lost", "08006");
-        var api  = apiOverAQueueThrowing(lost);
+        var api  = apiOverAQueue(null, lost);
 
         assertThatThrownBy(() -> api.releaseKeptOrderedUnit(new Object(), QUEUE, "instance-1", 3))
                 .isInstanceOf(MessageQueueException.class)
@@ -62,16 +80,19 @@ class DefaultShardOwnedQueuesApiTest {
 
     /**
      * The API over a registry holding {@link #QUEUE} alone, whose {@link MessageQueue#releaseKeptOrderedUnit} throws
-     * {@code failure}; every principal is allowed.
+     * {@code failure} when it is given, and answers {@code answer} otherwise; every principal is allowed.
      */
     // MessageQueue's own loader, not the thread's context loader: a proxy class must be defined in a loader that sees
     // its interface, which the context loader need not.
     @SuppressWarnings("PMD.UseProperClassLoader")
-    private static ShardOwnedQueuesApi apiOverAQueueThrowing(SQLException failure) {
+    private static ShardOwnedQueuesApi apiOverAQueue(KeptUnitReleases answer, SQLException failure) {
         var queue = (MessageQueue) Proxy.newProxyInstance(MessageQueue.class.getClassLoader(), new Class<?>[]{MessageQueue.class},
                                                           (proxy, method, args) -> {
                                                               if ("releaseKeptOrderedUnit".equals(method.getName())) {
-                                                                  throw failure;
+                                                                  if (failure != null) {
+                                                                      throw failure;
+                                                                  }
+                                                                  return answer;
                                                               }
                                                               throw new UnsupportedOperationException(method.getName());
                                                           });

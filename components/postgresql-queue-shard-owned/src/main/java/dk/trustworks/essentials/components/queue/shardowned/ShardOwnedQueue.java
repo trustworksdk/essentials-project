@@ -3837,8 +3837,12 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * still not flushed it is given up on then, and released here rather than answered {@code BUSY} for as long as that
      * flush hangs. More than one kept entry can name the unit - a run of this queue that took it
      * over past {@code stuckHandlerTimeout} and whose stop kept it again lists its entry after the earlier one - so each is
-     * tried in turn until one is released; with none released, the answer is {@code BUSY} when any entry was, else
-     * {@code ALREADY_TAKEN}.
+     * tried in turn until one is released; with none released, the answer is {@code CLAIM_WAIT_TIMED_OUT} when any entry
+     * was, else {@code BUSY} when any entry was, else {@code ALREADY_TAKEN}. An entry is answered
+     * {@link KeptUnitRelease.Outcome#CLAIM_WAIT_TIMED_OUT} when its charge waited for another release of the owner's lease
+     * row to end ({@link LeasedOwner#claimReleaseUnlessMoveOwed()}) for longer than {@link #stopNetworkWaitBound()} and
+     * gave up ({@link ReleaseClaimWaitTimedOutException}): nothing was charged, dead-lettered or released, and the unit
+     * goes back where it was claimed from, its row still held.
      * <p>
      * Which keys are in a handler is read once per entry, under the claim, together with the batch of acknowledgements
      * the flush takes, and before the row is released ({@link OrderedShardOwner#flushAcksNamingKeysInHandler}), or
@@ -3911,11 +3915,10 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * @throws SQLException when the flush, the charge or the release fails, or waits for an answer longer than
      *                      {@link #stopNetworkWaitBound()}; the unit is then left as it was, kept, for a later hand-back
      *                      or request, and a later request does not charge again what this one's charge was seen to
-     *                      commit. Thrown with SQL state {@link ReleaseChargeLedger#RELEASE_CLAIM_WAIT_TIMED_OUT} by the
-     *                      charge when another release of the owner's lease row held its claim on the owner
+     *                      commit. Not thrown when another release of the owner's lease row held its claim on the owner
      *                      ({@link LeasedOwner#claimReleaseUnlessMoveOwed()}) for longer than that bound: the charge did
-     *                      not start, so nothing was charged, dead-lettered or released, and asking again is safe
-     *                      ({@code MessageQueue.releaseKeptOrderedUnit}). Past the bound, a statement the driver
+     *                      not start, and that entry is answered {@link KeptUnitRelease.Outcome#CLAIM_WAIT_TIMED_OUT}
+     *                      instead. Past the bound, a statement the driver
      *                      stopped waiting for may still go through on the server: a charge that does leaves its
      *                      message charged, and a later request may charge it again; a dead-letter move that does leaves its message dead-lettered, and a later request,
      *                      or a hand-back once the handler has returned, makes the move again (the handler having
@@ -3944,6 +3947,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         // whose stop kept it again, lists its own entry after the earlier one, which still reads as holding its row until a
         // fenced write of it is refused. So an entry found taken or busy does not end the search: a later one may hold the row.
         KeptUnitRelease busy      = null;
+        KeptUnitRelease timedOut  = null;
         KeptUnitRelease owingMove = null;
         KeptUnitRelease taken     = null;
         for (var kept : keptOrderedOwners) {
@@ -3960,6 +3964,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             }
             var released         = false;
             var leftOutOwingMove = false;
+            var claimWaitedOut   = false;
             var inHandler        = Optional.<OrderedShardOwner.KeysInHandler>empty();
             var charge           = OrderedShardOwner.ReleaseCharge.NONE;
             try {
@@ -3993,6 +3998,14 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                     try {
                         try {
                             charge = chargeKeysInHandlerBeforeRelease(owner, OrderedShardOwner.ReleaseChargeScope.EVERY_KEY_IN_HANDLER, "on request");
+                        } catch (ReleaseClaimWaitTimedOutException e) {
+                            // Another release of the owner's row held its claim past this request's network wait bound, so
+                            // the charge did not start: nothing charged, dead-lettered or released, the ledger as it was.
+                            // Answered as an outcome, not thrown: the engine gave this wait up itself, and the caller asks
+                            // again. A statement the database failed - a lock_timeout among them - is still thrown.
+                            claimWaitedOut = true;
+                            log.debug("Instance {}: the charge before releasing ordered unit {} on queue {} on request gave up waiting "
+                                              + "for another release of its lease row", instanceId, unit, queueId, e);
                         } finally {
                             if (inHandler.isEmpty()) {
                                 // With no key in a handler, the release's own log line is an INFO, so the keys whose owed move
@@ -4002,13 +4015,15 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                                 reportOwedDeadLettersSettled(owner, settledBefore, releaseChargeSoFar(owner), "on request");
                             }
                         }
-                        var release = releaseLeaseRows(List.of(owner));
-                        // Left out, a dead-letter move of it still owed (releaseLeaseRows WARNed): not taken, so not
-                        // ALREADY_TAKEN, but BUSY. Not normally reached, as the charge above made every owed move or threw;
-                        // only a charge of the owner between it and the release leaves one owed, which the KeptUnit claim
-                        // rules out. Nothing is released, and the unit goes back where it was claimed from, as on a failure here.
-                        leftOutOwingMove = !release.released(owner);
-                        released = !leftOutOwingMove && release.rows() > 0;
+                        if (!claimWaitedOut) {
+                            var release = releaseLeaseRows(List.of(owner));
+                            // Left out, a dead-letter move of it still owed (releaseLeaseRows WARNed): not taken, so not
+                            // ALREADY_TAKEN, but BUSY. Not normally reached, as the charge above made every owed move or threw;
+                            // only a charge of the owner between it and the release leaves one owed, which the KeptUnit claim
+                            // rules out. Nothing is released, and the unit goes back where it was claimed from, as on a failure here.
+                            leftOutOwingMove = !release.released(owner);
+                            released = !leftOutOwingMove && release.rows() > 0;
+                        }
                     } catch (SQLException | RuntimeException | Error e) {
                         failure = e;
                         throw e;
@@ -4017,8 +4032,9 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                         // but only once the unit is released. Not released - the charge threw after a move, the release threw,
                         // the release left the unit out owing a move, or the row was found taken - the keys this request
                         // dead-lettered are named here: they are in the ledger from now on, so a later request or hand-back
-                        // with no key in a handler does not name them.
-                        if (!released && inHandler.isPresent()) {
+                        // with no key in a handler does not name them. A charge that gave up waiting for another release
+                        // dead-lettered nothing, so there is nothing to name.
+                        if (!released && !claimWaitedOut && inHandler.isPresent()) {
                             reportDeadLettersOfAnUnreleasedRequest(owner, inHandler.get(), settledBefore, releaseChargeSoFar(owner), failure,
                                                                    leftOutOwingMove);
                         }
@@ -4029,6 +4045,12 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             }
             if (released) {
                 return Optional.of(reportReleasedOnRequest(unit, inHandler, charge));
+            }
+            if (claimWaitedOut) {
+                // Its row still held, the unit back where it was claimed from: the search goes on, as for an entry not
+                // claimed. Nothing was charged, so the answer names no charge.
+                timedOut = keptUnitRelease(unit, KeptUnitRelease.Outcome.CLAIM_WAIT_TIMED_OUT, inHandler, OrderedShardOwner.ReleaseCharge.NONE);
+                continue;
             }
             if (leftOutOwingMove) {
                 // Its row still held: the search goes on, as for an entry not claimed, and the answer is BUSY. It names no
@@ -4041,8 +4063,16 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             }
             taken = keptUnitRelease(unit, KeptUnitRelease.Outcome.ALREADY_TAKEN, inHandler, charge);
         }
-        // Nothing released. Busy before taken: an entry that could not be claimed, or that was left out owing a move, may
-        // still hold the row, while one found taken holds nothing any more.
+        // Nothing released. Timed out and busy before taken: an entry whose charge gave up waiting for another release, one
+        // that could not be claimed, or one that was left out owing a move, may still hold the row, while one found taken
+        // holds nothing any more. Timed out first: that entry's row is held, and this request got as far as its charge.
+        if (timedOut != null) {
+            log.info("Instance {} did not release ordered unit {} on queue {} on request: before its charge it waited for another "
+                             + "release of the unit's lease row to end for longer than this request's network wait bound ({}), "
+                             + "and gave up. Nothing was charged, dead-lettered or released. Ask again",
+                     instanceId, unit, queueId, stopNetworkWaitBound());
+            return Optional.of(timedOut);
+        }
         if (busy != null) {
             log.info("Instance {} did not release ordered unit {} on queue {} on request: the stop that kept it is still flushing "
                              + "its acknowledgements, or another hand-back or release of it is running. Ask again",

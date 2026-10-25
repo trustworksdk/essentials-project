@@ -740,13 +740,13 @@ release on request makes every owed move before it releases, so it does not norm
 comes back on every request (its WARN logged at most once a minute per unit, as above, the repeats at DEBUG) points
 at a defect in the engine, to be investigated, not retried. A charge that starts while another release of the same
 unit's lease row is running waits for that release's statement to return; a `releaseKeptOrderedUnit`, a kept unit's
-hand-back and a `stop()` wait for it no longer than their network wait bound, then fail with nothing charged, as when
-their charge fails: the request throws its `SQLException`, with SQL state `55P03`
-(`KeptUnitRelease.RELEASE_CLAIM_WAIT_TIMED_OUT_SQL_STATE`), having released nothing - ask again; `ShardOwnedQueuesApi.releaseKeptOrderedUnit`'s
-`MessageQueueException` names that SQL state and says asking again is safe (over HTTP the request still answers 500;
-the message is in the server's ERROR log) - the hand-back is retried later, and a
-`stop()` leaves that unit's lease unreleased, with a WARN.
-(`6337f7d89`, `2fdeb3db0`, `bfa961ec5`, `dbae0986f`, `7dbd517be`, `e699c9d44`, `895b1a498`, `52c5e943e`, `56790ca82`, `b785a52b2`, `ab601d493`, `311efc4ad`, `055e013d6`, `4cce8acbb`, `29e3893d2`, `2c7ab3791`, `6be1d7215`, `d562a4253`, `4efa1654f`, `cbf8a9c41`, `40202d673`)
+hand-back and a `stop()` wait for it no longer than their network wait bound, then give up with nothing charged: the
+request answers a new `KeptUnitRelease.Outcome`, `CLAIM_WAIT_TIMED_OUT` (kept apart from `BUSY`), having charged,
+dead-lettered and released nothing - ask again; it is not thrown, so `ShardOwnedQueuesApi.releaseKeptOrderedUnit`
+returns it as an entry like the other outcomes (over HTTP a 200 answer; the admin console shows it as its own badge).
+A step that fails on the database - a PostgreSQL `lock_timeout` among them - still throws its `SQLException`. The
+hand-back is retried later, and a `stop()` leaves that unit's lease unreleased, with a WARN.
+(`6337f7d89`, `2fdeb3db0`, `bfa961ec5`, `dbae0986f`, `7dbd517be`, `e699c9d44`, `895b1a498`, `52c5e943e`, `56790ca82`, `b785a52b2`, `ab601d493`, `311efc4ad`, `055e013d6`, `4cce8acbb`, `29e3893d2`, `2c7ab3791`, `6be1d7215`, `d562a4253`, `4efa1654f`, `cbf8a9c41`, `40202d673`, `<!-- fix:U-044 -->`)
 
 **The unordered lane now charges a hung handler's delivery too, past the same bound.** It waits for no handler: a
 fair-share shed and a dead pump's hand-back release an unordered shard at once, and `stop()` once `shedGrace` has run
@@ -1017,11 +1017,12 @@ not during them, as on the ordered lane.
   the answering process has for the queue, so an empty `releases` from another process, or for another instance id,
   still says which process answered. Each entry of `releases` says `RELEASED` (with the keys in a handler when the release's flush took its batch
   of acknowledgements: a handler that returned before that is acknowledged and not named, and a key named is not
-  acknowledged), `ALREADY_TAKEN` or `BUSY`
+  acknowledged), `ALREADY_TAKEN`, `CLAIM_WAIT_TIMED_OUT` (nothing charged or released - ask again; §1.1.24) or `BUSY`
   (ask again) - `BUSY` too while the stop that kept the unit is still flushing it, except once the unit has been kept
   past the bound that gives such a unit up (§1.1.24): the call reviews the kept units first, so it then releases the
   unit rather than answering `BUSY`. Each entry also says how many messages in a handler the release charged an
-  attempt (`charged`) and which keys that charge dead-lettered (`deadLetteredKeys`; zero and empty on `BUSY`): such a
+  attempt (`charged`) and which keys that charge dead-lettered (`deadLetteredKeys`; zero and empty on `BUSY` and
+  `CLAIM_WAIT_TIMED_OUT`): such a
   key is blocked behind its dead letter until its dead letters are resurrected or deleted, so these are the keys that need a follow-up. A `default` method on both `MessageQueue` and `ShardOwnedQueuesApi` that releases nothing, so an
   implementation of your own of either still compiles. The admin console's Shard-owned queues page offers it as
   **Release kept unit**, which asks for the instance id and the unit, acts on the instance that takes the request and

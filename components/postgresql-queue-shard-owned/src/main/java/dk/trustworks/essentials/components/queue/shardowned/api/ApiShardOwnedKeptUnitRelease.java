@@ -41,7 +41,10 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  *                               before it releases: a {@code BUSY} that comes back on every request (its WARN that the
  *                               instance did not release the unit logged at most once a minute per unit, the repeats at
  *                               DEBUG) points at a defect in the engine, to be investigated, not retried (see
- *                               {@link KeptUnitRelease.Outcome#BUSY})
+ *                               {@link KeptUnitRelease.Outcome#BUSY}); {@code CLAIM_WAIT_TIMED_OUT} - nothing charged,
+ *                               dead-lettered or released: the request flushed the unit's acknowledgements, then gave
+ *                               up waiting for another release of its lease row to end, past the request's wait bound
+ *                               for the database - ask again (see {@link KeptUnitRelease.Outcome#CLAIM_WAIT_TIMED_OUT})
  * @param keysInHandler          the unit's keys still in a handler, as {@link KeptUnitRelease#keysInHandler()} reads them:
  *                               on {@code RELEASED} when the release's flush took its batch of acknowledgements, so a
  *                               handler that returned before that had its acknowledgement flushed and is not named, and
@@ -49,12 +52,13 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  *                               its batch, or without a flush when the row was already found taken, and as the row was
  *                               no longer held under that fence, that flush may have been refused and acknowledged
  *                               nothing, so these keys do not say which messages are delivered again; on {@code BUSY} as
- *                               they stood when asked. After
+ *                               they stood when asked; on {@code CLAIM_WAIT_TIMED_OUT} when that flush took its batch,
+ *                               the unit still kept. After
  *                               {@code RELEASED}, whoever takes the unit next delivers their messages again, possibly
  *                               while these handlers still run them
  * @param longestInHandlerMillis how long the key handed to its handler first had been there; zero when none was
  * @param charged                how many messages in a handler were charged an attempt before the release, as
- *                               {@link KeptUnitRelease#charged()} counts them; zero on {@code BUSY}, and when no key was in a
+ *                               {@link KeptUnitRelease#charged()} counts them; zero on {@code BUSY} and {@code CLAIM_WAIT_TIMED_OUT}, and when no key was in a
  *                               handler and no earlier attempt to release the unit committed a charge
  * @param deadLetteredKeys       the keys whose message that charge brought to {@code maxAttempts} and dead-lettered, as
  *                               {@link KeptUnitRelease#deadLetteredKeys()} names them; empty when none was. Each is blocked

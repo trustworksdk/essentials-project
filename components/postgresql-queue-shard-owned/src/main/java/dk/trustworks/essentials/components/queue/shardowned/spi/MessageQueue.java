@@ -351,14 +351,11 @@ public interface MessageQueue extends Lifecycle, AutoCloseable {
      *                      then left kept, as far as this instance knows: a statement whose answer the bound stopped
      *                      waiting for may still go through on the server, and a later request then answers
      *                      {@link KeptUnitRelease.Outcome#ALREADY_TAKEN}, or nothing for the unit, for a release that
-     *                      did. With SQL state {@link KeptUnitRelease#RELEASE_CLAIM_WAIT_TIMED_OUT_SQL_STATE}
-     *                      ({@code 55P03}) and the engine's own message, the charge waited for another release of the
-     *                      unit's lease row to end for longer than the calling thread's network wait bound and did not
-     *                      start: this request charged, dead-lettered and released nothing, and asking again is safe,
-     *                      as on {@link KeptUnitRelease.Outcome#BUSY}'s first case. PostgreSQL raises the same SQL
-     *                      state for a statement that gave up waiting for a lock ({@code lock_timeout}); that
-     *                      statement was rolled back, and asking again is safe then too: a later request does not
-     *                      charge again a message this one charged
+     *                      did. A charge that gave up waiting for another release of the unit's lease row to end is
+     *                      not thrown: it is answered {@link KeptUnitRelease.Outcome#CLAIM_WAIT_TIMED_OUT}. A
+     *                      statement that gave up waiting for a lock on the database (PostgreSQL's
+     *                      {@code lock_timeout}) is thrown like any other failure; it was rolled back, and asking
+     *                      again is safe: a later request does not charge again a message this one charged
      */
     default KeptUnitReleases releaseKeptOrderedUnit(String instanceId, int unit) throws SQLException {
         return KeptUnitReleases.NONE;
