@@ -18,12 +18,17 @@ package dk.trustworks.essentials.components.queue.shardowned;
 
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.*;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * {@link RateLimitedCount}, which {@link InDoubtReleaseFailures} and {@link OwedMoveReleaseRefusals} count on: the first
  * event is a WARN, later ones within the minute are logged at DEBUG, and the next WARN once the minute has passed counts
- * every event since the last one.
+ * every event since the last one. An event another thread records while a caller is taking the window is carried into
+ * the next WARN, not lost.
  */
 class RateLimitedCountTest {
     private static final long MINUTE = ErrorWindow.EVERY_NANOS;
@@ -55,5 +60,75 @@ class RateLimitedCountTest {
         assertThat(count.record(second)).as("two at DEBUG, and this one").isEqualTo(3);
         assertThat(count.record(second + 1)).as("the minute runs from the second warning").isZero();
         assertThat(count.record(second + MINUTE)).as("counted from the second warning").isEqualTo(2);
+    }
+
+    @Test
+    void a_record_landing_during_a_warning_is_counted_in_the_next_one() {
+        var first = 1_000L;
+        var other = new AtomicReference<Thread>();
+        var otherWarning = new AtomicInteger(-1);
+        var counter = new AtomicReference<RateLimitedCount>();
+        var window = new AtomicLong(ErrorWindow.NEVER_TAKEN);
+        // The other thread records once the first caller has taken the window, before that caller subtracts what it read
+        var count = new RateLimitedCount(now -> {
+            var taken = ErrorWindow.take(window, now);
+            if (taken && other.get() == null) {
+                var thread = new Thread(() -> otherWarning.set(counter.get().record(first + 1)), "other-recorder");
+                other.set(thread);
+                thread.start();
+                joinUninterruptibly(thread);
+            }
+            return taken;
+        });
+        counter.set(count);
+
+        assertThat(count.record(first)).as("the first caller read only its own event").isEqualTo(1);
+        assertThat(otherWarning.get()).as("the other thread's event, recorded inside the minute").isZero();
+        assertThat(count.record(first + MINUTE))
+                .as("the other thread's event is carried into the next warning, and this one")
+                .isEqualTo(2);
+    }
+
+    @Test
+    void every_event_recorded_from_several_threads_is_counted_in_exactly_one_warning() throws Exception {
+        var threads = 8;
+        var perThread = 20_000;
+        var count = new RateLimitedCount();
+        var clock = new AtomicLong(1_000L);
+        var warned = new AtomicLong();
+        var start = new CountDownLatch(1);
+        var pool = Executors.newFixedThreadPool(threads);
+        try {
+            var done = new ArrayList<Future<?>>();
+            for (var t = 0; t < threads; t++) {
+                done.add(pool.submit(() -> {
+                    start.await();
+                    for (var i = 0; i < perThread; i++) {
+                        warned.addAndGet(count.record(clock.addAndGet(MINUTE / 50)));
+                    }
+                    return null;
+                }));
+            }
+            start.countDown();
+            for (var future : done) {
+                future.get(30, TimeUnit.SECONDS);
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+
+        var pending = count.record(clock.get() + 2 * MINUTE) - 1;
+        assertThat(warned.get() + pending)
+                .as("the warnings' counts plus what is still pending add up to every event recorded")
+                .isEqualTo((long) threads * perThread);
+    }
+
+    private static void joinUninterruptibly(Thread thread) {
+        try {
+            thread.join();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(e);
+        }
     }
 }

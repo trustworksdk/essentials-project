@@ -17,6 +17,7 @@
 package dk.trustworks.essentials.components.queue.shardowned;
 
 import java.util.concurrent.atomic.*;
+import java.util.function.LongPredicate;
 
 /**
  * A rate-limited WARN that says how many times its event happened since the last one: an {@link ErrorWindow} plus a
@@ -31,8 +32,24 @@ import java.util.concurrent.atomic.*;
  * an event another thread recorded between the increment and the take is counted in the next WARN rather than lost.
  */
 final class RateLimitedCount {
-    private final AtomicLong    warning          = new AtomicLong(ErrorWindow.NEVER_TAKEN);
+    private final LongPredicate takeWarning;
     private final AtomicInteger sinceLastWarning = new AtomicInteger();
+
+    RateLimitedCount() {
+        var warning = new AtomicLong(ErrorWindow.NEVER_TAKEN);
+        this.takeWarning = now -> ErrorWindow.take(warning, now);
+    }
+
+    /**
+     * A test seam: {@code takeWarning} takes the window at the time it is given and answers whether this caller took
+     * it, as {@link ErrorWindow#take(AtomicLong, long)} does, so a test can record another event from a second thread
+     * after a caller has taken the window and before that caller subtracts what it read.
+     *
+     * @param takeWarning takes the window at the time it is given; whether this caller took it
+     */
+    RateLimitedCount(LongPredicate takeWarning) {
+        this.takeWarning = takeWarning;
+    }
 
     /**
      * Record one more event at {@code now} ({@code System.nanoTime()}, or an injected clock).
@@ -42,7 +59,7 @@ final class RateLimitedCount {
      */
     int record(long now) {
         var sinceWarning = sinceLastWarning.incrementAndGet();
-        if (ErrorWindow.take(warning, now)) {
+        if (takeWarning.test(now)) {
             sinceLastWarning.addAndGet(-sinceWarning);
             return sinceWarning;
         }
