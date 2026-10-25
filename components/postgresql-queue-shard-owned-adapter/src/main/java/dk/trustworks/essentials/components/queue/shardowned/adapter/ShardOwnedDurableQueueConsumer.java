@@ -158,16 +158,16 @@ class ShardOwnedDurableQueueConsumer implements DurableQueueConsumer {
      * that returns without doing anything.
      */
     private void deliver(MessageId messageId, String key, long keyOrder, byte[] payload, int payloadType) {
-        if (payloadType != MessageEnvelope.FORMAT_VERSION) {
+        if (!MessageEnvelope.isReadable(payloadType)) {
             throw new DurableQueueException(
-                    "Message was written in envelope format " + payloadType + ", and this adapter reads format "
-                            + MessageEnvelope.FORMAT_VERSION
+                    "Message was written in envelope format " + payloadType + ", and this adapter reads formats "
+                            + MessageEnvelope.FORMAT_VERSION_1 + " and " + MessageEnvelope.FORMAT_VERSION
                             + ". A message enqueued by something other than this adapter cannot be delivered through it.",
                     queueName());
         }
         // The order matters, not only the key: an EventProcessor's forwarded event is a reference whose order is the
         // event's position in its stream. Rebuilt as 0, every reference resolved to the aggregate's first event
-        var message = MessageEnvelope.deserialize(jsonSerializer, payload, key, keyOrder);
+        var message = MessageEnvelope.deserialize(jsonSerializer, payload, payloadType, key, keyOrder);
         var queuedMessage = ShardOwnedQueuedMessage.beingDelivered(queueName(),
                                                                    QueueEntryIdCodec.encode(queueName(), messageId),
                                                                    message);

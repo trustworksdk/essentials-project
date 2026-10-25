@@ -771,7 +771,7 @@ public class ShardOwnedDurableQueues implements DurableQueues {
     private ShardOwnedQueuedMessage toQueuedMessage(QueueName queueName, dk.trustworks.essentials.components.queue.shardowned.spi.QueuedMessage message) {
         return ShardOwnedQueuedMessage.read(QueueEntryIdCodec.encode(queueName, message.id()),
                                             queueName,
-                                            MessageEnvelope.deserialize(jsonSerializer, message.payload(),
+                                            MessageEnvelope.deserialize(jsonSerializer, message.payload(), message.payloadType(),
                                                                         message.key(), message.keyOrder()),
                                             message.attempts(),
                                             message.enqueuedAt(),
@@ -783,7 +783,7 @@ public class ShardOwnedDurableQueues implements DurableQueues {
     private ShardOwnedQueuedMessage toQueuedMessage(QueueName queueName, DeadLetter deadLetter) {
         return ShardOwnedQueuedMessage.read(QueueEntryIdCodec.encode(queueName, deadLetter.id()),
                                             queueName,
-                                            MessageEnvelope.deserialize(jsonSerializer, deadLetter.payload(),
+                                            MessageEnvelope.deserialize(jsonSerializer, deadLetter.payload(), deadLetter.payloadType(),
                                                                         deadLetter.key(), deadLetter.keyOrder()),
                                             deadLetter.attempts(),
                                             null,

@@ -12,8 +12,9 @@
 - Units of work: a long-standing bug is fixed where the JDBI and event-store units of work never ran `afterCommit`
   or `afterRollback` callbacks (see §1.0).
 
-There are no API removals, no schema changes and no change to the persisted message format. A few behaviours
-change in ways a test or a dashboard can notice; they are listed first.
+There are no API removals and no schema changes. The shard-owned adapter writes a new, cheaper message format and
+still reads the old one (§1.8). A few behaviours change in ways a test or a dashboard can notice; they are listed
+first.
 
 ## 1. Behaviour changes — read this first
 
@@ -135,6 +136,24 @@ the column text as stored (`{"orderId": "o-1"}`), the same text the polling path
 order and types are unchanged, and nothing persisted is affected. Code that compares this text byte for byte, for
 example a pattern-matching handler taking the JSON as a `String`, sees PostgreSQL's spacing under CDC as it already
 did under polling. Dropping the round trip saves a JSON parse and write per event.
+
+### 1.8 Shard-owned adapter: a new message format
+
+The shard-owned `DurableQueues` adapter stores each message as an envelope in the engine's `bytea` payload. In
+0.60.0 (format 1) the payload and metadata were held as JSON strings inside it, so every message was serialized twice
+on the way in and parsed twice on the way out. 0.60.1 writes format 2, which embeds them as JSON:
+`{"payloadType":"<class name>","payload":{...},"metaData":{...}}`. Measured on a typical event, that is about 18%
+less CPU to write and read a message and 9% fewer bytes, and the payload is no longer escaped in the
+`shard_queue_*_readable` views.
+
+- **Rows in format 1 are still read**, whether queued or dead-lettered, and a resurrected dead letter keeps its
+  format. The format is recorded per row in the engine's `payloadType` column, so nothing needs migrating.
+- **Do not run 0.60.0 and 0.60.1 side by side against the same shard-owned queues.** A 0.60.0 instance cannot read
+  format 2: it fails the delivery, and after the retries the message is dead-lettered. Stop every instance before
+  starting 0.60.1. The adapter is off by default and was new in 0.60.0, which is why this release changes the format
+  without a release that only reads it first; a future change to a format in use will get that step.
+- `MessageEnvelope.deserialize(jsonSerializer, bytes, key, order)` is deprecated for removal: it cannot tell the
+  formats apart. Use the overload that takes the row's format version.
 
 ## 2. Fixes
 
