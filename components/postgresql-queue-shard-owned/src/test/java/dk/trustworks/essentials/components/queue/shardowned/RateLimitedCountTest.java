@@ -97,24 +97,30 @@ class RateLimitedCountTest {
         var clock = new AtomicLong(1_000L);
         var warned = new AtomicLong();
         var start = new CountDownLatch(1);
-        var pool = Executors.newFixedThreadPool(threads);
-        try {
-            var done = new ArrayList<Future<?>>();
-            for (var t = 0; t < threads; t++) {
-                done.add(pool.submit(() -> {
-                    start.await();
-                    for (var i = 0; i < perThread; i++) {
-                        warned.addAndGet(count.record(clock.addAndGet(MINUTE / 50)));
-                    }
-                    return null;
-                }));
+        // shutdownNow before close: after a timed-out get, close() alone would wait for the tasks to finish their loops;
+        // the interrupt ends them, as each loop iteration checks for it
+        try (var pool = Executors.newFixedThreadPool(threads)) {
+            try {
+                var done = new ArrayList<Future<?>>();
+                for (var t = 0; t < threads; t++) {
+                    done.add(pool.submit(() -> {
+                        start.await();
+                        for (var i = 0; i < perThread; i++) {
+                            if (Thread.currentThread().isInterrupted()) {
+                                throw new InterruptedException();
+                            }
+                            warned.addAndGet(count.record(clock.addAndGet(MINUTE / 50)));
+                        }
+                        return null;
+                    }));
+                }
+                start.countDown();
+                for (var future : done) {
+                    future.get(30, TimeUnit.SECONDS);
+                }
+            } finally {
+                pool.shutdownNow();
             }
-            start.countDown();
-            for (var future : done) {
-                future.get(30, TimeUnit.SECONDS);
-            }
-        } finally {
-            pool.shutdownNow();
         }
 
         var pending = count.record(clock.get() + 2 * MINUTE) - 1;
