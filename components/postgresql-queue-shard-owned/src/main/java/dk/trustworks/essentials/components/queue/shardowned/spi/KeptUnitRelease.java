@@ -66,6 +66,15 @@ public record KeptUnitRelease(int unit,
                               List<String> deadLetteredKeys) {
 
     /**
+     * The SQL state of the {@link java.sql.SQLException} {@link MessageQueue#releaseKeptOrderedUnit} throws when the
+     * request's charge waited for another release of the unit's lease row to end for longer than the calling thread's
+     * network wait bound: PostgreSQL's {@code lock_not_available}. The request then charged, dead-lettered and released
+     * nothing, and asking again is safe, as on {@link Outcome#BUSY}'s first case. PostgreSQL raises the same state for a
+     * {@code lock_timeout}; see {@link MessageQueue#releaseKeptOrderedUnit}.
+     */
+    public static final String RELEASE_CLAIM_WAIT_TIMED_OUT_SQL_STATE = "55P03";
+
+    /**
      * Keeps unmodifiable copies of {@code keysInHandler} and {@code deadLetteredKeys}, and refuses a charge that cannot
      * be: a negative {@code charged}, or more {@code deadLetteredKeys} than {@code charged} - each dead-lettered key's
      * message is one of those charged.

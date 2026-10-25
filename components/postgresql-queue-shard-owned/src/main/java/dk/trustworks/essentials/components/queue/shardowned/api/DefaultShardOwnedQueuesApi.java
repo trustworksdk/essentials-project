@@ -185,14 +185,24 @@ public class DefaultShardOwnedQueuesApi implements ShardOwnedQueuesApi {
         validateQueueWriterRole(principal);
         requireNonNull(queueName, "No queueName provided");
         requireTrue(instanceId != null && !instanceId.isBlank(), "No instanceId provided - the instance id the WARN that reported the unit kept names");
-        return call("release kept ordered unit " + unit + " of instance '" + instanceId + "' of queue '" + queueName.value() + "'",
-                    () -> {
-                        var queue = queues.findQueue(queueName);
-                        if (queue.isEmpty()) {
-                            return ApiShardOwnedKeptUnitReleases.NONE;
-                        }
-                        return ApiShardOwnedKeptUnitReleases.from(queueName, queue.get().releaseKeptOrderedUnit(instanceId, unit));
-                    });
+        var what = "release kept ordered unit " + unit + " of instance '" + instanceId + "' of queue '" + queueName.value() + "'";
+        try {
+            var queue = queues.findQueue(queueName);
+            if (queue.isEmpty()) {
+                return ApiShardOwnedKeptUnitReleases.NONE;
+            }
+            return ApiShardOwnedKeptUnitReleases.from(queueName, queue.get().releaseKeptOrderedUnit(instanceId, unit));
+        } catch (SQLException e) {
+            if (KeptUnitRelease.RELEASE_CLAIM_WAIT_TIMED_OUT_SQL_STATE.equals(e.getSQLState())) {
+                // Nothing done, ask again (MessageQueue.releaseKeptOrderedUnit's @throws): said in the message, so a caller
+                // need not unwrap the cause to tell it from a failure that needs looking into
+                throw new MessageQueueException("Failed to " + what + " (SQL state " + e.getSQLState() + "): another release of the "
+                                                        + "unit's lease row did not end within the request's wait bound, or a "
+                                                        + "statement gave up waiting for a lock, so this request released nothing. "
+                                                        + "Asking again is safe", e);
+            }
+            throw new MessageQueueException("Failed to " + what, e);
+        }
     }
 
     @Override

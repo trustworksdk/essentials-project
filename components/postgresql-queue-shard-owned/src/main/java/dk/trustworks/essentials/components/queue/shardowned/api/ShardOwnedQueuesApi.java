@@ -198,6 +198,11 @@ public interface ShardOwnedQueuesApi {
      * @return the instance ids that answered, and what was done: one entry per subscription of the queue in the answering
      * process running under {@code instanceId} that had kept the unit, none when none had; both empty when no queue is
      * registered under that name
+     * @throws MessageQueueException when {@link MessageQueue#releaseKeptOrderedUnit} throws its {@link java.sql.SQLException},
+     *                               which is the cause. With SQL state
+     *                               {@link KeptUnitRelease#RELEASE_CLAIM_WAIT_TIMED_OUT_SQL_STATE} ({@code 55P03}) the
+     *                               message says so and that asking again is safe: the request released nothing
+     *                               (see {@link MessageQueue#releaseKeptOrderedUnit} for what that state means)
      */
     default ApiShardOwnedKeptUnitReleases releaseKeptOrderedUnit(Object principal, QueueName queueName, String instanceId, int unit) {
         return ApiShardOwnedKeptUnitReleases.NONE;

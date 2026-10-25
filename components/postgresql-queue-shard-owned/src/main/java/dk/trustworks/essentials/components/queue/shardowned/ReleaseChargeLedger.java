@@ -16,7 +16,7 @@
 
 package dk.trustworks.essentials.components.queue.shardowned;
 
-import dk.trustworks.essentials.components.queue.shardowned.spi.MessageId;
+import dk.trustworks.essentials.components.queue.shardowned.spi.*;
 import dk.trustworks.essentials.shared.Exceptions;
 
 import java.sql.*;
@@ -261,9 +261,10 @@ final class ReleaseChargeLedger {
      * The SQL state of the {@link SQLException} {@link #charge} throws when a release's claim outlasts the calling thread's
      * network wait bound: PostgreSQL's {@code lock_not_available}, which a {@code lock_timeout} raises, as this is a wait
      * for a lock - the claim - given up. Outside class {@code 08}, so the failure is not taken for one that may have gone
-     * through on the server ({@link LeaseRowState#mayHaveGoneThrough}): no statement was sent.
+     * through on the server ({@link LeaseRowState#mayHaveGoneThrough}): no statement was sent. Public on the SPI as
+     * {@link KeptUnitRelease#RELEASE_CLAIM_WAIT_TIMED_OUT_SQL_STATE}, as a release on request throws it to its caller.
      */
-    static final String RELEASE_CLAIM_WAIT_TIMED_OUT = "55P03";
+    static final String RELEASE_CLAIM_WAIT_TIMED_OUT = KeptUnitRelease.RELEASE_CLAIM_WAIT_TIMED_OUT_SQL_STATE;
 
     private final MessageId.Lane                lane;
     private final int                           shard;

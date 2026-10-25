@@ -553,6 +553,83 @@ class ShardOwnedUnorderedReleaseChargeIT {
     }
 
     /**
+     * A stop whose charge before releasing a shard waits for another release of that shard's lease row to end - its claim on
+     * the owner ({@link LeasedOwner#claimReleaseUnlessMoveOwed()}) held by the test here, as a release whose statement is
+     * still running holds it - for longer than the stop's network wait bound gives up with SQL state
+     * {@link ReleaseChargeLedger#RELEASE_CLAIM_WAIT_TIMED_OUT} and nothing charged. As when its charge fails, it leaves that
+     * shard unreleased, with one WARN naming it, and releases the rest, and whoever takes the shard next finds it not
+     * released, so its takeover charges the message: once, as the stop charged nothing.
+     */
+    @Test
+    void a_stop_whose_charge_outwaits_another_release_of_a_shards_lease_row_leaves_that_shard_unreleased_with_nothing_charged() throws Exception {
+        var settings    = settings(STUCK_HANDLER_TIMEOUT);
+        var entered     = new CountDownLatch(1);
+        var release     = new CountDownLatch(1);
+        var heldShard   = new CompletableFuture<Integer>();
+        var redelivered = new CompletableFuture<Integer>();
+        var logged      = captureQueueLog();
+        try (var firstRuntime = new ShardRuntime(dataSource, settings); var secondRuntime = new ShardRuntime(dataSource, settings)) {
+            var         first        = queue(firstRuntime, "stop-claim-wait-first");
+            var         second       = queue(secondRuntime, "stop-claim-wait-second");
+            LeasedOwner claimedOwner = null;
+            try {
+                first.startConsuming((messageId, payload, payloadType) -> {
+                    heldShard.complete(messageId.shard());
+                    entered.countDown();
+                    awaitQuietly(release);
+                }, settings, SHARD_COUNT);
+                assertThat(first.shardsHeld()).as("premise: alone, the first instance holds every shard").isEqualTo(SHARD_COUNT);
+                first.enqueue(List.of("hangs".getBytes(StandardCharsets.UTF_8)), 1);
+                assertThat(entered.await(20, TimeUnit.SECONDS)).as("premise: the message is in its handler").isTrue();
+                var shard = heldShard.get();
+                Thread.sleep(STUCK_HANDLER_TIMEOUT.toMillis() + 300);
+                var fenceBefore = fenceOf(shard);
+                var owner = first.owners().stream().filter(candidate -> candidate.shard() == shard).findFirst().orElseThrow();
+                // Another release of the shard's row, its statement still running: it holds this claim until the statement returns
+                assertThat(owner.claimReleaseUnlessMoveOwed()).as("premise: the release is claimed, no move owed").isTrue();
+                claimedOwner = owner;
+
+                first.stop();
+
+                // The stop returns after SHUTDOWN_BUDGET; its budget thread's charge waits out the network wait bound
+                Awaitility.await("the stop's charge gives up waiting for the claim").atMost(first.stopNetworkWaitBound().plusSeconds(10))
+                          .untilAsserted(() -> assertThat(chargeFailuresOf(logged, shard, "as the queue stopped")).as("one WARN naming the shard")
+                                                                                                                 .singleElement()
+                                                                                                                 .satisfies(warning -> assertThat(warning.getThrowableProxy().getMessage())
+                                                                                                                         .contains("held its claim on the unit for longer than this thread's network wait bound")));
+                Awaitility.await().atMost(Duration.ofSeconds(10)).until(() -> !first.handBackStillRunning());
+                assertThat(ownerOf(shard)).as("the shard whose charge gave up is left unreleased").isEqualTo("stop-claim-wait-first");
+                assertThat(fenceOf(shard)).as("under its fence").isEqualTo(fenceBefore);
+                for (var other = 0; other < SHARD_COUNT; other++) {
+                    if (other != shard) {
+                        assertThat(ownerOf(other)).as("shard %d released", other).isNull();
+                    }
+                }
+                assertThat(first.metrics().takeoverAttemptBumps.sum()).as("nothing charged: the charge did not start").isZero();
+                owner.endReleaseClaim();
+                claimedOwner = null;
+
+                second.startConsuming((messageId, payload, payloadType) -> {
+                    if (messageId.shard() == shard) {
+                        redelivered.complete(attemptsOf(messageId.shard(), messageId.sequence()));
+                    }
+                }, settings, SHARD_COUNT);
+                assertThat(redelivered.get(30, TimeUnit.SECONDS)).as("delivered again with the one attempt the takeover charged").isEqualTo(1);
+                assertThat(second.metrics().takeoverAttemptBumps.sum()).as("charged by the unclean takeover").isEqualTo(1);
+            } finally {
+                if (claimedOwner != null) {
+                    claimedOwner.endReleaseClaim();
+                }
+                release.countDown();
+                second.stop();
+                first.stop();
+            }
+        } finally {
+            releaseQueueLog(logged);
+        }
+    }
+
+    /**
      * A {@code QueueObserver} that throws when told of a message the charge before a stop's release dead-lettered does not
      * keep the shard: the charge and the move are made by then, so it is released all the same, with a WARN saying what
      * failed. Held, it would wait for an unclean takeover that charges again what this charge charged.

@@ -2915,6 +2915,15 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
     }
 
     /**
+     * The owners of the ordered units a stop of this queue kept ({@link #keptOrderedOwners}), in the order they were kept,
+     * whether or not they still hold their lease row. Package-private: it is for reaching a kept owner in a test, not a
+     * figure to operate on.
+     */
+    List<LeasedOwner> keptOwners() {
+        return keptOrderedOwners.stream().map(KeptUnit::owner).toList();
+    }
+
+    /**
      * Whether a later run of this queue, or a queue registering under its instance id, still has to wait for an ordered unit
      * a stop of this queue kept: one not handed back yet ({@link #keptOrderedUnitNotHandedBack()}) whose key has not been in
      * its handler longer than {@code stuckHandlerTimeout} ({@link ShardOwnerSettings}), nor that has been kept longer than
@@ -3921,9 +3930,13 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * @throws SQLException when the flush, the charge or the release fails, or waits for an answer longer than
      *                      {@link #stopNetworkWaitBound()}; the unit is then left as it was, kept, for a later hand-back
      *                      or request, and a later request does not charge again what this one's charge was seen to
-     *                      commit. Past the bound, a statement the driver stopped waiting for may still go through on the
-     *                      server: a charge that does leaves its message charged, and a later request may charge it
-     *                      again; a dead-letter move that does leaves its message dead-lettered, and a later request,
+     *                      commit. Thrown with SQL state {@link ReleaseChargeLedger#RELEASE_CLAIM_WAIT_TIMED_OUT} by the
+     *                      charge when another release of the owner's lease row held its claim on the owner
+     *                      ({@link LeasedOwner#claimReleaseUnlessMoveOwed()}) for longer than that bound: the charge did
+     *                      not start, so nothing was charged, dead-lettered or released, and asking again is safe
+     *                      ({@code MessageQueue.releaseKeptOrderedUnit}). Past the bound, a statement the driver
+     *                      stopped waiting for may still go through on the server: a charge that does leaves its
+     *                      message charged, and a later request may charge it again; a dead-letter move that does leaves its message dead-lettered, and a later request,
      *                      or a hand-back once the handler has returned, makes the move again (the handler having
      *                      completed, only asks the dead-letter table) and reports it
      *                      dead-lettered, finding it in the dead-letter table, but a takeover makes no move, and that
