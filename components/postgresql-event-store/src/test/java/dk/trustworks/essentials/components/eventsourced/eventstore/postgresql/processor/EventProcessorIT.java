@@ -287,7 +287,8 @@ public class EventProcessorIT {
     @Test
     void an_event_processor_that_is_stopped_and_started_again_handles_an_event_appended_after_the_restart() {
         // Running before it stops: the subscription holds its fenced lock and the Inbox consumes. Not straight after
-        // start(): a stop before the first lock-acquiring tick is a separate known race, which this test does not cover
+        // start(): a stop while the first lock-acquiring tick is still in flight can leave the lock held for the stopped
+        // subscription - an open race, RW-11 in docs/ROADMAP-0.6x.md, which this test does not cover
         Awaitility.waitAtMost(Duration.ofSeconds(10))
                   .until(() -> testProcessor.isActive() && testProcessor.getInboxForTesting().isConsumingMessages());
         testProcessor.stop();
@@ -335,8 +336,9 @@ public class EventProcessorIT {
         var inTransactionProcessor = new TestInTransactionOrderProcessor(new EventProcessorDependencies(eventStoreSubscriptionManager, inboxes, commandBus, List.of()), true);
         inTransactionProcessor.start();
         try {
-            // Holding its fenced lock before it stops. Not straight after start(): a stop before the first lock-acquiring
-            // tick is a separate known race, which this test does not cover
+            // Holding its fenced lock before it stops. Not straight after start(): a stop while the first lock-acquiring
+            // tick is still in flight can leave the lock held for the stopped subscription - an open race, RW-11 in
+            // docs/ROADMAP-0.6x.md, which this test does not cover
             Awaitility.waitAtMost(Duration.ofSeconds(10))
                       .until(inTransactionProcessor::isActive);
             inTransactionProcessor.stop();
