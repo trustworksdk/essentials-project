@@ -52,6 +52,8 @@ public final class SchemaReapplyLockProbe {
      * @param contributor the component whose schema is re-applied
      */
     public static void assertReapplyDoesNotWaitForWritersOnItsTables(Jdbi jdbi, EssentialsSchemaContributor contributor) {
+        assertNoRepeatableStatementLocksItsTable(contributor);
+        // The schema is applied once, here: the tables must exist for the to_regclass filter, and the probe re-applies onto this
         PostgresqlCreateSchemaApplier.applyOwnSchema(jdbi, contributor);
         var tables = contributor.contribute(SchemaContext.empty())
                                 .stream()
@@ -65,7 +67,7 @@ public final class SchemaReapplyLockProbe {
         if (tables.isEmpty()) {
             fail("'" + contributor.moduleId() + "' names no table in its changes");
         }
-        assertReapplyDoesNotWaitForWritersOn(jdbi, contributor, tables);
+        assertReapplyUnderWritersDoesNotWait(jdbi, contributor, tables);
     }
 
     /**
@@ -104,7 +106,14 @@ public final class SchemaReapplyLockProbe {
     public static void assertReapplyDoesNotWaitForWritersOn(Jdbi jdbi, EssentialsSchemaContributor contributor, Collection<String> tables) {
         assertNoRepeatableStatementLocksItsTable(contributor);
         PostgresqlCreateSchemaApplier.applyOwnSchema(jdbi, contributor);
+        assertReapplyUnderWritersDoesNotWait(jdbi, contributor, tables);
+    }
 
+    /**
+     * Apply the contributor's schema - already applied by the caller - again while another transaction holds
+     * {@code ROW EXCLUSIVE} on each of the given tables, and fail if the re-apply has to wait for that transaction.
+     */
+    private static void assertReapplyUnderWritersDoesNotWait(Jdbi jdbi, EssentialsSchemaContributor contributor, Collection<String> tables) {
         var executor = Executors.newSingleThreadExecutor();
         try (var writer = jdbi.open()) {
             writer.begin();
