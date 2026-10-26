@@ -89,8 +89,8 @@ open for health, login and `/webhooks/**` (signed instead). Seeded users are in 
 `./run-instance.sh 1` and `./run-instance.sh 2` — ports 8080/8081, instance ids `demo-1`/`demo-2`. This is the configuration the shard-owned engine exists
 for; one instance exercises none of its ownership, rebalancing or fencing.
 
-- **The queue load generator runs on every instance** (`trading-demo.queue-load.enabled`) by design — it is also the
-  queue's consumer. Safe because each instance produces under its own ordered key prefix; see `_demo_harness/CLAUDE.md`.
+- **The queue load generator, when on, runs on every instance** (`trading-demo.queue-load.enabled`, off by default since
+  the real flows run on the engine) by design — it is also the queue's consumer. Safe because each instance produces under its own ordered key prefix; see `_demo_harness/CLAUDE.md`.
 
 - **A distinct `instance-id` is not optional.** The engine defaults it to the hostname — right on a
   container platform, wrong for two processes on one machine. They would register as *one* instance,

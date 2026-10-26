@@ -53,10 +53,12 @@ trading-demo:
         roles: [CUSTOMER]
         password: bob-demo-password
   # Drives the shard-owned queue engine on BOTH lanes at once: unordered price ticks and
-  # per-account ordered activity. Off by default so the demo still starts on a small machine;
-  # POST /api/admin/queue-load/start turns it on, and /spike sends a burst.
+  # per-account ordered activity, on a queue of its own that nothing in the trading contexts reads.
+  # Off by default: the real flows already run on the engine, and its trickle (10 messages per lane
+  # every 250 ms) would keep the queues from ever going quiet. POST /api/admin/queue-load/start turns
+  # it on; /spike sends a burst and /faults injects retry and poison messages.
   queue-load:
-    enabled: true
+    enabled: false
     queue-name: trading-events
     shard-count: 4
     sustained-interval: 250ms
