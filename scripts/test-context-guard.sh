@@ -750,6 +750,37 @@ out=$(run warn s51 a1)
 case "$out" in *AGENT-STATE-S51*) ;; *) fail "a subagent boundary 600 lines back was not restored: ${out:0:300}" ;; esac
 pass
 
+# A hook can run before Claude Code has written the first reply after a compaction, so the last
+# count in the transcript is the one the context compacted at. The restore clears the warn
+# locks; a warn after it (a second tool call, or a second guard registered on the same state)
+# measured that old count and warned at the compaction point.
+case_name="no count after the last boundary: the restore still runs, a later warn measures nothing until a count is written"
+user_settings '{"modelSettings": {"claude-opus-5-5": {"autoCompactWindow": 300000}}}'
+m=$(main_transcript s80)
+assistant_entry "$m" claude-opus-5-5 266000 false
+expect_warning "$(run warn s80 "")" 266000/300000
+printf '%s\n' "MAIN-STATE-S80" >"$CONTEXT_GUARD_DIR/s80/main/STATE.md"
+compact s80 auto
+compact_boundary "$m" boundary-1 false
+out=$(run warn s80 "")
+case "$out" in *MAIN-STATE-S80*) ;; *) fail "the boundary with no count after it was not restored: ${out:0:300}" ;; esac
+expect_nothing "$(run warn s80 "")" "a warn after the restore measured the count from before the boundary"
+assistant_entry "$m" claude-opus-5-5 20000 false
+expect_nothing "$(run warn s80 "")" "20000 of 300000 is short of every warning point"
+assistant_entry "$m" claude-opus-5-5 250000 false
+expect_warning "$(run warn s80 "")" 250000/300000
+# A subagent's transcript, the same way.
+f=$(agent_transcript s81 a1)
+assistant_entry "$f" claude-opus-5-5 180000 true
+expect_warning "$(run warn s81 a1)" 180000/200000
+printf '%s\n' "AGENT-STATE-S81" >"$CONTEXT_GUARD_DIR/s81/agents/a1/STATE.md"
+compact_boundary "$f" boundary-1
+out=$(run warn s81 a1)
+case "$out" in *AGENT-STATE-S81*) ;; *) fail "the subagent boundary with no count after it was not restored: ${out:0:300}" ;; esac
+expect_nothing "$(run warn s81 a1)" "a subagent warn after the restore measured the count from before the boundary"
+rm -f "$CLAUDE_CONFIG_DIR/settings.json"
+pass
+
 # --- STATE.md handed back once per write -----------------------------------------------------
 
 main_compaction() { # $1 session, $2 boundary uuid: a main compaction as its next warn finds it

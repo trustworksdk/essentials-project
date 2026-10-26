@@ -310,15 +310,27 @@ main_transcript_model() { # the model id named by the main transcript's last ass
 }
 
 used_tokens() { # prints "<tokens> <model>" from the last assistant entry; model may be absent
+  # Prints 0 when a compact_boundary comes after the last assistant entry: no count was
+  # written since the compaction, and the one before it measures the context that was just
+  # summarised. A hook can run before Claude Code has written the first reply after a
+  # compaction to the transcript; measured against that older count, the first warn after a
+  # compaction warned at the compaction point.
   [ -f "$transcript" ] || return
   # Main transcript: skip sidechain entries. A subagent transcript is all sidechain.
-  local filter='select(.type=="assistant" and .message.usage)'
-  [ -z "$agent" ] && filter='select(.type=="assistant" and (.isSidechain|not) and .message.usage)'
+  local filter='.type=="assistant" and .message.usage'
+  local boundary='.type=="system" and .subtype=="compact_boundary"'
+  if [ -z "$agent" ]; then
+    filter='.type=="assistant" and (.isSidechain|not) and .message.usage'
+    boundary='.type=="system" and .subtype=="compact_boundary" and (.isSidechain|not)'
+  fi
   # jq takes the last match itself. The transcript's tail is read first (last_match), as
-  # this runs on every tool call; the whole file only when the tail holds no usage entry.
-  # The output tokens count too: that reply is in the next call's context.
-  local prog='[inputs | fromjson? | objects | '"$filter"' | .message
-             | "\((.usage.input_tokens//0) + (.usage.cache_read_input_tokens//0) + (.usage.cache_creation_input_tokens//0) + (.usage.output_tokens//0)) \(.model // "")"]
+  # this runs on every tool call; the whole file only when the tail holds no usage entry
+  # and no boundary. The output tokens count too: that reply is in the next call's context.
+  local prog='[inputs | fromjson? | objects
+             | if '"$boundary"' then "0"
+               elif '"$filter"' then .message
+                 | "\((.usage.input_tokens//0) + (.usage.cache_read_input_tokens//0) + (.usage.cache_creation_input_tokens//0) + (.usage.output_tokens//0)) \(.model // "")"
+               else empty end]
              | last // empty'
   local out
   out=$(last_match "$transcript" "$prog")
@@ -403,34 +415,7 @@ case "$mode" in
   warn)
     : >"$state_dir/live" 2>/dev/null # marks this state live for start's pruning
     read -r used own_model <<<"$(used_tokens)"
-    [ -n "$used" ] && [ "$used" -gt 0 ] 2>/dev/null || exit 0
-    window=$(context_window "${own_model:-}")
-    # A count past the assumed window proves the window is bigger (e.g. a 1M model).
-    [ "$used" -gt "$window" ] && window=1000000
-    # The main conversation compacts at its auto-compact window when that is smaller. Its model
-    # id is the settings model without [1m] when that is a full id, else its transcript's.
-    if [ -z "$agent" ] && [ -z "${CONTEXT_GUARD_WINDOW:-}" ]; then
-      id=$(main_model)
-      id=${id/'[1m]'/}
-      case "$id" in *-*) ;; *) id=${own_model:-} ;; esac
-      cap=$(autocompact_window "$id")
-      [ -n "$cap" ] && [ "$cap" -gt 0 ] && [ "$cap" -lt "$window" ] && window=$cap
-    fi
-    # A subagent's model cannot change mid-run, so its window never shrinks back once its
-    # count proved it bigger: after compaction its count is small again, and a shrink here
-    # would clear its warn locks before the restore check below.
-    [ -n "$agent" ] && [ -z "${CONTEXT_GUARD_WINDOW:-}" ] \
-      && [ "$(cat "$state_dir/window" 2>/dev/null)" = 1000000 ] && window=1000000
-    # Window re-estimated: earlier levels were measured against the wrong size.
-    if [ "$(cat "$state_dir/window" 2>/dev/null)" != "$window" ]; then
-      clear_locks
-      # Written to a temporary file and renamed onto window, not truncated in place.
-      printf '%s' "$window" >"$state_dir/window.$$" 2>/dev/null \
-        && mv -f "$state_dir/window.$$" "$state_dir/window" 2>/dev/null
-      rm -f "$state_dir/window.$$" 2>/dev/null
-    fi
-    trigger=$(trigger_of "$window")
-    pct=$(( used * 100 / window ))
+    [ -n "$used" ] && [ "$used" -ge 0 ] 2>/dev/null || exit 0
     event=$(field hook_event_name)
     event=${event:-PostToolUse}
 
@@ -463,6 +448,36 @@ case "$mode" in
       [ -n "$text" ] && emit "$event" "$text"
       exit 0
     fi
+    # 0: no count since the compaction (see used_tokens) - nothing to measure until one is written.
+    [ "$used" -gt 0 ] || exit 0
+    window=$(context_window "${own_model:-}")
+    # A count past the assumed window proves the window is bigger (e.g. a 1M model).
+    [ "$used" -gt "$window" ] && window=1000000
+    # The main conversation compacts at its auto-compact window when that is smaller. Its model
+    # id is the settings model without [1m] when that is a full id, else its transcript's.
+    if [ -z "$agent" ] && [ -z "${CONTEXT_GUARD_WINDOW:-}" ]; then
+      id=$(main_model)
+      id=${id/'[1m]'/}
+      case "$id" in *-*) ;; *) id=${own_model:-} ;; esac
+      cap=$(autocompact_window "$id")
+      [ -n "$cap" ] && [ "$cap" -gt 0 ] && [ "$cap" -lt "$window" ] && window=$cap
+    fi
+    # A subagent's model cannot change mid-run, so its window never shrinks back once its
+    # count proved it bigger: after compaction its count is small again, and a shrink here
+    # would clear its warn locks before the restore check below.
+    [ -n "$agent" ] && [ -z "${CONTEXT_GUARD_WINDOW:-}" ] \
+      && [ "$(cat "$state_dir/window" 2>/dev/null)" = 1000000 ] && window=1000000
+    # Window re-estimated: earlier levels were measured against the wrong size.
+    if [ "$(cat "$state_dir/window" 2>/dev/null)" != "$window" ]; then
+      clear_locks
+      # Written to a temporary file and renamed onto window, not truncated in place.
+      printf '%s' "$window" >"$state_dir/window.$$" 2>/dev/null \
+        && mv -f "$state_dir/window.$$" "$state_dir/window" 2>/dev/null
+      rm -f "$state_dir/window.$$" 2>/dev/null
+    fi
+    trigger=$(trigger_of "$window")
+    pct=$(( used * 100 / window ))
+
     # Warned already, and usage is now below half the compaction point: compaction happened.
     if has_lock && [ "$used" -lt $(( trigger / 2 )) ]; then
       clear_locks
