@@ -71,13 +71,14 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  * </ul>
  * The state left behind:
  * <ul>
- *     <li>after the scheduled lock confirmation has ended, {@link #isStarted()} is still <code>true</code> and this lock
- *     manager still acquires locks - {@link #tryAcquireLock(LockName)}, and an async acquiring that is still running, which
- *     tries to acquire its lock again on every tick and gets it once its row has expired after the lock timeout, unless
- *     another instance takes it first - but confirms none of them: each one's row expires after the lock timeout while its
- *     holder believes it holds it. Stop and start the lock manager to start the lock confirmation again - {@link #stop()}
- *     drops every async acquiring; call {@link #acquireLockAsync(LockName, LockCallback)} again after {@link #start()}, see
- *     {@link #acquireLockAsync(LockName, LockCallback)}</li>
+ *     <li>after the scheduled lock confirmation has ended, {@link #isStarted()} is still <code>true</code>, but this lock
+ *     manager acquires no lock, since it could not confirm it - its row would expire after the lock timeout while its holder
+ *     believed it held it: {@link #tryAcquireLock(LockName)} and {@link #tryAcquireLock(LockName, Duration)} return empty,
+ *     {@link #acquireLock(LockName)} throws {@link IllegalStateException}, and the ticks of an async acquiring, one still
+ *     running or one {@link #acquireLockAsync(LockName, LockCallback)} starts afterwards, do nothing, so its
+ *     <code>lockAcquired</code> is not called. Stop and start the lock manager to start the lock confirmation again and
+ *     acquire locks again - {@link #stop()} drops every async acquiring; call {@link #acquireLockAsync(LockName, LockCallback)}
+ *     again after {@link #start()}, see {@link #acquireLockAsync(LockName, LockCallback)}</li>
  *     <li>after {@link #stop()} has thrown a critical error, the lock manager is stopped ({@link #isStarted()} is
  *     <code>false</code>) and can be started again</li>
  *     <li>an async acquiring ended by a critical error keeps its entry - see {@link #acquireLockAsync(LockName, LockCallback)}
@@ -139,6 +140,11 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
      * the database and lock releases are a bounded best effort - see {@link #shutdownStarting(ShutdownContext)}
      */
     private volatile ShutdownContext shutdown;
+    /**
+     * Set, under {@code reentrantLock}, when the scheduled lock confirmation has ended (see the class javadoc, "Errors"), and
+     * cleared by {@link #start()}. While set, this lock manager acquires no lock: it could not confirm it
+     */
+    private volatile boolean         confirmationEnded;
 
     private   ScheduledExecutorService lockConfirmationExecutor;
     private   ScheduledExecutorService asyncLockAcquiringExecutor;
@@ -196,6 +202,7 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
             reentrantLock.lock();
             try {
                 stopping = false;
+                confirmationEnded = false;
                 lockConfirmationExecutor = Executors.newScheduledThreadPool(1,
                                                                             new ThreadFactoryBuilder()
                                                                                     .nameFormat(lockManagerInstanceId + "-FencedLock-Confirmation-%d")
@@ -334,7 +341,9 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
                           lockManagerInstanceId, numberOfLocallyAcquiredLocksBeforeConfirmation, locksAcquiredByThisLockManager.size());
             }
         } catch (Throwable e) {
-            // Escaping, it ends the scheduled confirmation - see the class javadoc, "Errors"
+            // Escaping, it ends the scheduled confirmation - see the class javadoc, "Errors". Recorded first, still under
+            // reentrantLock, so no acquire made from here on gets a lock that would never be confirmed
+            confirmationEnded = true;
             releaseHeldLocksLocallyAsTheConfirmationEnds(e);
             throw e;
         } finally {
@@ -364,8 +373,9 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
             }
         });
         log.error(msg("[{}] The lock confirmation failed with {} - released the {} lock(s) this lock manager instance held locally only "
-                      + "(their rows expire after the lock timeout) and the scheduled lock confirmation has ended: a lock this instance "
-                      + "acquires from now on is not confirmed, until the lock manager is stopped and started again",
+                      + "(their rows expire after the lock timeout) and the scheduled lock confirmation has ended: this lock manager "
+                      + "acquires no lock from now on (tryAcquireLock returns empty, acquireLock throws, async acquiring acquires nothing), "
+                      + "until it is stopped and started again",
                       lockManagerInstanceId, isCriticalError(failure) ? "a critical error" : "an unexpected failure", heldLocks.size()), failure);
     }
 
@@ -730,7 +740,7 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
                 return Optional.of(lock);
             }
             var remainingMs = Duration.ofNanos(deadline - System.nanoTime()).toMillis();
-            if (remainingMs <= 0 || shutdown != null || !pauseBeforeNextAcquireAttempt(Math.min(remainingMs, syncAcquireLockPauseIntervalMs))) {
+            if (remainingMs <= 0 || shutdown != null || confirmationEnded || !pauseBeforeNextAcquireAttempt(Math.min(remainingMs, syncAcquireLockPauseIntervalMs))) {
                 return Optional.empty();
             }
         }
@@ -776,6 +786,10 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
             log.debug("[{}] Shutting down - not attempting to acquire lock '{}'", lockManagerInstanceId, lockName);
             return Mono.empty();
         }
+        if (confirmationEnded) {
+            logNotAcquiringAsTheConfirmationHasEnded(lockName);
+            return Mono.empty();
+        }
         if (alreadyAcquiredLockIsValid) {
             releaseLock(alreadyAcquiredLock);
         }
@@ -788,6 +802,10 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
         try {
             if (!started || stopping || shutdown != null) {
                 log.debug("[{}] Lock manager stopped or shutting down while waiting to acquire lock '{}' - not acquiring it", lockManagerInstanceId, lockName);
+                return Mono.empty();
+            }
+            if (confirmationEnded) {
+                logNotAcquiringAsTheConfirmationHasEnded(lockName);
                 return Mono.empty();
             }
             // Set as soon as the acquire statement has succeeded, so a failure of the UnitOfWork after it - its commit -
@@ -824,6 +842,11 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
     }
 
     private static final long NO_WAIT_LIMIT = -1L;
+
+    private void logNotAcquiringAsTheConfirmationHasEnded(LockName lockName) {
+        log.debug("[{}] The scheduled lock confirmation has ended - not acquiring lock '{}', which this lock manager could not confirm, "
+                  + "until it is stopped and started again", lockManagerInstanceId, lockName);
+    }
 
     /**
      * @return true if {@link #reentrantLock} is now held by the calling thread; false if the wait limit passed or the thread was
@@ -1008,6 +1031,10 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
             if (shutdown != null) {
                 throw new IllegalStateException(msg("[{}] Shutting down while waiting to acquire lock '{}'", lockManagerInstanceId, lockName));
             }
+            if (confirmationEnded) {
+                throw new IllegalStateException(msg("[{}] The scheduled lock confirmation has ended - not acquiring lock '{}', which this lock manager "
+                                                    + "could not confirm, until it is stopped and started again", lockManagerInstanceId, lockName));
+            }
             if (!pauseBeforeNextAcquireAttempt(syncAcquireLockPauseIntervalMs)) {
                 throw new IllegalStateException(msg("[{}] Interrupted while waiting to acquire lock '{}'", lockManagerInstanceId, lockName));
             }
@@ -1123,6 +1150,10 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
         try {
             reentrantLock.lock();
             if (!started || shutdown != null) {
+                return;
+            }
+            if (confirmationEnded) {
+                logNotAcquiringAsTheConfirmationHasEnded(lockName);
                 return;
             }
             var existingLock = locksAcquiredByThisLockManager.get(lockName);
