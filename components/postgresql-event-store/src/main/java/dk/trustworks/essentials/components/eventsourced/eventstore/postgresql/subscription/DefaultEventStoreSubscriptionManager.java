@@ -319,14 +319,16 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
             return;
         }
         log.debug("[{}] Starting EventStoreSubscription '{}': '{}'", fencedLockManager.getLockManagerInstanceId(), eventStoreSubscription.subscriberId(), eventStoreSubscription);
-        eventStoreSubscriptionObserver.startingSubscriber(eventStoreSubscription);
         Duration startDuration;
         try {
+            // Inside the try: the observer runs once the start is claimed, so its failure must release the claim too
+            eventStoreSubscriptionObserver.startingSubscriber(eventStoreSubscription);
             startDuration = StopWatch.time(CheckedRunnable.safe(eventStoreSubscription::start));
-        } catch (RuntimeException | Error e) {
+        } catch (Throwable e) {
             // A critical error keeps the claim: it is rethrown as it is
             Exceptions.rethrowIfCriticalError(e);
-            // Not started, so a later attempt may start it - after a non-critical Error (an AssertionError, say) as after a RuntimeException
+            // Not started, so a later attempt may start it - after a non-critical Error (an AssertionError, say), or a checked
+            // exception the observer threw sneakily, as after a RuntimeException
             startClaimed.remove(eventStoreSubscription);
             throw e;
         } finally {

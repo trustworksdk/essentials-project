@@ -26,12 +26,15 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ty
 import dk.trustworks.essentials.components.foundation.fencedlock.FencedLockManager;
 import dk.trustworks.essentials.components.foundation.types.SubscriberId;
 import dk.trustworks.essentials.reactive.EventBus;
+import dk.trustworks.essentials.shared.Exceptions;
 import org.junit.jupiter.api.*;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -334,6 +337,45 @@ class DefaultEventStoreSubscriptionManagerTest {
         }
     }
 
+    @Test
+    void a_subscription_whose_startingSubscriber_observer_throws_is_no_longer_claimed_and_a_later_start_starts_it() throws ReflectiveOperationException {
+        a_subscription_whose_startingSubscriber_observer_throws_is_no_longer_claimed_and_a_later_start_starts_it(new IllegalStateException("Observer failed"));
+    }
+
+    @Test
+    void a_subscription_whose_startingSubscriber_observer_throws_a_checked_exception_is_no_longer_claimed_and_a_later_start_starts_it() throws ReflectiveOperationException {
+        a_subscription_whose_startingSubscriber_observer_throws_is_no_longer_claimed_and_a_later_start_starts_it(new IOException("Observer failed"));
+    }
+
+    /**
+     * The observer's {@code startingSubscriber} runs once the manager has claimed the subscription's start, so its failure
+     * must release the claim and count as a returned start, like a failed {@code start()} of the subscription itself
+     */
+    private void a_subscription_whose_startingSubscriber_observer_throws_is_no_longer_claimed_and_a_later_start_starts_it(Throwable failure) throws ReflectiveOperationException {
+        var observer = new ThrowingOnceStartingSubscriberObserver(failure);
+        var manager  = manager(observer, mock(DurableSubscriptionRepository.class));
+        manager.start();
+        try {
+            assertThatThrownBy(() -> manager.subscribeToAggregateEventsInTransaction(SUBSCRIBER, THINGS, Optional.empty(), (event, unitOfWork) -> {}))
+                    .isSameAs(failure);
+            var held = manager.getSubscription(SUBSCRIBER, THINGS).orElseThrow();
+            assertThat(held.isStarted()).isFalse();
+            assertThat(startClaimed(manager)).doesNotContain(held);
+
+            // The manager's start of it returned, so a repeated subscribe WARNs that the held subscription is not started
+            assertThat(manager.subscribeToAggregateEventsInTransaction(SUBSCRIBER, THINGS, Optional.empty(), (event, unitOfWork) -> {})).isSameAs(held);
+            assertThat(warnings()).singleElement()
+                                  .satisfies(warning -> assertThat(warning.getFormattedMessage()).contains("not started"));
+
+            // A later start of the manager starts it
+            manager.stop();
+            manager.start();
+            assertThat(held.isStarted()).isTrue();
+        } finally {
+            manager.stop();
+        }
+    }
+
     @SuppressWarnings("unchecked")
     private static Set<EventStoreSubscription> startClaimed(DefaultEventStoreSubscriptionManager manager) throws ReflectiveOperationException {
         var field = DefaultEventStoreSubscriptionManager.class.getDeclaredField("startClaimed");
@@ -417,6 +459,25 @@ class DefaultEventStoreSubscriptionManagerTest {
         @Override
         public void startedSubscriber(EventStoreSubscription eventStoreSubscription, Duration startDuration) {
             started.add(eventStoreSubscription);
+        }
+    }
+
+    /**
+     * Throws the given failure - sneakily when it is a checked exception - from the first {@link #startingSubscriber} call
+     */
+    private static class ThrowingOnceStartingSubscriberObserver extends EventStoreSubscriptionObserver.NoOpEventStoreSubscriptionObserver {
+        private final Throwable     failure;
+        private final AtomicBoolean thrown = new AtomicBoolean();
+
+        ThrowingOnceStartingSubscriberObserver(Throwable failure) {
+            this.failure = failure;
+        }
+
+        @Override
+        public void startingSubscriber(EventStoreSubscription eventStoreSubscription) {
+            if (thrown.compareAndSet(false, true)) {
+                Exceptions.sneakyThrow(failure);
+            }
         }
     }
 
