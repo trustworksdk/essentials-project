@@ -819,14 +819,24 @@ expect_empty_dir() { # $1 dir, $2 what was symlinked to it
   [ -z "$(ls -A "$1")" ] || fail "created through a symlinked $2: $(ls -A "$1" | tr '\n' ' ')"
 }
 
-case_name="a state directory that is a symlink is refused: nothing printed, nothing written through it"
+run_err() { # as run, its stderr in $hook_err
+  hook_input "$2" "$3" | bash "$hook" "$1" 2>"$hook_err" | jq -r '.hookSpecificOutput.additionalContext // empty'
+}
+expect_refused() { # $1 the reason the stderr line must give, $2 what ran
+  [ "$(cat "$hook_err")" = "context-guard: $1; guard disabled" ] \
+    || fail "$2: expected 'context-guard: $1; guard disabled' on stderr, got '$(head -c 300 "$hook_err")'"
+}
+
+case_name="a state directory that is a symlink is refused: nothing printed but the reason on stderr, nothing written through it"
 elsewhere=$tmp/elsewhere
 mkdir -p "$elsewhere/main"
 printf '%s\n' "PLANTED-STATE" >"$elsewhere/main/STATE.md"
 ln -s "$elsewhere" "$CONTEXT_GUARD_DIR/s24"
 assistant_entry "$(main_transcript s24)" claude-opus-5-5 950000 false
-expect_nothing "$(run warn s24 "")" "warned through a symlinked session directory"
-expect_nothing "$(run restore s24 "")" "restore injected a STATE.md from a symlinked session directory"
+expect_nothing "$(run_err warn s24 "")" "warned through a symlinked session directory"
+expect_refused "state directory $CONTEXT_GUARD_DIR/s24 is a symlink" "warn"
+expect_nothing "$(run_err restore s24 "")" "restore injected a STATE.md from a symlinked session directory"
+expect_refused "state directory $CONTEXT_GUARD_DIR/s24 is a symlink" "restore"
 [ "$(ls "$elsewhere/main")" = STATE.md ] || fail "wrote through the symlink: $(ls "$elsewhere/main" | tr '\n' ' ')"
 rm -f "$CONTEXT_GUARD_DIR/s24"
 pass
@@ -838,9 +848,12 @@ mkdir -p "$elsewhere"
 ln -s "$elsewhere" "$CONTEXT_GUARD_DIR/s30"
 assistant_entry "$(main_transcript s30)" claude-opus-5-5 950000 false
 assistant_entry "$(agent_transcript s30 a1)" claude-opus-5-5 150000 true
-expect_nothing "$(run warn s30 "")" "warned through a symlinked session directory"
-expect_nothing "$(run restore s30 "")" "restored through a symlinked session directory"
-expect_nothing "$(run warn s30 a1)" "a subagent warned through a symlinked session directory"
+expect_nothing "$(run_err warn s30 "")" "warned through a symlinked session directory"
+expect_refused "state directory $CONTEXT_GUARD_DIR/s30 is a symlink" "warn"
+expect_nothing "$(run_err restore s30 "")" "restored through a symlinked session directory"
+expect_refused "state directory $CONTEXT_GUARD_DIR/s30 is a symlink" "restore"
+expect_nothing "$(run_err warn s30 a1)" "a subagent warned through a symlinked session directory"
+expect_refused "state directory $CONTEXT_GUARD_DIR/s30 is a symlink" "a subagent's warn"
 expect_empty_dir "$elsewhere" "session directory"
 rm -f "$CONTEXT_GUARD_DIR/s30"
 pass
@@ -851,7 +864,8 @@ mkdir -p "$elsewhere" "$CONTEXT_GUARD_DIR/s31"
 ln -s "$elsewhere" "$CONTEXT_GUARD_DIR/s31/agents"
 assistant_entry "$(main_transcript s31)" claude-opus-5-5 150000 false
 assistant_entry "$(agent_transcript s31 a1)" claude-opus-5-5 150000 true
-expect_nothing "$(run warn s31 a1)" "a subagent warned through a symlinked agents directory"
+expect_nothing "$(run_err warn s31 a1)" "a subagent warned through a symlinked agents directory"
+expect_refused "state directory $CONTEXT_GUARD_DIR/s31/agents is a symlink" "a subagent's warn"
 expect_empty_dir "$elsewhere" "agents directory"
 rm -f "$CONTEXT_GUARD_DIR/s31/agents"
 pass
@@ -862,9 +876,12 @@ mkdir -p "$elsewhere"
 ln -s "$elsewhere" "$tmp/guard-link"
 assistant_entry "$(main_transcript s32)" claude-opus-5-5 950000 false
 for r in "$tmp/guard-link" "$tmp/guard-link/" "$tmp/guard-link//"; do
-  expect_nothing "$(CONTEXT_GUARD_DIR=$r run warn s32 "")" "warned through a symlinked root $r"
-  expect_nothing "$(CONTEXT_GUARD_DIR=$r run restore s32 "")" "restored through a symlinked root $r"
-  hook_input s32 "" | CONTEXT_GUARD_DIR=$r bash "$hook" start >/dev/null
+  expect_nothing "$(CONTEXT_GUARD_DIR=$r run_err warn s32 "")" "warned through a symlinked root $r"
+  expect_refused "state directory $tmp/guard-link is a symlink" "warn with root $r"
+  expect_nothing "$(CONTEXT_GUARD_DIR=$r run_err restore s32 "")" "restored through a symlinked root $r"
+  expect_refused "state directory $tmp/guard-link is a symlink" "restore with root $r"
+  hook_input s32 "" | CONTEXT_GUARD_DIR=$r bash "$hook" start >/dev/null 2>"$hook_err"
+  expect_refused "state directory $tmp/guard-link is a symlink" "start with root $r"
   expect_empty_dir "$elsewhere" "root $r"
 done
 rm -f "$tmp/guard-link"
@@ -873,7 +890,8 @@ pass
 case_name="a missing root is created with its missing parents, each state directory 700"
 r=$tmp/fresh/parent/guard
 assistant_entry "$(main_transcript s33)" claude-opus-5-5 950000 false
-expect_warning "$(CONTEXT_GUARD_DIR=$r run warn s33 "")" 950000/1000000
+expect_warning "$(CONTEXT_GUARD_DIR=$r run_err warn s33 "")" 950000/1000000
+expect_no_stderr
 for d in "$r" "$r/s33" "$r/s33/main"; do
   [ "$(ls -ld "$d" | cut -c1-10)" = drwx------ ] || fail "$d is $(ls -ld "$d" | cut -c1-10), expected drwx------"
 done
@@ -882,44 +900,62 @@ pass
 # The root's parent is not chmod (it may be /tmp): one another user could rename the root in,
 # or a symlink, would let them swap the checked root for a tree of their own afterwards. A test
 # cannot make a directory another user owns, so these cases pin the symlink and mode checks.
-case_name="a symlinked parent of the root: nothing printed, nothing created in its target"
+case_name="a symlinked parent of the root: nothing printed but the reason on stderr, nothing created in its target"
 elsewhere=$tmp/elsewhere-parent
 mkdir -p "$elsewhere"
 ln -s "$elsewhere" "$tmp/parent-link"
 assistant_entry "$(main_transcript s46)" claude-opus-5-5 950000 false
 for r in "$tmp/parent-link/guard" "$tmp/parent-link//guard"; do
-  expect_nothing "$(CONTEXT_GUARD_DIR=$r run warn s46 "")" "warned under a symlinked parent $r"
-  expect_nothing "$(CONTEXT_GUARD_DIR=$r run restore s46 "")" "restored under a symlinked parent $r"
-  hook_input s46 "" | CONTEXT_GUARD_DIR=$r bash "$hook" start >/dev/null
+  why="$tmp/parent-link, the parent of the state root $r, is a symlink"
+  expect_nothing "$(CONTEXT_GUARD_DIR=$r run_err warn s46 "")" "warned under a symlinked parent $r"
+  expect_refused "$why" "warn with root $r"
+  expect_nothing "$(CONTEXT_GUARD_DIR=$r run_err restore s46 "")" "restored under a symlinked parent $r"
+  expect_refused "$why" "restore with root $r"
+  hook_input s46 "" | CONTEXT_GUARD_DIR=$r bash "$hook" start >/dev/null 2>"$hook_err"
+  expect_refused "$why" "start with root $r"
   expect_empty_dir "$elsewhere" "parent $r"
 done
 rm -f "$tmp/parent-link"
 pass
 
-case_name="a parent of the root its group or others can write to, not sticky: nothing printed, no root created"
+# 775 is what mkdir makes under umask 002 (user-private groups), 2775 a setgid team directory.
+case_name="a parent of the root its group or others can write to, not sticky: nothing printed but the reason on stderr, no root created"
 assistant_entry "$(main_transcript s47)" claude-opus-5-5 950000 false
-for mode in 777 770 707 720 702; do
+for mode in 777 775 2775 770 707 720 702; do
   p=$tmp/open-$mode
   mkdir -p "$p"
   chmod "$mode" "$p"
-  expect_nothing "$(CONTEXT_GUARD_DIR=$p/guard run warn s47 "")" "warned under a parent of mode $mode"
-  hook_input s47 "" | CONTEXT_GUARD_DIR=$p/guard bash "$hook" start >/dev/null
+  why="$p, the parent of the state root $p/guard, is writable by its group or others and not sticky ($(ls -ldn "$p" | cut -d' ' -f1))"
+  expect_nothing "$(CONTEXT_GUARD_DIR=$p/guard run_err warn s47 "")" "warned under a parent of mode $mode"
+  expect_refused "$why" "warn under a parent of mode $mode"
+  hook_input s47 "" | CONTEXT_GUARD_DIR=$p/guard bash "$hook" start >/dev/null 2>"$hook_err"
+  expect_refused "$why" "start under a parent of mode $mode"
   [ ! -e "$p/guard" ] || fail "created the root under a parent of mode $mode"
 done
 pass
 
-case_name="a sticky world-writable parent (as /tmp is), a 755 one and a relative root: the guard works"
+case_name="a parent of the root that is a file: nothing printed but the reason on stderr"
+: >"$tmp/file-parent"
+assistant_entry "$(main_transcript s54)" claude-opus-5-5 950000 false
+expect_nothing "$(CONTEXT_GUARD_DIR=$tmp/file-parent/guard run_err warn s54 "")" "warned under a parent that is a file"
+expect_refused "$tmp/file-parent, the parent of the state root $tmp/file-parent/guard, is not a directory and could not be created as one" \
+  "warn under a parent that is a file"
+pass
+
+case_name="a sticky world-writable parent (as /tmp is), a 755 one and a relative root: the guard works, nothing on stderr"
 for mode in 1777 755; do
   p=$tmp/parent-$mode
   mkdir -p "$p"
   chmod "$mode" "$p"
   assistant_entry "$(main_transcript s48-$mode)" claude-opus-5-5 950000 false
-  expect_warning "$(CONTEXT_GUARD_DIR=$p/guard run warn s48-$mode "")" 950000/1000000
+  expect_warning "$(CONTEXT_GUARD_DIR=$p/guard run_err warn s48-$mode "")" 950000/1000000
+  expect_no_stderr
 done
 mkdir -p "$tmp/rel-cwd"
 chmod 700 "$tmp/rel-cwd" # the parent of a relative root is the working directory
 assistant_entry "$(main_transcript s48-rel)" claude-opus-5-5 950000 false
-expect_warning "$(cd "$tmp/rel-cwd" && CONTEXT_GUARD_DIR=guard run warn s48-rel "")" 950000/1000000
+expect_warning "$(cd "$tmp/rel-cwd" && CONTEXT_GUARD_DIR=guard run_err warn s48-rel "")" 950000/1000000
+expect_no_stderr
 [ -d "$tmp/rel-cwd/guard/s48-rel/main" ] || fail "the relative root was not created in the working directory"
 pass
 

@@ -96,12 +96,16 @@
 #        CONTEXT_GUARD_HEADROOM (default "8 5": warn once at each, when that % of the window or
 #          less is left before the compaction point),
 #        CONTEXT_GUARD_RESERVE (default 33000: tokens short of the window Claude Code compacts at),
-#        CONTEXT_GUARD_DIR (default /tmp/claude-<uid>/context-guard).
+#        CONTEXT_GUARD_DIR (default /tmp/claude-<uid>/context-guard; another one needs a parent
+#          that is a real directory, not a symlink - macOS's /tmp is one, /private/tmp is not -
+#          owned by this user or root, and not writable by its group or others unless sticky,
+#          which rules out a directory made under umask 002 and a group-writable team directory).
 # State is private: files are created with umask 077, every state directory must be a real
-# directory owned by this user (else the hook does nothing; each is checked before anything is
-# created in it, a missing one created a level at a time) and is chmod 700, and the root's
-# parent must be a real directory owned by this user or root that its group and others cannot
-# write to unless it is sticky, as /tmp is (else the hook does nothing), so on a shared host
+# directory owned by this user (else the hook does nothing but say why on stderr; each is checked
+# before anything is created in it, a missing one created a level at a time) and is chmod 700,
+# and the root's parent must be a real directory owned by this user or root that its group and
+# others cannot write to unless it is sticky, as /tmp is (else, again, the hook only says why
+# on stderr), so on a shared host
 # no other user can read STATE.md or plant one for a restore to inject. The directories above
 # that parent are not checked (the default root's are /tmp and /, both root-owned, /tmp
 # sticky): a CONTEXT_GUARD_DIR with a directory anywhere above its parent that another user
@@ -161,14 +165,28 @@ parent=${root%/*}
 case "$root" in */*) ;; *) parent=. ;; esac
 while case "$parent" in ?*/) ;; *) false ;; esac; do parent=${parent%/}; done
 parent=${parent:-/}
-[ -d "$parent" ] || mkdir -p "$parent" 2>/dev/null || exit 0
-[ -d "$parent" ] && [ ! -L "$parent" ] || exit 0
+# A refusal says why on stderr, so a CONTEXT_GUARD_DIR the guard cannot use does not switch it
+# off unnoticed; nothing reaches the model, and the hook still exits 0.
+refuse() { # $1: why the state is not used
+  printf 'context-guard: %s; guard disabled\n' "$1" >&2
+  exit 0
+}
+what="$parent, the parent of the state root $root,"
+[ -d "$parent" ] || mkdir -p "$parent" 2>/dev/null || refuse "$what is not a directory and could not be created as one"
+[ ! -L "$parent" ] || refuse "$what is a symlink"
+[ -d "$parent" ] || refuse "$what is not a directory"
 read -r parent_mode _ parent_owner _ <<<"$(ls -ldn "$parent" 2>/dev/null)"
-[ -O "$parent" ] || [ "${parent_owner:-}" = 0 ] || exit 0
-case "${parent_mode:-}" in d????????[tT]*|d????-??-*) ;; *) exit 0 ;; esac
+[ -O "$parent" ] || [ "${parent_owner:-}" = 0 ] \
+  || refuse "$what is owned by uid ${parent_owner:-unknown}, neither this user nor root"
+case "${parent_mode:-}" in
+  d????????[tT]*|d????-??-*) ;;
+  *) refuse "$what is writable by its group or others and not sticky (${parent_mode:-mode unknown})" ;;
+esac
 for d in "$root" "$base" ${agent:+"$base/agents"} "$state_dir"; do
   [ -e "$d" ] || [ -L "$d" ] || mkdir "$d" 2>/dev/null
-  [ -d "$d" ] && [ ! -L "$d" ] && [ -O "$d" ] || exit 0
+  [ ! -L "$d" ] || refuse "state directory $d is a symlink"
+  [ -d "$d" ] || refuse "state directory $d is not a directory and could not be created as one"
+  [ -O "$d" ] || refuse "state directory $d is not owned by this user"
   chmod 700 "$d" 2>/dev/null
 done
 state_file=$state_dir/STATE.md
