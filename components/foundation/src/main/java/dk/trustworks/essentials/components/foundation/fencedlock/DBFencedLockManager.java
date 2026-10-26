@@ -78,14 +78,9 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  *     {@link #acquireLock(LockName)} throws {@link IllegalStateException}, and the ticks of an async acquiring, one still
  *     running or one {@link #acquireLockAsync(LockName, LockCallback)} starts afterwards, do nothing, so its
  *     <code>lockAcquired</code> is not called. This lock manager does not recover from it on its own: the way back is to
- *     restart the application. A {@link #stop()} and {@link #start()} of the lock manager alone starts the lock confirmation
- *     again, so it acquires and confirms locks again, but {@link #stop()} drops every async acquiring and {@link #start()}
- *     schedules none of them again. A component that acquires its lock through
- *     {@link #acquireLockAsync(LockName, LockCallback)} when it starts - an event processor, an exclusive event store
- *     subscription, the scheduler; an inbox or an outbox when it starts consuming - is then not given its lock until it is
- *     stopped and started too, after the lock manager (an inbox or an outbox: call <code>startConsuming()</code> again,
- *     or <code>consume(messageConsumer)</code> after <code>stopConsuming()</code>, which drops its consumer); code of your
- *     own calls {@link #acquireLockAsync(LockName, LockCallback)} again after {@link #start()}</li>
+ *     restart the application, or stop and start the lock manager ({@link #stop()}, then {@link #start()}), which starts
+ *     the lock confirmation again and resumes every async acquiring not cancelled with
+ *     {@link #cancelAsyncLockAcquiring(LockName)}</li>
  *     <li>after {@link #stop()} has thrown a critical error, the lock manager is stopped ({@link #isStarted()} is
  *     <code>false</code>) and can be started again</li>
  *     <li>an async acquiring ended by a critical error keeps its entry - see {@link #acquireLockAsync(LockName, LockCallback)}
@@ -106,11 +101,13 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
      */
     private final ConcurrentMap<LockName, LOCK>               locksAcquiredByThisLockManager;
     /**
-     * Entries only exist if acquiring the lock is being performed asynchronously
+     * One entry per async acquiring registered with {@link #acquireLockAsync(LockName, LockCallback)} and not yet cancelled
+     * with {@link #cancelAsyncLockAcquiring(LockName)}. {@link #stop()} cancels each entry's scheduled future but keeps the
+     * entry, and {@link #start()} schedules every kept entry again<br>
      * Key: lock name<br>
-     * Value: the {@link ScheduledFuture} returned from {@link ScheduledExecutorService#scheduleAtFixedRate(Runnable, long, long, TimeUnit)}
+     * Value: the registration's {@link LockCallback} and its current {@link ScheduledFuture}
      */
-    private final ConcurrentMap<LockName, ScheduledFuture<?>> asyncLockAcquirings;
+    private final ConcurrentMap<LockName, AsyncLockAcquiring> asyncLockAcquirings;
     private final Duration                                    lockTimeOut;
     private final Duration                                    lockConfirmationInterval;
     private final String                                      lockManagerInstanceId;
@@ -226,6 +223,18 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
                                                                                            lockConfirmationInterval.toMillis(),
                                                                                            lockConfirmationInterval.toMillis(),
                                                                                            TimeUnit.MILLISECONDS);
+
+                // Resume every async acquiring the last stop() kept. Each is rescheduled inside computeIfPresent, so a
+                // concurrent cancelAsyncLockAcquiring - which does not take reentrantLock - either removes the entry
+                // first, and nothing is scheduled for it, or removes the rescheduled entry and cancels its new future
+                var executor = asyncLockAcquiringExecutor;
+                for (var lockName : asyncLockAcquirings.keySet()) {
+                    asyncLockAcquirings.computeIfPresent(lockName, (name, kept) -> {
+                        log.debug("[{}] Resuming async Lock acquiring for lock '{}'", lockManagerInstanceId, name);
+                        kept.scheduledFuture().cancel(true);
+                        return new AsyncLockAcquiring(kept.lockCallback(), scheduleAsyncLockAcquiring(executor, name, kept.lockCallback()));
+                    });
+                }
 
                 started = true;
             } finally {
@@ -382,8 +391,7 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
         log.error(msg("[{}] The lock confirmation failed with {} - released the {} lock(s) this lock manager instance held locally only "
                       + "(their rows expire after the lock timeout) and the scheduled lock confirmation has ended: this lock manager "
                       + "acquires no lock from now on (tryAcquireLock returns empty, acquireLock throws, async acquiring acquires nothing), "
-                      + "until the application is restarted (or the lock manager is stopped and started, and after it every component "
-                      + "that acquires a lock through it with acquireLockAsync, which the lock manager's stop drops)",
+                      + "until the application is restarted, or the lock manager is stopped and started",
                       lockManagerInstanceId, isCriticalError(failure) ? "a critical error" : "an unexpected failure", heldLocks.size()), failure);
     }
 
@@ -495,7 +503,7 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
         if (confirmation != null) {
             confirmation.cancel(true);
         }
-        asyncLockAcquirings.values().forEach(acquiring -> acquiring.cancel(true));
+        asyncLockAcquirings.values().forEach(acquiring -> acquiring.scheduledFuture().cancel(true));
         log.debug("[{}] Shutdown starting - lock confirmation and async acquiring cancelled", lockManagerInstanceId);
     }
 
@@ -606,8 +614,7 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
             // Held across the whole teardown so that acquireLockAsync - which reads asyncLockAcquiringExecutor under
             // the same lock - either completes entirely before this and gets its scheduled future cancelled below, or
             // runs entirely after it and sees started == false. Interleaving the two is what produced a
-            // NullPointerException on the caller's thread, and would otherwise leave a cancelled future stranded in
-            // asyncLockAcquirings, which a later start() would then treat as a live acquiring and never re-schedule.
+            // NullPointerException on the caller's thread.
             // The first critical error releasing a lock, rethrown once the teardown is complete - see the class javadoc, "Errors"
             Throwable criticalError = null;
             reentrantLock.lock();
@@ -657,13 +664,15 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
                 }
                 locksAcquiredByThisLockManager.clear();
 
-                asyncLockAcquirings.forEach((lockName, scheduledFuture) -> {
-                    log.debug("[{}] Cancelling acquiring of Lock '{}' due to Stopping",
+                // Each registration is kept - only its scheduled future is cancelled - so start() resumes it.
+                // cancelAsyncLockAcquiring is what removes one for good
+                asyncLockAcquirings.forEach((lockName, acquiring) -> {
+                    log.debug("[{}] Suspending async acquiring of Lock '{}' due to Stopping - start() resumes it",
                               lockManagerInstanceId,
                               lockName);
 
                     try {
-                        scheduledFuture.cancel(true);
+                        acquiring.scheduledFuture().cancel(true);
                     } catch (Exception e) {
                         if (IOExceptionUtil.isIOException(e)) {
                             log.debug(msg("[{}] Failed to stop acquiring of FencedLock with name '{}'",
@@ -676,7 +685,6 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
                         }
                     }
                 });
-                asyncLockAcquirings.clear();
 
                 if (asyncLockAcquiringExecutor != null) {
                     log.debug("[{}] Shutting down asyncLockAcquiringExecutor",
@@ -871,8 +879,7 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
 
     private void logAsyncAcquiringNotAcquiringAsTheConfirmationHasEnded(LockName lockName) {
         log.debug("[{}] The scheduled lock confirmation has ended - the async acquiring of lock '{}' is not acquiring it, as this lock manager "
-                  + "could not confirm it, until the application is restarted: a stop and start of the lock manager drops this async acquiring, "
-                  + "so its component must be stopped and started too (or acquireLockAsync called again) after it", lockManagerInstanceId, lockName);
+                  + "could not confirm it, until the application is restarted, or the lock manager is stopped and started", lockManagerInstanceId, lockName);
     }
 
     /**
@@ -1132,9 +1139,13 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
      * {@link #isLockAcquiredByAnotherLockManagerInstance(LockName)} tells an ended acquiring apart from one still waiting
      * for the lock.
      * The ended acquiring keeps its entry, so calling this method again for the same lock name does not restart it. To
-     * restart it, call {@link #cancelAsyncLockAcquiring(LockName)} and then this method, or stop and start the lock manager
-     * and then call this method again: {@link #stop()} drops every async acquiring, and {@link #start()} schedules none of
-     * them again.
+     * restart it, call {@link #cancelAsyncLockAcquiring(LockName)} and then this method, or stop and start the lock manager.
+     * <p>
+     * {@link #stop()} cancels the scheduled acquiring but keeps the registration (the lock name and this
+     * <code>lockCallback</code>), and {@link #start()} schedules every kept registration again, an ended one included; only
+     * {@link #cancelAsyncLockAcquiring(LockName)} removes a registration for good. Called while one is kept for the same
+     * lock name - by a component on its own start, after the lock manager's - this method does nothing, and keeps the
+     * <code>lockCallback</code> of the kept registration. Called while the lock manager is not started, it registers nothing.
      */
     @Override
     public void acquireLockAsync(LockName lockName, LockCallback lockCallback) {
@@ -1155,14 +1166,29 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
 
             asyncLockAcquirings.computeIfAbsent(lockName, _lockName -> {
                 log.debug("[{}] Starting async Lock acquiring for lock '{}'", lockManagerInstanceId, lockName);
-                return executor.scheduleAtFixedRate(() -> asyncLockAcquiringTick(lockName, lockCallback),
-                                                    0,
-                                                    lockConfirmationInterval.toMillis(),
-                                                    TimeUnit.MILLISECONDS);
+                return new AsyncLockAcquiring(lockCallback, scheduleAsyncLockAcquiring(executor, lockName, lockCallback));
             });
         } finally {
             reentrantLock.unlock();
         }
+    }
+
+    /**
+     * An async acquiring registered with {@link #acquireLockAsync(LockName, LockCallback)}: the callback it was registered
+     * with, kept across {@link #stop()} so {@link #start()} can schedule it again, and the scheduled future of its ticks
+     * since the last (re)scheduling - cancelled while the lock manager is stopped
+     *
+     * @param lockCallback    the callback the async acquiring was registered with
+     * @param scheduledFuture the future of its ticks ({@link #asyncLockAcquiringTick(LockName, LockCallback)})
+     */
+    private record AsyncLockAcquiring(LockCallback lockCallback, ScheduledFuture<?> scheduledFuture) {
+    }
+
+    private ScheduledFuture<?> scheduleAsyncLockAcquiring(ScheduledExecutorService executor, LockName lockName, LockCallback lockCallback) {
+        return executor.scheduleAtFixedRate(() -> asyncLockAcquiringTick(lockName, lockCallback),
+                                            0,
+                                            lockConfirmationInterval.toMillis(),
+                                            TimeUnit.MILLISECONDS);
     }
 
     /**
@@ -1356,10 +1382,10 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
     @Override
     public void cancelAsyncLockAcquiring(LockName lockName) {
         requireNonNull(lockName, "You must supply a lockName");
-        var scheduledFuture = asyncLockAcquirings.remove(lockName);
-        if (scheduledFuture != null) {
+        var acquiring = asyncLockAcquirings.remove(lockName);
+        if (acquiring != null) {
             log.debug("[{}] Canceling async Lock acquiring for lock '{}'", lockManagerInstanceId, lockName);
-            scheduledFuture.cancel(true);
+            acquiring.scheduledFuture().cancel(true);
             var acquiredLock = locksAcquiredByThisLockManager.get(lockName);
             if (acquiredLock != null) {
                 log.debug("[{}] Releasing Lock due to cancelling the lock acquiring '{}'", lockManagerInstanceId, lockName);

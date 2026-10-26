@@ -55,7 +55,7 @@ import static org.assertj.core.api.Assertions.*;
  * ({@link dk.trustworks.essentials.shared.Exceptions#isCriticalError(Throwable)}) still escapes, rolling back the tick's
  * confirmations and ending the scheduled confirmation - but every lock still held is released locally, and the error logged at
  * ERROR, first. From then on the lock manager acquires no lock, which it could no longer confirm, until it is stopped and
- * started again - and an async acquiring registered before the stop is not resumed by the start: it has to be registered
+ * started again - and an async acquiring registered before the stop is resumed by the start, without being registered
  * again.
  */
 class DBFencedLockManagerLostLockReleaseTest {
@@ -403,8 +403,8 @@ class DBFencedLockManagerLostLockReleaseTest {
     }
 
     @Test
-    @SuppressWarnings("PMD.CloseResource") // otherLock, and the lock the re-registered async acquiring takes, are released by stop() in cleanup()
-    void an_async_acquiring_registered_before_the_confirmation_ended_is_not_resumed_by_a_stop_and_start_of_the_lock_manager() {
+    @SuppressWarnings("PMD.CloseResource") // otherLock, and the lock the resumed async acquiring takes, are released by stop() in cleanup()
+    void an_async_acquiring_registered_before_the_confirmation_ended_is_resumed_by_a_stop_and_start_of_the_lock_manager() {
         // Given an async acquiring that has acquired its lock
         var asyncAcquired = new CopyOnWriteArrayList<FencedLock>();
         var asyncReleased = new CopyOnWriteArrayList<FencedLock>();
@@ -450,19 +450,22 @@ class DBFencedLockManagerLostLockReleaseTest {
         // Then the lock manager acquires locks again ...
         var otherLock = lockManager.tryAcquireLock(OTHER_LOCK_NAME).orElseThrow();
         assertThat(otherLock.isLocked()).isTrue();
-        // ... but the async acquiring is not resumed: stop() dropped it and start() schedules none again, so lockAcquired is
-        // not called again
-        Awaitility.await()
-                  .during(Duration.ofMillis(1000))
-                  .atMost(Duration.ofSeconds(3))
-                  .untilAsserted(() -> assertThat(asyncAcquired).hasSize(1));
-
-        // And it acquires its lock again once it is registered again
-        lockManager.acquireLockAsync(LOCK_NAME, lockCallback);
+        // ... and resumes the async acquiring without it being registered again: stop() kept its registration and start()
+        // scheduled it again, so it acquires its lock and lockAcquired is called again, on the same callback
         Awaitility.waitAtMost(Duration.ofSeconds(5))
                   .untilAsserted(() -> assertThat(asyncAcquired).hasSize(2));
         awaitConfirmationKeepsRunning(LOCK_NAME);
         assertThat(asyncAcquired.getLast().isLocked()).isTrue();
+
+        // And a component registering it again on its own start changes nothing: the registration is already there
+        lockManager.acquireLockAsync(LOCK_NAME, lockCallback);
+        Awaitility.await()
+                  .during(Duration.ofMillis(500))
+                  .atMost(Duration.ofSeconds(3))
+                  .untilAsserted(() -> {
+                      assertThat(asyncAcquired).hasSize(2);
+                      assertThat(asyncReleased).hasSize(1);
+                  });
     }
 
     private List<LockAcquired> lockAcquiredEvents() {
