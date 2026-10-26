@@ -99,6 +99,9 @@ class ShardOwnedTakeoverAttemptsIT {
             }, ShardOwnerSettings.defaults(), SHARD_COUNT, policy);
             first.enqueue(List.of(bytes("failing")), 1);
             Awaitility.await().atMost(Duration.ofSeconds(20)).until(() -> deliveries.get() == 1);
+            // The handler counts the delivery before the pump writes the failure, so closing on the count alone
+            // raced that write: a close that won left attempts at 0 and the second owner delivered three more
+            Awaitility.await().atMost(Duration.ofSeconds(20)).until(() -> storedAttempts() == 1);
         }
         // Closed cleanly with the message waiting out its first backoff, its count (1) on the row
 
@@ -113,6 +116,15 @@ class ShardOwnedTakeoverAttemptsIT {
             assertThat(deliveries.get())
                     .as("3 attempts in total across both owners, not 3 more under the second")
                     .isEqualTo(3);
+        }
+    }
+
+    private int storedAttempts() throws Exception {
+        try (var connection = dataSource.getConnection();
+             var statement = connection.createStatement();
+             var resultSet = statement.executeQuery("SELECT coalesce(max(attempts), 0) FROM " + ShardOwnedSchema.UNORDERED_TABLE)) {
+            resultSet.next();
+            return resultSet.getInt(1);
         }
     }
 

@@ -139,6 +139,7 @@ public final class ShardRuntime implements Lifecycle, AutoCloseable {
      * Sends the wake-ups for units this runtime does not serve - see {@link #wakeIfServedHere}
      */
     private final ShardWakeupNotifier      notifier;
+    private final PumpConnections          pumpConnections;
     /**
      * Recreated by every {@link #start()}, because an {@code ExecutorService} cannot be restarted
      * once shut down. This is what makes the runtime genuinely restartable rather than merely
@@ -174,12 +175,84 @@ public final class ShardRuntime implements Lifecycle, AutoCloseable {
      */
     public ShardRuntime(DataSource dataSource, ShardOwnerSettings settings, ShardOwnerMetrics metrics,
                         ConnectionPoolMetadata pool) {
+        this(dataSource, settings, metrics, pool, PumpConnections.allHeld());
+    }
+
+    private ShardRuntime(DataSource dataSource, ShardOwnerSettings settings, ShardOwnerMetrics metrics,
+                         ConnectionPoolMetadata pool, PumpConnections pumpConnections) {
         this.dataSource = requireNonNull(dataSource, "No dataSource provided");
         this.settings = requireNonNull(settings, "No settings provided");
         this.metrics = requireNonNull(metrics, "No metrics provided");
         this.pool = requireNonNull(pool, "No pool metadata provided");
+        this.pumpConnections = requireNonNull(pumpConnections, "No pumpConnections provided");
         this.notifier = new ShardWakeupNotifier(dataSource);
         start();
+    }
+
+    /**
+     * A runtime with everything the constructors take, and whether its pumps hold their connections - see
+     * {@link PumpConnections}. Builds and starts it.
+     */
+    public static Builder builder() {
+        return new Builder();
+    }
+
+    public static final class Builder {
+        private DataSource             dataSource;
+        private ShardOwnerSettings     settings        = ShardOwnerSettings.defaults();
+        private ShardOwnerMetrics      metrics;
+        private ConnectionPoolMetadata pool            = ConnectionPoolMetadata.unknown();
+        private PumpConnections        pumpConnections = PumpConnections.allHeld();
+
+        private Builder() {
+        }
+
+        public Builder setDataSource(DataSource dataSource) {
+            this.dataSource = requireNonNull(dataSource, "No dataSource provided");
+            return this;
+        }
+
+        /**
+         * @param settings engine tuning; {@link ShardOwnerSettings#defaults()} unless set
+         */
+        public Builder setSettings(ShardOwnerSettings settings) {
+            this.settings = requireNonNull(settings, "No settings provided");
+            return this;
+        }
+
+        /**
+         * @param metrics where the pumps count; a new instance unless set
+         */
+        public Builder setMetrics(ShardOwnerMetrics metrics) {
+            this.metrics = requireNonNull(metrics, "No metrics provided");
+            return this;
+        }
+
+        /**
+         * @param pool what can be learned about the pool behind the {@code DataSource}, for the start-up budget check;
+         *             {@link ConnectionPoolMetadata#unknown()} unless set, which skips it
+         */
+        public Builder setPool(ConnectionPoolMetadata pool) {
+            this.pool = requireNonNull(pool, "No pool metadata provided");
+            return this;
+        }
+
+        /**
+         * @param pumpConnections whether the pumps hold their connections while idle; {@link PumpConnections#allHeld()}
+         *                        unless set
+         */
+        public Builder setPumpConnections(PumpConnections pumpConnections) {
+            this.pumpConnections = requireNonNull(pumpConnections, "No pumpConnections provided");
+            return this;
+        }
+
+        /**
+         * @return the runtime, started
+         */
+        public ShardRuntime build() {
+            requireNonNull(dataSource, "No dataSource provided");
+            return new ShardRuntime(dataSource, settings, metrics != null ? metrics : new ShardOwnerMetrics(), pool, pumpConnections);
+        }
     }
 
     /**
@@ -214,10 +287,17 @@ public final class ShardRuntime implements Lifecycle, AutoCloseable {
         // and every statement an owner issues carries its own queue id.
         var connections = new ShardOwnedStorage(dataSource, NO_QUEUE_ID);
         for (var index = 0; index < pumpCount; index++) {
+            // The first PumpConnections.minHeld hold their connection; the rest give it back while idle
             var pump = new ShardPump(connections, settings, metrics, running, flushOnExit, "pump-" + index,
-                                     () -> PoolBudget.exhaustion(dataSource, pool));
+                                     () -> PoolBudget.exhaustion(dataSource, pool), pumpConnections.holdsAlways(index),
+                                     pumpConnections.releaseIdleAfter().toNanos());
             pumps.add(pump);
             pumpExecutor.submit(pump);
+        }
+        if (pumpConnections.minHeld() < pumpCount) {
+            log.info("Shard-owned queue: {} of {} pump(s) hold their connection always; the other {} release it once they have "
+                             + "delivered nothing for {}, borrowing one only for a pass with database work",
+                     pumpConnections.minHeld(), pumpCount, pumpCount - pumpConnections.minHeld(), pumpConnections.releaseIdleAfter());
         }
         this.listener = new ShardWakeupListener(dataSource, wakeups);
         // Started here, after it is fully constructed, rather than from inside its own constructor.

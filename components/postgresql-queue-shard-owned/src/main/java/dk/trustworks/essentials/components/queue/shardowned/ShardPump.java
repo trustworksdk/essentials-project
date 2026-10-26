@@ -86,10 +86,26 @@ final class ShardPump implements Runnable {
      * an unreachable database fail acquisition with the same exception, and the fixes are unrelated.
      */
     private final Supplier<Optional<String>>        poolExhaustion;
+    /**
+     * Whether this pump is one of the {@link PumpConnections#minHeld()} that keep their connection for as long as they
+     * run; the others release it once they have delivered nothing for {@link #releaseIdleConnectionAfterNanos}
+     */
+    private final boolean                           holdsConnectionAlways;
+    private final long                              releaseIdleConnectionAfterNanos;
 
     ShardPump(ShardOwnedStorage storage, ShardOwnerSettings settings, ShardOwnerMetrics metrics,
               AtomicBoolean running, AtomicBoolean flushOnExit, String name,
               Supplier<Optional<String>> poolExhaustion) {
+        this(storage, settings, metrics, running, flushOnExit, name, poolExhaustion, true, 0L);
+    }
+
+    /**
+     * @param holdsConnectionAlways           whether this pump keeps its connection for as long as it runs
+     * @param releaseIdleConnectionAfterNanos otherwise, how long it goes without delivering before releasing it
+     */
+    ShardPump(ShardOwnedStorage storage, ShardOwnerSettings settings, ShardOwnerMetrics metrics,
+              AtomicBoolean running, AtomicBoolean flushOnExit, String name,
+              Supplier<Optional<String>> poolExhaustion, boolean holdsConnectionAlways, long releaseIdleConnectionAfterNanos) {
         this.storage = requireNonNull(storage, "No storage provided");
         this.settings = requireNonNull(settings, "No settings provided");
         this.metrics = requireNonNull(metrics, "No metrics provided");
@@ -97,6 +113,8 @@ final class ShardPump implements Runnable {
         this.flushOnExit = requireNonNull(flushOnExit, "No flushOnExit flag provided");
         this.name = requireNonNull(name, "No name provided");
         this.poolExhaustion = requireNonNull(poolExhaustion, "No poolExhaustion provided");
+        this.holdsConnectionAlways = holdsConnectionAlways;
+        this.releaseIdleConnectionAfterNanos = releaseIdleConnectionAfterNanos;
     }
 
     /**
@@ -142,15 +160,26 @@ final class ShardPump implements Runnable {
 
     @Override
     public void run() {
-        while (running.get()) {
-            try (var connection = storage.connection()) {
-                // Reset per connection, not per owner: after a reconnect every owner has to bump
-                // attempts again, because the takeover it is recovering from may be its own.
-                var takenOver = Collections.newSetFromMap(new IdentityHashMap<LeasedOwner, Boolean>());
-                // And every owner is visited once on the new connection, signalled or not
-                var fullScanDue = true;
-
-                while (running.get()) {
+        // Reset when a connection FAILS, not per owner: after a reconnect every owner has to bump
+        // attempts again, because the takeover it is recovering from may be its own. NOT reset when
+        // this pump releases an idle connection - nothing was lost then, and redoing every owner's
+        // takeover on each borrow would cost a statement per owner for nothing.
+        var takenOver = Collections.newSetFromMap(new IdentityHashMap<LeasedOwner, Boolean>());
+        // And every owner is visited once on the first connection, and on each after a failure
+        var fullScanDue = true;
+        // Null while this pump holds none: a pump beyond PumpConnections.minHeld borrows one when a
+        // pass has database work, and once it has delivered nothing for PumpConnections.releaseIdleAfter
+        // gives it back at the end of every pass. Quiet is measured in deliveries, not database work:
+        // every idle owner still sweeps at maxSweepInterval, so a pump serving a few dozen owners always
+        // has database work within any idle window, and would never release.
+        Connection connection = null;
+        var lastDeliveryNanos = System.nanoTime();
+        try {
+            while (running.get()) {
+                try {
+                    if (connection == null && holdsConnectionAlways) {
+                        connection = storage.connection();
+                    }
                     var delivered       = 0;
                     var statementFailed = false;
                     // needsAttention has a side effect — it consumes the shard's wake-up flag — so
@@ -171,6 +200,7 @@ final class ShardPump implements Runnable {
                         // and acknowledged found nothing to bump, which is what a crashed owner's
                         // successor depends on to stop an infinite redelivery loop.
                         if (takenOver.add(owner)) {
+                            connection = connected(connection);
                             owner.onTakeover(connection);
                         }
                         if (!owner.leaseHeld()) {
@@ -200,6 +230,9 @@ final class ShardPump implements Runnable {
                         attentive.add(owner);
                     }
 
+                    if (!attentive.isEmpty()) {
+                        connection = connected(connection);
+                    }
                     batchRead(connection, attentive);
                     // Every read of the pass before its one horizon probe - see HorizonProbingOwner.
                     for (var owner : attentive) {
@@ -270,6 +303,9 @@ final class ShardPump implements Runnable {
                         }
                     }
 
+                    if (delivered > 0) {
+                        lastDeliveryNanos = System.nanoTime();
+                    }
                     if (statementFailed) {
                         // Paced like the reconnect path, and for the same reason. A statement that
                         // fails permanently — a blocked delete, a full disk, a broken constraint —
@@ -278,39 +314,72 @@ final class ShardPump implements Runnable {
                         // pacing was not.
                         TimeUnit.MILLISECONDS.sleep(200L);
                     } else if (delivered == 0) {
+                        if (connection != null && !holdsConnectionAlways
+                                && System.nanoTime() - lastDeliveryNanos >= releaseIdleConnectionAfterNanos) {
+                            closeQuietly(connection);
+                            connection = null;
+                            metrics.pumpConnectionsReleased.increment();
+                        }
                         park();
                     }
+                } catch (SQLException e) {
+                    closeQuietly(connection);
+                    connection = null;
+                    takenOver.clear();
+                    fullScanDue = true;
+                    metrics.connectionFailures.increment();
+                    // Asked for any SQLException, not only a timeout type: pools disagree on what they
+                    // throw when full (Hikari a SQLTransientConnectionException, DBCP2 and Tomcat plain
+                    // SQLExceptions), and the live count is what separates the cases anyway.
+                    var exhausted = poolExhaustion.get();
+                    if (exhausted.isPresent()) {
+                        // Not a database problem, and reporting it as one sends the reader to the wrong
+                        // place. The shards this pump serves deliver nothing until a connection is free.
+                        log.error("{} could not get a connection: {}. Its shards stop delivering until one is "
+                                          + "free; raise the pool's maximum size. Retrying", name, exhausted.get(), e);
+                    } else {
+                        log.warn("{} lost its connection; reconnecting", name, e);
+                    }
+                    try {
+                        TimeUnit.MILLISECONDS.sleep(200L);
+                    } catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+                        return;
+                    }
                 }
-                if (flushOnExit.get()) {
+            }
+            if (flushOnExit.get() && !owners.isEmpty()) {
+                try {
+                    connection = connected(connection);
                     for (var owner : owners) {
                         owner.flushOnStop(connection);
                     }
-                }
-                return;
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                return;
-            } catch (SQLException e) {
-                metrics.connectionFailures.increment();
-                // Asked for any SQLException, not only a timeout type: pools disagree on what they
-                // throw when full (Hikari a SQLTransientConnectionException, DBCP2 and Tomcat plain
-                // SQLExceptions), and the live count is what separates the cases anyway.
-                var exhausted = poolExhaustion.get();
-                if (exhausted.isPresent()) {
-                    // Not a database problem, and reporting it as one sends the reader to the wrong
-                    // place. The shards this pump serves deliver nothing until a connection is free.
-                    log.error("{} could not get a connection: {}. Its shards stop delivering until one is "
-                                      + "free; raise the pool's maximum size. Retrying", name, exhausted.get(), e);
-                } else {
-                    log.warn("{} lost its connection; reconnecting", name, e);
-                }
-                try {
-                    TimeUnit.MILLISECONDS.sleep(200L);
-                } catch (InterruptedException interrupted) {
-                    Thread.currentThread().interrupt();
-                    return;
+                } catch (SQLException e) {
+                    log.warn("{} could not flush its owners' acknowledgements on stop; they are redelivered", name, e);
                 }
             }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } finally {
+            closeQuietly(connection);
+        }
+    }
+
+    /**
+     * {@code connection}, or a new one from the pool if this pump holds none
+     */
+    private Connection connected(Connection connection) throws SQLException {
+        return connection != null ? connection : storage.connection();
+    }
+
+    private void closeQuietly(Connection connection) {
+        if (connection == null) {
+            return;
+        }
+        try {
+            connection.close();
+        } catch (SQLException | RuntimeException e) {
+            log.debug("{}: closing its connection failed", name, e);
         }
     }
 

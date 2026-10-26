@@ -194,6 +194,12 @@ public final class ShardOwnerMetrics {
      */
     public final LongAdder     connectionFailures               = new LongAdder();
     /**
+     * Connections a pump beyond {@link PumpConnections#minHeld()} gave back to the pool, once it had delivered nothing for
+     * {@link PumpConnections#releaseIdleAfter()}. A quiet pump borrows for each pass with database work and gives the
+     * connection back after it, so this grows with the sweeps of the owners it serves while quiet
+     */
+    public final LongAdder     pumpConnectionsReleased          = new LongAdder();
+    /**
      * Units taken, <b>including the first acquisition at start-up</b>. It counted only rebalance
      * acquisitions until the admin API began publishing it, so a single instance holding every unit
      * of a queue reported zero — which reads as "this instance has taken nothing" rather than "this
@@ -309,6 +315,7 @@ public final class ShardOwnerMetrics {
         snapshot.put("leaseRenewals", leaseRenewals.sum());
         snapshot.put("leasesLost", leasesLost.sum());
         snapshot.put("connectionFailures", connectionFailures.sum());
+        snapshot.put("pumpConnectionsReleased", pumpConnectionsReleased.sum());
         snapshot.put("shardsAcquired", shardsAcquired.sum());
         snapshot.put("shardsReleased", shardsReleased.sum());
         snapshot.put("keyHeadOfLineBlocks", keyHeadOfLineBlocks.sum());

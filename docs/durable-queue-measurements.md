@@ -665,6 +665,40 @@ Trading demo (single instance, burst 300, 7 days), three alternating runs per ar
 The lock wait is gone, the database's active time fell 20-35 % and its busy moments about 40 %; WAL flushing is now
 the dominant wait. All 7 demo checks passed in all six runs.
 
+### 3.15 Elastic pump connections: giving idle pumps' connections back
+
+Every pump holds one connection for as long as it runs, so a runtime holds `pumpThreads + 1` (the wake-up listener's
+included) whether its queues are busy or quiet. `PumpConnections.elastic(minHeld, releaseIdleAfter)` keeps that for the
+first `minHeld` pumps; the others, once they have delivered nothing for `releaseIdleAfter`, borrow a connection only for
+a pass with database work and give it back at the end of that pass.
+
+Quiet is measured in deliveries, not in database work. The first version released a connection only after
+`releaseIdleAfter` without any statement, and in the trading demo it never released anything: each pump serves dozens of
+owners, and their backed-off sweeps (every `maxSweepInterval`, 30 s) always land inside a 10 s window. The engine's own
+tests passed, with a handful of owners. `ShardOwnedElasticPumpConnectionsIT` now runs owners sweeping every 200 ms, and
+fails against the first version.
+
+No regression with the default (every pump held): `ShardOwnedOrderedLoadedCostIT` (benchmark-gated; 8 ordered queues,
+2 pumps, 3 000 msg/s offered), three alternating rounds per arm from two worktrees:
+
+| Arm | delivered | p50 (ms) | p99 (ms) | max (ms) | transactions / msg | read statements / msg |
+|---|---|---|---|---|---|---|
+| before | 2 964 msg/s | 3.1 / 3.0 / 3.3 | 6.0 / 6.0 / 6.8 | 27 / 26 / 43 | 6.3-6.6 | 3.3-3.5 |
+| this change | 2 963-2 965 msg/s | 3.0 / 3.0 / 3.2 | 5.5 / 10.0 / 6.1 | 23 / 37 / 23 | 6.4-6.7 | 3.4 |
+
+Trading demo (single instance, 4 pumps, Hikari pool 40), `min-held-pump-connections` 4 (all held) against 1:
+
+| Workload | Arm | Hikari active, min / p10 / median | booked p50 / p99 (ms) | placed→submitted p99 (ms) |
+|---|---|---|---|---|
+| idle, queue load generator off, 90 s × 2 runs | all held | 5 / 5 / 5 | - | - |
+| idle, queue load generator off, 90 s × 2 runs | elastic | 2 / 2 / 2 (5 for a few seconds once a minute) | - | - |
+| burst 300, 7 days, 3 alternating runs | all held | 5 / 5 / 6 | 240-264 / 2 576-4 807 | 776-2 592 |
+| burst 300, 7 days, 3 alternating runs | elastic | 2 / 2 / 5 | 241-258 / 2 541-4 574 | 761-2 137 |
+
+Three connections come back whenever the queues are quiet, between rushes as well as overnight, and latency is
+unchanged within the spread. The pool still has to fit every pump at a rush: all four pumps are busy then, and the
+start-up budget check still counts them. All 7 demo checks passed in all six load runs.
+
 ## 4. Environment
 
 | | |

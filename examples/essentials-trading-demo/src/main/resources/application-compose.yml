@@ -65,6 +65,10 @@ essentials:
     # router's handlers waited for connections from the 40-connection pool instead
     # (_demo_harness/CLAUDE.md, "The order path under a rush").
     pump-threads: 4
+    # Only one of them keeps its connection between rushes; the other three give theirs back to the pool
+    # once they have delivered nothing for 10 s, and borrow one only for a pass with work. The pool still has to
+    # fit all four at a rush - this frees three connections while the queues are quiet.
+    min-held-pump-connections: 1
     # No `queues:` list. Nothing here needs one: the DurableQueues adapter registers the queues the
     # framework invents, and QueueLoadGenerator registers its own through
     # ShardOwnedQueueFactory.register, so its name lives in that class rather than in two places that

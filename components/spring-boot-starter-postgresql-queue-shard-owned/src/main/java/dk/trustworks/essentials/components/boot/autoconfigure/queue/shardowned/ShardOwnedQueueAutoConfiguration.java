@@ -121,10 +121,16 @@ public class ShardOwnedQueueAutoConfiguration {
     @ConditionalOnMissingBean
     public ShardRuntime shardRuntime(DataSource dataSource,
                                      ShardOwnerSettings settings,
+                                     ShardOwnedQueueProperties properties,
                                      ObjectProvider<DataSourcePoolMetadataProvider> poolMetadataProviders) {
         var provider = new CompositeDataSourcePoolMetadataProvider(poolMetadataProviders.orderedStream().toList());
-        return new ShardRuntime(dataSource, settings, new ShardOwnerMetrics(),
-                                SpringConnectionPoolMetadata.of(dataSource, provider));
+        return ShardRuntime.builder()
+                           .setDataSource(dataSource)
+                           .setSettings(settings)
+                           .setMetrics(new ShardOwnerMetrics())
+                           .setPool(SpringConnectionPoolMetadata.of(dataSource, provider))
+                           .setPumpConnections(properties.toPumpConnections())
+                           .build();
     }
 
     /**

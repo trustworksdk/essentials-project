@@ -312,8 +312,31 @@ Measured (`docs/durable-queue-measurements.md` §3.14): the lock wait disappears
 and the ordered-lane benchmark's p99 falls from 9-70 ms to 5-7 ms, at about 30 % more pump statements per message. In
 the demo, booked p50 255-261 ms → 237-244 ms and placed→submitted p99 1 271-1 496 ms → 796-992 ms over three runs each.
 
+### 2.12 Shard-owned: idle pumps can give their connections back (`postgresql-queue-shard-owned`, Spring Boot starter)
+
+Every pump holds a database connection for as long as it runs, so a process holds `pumpThreads + 1` connections (the
+wake-up listener's included) whether its queues are busy or quiet. A new, opt-in setting keeps that for some pumps and
+lets the others give their connection back while their queues are quiet:
+
+```yaml
+essentials:
+  shard-owned-queue:
+    min-held-pump-connections: 1           # unset = every pump holds its connection, as before
+    release-idle-pump-connection-after: 10s
+```
+
+Without Spring: `ShardRuntime.builder()...setPumpConnections(PumpConnections.elastic(1, Duration.ofSeconds(10)))`. A
+pump beyond `min-held-pump-connections` that has delivered nothing for `release-idle-pump-connection-after` borrows a
+connection only for a pass with database work and returns it at the end of that pass. The pool still has to fit every
+pump during a rush, and the start-up check still counts all of them; this frees connections for the application while
+queues are quiet. `ShardOwnerMetrics.pumpConnectionsReleased` counts the releases.
+
+Measured (`docs/durable-queue-measurements.md` §3.15): with 4 pumps and 1 held, the trading demo holds 2 connections
+instead of 5 while quiet, between rushes as well as when idle, with latency unchanged within the spread. The default
+(every pump held) is unchanged, and benchmarks the same as before.
+
 ## 3. Documentation
 
 - The polling-optimizer docs describe the new defaults, and the stale-statistics guidance is next to the claim
   settings.
-- The `essentials` Claude Code plugin is updated to `0.60.0-6` with the documentation above.
+- The `essentials` Claude Code plugin is updated to `0.60.0-17` with the documentation above.

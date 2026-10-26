@@ -16,7 +16,7 @@
 
 package dk.trustworks.essentials.components.boot.autoconfigure.queue.shardowned;
 
-import dk.trustworks.essentials.components.queue.shardowned.ShardOwnerSettings;
+import dk.trustworks.essentials.components.queue.shardowned.*;
 import dk.trustworks.essentials.components.queue.shardowned.adapter.ShardOwnedDurableQueues;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
@@ -149,6 +149,15 @@ public class ShardOwnedQueueProperties {
 
     /** Threads, and therefore held connections, this process uses to talk to the database. */
     private int pumpThreads = 2;
+    /**
+     * How many of the {@code pump-threads} pumps hold their connection always; the others give it back to the pool after
+     * once they have delivered nothing for {@code release-idle-pump-connection-after}, and borrow one only for a pass with database work. Unset
+     * means all of them, as before. The pool still needs room for every pump at the peak - this frees connections while
+     * queues are quiet.
+     */
+    private Integer minHeldPumpConnections;
+    /** How long a pump beyond {@code min-held-pump-connections} goes without delivering a message before it releases its connection. */
+    private Duration releaseIdlePumpConnectionAfter = PumpConnections.DEFAULT_RELEASE_IDLE_AFTER;
     /** Concurrent keys per ordered shard. */
     private int keyConcurrency = 8;
     private int readBatchSize = 500;
@@ -254,6 +263,31 @@ public class ShardOwnedQueueProperties {
                                       holeExpiry, sweepInterval, maxHolesPerChase, keyConcurrency,
                                       pollBackstop, maxSweepInterval, pumpThreads,
                                       shedGrace, leaseTtl, watermarkCap);
+    }
+
+    /**
+     * {@link PumpConnections#allHeld()} unless {@code min-held-pump-connections} is set
+     */
+    public PumpConnections toPumpConnections() {
+        return minHeldPumpConnections == null
+               ? PumpConnections.allHeld()
+               : PumpConnections.elastic(minHeldPumpConnections, releaseIdlePumpConnectionAfter);
+    }
+
+    public Integer getMinHeldPumpConnections() {
+        return minHeldPumpConnections;
+    }
+
+    public void setMinHeldPumpConnections(Integer minHeldPumpConnections) {
+        this.minHeldPumpConnections = minHeldPumpConnections;
+    }
+
+    public Duration getReleaseIdlePumpConnectionAfter() {
+        return releaseIdlePumpConnectionAfter;
+    }
+
+    public void setReleaseIdlePumpConnectionAfter(Duration releaseIdlePumpConnectionAfter) {
+        this.releaseIdlePumpConnectionAfter = releaseIdlePumpConnectionAfter;
     }
 
     public Duration getWatermarkCap() {
