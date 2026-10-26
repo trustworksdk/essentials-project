@@ -114,14 +114,14 @@ Exceptions.forEachThenThrowFirst(parts, Lifecycle::stop);
 // Undo a failed start: stop every part, adding each stop's failure to the start's failure, then throw that
 try {
     parts.forEach(Lifecycle::start);
-} catch (RuntimeException | Error e) {
+} catch (Throwable e) {                    // Throwable: a checked exception thrown sneakily (Kotlin) is undone too
     Exceptions.rethrowIfCriticalError(e);
     Exceptions.forEachCollectingFailures(parts, Lifecycle::stop, e);  // returns e
     throw e;
 }
 ```
 
-- `forEachThenThrowFirst` / `forEachCollectingFailures` collect a `RuntimeException` and a non-critical `Error` (an `AssertionError`, say) alike. A critical error (`isCriticalError`) is rethrown at once, the items after it not run, with the failure collected so far added to it as suppressed.
+- `forEachThenThrowFirst` / `forEachCollectingFailures` collect a `RuntimeException`, a non-critical `Error` (an `AssertionError`, say) and a checked exception the action throws without declaring it (`sneakyThrow`, or from Kotlin) alike. A critical error (`isCriticalError`) is rethrown at once, the items after it not run, with the failure collected so far added to it as suppressed.
 - A failure is added once, by identity: an instance thrown for several items, or one the failure already carries as suppressed, is not added again.
 - `addSuppressedOnce(holder, suppressed)` is that rule on its own, for a cleanup loop of your own: it adds `suppressed` unless it is `holder` itself (where `Throwable.addSuppressed` throws `IllegalArgumentException`) or `holder` already carries it, both by identity.
 - `forEachCollectingFailures` returns `failure` when it is not null, else the action's first failure (later ones suppressed on it), else null - it does not throw the action's non-critical failures, so the caller throws the result with its own type.

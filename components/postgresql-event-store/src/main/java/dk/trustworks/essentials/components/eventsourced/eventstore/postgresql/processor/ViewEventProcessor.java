@@ -160,7 +160,8 @@ public abstract class ViewEventProcessor extends AbstractEventProcessor {
                                                 processorName));
         }
         started = true;
-        try {
+        // Nothing is left to undo but the flag: left not started, so start() may be called again - see startOrRollBack
+        startOrRollBack(() -> {
             logger.info("🎑⚙️  [{}] Starting ViewEventProcessor - will subscribe to events related to these AggregatesType's: {}",
                         processorName,
                         subscribeToEventsRelatedTo);
@@ -174,12 +175,7 @@ public abstract class ViewEventProcessor extends AbstractEventProcessor {
                                                            .onLockAcquired(lock -> onLockAcquired(processorName, subscribeToEventsRelatedTo, lock))
                                                            .onLockReleased(lock -> onLockReleased(processorName))
                                                            .build());
-        } catch (RuntimeException | Error e) {
-            // Left not started, so start() may be called again. A critical error is rethrown as it is, as Exceptions#forEachCollectingFailures does
-            Exceptions.rethrowIfCriticalError(e);
-            started = false;
-            throw e;
-        }
+        }, () -> { }, () -> started = false);
     }
 
     private void onLockAcquired(String processorName, List<AggregateType> subscribeToEventsRelatedTo, FencedLock lock) {
@@ -213,7 +209,8 @@ public abstract class ViewEventProcessor extends AbstractEventProcessor {
                     Exceptions.forEachThenThrowFirst(subscriptions, (EventStoreSubscription subscription) -> {
                         try {
                             subscription.unsubscribe();
-                        } catch (RuntimeException | Error failure) {
+                        } catch (Throwable failure) {
+                            // Throwable, so a checked exception thrown sneakily is logged too - the shared rule collects it as well
                             logger.error("FencedLock '{}' for ViewProcessor '{}' was RELEASED - failed to unsubscribe subscriber {}", lockName, processorName, subscription, failure);
                             throw failure;
                         }

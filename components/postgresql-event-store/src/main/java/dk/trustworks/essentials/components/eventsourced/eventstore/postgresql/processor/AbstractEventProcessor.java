@@ -211,9 +211,10 @@ public abstract class AbstractEventProcessor implements Lifecycle {
      * not leave subscriptions running that nothing refers to. The subscriptions are returned, not assigned, so the
      * processor's {@code eventStoreSubscriptions} keep the (unsubscribed) ones of an earlier run until every subscribe
      * succeeded. Undoing anything else the start did (its {@code started} flag, an {@code Inbox} consumption) is left to the
-     * caller.
+     * caller - {@link #startOrRollBack(Runnable, Runnable, Runnable)}.
      * <p>
-     * A {@link RuntimeException} and a non-critical {@link Error} are rolled back alike, as
+     * A {@link RuntimeException}, a non-critical {@link Error} and a checked exception the subscribe throws without
+     * declaring it (sneakily - a Kotlin override or interceptor can) are rolled back alike, as
      * {@link Exceptions#forEachCollectingFailures(Iterable, Consumer, Throwable)} treats them; a critical error
      * ({@link Exceptions#isCriticalError(Throwable)}) is rethrown at once, without the rollback.
      *
@@ -221,8 +222,9 @@ public abstract class AbstractEventProcessor implements Lifecycle {
      * @param subscribe      subscribes to one aggregate type and returns the subscription
      * @param <T>            the type of the aggregate types
      * @return the subscriptions, one per aggregate type in its order, as an unmodifiable list
-     * @throws RuntimeException the subscribe failure, when it is a {@link RuntimeException}, with each failure to unsubscribe
-     *                          one of the subscriptions created before it added as suppressed
+     * @throws RuntimeException the subscribe failure, when it is a {@link RuntimeException} (or a checked exception thrown
+     *                          sneakily, rethrown as it is), with each failure to unsubscribe one of the subscriptions
+     *                          created before it added as suppressed
      * @throws Error            the subscribe failure, when it is a non-critical {@link Error}, with each failure to
      *                          unsubscribe added as suppressed; or a critical error, rethrown at once - by the subscribe,
      *                          without the rollback, or by an unsubscribe during the rollback, with the subscribe failure
@@ -236,13 +238,58 @@ public abstract class AbstractEventProcessor implements Lifecycle {
             for (var aggregateType : aggregateTypes) {
                 created.add(subscribe.apply(aggregateType));
             }
-        } catch (RuntimeException | Error e) {
+        } catch (Throwable e) {
+            // Throwable, not RuntimeException | Error: a checked exception thrown sneakily would skip the rollback.
+            // Rethrown as it is - the try declares no checked exception, so 'throw e' needs no sneaky throw
             Exceptions.rethrowIfCriticalError(e);
             // Each one on its own, so a failing unsubscribe neither replaces the subscribe failure nor leaves the ones after it subscribed
             unsubscribeEachAddingFailuresTo(created, e);
             throw e;
         }
         return Collections.unmodifiableList(created);
+    }
+
+    /**
+     * Runs the steps of a processor's {@code start()} after the caller has marked it started, and rolls the start back
+     * when a step fails - used by {@link EventProcessor#start()}, {@link InTransactionEventProcessor#start()} and
+     * {@link ViewEventProcessor#start()}, so the shape of a failed start is written once. On a failure, {@code undo} runs - it stops
+     * what the steps left running beyond the subscriptions (an {@link EventProcessor}'s {@code Inbox} consumption), since a
+     * {@code stop()} of a processor that is not started does nothing - with a failure of its own added to the step's
+     * failure as suppressed, then {@code markNotStarted} runs, so
+     * {@code start()} may be called again, and the step's failure is rethrown as it was thrown. The subscriptions the steps
+     * created are unsubscribed by {@link #subscribeEachOrUnsubscribe(List, Function)} itself.
+     * <p>
+     * A {@link RuntimeException}, a non-critical {@link Error} and a checked exception a step throws without declaring it
+     * (sneakily - a Kotlin override of a processor hook such as {@code getInboxRedeliveryPolicy()} can) are rolled back
+     * alike. A critical error ({@link Exceptions#isCriticalError(Throwable)}) is rethrown at once, without the rollback;
+     * one thrown by {@code undo} is rethrown with the step's failure added to it as suppressed, and {@code markNotStarted}
+     * does not run.
+     * <p>
+     * Which checks run before the caller marks the processor started is the caller's: a check that rejects the processor
+     * runs before it, so a rejected processor still reports {@code isStarted() == false}.
+     *
+     * @param steps          the steps of the start, after the processor was marked started
+     * @param undo           undoes what the steps did beyond the subscriptions, when a step fails
+     * @param markNotStarted marks the processor not started again, when a step fails
+     * @throws RuntimeException a step's failure, when it is a {@link RuntimeException} (or a checked exception thrown
+     *                          sneakily, rethrown as it is), with {@code undo}'s failure added as suppressed
+     * @throws Error            a step's failure, when it is a non-critical {@link Error}, with {@code undo}'s failure added
+     *                          as suppressed; or a critical error, rethrown at once
+     */
+    static void startOrRollBack(Runnable steps, Runnable undo, Runnable markNotStarted) {
+        requireNonNull(steps, "steps is null");
+        requireNonNull(undo, "undo is null");
+        requireNonNull(markNotStarted, "markNotStarted is null");
+        try {
+            steps.run();
+        } catch (Throwable e) {
+            // Throwable, not RuntimeException | Error: a checked exception thrown sneakily would skip the rollback and leave
+            // the processor started. Rethrown as it is - the try declares no checked exception, so 'throw e' needs no sneaky throw
+            Exceptions.rethrowIfCriticalError(e);
+            Exceptions.forEachCollectingFailures(List.of(undo), Runnable::run, e);
+            markNotStarted.run();
+            throw e;
+        }
     }
 
     /**

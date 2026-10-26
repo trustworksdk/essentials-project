@@ -21,12 +21,15 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ev
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.EventStoreUnitOfWorkFactory;
 import dk.trustworks.essentials.components.foundation.fencedlock.*;
+import dk.trustworks.essentials.components.foundation.messaging.RedeliveryPolicy;
 import dk.trustworks.essentials.components.foundation.messaging.eip.store_and_forward.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.DurableQueues;
 import dk.trustworks.essentials.components.foundation.reactive.command.DurableLocalCommandBus;
 import dk.trustworks.essentials.components.foundation.types.SubscriberId;
+import dk.trustworks.essentials.shared.Exceptions;
 import org.junit.jupiter.api.Test;
 
+import java.io.IOException;
 import java.util.*;
 import java.util.function.*;
 
@@ -41,7 +44,8 @@ import static org.mockito.Mockito.*;
  * subscriptions would be live and referenced by nothing, while the processor's list still held an earlier run's
  * (unsubscribed) subscriptions - which a later {@code stop()} would unsubscribe once more. A start that fails before it
  * subscribes (its {@code Inbox} cannot be created or consumed from) is left not started too, and a subscribe that throws
- * a non-critical {@link Error} is rolled back like one that throws a {@link RuntimeException}. A
+ * a non-critical {@link Error} or a checked exception thrown without being declared (sneakily - a Kotlin override can) is
+ * rolled back like one that throws a {@link RuntimeException}. A
  * {@link ViewEventProcessor} subscribes when it acquires its lock, and unsubscribes what it created there in the same way;
  * one whose lock acquiring cannot be started is left not started.
  * <p>
@@ -302,6 +306,157 @@ class ProcessorStartRollbackTest {
         assertThat(processor.eventStoreSubscriptions).containsExactly(things, others);
         verify(inbox, never()).stopConsuming();
         verifyNoInteractions(things, others);
+    }
+
+    @Test
+    void an_EventProcessor_whose_second_subscribe_throws_a_checked_exception_sneakily_unsubscribes_the_first_and_is_not_started() {
+        var subscriptionManager = subscriptionManager();
+        var things              = mock(EventStoreSubscription.class);
+        var others              = mock(EventStoreSubscription.class);
+        var failure             = new IOException("Others cannot be subscribed to - thrown without being declared, as a Kotlin override can");
+        stubAsynchronousSubscribe(subscriptionManager, THINGS).thenReturn(things);
+        stubAsynchronousSubscribe(subscriptionManager, OTHERS).thenAnswer(invocation -> Exceptions.sneakyThrow(failure))
+                                                              .thenReturn(others);
+        var inbox     = mock(Inbox.class);
+        var processor = new TwoTypesEventProcessor(subscriptionManager, inboxes(inbox));
+
+        assertThatThrownBy(processor::start).isSameAs(failure);
+
+        verify(things).unsubscribe();
+        verify(inbox).stopConsuming();
+        assertThat(processor.isStarted()).isFalse();
+
+        processor.start();
+
+        assertThat(processor.isStarted()).isTrue();
+        assertThat(processor.eventStoreSubscriptions).containsExactly(things, others);
+    }
+
+    @Test
+    void an_EventProcessor_whose_Inbox_cannot_be_created_because_of_a_checked_exception_thrown_sneakily_is_not_started() {
+        var subscriptionManager = subscriptionManager();
+        var failure             = new IOException("The redelivery policy cannot be read - thrown without being declared, as a Kotlin override can");
+        var processor = new TwoTypesEventProcessor(subscriptionManager, inboxes(mock(Inbox.class))) {
+            @Override
+            protected RedeliveryPolicy getInboxRedeliveryPolicy() {
+                return Exceptions.sneakyThrow(failure);
+            }
+        };
+
+        assertThatThrownBy(processor::start).isSameAs(failure);
+
+        assertThat(processor.isStarted()).isFalse();
+    }
+
+    @Test
+    void an_EventProcessor_that_subscribed_everything_is_started_when_reading_its_undelivered_message_count_throws_a_checked_exception_sneakily() {
+        var subscriptionManager = subscriptionManager();
+        var things              = mock(EventStoreSubscription.class);
+        var others              = mock(EventStoreSubscription.class);
+        stubAsynchronousSubscribe(subscriptionManager, THINGS).thenReturn(things);
+        stubAsynchronousSubscribe(subscriptionManager, OTHERS).thenReturn(others);
+        var inbox = mock(Inbox.class);
+        when(inbox.getNumberOfUndeliveredMessages()).thenAnswer(invocation -> Exceptions.sneakyThrow(new IOException("The database is down")));
+        var processor = new TwoTypesEventProcessor(subscriptionManager, inboxes(inbox));
+
+        processor.start();
+
+        assertThat(processor.isStarted()).isTrue();
+        assertThat(processor.eventStoreSubscriptions).containsExactly(things, others);
+        verify(inbox, never()).stopConsuming();
+    }
+
+    @Test
+    void a_checked_exception_thrown_sneakily_by_an_unsubscribe_during_the_rollback_is_suppressed_into_the_subscribe_failure() {
+        var subscriptionManager = subscriptionManager();
+        var things              = mock(EventStoreSubscription.class);
+        var subscribeFailure    = new IllegalStateException("Others cannot be subscribed to");
+        var unsubscribeFailure  = new IOException("Things cannot be unsubscribed - thrown without being declared");
+        doAnswer(invocation -> Exceptions.sneakyThrow(unsubscribeFailure)).when(things).unsubscribe();
+        stubAsynchronousSubscribe(subscriptionManager, THINGS).thenReturn(things);
+        stubAsynchronousSubscribe(subscriptionManager, OTHERS).thenThrow(subscribeFailure);
+        var inbox     = mock(Inbox.class);
+        var processor = new TwoTypesEventProcessor(subscriptionManager, inboxes(inbox));
+
+        assertThatThrownBy(processor::start).isSameAs(subscribeFailure)
+                                            .satisfies(e -> assertThat(e.getSuppressed()).containsExactly(unsubscribeFailure));
+        verify(inbox).stopConsuming();
+        assertThat(processor.isStarted()).isFalse();
+    }
+
+    @Test
+    void a_checked_exception_thrown_sneakily_by_stopping_the_Inbox_consumption_during_the_rollback_is_suppressed_into_the_start_failure() {
+        var subscriptionManager = subscriptionManager();
+        var things              = mock(EventStoreSubscription.class);
+        var subscribeFailure    = new IllegalStateException("Others cannot be subscribed to");
+        var stopFailure         = new IOException("The Inbox consumption cannot be stopped - thrown without being declared");
+        stubAsynchronousSubscribe(subscriptionManager, THINGS).thenReturn(things);
+        stubAsynchronousSubscribe(subscriptionManager, OTHERS).thenThrow(subscribeFailure);
+        var inbox = mock(Inbox.class);
+        doAnswer(invocation -> Exceptions.sneakyThrow(stopFailure)).when(inbox).stopConsuming();
+        var processor = new TwoTypesEventProcessor(subscriptionManager, inboxes(inbox));
+
+        assertThatThrownBy(processor::start).isSameAs(subscribeFailure)
+                                            .satisfies(e -> assertThat(e.getSuppressed()).containsExactly(stopFailure));
+        verify(things).unsubscribe();
+        assertThat(processor.isStarted()).isFalse();
+    }
+
+    @Test
+    void an_InTransactionEventProcessor_whose_second_subscribe_throws_a_checked_exception_sneakily_unsubscribes_the_first_and_is_not_started() {
+        var subscriptionManager = subscriptionManager();
+        var things              = mock(EventStoreSubscription.class);
+        var failure             = new IOException("Others cannot be subscribed to - thrown without being declared, as a Kotlin override can");
+        when(subscriptionManager.exclusivelySubscribeToAggregateEventsInTransaction(any(SubscriberId.class), eq(THINGS), eq(Optional.empty()), any(TransactionalPersistedEventHandler.class)))
+                .thenReturn(things);
+        when(subscriptionManager.exclusivelySubscribeToAggregateEventsInTransaction(any(SubscriberId.class), eq(OTHERS), eq(Optional.empty()), any(TransactionalPersistedEventHandler.class)))
+                .thenAnswer(invocation -> Exceptions.sneakyThrow(failure));
+        var processor = new TwoTypesInTransactionEventProcessor(subscriptionManager);
+
+        assertThatThrownBy(processor::start).isSameAs(failure);
+
+        verify(things).unsubscribe();
+        assertThat(processor.isStarted()).isFalse();
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void a_ViewEventProcessor_whose_second_subscribe_throws_a_checked_exception_sneakily_on_lock_acquired_unsubscribes_the_first() {
+        var subscriptionManager = subscriptionManager();
+        var things              = mock(EventStoreSubscription.class);
+        var failure             = new IOException("Others cannot be subscribed to - thrown without being declared");
+        when(subscriptionManager.subscribeToAggregateEventsAsynchronously(any(SubscriberId.class), eq(THINGS), any(Function.class), any(PersistedEventHandler.class)))
+                .thenReturn(things);
+        when(subscriptionManager.subscribeToAggregateEventsAsynchronously(any(SubscriberId.class), eq(OTHERS), any(Function.class), any(PersistedEventHandler.class)))
+                .thenAnswer(invocation -> Exceptions.sneakyThrow(failure));
+        var fencedLockManager = mock(FencedLockManager.class);
+        var processor         = new TwoTypesViewEventProcessor(subscriptionManager, fencedLockManager);
+        processor.start();
+        var lockCallback = org.mockito.ArgumentCaptor.forClass(LockCallback.class);
+        verify(fencedLockManager).acquireLockAsync(any(LockName.class), lockCallback.capture());
+        var lock = mock(FencedLock.class);
+        when(lock.getCurrentToken()).thenReturn(1L);
+
+        assertThatThrownBy(() -> lockCallback.getValue().lockAcquired(lock)).isSameAs(failure);
+
+        verify(things).unsubscribe();
+        assertThat(processor.eventStoreSubscriptions).isNull();
+    }
+
+    @Test
+    void a_ViewEventProcessor_whose_lock_acquiring_throws_a_checked_exception_sneakily_is_not_started_and_starts_again_on_the_next_start() {
+        var fencedLockManager = mock(FencedLockManager.class);
+        var failure           = new IOException("The lock acquiring cannot be started - thrown without being declared");
+        doAnswer(invocation -> Exceptions.sneakyThrow(failure)).doNothing().when(fencedLockManager).acquireLockAsync(any(LockName.class), any(LockCallback.class));
+        var processor = new TwoTypesViewEventProcessor(subscriptionManager(), fencedLockManager);
+
+        assertThatThrownBy(processor::start).isSameAs(failure);
+
+        assertThat(processor.isStarted()).isFalse();
+
+        processor.start();
+
+        assertThat(processor.isStarted()).isTrue();
     }
 
     @SuppressWarnings("unchecked")

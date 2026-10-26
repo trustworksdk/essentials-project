@@ -34,6 +34,7 @@ import org.slf4j.*;
 
 import java.time.Duration;
 import java.util.*;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
@@ -296,8 +297,11 @@ public abstract class EventProcessor extends AbstractEventProcessor {
             var subscribeToEventsRelatedTo = requireNonNull(reactsToEventsRelatedToAggregateTypes(), "reactsToEventsRelatedToAggregateTypes() returned null");
             started = true;
             // The Inbox whose consumption this start holds, once it does - stopped again when a later step fails
-            Inbox consumingInbox = null;
-            try {
+            var consumingInbox = new AtomicReference<Inbox>();
+            // Any step may fail (getOrCreateInbox, the Inbox's consume, a subscribe), and subscribeEachOrUnsubscribe unsubscribes
+            // what it created. Left not started, so start() may be called again - and stop() then does nothing, so the Inbox
+            // consumption this start holds is undone here too - see startOrRollBack
+            startOrRollBack(() -> {
                 log.info("⚙️ [{}] Starting EventProcessor - will subscribe to events related to these AggregatesType's: {}",
                          processorName,
                          subscribeToEventsRelatedTo);
@@ -318,29 +322,25 @@ public abstract class EventProcessor extends AbstractEventProcessor {
                 if (!inbox.hasAMessageConsumer()) {
                     inbox.consume(inboxMessageHandlerDelegate);
                 }
-                consumingInbox = inbox;
+                consumingInbox.set(inbox);
                 durableQueueName = inbox.name().asQueueName();
 
                 // Assigned only once every subscribe succeeded, so eventStoreSubscriptions holds the (unsubscribed) ones of an earlier run until then
                 eventStoreSubscriptions = subscribeEachOrUnsubscribe(subscribeToEventsRelatedTo, aggregateType -> subscribe(processorName, aggregateType));
-            } catch (RuntimeException | Error e) {
-                // Any step may fail (getOrCreateInbox, the Inbox's consume, a subscribe), and subscribeEachOrUnsubscribe has unsubscribed
-                // what it created. Left not started, so start() may be called again - and stop() then does nothing, so the Inbox
-                // consumption this start holds is undone here too. A critical error is rethrown as it is, as Exceptions#forEachCollectingFailures does
-                Exceptions.rethrowIfCriticalError(e);
-                if (consumingInbox != null) {
-                    Exceptions.forEachCollectingFailures(List.of(consumingInbox), Inbox::stopConsuming, e);
+            }, () -> {
+                var heldInbox = consumingInbox.get();
+                if (heldInbox != null) {
+                    heldInbox.stopConsuming();
                 }
-                started = false;
-                throw e;
-            }
+            }, () -> started = false);
 
             // The count is a database query. Read in its own try, so a start that subscribed everything does not fail on its log line
-            // and leave the processor started with its caller told it failed
+            // and leave the processor started with its caller told it failed. Throwable, not RuntimeException | Error, for a checked
+            // exception thrown sneakily too
             long undeliveredMessages;
             try {
                 undeliveredMessages = inbox.getNumberOfUndeliveredMessages();
-            } catch (RuntimeException | Error e) {
+            } catch (Throwable e) {
                 Exceptions.rethrowIfCriticalError(e);
                 log.warn("⚙️ [{}] Started. Failed to read the # of undelivered Inbox messages", processorName, e);
                 return;

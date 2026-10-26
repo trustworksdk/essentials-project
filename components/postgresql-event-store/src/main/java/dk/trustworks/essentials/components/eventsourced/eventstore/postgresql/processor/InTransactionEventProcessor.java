@@ -35,7 +35,6 @@ import dk.trustworks.essentials.components.foundation.transaction.*;
 import dk.trustworks.essentials.components.foundation.types.SubscriberId;
 import dk.trustworks.essentials.reactive.Handler;
 import dk.trustworks.essentials.reactive.command.*;
-import dk.trustworks.essentials.shared.Exceptions;
 import org.slf4j.*;
 import reactor.core.publisher.Mono;
 
@@ -270,7 +269,9 @@ public abstract class InTransactionEventProcessor implements Lifecycle {
             }
 
             started = true;
-            try {
+            // subscribeEachOrUnsubscribe unsubscribes what it created, and nothing else is left to undo. Left not started,
+            // so start() may be called again - see AbstractEventProcessor#startOrRollBack
+            AbstractEventProcessor.startOrRollBack(() -> {
                 log.info("⚙️ [{}] Starting InTransactionEventProcessor - will subscribe '{}' to events related to these AggregatesType's: {}",
                          processorName,
                          useExclusively ? "exclusively" : "non-exclusively",
@@ -280,13 +281,7 @@ public abstract class InTransactionEventProcessor implements Lifecycle {
 
                 // Assigned only once every subscribe succeeded, so eventStoreSubscriptions holds the (unsubscribed) ones of an earlier run until then
                 eventStoreSubscriptions = AbstractEventProcessor.subscribeEachOrUnsubscribe(subscribeToEventsRelatedTo, this::createEventStoreSubscription);
-            } catch (RuntimeException | Error e) {
-                // subscribeEachOrUnsubscribe has unsubscribed what it created. Left not started, so start() may be called again.
-                // A critical error is rethrown as it is, as Exceptions#forEachCollectingFailures does
-                Exceptions.rethrowIfCriticalError(e);
-                started = false;
-                throw e;
-            }
+            }, () -> { }, () -> started = false);
         }
     }
 

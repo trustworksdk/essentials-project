@@ -167,8 +167,9 @@ public final class Exceptions {
      * Meant for fanning one operation out over independent parts, such as stopping every consumer of a queue, where
      * giving up at the first throw would leave the parts after it untouched (still running, say).
      * <p>
-     * A {@link RuntimeException} and a non-critical {@link Error} (an {@link AssertionError}, for example) are collected
-     * alike. A critical error ({@link #isCriticalError(Throwable)}) is rethrown at once, without running
+     * A {@link RuntimeException}, a non-critical {@link Error} (an {@link AssertionError}, for example) and a checked
+     * exception the action throws without declaring it (with {@link #sneakyThrow(Throwable)}, or from Kotlin) are
+     * collected alike. A critical error ({@link #isCriticalError(Throwable)}) is rethrown at once, without running
      * <code>action</code> for the items after it, with the failure collected so far added to it as suppressed, unless it
      * already carries it.
      *
@@ -212,7 +213,9 @@ public final class Exceptions {
         for (var item : items) {
             try {
                 action.accept(item);
-            } catch (RuntimeException | Error e) {
+            } catch (Throwable e) {
+                // Throwable, not RuntimeException | Error: a checked exception thrown without being declared (sneakily - a
+                // Kotlin action can) is collected too, so it neither skips the items after it nor replaces the failure
                 if (isCriticalError(e)) {
                     if (collected != null) {
                         addSuppressedOnce(e, collected);

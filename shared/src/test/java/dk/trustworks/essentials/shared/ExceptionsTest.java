@@ -268,6 +268,44 @@ public class ExceptionsTest {
     }
 
     @Test
+    void forEachThenThrowFirst_collectsACheckedExceptionThrownSneakily_likeARuntimeException() {
+        var ran     = new ArrayList<String>();
+        var checked = new java.io.IOException("a - thrown without being declared, as a Kotlin action can");
+        var second  = new IllegalStateException("c");
+
+        var thrown = catchThrowable(() -> Exceptions.forEachThenThrowFirst(List.of("a", "b", "c"), item -> {
+            ran.add(item);
+            switch (item) {
+                case "a" -> Exceptions.sneakyThrow(checked);
+                case "c" -> throw second;
+                default -> { }
+            }
+        }));
+
+        assertThat(ran).as("every item ran, also after the checked exception").containsExactly("a", "b", "c");
+        assertThat(thrown).isSameAs(checked);
+        assertThat(thrown.getSuppressed()).containsExactly(second);
+    }
+
+    @Test
+    void forEachCollectingFailures_addsACheckedExceptionThrownSneakilyToTheGivenFailure() {
+        var ran     = new ArrayList<String>();
+        var failure = new IllegalStateException("the start's failure");
+        var checked = new java.io.IOException("a - thrown without being declared, as a Kotlin action can");
+
+        var returned = Exceptions.forEachCollectingFailures(List.of("a", "b"), item -> {
+            ran.add(item);
+            if ("a".equals(item)) {
+                Exceptions.sneakyThrow(checked);
+            }
+        }, failure);
+
+        assertThat(ran).containsExactly("a", "b");
+        assertThat(returned).isSameAs(failure);
+        assertThat(failure.getSuppressed()).containsExactly(checked);
+    }
+
+    @Test
     void forEachThenThrowFirst_doesNotSuppressAFailureInItself_whenEveryItemThrowsTheSameInstance() {
         var ran     = new ArrayList<String>();
         var failure = new IllegalStateException("shared instance");
