@@ -109,6 +109,41 @@ public interface MessageQueue extends Lifecycle, AutoCloseable {
     }
 
     /**
+     * As {@link #enqueue(Connection, List)}, but without the wake-up notification: the caller wakes the owners with
+     * {@link #wakeUp(Collection)} once its transaction has committed, and does nothing if it rolls back.
+     * <p>
+     * A transaction that sends {@code NOTIFY} takes, at commit, a lock every notifying transaction in the cluster
+     * shares, and holds it through its WAL flush, so those commits run one at a time. Issued inside every enqueue
+     * transaction, that lock was a third of the database's active time at the trading demo's peaks. Woken after commit
+     * instead, an owner in this process is signalled in memory and needs no notification at all, and the rest are
+     * sent batched, outside the business transaction.
+     * <p>
+     * The rows are still written in the caller's transaction, so the enqueue is exactly as transactional; only the
+     * wake-up moves. A caller that never calls {@link #wakeUp(Collection)} loses no messages - owners find them on
+     * their head sweep - only latency.
+     * <p>
+     * The default enqueues with the notification, for implementations that do not separate the two; their
+     * {@link #wakeUp(Collection)} then has nothing to do.
+     *
+     * @return the ids to pass to {@link #wakeUp(Collection)} after commit
+     */
+    default List<MessageId> enqueueWithoutWakeup(Connection connection, List<Message> messages) throws SQLException {
+        return enqueue(connection, messages);
+    }
+
+    /**
+     * Wake the owners of the units {@code enqueued} were written to, after the transaction that wrote them by
+     * {@link #enqueueWithoutWakeup(Connection, List)} has committed. Never blocks on the database: owners in this
+     * process are signalled in memory, and the notifications for the rest are queued and sent batched.
+     * <p>
+     * The default does nothing, matching the default {@link #enqueueWithoutWakeup(Connection, List)}.
+     *
+     * @param enqueued ids returned by {@link #enqueueWithoutWakeup(Connection, List)}; only their lane and shard are used
+     */
+    default void wakeUp(Collection<MessageId> enqueued) {
+    }
+
+    /**
      * Consume with a handler. The engine leases shards, enforces per-key order, retries and
      * dead-letters according to {@code policy}, and acknowledges on the handler's behalf.
      *

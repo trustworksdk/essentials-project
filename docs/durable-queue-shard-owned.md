@@ -418,7 +418,7 @@ Enqueue is a single multi-row `INSERT` into one shard's lane. Unordered messages
 
 **Every enqueue path runs its batch in an explicit transaction.** This cannot be left to PostgreSQL's implicit transaction: pgjdbc sends a small batch as a single sync but splits a large one into synced chunks, so a ten-row batch is atomic by accident and a five-thousand-row batch is not. A caller who has already begun a transaction is left alone — their commit decides, which is the point of enqueueing transactionally.
 
-Inside the same transaction, `pg_notify` is issued once per batch per shard with the payload `queueId:lane:shard`. Because it is inside the transaction, the hint is delivered only if the enqueue commits and is discarded if it does not.
+Inside the same transaction, `pg_notify` is issued once per batch per shard with the payload `queueId:lane:shard`. Because it is inside the transaction, the hint is delivered only if the enqueue commits and is discarded if it does not. That is still what `enqueue(Connection, …)` does. Every other enqueue whose commit the engine or the `DurableQueues` adapter controls writes without it and wakes the owner after the commit instead — see "Waking after commit" under Tier 1.
 
 If the enqueuing JVM also owns the target shard, the insert additionally stamps `lease` with the owner's fence — a **pre-claim** — and the row is handed to the owner in memory after the transaction commits. See §6.
 
@@ -553,7 +553,8 @@ Three tiers. Each is faster than the one below it, each is optional, and **corre
 
 Three rules matter, and all three cost something real when broken:
 
-- **The notify is issued by the application inside the enqueue transaction, coalesced to at most one per shard per batch.** A per-row trigger would turn every message into a notify, and PostgreSQL serializes notify-queue access cluster-wide.
+- **The notify is issued by the application, coalesced to at most one per shard per batch** — inside the enqueue transaction for `enqueue(Connection, …)`, after commit everywhere else (below). A per-row trigger would turn every message into a notify, and PostgreSQL serializes notify-queue access cluster-wide.
+- **Waking after commit.** A transaction that sends `NOTIFY` takes, at commit, a lock every notifying transaction in the cluster shares (`pg_locks`: object, class 1262 `pg_database`, objid 0) and holds it through its WAL flush, so notifying commits run one at a time and lose group commit. In the trading demo, sampling `pg_stat_activity` every 100 ms over a run, backends waited on that lock for 20 % of all active time and 34 % at peaks, with another 34 % in `WALWrite` at peaks. So `enqueueWithoutWakeup` + `wakeUp(ids)`, the own-transaction `enqueue(List)` and the adapter (from a `UnitOfWork`'s `afterCommit`) write without `pg_notify` and wake afterwards: a unit an owner of this process serves actively (lease held, delivery permitted, not draining or shedding) is signalled in memory; every other unit is queued on the runtime's `ShardWakeupNotifier`, which sends whatever accumulated while its previous batch was in flight as one `pg_notify … FROM unnest(?)` transaction. A wake-up lost on the way — a crash between commit and send, a failed batch — costs latency to the head sweep, as a lost notification always did.
 - **The listener's connection never does work.** A busy listener delays every notification queued behind it.
 - **The listener reconnects *and* re-runs `LISTEN`.** The subscription is per connection. Its failure is silent by construction — owners fall back to the backstop, so delivery continues and only latency degrades — which means no delivery-based test can detect it. Assert on notification counts.
 

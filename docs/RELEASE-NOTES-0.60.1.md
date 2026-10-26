@@ -294,6 +294,24 @@ for example). That is one query and round trip fewer per aggregate update. The a
 instance adds or deletes a snapshot of the same aggregate in between; a snapshot is then added a little early, or at
 most one policy interval late. Snapshots deleted through the repository are never taken from a load.
 
+### 2.11 Shard-owned: enqueues no longer serialise their commits on `NOTIFY` (`postgresql-queue-shard-owned`, adapter)
+
+Every enqueue transaction sent the wake-up `pg_notify`. A transaction that notifies takes, at commit, a lock every
+notifying transaction in the cluster shares and holds it through its WAL flush, so enqueueing transactions committed one
+at a time. In the trading demo backends waited on that lock for about 20 % of the database's active time, and 36-39 % at
+peaks.
+
+The engine's own-transaction enqueues and the `DurableQueues` adapter (inside a `UnitOfWork`, from `afterCommit`) now
+write without it and wake the owner after commit: in memory when the owner runs in the same process, otherwise by a
+notification a background notifier sends batched, outside the business transaction. `MessageQueue` gains
+`enqueueWithoutWakeup(Connection, …)` and `wakeUp(ids)` for callers that control their own transaction;
+`enqueue(Connection, …)` keeps notifying inside the transaction, unchanged. A wake-up lost on the way costs latency up to
+the head sweep, as a lost notification always did.
+
+Measured (`docs/durable-queue-measurements.md` §3.14): the lock wait disappears, the database's active time falls 20-35 %,
+and the ordered-lane benchmark's p99 falls from 9-70 ms to 5-7 ms, at about 30 % more pump statements per message. In
+the demo, booked p50 255-261 ms → 237-244 ms and placed→submitted p99 1 271-1 496 ms → 796-992 ms over three runs each.
+
 ## 3. Documentation
 
 - The polling-optimizer docs describe the new defaults, and the stale-statistics guidance is next to the claim

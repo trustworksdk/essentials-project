@@ -189,7 +189,12 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         var owner = localHandoffEnabled ? ownedShards.get(shard) : null;
         if (owner == null) {
             try (var connection = dataSource.getConnection()) {
-                storage.enqueueBatch(connection, shard, payloads, payloadType);
+                var wakeAfterCommit = wakesAfterCommit(connection);
+                storage.enqueueRows(connection, shard, payloads.stream().map(payload -> new ShardOwnedStorage.PayloadRow(payload, payloadType)).toList(),
+                                    !wakeAfterCommit);
+                if (wakeAfterCommit) {
+                    wakeUp("unordered", shard);
+                }
             }
             return;
         }
@@ -235,10 +240,39 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                    .add(message);
         }
         try (var connection = dataSource.getConnection()) {
+            var wakeAfterCommit = wakesAfterCommit(connection);
             for (var entry : byShard.entrySet()) {
-                storage.enqueueOrderedBatch(connection, entry.getKey(), entry.getValue());
+                storage.enqueueOrderedBatch(connection, entry.getKey(), entry.getValue(), !wakeAfterCommit);
+                if (wakeAfterCommit) {
+                    wakeUp("ordered", entry.getKey());
+                }
             }
         }
+    }
+
+    /**
+     * Whether an enqueue on {@code connection} can wake the owner after its commit instead of notifying inside the
+     * transaction: the storage call commits it (autocommit), and there is a runtime to wake through. Otherwise
+     * something else commits, or nothing in this process could deliver the wake-up, and the notification rides along
+     * in the transaction as before - see {@link ShardWakeupNotifier} for why the difference matters.
+     */
+    private boolean wakesAfterCommit(java.sql.Connection connection) throws SQLException {
+        return connection.getAutoCommit() && wakeUpRuntime() != null;
+    }
+
+    /**
+     * After the enqueue's commit: in memory if an owner of this process serves the unit, batched notification if not.
+     */
+    private void wakeUp(String lane, int shard) {
+        var serving = wakeUpRuntime();
+        if (serving != null && !serving.wakeIfServedHere(queueId, lane, shard)) {
+            serving.notifier().submit(List.of(ShardWakeupListener.key(queueId, lane, shard)));
+        }
+    }
+
+    private ShardRuntime wakeUpRuntime() {
+        var own = runtime;
+        return own != null ? own : ShardRuntime.sharedIfPresent(dataSource);
     }
 
     /**

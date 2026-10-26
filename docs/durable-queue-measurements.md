@@ -633,6 +633,38 @@ after: placed → booked p99 median 5.0 s over 6 runs against 2.9 s over 5 (plac
 booked 3.2 → 1.7 s), p50 unchanged. The arms overlap (2.6-5.6 against 3.8-6.0 s), so this is probable rather than
 established; the demo's JVM is CPU-bound during every rush in both arms (`_demo_harness/CLAUDE.md`).
 
+### 3.14 Waking owners after commit instead of notifying inside the enqueue transaction
+
+Every enqueue transaction used to send `pg_notify`. A notifying commit takes PostgreSQL's cluster-wide NOTIFY lock
+(`pg_locks`: object 1262/0) and holds it through its WAL flush, so those commits ran one at a time. The engine's
+own-transaction enqueues and the `DurableQueues` adapter now write without it and wake the owner after commit - in
+memory when it runs in the same process, by a batched notification otherwise.
+
+`ShardOwnedOrderedLoadedCostIT` (benchmark-gated; 8 ordered queues, 2 pumps, 4 producers per queue, 2 ms handler),
+three alternating rounds per arm from two worktrees:
+
+| Offered | Arm | p50 (ms) | p99 (ms) | max (ms) | transactions / msg | read statements / msg |
+|---|---|---|---|---|---|---|
+| 2 000/s | NOTIFY in transaction | 5.3 / 6.6 / 5.4 | 40.0 / 23.2 / 9.2 | 139 / 63 / 37 | 5.4-5.7 | 2.9-3.1 |
+| 2 000/s | wake after commit | 3.1 / 3.2 / 2.8 | 6.6 / 5.6 / 4.8 | 22 / 31 / 28 | 6.6-7.7 | 3.6-4.0 |
+| 3 000/s | NOTIFY in transaction | 8.7 / 9.1 / 6.7 | 30.4 / 70.2 / 13.3 | 91 / 190 / 49 | 4.4-4.9 | 2.2-2.5 |
+| 3 000/s | wake after commit | 3.0 / 3.1 / 3.0 | 7.2 / 5.6 / 6.3 | 31 / 26 / 25 | 6.6-6.8 | 3.4-3.5 |
+
+Every round of the change beats every baseline round on latency. It costs about 30 % more pump statements per message:
+the serialised commits used to batch delivery by accident - an owner woke late and found several messages - and an
+owner woken at once reads smaller batches more often.
+
+Trading demo (single instance, burst 300, 7 days), three alternating runs per arm, `pg_stat_activity` sampled every
+100 ms ("busy" = 6 or more active backends):
+
+| Arm | NOTIFY lock, all / busy | `WALWrite`, all / busy | active backend-samples | busy samples | booked p50 / p99 (ms) | placed→submitted p99 (ms) |
+|---|---|---|---|---|---|---|
+| NOTIFY in transaction | 17.5-22.2 % / 35.8-38.9 % | 18.4-24.7 % / 29.8-33.7 % | 11 716-14 264 | 584-646 | 255-261 / 2 603-3 035 | 1 271-1 496 |
+| wake after commit | 0 % / 0 % | 29.2-33.6 % / 60.5-62.4 % | 9 020-9 522 | 318-379 | 237-244 / 2 229-2 651 | 796-992 |
+
+The lock wait is gone, the database's active time fell 20-35 % and its busy moments about 40 %; WAL flushing is now
+the dominant wait. All 7 demo checks passed in all six runs.
+
 ## 4. Environment
 
 | | |

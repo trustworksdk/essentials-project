@@ -290,11 +290,7 @@ public class ShardOwnedDurableQueues implements DurableQueues {
         var messages = messagesToQueue.stream().map(message -> toEngineMessage(message, delay)).toList();
 
         var ids = onQueue(queueName, "queue " + messages.size() + " message(s) on '" + queueName + "'",
-                          () -> {
-                              var connection = currentTransactionConnection();
-                              return connection == null ? queue.enqueue(messages)
-                                                        : queue.enqueue(connection, messages);
-                          });
+                          () -> enqueueInCurrentUnitOfWork(queue, messages));
         return ids.stream().map(id -> QueueEntryIdCodec.encode(queueName, id)).toList();
     }
 
@@ -790,6 +786,101 @@ public class ShardOwnedDurableQueues implements DurableQueues {
                                             null,
                                             true,
                                             deadLetter.lastError());
+    }
+
+    /**
+     * Enqueue in the {@link UnitOfWork} in progress, waking the owners after it commits; without one the engine
+     * commits the batch itself and wakes them after that.
+     * <p>
+     * Not with the engine's in-transaction notification: a transaction that sends {@code NOTIFY} takes, at commit, a
+     * lock every notifying transaction in the cluster shares and holds it through its WAL flush, so every enqueueing
+     * unit of work committed one at a time behind the others - a third of the database's active time at the trading
+     * demo's peaks. The wake-up is registered before the rows are written, so a unit of work that cannot carry the
+     * callback gets the in-transaction notification instead.
+     */
+    private List<dk.trustworks.essentials.components.queue.shardowned.spi.MessageId> enqueueInCurrentUnitOfWork(
+            MessageQueue queue, List<dk.trustworks.essentials.components.queue.shardowned.spi.Message> messages) throws SQLException {
+        var unitOfWork = currentHandleAwareUnitOfWork();
+        if (unitOfWork == null) {
+            return queue.enqueue(messages);
+        }
+        var connection = unitOfWork.handle().getConnection();
+        var wakeUp     = new PendingWakeUp(queue);
+        try {
+            unitOfWork.registerLifecycleCallbackForResource(wakeUp, WAKE_UP_AFTER_COMMIT);
+        } catch (UnsupportedOperationException cannotCarryTheCallback) {
+            return queue.enqueue(connection, messages);
+        }
+        var ids = queue.enqueueWithoutWakeup(connection, messages);
+        wakeUp.ids = ids;
+        return ids;
+    }
+
+    /**
+     * Ids enqueued in a unit of work whose owners are woken once it commits. Compared by identity, so every enqueue
+     * of the unit of work is a resource of its own.
+     */
+    private static final class PendingWakeUp {
+        private final MessageQueue                                                              queue;
+        private volatile List<dk.trustworks.essentials.components.queue.shardowned.spi.MessageId> ids = List.of();
+
+        private PendingWakeUp(MessageQueue queue) {
+            this.queue = queue;
+        }
+    }
+
+    /**
+     * Wakes the owners of what a unit of work enqueued, after it commits; a rollback took the rows, so nothing to wake.
+     */
+    private static final UnitOfWorkLifecycleCallback<PendingWakeUp> WAKE_UP_AFTER_COMMIT = new UnitOfWorkLifecycleCallback<>() {
+        @Override
+        public BeforeCommitProcessingStatus beforeCommit(UnitOfWork unitOfWork, List<PendingWakeUp> associatedResources) {
+            return BeforeCommitProcessingStatus.COMPLETED;
+        }
+
+        @Override
+        public void afterCommit(UnitOfWork unitOfWork, List<PendingWakeUp> associatedResources) {
+            for (var pending : associatedResources) {
+                try {
+                    pending.queue.wakeUp(pending.ids);
+                } catch (RuntimeException e) {
+                    // A wake-up is a hint: the owner's head sweep finds the rows regardless
+                    log.warn("Could not wake the owners of {} enqueued message(s); they are delivered after the owners' next sweep",
+                             pending.ids.size(), e);
+                }
+            }
+        }
+
+        @Override
+        public void beforeRollback(UnitOfWork unitOfWork, List<PendingWakeUp> associatedResources, Throwable causeOfTheRollback) {
+        }
+
+        @Override
+        public void afterRollback(UnitOfWork unitOfWork, List<PendingWakeUp> associatedResources, Throwable causeOfTheRollback) {
+        }
+
+        /**
+         * Nothing a rollback to a savepoint cannot undo: the rows go with it, and waking an owner for rows that are not
+         * there costs it one empty read. Answering {@code true} would stop a {@code ViewEventProcessor} from rolling
+         * back to a savepoint.
+         */
+        @Override
+        public boolean hasPendingChanges(PendingWakeUp resource) {
+            return false;
+        }
+    };
+
+    /**
+     * The {@link HandleAwareUnitOfWork} in progress, or {@code null} if there is none.
+     */
+    private HandleAwareUnitOfWork currentHandleAwareUnitOfWork() {
+        if (unitOfWorkFactory == null) {
+            return null;
+        }
+        return unitOfWorkFactory.getCurrentUnitOfWork()
+                                .filter(HandleAwareUnitOfWork.class::isInstance)
+                                .map(HandleAwareUnitOfWork.class::cast)
+                                .orElse(null);
     }
 
     /**

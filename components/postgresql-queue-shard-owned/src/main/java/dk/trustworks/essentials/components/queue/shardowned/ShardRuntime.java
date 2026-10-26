@@ -136,6 +136,10 @@ public final class ShardRuntime implements Lifecycle, AutoCloseable {
     private final List<ShardPump>          pumps       = new ArrayList<>();
     private final Map<String, ShardWakeup> wakeups     = new ConcurrentHashMap<>();
     /**
+     * Sends the wake-ups for units this runtime does not serve - see {@link #wakeIfServedHere}
+     */
+    private final ShardWakeupNotifier      notifier;
+    /**
      * Recreated by every {@link #start()}, because an {@code ExecutorService} cannot be restarted
      * once shut down. This is what makes the runtime genuinely restartable rather than merely
      * stoppable — the same distinction {@code ShardOwnedQueue.stop()} had to make.
@@ -174,6 +178,7 @@ public final class ShardRuntime implements Lifecycle, AutoCloseable {
         this.settings = requireNonNull(settings, "No settings provided");
         this.metrics = requireNonNull(metrics, "No metrics provided");
         this.pool = requireNonNull(pool, "No pool metadata provided");
+        this.notifier = new ShardWakeupNotifier(dataSource);
         start();
     }
 
@@ -256,6 +261,39 @@ public final class ShardRuntime implements Lifecycle, AutoCloseable {
         pumpFor(queueId, lane, shard).add(owner);
     }
 
+    /**
+     * Wake the owner of a unit in memory, if this runtime serves it actively: the owner holds its lease, may deliver
+     * and is not handing the unit over. Its wake-up entry alone does not say so - entries outlive the lease they were
+     * made for until the queue stops - so the pump's own record of its owners decides.
+     *
+     * @return whether the owner was woken; if not, the caller has to notify, since the unit is served elsewhere or by
+     * nobody
+     */
+    boolean wakeIfServedHere(short queueId, String lane, int shard) {
+        if (!running.get()) {
+            return false;
+        }
+        var wakeup = wakeups.get(ShardWakeupListener.key(queueId, lane, shard));
+        if (wakeup == null || !pumpFor(queueId, lane, shard).servesActively(wakeup)) {
+            return false;
+        }
+        wakeup.signal();
+        return true;
+    }
+
+    ShardWakeupNotifier notifier() {
+        return notifier;
+    }
+
+    /**
+     * The runtime shared for {@code dataSource}, if some queue is borrowing one - without borrowing it. A queue that
+     * only produces must not stand up pumps to find out whether anyone in the process consumes.
+     */
+    static synchronized ShardRuntime sharedIfPresent(DataSource dataSource) {
+        var existing = SHARED.get(dataSource);
+        return existing == null ? null : existing.runtime();
+    }
+
     void forget(short queueId, String lane, int shard) {
         wakeups.remove(ShardWakeupListener.key(queueId, lane, shard));
     }
@@ -329,6 +367,8 @@ public final class ShardRuntime implements Lifecycle, AutoCloseable {
         pumps.forEach(pump -> pump.wakeup().signal());
         wakeups.values().forEach(ShardWakeup::signal);
         listener.stop();
+        // Wake-ups for units served elsewhere that are still queued are sent before the runtime goes
+        notifier.flushAndStop(Duration.ofSeconds(2));
         heartbeat.shutdownNow();
         pumpExecutor.shutdown();
         try {

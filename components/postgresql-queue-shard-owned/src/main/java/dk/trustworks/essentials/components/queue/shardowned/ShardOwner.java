@@ -221,6 +221,11 @@ final class ShardOwner implements LeasedOwner {
     }
 
     @Override
+    public boolean handingOver() {
+        return draining.get();
+    }
+
+    @Override
     public int shard() {
         return shard;
     }

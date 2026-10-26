@@ -128,6 +128,27 @@ try (var connection = dataSource.getConnection()) {
 }
 ```
 
+**Busy transactional producers: wake after commit.** `enqueue(connection, …)` sends the wake-up `NOTIFY` inside your
+transaction, and every transaction that notifies takes, at commit, one cluster-wide lock and holds it through its WAL
+flush - so those commits run one at a time. Under load that lock dominates the database (a third of its active time at
+the trading demo's peaks). Use the pair instead, and the business commit never takes it:
+
+```java
+List<MessageId> ids;
+try (var connection = dataSource.getConnection()) {
+    connection.setAutoCommit(false);
+    orderRepository.save(order, connection);
+    ids = queue.enqueueWithoutWakeup(connection, List.of(Message.of(payload, payloadType)));
+    connection.commit();
+}
+queue.wakeUp(ids);                            // after commit only; never on rollback
+```
+
+`wakeUp` never blocks on the database: an owner in this process is signalled in memory, the rest are notified by a
+per-runtime notifier that batches pending wake-ups into one transaction. Forgetting `wakeUp` loses no message - the
+owner's head sweep finds it - only latency. The Essentials `DurableQueues` adapter does this for you inside a
+`UnitOfWork` (from `afterCommit`); the engine's own-transaction `enqueue(List)` does it after its own commit.
+
 **If you construct a `ShardOwnedQueue` without a runtime it borrows the one shared per `DataSource`**, reference counted, closed by its last user. That is the safe default; pass your own only when you deliberately want a separate set of threads and connections.
 
 ## Prerequisites
@@ -349,7 +370,8 @@ Measured, one shared runtime, idle:
 1. **Share one `ShardRuntime`.** This is the single most important line on the page. A runtime per queue costs five connections each — 100 queues once exhausted a 500-connection pool. The default does the right thing; only an explicitly-passed runtime can get this wrong.
 2. **Size `max_connections` for the engine plus your handlers plus everything else.** The engine's own need is small and fixed (`pumpThreads + 1`), but a `parallelConsumers` of 8 across 25 consumers is up to 200 handlers each potentially wanting a pool connection. **The handlers, not the engine, are what will exhaust your pool.**
 3. **Count your shards, not your queues.** Idle cost follows owned shards: ~0.1 queries/s each. 300 queues × 8 shards × 2 lanes = 4 800 owners = ~481 queries/s doing nothing. Acceptable; 10 000 queues at 16 shards would not be. Lower `shardCount` for quiet queues, or raise `maxSweepInterval`.
-4. **`holeExpiry` must exceed your longest enqueue transaction — on the UNORDERED lane.** A gap in the sequence means an uncommitted transaction. Abandoning it too early means a message only the head sweep will find. The ordered lane has no equivalent requirement: it waits for the actual transactions rather than guessing on a timer, so a long enqueue delays that lane's cursor but cannot make it skip anything until `watermarkCap` (60 s) is exceeded.
+4. **Do not notify inside busy transactions.** Each notifying commit takes one cluster-wide lock and holds it through its WAL flush, so enqueueing transactions commit one at a time. Prefer `enqueueWithoutWakeup` + `wakeUp` (above) on hot paths; the adapter already does.
+5. **`holeExpiry` must exceed your longest enqueue transaction — on the UNORDERED lane.** A gap in the sequence means an uncommitted transaction. Abandoning it too early means a message only the head sweep will find. The ordered lane has no equivalent requirement: it waits for the actual transactions rather than guessing on a timer, so a long enqueue delays that lane's cursor but cannot make it skip anything until `watermarkCap` (60 s) is exceeded.
 
 ## How to not kill the application
 

@@ -123,6 +123,23 @@ final class ShardPump implements Runnable {
         return owners.size();
     }
 
+    /**
+     * Whether this pump serves, for the unit {@code wakeup} belongs to, an owner that holds its lease, may deliver and
+     * is not handing the unit over - one a wake-up signalled in memory is certain to reach.
+     */
+    boolean servesActively(ShardWakeup wakeup) {
+        var ownersOf = byWakeup.get(wakeup);
+        if (ownersOf == null) {
+            return false;
+        }
+        for (var owner : ownersOf) {
+            if (owner.leaseHeld() && owner.deliveryPermitted() && !owner.handingOver()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     @Override
     public void run() {
         while (running.get()) {

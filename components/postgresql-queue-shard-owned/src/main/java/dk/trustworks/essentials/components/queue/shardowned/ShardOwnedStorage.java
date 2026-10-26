@@ -170,10 +170,18 @@ public final class ShardOwnedStorage {
      * @return the allocated sequence values, ascending
      */
     public List<Long> enqueueRows(Connection connection, int shard, List<PayloadRow> rows) throws SQLException {
-        return inTransaction(connection, () -> enqueueBatchInternal(connection, shard, rows));
+        return enqueueRows(connection, shard, rows, true);
     }
 
-    private List<Long> enqueueBatchInternal(Connection connection, int shard, List<PayloadRow> rows) throws SQLException {
+    /**
+     * @param notify whether to issue the shard's wake-up notification inside the transaction. {@code false} leaves
+     *               waking the owner to the caller, after commit - see {@code PostgresqlMessageQueue#wakeUp}
+     */
+    public List<Long> enqueueRows(Connection connection, int shard, List<PayloadRow> rows, boolean notify) throws SQLException {
+        return inTransaction(connection, () -> enqueueBatchInternal(connection, shard, rows, notify));
+    }
+
+    private List<Long> enqueueBatchInternal(Connection connection, int shard, List<PayloadRow> rows, boolean notify) throws SQLException {
         // visible_at is now() plus the requested delay, computed by the SERVER. A client timestamp
         // here would make delayed delivery depend on the enqueueing node's clock, which is the one
         // thing the rest of this engine is careful never to do.
@@ -202,7 +210,9 @@ public final class ShardOwnedStorage {
         // In the same transaction as the inserts: delivered at commit, discarded on rollback. One
         // hint per batch per shard rather than one per message — coalescing is what keeps the
         // notification queue from becoming the bottleneck it is famous for being.
-        ShardWakeupListener.notifyShard(connection, queueId, "unordered", shard);
+        if (notify) {
+            ShardWakeupListener.notifyShard(connection, queueId, "unordered", shard);
+        }
         return seqs;
     }
 
@@ -1261,10 +1271,18 @@ public final class ShardOwnedStorage {
      * an identity, and returning it as one produced ids that no by-id operation could resolve.
      */
     public List<Long> enqueueOrderedBatch(Connection connection, int shard, List<OrderedPayload> messages) throws SQLException {
-        return inTransaction(connection, () -> enqueueOrderedBatchInternal(connection, shard, messages));
+        return enqueueOrderedBatch(connection, shard, messages, true);
     }
 
-    private List<Long> enqueueOrderedBatchInternal(Connection connection, int shard, List<OrderedPayload> messages) throws SQLException {
+    /**
+     * @param notify whether to issue the shard's wake-up notification inside the transaction. {@code false} leaves
+     *               waking the owner to the caller, after commit - see {@code PostgresqlMessageQueue#wakeUp}
+     */
+    public List<Long> enqueueOrderedBatch(Connection connection, int shard, List<OrderedPayload> messages, boolean notify) throws SQLException {
+        return inTransaction(connection, () -> enqueueOrderedBatchInternal(connection, shard, messages, notify));
+    }
+
+    private List<Long> enqueueOrderedBatchInternal(Connection connection, int shard, List<OrderedPayload> messages, boolean notify) throws SQLException {
         assignTransactionIdBeforeAllocating(connection);
         var sql = "INSERT INTO " + ORDERED_TABLE
                 + " (queue_id, shard, msg_key, key_order, seq, payload, payload_type, visible_at)"
@@ -1290,7 +1308,9 @@ public final class ShardOwnedStorage {
             }
         }
         Collections.sort(seqs);
-        ShardWakeupListener.notifyShard(connection, queueId, "ordered", shard);
+        if (notify) {
+            ShardWakeupListener.notifyShard(connection, queueId, "ordered", shard);
+        }
         return seqs;
     }
 

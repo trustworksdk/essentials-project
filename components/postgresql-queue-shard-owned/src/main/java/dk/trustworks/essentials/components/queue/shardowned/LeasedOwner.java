@@ -98,6 +98,15 @@ interface LeasedOwner {
      */
     String lane();
 
+    /**
+     * Whether this owner is on its way out - draining for a stop, or (ordered) shedding its unit - and so may not be
+     * the one serving the unit by the time a message enqueued now commits. A wake-up for such a unit is sent as a
+     * notification rather than signalled only in memory, so a successor elsewhere hears of it too.
+     */
+    default boolean handingOver() {
+        return false;
+    }
+
     boolean leaseHeld();
 
     /**

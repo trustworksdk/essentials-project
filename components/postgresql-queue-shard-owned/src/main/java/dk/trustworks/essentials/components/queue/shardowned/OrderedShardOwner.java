@@ -1234,6 +1234,11 @@ final class OrderedShardOwner implements BatchReadableOwner, HorizonProbingOwner
     }
 
     @Override
+    public boolean handingOver() {
+        return shedding.get() || draining.get();
+    }
+
+    @Override
     public int shard() {
         return shard;
     }
