@@ -173,6 +173,62 @@ class DBFencedLockManagerAcquiredCallbackErrorTest {
         }
     }
 
+    /**
+     * The recovery path the <code>acquireLockAsync</code> javadoc gives for an acquiring a critical error ended - and that
+     * the lock-driven processors' stop/start relies on: a repeated <code>acquireLockAsync</code> does nothing until
+     * <code>cancelAsyncLockAcquiring</code> has removed the ended acquiring, after which it acquires the lock again.
+     */
+    @Test
+    void a_critical_error_ended_async_acquiring_is_restarted_only_after_cancelAsyncLockAcquiring() {
+        var acquiredCalls = new AtomicInteger();
+        var releasedCalls = new AtomicInteger();
+        var criticalError = new ExceptionInInitializerError("first lockAcquired fails critically");
+        var callback = LockCallback.builder()
+                                   .onLockAcquired(lock -> {
+                                       if (acquiredCalls.incrementAndGet() == 1) {
+                                           throw criticalError;
+                                       }
+                                   })
+                                   .onLockReleased(lock -> releasedCalls.incrementAndGet())
+                                   .build();
+        var logEvents = captureLockManagerLog();
+        try {
+            node.acquireLockAsync(LOCK_NAME, callback);
+
+            // The critical error released the lock and ended the async acquiring
+            Awaitility.waitAtMost(Duration.ofSeconds(5))
+                      .untilAsserted(() -> {
+                          assertThat(logEvents.list.stream().filter(event -> event.getLevel() == Level.ERROR)).hasSize(1);
+                          assertThat(storage.rows.get(LOCK_NAME).lockedBy()).isNull();
+                          assertThat(releasedCalls.get()).isEqualTo(1);
+                      });
+            assertThat(acquiredCalls.get()).isEqualTo(1);
+
+            // Asking again before a cancel does not restart it: the ended acquiring keeps its entry
+            node.acquireLockAsync(LOCK_NAME, callback);
+            Awaitility.await()
+                      .during(Duration.ofMillis(500))
+                      .atMost(Duration.ofSeconds(5))
+                      .untilAsserted(() -> {
+                          assertThat(acquiredCalls.get()).isEqualTo(1);
+                          assertThat(storage.rows.get(LOCK_NAME).lockedBy()).isNull();
+                          assertThat(node.isLockedByThisLockManagerInstance(LOCK_NAME)).isFalse();
+                      });
+
+            // Cancelling the ended acquiring removes it, so the next acquireLockAsync acquires the lock and calls lockAcquired again
+            node.cancelAsyncLockAcquiring(LOCK_NAME);
+            node.acquireLockAsync(LOCK_NAME, callback);
+            Awaitility.waitAtMost(Duration.ofSeconds(5))
+                      .untilAsserted(() -> assertThat(acquiredCalls.get()).isEqualTo(2));
+            assertThat(node.isLockedByThisLockManagerInstance(LOCK_NAME)).isTrue();
+            assertThat(storage.rows.get(LOCK_NAME).lockedBy()).isEqualTo("node");
+            assertThat(releasedCalls.get()).isEqualTo(1);
+            assertThat(logEvents.list.stream().filter(event -> event.getLevel() == Level.ERROR)).hasSize(1);
+        } finally {
+            detachLockManagerLog(logEvents);
+        }
+    }
+
     @Test
     void a_failing_lock_released_callback_after_a_critical_error_in_lock_acquired_is_added_to_the_error_as_suppressed() {
         var acquiredCalls = new AtomicInteger();
