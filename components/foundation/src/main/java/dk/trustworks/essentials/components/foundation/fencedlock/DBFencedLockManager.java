@@ -40,6 +40,50 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
 /**
  * Common super base class for implementing persistent/durable {@link FencedLockManager}'s
  *
+ * <h2>Errors</h2>
+ * One invariant governs every failure path: <b>before this lock manager stops confirming a lock it holds, it releases the
+ * lock locally</b> - removes it from the locks it confirms and marks it as released, which calls its
+ * {@link LockCallback#lockReleased(FencedLock)} callbacks, and publishes {@link LockReleased}. A lock this instance no longer
+ * confirms must not go on reporting itself as held by this instance: its row expires after the lock timeout, and another
+ * instance may then take the lock over while a holder here still believes it holds it. The local release holds whatever the
+ * error, including when the release in the DB fails or is not attempted (the row then expires after the lock timeout). The
+ * lock reports itself as released even when one of its <code>lockReleased</code> callbacks fails; one failing with a critical
+ * error skips the callbacks after it and the {@link LockReleased} event.
+ * <p>
+ * On the lock confirmation, an async acquiring and {@link #stop()}, a failure of a <code>lockAcquired</code>/<code>lockReleased</code>
+ * callback, a {@link FencedLockEvents} subscriber or the storage that is not a critical error is logged and handled like a
+ * {@link RuntimeException}: what was running carries on.
+ * A critical error ({@link dk.trustworks.essentials.shared.Exceptions#isCriticalError(Throwable)}, also when it is the cause,
+ * or a suppressed exception, of the throwable thrown) is not recovered from. What it ends depends on the thread it reaches:
+ * <ul>
+ *     <li><b>the lock confirmation</b>: the critical error ends the scheduled lock confirmation. First every lock this instance
+ *     still holds is released locally (not in the DB - the rows expire after the lock timeout), and the error is logged at
+ *     ERROR, because the task's {@link ScheduledFuture} it escapes into is never read. Thrown inside the confirmation's
+ *     {@link UnitOfWork}, it rolls back the confirmations made in that tick</li>
+ *     <li><b>an async acquiring</b> ({@link #acquireLockAsync(LockName, LockCallback)}): the critical error ends the async
+ *     acquiring of that lock, and is logged at ERROR first; when it came from <code>lockAcquired</code>, the lock is released
+ *     before that - see {@link #acquireLockAsync(LockName, LockCallback)}</li>
+ *     <li><b>the caller of {@link #stop()}</b>: the teardown is completed first - every lock gets its release, one whose
+ *     release failed with a critical error is released locally, the async acquirings are cancelled, the executors shut down
+ *     and {@link FencedLockEvents.FencedLockManagerStopped} published - and then the first critical error is thrown, with
+ *     every later failure of a release added to it as suppressed</li>
+ *     <li><b>the caller of {@link FencedLock#release()}</b> or of an acquire: the critical error is thrown to the caller</li>
+ * </ul>
+ * The state left behind:
+ * <ul>
+ *     <li>after the scheduled lock confirmation has ended, {@link #isStarted()} is still <code>true</code> and this lock
+ *     manager still acquires locks - {@link #tryAcquireLock(LockName)}, and an async acquiring that is still running, which
+ *     tries to acquire its lock again on every tick and gets it once its row has expired after the lock timeout, unless
+ *     another instance takes it first - but confirms none of them: each one's row expires after the lock timeout while its
+ *     holder believes it holds it. Stop and start the lock manager to start the lock confirmation again - {@link #stop()}
+ *     drops every async acquiring; call {@link #acquireLockAsync(LockName, LockCallback)} again after {@link #start()}, see
+ *     {@link #acquireLockAsync(LockName, LockCallback)}</li>
+ *     <li>after {@link #stop()} has thrown a critical error, the lock manager is stopped ({@link #isStarted()} is
+ *     <code>false</code>) and can be started again</li>
+ *     <li>an async acquiring ended by a critical error keeps its entry - see {@link #acquireLockAsync(LockName, LockCallback)}
+ *     for how to restart it</li>
+ * </ul>
+ *
  * @param <UOW>  the type of {@link UnitOfWork} required
  * @param <LOCK> the concrete type of {@link DBFencedLock} used
  */
@@ -257,7 +301,8 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
                         }
                     } catch (Throwable e) {
                         // A non-critical Error (from a LockAcquired event subscriber, say) is handled like a RuntimeException:
-                        // escaping this loop, it would roll back the confirmations made in the tick and skip the locks after this one
+                        // escaping this loop, it would roll back the confirmations made in the tick and skip the locks after this one.
+                        // A critical error does escape, and ends the scheduled confirmation once every held lock is released locally
                         rethrowIfCriticalError(e);
                         log.error(msg("[{}] Technical failure while trying to confirm lock '{}'", lockManagerInstanceId, fencedLock.getName()), e);
                     }
@@ -288,9 +333,40 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
                 log.debug("[{}] Completed confirmation of {} locks acquired by this Lock Manager Instance. Number of Locks acquired locally after confirmation {}",
                           lockManagerInstanceId, numberOfLocallyAcquiredLocksBeforeConfirmation, locksAcquiredByThisLockManager.size());
             }
+        } catch (Throwable e) {
+            // Escaping, it ends the scheduled confirmation - see the class javadoc, "Errors"
+            releaseHeldLocksLocallyAsTheConfirmationEnds(e);
+            throw e;
         } finally {
             reentrantLock.unlock();
         }
+    }
+
+    /**
+     * Called with what is about to escape the lock confirmation task - in practice a critical error
+     * ({@link dk.trustworks.essentials.shared.Exceptions#isCriticalError(Throwable)}), which the confirmation loop and its
+     * helpers rethrow: a task scheduled at a fixed rate that throws is never run again, so no lock this instance holds would be
+     * confirmed again. Each lock is released locally ({@link #releaseLostLockLocally(DBFencedLock)}), so it stops reporting
+     * itself as held by this instance before its row can expire and another instance take it over. Not in the DB: the rows
+     * expire after <code>lockTimeOut</code>. A failure of one local release is added to <code>failure</code> as suppressed and
+     * the next lock released all the same. <code>failure</code> is logged at ERROR afterwards, because the task's
+     * {@link ScheduledFuture} it escapes into is never read.
+     *
+     * @param failure the failure that ends the scheduled confirmation
+     */
+    private void releaseHeldLocksLocallyAsTheConfirmationEnds(Throwable failure) {
+        var heldLocks = List.copyOf(locksAcquiredByThisLockManager.values());
+        heldLocks.forEach(lock -> {
+            try {
+                releaseLostLockLocally(lock);
+            } catch (Throwable localReleaseFailure) {
+                addSuppressedOnce(failure, localReleaseFailure);
+            }
+        });
+        log.error(msg("[{}] The lock confirmation failed with {} - released the {} lock(s) this lock manager instance held locally only "
+                      + "(their rows expire after the lock timeout) and the scheduled lock confirmation has ended: a lock this instance "
+                      + "acquires from now on is not confirmed, until the lock manager is stopped and started again",
+                      lockManagerInstanceId, isCriticalError(failure) ? "a critical error" : "an unexpected failure", heldLocks.size()), failure);
     }
 
 
@@ -505,6 +581,7 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
     }
 
     @Override
+    @SuppressWarnings("PMD.CloseResource") // A held lock's close() is its release(), which the teardown calls for every lock
     public void stop() {
         if (started) {
             log.info("[{}] Stopping lock manager", lockManagerInstanceId);
@@ -513,6 +590,8 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
             // runs entirely after it and sees started == false. Interleaving the two is what produced a
             // NullPointerException on the caller's thread, and would otherwise leave a cancelled future stranded in
             // asyncLockAcquirings, which a later start() would then treat as a live acquiring and never re-schedule.
+            // The first critical error releasing a lock, rethrown once the teardown is complete - see the class javadoc, "Errors"
+            Throwable criticalError = null;
             reentrantLock.lock();
             try {
                 stopping = true;
@@ -525,17 +604,28 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
                               lockManagerInstanceId);
                 }
 
-                locksAcquiredByThisLockManager.values().forEach(lock -> {
+                for (var lock : locksAcquiredByThisLockManager.values()) {
                     log.debug("[{}] Releasing acquired Lock '{}' due to Stopping",
                               lockManagerInstanceId,
                               lock.getName());
                     try {
                         lock.release();
                     } catch (Throwable e) {
-                        // A non-critical Error from a lockReleased callback or a LockReleased event subscriber (an AssertionError,
-                        // say) is handled like a RuntimeException: escaping, it would leave the locks after this one held and
-                        // this lock manager started, with its async lock acquiring still running
-                        rethrowIfCriticalError(e);
+                        // No failure ends the teardown: escaping, it would leave the locks after this one held and this lock
+                        // manager started, with its async lock acquiring still running. A non-critical Error from a lockReleased
+                        // callback or a LockReleased event subscriber (an AssertionError, say) is handled like a RuntimeException.
+                        // A critical error is kept and rethrown at the end, with every later failure added to it as suppressed
+                        // instead of logged, and each lock whose release failed from then on is released locally: a critical error from releaseLockInDB,
+                        // say, escapes releaseLock before it removes the lock and marks it as released
+                        if (criticalError != null || isCriticalError(e)) {
+                            if (criticalError == null) {
+                                criticalError = e;
+                            } else {
+                                addSuppressedOnce(criticalError, e);
+                            }
+                            releaseLocallyAfterFailedRelease(lock.getName(), lock, criticalError);
+                            continue;
+                        }
                         if (IOExceptionUtil.isIOException(e)) {
                             log.debug(msg("[{}] Failed to release FencedLock with name '{}'",
                                           lockManagerInstanceId,
@@ -546,7 +636,7 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
                                          lock.getName()), e);
                         }
                     }
-                });
+                }
                 locksAcquiredByThisLockManager.clear();
 
                 asyncLockAcquirings.forEach((lockName, scheduledFuture) -> {
@@ -595,7 +685,18 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
                 reentrantLock.unlock();
             }
             log.info("[{}] Stopped lock manager", lockManagerInstanceId);
-            notify(new FencedLockManagerStopped(this));
+            if (criticalError == null) {
+                notify(new FencedLockManagerStopped(this));
+                return;
+            }
+            // The lock manager is stopped, so the event is published before the critical error is rethrown - a failure
+            // publishing it is added to that error rather than thrown in its place
+            try {
+                notify(new FencedLockManagerStopped(this));
+            } catch (Throwable e) {
+                addSuppressedOnce(criticalError, e);
+            }
+            sneakyThrow(criticalError);
         } else {
             log.info("[{}] Lock Manager was already stopped", lockManagerInstanceId);
         }
@@ -967,7 +1068,8 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
      * That end is deliberate, and nothing but the ERROR log line says the acquiring has ended. A critical error is not
      * retried, because a retry is not expected to succeed (a class whose initialiser failed stays unusable in its class
      * loader, say), and it is rethrown from the acquiring task ({@link dk.trustworks.essentials.shared.Exceptions#rethrowIfCriticalError(Throwable)}),
-     * as critical errors are throughout this lock manager. The task runs on this lock manager's own executor, so the error
+     * as critical errors are throughout this lock manager (see the class javadoc, "Errors", for what one ends on each of its
+     * threads and the state it leaves behind). The task runs on this lock manager's own executor, so the error
      * ends up in the task's {@link ScheduledFuture}, which nothing reads: no {@link FencedLockEvents} event says the
      * acquiring has ended (the {@link FencedLockEvents.LockReleased} published when the error came from
      * <code>lockAcquired</code> and the lock was released first looks like any other release), and none of

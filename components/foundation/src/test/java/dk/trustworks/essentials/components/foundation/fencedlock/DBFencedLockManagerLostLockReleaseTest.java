@@ -16,11 +16,15 @@
 
 package dk.trustworks.essentials.components.foundation.fencedlock;
 
+import ch.qos.logback.classic.*;
+import ch.qos.logback.classic.spi.*;
+import ch.qos.logback.core.read.ListAppender;
 import dk.trustworks.essentials.components.foundation.fencedlock.FencedLockEvents.*;
 import dk.trustworks.essentials.components.foundation.transaction.*;
 import dk.trustworks.essentials.reactive.*;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.*;
+import org.slf4j.LoggerFactory;
 
 import java.io.*;
 import java.time.*;
@@ -48,8 +52,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * subscriber, thrown on the confirmation thread, is handled like a {@link RuntimeException}: a lost lock is still released
  * locally and {@link LockReleased} published (in the DB too, unless the confirmation {@link UnitOfWork} failed on IO - see
  * above), the other confirmations of the tick are kept, and the scheduled confirmation keeps running. A critical error
- * ({@link dk.trustworks.essentials.shared.Exceptions#isCriticalError(Throwable)}) still escapes: it rolls back the tick's
- * confirmations and ends the scheduled confirmation.
+ * ({@link dk.trustworks.essentials.shared.Exceptions#isCriticalError(Throwable)}) still escapes, rolling back the tick's
+ * confirmations and ending the scheduled confirmation - but every lock still held is released locally, and the error logged at
+ * ERROR, first.
  */
 class DBFencedLockManagerLostLockReleaseTest {
     private static final LockName LOCK_NAME       = LockName.of("lost-lock");
@@ -268,39 +273,116 @@ class DBFencedLockManagerLostLockReleaseTest {
     }
 
     @Test
-    void a_lock_acquired_event_subscriber_failing_with_a_critical_error_during_confirmation_rolls_back_the_tick_and_ends_the_confirmation() {
+    @SuppressWarnings("PMD.CloseResource") // Releasing the locks is the job of the lock manager when the confirmation ends, the behaviour under test
+    void a_lock_acquired_event_subscriber_failing_with_a_critical_error_during_confirmation_releases_every_held_lock_locally_and_ends_the_confirmation() {
         // Given
-        lockManager.tryAcquireLock(LOCK_NAME).orElseThrow();
-        lockManager.tryAcquireLock(OTHER_LOCK_NAME).orElseThrow();
+        var lock                     = lockManager.tryAcquireLock(LOCK_NAME).orElseThrow();
+        var otherLock                = lockManager.tryAcquireLock(OTHER_LOCK_NAME).orElseThrow();
         var unitOfWorksOfFailedTicks = new CopyOnWriteArrayList<UnitOfWork>();
+        var criticalError            = new ExceptionInInitializerError("LockAcquired subscriber fails critically");
+        var logEvents                = captureLockManagerLog();
+        try {
+            // When
+            eventSubscriberAction = event -> {
+                if (event instanceof LockAcquired lockAcquired && lockAcquired.lock.getName().equals(LOCK_NAME)) {
+                    unitOfWorksOfFailedTicks.add(unitOfWorkFactory.getRequiredUnitOfWork());
+                    throw criticalError;
+                }
+            };
 
-        // When
-        eventSubscriberAction = event -> {
-            if (event instanceof LockAcquired lockAcquired && lockAcquired.lock.getName().equals(LOCK_NAME)) {
-                unitOfWorksOfFailedTicks.add(unitOfWorkFactory.getRequiredUnitOfWork());
-                throw new ExceptionInInitializerError("LockAcquired subscriber fails critically");
-            }
-        };
+            // Then the critical error escapes the confirmation loop: the confirmation UnitOfWork of that tick is rolled back
+            Awaitility.waitAtMost(Duration.ofSeconds(5))
+                      .untilAsserted(() -> {
+                          assertThat(unitOfWorksOfFailedTicks).isNotEmpty();
+                          assertThat(unitOfWorksOfFailedTicks.getFirst().status()).isNotEqualTo(UnitOfWorkStatus.Started);
+                      });
+            assertThat(unitOfWorksOfFailedTicks.getFirst().status()).isEqualTo(UnitOfWorkStatus.RolledBack);
 
-        // Then the critical error escapes the confirmation loop: the confirmation UnitOfWork of that tick is rolled back
-        Awaitility.waitAtMost(Duration.ofSeconds(5))
-                  .untilAsserted(() -> {
-                      assertThat(unitOfWorksOfFailedTicks).isNotEmpty();
-                      assertThat(unitOfWorksOfFailedTicks.getFirst().status()).isNotEqualTo(UnitOfWorkStatus.Started);
-                  });
-        assertThat(unitOfWorksOfFailedTicks.getFirst().status()).isEqualTo(UnitOfWorkStatus.RolledBack);
+            // And before it ended the confirmation, every lock this instance held was released locally - neither is confirmed
+            // any more, so neither may go on reporting itself held by this instance - and LockReleased published for each.
+            // And it was logged at ERROR, once, since the scheduled future it escapes into is never read. Awaited together:
+            // per lock, isLocked() turns false before LockReleased is published, and the ERROR line follows the last lock
+            Awaitility.waitAtMost(Duration.ofSeconds(5))
+                      .untilAsserted(() -> {
+                          assertThat(lock.isLocked()).isFalse();
+                          assertThat(otherLock.isLocked()).isFalse();
+                          assertThat(lockReleasedEventsFor(LOCK_NAME)).hasSize(1);
+                          assertThat(lockReleasedEventsFor(OTHER_LOCK_NAME)).hasSize(1);
+                          assertThat(logEvents.list.stream().filter(event -> event.getLevel() == Level.ERROR))
+                                  .singleElement()
+                                  .satisfies(event -> {
+                                      assertThat(event.getFormattedMessage()).contains("critical error", "2 lock(s)", "ended");
+                                      assertThat(((ThrowableProxy) event.getThrowableProxy()).getThrowable()).isSameAs(criticalError);
+                                  });
+                      });
+            assertThat(lock.isLockedByThisLockManagerInstance()).isFalse();
+            assertThat(otherLock.isLockedByThisLockManagerInstance()).isFalse();
+            // ... locally only: the rows expire after the lock timeout
+            assertThat(storage.releaseInDBUnitOfWorks).isEmpty();
 
-        // And the scheduled confirmation has ended: no lock is confirmed again
-        var lockAttempts      = storage.confirmAttempts(LOCK_NAME);
-        var otherLockAttempts = storage.confirmAttempts(OTHER_LOCK_NAME);
-        Awaitility.await()
-                  .during(Duration.ofMillis(500))
-                  .atMost(Duration.ofSeconds(2))
-                  .untilAsserted(() -> {
-                      assertThat(storage.confirmAttempts(LOCK_NAME)).isEqualTo(lockAttempts);
-                      assertThat(storage.confirmAttempts(OTHER_LOCK_NAME)).isEqualTo(otherLockAttempts);
-                  });
-        assertThat(unitOfWorksOfFailedTicks).hasSize(1);
+            // And the scheduled confirmation has ended: a lock acquired afterwards is never confirmed
+            eventSubscriberAction = event -> {
+            };
+            lockManager.tryAcquireLock(LOCK_NAME).orElseThrow();
+            var lockAttempts = storage.confirmAttempts(LOCK_NAME);
+            Awaitility.await()
+                      .during(Duration.ofMillis(500))
+                      .atMost(Duration.ofSeconds(2))
+                      .untilAsserted(() -> assertThat(storage.confirmAttempts(LOCK_NAME)).isEqualTo(lockAttempts));
+            assertThat(unitOfWorksOfFailedTicks).hasSize(1);
+        } finally {
+            ((Logger) LoggerFactory.getLogger(TestDBFencedLockManager.class)).detachAppender(logEvents);
+        }
+    }
+
+    @Test
+    @SuppressWarnings("PMD.CloseResource") // Releasing the locks is the job of the lock manager when the confirmation ends, the behaviour under test
+    void a_local_release_failing_with_a_critical_error_as_the_confirmation_ends_does_not_keep_the_other_held_lock_held() {
+        // Given two held locks, each with a lockReleased callback failing critically - both, so neither map order lets the
+        // test pass with the lock released second skipped
+        var lock                   = lockManager.tryAcquireLock(LOCK_NAME).orElseThrow();
+        var otherLock              = lockManager.tryAcquireLock(OTHER_LOCK_NAME).orElseThrow();
+        var lockReleasedError      = new ExceptionInInitializerError("lockReleased of lost-lock fails critically");
+        var otherLockReleasedError = new ExceptionInInitializerError("lockReleased of other-lock fails critically");
+        lock.registerCallback(lockReleasedFailingWith(lockReleasedError));
+        otherLock.registerCallback(lockReleasedFailingWith(otherLockReleasedError));
+        var criticalError = new ExceptionInInitializerError("LockAcquired subscriber fails critically");
+        var logEvents     = captureLockManagerLog();
+        try {
+            // When a critical error ends the confirmation
+            eventSubscriberAction = event -> {
+                if (event instanceof LockAcquired lockAcquired && lockAcquired.lock.getName().equals(LOCK_NAME)) {
+                    throw criticalError;
+                }
+            };
+
+            // Then the failing local release of one lock does not stop the other being released locally, and both
+            // failures are added to the critical error, logged at ERROR once the last lock is done. No LockReleased is
+            // asserted: a lockReleased callback failing critically skips that lock's LockReleased
+            Awaitility.waitAtMost(Duration.ofSeconds(5))
+                      .untilAsserted(() -> assertThat(logEvents.list.stream().filter(event -> event.getLevel() == Level.ERROR))
+                              .singleElement()
+                              .satisfies(event -> {
+                                  var loggedError = ((ThrowableProxy) event.getThrowableProxy()).getThrowable();
+                                  assertThat(loggedError).isSameAs(criticalError);
+                                  assertThat(loggedError.getSuppressed()).containsExactlyInAnyOrder(lockReleasedError, otherLockReleasedError);
+                              }));
+            assertThat(lock.isLocked()).isFalse();
+            assertThat(otherLock.isLocked()).isFalse();
+            assertThat(lock.isLockedByThisLockManagerInstance()).isFalse();
+            assertThat(otherLock.isLockedByThisLockManagerInstance()).isFalse();
+        } finally {
+            ((Logger) LoggerFactory.getLogger(TestDBFencedLockManager.class)).detachAppender(logEvents);
+        }
+    }
+
+    private static ListAppender<ILoggingEvent> captureLockManagerLog() {
+        var appender = new ListAppender<ILoggingEvent>();
+        // Appended to by the lock manager's threads while the test thread reads it
+        appender.list = new CopyOnWriteArrayList<>();
+        appender.start();
+        ((Logger) LoggerFactory.getLogger(TestDBFencedLockManager.class)).addAppender(appender);
+        return appender;
     }
 
     private void verifyLostLockIsReleasedAndTheConfirmationOfTheTickIsKept(FencedLock lostLock, FencedLock confirmedLock) {

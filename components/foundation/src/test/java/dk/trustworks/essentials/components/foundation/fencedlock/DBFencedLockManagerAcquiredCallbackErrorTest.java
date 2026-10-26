@@ -735,24 +735,85 @@ class DBFencedLockManagerAcquiredCallbackErrorTest {
         assertThat(node.isStarted()).isFalse();
     }
 
+    /**
+     * Both locks fail critically, so whichever of them <code>stop()</code> releases first, the other is released after a
+     * critical error.
+     */
     @Test
-    @SuppressWarnings("PMD.CloseResource") // Releasing the lock is the job of node.stop(), the call under test: it releases the lock before the lockReleased callback throws
-    void a_lock_released_callback_failing_with_a_critical_error_while_stopping_is_thrown_from_stop() {
-        var lock          = node.tryAcquireLock(LOCK_NAME).orElseThrow();
-        var criticalError = new ExceptionInInitializerError("lockReleased fails critically");
-        var failed        = new AtomicBoolean();
-        lock.registerCallback(LockCallback.builder()
-                                          .onLockAcquired(_lock -> {
-                                          })
-                                          .onLockReleased(_lock -> {
-                                              // Once only, so the stop() in cleanup completes
-                                              if (failed.compareAndSet(false, true)) {
-                                                  throw criticalError;
-                                              }
-                                          })
-                                          .build());
+    @SuppressWarnings("PMD.CloseResource") // Releasing the locks is the job of node.stop(), the call under test: it releases each lock before its lockReleased callback throws
+    void lock_released_callbacks_failing_with_a_critical_error_while_stopping_are_thrown_from_stop_once_every_lock_is_released_and_the_lock_manager_stopped() {
+        var otherLockName      = LockName.of("acquired-callback-error-other-lock");
+        var lock               = node.tryAcquireLock(LOCK_NAME).orElseThrow();
+        var otherLock          = node.tryAcquireLock(otherLockName).orElseThrow();
+        var criticalError      = new ExceptionInInitializerError("lockReleased fails critically");
+        var otherCriticalError = new ExceptionInInitializerError("other lockReleased fails critically");
+        lock.registerCallback(lockReleasedFailingWith(criticalError));
+        otherLock.registerCallback(lockReleasedFailingWith(otherCriticalError));
 
-        assertThatThrownBy(node::stop).isSameAs(criticalError);
+        var thrown = catchThrowable(node::stop);
+
+        // The first critical error is thrown, carrying the second
+        assertThat(thrown).isIn(criticalError, otherCriticalError);
+        assertThat(thrown.getSuppressed()).singleElement()
+                                          .isIn(criticalError, otherCriticalError)
+                                          .isNotSameAs(thrown);
+        // ... once every lock is released, in the DB too, and the lock manager is stopped
+        assertThat(lock.isLocked()).isFalse();
+        assertThat(otherLock.isLocked()).isFalse();
+        assertThat(lock.isLockedByThisLockManagerInstance()).isFalse();
+        assertThat(otherLock.isLockedByThisLockManagerInstance()).isFalse();
+        assertThat(storage.rows.get(LOCK_NAME).lockedBy()).isNull();
+        assertThat(storage.rows.get(otherLockName).lockedBy()).isNull();
+        assertThat(node.isStarted()).isFalse();
+        assertThat(events).filteredOn(FencedLockEvents.FencedLockManagerStopped.class::isInstance).hasSize(1);
+        // ... so it can be started again, and a second stop() has nothing left to do
+        assertThatCode(node::stop).doesNotThrowAnyException();
+        node.start();
+        assertThat(node.tryAcquireLock(LOCK_NAME)).isPresent();
+    }
+
+    @Test
+    @SuppressWarnings("PMD.CloseResource") // Releasing the locks is the job of node.stop(), the call under test
+    void a_release_in_the_db_failing_with_a_critical_error_while_stopping_still_releases_every_lock_locally_and_stops_the_lock_manager() {
+        var otherLockName = LockName.of("acquired-callback-error-other-lock");
+        var lock          = node.tryAcquireLock(LOCK_NAME).orElseThrow();
+        var otherLock     = node.tryAcquireLock(otherLockName).orElseThrow();
+        var releasedLocks = new CopyOnWriteArrayList<FencedLock>();
+        for (var heldLock : List.of(lock, otherLock)) {
+            heldLock.registerCallback(LockCallback.builder()
+                                                  .onLockAcquired(_lock -> {
+                                                  })
+                                                  .onLockReleased(releasedLocks::add)
+                                                  .build());
+        }
+        var releaseError = new NoClassDefFoundError("releaseLockInDB fails critically");
+        storage.failNextReleaseWith = releaseError;
+
+        assertThatThrownBy(node::stop).isSameAs(releaseError);
+
+        // The first release failed in the DB, before releaseLock released the lock locally - it is released locally all the
+        // same: no lock reports itself held, lockReleased was called and LockReleased published for both
+        assertThat(lock.isLockedByThisLockManagerInstance()).isFalse();
+        assertThat(otherLock.isLockedByThisLockManagerInstance()).isFalse();
+        assertThat(releasedLocks).containsExactlyInAnyOrder(lock, otherLock);
+        assertThat(events).filteredOn(LockReleased.class::isInstance)
+                          .extracting(event -> ((LockReleased) event).lock)
+                          .containsExactlyInAnyOrder(lock, otherLock);
+        // ... the release after it was made in the DB too, while the failed one's row expires after the lock timeout
+        assertThat(List.of(storage.rows.get(LOCK_NAME).lockedBy() == null, storage.rows.get(otherLockName).lockedBy() == null))
+                .containsExactlyInAnyOrder(true, false);
+        // ... and the lock manager is stopped
+        assertThat(node.isStarted()).isFalse();
+    }
+
+    private static LockCallback lockReleasedFailingWith(Error error) {
+        return LockCallback.builder()
+                           .onLockAcquired(_lock -> {
+                           })
+                           .onLockReleased(_lock -> {
+                               throw error;
+                           })
+                           .build();
     }
 
     private static ListAppender<ILoggingEvent> captureLockManagerLog() {
