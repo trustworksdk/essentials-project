@@ -71,8 +71,9 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  * </ul>
  * The state left behind:
  * <ul>
- *     <li>after the scheduled lock confirmation has ended, {@link #isStarted()} is still <code>true</code>, but this lock
- *     manager acquires no lock, since it could not confirm it - its row would expire after the lock timeout while its holder
+ *     <li>after the scheduled lock confirmation has ended, {@link #isStarted()} is still <code>true</code> and
+ *     {@link #isLockConfirmationEnded()} returns <code>true</code>, so code (a liveness probe, say) can tell this state, but
+ *     this lock manager acquires no lock, since it could not confirm it - its row would expire after the lock timeout while its holder
  *     believed it held it: {@link #tryAcquireLock(LockName)} and {@link #tryAcquireLock(LockName, Duration)} return empty,
  *     {@link #acquireLock(LockName)} throws {@link IllegalStateException}, and the ticks of an async acquiring, one still
  *     running or one {@link #acquireLockAsync(LockName, LockCallback)} starts afterwards, do nothing, so its
@@ -723,6 +724,19 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
     @Override
     public boolean isStarted() {
         return started;
+    }
+
+    /**
+     * Has the scheduled lock confirmation of this lock manager ended (in practice on a critical error - see the class javadoc,
+     * "Errors")? While it has, {@link #isStarted()} can still be <code>true</code>, but this lock manager acquires no lock -
+     * see the class javadoc, "The state left behind", for what that means and the way back.
+     *
+     * @return <code>true</code> from the moment the scheduled lock confirmation ended until the lock manager is stopped and
+     * started again ({@link #start()} on a lock manager that is still started does nothing, and a {@link #stop()} alone does
+     * not clear it), otherwise <code>false</code>
+     */
+    public boolean isLockConfirmationEnded() {
+        return confirmationEnded;
     }
 
     @Override

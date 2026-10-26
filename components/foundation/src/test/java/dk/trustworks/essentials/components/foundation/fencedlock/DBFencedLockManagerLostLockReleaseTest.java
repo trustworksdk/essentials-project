@@ -336,6 +336,7 @@ class DBFencedLockManagerLostLockReleaseTest {
     @SuppressWarnings("PMD.CloseResource") // lock is released locally by the lock manager when the confirmation ends, the behaviour under test; reacquiredLock is released by stop() in cleanup()
     void once_a_critical_error_has_ended_the_confirmation_no_lock_is_acquired_until_the_lock_manager_is_stopped_and_started_again() {
         // Given a critical error that has ended the scheduled confirmation
+        assertThat(lockManager.isLockConfirmationEnded()).isFalse();
         var lock          = lockManager.tryAcquireLock(LOCK_NAME).orElseThrow();
         var criticalError = new ExceptionInInitializerError("LockAcquired subscriber fails critically");
         var logEvents     = captureLockManagerLog();
@@ -357,8 +358,10 @@ class DBFencedLockManagerLostLockReleaseTest {
         };
         var lockAcquiredEventsAtTheEnd = lockAcquiredEvents().size();
 
-        // When / Then no lock is acquired: none of them could be confirmed, so each row would expire while its holder believed it held it
+        // When / Then no lock is acquired: none of them could be confirmed, so each row would expire while its holder believed it held it.
+        // The lock manager still reports itself started, but reports that its lock confirmation has ended
         assertThat(lockManager.isStarted()).isTrue();
+        assertThat(lockManager.isLockConfirmationEnded()).isTrue();
         assertThat(lockManager.tryAcquireLock(LOCK_NAME)).isEmpty();
         assertThat(lockManager.tryAcquireLock(OTHER_LOCK_NAME)).isEmpty();
         var timedAcquireStarted = System.nanoTime();
@@ -386,9 +389,14 @@ class DBFencedLockManagerLostLockReleaseTest {
                   .untilAsserted(() -> assertThat(asyncAcquired).isEmpty());
         assertThat(lockAcquiredEvents()).hasSize(lockAcquiredEventsAtTheEnd);
 
-        // And once the lock manager is stopped and started again, it acquires locks and confirms them
-        lockManager.stop();
+        // And once the lock manager is stopped and started again, it acquires locks and confirms them - a start on the still
+        // started lock manager does nothing and a stop alone does not clear the ended confirmation, the start after it does
         lockManager.start();
+        assertThat(lockManager.isLockConfirmationEnded()).isTrue();
+        lockManager.stop();
+        assertThat(lockManager.isLockConfirmationEnded()).isTrue();
+        lockManager.start();
+        assertThat(lockManager.isLockConfirmationEnded()).isFalse();
         var reacquiredLock = lockManager.tryAcquireLock(LOCK_NAME).orElseThrow();
         awaitConfirmationKeepsRunning(LOCK_NAME);
         assertThat(reacquiredLock.isLocked()).isTrue();
