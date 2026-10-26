@@ -77,16 +77,6 @@
             "timeout": 10
           }
         ]
-      },
-      {
-        "matcher": "compact",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/context-guard.sh\" restore",
-            "timeout": 10
-          }
-        ]
       }
     ]
   },

@@ -18,11 +18,10 @@
 # included, is measured against (the main conversation's capped at its auto-compact window when
 # one is set; and that a subagent reads the main transcript's model from its
 # tail, once, and the whole file only when its last 5000 lines name none), the restore after a
-# subagent's compaction, whose state a restore hands back (main/'s only after a compaction
-# taken for the main conversation's, a subagent's own after a compact_boundary in its own
-# transcript), the main conversation's restore from a compact_boundary in its transcript when
-# SessionStart(compact) took its compaction for a subagent's, STATE.md handed back once per
-# write, and the pre-compaction snapshot without GNU-only tools.
+# compaction and whose state it hands back (every agent's own, from the warn after a
+# compact_boundary in its own transcript; nothing at SessionStart(compact), which cannot tell
+# a subagent's compaction from the main conversation's), STATE.md handed back once per write,
+# and the pre-compaction snapshot without GNU-only tools.
 #
 # Every case runs the hook as Claude Code does - hook JSON on stdin, the mode as $1 - against
 # fake transcripts in a temp dir. CONTEXT_GUARD_DIR, CLAUDE_CONFIG_DIR and CLAUDE_PROJECT_DIR
@@ -478,8 +477,7 @@ compact_boundary "$(main_transcript s38)" sidechain-1 true
 expect_nothing "$(run warn s38 "")" "a subagent's compaction restored the main conversation on its next warn"
 pass
 
-# Half the compaction point is no test: a main count at 75% of it is past half, and a subagent
-# compacts at any main count.
+# A subagent compacts at any main count: SessionStart(compact) adds nothing at any of them.
 case_name="a subagent's compaction while the main count is past half its compaction point but not near it: nothing from main/"
 user_settings '{"modelSettings": {"claude-opus-5-5": {"autoCompactWindow": 300000}}}'
 assistant_entry "$(main_transcript s40)" claude-opus-5-5 200000 false # trigger 267000
@@ -501,41 +499,39 @@ out=$(run warn s40 a1)
 case "$out" in *AGENT-STATE-S40*) ;; *) fail "expected the subagent's own STATE.md, got: ${out:0:300}" ;; esac
 pass
 
-case_name="SessionStart(compact) after the main conversation's auto PreCompact near its compaction point: main/'s state, named as its"
+case_name="the main conversation's auto compaction near its compaction point: nothing at SessionStart, its next warn restores main/'s state and snapshot, named as its, once"
 user_settings '{"modelSettings": {"claude-opus-5-5": {"autoCompactWindow": 300000}}}'
-assistant_entry "$(main_transcript s39)" claude-opus-5-5 266000 false # 1000 short of 267000
+m=$(main_transcript s39)
+assistant_entry "$m" claude-opus-5-5 266000 false # 1000 short of 267000
 expect_warning "$(run warn s39 "")" 266000/300000
 printf '%s\n' "MAIN-STATE-S39" >"$CONTEXT_GUARD_DIR/s39/main/STATE.md"
 compact s39 auto
-rm -f "$CLAUDE_CONFIG_DIR/settings.json"
-out=$(run restore s39 "")
-case "$out" in
-  *"the main conversation was just compacted"*"if you are a subagent, it is not yours"*MAIN-STATE-S39*"Pre-compaction snapshot"*) ;;
-  *) fail "expected main/'s STATE.md and snapshot, named as the main conversation's: ${out:0:300}" ;;
-esac
-printf '%s\n' "MAIN-STATE-S39-B" >"$CONTEXT_GUARD_DIR/s39/main/STATE.md"
-expect_nothing "$(run restore s39 "")" "a second SessionStart(compact) without a PreCompact restored again"
-[ -e "$CONTEXT_GUARD_DIR/s39/main/warned.5" ] && fail "the main conversation's restore kept its warn lock"
-pass
-
-case_name="the main conversation's boundary after SessionStart(compact) restored it: its next warn adds nothing, a later compaction restores"
-compact_boundary "$(main_transcript s39)" boundary-1 false
-assistant_entry "$(main_transcript s39)" claude-opus-5-5 20000 false
-expect_nothing "$(run warn s39 "")" "the warn after the boundary handed main/'s state back a second time"
-expect_nothing "$(run warn s39 "")" "a later warn handed main/'s state back"
-# The marker went with that boundary: the next compaction SessionStart(compact) misses restores.
-printf '%s\n' "MAIN-STATE-S39-C" >"$CONTEXT_GUARD_DIR/s39/main/STATE.md"
-compact s39 auto # a count of 20000: taken for a subagent's
-expect_nothing "$(run restore s39 "")" "a compaction far from the compaction point was restored at SessionStart"
-compact_boundary "$(main_transcript s39)" boundary-2 false
-assistant_entry "$(main_transcript s39)" claude-opus-5-5 15000 false
+expect_nothing "$(run restore s39 "")" "SessionStart(compact) injected main/'s state"
+[ -d "$CONTEXT_GUARD_DIR/s39/main/warned.5" ] || fail "SessionStart(compact) cleared main's warn lock"
+compact_boundary "$m" boundary-1 false
+assistant_entry "$m" claude-opus-5-5 20000 false
 out=$(run warn s39 "")
-case "$out" in *MAIN-STATE-S39-C*) ;; *) fail "the second compaction was not restored by the warn after its boundary: ${out:0:300}" ;; esac
+case "$out" in
+  *"the main conversation was just compacted"*"treat it as your own notes"*MAIN-STATE-S39*"Pre-compaction snapshot"*) ;;
+  *) fail "expected main/'s STATE.md and snapshot from the warn after the boundary, named as the main conversation's: ${out:0:300}" ;;
+esac
+case "$out" in *"if you are a subagent"*) fail "the main conversation's restore still addresses a subagent: ${out:0:300}" ;; esac
+[ -e "$CONTEXT_GUARD_DIR/s39/main/warned.5" ] && fail "the main conversation's restore kept its warn lock"
+expect_nothing "$(run warn s39 "")" "the same boundary restored again"
+# The next compaction's boundary restores the STATE.md written since.
+printf '%s\n' "MAIN-STATE-S39-B" >"$CONTEXT_GUARD_DIR/s39/main/STATE.md"
+compact s39 auto
+expect_nothing "$(run restore s39 "")" "SessionStart(compact) injected main/'s state the second time"
+compact_boundary "$m" boundary-2 false
+assistant_entry "$m" claude-opus-5-5 15000 false
+out=$(run warn s39 "")
+case "$out" in *MAIN-STATE-S39-B*) ;; *) fail "the second compaction was not restored by the warn after its boundary: ${out:0:300}" ;; esac
+rm -f "$CLAUDE_CONFIG_DIR/settings.json"
 pass
 
-# The margin is window/100 (3000 on 300000): a last turn that ends in a large tool result puts
-# the main conversation's own compaction further from it than that.
-case_name="the main conversation's auto compaction well short of the margin: nothing at SessionStart, its next warn restores main/'s state and snapshot, once"
+# A last turn that ends in a large tool result puts the main conversation's own compaction well
+# short of its compaction point: the restore does not depend on the count it compacted at.
+case_name="the main conversation's auto compaction 17000 short of its compaction point: nothing at SessionStart, its next warn restores main/'s state and snapshot, once"
 user_settings '{"modelSettings": {"claude-opus-5-5": {"autoCompactWindow": 300000}}}'
 assistant_entry "$(main_transcript s41)" claude-opus-5-5 250000 false # 17000 short of 267000
 expect_warning "$(run warn s41 "")" 250000/300000
@@ -555,29 +551,38 @@ expect_nothing "$(run warn s41 "")" "the same boundary restored again"
 rm -f "$CLAUDE_CONFIG_DIR/settings.json"
 pass
 
-case_name="a last turn's output counts toward the main count: 262000 in and 3000 out is within the margin"
+case_name="a last turn's output counts toward the main count; a manual compaction: nothing at SessionStart, its next warn restores"
 user_settings '{"modelSettings": {"claude-opus-5-5": {"autoCompactWindow": 300000}}}'
-assistant_entry "$(main_transcript s42)" claude-opus-5-5 262000 false 3000 # 265000, within 3000 of 267000
-run warn s42 "" >/dev/null
+m=$(main_transcript s42)
+assistant_entry "$m" claude-opus-5-5 262000 false 3000 # 262000 in and 3000 out: 265000
+expect_warning "$(run warn s42 "")" 265000/300000
 printf '%s\n' "MAIN-STATE-S42" >"$CONTEXT_GUARD_DIR/s42/main/STATE.md"
-compact s42 auto
+compact s42 manual
+expect_nothing "$(run restore s42 "")" "a manual compaction was restored at SessionStart"
+compact_boundary "$m" boundary-1 false
+assistant_entry "$m" claude-opus-5-5 20000 false
+out=$(run warn s42 "")
+case "$out" in *MAIN-STATE-S42*) ;; *) fail "the manual compaction was not restored by the warn after its boundary: ${out:0:300}" ;; esac
 rm -f "$CLAUDE_CONFIG_DIR/settings.json"
-out=$(run restore s42 "")
-case "$out" in *MAIN-STATE-S42*) ;; *) fail "expected main/'s STATE.md at SessionStart: ${out:0:300}" ;; esac
 pass
 
-case_name="a SessionStart restore no main boundary followed (a subagent's compaction) does not hold back the next main restore"
+case_name="a subagent's compaction while the main count is near its compaction point: nothing from main/, main's warn lock kept; the main conversation's own compaction is restored by the warn after its boundary"
 user_settings '{"modelSettings": {"claude-opus-5-5": {"autoCompactWindow": 300000}}}'
 m=$(main_transcript s43)
-assistant_entry "$m" claude-opus-5-5 265000 false # within the margin: a subagent's compaction is taken for main's
-run warn s43 "" >/dev/null
+assistant_entry "$m" claude-opus-5-5 265000 false # 2000 short of 267000
+expect_warning "$(run warn s43 "")" 265000/300000
 printf '%s\n' "MAIN-STATE-S43-A" >"$CONTEXT_GUARD_DIR/s43/main/STATE.md"
-compact s43 auto
-case "$(run restore s43 "")" in *MAIN-STATE-S43-A*) ;; *) fail "the compaction within the margin was not restored at SessionStart" ;; esac
-assistant_entry "$m" claude-opus-5-5 240000 false # the main conversation's own one, 27000 short
+f=$(agent_transcript s43 a1)
+assistant_entry "$f" claude-sonnet-5 180000 true
+expect_warning "$(run warn s43 a1)" 180000/200000
+compact s43 auto # the subagent's PreCompact: no agent_id, the main transcript
+compact_boundary "$f" boundary-a1
+expect_nothing "$(run restore s43 "")" "a subagent's compaction at a main count of 265000 injected main/'s state"
+[ -d "$CONTEXT_GUARD_DIR/s43/main/warned.5" ] || fail "a subagent's compaction cleared main's warn lock"
+expect_nothing "$(run warn s43 "")" "a subagent's compaction restored the main conversation on its next warn"
 printf '%s\n' "MAIN-STATE-S43-B" >"$CONTEXT_GUARD_DIR/s43/main/STATE.md"
-compact s43 auto
-expect_nothing "$(run restore s43 "")" "a compaction 27000 short of the compaction point was restored at SessionStart"
+compact s43 auto # the main conversation's own
+expect_nothing "$(run restore s43 "")" "the main conversation's compaction was restored at SessionStart"
 compact_boundary "$m" boundary-1 false
 assistant_entry "$m" claude-opus-5-5 20000 false
 out=$(run warn s43 "")
@@ -599,54 +604,63 @@ case "$out" in *MAIN-STATE-S44*) ;; *) fail "a compaction after the first call w
 pass
 
 # The main conversation can end its turn with no tool call (waiting on background agents), so a
-# subagent's PreCompact can come between a SessionStart restore and the main boundary's warn.
-case_name="a subagent's compaction after SessionStart restored the main conversation's and its boundary is in the transcript: the next main warn adds nothing"
+# subagent's PreCompact and SessionStart(compact) can come between the main conversation's
+# compaction and the warn that finds its boundary.
+case_name="a subagent's compaction between the main conversation's compaction and its next warn: that warn restores main/'s state, once"
 user_settings '{"modelSettings": {"claude-opus-5-5": {"autoCompactWindow": 300000}}}'
 m=$(main_transcript s45)
-assistant_entry "$m" claude-opus-5-5 265000 false # within the margin
+assistant_entry "$m" claude-opus-5-5 265000 false
 run warn s45 "" >/dev/null
 printf '%s\n' "MAIN-STATE-S45" >"$CONTEXT_GUARD_DIR/s45/main/STATE.md"
 compact s45 auto
-case "$(run restore s45 "")" in *MAIN-STATE-S45*) ;; *) fail "the compaction within the margin was not restored at SessionStart" ;; esac
+expect_nothing "$(run restore s45 "")" "the main conversation's compaction was restored at SessionStart"
 compact_boundary "$m" boundary-1 false
 assistant_entry "$m" claude-opus-5-5 20000 false
 compact s45 auto # a subagent's PreCompact: no agent_id, the main transcript
 expect_nothing "$(run restore s45 "")" "a subagent's compaction at a main count of 20000 was restored at SessionStart"
-expect_nothing "$(run warn s45 "")" "the main compaction SessionStart restored was handed back again by the warn after a subagent's compaction"
+out=$(run warn s45 "")
+case "$out" in *MAIN-STATE-S45*) ;; *) fail "a subagent's compaction in between kept the main conversation's restore back: ${out:0:300}" ;; esac
+expect_nothing "$(run warn s45 "")" "the main conversation's compaction was handed back twice"
 rm -f "$CLAUDE_CONFIG_DIR/settings.json"
 pass
 
 # --- STATE.md handed back once per write -----------------------------------------------------
 
+main_compaction() { # $1 session, $2 boundary uuid: a main compaction as its next warn finds it
+  # PreCompact, the boundary line, a small count; prints what that warn emitted.
+  local m
+  m=$(main_transcript "$1")
+  compact "$1" manual
+  compact_boundary "$m" "$2" false
+  assistant_entry "$m" claude-opus-5-5 20000 false
+  run warn "$1" ""
+}
+
 case_name="restore hands STATE.md back once per write"
-mkdir -p "$CONTEXT_GUARD_DIR/s4/main"
+assistant_entry "$(main_transcript s4)" claude-opus-5-5 30000 false
+run warn s4 "" >/dev/null # the first main warn: it records that there is no boundary yet
 state=$CONTEXT_GUARD_DIR/s4/main/STATE.md
 printf '%s\n' "STATE-MARKER-1" >"$state"
-compact s4 manual
-out=$(run restore s4 "")
+out=$(main_compaction s4 boundary-1)
 case "$out" in *STATE-MARKER-1*) ;; *) fail "first restore lacks STATE.md: ${out:0:200}" ;; esac
-compact s4 manual
-out=$(run restore s4 "")
+out=$(main_compaction s4 boundary-2)
 case "$out" in *STATE-MARKER*) fail "second restore without a rewrite handed STATE.md back again" ;; esac
 printf '%s\n' "STATE-MARKER-2" >"$state"
-compact s4 manual
-out=$(run restore s4 "")
+out=$(main_compaction s4 boundary-3)
 case "$out" in *STATE-MARKER-2*) ;; *) fail "restore after a rewrite lacks STATE.md: ${out:0:200}" ;; esac
-compact s4 manual
-out=$(run restore s4 "")
+out=$(main_compaction s4 boundary-4)
 case "$out" in *STATE-MARKER*) fail "restore after the rewrite was handed back handed it back again" ;; esac
 touch -t 209901010000 "$state" # the same content written again, later
-compact s4 manual
-out=$(run restore s4 "")
+out=$(main_compaction s4 boundary-5)
 case "$out" in *STATE-MARKER-2*) ;; *) fail "restore after a same-content rewrite lacks STATE.md: ${out:0:200}" ;; esac
 pass
 
 case_name="restore of a STATE.md over 20000 bytes says it was cut and where the rest is"
-mkdir -p "$CONTEXT_GUARD_DIR/s21/main"
+assistant_entry "$(main_transcript s21)" claude-opus-5-5 30000 false
+run warn s21 "" >/dev/null
 state=$CONTEXT_GUARD_DIR/s21/main/STATE.md
 { printf 'STATE-HEAD\n'; head -c 25000 /dev/zero | tr '\0' 'x'; printf '\nSTATE-TAIL\n'; } >"$state"
-compact s21 manual
-out=$(run restore s21 "")
+out=$(main_compaction s21 boundary-1)
 case "$out" in *STATE-HEAD*) ;; *) fail "restore lacks the start of STATE.md" ;; esac
 case "$out" in *STATE-TAIL*) fail "restore handed back more than 20000 bytes" ;; esac
 case "$out" in *"cut at 20000 bytes"*"$state"*) ;; *) fail "restore does not say STATE.md was cut: ${out: -200}" ;; esac
