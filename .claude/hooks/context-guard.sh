@@ -101,17 +101,17 @@
 #          owned by this user or root, and not writable by its group or others unless sticky,
 #          which rules out a directory made under umask 002 and a group-writable team directory).
 # State is private: files are created with umask 077, every state directory must be a real
-# directory owned by this user (else the hook does nothing but say why on stderr; each is checked
-# before anything is created in it, a missing one created a level at a time) and is chmod 700,
-# and the root's parent must be a real directory owned by this user or root that its group and
-# others cannot write to unless it is sticky, as /tmp is (else, again, the hook only says why
-# on stderr), so on a shared host
-# no other user can read STATE.md or plant one for a restore to inject. The directories above
-# that parent are not checked (the default root's are /tmp and /, both root-owned, /tmp
-# sticky): a CONTEXT_GUARD_DIR with a directory anywhere above its parent that another user
-# can rename entries in (one they own, or one they can write to that is not sticky) loses that
-# protection. `start` prunes session directories with nothing written in them for 7 days;
-# `warn` marks its state dir live on every call, so a long-running session is never pruned.
+# directory owned by this user (each is checked before anything is created in it, a missing one
+# created a level at a time) and is chmod 700, and the root's parent must be a real directory
+# owned by this user or root that its group and others cannot write to unless it is sticky, as
+# /tmp is, so on a shared host no other user can read STATE.md or plant one for a restore to
+# inject. When a check fails the hook does nothing but say why: on stderr, and from `start`
+# also as a systemMessage the user sees (see refuse below). The directories above that parent
+# are not checked (the default root's are /tmp and /, both root-owned, /tmp sticky): a
+# CONTEXT_GUARD_DIR with a directory anywhere above its parent that another user can rename
+# entries in (one they own, or one they can write to that is not sticky) loses that protection.
+# `start` prunes session directories with nothing written in them for 7 days; `warn` marks its
+# state dir live on every call, so a long-running session is never pruned.
 # Known limit: a /model switch in the main conversation is not followed - main/model is
 # written at SessionStart only, so a switch from a [1m] model to a 200k one keeps the 1M
 # window (the upward switch is caught by a count past the window). The session then compacts
@@ -165,10 +165,15 @@ parent=${root%/*}
 case "$root" in */*) ;; *) parent=. ;; esac
 while case "$parent" in ?*/) ;; *) false ;; esac; do parent=${parent%/}; done
 parent=${parent:-/}
-# A refusal says why on stderr, so a CONTEXT_GUARD_DIR the guard cannot use does not switch it
-# off unnoticed; nothing reaches the model, and the hook still exits 0.
+# A refusal says why, so a CONTEXT_GUARD_DIR the guard cannot use does not switch it off
+# unnoticed: on stderr in every mode, which a normal session need not show, and from `start`
+# also as a systemMessage, JSON output Claude Code shows the user and does not give the model.
+# Only `start` prints it, so the user sees it once per session start, not on every tool call.
+# Nothing reaches the model, and the hook still exits 0.
 refuse() { # $1: why the state is not used
-  printf 'context-guard: %s; guard disabled\n' "$1" >&2
+  local line="context-guard: $1; guard disabled"
+  printf '%s\n' "$line" >&2
+  [ "$mode" = start ] && jq -n --arg m "$line" '{systemMessage: $m}'
   exit 0
 }
 what="$parent, the parent of the state root $root,"

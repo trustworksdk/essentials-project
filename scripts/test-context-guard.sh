@@ -819,12 +819,24 @@ expect_empty_dir() { # $1 dir, $2 what was symlinked to it
   [ -z "$(ls -A "$1")" ] || fail "created through a symlinked $2: $(ls -A "$1" | tr '\n' ' ')"
 }
 
-run_err() { # as run, its stderr in $hook_err
-  hook_input "$2" "$3" | bash "$hook" "$1" 2>"$hook_err" | jq -r '.hookSpecificOutput.additionalContext // empty'
+hook_out=$tmp/hook-stdout.log
+run_err() { # as run, its stderr in $hook_err and its whole stdout in $hook_out
+  hook_input "$2" "$3" | bash "$hook" "$1" 2>"$hook_err" >"$hook_out"
+  jq -r '.hookSpecificOutput.additionalContext // empty' "$hook_out"
 }
-expect_refused() { # $1 the reason the stderr line must give, $2 what ran
+# A refusal's reason goes to stderr in every mode, which a normal session need not show; from
+# start alone it is also a systemMessage, which the user sees, so that one line is all start
+# prints, and every other mode prints nothing.
+expect_refused() { # $1 the reason the stderr line must give, $2 what ran (its mode first)
   [ "$(cat "$hook_err")" = "context-guard: $1; guard disabled" ] \
     || fail "$2: expected 'context-guard: $1; guard disabled' on stderr, got '$(head -c 300 "$hook_err")'"
+  case "$2" in
+    start*)
+      jq -se --arg m "context-guard: $1; guard disabled" '. == [{systemMessage: $m}]' "$hook_out" >/dev/null \
+        || fail "$2: expected exactly {\"systemMessage\": \"context-guard: $1; guard disabled\"} on stdout, got '$(head -c 300 "$hook_out")'" ;;
+    *)
+      [ ! -s "$hook_out" ] || fail "$2: printed on stdout: $(head -c 300 "$hook_out")" ;;
+  esac
 }
 
 case_name="a state directory that is a symlink is refused: nothing printed but the reason on stderr, nothing written through it"
@@ -880,7 +892,7 @@ for r in "$tmp/guard-link" "$tmp/guard-link/" "$tmp/guard-link//"; do
   expect_refused "state directory $tmp/guard-link is a symlink" "warn with root $r"
   expect_nothing "$(CONTEXT_GUARD_DIR=$r run_err restore s32 "")" "restored through a symlinked root $r"
   expect_refused "state directory $tmp/guard-link is a symlink" "restore with root $r"
-  hook_input s32 "" | CONTEXT_GUARD_DIR=$r bash "$hook" start >/dev/null 2>"$hook_err"
+  CONTEXT_GUARD_DIR=$r run_err start s32 "" >/dev/null
   expect_refused "state directory $tmp/guard-link is a symlink" "start with root $r"
   expect_empty_dir "$elsewhere" "root $r"
 done
@@ -900,7 +912,7 @@ pass
 # The root's parent is not chmod (it may be /tmp): one another user could rename the root in,
 # or a symlink, would let them swap the checked root for a tree of their own afterwards. A test
 # cannot make a directory another user owns, so these cases pin the symlink and mode checks.
-case_name="a symlinked parent of the root: nothing printed but the reason on stderr, nothing created in its target"
+case_name="a symlinked parent of the root: the reason on stderr and, from start, as a systemMessage, nothing created in its target"
 elsewhere=$tmp/elsewhere-parent
 mkdir -p "$elsewhere"
 ln -s "$elsewhere" "$tmp/parent-link"
@@ -911,7 +923,7 @@ for r in "$tmp/parent-link/guard" "$tmp/parent-link//guard"; do
   expect_refused "$why" "warn with root $r"
   expect_nothing "$(CONTEXT_GUARD_DIR=$r run_err restore s46 "")" "restored under a symlinked parent $r"
   expect_refused "$why" "restore with root $r"
-  hook_input s46 "" | CONTEXT_GUARD_DIR=$r bash "$hook" start >/dev/null 2>"$hook_err"
+  CONTEXT_GUARD_DIR=$r run_err start s46 "" >/dev/null
   expect_refused "$why" "start with root $r"
   expect_empty_dir "$elsewhere" "parent $r"
 done
@@ -919,7 +931,7 @@ rm -f "$tmp/parent-link"
 pass
 
 # 775 is what mkdir makes under umask 002 (user-private groups), 2775 a setgid team directory.
-case_name="a parent of the root its group or others can write to, not sticky: nothing printed but the reason on stderr, no root created"
+case_name="a parent of the root its group or others can write to, not sticky: the reason on stderr and, from start, as a systemMessage, no root created"
 assistant_entry "$(main_transcript s47)" claude-opus-5-5 950000 false
 for mode in 777 775 2775 770 707 720 702; do
   p=$tmp/open-$mode
@@ -928,21 +940,24 @@ for mode in 777 775 2775 770 707 720 702; do
   why="$p, the parent of the state root $p/guard, is writable by its group or others and not sticky ($(ls -ldn "$p" | cut -d' ' -f1))"
   expect_nothing "$(CONTEXT_GUARD_DIR=$p/guard run_err warn s47 "")" "warned under a parent of mode $mode"
   expect_refused "$why" "warn under a parent of mode $mode"
-  hook_input s47 "" | CONTEXT_GUARD_DIR=$p/guard bash "$hook" start >/dev/null 2>"$hook_err"
+  CONTEXT_GUARD_DIR=$p/guard run_err start s47 "" >/dev/null
   expect_refused "$why" "start under a parent of mode $mode"
   [ ! -e "$p/guard" ] || fail "created the root under a parent of mode $mode"
 done
 pass
 
-case_name="a parent of the root that is a file: nothing printed but the reason on stderr"
+case_name="a parent of the root that is a file: the reason on stderr and, from start, as a systemMessage"
 : >"$tmp/file-parent"
 assistant_entry "$(main_transcript s54)" claude-opus-5-5 950000 false
 expect_nothing "$(CONTEXT_GUARD_DIR=$tmp/file-parent/guard run_err warn s54 "")" "warned under a parent that is a file"
 expect_refused "$tmp/file-parent, the parent of the state root $tmp/file-parent/guard, is not a directory and could not be created as one" \
   "warn under a parent that is a file"
+CONTEXT_GUARD_DIR=$tmp/file-parent/guard run_err start s54 "" >/dev/null
+expect_refused "$tmp/file-parent, the parent of the state root $tmp/file-parent/guard, is not a directory and could not be created as one" \
+  "start under a parent that is a file"
 pass
 
-case_name="a sticky world-writable parent (as /tmp is), a 755 one and a relative root: the guard works, nothing on stderr"
+case_name="a sticky world-writable parent (as /tmp is), a 755 one and a relative root: the guard works, nothing on stderr, start prints nothing"
 for mode in 1777 755; do
   p=$tmp/parent-$mode
   mkdir -p "$p"
@@ -950,12 +965,18 @@ for mode in 1777 755; do
   assistant_entry "$(main_transcript s48-$mode)" claude-opus-5-5 950000 false
   expect_warning "$(CONTEXT_GUARD_DIR=$p/guard run_err warn s48-$mode "")" 950000/1000000
   expect_no_stderr
+  CONTEXT_GUARD_DIR=$p/guard run_err start s48-$mode "" >/dev/null
+  expect_no_stderr
+  [ ! -s "$hook_out" ] || fail "start printed under a parent of mode $mode: $(head -c 300 "$hook_out")"
 done
 mkdir -p "$tmp/rel-cwd"
 chmod 700 "$tmp/rel-cwd" # the parent of a relative root is the working directory
 assistant_entry "$(main_transcript s48-rel)" claude-opus-5-5 950000 false
 expect_warning "$(cd "$tmp/rel-cwd" && CONTEXT_GUARD_DIR=guard run_err warn s48-rel "")" 950000/1000000
 expect_no_stderr
+(cd "$tmp/rel-cwd" && CONTEXT_GUARD_DIR=guard run_err start s48-rel "" >/dev/null)
+expect_no_stderr
+[ ! -s "$hook_out" ] || fail "start printed under a relative root: $(head -c 300 "$hook_out")"
 [ -d "$tmp/rel-cwd/guard/s48-rel/main" ] || fail "the relative root was not created in the working directory"
 pass
 
