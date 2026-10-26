@@ -28,6 +28,8 @@ import dk.trustworks.essentials.components.foundation.types.SubscriberId;
 import dk.trustworks.essentials.reactive.EventBus;
 import dk.trustworks.essentials.shared.Exceptions;
 import org.junit.jupiter.api.*;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
@@ -35,6 +37,7 @@ import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -273,17 +276,17 @@ class DefaultEventStoreSubscriptionManagerTest {
         }
     }
 
-    @Test
-    void the_managers_start_starts_the_held_subscriptions_after_one_whose_start_throws() {
-        the_managers_start_starts_the_held_subscriptions_after_one_whose_start_throws(new IllegalStateException("Local event bus refused the subscriber"));
+    /**
+     * A subscription's start failing with an exception, and with an {@link Error}
+     */
+    static Stream<Named<Throwable>> startFailures() {
+        return Stream.of(Named.of("an exception", new IllegalStateException("Local event bus refused the subscriber")),
+                         Named.of("an Error", new AssertionError("Local event bus refused the subscriber")));
     }
 
-    @Test
-    void the_managers_start_starts_the_held_subscriptions_after_one_whose_start_throws_an_Error() {
-        the_managers_start_starts_the_held_subscriptions_after_one_whose_start_throws(new AssertionError("Local event bus refused the subscriber"));
-    }
-
-    private void the_managers_start_starts_the_held_subscriptions_after_one_whose_start_throws(Throwable failure) {
+    @ParameterizedTest(name = "start throws {0}")
+    @MethodSource("startFailures")
+    void the_managers_start_starts_the_held_subscriptions_after_one_whose_start_throws(Throwable failure) {
         // Only the first subscription the manager starts - whichever it is - fails to register with the local event bus
         var eventBus = mock(EventBus.class);
         doThrow(failure).doReturn(eventBus).when(eventBus).addSyncSubscriber(any());
@@ -306,22 +309,14 @@ class DefaultEventStoreSubscriptionManagerTest {
         }
     }
 
-    @Test
-    void a_subscription_whose_start_throws_is_no_longer_claimed_by_the_manager() throws ReflectiveOperationException {
-        a_subscription_whose_start_throws_is_no_longer_claimed_by_the_manager(new IllegalStateException("Local event bus refused the subscriber"));
-    }
-
-    @Test
-    void a_subscription_whose_start_throws_an_Error_is_no_longer_claimed_by_the_manager() throws ReflectiveOperationException {
-        a_subscription_whose_start_throws_is_no_longer_claimed_by_the_manager(new AssertionError("Local event bus refused the subscriber"));
-    }
-
     /**
      * A subscription the manager has claimed is skipped by every later start attempt of the manager's - its {@code start()}'s
      * walk, or a subscribe on another thread - so a failed start must release the claim. That claim is not otherwise
      * observable without racing the two, hence the look at the manager's {@code startClaimed} set
      */
-    private void a_subscription_whose_start_throws_is_no_longer_claimed_by_the_manager(Throwable failure) throws ReflectiveOperationException {
+    @ParameterizedTest(name = "start throws {0}")
+    @MethodSource("startFailures")
+    void a_subscription_whose_start_throws_is_no_longer_claimed_by_the_manager(Throwable failure) throws ReflectiveOperationException {
         var eventBus = mock(EventBus.class);
         doThrow(failure).when(eventBus).addSyncSubscriber(any());
         var manager = manager(new EventStoreSubscriptionObserver.NoOpEventStoreSubscriptionObserver(), mock(DurableSubscriptionRepository.class), eventBus);
@@ -337,21 +332,21 @@ class DefaultEventStoreSubscriptionManagerTest {
         }
     }
 
-    @Test
-    void a_subscription_whose_startingSubscriber_observer_throws_is_no_longer_claimed_and_a_later_start_starts_it() throws ReflectiveOperationException {
-        a_subscription_whose_startingSubscriber_observer_throws_is_no_longer_claimed_and_a_later_start_starts_it(new IllegalStateException("Observer failed"));
-    }
-
-    @Test
-    void a_subscription_whose_startingSubscriber_observer_throws_a_checked_exception_is_no_longer_claimed_and_a_later_start_starts_it() throws ReflectiveOperationException {
-        a_subscription_whose_startingSubscriber_observer_throws_is_no_longer_claimed_and_a_later_start_starts_it(new IOException("Observer failed"));
+    /**
+     * The observer's {@code startingSubscriber} failing with an unchecked, and with a checked exception
+     */
+    static Stream<Named<Throwable>> startingSubscriberObserverFailures() {
+        return Stream.of(Named.of("an unchecked exception", new IllegalStateException("Observer failed")),
+                         Named.of("a checked exception", new IOException("Observer failed")));
     }
 
     /**
      * The observer's {@code startingSubscriber} runs once the manager has claimed the subscription's start, so its failure
      * must release the claim and count as a returned start, like a failed {@code start()} of the subscription itself
      */
-    private void a_subscription_whose_startingSubscriber_observer_throws_is_no_longer_claimed_and_a_later_start_starts_it(Throwable failure) throws ReflectiveOperationException {
+    @ParameterizedTest(name = "startingSubscriber throws {0}")
+    @MethodSource("startingSubscriberObserverFailures")
+    void a_subscription_whose_startingSubscriber_observer_throws_is_no_longer_claimed_and_a_later_start_starts_it(Throwable failure) throws ReflectiveOperationException {
         var observer = new ThrowingOnceStartingSubscriberObserver(failure);
         var manager  = manager(observer, mock(DurableSubscriptionRepository.class));
         manager.start();
