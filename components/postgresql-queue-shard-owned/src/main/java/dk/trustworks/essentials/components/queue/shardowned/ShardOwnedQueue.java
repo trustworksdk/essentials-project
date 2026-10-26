@@ -3100,11 +3100,13 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         }
         try (var connection = storage.connection()) {
             return ordered.chargeKeysInHandlerBeforeRelease(connection, scope);
-        } catch (SQLException | RuntimeException | Error e) {
-            Exceptions.rethrowIfCriticalError(e);
+        } catch (ReleaseClaimWaitTimedOutException e) {
             // A claim wait given up is a charge that never started, never a failure after its writes, even when the handlers it
             // was to charge have returned while it waited and nothing reads as owed now
-            if (e instanceof ReleaseClaimWaitTimedOutException || ordered.owesReleaseCharge(scope)) {
+            throw e;
+        } catch (SQLException | RuntimeException | Error e) {
+            Exceptions.rethrowIfCriticalError(e);
+            if (ordered.owesReleaseCharge(scope)) {
                 throw e;
             }
             orderedChargeFailedWithNothingOwed(owner, from, e);
