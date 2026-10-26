@@ -31,6 +31,7 @@ import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
 import java.util.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.*;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -48,6 +49,11 @@ import static org.mockito.Mockito.*;
  * rolled back like one that throws a {@link RuntimeException}. A
  * {@link ViewEventProcessor} subscribes when it acquires its lock, and unsubscribes what it created there in the same way;
  * one whose lock acquiring cannot be started is left not started.
+ * <p>
+ * The shared helper all three use, {@code AbstractEventProcessor.startOrRollBack}, is also tested on its own, for what a
+ * processor cannot easily be made to throw: a critical error from the steps is rethrown at once, with neither the undo nor
+ * the mark-not-started run, and one from the undo is rethrown with the step's failure suppressed into it, without marking
+ * the processor not started.
  * <p>
  * Mocks throughout: the subscriptions are handed out by a mocked subscription manager, so no database is involved.
  */
@@ -457,6 +463,91 @@ class ProcessorStartRollbackTest {
         processor.start();
 
         assertThat(processor.isStarted()).isTrue();
+    }
+
+    // startOrRollBack itself - the one copy of the failed-start shape all three processors' start() share ---------------
+
+    @Test
+    void startOrRollBack_rethrows_a_critical_error_from_the_steps_at_once_without_undoing_or_marking_not_started() {
+        var failure          = new StackOverflowError("The start's steps overflowed the stack");
+        var undone           = new AtomicBoolean();
+        var markedNotStarted = new AtomicBoolean();
+
+        assertThatThrownBy(() -> AbstractEventProcessor.startOrRollBack(() -> {
+                                                                            throw failure;
+                                                                        },
+                                                                        () -> undone.set(true),
+                                                                        () -> markedNotStarted.set(true)))
+                .isSameAs(failure);
+
+        assertThat(undone).isFalse();
+        assertThat(markedNotStarted).isFalse();
+    }
+
+    @Test
+    void startOrRollBack_rethrows_a_critical_error_from_undo_with_the_steps_failure_suppressed_and_does_not_mark_not_started() {
+        var stepFailure      = new IllegalStateException("Others cannot be subscribed to");
+        var undoFailure      = new OutOfMemoryError("The Inbox consumption cannot be stopped");
+        var markedNotStarted = new AtomicBoolean();
+
+        assertThatThrownBy(() -> AbstractEventProcessor.startOrRollBack(() -> {
+                                                                            throw stepFailure;
+                                                                        },
+                                                                        () -> {
+                                                                            throw undoFailure;
+                                                                        },
+                                                                        () -> markedNotStarted.set(true)))
+                .isSameAs(undoFailure)
+                .satisfies(e -> assertThat(e.getSuppressed()).containsExactly(stepFailure));
+
+        assertThat(markedNotStarted).isFalse();
+    }
+
+    @Test
+    void startOrRollBack_rethrows_the_steps_failure_with_a_non_critical_undo_failure_suppressed_and_marks_not_started() {
+        var stepFailure      = new IllegalStateException("Others cannot be subscribed to");
+        var undoFailure      = new IllegalStateException("The Inbox consumption cannot be stopped");
+        var markedNotStarted = new AtomicBoolean();
+
+        assertThatThrownBy(() -> AbstractEventProcessor.startOrRollBack(() -> {
+                                                                            throw stepFailure;
+                                                                        },
+                                                                        () -> {
+                                                                            throw undoFailure;
+                                                                        },
+                                                                        () -> markedNotStarted.set(true)))
+                .isSameAs(stepFailure)
+                .satisfies(e -> assertThat(e.getSuppressed()).containsExactly(undoFailure));
+
+        assertThat(markedNotStarted).isTrue();
+    }
+
+    @Test
+    void startOrRollBack_rolls_back_a_checked_exception_the_steps_throw_sneakily_and_rethrows_it_as_it_is() {
+        var failure          = new IOException("The start's steps failed - thrown without being declared, as a Kotlin override can");
+        var undone           = new AtomicBoolean();
+        var markedNotStarted = new AtomicBoolean();
+
+        assertThatThrownBy(() -> AbstractEventProcessor.startOrRollBack(() -> Exceptions.sneakyThrow(failure),
+                                                                        () -> undone.set(true),
+                                                                        () -> markedNotStarted.set(true)))
+                .isSameAs(failure);
+
+        assertThat(undone).isTrue();
+        assertThat(markedNotStarted).isTrue();
+    }
+
+    @Test
+    void startOrRollBack_neither_undoes_nor_marks_not_started_when_the_steps_succeed() {
+        var undone           = new AtomicBoolean();
+        var markedNotStarted = new AtomicBoolean();
+
+        AbstractEventProcessor.startOrRollBack(() -> { },
+                                               () -> undone.set(true),
+                                               () -> markedNotStarted.set(true));
+
+        assertThat(undone).isFalse();
+        assertThat(markedNotStarted).isFalse();
     }
 
     @SuppressWarnings("unchecked")
