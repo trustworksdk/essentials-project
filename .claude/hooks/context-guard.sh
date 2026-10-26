@@ -6,8 +6,8 @@
 #
 #   start       SessionStart (startup|resume|clear|fork) - remember the session's model
 #   warn        PostToolUse, UserPromptSubmit - warning when 8 % and again 5 % of the window
-#               is left before the compaction point;
-#               for a subagent also the restore (see "Whose compaction" below)
+#               is left before the compaction point; also the restore after a compaction
+#               found in the agent's own transcript (see "Whose compaction" below)
 #   precompact  PreCompact (auto|manual)       - write a fallback snapshot; mark main/ compacted
 #                                                when it takes the compaction for the main
 #                                                conversation's (see "Whose compaction")
@@ -29,19 +29,29 @@
 # window/100 of its compaction point (main/window), and only then leaves main/compacted; any
 # other auto compaction is taken for a subagent's. The main conversation auto-compacts once
 # its context reaches that point, so its last count is then just short of it; a subagent
-# compacts on its own count, whatever the main count is. When that reading is wrong the other
-# way - the main conversation's own auto compaction comes with its last count further below
-# the point, as after a downward /model switch (Known limit) or one very large tool result -
-# the main conversation gets no restore at all: no STATE.md and no snapshot. restore hands
-# back main/'s state only when main/compacted is there, and removes it; otherwise it adds
-# nothing and leaves main/'s warn locks alone. A subagent that compacts while the main count
-# is within that margin is taken for the main conversation, so the restore text names whose
-# state it is. A subagent's restore is driven by its own transcript: its warn hands its state
-# back when the transcript's last 500 lines hold a compact_boundary whose uuid is not the one
-# kept in its state dir (boundary), so a compaction no warning preceded is restored as well;
-# failing that, after a warning, once its count is below half the compaction point. A
-# boundary's restore is claimed by a mkdir lock (restoring.<uuid>), so parallel tool calls
-# hand it back once. It has no snapshot: its PreCompact writes main/'s.
+# compacts on its own count, whatever the main count is. restore hands back main/'s state
+# only when main/compacted is there, removes it and leaves main/restored-pending; otherwise
+# it adds nothing and leaves main/'s warn locks alone. A subagent that compacts while the
+# main count is within that margin is taken for the main conversation, so the restore text
+# names whose state it is.
+# Every agent's restore is also driven by its own transcript: its warn hands its state back
+# when the transcript's last 500 lines hold a compact_boundary whose uuid is not the one kept
+# in its state dir (boundary) - in the main transcript only a line that is not isSidechain -
+# so a compaction no warning preceded is restored as well. For the main conversation this is
+# the fallback for its own auto compaction that came with its last count further below the
+# point than the margin, as after a downward /model switch (Known limit) or a last turn that
+# ended in a large tool result: precompact left no main/compacted, SessionStart(compact)
+# added nothing, and the next warn hands STATE.md and the snapshot back. When
+# main/restored-pending is there, SessionStart(compact) already did, so that warn only
+# records the uuid and removes the marker. precompact removes it too, recording first the
+# uuid of a main boundary that followed it when no main warn did, so a marker no main
+# boundary followed (a subagent's compaction taken for the main conversation's) does not
+# hold back the restore of the next one. A main warn that finds no boundary file (main/ has
+# none before its first warn) records the current uuid without restoring, so a resumed
+# session's older compactions are not restored. A subagent, failing a boundary, is restored
+# after a warning once its count is below half the compaction point. A boundary's restore is
+# claimed by a mkdir lock (restoring.<uuid>), so parallel tool calls hand it back once. A
+# subagent's has no snapshot: its PreCompact writes main/'s.
 # Each agent's percentage is taken against its own window, kept in its own state dir. The
 # main session's model is main/model or, when that is absent, the settings `model`; its
 # window is 1000000 when that names a [1m] model, else 200000. A subagent shares the main
@@ -66,8 +76,8 @@
 # 300000 window in our sessions, ~967000 on 1M per its docs - both 33000 short. The warnings
 # are measured against that compaction point (window - CONTEXT_GUARD_RESERVE), as headroom
 # left in % of the window, so they come equally close before compaction on every window size.
-# The count is the last API call's, so the tool result just returned is not in it yet: one
-# large result can cross a warning point, or reach compaction, unannounced.
+# The count is the last API call's input plus its output, so the tool result just returned is
+# not in it yet: one large result can cross a warning point, or reach compaction, unannounced.
 # Tested by scripts/test-context-guard.sh.
 #
 # Base dir is fixed rather than taken from the hook input's scratchpad_dir: that field is
@@ -89,7 +99,9 @@
 # written at SessionStart only, so a switch from a [1m] model to a 200k one keeps the 1M
 # window (the upward switch is caught by a count past the window). The session then compacts
 # far short of the compaction point main/window gives, so that compaction is taken for a
-# subagent's and gets no restore (see "Whose compaction" above).
+# subagent's: SessionStart(compact) adds nothing, and the restore comes with the main
+# conversation's next warn, from the compact_boundary in its transcript (see "Whose
+# compaction" above).
 # Never fails the hook: every path exits 0.
 # Needs bash and jq (without jq it does nothing). Transcripts are read by jq (warn's usage
 # and main-model checks first take the last 500, then 5000 lines with POSIX `tail -n`), so no
@@ -140,7 +152,8 @@ state_file=$state_dir/STATE.md
 restored_file=$state_dir/STATE.restored.md # the STATE.md the last restore handed back
 snapshot_file=$state_dir/precompact-snapshot.md
 compacted_file=$state_dir/compacted # main/ only: precompact took a compaction for the main conversation's
-boundary_file=$state_dir/boundary   # a subagent's: uuid of the compact_boundary it restored for
+boundary_file=$state_dir/boundary   # uuid of the last compact_boundary seen and handled (see warn)
+pending_file=$state_dir/restored-pending # main/ only: restore handed main/'s state back, no boundary seen since
 
 emit() { # $1 event name, $2 text
   jq -n --arg e "$1" --arg c "$2" '{hookSpecificOutput:{hookEventName:$e, additionalContext:$c}}'
@@ -258,8 +271,9 @@ used_tokens() { # prints "<tokens> <model>" from the last assistant entry; model
   [ -z "$agent" ] && filter='select(.type=="assistant" and (.isSidechain|not) and .message.usage)'
   # jq takes the last match itself. The transcript's tail is read first (last_match), as
   # this runs on every tool call; the whole file only when the tail holds no usage entry.
+  # The output tokens count too: that reply is in the next call's context.
   local prog='[inputs | fromjson? | objects | '"$filter"' | .message
-             | "\((.usage.input_tokens//0) + (.usage.cache_read_input_tokens//0) + (.usage.cache_creation_input_tokens//0)) \(.model // "")"]
+             | "\((.usage.input_tokens//0) + (.usage.cache_read_input_tokens//0) + (.usage.cache_creation_input_tokens//0) + (.usage.output_tokens//0)) \(.model // "")"]
              | last // empty'
   local out
   out=$(last_match "$transcript" "$prog")
@@ -275,12 +289,19 @@ trigger_of() { # $1 window; prints its compaction point, CONTEXT_GUARD_RESERVE s
 }
 
 last_boundary() { # uuid of the last compact_boundary in the last 500 lines of this transcript
-  # Only the tail: this runs on every tool call of a subagent, and the first one after its
-  # compaction finds the line near the end. grep keeps jq to the boundary lines.
+  # Only the tail: this runs on every tool call, and the first one after a compaction finds
+  # the line near the end. grep keeps jq to the boundary lines. In the main transcript a
+  # sidechain line is not the main conversation's.
   [ -f "$transcript" ] || return
+  local filter='select(.type=="system" and .subtype=="compact_boundary")'
+  [ -z "$agent" ] && filter='select(.type=="system" and .subtype=="compact_boundary" and (.isSidechain|not))'
   tail -n 500 "$transcript" 2>/dev/null | grep -F '"compact_boundary"' \
-    | jq -nrR '[inputs | fromjson? | objects | select(.type=="system" and .subtype=="compact_boundary")
-              | .uuid | strings] | last // empty' 2>/dev/null
+    | jq -nrR '[inputs | fromjson? | objects | '"$filter"' | .uuid | strings] | last // empty' 2>/dev/null
+}
+
+record_boundary() { # $1 uuid (may be empty); written to a temporary file and renamed onto boundary
+  printf '%s' "$1" >"$boundary_file.$$" 2>/dev/null && mv -f "$boundary_file.$$" "$boundary_file" 2>/dev/null
+  rm -f "$boundary_file.$$" 2>/dev/null
 }
 
 restore_text() {
@@ -359,24 +380,27 @@ case "$mode" in
     event=$(field hook_event_name)
     event=${event:-PostToolUse}
 
-    # A subagent's restore comes here; the main conversation's from SessionStart(compact).
-    # Its transcript gained a compact_boundary since the last restore: it compacted, warned
-    # before or not.
-    if [ -n "$agent" ]; then
-      b=$(last_boundary)
-      if [ -n "$b" ] && [ "$b" != "$(cat "$boundary_file" 2>/dev/null)" ]; then
-        # Claimed first: parallel tool calls can both see the new uuid before either renames
-        # boundary, and only the one whose mkdir succeeds restores.
-        mkdir "$state_dir/restoring.${b//[!A-Za-z0-9-]/_}" 2>/dev/null || exit 0
-        # Written to a temporary file and renamed onto boundary, not truncated in place.
-        printf '%s' "$b" >"$boundary_file.$$" 2>/dev/null \
-          && mv -f "$boundary_file.$$" "$boundary_file" 2>/dev/null
-        rm -f "$boundary_file.$$" 2>/dev/null
-        clear_locks
-        text=$(restore_text)
-        [ -n "$text" ] && emit "$event" "$text"
+    # A subagent's restore comes here; the main conversation's from SessionStart(compact), or
+    # here when that one took the compaction for a subagent's (see "Whose compaction").
+    # The agent's transcript gained a compact_boundary since the last restore: it compacted,
+    # warned before or not.
+    b=$(last_boundary)
+    if [ -z "$agent" ] && [ ! -e "$boundary_file" ]; then
+      record_boundary "$b" # the first main warn: a boundary already there is older (a resume)
+    elif [ -n "$b" ] && [ "$b" != "$(cat "$boundary_file" 2>/dev/null)" ]; then
+      # Claimed first: parallel tool calls can both see the new uuid before either renames
+      # boundary, and only the one whose mkdir succeeds restores.
+      mkdir "$state_dir/restoring.${b//[!A-Za-z0-9-]/_}" 2>/dev/null || exit 0
+      record_boundary "$b"
+      clear_locks
+      # SessionStart(compact) handed main/'s state back for this compaction already.
+      if [ -z "$agent" ] && [ -e "$pending_file" ]; then
+        rm -f "$pending_file" 2>/dev/null
         exit 0
       fi
+      text=$(restore_text)
+      [ -n "$text" ] && emit "$event" "$text"
+      exit 0
     fi
     # Warned already, and usage is now below half the compaction point: compaction happened.
     if has_lock && [ "$used" -lt $(( trigger / 2 )) ]; then
@@ -451,9 +475,18 @@ case "$mode" in
     # is short of it only by what its last turn added; a subagent compacts at any main count.
     # The margin is kept that narrow because a looser one (half the point, or the smallest
     # headroom level) also covers main counts a subagent's compaction comes at, late in the
-    # main conversation's cycle; its cost is a main compaction a large last turn triggers from
-    # further away, which gets no restore.
+    # main conversation's cycle; a main compaction a large last turn triggers from further
+    # away gets no restore from SessionStart(compact), and its restore comes with the main
+    # conversation's next warn instead, from the compact_boundary in its transcript.
     [ -z "$agent" ] || exit 0
+    # A marker the last restore left: when that compaction's main boundary is already in the
+    # transcript (no main warn ran since), it is consumed here, recorded as handled; a marker no
+    # main boundary followed is dropped, so it cannot hold back the next main restore.
+    if [ -e "$pending_file" ]; then
+      b=$(last_boundary)
+      [ -n "$b" ] && [ "$b" != "$(cat "$boundary_file" 2>/dev/null)" ] && record_boundary "$b"
+    fi
+    rm -f "$pending_file" 2>/dev/null
     if [ "$(field trigger)" != manual ]; then
       read -r used _ <<<"$(used_tokens)"
       window=$(cat "$state_dir/window" 2>/dev/null)
@@ -467,10 +500,13 @@ case "$mode" in
   restore)
     [ -n "$agent" ] && exit 0
     # No main/compacted: precompact took no compaction since the last restore for the main
-    # conversation's, so this one is a subagent's (its input carries no agent_id either).
+    # conversation's, so this one is taken for a subagent's (its input carries no agent_id
+    # either). When it was the main conversation's after all, its next warn restores it.
     [ -e "$compacted_file" ] || exit 0
     rm -f "$compacted_file" 2>/dev/null
     clear_locks
+    # Handed back here: the warn that finds this compaction's boundary must not repeat it.
+    : >"$pending_file" 2>/dev/null
     text=$(restore_text)
     [ -n "$text" ] && emit SessionStart "$text"
     ;;
