@@ -27,8 +27,8 @@
 # be there yet when either hook runs. Neither hook can tell whose compaction it is, so
 # neither restores anything: precompact writes main/'s snapshot whoever compacts, and
 # SessionStart(compact) adds nothing. Every agent's restore is driven by its own transcript
-# instead: its warn hands its state back when the transcript's last 500 lines hold a
-# compact_boundary whose uuid is not the one kept in its state dir (boundary) - in the main
+# instead: its warn hands its state back when the transcript's last compact_boundary, wherever
+# in the file it is, has a uuid that is not the one kept in its state dir (boundary) - in the main
 # transcript only a line that is not isSidechain - so a compaction no warning preceded is
 # restored as well. The main conversation's restore therefore comes with its first
 # PostToolUse or UserPromptSubmit after the compaction, not at SessionStart; until then it
@@ -102,8 +102,9 @@
 # compact_boundary in its transcript (see "Whose compaction" above).
 # Never fails the hook: every path exits 0.
 # Needs bash and jq (without jq it does nothing). Transcripts are read by jq (warn's usage
-# and main-model checks first take the last 500, then 5000 lines with POSIX `tail -n`), so no
-# GNU-only tool (tac, GNU sed) is involved: it works on a stock macOS userland as well.
+# and main-model checks first take the last 500, then 5000 lines with POSIX `tail -n`; its
+# boundary check hands jq only the lines a POSIX `grep -F` finds in the whole file), so no GNU-only tool (tac, GNU
+# sed) is involved: it works on a stock macOS userland as well.
 set -u
 case "${CONTEXT_GUARD:-on}" in off|0|false|no) exit 0 ;; esac
 umask 077
@@ -293,14 +294,17 @@ trigger_of() { # $1 window; prints its compaction point, CONTEXT_GUARD_RESERVE s
   echo "$t"
 }
 
-last_boundary() { # uuid of the last compact_boundary in the last 500 lines of this transcript
-  # Only the tail: this runs on every tool call, and the first one after a compaction finds
-  # the line near the end. grep keeps jq to the boundary lines. In the main transcript a
-  # sidechain line is not the main conversation's.
+last_boundary() { # uuid of the last compact_boundary in this transcript
+  # The whole file, not its tail: any number of lines can come between a compaction and the
+  # agent's next warn (attachments, queue operations as background agents report, API
+  # records), and a boundary that fell out of a tail would never be restored. grep reads the
+  # file and hands jq the boundary lines alone, so this stays cheap on every tool call (under
+  # 0.1 s on a 190 MB transcript, measured with the file in the page cache). In the main transcript a sidechain line is not the main
+  # conversation's.
   [ -f "$transcript" ] || return
   local filter='select(.type=="system" and .subtype=="compact_boundary")'
   [ -z "$agent" ] && filter='select(.type=="system" and .subtype=="compact_boundary" and (.isSidechain|not))'
-  tail -n 500 "$transcript" 2>/dev/null | grep -F '"compact_boundary"' \
+  grep -F '"compact_boundary"' "$transcript" 2>/dev/null \
     | jq -nrR '[inputs | fromjson? | objects | '"$filter"' | .uuid | strings] | last // empty' 2>/dev/null
 }
 

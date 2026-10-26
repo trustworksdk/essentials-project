@@ -661,6 +661,42 @@ expect_nothing "$(run warn s45 "")" "the main conversation's compaction was hand
 rm -f "$CLAUDE_CONFIG_DIR/settings.json"
 pass
 
+# While the main conversation waits on background agents, its transcript takes lines that are
+# not its turns (attachments, queue operations as the agents report): its compaction's boundary
+# can be thousands of lines back by its next warn, and is restored all the same.
+non_turn_lines() { # $1 transcript, $2 count: lines with no assistant entry and no boundary
+  jq -nc --argjson n "$2" 'range(1; $n + 1) | if . % 2 == 0 then {type: "queue-operation", operation: "enqueue", content: "agent \(.) done"}
+                           else {type: "attachment", attachment: {type: "task_status", content: "r\(.)"}} end' >>"$1"
+}
+
+case_name="the main conversation's compaction boundary 6000 lines back at its next warn: that warn restores main/'s state, once"
+m=$(main_transcript s50)
+assistant_entry "$m" claude-opus-5-5 30000 false
+run warn s50 "" >/dev/null # the first main warn: it records that there is no boundary yet
+printf '%s\n' "MAIN-STATE-S50" >"$CONTEXT_GUARD_DIR/s50/main/STATE.md"
+compact s50 auto
+compact_boundary "$m" boundary-1 false
+assistant_entry "$m" claude-opus-5-5 20000 false
+non_turn_lines "$m" 6000
+out=$(run warn s50 "")
+case "$out" in *MAIN-STATE-S50*) ;; *) fail "a boundary 6000 lines back was not restored: ${out:0:300}" ;; esac
+[ "$(cat "$CONTEXT_GUARD_DIR/s50/main/boundary")" = boundary-1 ] \
+  || fail "boundary holds '$(cat "$CONTEXT_GUARD_DIR/s50/main/boundary")', expected boundary-1"
+expect_nothing "$(run warn s50 "")" "the main conversation's compaction was handed back twice"
+pass
+
+case_name="a subagent's compaction boundary 600 lines back at its next warn: that warn restores its own state"
+f=$(agent_transcript s51 a1)
+assistant_entry "$f" claude-opus-5-5 100000 true
+expect_nothing "$(run warn s51 a1)" "50% of 200000 is short of every warning point"
+printf '%s\n' "AGENT-STATE-S51" >"$CONTEXT_GUARD_DIR/s51/agents/a1/STATE.md"
+compact_boundary "$f" boundary-1
+assistant_entry "$f" claude-opus-5-5 20000 true
+non_turn_lines "$f" 600
+out=$(run warn s51 a1)
+case "$out" in *AGENT-STATE-S51*) ;; *) fail "a subagent boundary 600 lines back was not restored: ${out:0:300}" ;; esac
+pass
+
 # --- STATE.md handed back once per write -----------------------------------------------------
 
 main_compaction() { # $1 session, $2 boundary uuid: a main compaction as its next warn finds it
