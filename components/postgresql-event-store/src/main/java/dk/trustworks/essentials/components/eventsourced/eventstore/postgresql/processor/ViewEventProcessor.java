@@ -241,8 +241,9 @@ public abstract class ViewEventProcessor extends AbstractEventProcessor {
                                                              );
         // The subscriptions created before one that fails to subscribe are unsubscribed again - see subscribeEachOrUnsubscribe.
         // Nothing else is undone here: the consumer started above is left to onLockReleased, which cancels it - DBFencedLockManager
-        // releases the lock when this callback throws a RuntimeException; a non-critical Error escapes its tick without a release,
-        // so this failure does not cancel the consumer: it runs until the lock is released later (stop() releases it)
+        // releases the lock when this callback throws a RuntimeException or a non-critical Error, so the lock is acquired again -
+        // by this instance's next tick or by another instance - and the subscribe is retried there; a critical error
+        // (Exceptions.isCriticalError) escapes the lock manager without a release
         eventStoreSubscriptions = subscribeEachOrUnsubscribe(subscribeToEventsRelatedTo, aggregateType -> {
             var subscriberId = AbstractEventProcessor.resolveSubscriberId(aggregateType, processorName);
             var subscription = eventStoreSubscriptionManager.subscribeToAggregateEventsAsynchronously(

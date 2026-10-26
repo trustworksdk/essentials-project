@@ -983,7 +983,11 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
                     locksAcquiredByThisLockManager.put(lockName, (LOCK) fencedLock);
                     try {
                         lockCallback.lockAcquired(fencedLock);
-                    } catch (RuntimeException e) {
+                    } catch (RuntimeException | Error e) {
+                        // A critical error (see Exceptions.isCriticalError) is not recovered from here - it escapes the tick.
+                        // A non-critical Error (an AssertionError, say) is handled like a RuntimeException: escaping, it
+                        // would keep the lock held by this instance and end the scheduled acquiring of the lock for good.
+                        rethrowIfCriticalError(e);
                         // The lock WAS acquired; it is the callback that failed. Keeping the lock would
                         // be the worst of both outcomes: this instance owns a lock it is not serving,
                         // no other instance can take it, and no later tick will ever call the callback
@@ -1014,7 +1018,10 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
                 locksAcquiredByThisLockManager.remove(lockName);
                 lockCallback.lockReleased(existingLock);
             }
-        } catch (Exception e) {
+        } catch (Exception | Error e) {
+            // A non-critical Error (from a lockReleased callback, say) must not escape either: a task scheduled at a fixed
+            // rate that throws is never run again, which would end the acquiring of this lock for good
+            rethrowIfCriticalError(e);
             log.error(msg("[{}] Technical error while trying to acquire lock '{}'", lockManagerInstanceId, lockName), e);
         } finally {
             reentrantLock.unlock();
