@@ -18,8 +18,10 @@
 # included, is measured against (the main conversation's capped at its auto-compact window when
 # one is set; and that a subagent reads the main transcript's model from its
 # tail, once, and the whole file only when its last 5000 lines name none), the restore after a
-# subagent's compaction, STATE.md handed back once per write, and the pre-compaction snapshot
-# without GNU-only tools.
+# subagent's compaction, whose state a restore hands back (main/'s only after a compaction
+# taken for the main conversation's, a subagent's own after a compact_boundary in its own
+# transcript), STATE.md handed back once per write, and the pre-compaction snapshot without
+# GNU-only tools.
 #
 # Every case runs the hook as Claude Code does - hook JSON on stdin, the mode as $1 - against
 # fake transcripts in a temp dir. CONTEXT_GUARD_DIR, CLAUDE_CONFIG_DIR and CLAUDE_PROJECT_DIR
@@ -405,22 +407,131 @@ expect_nothing "$(run warn s1 a3)" "the restore was emitted a second time"
 [ "$(window_of s1 a3)" = 1000000 ] || fail "window shrank to '$(window_of s1 a3)'"
 pass
 
+# --- Whose compaction a restore is ------------------------------------------------------------
+
+# A subagent's PreCompact and SessionStart(compact) arrive as the main conversation's do: no
+# agent_id, the main transcript_path. So every PreCompact and restore below runs with agent "",
+# and a subagent's compaction is modelled by what it leaves in its own transcript: a
+# compact_boundary line.
+compact() { # $1 session, $2 trigger (auto|manual): a PreCompact input as Claude Code sends it
+  hook_input "$1" "" | jq -c --arg t "$2" '.trigger = $t' | bash "$hook" precompact >/dev/null
+}
+compact_boundary() { # $1 transcript, $2 uuid: the line a compaction appends to its agent's one
+  jq -nc --arg u "$2" '{type: "system", subtype: "compact_boundary", isSidechain: true, uuid: $u,
+                       content: "Conversation compacted", compactMetadata: {trigger: "auto"}}' >>"$1"
+}
+
+case_name="subagent compacted with no warning before it: its next warn restores its own state, once per compaction"
+f=$(agent_transcript s37 a1)
+assistant_entry "$f" claude-opus-5-5 100000 true
+expect_nothing "$(run warn s37 a1)" "50% of 200000 is short of every warning point"
+mkdir -p "$CONTEXT_GUARD_DIR/s37/main"
+printf '%s\n' "MAIN-STATE-S37" >"$CONTEXT_GUARD_DIR/s37/main/STATE.md"
+printf '%s\n' "AGENT-STATE-S37" >"$CONTEXT_GUARD_DIR/s37/agents/a1/STATE.md"
+compact_boundary "$f" boundary-1
+assistant_entry "$f" claude-opus-5-5 20000 true
+out=$(run warn s37 a1)
+case "$out" in
+  *"was just compacted"*AGENT-STATE-S37*) ;;
+  *) fail "expected the subagent's own STATE.md, got: ${out:0:300}" ;;
+esac
+case "$out" in *MAIN-STATE-S37*) fail "the subagent's restore handed it the main conversation's STATE.md" ;; esac
+case "$out" in *"this subagent (agent_id a1)"*) ;; *) fail "the restore does not name its owner: ${out:0:200}" ;; esac
+# The same boundary does not restore again: the warning points work as before.
+assistant_entry "$f" claude-opus-5-5 160000 true
+expect_warning "$(run warn s37 a1)" 160000/200000
+printf '%s\n' "AGENT-STATE-S37-B" >"$CONTEXT_GUARD_DIR/s37/agents/a1/STATE.md"
+compact_boundary "$f" boundary-2
+assistant_entry "$f" claude-opus-5-5 21000 true
+out=$(run warn s37 a1)
+case "$out" in *AGENT-STATE-S37-B*) ;; *) fail "a second compaction did not restore: ${out:0:300}" ;; esac
+# A parallel tool call that read boundary before this one renamed it sees boundary-2 as new:
+# the restoring.<uuid> claim keeps it from handing the state back a second time.
+printf '%s\n' "AGENT-STATE-S37-C" >"$CONTEXT_GUARD_DIR/s37/agents/a1/STATE.md"
+printf '%s' boundary-1 >"$CONTEXT_GUARD_DIR/s37/agents/a1/boundary"
+expect_nothing "$(run warn s37 a1)" "a boundary already claimed was restored again"
+pass
+
+case_name="a subagent's compaction, as the harness reports it: nothing from main/, main's warn lock kept, the subagent gets its own state"
+assistant_entry "$(main_transcript s38)" claude-opus-5-5 50000 false
+expect_nothing "$(run warn s38 "")" "5% of 1000000 is short of every warning point"
+printf '%s\n' "MAIN-STATE-S38" >"$CONTEXT_GUARD_DIR/s38/main/STATE.md"
+mkdir "$CONTEXT_GUARD_DIR/s38/main/warned.8" # a lock as a warning leaves it: not the restore's to clear
+f=$(agent_transcript s38 a1)
+assistant_entry "$f" claude-sonnet-5 180000 true # not the main session's id: 200000
+expect_warning "$(run warn s38 a1)" 180000/200000
+printf '%s\n' "AGENT-STATE-S38" >"$CONTEXT_GUARD_DIR/s38/agents/a1/STATE.md"
+compact s38 auto
+compact_boundary "$f" boundary-1
+expect_nothing "$(run restore s38 "")" "a subagent's compaction injected main/'s state"
+[ -d "$CONTEXT_GUARD_DIR/s38/main/warned.8" ] || fail "a subagent's compaction cleared main's warn lock"
+assistant_entry "$f" claude-sonnet-5 30000 true
+out=$(run warn s38 a1)
+case "$out" in *AGENT-STATE-S38*) ;; *) fail "expected the subagent's own STATE.md, got: ${out:0:300}" ;; esac
+case "$out" in *MAIN-STATE-S38*) fail "the subagent's restore handed it the main conversation's STATE.md" ;; esac
+pass
+
+# Half the compaction point is no test: a main count at 75% of it is past half, and a subagent
+# compacts at any main count.
+case_name="a subagent's compaction while the main count is past half its compaction point but not near it: nothing from main/"
+user_settings '{"modelSettings": {"claude-opus-5-5": {"autoCompactWindow": 300000}}}'
+assistant_entry "$(main_transcript s40)" claude-opus-5-5 200000 false # trigger 267000
+expect_nothing "$(run warn s40 "")" "67000 left of a 300000 window is short of every warning point"
+[ "$(cat "$CONTEXT_GUARD_DIR/s40/main/window")" = 300000 ] || fail "main/window is not 300000"
+printf '%s\n' "MAIN-STATE-S40" >"$CONTEXT_GUARD_DIR/s40/main/STATE.md"
+mkdir "$CONTEXT_GUARD_DIR/s40/main/warned.8"
+f=$(agent_transcript s40 a1)
+assistant_entry "$f" claude-sonnet-5 180000 true
+expect_warning "$(run warn s40 a1)" 180000/200000
+printf '%s\n' "AGENT-STATE-S40" >"$CONTEXT_GUARD_DIR/s40/agents/a1/STATE.md"
+compact s40 auto
+compact_boundary "$f" boundary-1
+rm -f "$CLAUDE_CONFIG_DIR/settings.json"
+expect_nothing "$(run restore s40 "")" "a subagent's compaction at a main count of 200000 injected main/'s state"
+[ -d "$CONTEXT_GUARD_DIR/s40/main/warned.8" ] || fail "a subagent's compaction cleared main's warn lock"
+assistant_entry "$f" claude-sonnet-5 30000 true
+out=$(run warn s40 a1)
+case "$out" in *AGENT-STATE-S40*) ;; *) fail "expected the subagent's own STATE.md, got: ${out:0:300}" ;; esac
+pass
+
+case_name="SessionStart(compact) after the main conversation's auto PreCompact near its compaction point: main/'s state, named as its"
+user_settings '{"modelSettings": {"claude-opus-5-5": {"autoCompactWindow": 300000}}}'
+assistant_entry "$(main_transcript s39)" claude-opus-5-5 266000 false # 1000 short of 267000
+expect_warning "$(run warn s39 "")" 266000/300000
+printf '%s\n' "MAIN-STATE-S39" >"$CONTEXT_GUARD_DIR/s39/main/STATE.md"
+compact s39 auto
+rm -f "$CLAUDE_CONFIG_DIR/settings.json"
+out=$(run restore s39 "")
+case "$out" in
+  *"the main conversation was just compacted"*"if you are a subagent, it is not yours"*MAIN-STATE-S39*"Pre-compaction snapshot"*) ;;
+  *) fail "expected main/'s STATE.md and snapshot, named as the main conversation's: ${out:0:300}" ;;
+esac
+printf '%s\n' "MAIN-STATE-S39-B" >"$CONTEXT_GUARD_DIR/s39/main/STATE.md"
+expect_nothing "$(run restore s39 "")" "a second SessionStart(compact) without a PreCompact restored again"
+[ -e "$CONTEXT_GUARD_DIR/s39/main/warned.5" ] && fail "the main conversation's restore kept its warn lock"
+pass
+
 # --- STATE.md handed back once per write -----------------------------------------------------
 
 case_name="restore hands STATE.md back once per write"
 mkdir -p "$CONTEXT_GUARD_DIR/s4/main"
 state=$CONTEXT_GUARD_DIR/s4/main/STATE.md
 printf '%s\n' "STATE-MARKER-1" >"$state"
+compact s4 manual
 out=$(run restore s4 "")
 case "$out" in *STATE-MARKER-1*) ;; *) fail "first restore lacks STATE.md: ${out:0:200}" ;; esac
+compact s4 manual
 out=$(run restore s4 "")
 case "$out" in *STATE-MARKER*) fail "second restore without a rewrite handed STATE.md back again" ;; esac
 printf '%s\n' "STATE-MARKER-2" >"$state"
+compact s4 manual
 out=$(run restore s4 "")
 case "$out" in *STATE-MARKER-2*) ;; *) fail "restore after a rewrite lacks STATE.md: ${out:0:200}" ;; esac
+compact s4 manual
 out=$(run restore s4 "")
 case "$out" in *STATE-MARKER*) fail "restore after the rewrite was handed back handed it back again" ;; esac
 touch -t 209901010000 "$state" # the same content written again, later
+compact s4 manual
 out=$(run restore s4 "")
 case "$out" in *STATE-MARKER-2*) ;; *) fail "restore after a same-content rewrite lacks STATE.md: ${out:0:200}" ;; esac
 pass
@@ -429,6 +540,7 @@ case_name="restore of a STATE.md over 20000 bytes says it was cut and where the 
 mkdir -p "$CONTEXT_GUARD_DIR/s21/main"
 state=$CONTEXT_GUARD_DIR/s21/main/STATE.md
 { printf 'STATE-HEAD\n'; head -c 25000 /dev/zero | tr '\0' 'x'; printf '\nSTATE-TAIL\n'; } >"$state"
+compact s21 manual
 out=$(run restore s21 "")
 case "$out" in *STATE-HEAD*) ;; *) fail "restore lacks the start of STATE.md" ;; esac
 case "$out" in *STATE-TAIL*) fail "restore handed back more than 20000 bytes" ;; esac
