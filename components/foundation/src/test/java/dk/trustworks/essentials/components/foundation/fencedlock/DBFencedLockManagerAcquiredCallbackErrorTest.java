@@ -533,19 +533,6 @@ class DBFencedLockManagerAcquiredCallbackErrorTest {
         }
     }
 
-    private static ListAppender<ILoggingEvent> captureLockManagerLog() {
-        var appender = new ListAppender<ILoggingEvent>();
-        // Appended to by the lock manager's threads while the test thread reads it
-        appender.list = new CopyOnWriteArrayList<>();
-        appender.start();
-        ((Logger) LoggerFactory.getLogger(TestDBFencedLockManager.class)).addAppender(appender);
-        return appender;
-    }
-
-    private static void detachLockManagerLog(ListAppender<ILoggingEvent> appender) {
-        ((Logger) LoggerFactory.getLogger(TestDBFencedLockManager.class)).detachAppender(appender);
-    }
-
     @Test
     void a_lock_released_callback_failing_with_an_error_does_not_end_the_async_acquiring() {
         var acquiredCalls       = new AtomicInteger();
@@ -766,5 +753,18 @@ class DBFencedLockManagerAcquiredCallbackErrorTest {
                                           .build());
 
         assertThatThrownBy(node::stop).isSameAs(criticalError);
+    }
+
+    private static ListAppender<ILoggingEvent> captureLockManagerLog() {
+        var appender = new ListAppender<ILoggingEvent>();
+        // Appended to by the lock manager's threads while the test thread reads it
+        appender.list = new CopyOnWriteArrayList<>();
+        appender.start();
+        ((Logger) LoggerFactory.getLogger(TestDBFencedLockManager.class)).addAppender(appender);
+        return appender;
+    }
+
+    private static void detachLockManagerLog(ListAppender<ILoggingEvent> appender) {
+        ((Logger) LoggerFactory.getLogger(TestDBFencedLockManager.class)).detachAppender(appender);
     }
 }
