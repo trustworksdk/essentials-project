@@ -663,13 +663,13 @@ Kafka → KafkaListener → Inbox.addMessageReceived() → UnitOfWork.commit() �
 ```java
 Inbox orderEventsInbox = inboxes.getOrCreateInbox(
     InboxConfig.builder()
-        .setInboxName(InboxName.of("OrderService:KafkaEvents"))
-        .setRedeliveryPolicy(RedeliveryPolicy.fixedBackoff()
+        .inboxName(InboxName.of("OrderService:KafkaEvents"))
+        .redeliveryPolicy(RedeliveryPolicy.fixedBackoff()
             .setRedeliveryDelay(Duration.ofMillis(100))
             .setMaximumNumberOfRedeliveries(10)
             .build())
-        .setMessageConsumptionMode(MessageConsumptionMode.SingleGlobalConsumer)
-        .setNumberOfParallelMessageConsumers(5)
+        .messageConsumptionMode(MessageConsumptionMode.SingleGlobalConsumer)
+        .numberOfParallelMessageConsumers(5)
         .build(),
     new PatternMatchingMessageHandler() {
         @MessageHandler
@@ -819,10 +819,10 @@ durableQueues.consumeFromQueue(
 ```java
 Inbox inbox = inboxes.getOrCreateInbox(
     InboxConfig.builder()
-        .setInboxName(InboxName.of("OrderEventsInbox"))
-        .setMessageConsumptionMode(MessageConsumptionMode.SingleGlobalConsumer)  // Required!
-        .setNumberOfParallelMessageConsumers(10)
-        .setRedeliveryPolicy(redeliveryPolicy)
+        .inboxName(InboxName.of("OrderEventsInbox"))
+        .messageConsumptionMode(MessageConsumptionMode.SingleGlobalConsumer)  // Required!
+        .numberOfParallelMessageConsumers(10)
+        .redeliveryPolicy(redeliveryPolicy)
         .build(),
     messageHandler);
 ```

@@ -351,13 +351,13 @@ public class OrderProcessor {
 // Configure inbox
 Inbox orderEventsInbox = inboxes.getOrCreateInbox(
     InboxConfig.builder()
-        .setInboxName(InboxName.of("OrderService:KafkaEvents"))
-        .setRedeliveryPolicy(RedeliveryPolicy.fixedBackoff()
+        .inboxName(InboxName.of("OrderService:KafkaEvents"))
+        .redeliveryPolicy(RedeliveryPolicy.fixedBackoff()
             .setRedeliveryDelay(Duration.ofMillis(100))
             .setMaximumNumberOfRedeliveries(10)
             .build())
-        .setMessageConsumptionMode(MessageConsumptionMode.SingleGlobalConsumer)
-        .setNumberOfParallelMessageConsumers(5)
+        .messageConsumptionMode(MessageConsumptionMode.SingleGlobalConsumer)
+        .numberOfParallelMessageConsumers(5)
         .build(),
     new PatternMatchingMessageHandler() {
         @MessageHandler
