@@ -963,8 +963,21 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
      * in the DB, the lock is still released locally: this lock manager stops confirming it, so its row expires after the lock
      * timeout, and <code>lockReleased</code> is called and {@link FencedLockEvents.LockReleased} published, so what
      * <code>lockAcquired</code> started can be stopped before another instance takes the lock over.
-     * The ended acquiring keeps its entry, so calling this method again for the same lock name does not restart it until
-     * {@link #cancelAsyncLockAcquiring(LockName)} has been called or the lock manager has been stopped.
+     * <p>
+     * That end is deliberate, and nothing but the ERROR log line says the acquiring has ended. A critical error is not
+     * retried, because a retry is not expected to succeed (a class whose initialiser failed stays unusable in its class
+     * loader, say), and it is rethrown from the acquiring task ({@link dk.trustworks.essentials.shared.Exceptions#rethrowIfCriticalError(Throwable)}),
+     * as critical errors are throughout this lock manager. The task runs on this lock manager's own executor, so the error
+     * ends up in the task's {@link ScheduledFuture}, which nothing reads: no {@link FencedLockEvents} event says the
+     * acquiring has ended (the {@link FencedLockEvents.LockReleased} published when the error came from
+     * <code>lockAcquired</code> and the lock was released first looks like any other release), and none of
+     * {@link #isLockAcquired(LockName)}, {@link #isLockedByThisLockManagerInstance(LockName)} and
+     * {@link #isLockAcquiredByAnotherLockManagerInstance(LockName)} tells an ended acquiring apart from one still waiting
+     * for the lock.
+     * The ended acquiring keeps its entry, so calling this method again for the same lock name does not restart it. To
+     * restart it, call {@link #cancelAsyncLockAcquiring(LockName)} and then this method, or stop and start the lock manager
+     * and then call this method again: {@link #stop()} drops every async acquiring, and {@link #start()} schedules none of
+     * them again.
      */
     @Override
     public void acquireLockAsync(LockName lockName, LockCallback lockCallback) {
