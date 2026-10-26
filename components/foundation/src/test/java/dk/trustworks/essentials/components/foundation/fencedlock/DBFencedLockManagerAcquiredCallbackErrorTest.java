@@ -411,6 +411,7 @@ class DBFencedLockManagerAcquiredCallbackErrorTest {
     }
 
     @Test
+    @SuppressWarnings("PMD.CloseResource") // The re-acquired lock must stay held for the assertions; the node.stop() in cleanup releases it
     void a_lock_re_acquired_by_the_lock_released_callback_after_a_failed_lock_acquired_stays_held_and_confirmed() {
         var acquiredCalls = new AtomicInteger();
         var reacquired    = new AtomicReference<FencedLock>();
@@ -451,6 +452,7 @@ class DBFencedLockManagerAcquiredCallbackErrorTest {
     }
 
     @Test
+    @SuppressWarnings("PMD.CloseResource") // The re-acquired lock must stay held for the assertions; the node.stop() in cleanup releases it
     void a_lock_re_acquired_by_a_lock_released_callback_that_then_throws_after_a_failed_lock_acquired_stays_held_and_confirmed() {
         var acquiredCalls = new AtomicInteger();
         var reacquired    = new AtomicReference<FencedLock>();
@@ -588,6 +590,7 @@ class DBFencedLockManagerAcquiredCallbackErrorTest {
     }
 
     @Test
+    @SuppressWarnings("PMD.CloseResource") // The lock manager owns the held lock and the test needs it held until the takeover; the async acquiring drops it once it finds it lost, and the node.stop() in cleanup releases the lock it re-acquires
     void a_lock_released_callback_failing_with_an_error_when_the_async_acquiring_finds_the_lock_lost_does_not_end_the_async_acquiring() {
         var acquiredLocks         = new CopyOnWriteArrayList<FencedLock>();
         var releasedCalls         = new AtomicInteger();
@@ -651,6 +654,7 @@ class DBFencedLockManagerAcquiredCallbackErrorTest {
     }
 
     @Test
+    @SuppressWarnings("PMD.CloseResource") // close() is release(), the call under test, made inside assertThatThrownBy
     void a_failing_lock_released_callback_does_not_leave_a_released_lock_half_marked_or_unannounced() {
         var lock                = node.tryAcquireLock(LOCK_NAME).orElseThrow();
         var callbackError       = new AssertionError("lockReleased fails");
@@ -687,6 +691,7 @@ class DBFencedLockManagerAcquiredCallbackErrorTest {
     }
 
     @Test
+    @SuppressWarnings("PMD.CloseResource") // close() is release(), the call under test, made inside assertThatThrownBy
     void a_failing_lock_released_callback_during_shutdown_does_not_leave_a_released_lock_half_marked_or_unannounced() {
         var lock                = node.tryAcquireLock(LOCK_NAME).orElseThrow();
         var callbackError       = new AssertionError("lockReleased fails");
@@ -718,6 +723,7 @@ class DBFencedLockManagerAcquiredCallbackErrorTest {
     }
 
     @Test
+    @SuppressWarnings("PMD.CloseResource") // Releasing the locks is the job of node.stop(), the call under test
     void lock_released_callbacks_failing_with_an_error_while_stopping_do_not_keep_the_other_locks_held_or_the_lock_manager_started() {
         var otherLockName = LockName.of("acquired-callback-error-other-lock");
         var lock          = node.tryAcquireLock(LOCK_NAME).orElseThrow();
@@ -743,6 +749,7 @@ class DBFencedLockManagerAcquiredCallbackErrorTest {
     }
 
     @Test
+    @SuppressWarnings("PMD.CloseResource") // Releasing the lock is the job of node.stop(), the call under test: it releases the lock before the lockReleased callback throws
     void a_lock_released_callback_failing_with_a_critical_error_while_stopping_is_thrown_from_stop() {
         var lock          = node.tryAcquireLock(LOCK_NAME).orElseThrow();
         var criticalError = new ExceptionInInitializerError("lockReleased fails critically");
