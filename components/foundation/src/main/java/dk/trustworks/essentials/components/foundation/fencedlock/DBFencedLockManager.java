@@ -399,6 +399,22 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
         log.debug("[{}] Shutdown starting - lock confirmation and async acquiring cancelled", lockManagerInstanceId);
     }
 
+    /**
+     * Marks a lock this instance has removed locally as released (which calls its <code>lockReleased</code> callbacks) and
+     * publishes {@link LockReleased} for it - the latter even when a callback throws, so a failing callback cannot leave
+     * the release unannounced. The first failure, of a callback or of publishing the event, is rethrown afterwards, with a
+     * later one added to it as suppressed. A critical error ({@link dk.trustworks.essentials.shared.Exceptions#isCriticalError(Throwable)}),
+     * of either step, is rethrown at once in place of any earlier failure, which is added to it as suppressed: one from the
+     * callbacks also skips publishing the event.
+     *
+     * @param lock the lock released by this instance
+     */
+    private void markAsReleasedAndNotify(LOCK lock) {
+        forEachThenThrowFirst(List.<Runnable>of(lock::markAsReleased,
+                                                () -> notify(new LockReleased(lock, this))),
+                              Runnable::run);
+    }
+
     private void releaseLockDuringShutdown(LOCK lock, ShutdownContext shutdown) {
         if (!locksAcquiredByThisLockManager.containsKey(lock.getName())) {
             return;
@@ -413,8 +429,7 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
             }
         });
         locksAcquiredByThisLockManager.remove(lock.getName());
-        lock.markAsReleased();
-        notify(new LockReleased(lock, this));
+        markAsReleasedAndNotify(lock);
         log.debug("[{}] {} lock '{}' during shutdown", lockManagerInstanceId, released ? "Released" : "Dropped (left to expire)", lock.getName());
     }
 
@@ -444,8 +459,7 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
             log.trace("[{}] Removing {} DB released lock '{}' locally, marking and notifying it as released: {}",
                       lockManagerInstanceId, releaseWithSuccess ? "successfully" : "failed", lock.getName(), lock);
             locksAcquiredByThisLockManager.remove(lock.getName());
-            lock.markAsReleased();
-            notify(new LockReleased(lock, this));
+            markAsReleasedAndNotify(lock);
             if (releaseWithSuccess) {
                 log.debug("[{}] Released Lock '{}': {}", lockManagerInstanceId, lock.getName(), lock);
             } else {

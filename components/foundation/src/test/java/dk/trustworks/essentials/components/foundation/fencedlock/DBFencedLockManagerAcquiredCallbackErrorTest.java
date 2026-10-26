@@ -20,6 +20,9 @@ import ch.qos.logback.classic.*;
 import ch.qos.logback.classic.spi.*;
 import ch.qos.logback.core.read.ListAppender;
 import dk.trustworks.essentials.components.foundation.fencedlock.DBFencedLockManagerAcquireCommitFailureTest.*;
+import dk.trustworks.essentials.components.foundation.fencedlock.FencedLockEvents.LockReleased;
+import dk.trustworks.essentials.components.foundation.lifecycle.ShutdownContext;
+import dk.trustworks.essentials.reactive.LocalEventBus;
 import dk.trustworks.essentials.shared.Exceptions;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.*;
@@ -27,10 +30,11 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.time.Duration;
+import java.util.*;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.*;
 
-import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.*;
 
 /**
  * A lock callback that fails with a non-critical {@link Error} (an {@link AssertionError}, say) or with a checked exception
@@ -49,19 +53,27 @@ import static org.assertj.core.api.Assertions.assertThat;
 class DBFencedLockManagerAcquiredCallbackErrorTest {
     private static final LockName LOCK_NAME = LockName.of("acquired-callback-error-lock");
 
-    private InMemoryLockStorage     storage;
-    private TestDBFencedLockManager node;
+    private InMemoryLockStorage                   storage;
+    private TestDBFencedLockManager               node;
+    /**
+     * Every {@link FencedLockEvents} the lock manager published
+     */
+    private List<FencedLockEvents>                 events;
 
     @BeforeEach
     void setup() {
         storage = new InMemoryLockStorage();
+        events = new CopyOnWriteArrayList<>();
+        var eventBus = new LocalEventBus("acquired-callback-error-test");
+        eventBus.addSyncSubscriber(event -> events.add((FencedLockEvents) event));
         node = new TestDBFencedLockManager(storage,
                                            new StagingUnitOfWorkFactory(storage),
                                            FencedLockManagerSettings.builder()
                                                                     .setLockManagerInstanceId("node")
                                                                     .setLockTimeOut(Duration.ofSeconds(30))
                                                                     .setLockConfirmationInterval(Duration.ofMillis(100))
-                                                                    .build());
+                                                                    .build(),
+                                           eventBus);
         node.start();
     }
 
@@ -333,16 +345,25 @@ class DBFencedLockManagerAcquiredCallbackErrorTest {
 
     @Test
     void a_lock_released_callback_failing_with_an_error_does_not_end_the_async_acquiring() {
-        var acquiredCalls = new AtomicInteger();
-        var releasedCalls = new AtomicInteger();
+        var acquiredCalls       = new AtomicInteger();
+        var releasedCalls       = new AtomicInteger();
+        var releasedLock        = new AtomicReference<FencedLock>();
+        var secondReleasedCalls = new AtomicInteger();
         node.acquireLockAsync(LOCK_NAME, LockCallback.builder()
                                                      .onLockAcquired(lock -> {
                                                          if (acquiredCalls.incrementAndGet() == 1) {
+                                                             // A second callback on the same lock, registered after the failing one
+                                                             lock.registerCallback(LockCallback.builder()
+                                                                                               .onLockAcquired(_lock -> {
+                                                                                               })
+                                                                                               .onLockReleased(_lock -> secondReleasedCalls.incrementAndGet())
+                                                                                               .build());
                                                              throw new AssertionError("first lockAcquired fails");
                                                          }
                                                      })
                                                      .onLockReleased(lock -> {
                                                          if (releasedCalls.incrementAndGet() == 1) {
+                                                             releasedLock.set(lock);
                                                              throw new AssertionError("first lockReleased fails");
                                                          }
                                                      })
@@ -354,5 +375,81 @@ class DBFencedLockManagerAcquiredCallbackErrorTest {
                   .untilAsserted(() -> assertThat(acquiredCalls.get()).isEqualTo(2));
         assertThat(releasedCalls.get()).isEqualTo(1);
         assertThat(node.isLockedByThisLockManagerInstance(LOCK_NAME)).isTrue();
+
+        // ... and the release it interrupted was completed all the same: the released lock no longer reports itself
+        // locked, the callback registered after the failing one was called, and LockReleased was published for it
+        assertThat(releasedLock.get()).isNotNull();
+        assertThat(releasedLock.get().isLocked()).isFalse();
+        assertThat(releasedLock.get().isLockedByThisLockManagerInstance()).isFalse();
+        assertThat(secondReleasedCalls.get()).isEqualTo(1);
+        assertThat(events).anySatisfy(event -> assertThat(event).isInstanceOfSatisfying(LockReleased.class,
+                                                                                        released -> assertThat(released.lock).isSameAs(releasedLock.get())));
+    }
+
+    @Test
+    void a_failing_lock_released_callback_does_not_leave_a_released_lock_half_marked_or_unannounced() {
+        var lock                = node.tryAcquireLock(LOCK_NAME).orElseThrow();
+        var callbackError       = new AssertionError("lockReleased fails");
+        var secondReleasedCalls = new AtomicInteger();
+        var lockedWhileReleasing = new AtomicBoolean(true);
+        lock.registerCallback(LockCallback.builder()
+                                          .onLockAcquired(_lock -> {
+                                          })
+                                          .onLockReleased(_lock -> {
+                                              lockedWhileReleasing.set(_lock.isLockedByThisLockManagerInstance());
+                                              throw callbackError;
+                                          })
+                                          .build());
+        lock.registerCallback(LockCallback.builder()
+                                          .onLockAcquired(_lock -> {
+                                          })
+                                          .onLockReleased(_lock -> secondReleasedCalls.incrementAndGet())
+                                          .build());
+
+        // The callback's failure reaches the caller of release() ...
+        assertThatThrownBy(lock::release).isSameAs(callbackError);
+
+        // ... once the release is complete: in the DB, locally, every callback called and LockReleased published
+        assertThat(storage.rows.get(LOCK_NAME).lockedBy()).isNull();
+        assertThat(node.isLockedByThisLockManagerInstance(LOCK_NAME)).isFalse();
+        assertThat(lock.isLocked()).isFalse();
+        assertThat(lock.isLockedByThisLockManagerInstance()).isFalse();
+        assertThat(secondReleasedCalls.get()).isEqualTo(1);
+        // The lock already read as released while its callbacks ran
+        assertThat(lockedWhileReleasing.get()).isFalse();
+        assertThat(events).filteredOn(LockReleased.class::isInstance)
+                          .singleElement()
+                          .satisfies(event -> assertThat(((LockReleased) event).lock).isSameAs(lock));
+    }
+
+    @Test
+    void a_failing_lock_released_callback_during_shutdown_does_not_leave_a_released_lock_half_marked_or_unannounced() {
+        var lock                = node.tryAcquireLock(LOCK_NAME).orElseThrow();
+        var callbackError       = new AssertionError("lockReleased fails");
+        var secondReleasedCalls = new AtomicInteger();
+        lock.registerCallback(LockCallback.builder()
+                                          .onLockAcquired(_lock -> {
+                                          })
+                                          .onLockReleased(_lock -> {
+                                              throw callbackError;
+                                          })
+                                          .build());
+        lock.registerCallback(LockCallback.builder()
+                                          .onLockAcquired(_lock -> {
+                                          })
+                                          .onLockReleased(_lock -> secondReleasedCalls.incrementAndGet())
+                                          .build());
+        node.shutdownStarting(ShutdownContext.startingNow(Duration.ofSeconds(10)));
+
+        assertThatThrownBy(lock::release).isSameAs(callbackError);
+
+        assertThat(storage.rows.get(LOCK_NAME).lockedBy()).isNull();
+        assertThat(node.isLockedByThisLockManagerInstance(LOCK_NAME)).isFalse();
+        assertThat(lock.isLocked()).isFalse();
+        assertThat(lock.isLockedByThisLockManagerInstance()).isFalse();
+        assertThat(secondReleasedCalls.get()).isEqualTo(1);
+        assertThat(events).filteredOn(LockReleased.class::isInstance)
+                          .singleElement()
+                          .satisfies(event -> assertThat(((LockReleased) event).lock).isSameAs(lock));
     }
 }

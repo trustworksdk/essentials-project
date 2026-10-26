@@ -32,6 +32,8 @@ public interface LockCallback {
     /**
      * This method is called when the lock in question was owned by the {@link FencedLockManager}
      * instance belonging to this JVM instance and the lock has been released<br>
+     * When a {@link DBFencedLockManager} releases the lock, <code>lock</code> already reports itself as released
+     * ({@link FencedLock#isLockedByThisLockManagerInstance()} is false) when this is called.
      *
      * @param lock the lock that was released
      */
