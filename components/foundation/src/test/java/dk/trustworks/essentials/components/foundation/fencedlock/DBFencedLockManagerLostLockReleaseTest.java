@@ -20,6 +20,7 @@ import ch.qos.logback.classic.*;
 import ch.qos.logback.classic.spi.*;
 import ch.qos.logback.core.read.ListAppender;
 import dk.trustworks.essentials.components.foundation.fencedlock.FencedLockEvents.*;
+import dk.trustworks.essentials.components.foundation.lifecycle.ShutdownContext;
 import dk.trustworks.essentials.components.foundation.transaction.*;
 import dk.trustworks.essentials.reactive.*;
 import org.awaitility.Awaitility;
@@ -31,6 +32,7 @@ import java.time.*;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.*;
 
 import static org.assertj.core.api.Assertions.*;
@@ -514,6 +516,141 @@ class DBFencedLockManagerLostLockReleaseTest {
         } finally {
             ((Logger) LoggerFactory.getLogger(TestDBFencedLockManager.class)).detachAppender(logEvents);
         }
+    }
+
+    @Test
+    @SuppressWarnings("PMD.CloseResource") // The lock is released by the test, the behaviour under test
+    void a_release_waiting_while_the_confirmation_ends_with_a_critical_error_does_not_announce_the_release_a_second_time() throws Exception {
+        // Given a held lock whose lockReleased callbacks are counted
+        storage.allowReleaseInDB.countDown();
+        var lock             = lockManager.tryAcquireLock(LOCK_NAME).orElseThrow();
+        var lockReleasedCalls = new AtomicInteger();
+        lock.registerCallback(new LockCallback() {
+            @Override
+            public void lockAcquired(FencedLock lock) {
+            }
+
+            @Override
+            public void lockReleased(FencedLock lock) {
+                lockReleasedCalls.incrementAndGet();
+            }
+        });
+        // And a confirmation tick held inside its UnitOfWork - holding the lock manager's lock - until the test lets it end
+        // with a critical error
+        var tickHeld      = new CountDownLatch(1);
+        var endTheTick    = new CountDownLatch(1);
+        var criticalError = new ExceptionInInitializerError("LockAcquired subscriber fails critically");
+        var logEvents     = captureLockManagerLog();
+        try {
+            eventSubscriberAction = event -> {
+                if (event instanceof LockAcquired lockAcquired && lockAcquired.lock.getName().equals(LOCK_NAME)) {
+                    tickHeld.countDown();
+                    try {
+                        endTheTick.await(10, TimeUnit.SECONDS);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                    throw criticalError;
+                }
+            };
+            assertThat(tickHeld.await(5, TimeUnit.SECONDS)).isTrue();
+
+            // When the lock is released on another thread, which waits for the lock manager's lock behind the tick ...
+            var releaseFailure = new AtomicReference<Throwable>();
+            var releasing      = new Thread(() -> {
+                try {
+                    lock.release();
+                } catch (Throwable e) {
+                    releaseFailure.set(e);
+                }
+            }, "releasing-thread");
+            releasing.start();
+            var managerLock = managerLockOf(lockManager);
+            Awaitility.waitAtMost(Duration.ofSeconds(5))
+                      .until(() -> managerLock.hasQueuedThread(releasing));
+            // ... and the tick then ends the confirmation, releasing every held lock locally
+            endTheTick.countDown();
+            releasing.join(Duration.ofSeconds(10).toMillis());
+
+            // Then the release is announced once: by the end of the confirmation. The waiting release finds the lock released
+            // locally already and neither calls lockReleased nor publishes LockReleased again
+            assertThat(releasing.isAlive()).isFalse();
+            assertThat(releaseFailure.get()).isNull();
+            assertThat(lock.isLocked()).isFalse();
+            assertThat(lockReleasedCalls.get()).isEqualTo(1);
+            assertThat(lockReleasedEventsFor(LOCK_NAME)).hasSize(1);
+            assertThat(lockManager.isLockConfirmationEnded()).isTrue();
+        } finally {
+            endTheTick.countDown();
+            ((Logger) LoggerFactory.getLogger(TestDBFencedLockManager.class)).detachAppender(logEvents);
+        }
+    }
+
+    @Test
+    @SuppressWarnings("PMD.CloseResource") // newerLock is released by stop() in cleanup(); staleLock was released when it was lost
+    void releasing_a_lost_lock_after_the_lock_was_acquired_again_leaves_the_newer_acquisition_held_and_confirmed() {
+        // Given a lock that was lost - released locally and LockReleased published - ...
+        storage.allowReleaseInDB.countDown();
+        var staleLock = lockManager.tryAcquireLock(LOCK_NAME).orElseThrow();
+        storage.confirmOutcomeByLock.put(LOCK_NAME, ConfirmOutcome.TAKEN_OVER);
+        Awaitility.waitAtMost(Duration.ofSeconds(5))
+                  .untilAsserted(() -> {
+                      assertThat(staleLock.isLocked()).isFalse();
+                      assertThat(lockReleasedEventsFor(LOCK_NAME)).hasSize(1);
+                      assertThat(storage.releasedInDBTokens).hasSize(1);
+                  });
+        // ... and acquired again by this lock manager, as a new FencedLock
+        storage.confirmOutcomeByLock.remove(LOCK_NAME);
+        var newerLock = lockManager.tryAcquireLock(LOCK_NAME).orElseThrow();
+        assertThat(newerLock).isNotSameAs(staleLock);
+        var releasedInDBBefore = storage.releaseInDBUnitOfWorks.size();
+
+        // When the stale lock is released (or closed)
+        staleLock.release();
+
+        // Then nothing is released: the newer acquisition stays held by this lock manager, which keeps confirming it and
+        // returns it to the next acquire, no release is attempted in the DB, and no LockReleased is published again
+        assertThat(newerLock.isLocked()).isTrue();
+        assertThat(lockManager.tryAcquireLock(LOCK_NAME)).containsSame(newerLock);
+        awaitConfirmationKeepsRunning(LOCK_NAME);
+        assertThat(newerLock.isLocked()).isTrue();
+        assertThat(storage.releaseInDBUnitOfWorks).hasSize(releasedInDBBefore);
+        assertThat(lockReleasedEventsFor(LOCK_NAME)).hasSize(1);
+    }
+
+    @Test
+    @SuppressWarnings("PMD.CloseResource") // newerLock is released by stop() in cleanup(); staleLock was released when it was lost
+    void releasing_a_lost_lock_during_shutdown_after_the_lock_was_acquired_again_leaves_the_newer_acquisition_held() {
+        // Given a lock that was lost and acquired again by this lock manager, as a new FencedLock
+        storage.allowReleaseInDB.countDown();
+        var staleLock = lockManager.tryAcquireLock(LOCK_NAME).orElseThrow();
+        storage.confirmOutcomeByLock.put(LOCK_NAME, ConfirmOutcome.TAKEN_OVER);
+        Awaitility.waitAtMost(Duration.ofSeconds(5))
+                  .untilAsserted(() -> {
+                      assertThat(staleLock.isLocked()).isFalse();
+                      assertThat(lockReleasedEventsFor(LOCK_NAME)).hasSize(1);
+                      assertThat(storage.releasedInDBTokens).hasSize(1);
+                  });
+        storage.confirmOutcomeByLock.remove(LOCK_NAME);
+        var newerLock = lockManager.tryAcquireLock(LOCK_NAME).orElseThrow();
+        var releasedInDBBefore = storage.releaseInDBUnitOfWorks.size();
+
+        // When shutdown starts and the stale lock is released
+        lockManager.shutdownStarting(ShutdownContext.startingNow(Duration.ofSeconds(10)));
+        staleLock.release();
+
+        // Then the newer acquisition stays held by this lock manager - an acquire during shutdown still returns it - no
+        // release is attempted in the DB, and no LockReleased is published again
+        assertThat(newerLock.isLocked()).isTrue();
+        assertThat(lockManager.tryAcquireLock(LOCK_NAME)).containsSame(newerLock);
+        assertThat(storage.releaseInDBUnitOfWorks).hasSize(releasedInDBBefore);
+        assertThat(lockReleasedEventsFor(LOCK_NAME)).hasSize(1);
+    }
+
+    private static ReentrantLock managerLockOf(DBFencedLockManager<?, ?> lockManager) throws ReflectiveOperationException {
+        var field = DBFencedLockManager.class.getDeclaredField("reentrantLock");
+        field.setAccessible(true);
+        return (ReentrantLock) field.get(lockManager);
     }
 
     private static ListAppender<ILoggingEvent> captureLockManagerLog() {
