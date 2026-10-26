@@ -739,6 +739,50 @@ for d in "$r" "$r/s33" "$r/s33/main"; do
 done
 pass
 
+# The root's parent is not chmod (it may be /tmp): one another user could rename the root in,
+# or a symlink, would let them swap the checked root for a tree of their own afterwards. A test
+# cannot make a directory another user owns, so these cases pin the symlink and mode checks.
+case_name="a symlinked parent of the root: nothing printed, nothing created in its target"
+elsewhere=$tmp/elsewhere-parent
+mkdir -p "$elsewhere"
+ln -s "$elsewhere" "$tmp/parent-link"
+assistant_entry "$(main_transcript s46)" claude-opus-5-5 950000 false
+for r in "$tmp/parent-link/guard" "$tmp/parent-link//guard"; do
+  expect_nothing "$(CONTEXT_GUARD_DIR=$r run warn s46 "")" "warned under a symlinked parent $r"
+  expect_nothing "$(CONTEXT_GUARD_DIR=$r run restore s46 "")" "restored under a symlinked parent $r"
+  hook_input s46 "" | CONTEXT_GUARD_DIR=$r bash "$hook" start >/dev/null
+  expect_empty_dir "$elsewhere" "parent $r"
+done
+rm -f "$tmp/parent-link"
+pass
+
+case_name="a parent of the root its group or others can write to, not sticky: nothing printed, no root created"
+assistant_entry "$(main_transcript s47)" claude-opus-5-5 950000 false
+for mode in 777 770 707 720 702; do
+  p=$tmp/open-$mode
+  mkdir -p "$p"
+  chmod "$mode" "$p"
+  expect_nothing "$(CONTEXT_GUARD_DIR=$p/guard run warn s47 "")" "warned under a parent of mode $mode"
+  hook_input s47 "" | CONTEXT_GUARD_DIR=$p/guard bash "$hook" start >/dev/null
+  [ ! -e "$p/guard" ] || fail "created the root under a parent of mode $mode"
+done
+pass
+
+case_name="a sticky world-writable parent (as /tmp is), a 755 one and a relative root: the guard works"
+for mode in 1777 755; do
+  p=$tmp/parent-$mode
+  mkdir -p "$p"
+  chmod "$mode" "$p"
+  assistant_entry "$(main_transcript s48-$mode)" claude-opus-5-5 950000 false
+  expect_warning "$(CONTEXT_GUARD_DIR=$p/guard run warn s48-$mode "")" 950000/1000000
+done
+mkdir -p "$tmp/rel-cwd"
+chmod 700 "$tmp/rel-cwd" # the parent of a relative root is the working directory
+assistant_entry "$(main_transcript s48-rel)" claude-opus-5-5 950000 false
+expect_warning "$(cd "$tmp/rel-cwd" && CONTEXT_GUARD_DIR=guard run warn s48-rel "")" 950000/1000000
+[ -d "$tmp/rel-cwd/guard/s48-rel/main" ] || fail "the relative root was not created in the working directory"
+pass
+
 case_name="start prunes sessions with nothing written for 7 days, keeps a live one and its own"
 mkdir -p "$CONTEXT_GUARD_DIR/stale/main" "$CONTEXT_GUARD_DIR/live/main" "$CONTEXT_GUARD_DIR/s25/main"
 for p in "$CONTEXT_GUARD_DIR/stale" "$CONTEXT_GUARD_DIR/stale/main" "$CONTEXT_GUARD_DIR/live" \
@@ -757,7 +801,7 @@ pass
 case_name="precompact without tac, sed and awk: each edited path once, at most 30, oldest first"
 bin=$tmp/bin
 mkdir -p "$bin"
-for t in bash jq cat head tail mkdir rm cp cmp date git id; do
+for t in bash jq cat head tail mkdir rm cp cmp date git id ls; do
   p=$(command -v "$t") && ln -s "$p" "$bin/$t"
 done
 for t in tac sed awk; do

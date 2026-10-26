@@ -91,10 +91,15 @@
 #        CONTEXT_GUARD_DIR (default /tmp/claude-<uid>/context-guard).
 # State is private: files are created with umask 077, every state directory must be a real
 # directory owned by this user (else the hook does nothing; each is checked before anything is
-# created in it, a missing one created a level at a time) and is chmod 700, so on a shared
-# host no other user can read STATE.md or plant one for a restore to inject. `start` prunes
-# session directories with nothing written in them for 7 days; `warn` marks its state dir
-# live on every call, so a long-running session is never pruned.
+# created in it, a missing one created a level at a time) and is chmod 700, and the root's
+# parent must be a real directory owned by this user or root that its group and others cannot
+# write to unless it is sticky, as /tmp is (else the hook does nothing), so on a shared host
+# no other user can read STATE.md or plant one for a restore to inject. The directories above
+# that parent are not checked (the default root's are /tmp and /, both root-owned, /tmp
+# sticky): a CONTEXT_GUARD_DIR with a directory anywhere above its parent that another user
+# can rename entries in (one they own, or one they can write to that is not sticky) loses that
+# protection. `start` prunes session directories with nothing written in them for 7 days;
+# `warn` marks its state dir live on every call, so a long-running session is never pruned.
 # Known limit: a /model switch in the main conversation is not followed - main/model is
 # written at SessionStart only, so a switch from a [1m] model to a 200k one keeps the 1M
 # window (the upward switch is caught by a count past the window). The session then compacts
@@ -138,11 +143,20 @@ fi
 # Refuse state another user could have pre-created or swapped for a symlink. Each state
 # directory, from the root down, is checked before anything is created in it, and a missing
 # one is created a single level at a time: `mkdir -p` would follow a planted link and create
-# the rest in its target before any check ran. The root's parent is created when missing,
-# unchecked.
+# the rest in its target before any check ran. The root's parent is created, with its own
+# missing parents, when absent, and never chmod (it may be /tmp or a project directory), but
+# it must be a real directory, owned by this user or by root, that its group and others
+# cannot write to unless it is sticky (as /tmp is): in any other parent another user could
+# rename the checked root away and put a tree of their own in its place.
 parent=${root%/*}
 case "$root" in */*) ;; *) parent=. ;; esac
-[ -d "${parent:-/}" ] || mkdir -p "$parent" 2>/dev/null || exit 0
+while case "$parent" in ?*/) ;; *) false ;; esac; do parent=${parent%/}; done
+parent=${parent:-/}
+[ -d "$parent" ] || mkdir -p "$parent" 2>/dev/null || exit 0
+[ -d "$parent" ] && [ ! -L "$parent" ] || exit 0
+read -r parent_mode _ parent_owner _ <<<"$(ls -ldn "$parent" 2>/dev/null)"
+[ -O "$parent" ] || [ "${parent_owner:-}" = 0 ] || exit 0
+case "${parent_mode:-}" in d????????[tT]*|d????-??-*) ;; *) exit 0 ;; esac
 for d in "$root" "$base" ${agent:+"$base/agents"} "$state_dir"; do
   [ -e "$d" ] || [ -L "$d" ] || mkdir "$d" 2>/dev/null
   [ -d "$d" ] && [ ! -L "$d" ] && [ -O "$d" ] || exit 0
