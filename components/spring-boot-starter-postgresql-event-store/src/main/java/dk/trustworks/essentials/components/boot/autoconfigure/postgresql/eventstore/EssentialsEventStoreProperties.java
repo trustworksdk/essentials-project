@@ -997,7 +997,13 @@ public class EssentialsEventStoreProperties {
         private       boolean                                        enabled                  = false;
         private       String                                         snapshotTableName        = PostgresqlAggregateSnapshotRepository.DEFAULT_AGGREGATE_SNAPSHOTS_TABLE_NAME;
         private       SnapshotExecutionMode                          defaultMode              = SnapshotExecutionMode.SYNC;
-        private       int                                            defaultEveryNEvents      = 10;
+        /**
+         * How many events an aggregate may get ahead of its newest snapshot before a new one is added, for an aggregate
+         * whose snapshot policy does not say ({@code @AggregateSnapshotPolicy} has its own default, 100). Default 1000;
+         * 10 until 0.60.1, which added a snapshot - a serialization and an insert inside the command's transaction -
+         * every tenth event.
+         */
+        private       int                                            defaultEveryNEvents      = 1000;
         private       SnapshotDeletionMode                           defaultDeletionMode      = SnapshotDeletionMode.DELETE_ALL_HISTORIC;
         private       int                                            defaultKeepLastSnapshots = 1;
         private       int                                            workerThreads            = 1;

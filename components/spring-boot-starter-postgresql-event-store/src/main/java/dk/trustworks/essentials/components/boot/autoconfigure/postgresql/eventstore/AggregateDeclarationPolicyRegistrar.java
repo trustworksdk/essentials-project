@@ -46,6 +46,12 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * merely by bean-registration order, and a registrar running second would let validation pass over empty registries -
  * reintroducing exactly the silent failure this class exists to remove.
  * <p>
+ * The validator is not the only reader, and the others do not wait for a phase: an application resolves its
+ * aggregates' configuration while its own beans are being built (a {@code StatefulAggregateRepository} bean resolves its
+ * snapshot repository in its builder), and application beans are created before auto-configured ones. So both
+ * configuration resolver beans take this registrar and create it before they exist; before they did, those resolutions
+ * read empty registries and every declared aggregate silently got the global defaults.
+ * <p>
  * The registrar is additionally passed to the validator's {@code @Bean} method as an unused parameter. That is belt and
  * braces rather than the mechanism - it keeps the dependency visible in the wiring, and preserves correctness if the
  * validator ever moves its checks out of {@code afterSingletonsInstantiated()} and into its constructor.

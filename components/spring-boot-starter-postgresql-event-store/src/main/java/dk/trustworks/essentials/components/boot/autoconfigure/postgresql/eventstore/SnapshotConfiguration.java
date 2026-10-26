@@ -23,6 +23,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.pe
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.JSONEventSerializer;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
 import io.micrometer.core.instrument.MeterRegistry;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.config.BeanDefinition;
 import org.springframework.beans.factory.config.BeanFactoryPostProcessor;
 import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
@@ -99,13 +100,24 @@ public class SnapshotConfiguration {
      *                   for the event store and snapshot behavior.
      * @param registry   the {@link AggregateSnapshotPolicyRegistry} managing the snapshot policies
      *                   for the aggregates.
+     * @param declarationPolicyRegistrar the registrar copying declared aggregates' policies into {@code registry};
+     *                                   absent when {@link ClosingBooksConfiguration} is not active
+     * <p>
+     * Takes the {@link AggregateDeclarationPolicyRegistrar} so that it has run before anything can resolve: an
+     * application resolves its aggregates' configuration while its own beans are being built (a
+     * {@code StatefulAggregateRepository} bean does, through its snapshot repository provider), application beans are
+     * created before auto-configured ones, and a resolution that came first found empty registries and silently got
+     * the global defaults for every declared aggregate.
      * @return an instance of {@link AggregateSnapshotConfigurationResolver} for resolving snapshot
      *         configurations based on the provided properties and policies.
      */
     @Bean
     @ConditionalOnMissingBean
     public AggregateSnapshotConfigurationResolver aggregateSnapshotConfigurationResolver(EssentialsEventStoreProperties properties,
-                                                                                        AggregateSnapshotPolicyRegistry registry) {
+                                                                                        AggregateSnapshotPolicyRegistry registry,
+                                                                                        ObjectProvider<AggregateDeclarationPolicyRegistrar> declarationPolicyRegistrar) {
+        // Created - and so registered - before this resolver exists; see above
+        declarationPolicyRegistrar.getIfAvailable();
         return new DefaultAggregateSnapshotConfigurationResolver(properties, registry);
     }
 

@@ -32,6 +32,15 @@ class AggregateSnapshotPropertiesBindingTest {
     private final ApplicationContextRunner contextRunner = new ApplicationContextRunner()
             .withConfiguration(AutoConfigurations.of(TestConfiguration.class));
 
+    /**
+     * 10 until 0.60.1
+     */
+    @Test
+    void an_aggregate_without_a_snapshot_policy_is_snapshotted_every_1000_events_by_default() {
+        contextRunner.run(context -> assertThat(context.getBean(EssentialsEventStoreProperties.class).getSnapshots().getDefaultEveryNEvents())
+                .isEqualTo(1000));
+    }
+
     @Test
     void binds_snapshot_properties_and_per_aggregate_overrides() {
         contextRunner

@@ -166,6 +166,27 @@ less CPU to write and read a message and 9% fewer bytes, and the payload is no l
   event to decide whether they handle it (117 to 30 ns per call). `resolveClass` is a new default method that resolves
   a name the way the by-name `deserialize` methods do.
 
+### 1.9 ⚠️ Policies on declared aggregates now apply to repositories built at startup (`spring-boot-starter-postgresql-event-store`)
+
+`@AggregateSnapshotPolicy` and `@AggregateClosingBooksPolicy` on an aggregate declared through
+`EssentialsAggregateDeclarations` reach the policy registries when `AggregateDeclarationPolicyRegistrar` runs. Nothing
+made that happen before a resolution, and an application resolves while building its own beans: a
+`StatefulAggregateRepository` bean resolves its snapshot repository in its builder, and `ClosingBooksSetup` its
+closing-books policy. Application beans are created before auto-configured ones, so those resolutions found empty
+registries and silently got the global defaults, which the caching provider then kept.
+
+Both configuration resolvers now wait for the registrar. If you declare aggregates and build their repositories as
+beans, the values you annotated now apply where the defaults applied before - snapshot interval and mode, closing-books
+trigger, boundary and time zone. In the trading demo, `Account` was snapshotted every 10 events instead of 100 and
+closed its books at UTC end of day instead of New York's. Check your annotations say what you want.
+`DeclaredAggregatePolicyResolutionOrderTest` reproduces it.
+
+### 1.10 Aggregates without a snapshot policy are snapshotted every 1000 events (`spring-boot-starter-postgresql-event-store`)
+
+`essentials.eventstore.snapshots.default-every-n-events` defaults to 1000; it was 10, which added a snapshot - a
+serialization and an insert inside the command's transaction - every tenth event of every aggregate without an
+interval of its own. `@AggregateSnapshotPolicy` keeps its own default of 100. Set the property to keep the old interval.
+
 ## 2. Fixes
 
 ### 2.0 A busy queue is no longer held to one poll per interval (`postgresql-queue`)

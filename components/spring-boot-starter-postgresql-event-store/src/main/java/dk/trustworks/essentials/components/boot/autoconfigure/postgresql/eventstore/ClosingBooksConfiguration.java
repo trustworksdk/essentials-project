@@ -113,13 +113,23 @@ public class ClosingBooksConfiguration {
      *                   related to the event store and aggregate lifecycle.
      * @param registry   the {@link AggregateClosingBooksPolicyRegistry} responsible for registering
      *                   and managing aggregate closing books policies.
+     * @param declarationPolicyRegistrar the registrar copying declared aggregates' policies into {@code registry}
+     * <p>
+     * Takes the {@link AggregateDeclarationPolicyRegistrar} so that it has run before anything can resolve: an
+     * application resolves its aggregates' configuration while its own beans are being built (a
+     * {@code StatefulAggregateRepository} bean does, through its snapshot repository provider), application beans are
+     * created before auto-configured ones, and a resolution that came first found empty registries and silently got
+     * the global defaults for every declared aggregate.
      * @return an instance of {@link AggregateClosingBooksConfigurationResolver} for resolving
      *         aggregate-specific closing books configurations.
      */
     @Bean
     @ConditionalOnMissingBean
     public AggregateClosingBooksConfigurationResolver aggregateClosingBooksConfigurationResolver(EssentialsEventStoreProperties properties,
-                                                                                                 AggregateClosingBooksPolicyRegistry registry) {
+                                                                                                 AggregateClosingBooksPolicyRegistry registry,
+                                                                                                 ObjectProvider<AggregateDeclarationPolicyRegistrar> declarationPolicyRegistrar) {
+        // Created - and so registered - before this resolver exists; see above
+        declarationPolicyRegistrar.getIfAvailable();
         return new DefaultAggregateClosingBooksConfigurationResolver(properties, registry);
     }
 
