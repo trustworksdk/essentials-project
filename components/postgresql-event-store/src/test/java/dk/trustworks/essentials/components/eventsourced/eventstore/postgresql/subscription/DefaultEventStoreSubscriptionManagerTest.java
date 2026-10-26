@@ -243,7 +243,7 @@ class DefaultEventStoreSubscriptionManagerTest {
     }
 
     @Test
-    void subscribing_again_to_held_subscriptions_the_managers_failed_start_did_not_start_WARNs_for_each() {
+    void subscribing_again_to_held_subscriptions_whose_starts_failed_in_the_managers_start_WARNs_for_each() {
         var repository = mock(DurableSubscriptionRepository.class, invocation -> {
             throw new IllegalStateException("Resume point lookup failed");
         });
@@ -252,8 +252,10 @@ class DefaultEventStoreSubscriptionManagerTest {
         var first   = manager.subscribeToAggregateEventsAsynchronously(SUBSCRIBER, THINGS, GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER, Optional.empty(), event -> {});
         var second  = manager.subscribeToAggregateEventsAsynchronously(SUBSCRIBER, other, GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER, Optional.empty(), event -> {});
         try {
-            // The manager's start() throws on whichever subscription it starts first, and does not reach the other one
-            assertThatThrownBy(manager::start).hasMessage("Resume point lookup failed");
+            // The manager's start() tries both subscriptions, and throws the first failure with the other one suppressed
+            assertThatThrownBy(manager::start).hasMessage("Resume point lookup failed")
+                                              .satisfies(failure -> assertThat(failure.getSuppressed()).singleElement()
+                                                                                                       .satisfies(suppressed -> assertThat(suppressed).hasMessage("Resume point lookup failed")));
             assertThat(manager.isStarted()).isTrue();
             assertThat(first.isStarted()).isFalse();
             assertThat(second.isStarted()).isFalse();
@@ -269,30 +271,74 @@ class DefaultEventStoreSubscriptionManagerTest {
     }
 
     @Test
-    void subscribing_again_to_a_held_subscription_the_managers_start_did_not_reach_after_an_Error_WARNs() {
+    void the_managers_start_starts_the_held_subscriptions_after_one_whose_start_throws() {
+        the_managers_start_starts_the_held_subscriptions_after_one_whose_start_throws(new IllegalStateException("Local event bus refused the subscriber"));
+    }
+
+    @Test
+    void the_managers_start_starts_the_held_subscriptions_after_one_whose_start_throws_an_Error() {
+        the_managers_start_starts_the_held_subscriptions_after_one_whose_start_throws(new AssertionError("Local event bus refused the subscriber"));
+    }
+
+    private void the_managers_start_starts_the_held_subscriptions_after_one_whose_start_throws(Throwable failure) {
+        // Only the first subscription the manager starts - whichever it is - fails to register with the local event bus
         var eventBus = mock(EventBus.class);
-        doThrow(new AssertionError("Local event bus refused the subscriber")).when(eventBus).addSyncSubscriber(any());
-        var manager = manager(new EventStoreSubscriptionObserver.NoOpEventStoreSubscriptionObserver(), mock(DurableSubscriptionRepository.class), eventBus);
-        var other   = AggregateType.of("OtherThings");
-        var first   = manager.subscribeToAggregateEventsInTransaction(SUBSCRIBER, THINGS, Optional.empty(), (event, unitOfWork) -> {});
-        var second  = manager.subscribeToAggregateEventsInTransaction(SUBSCRIBER, other, Optional.empty(), (event, unitOfWork) -> {});
+        doThrow(failure).doReturn(eventBus).when(eventBus).addSyncSubscriber(any());
+        var observer = new RecordingStartObserver();
+        var manager  = manager(observer, mock(DurableSubscriptionRepository.class), eventBus);
+        var other    = AggregateType.of("OtherThings");
+        var first    = manager.subscribeToAggregateEventsInTransaction(SUBSCRIBER, THINGS, Optional.empty(), (event, unitOfWork) -> {});
+        var second   = manager.subscribeToAggregateEventsInTransaction(SUBSCRIBER, other, Optional.empty(), (event, unitOfWork) -> {});
         try {
-            // The manager's start() ends on an Error from whichever subscription it starts first, and does not reach the other one.
-            // The one it reached reports itself started - its own handling of an Error, not the manager's
-            assertThatThrownBy(manager::start).isInstanceOf(AssertionError.class).hasMessage("Local event bus refused the subscriber");
+            assertThatThrownBy(manager::start).isSameAs(failure);
             assertThat(manager.isStarted()).isTrue();
-            assertThat(List.of(first, second)).filteredOn(subscription -> !subscription.isStarted()).hasSize(1);
-            var notReached = first.isStarted() ? second : first;
 
-            assertThat(manager.subscribeToAggregateEventsInTransaction(SUBSCRIBER, THINGS, Optional.empty(), (event, unitOfWork) -> {})).isSameAs(first);
-            assertThat(manager.subscribeToAggregateEventsInTransaction(SUBSCRIBER, other, Optional.empty(), (event, unitOfWork) -> {})).isSameAs(second);
-
-            assertThat(warnings()).singleElement()
-                                  .satisfies(warning -> assertThat(warning.getFormattedMessage()).contains("not started")
-                                                                                                 .contains(notReached.aggregateType().toString()));
+            // Both got their start attempt, and the one after the failing one was started
+            assertThat(observer.starting).containsExactlyInAnyOrder(first, second);
+            assertThat(observer.started).containsExactly(observer.starting.get(1));
+            verify(eventBus, times(2)).addSyncSubscriber(any());
+            assertThat(observer.starting.get(1).isStarted()).isTrue();
         } finally {
             manager.stop();
         }
+    }
+
+    @Test
+    void a_subscription_whose_start_throws_is_no_longer_claimed_by_the_manager() throws ReflectiveOperationException {
+        a_subscription_whose_start_throws_is_no_longer_claimed_by_the_manager(new IllegalStateException("Local event bus refused the subscriber"));
+    }
+
+    @Test
+    void a_subscription_whose_start_throws_an_Error_is_no_longer_claimed_by_the_manager() throws ReflectiveOperationException {
+        a_subscription_whose_start_throws_is_no_longer_claimed_by_the_manager(new AssertionError("Local event bus refused the subscriber"));
+    }
+
+    /**
+     * A subscription the manager has claimed is skipped by every later start attempt of the manager's - its {@code start()}'s
+     * walk, or a subscribe on another thread - so a failed start must release the claim. That claim is not otherwise
+     * observable without racing the two, hence the look at the manager's {@code startClaimed} set
+     */
+    private void a_subscription_whose_start_throws_is_no_longer_claimed_by_the_manager(Throwable failure) throws ReflectiveOperationException {
+        var eventBus = mock(EventBus.class);
+        doThrow(failure).when(eventBus).addSyncSubscriber(any());
+        var manager = manager(new EventStoreSubscriptionObserver.NoOpEventStoreSubscriptionObserver(), mock(DurableSubscriptionRepository.class), eventBus);
+        manager.start();
+        try {
+            assertThatThrownBy(() -> manager.subscribeToAggregateEventsInTransaction(SUBSCRIBER, THINGS, Optional.empty(), (event, unitOfWork) -> {}))
+                    .isSameAs(failure);
+            var held = manager.getSubscription(SUBSCRIBER, THINGS).orElseThrow();
+
+            assertThat(startClaimed(manager)).doesNotContain(held);
+        } finally {
+            manager.stop();
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Set<EventStoreSubscription> startClaimed(DefaultEventStoreSubscriptionManager manager) throws ReflectiveOperationException {
+        var field = DefaultEventStoreSubscriptionManager.class.getDeclaredField("startClaimed");
+        field.setAccessible(true);
+        return (Set<EventStoreSubscription>) field.get(manager);
     }
 
     @Test
@@ -353,6 +399,25 @@ class DefaultEventStoreSubscriptionManagerTest {
                                                         Duration.ofMinutes(1),
                                                         durableSubscriptionRepository,
                                                         true);
+    }
+
+    /**
+     * Records the subscriptions the manager is about to start ({@link #startingSubscriber}, called right before a
+     * subscription's own {@code start()}), and those whose start returned normally ({@link #startedSubscriber}), in order
+     */
+    private static class RecordingStartObserver extends EventStoreSubscriptionObserver.NoOpEventStoreSubscriptionObserver {
+        private final List<EventStoreSubscription> starting = new CopyOnWriteArrayList<>();
+        private final List<EventStoreSubscription> started  = new CopyOnWriteArrayList<>();
+
+        @Override
+        public void startingSubscriber(EventStoreSubscription eventStoreSubscription) {
+            starting.add(eventStoreSubscription);
+        }
+
+        @Override
+        public void startedSubscriber(EventStoreSubscription eventStoreSubscription, Duration startDuration) {
+            started.add(eventStoreSubscription);
+        }
     }
 
     /**

@@ -24,6 +24,7 @@ import dk.trustworks.essentials.components.foundation.IOExceptionUtil;
 import dk.trustworks.essentials.components.foundation.fencedlock.FencedLockManager;
 import dk.trustworks.essentials.components.foundation.lifecycle.*;
 import dk.trustworks.essentials.components.foundation.types.*;
+import dk.trustworks.essentials.shared.Exceptions;
 import dk.trustworks.essentials.shared.concurrent.ThreadFactoryBuilder;
 import dk.trustworks.essentials.shared.functional.CheckedRunnable;
 import dk.trustworks.essentials.shared.functional.tuple.Pair;
@@ -69,10 +70,9 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
      * this manager is still to start it (its {@link #start()} has not reached it yet, or the thread starting it has not
      * returned from its {@code start()} yet). {@link #startClaimed} cannot tell such a subscription from one that was
      * stopped directly, since it holds a subscription from the moment its start is claimed, and keeps it after a direct stop.
-     * When {@link #start()} throws on one subscription, it does not reach the ones after it, and a repeated {@link #start()}
-     * does nothing until this manager is stopped, so before rethrowing, {@link #start()} adds every held subscription it has not claimed, and a repeated
-     * subscribe for one of them WARNs. A subscription another thread adds in that instant may be added here before its
-     * own start returns, so a repeated subscribe for it in that window may WARN once
+     * When one subscription's start throws, {@link #start()} still starts the ones after it, so each held subscription ends
+     * up in here. Only a critical error ({@link Exceptions#isCriticalError(Throwable)}) ends {@link #start()} at once: the
+     * held subscriptions it did not reach stay out of here, and a repeated subscribe for one of them logs at INFO, not WARN
      */
     private final    Set<EventStoreSubscription>                                              startReturned = ConcurrentHashMap.newKeySet();
     private          ScheduledFuture<?>                                                       saveResumePointsFuture;
@@ -305,19 +305,9 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
                                              TimeUnit.MILLISECONDS);
             }
             started = true;
-            // Start any subscribers added prior to us starting
-            try {
-                subscribers.values().forEach(this::startEventStoreSubscriber);
-            } catch (RuntimeException | Error e) {
-                // The walk ended at a subscription whose start threw, and the started flag stays set, so a repeated start()
-                // does not reach the ones after it: mark them, so a repeated subscribe for one of them WARNs
-                subscribers.values().forEach(eventStoreSubscription -> {
-                    if (!startClaimed.contains(eventStoreSubscription)) {
-                        startReturned.add(eventStoreSubscription);
-                    }
-                });
-                throw e;
-            }
+            // Start any subscribers added prior to us starting. Each held subscription gets its start attempt even when an
+            // earlier one's start throws: the started flag stays set, so a repeated start() would not reach the ones after it
+            Exceptions.forEachThenThrowFirst(subscribers.values(), this::startEventStoreSubscriber);
         } else {
             log.debug("[{}] EventStore Subscription Manager was already started", fencedLockManager.getLockManagerInstanceId());
         }
@@ -333,8 +323,10 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
         Duration startDuration;
         try {
             startDuration = StopWatch.time(CheckedRunnable.safe(eventStoreSubscription::start));
-        } catch (RuntimeException e) {
-            // Not started, so a later attempt may start it
+        } catch (RuntimeException | Error e) {
+            // A critical error keeps the claim: it is rethrown as it is
+            Exceptions.rethrowIfCriticalError(e);
+            // Not started, so a later attempt may start it - after a non-critical Error (an AssertionError, say) as after a RuntimeException
             startClaimed.remove(eventStoreSubscription);
             throw e;
         } finally {
