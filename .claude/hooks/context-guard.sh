@@ -43,7 +43,9 @@
 # resumed session's older compactions are not restored. A subagent, failing a boundary, is
 # restored after a warning once its count is below half the compaction point. A boundary's
 # restore is claimed by a mkdir lock (restoring.<uuid>), so parallel tool calls hand it back
-# once. A subagent's has no snapshot: its PreCompact writes main/'s.
+# once; a claim whose uuid could not be written to boundary is removed, so the next warn
+# retries, and a written one removes the claims of the boundaries before the one it replaced.
+# A subagent's has no snapshot: its PreCompact writes main/'s.
 # Each agent's percentage is taken against its own window, kept in its own state dir. The
 # main session's model is main/model or, when that is absent, the settings `model`; its
 # window is 1000000 when that names a [1m] model, else 200000. A subagent shares the main
@@ -303,9 +305,15 @@ last_boundary() { # uuid of the last compact_boundary in the last 500 lines of t
 }
 
 record_boundary() { # $1 uuid (may be empty); written to a temporary file and renamed onto boundary
+  # Fails when either step does, so a restore can give up its claim and leave it to the next warn.
+  local rc
   printf '%s' "$1" >"$boundary_file.$$" 2>/dev/null && mv -f "$boundary_file.$$" "$boundary_file" 2>/dev/null
+  rc=$?
   rm -f "$boundary_file.$$" 2>/dev/null
+  return "$rc"
 }
+
+claim_dir() { printf '%s' "$state_dir/restoring.${1//[!A-Za-z0-9-]/_}"; } # $1 uuid: its restore's claim
 
 restore_text() {
   local text=""
@@ -391,9 +399,22 @@ case "$mode" in
       record_boundary "$b" # the first main warn: a boundary already there is older (a resume)
     elif [ -n "$b" ] && [ "$b" != "$(cat "$boundary_file" 2>/dev/null)" ]; then
       # Claimed first: parallel tool calls can both see the new uuid before either renames
-      # boundary, and only the one whose mkdir succeeds restores.
-      mkdir "$state_dir/restoring.${b//[!A-Za-z0-9-]/_}" 2>/dev/null || exit 0
-      record_boundary "$b"
+      # boundary, and only the one whose mkdir succeeds restores. A call that loses the claim
+      # stops here: going on, a subagent's could reach the restore after a warn lock below
+      # before the winner has cleared the locks, and hand the state back a second time.
+      claim=$(claim_dir "$b")
+      mkdir "$claim" 2>/dev/null || exit 0
+      replaced=$(cat "$boundary_file" 2>/dev/null)
+      # Not recorded (a full disk, a write error): nothing is restored and the claim is given
+      # up, so the next warn finds the uuid new again and retries. Kept, it would make every
+      # later warn lose the claim and exit, the agent's restore and warnings with it.
+      record_boundary "$b" || { rmdir "$claim" 2>/dev/null; exit 0; }
+      # Recorded: the claims of older boundaries go, but for the one just replaced, which a call
+      # that read the transcript before the new line was appended still takes for new.
+      keep=$(claim_dir "$replaced")
+      for d in "$state_dir"/restoring.*; do
+        [ "$d" = "$claim" ] || [ "$d" = "$keep" ] || rmdir "$d" 2>/dev/null
+      done
       clear_locks
       text=$(restore_text)
       [ -n "$text" ] && emit "$event" "$text"

@@ -454,6 +454,38 @@ printf '%s' boundary-1 >"$CONTEXT_GUARD_DIR/s37/agents/a1/boundary"
 expect_nothing "$(run warn s37 a1)" "a boundary already claimed was restored again"
 pass
 
+# mv wrapped to fail onto a state directory's boundary file only: the write a full disk refuses.
+no_boundary_mv=$tmp/no-boundary-mv
+mkdir -p "$no_boundary_mv"
+printf '%s\n' '#!/usr/bin/env bash' 'case "${!#}" in */boundary) exit 1 ;; esac' \
+  "exec '$(command -v mv)' \"\$@\"" >"$no_boundary_mv/mv"
+chmod +x "$no_boundary_mv/mv"
+
+case_name="a subagent restore whose boundary write fails: its claim is dropped and its next warn restores; older claims are removed"
+f=$(agent_transcript s49 a1)
+a=$CONTEXT_GUARD_DIR/s49/agents/a1
+assistant_entry "$f" claude-opus-5-5 100000 true
+expect_nothing "$(run warn s49 a1)" "50% of 200000 is short of every warning point"
+printf '%s\n' "AGENT-STATE-S49" >"$a/STATE.md"
+compact_boundary "$f" boundary-1
+assistant_entry "$f" claude-opus-5-5 20000 true
+out=$(hook_input s49 a1 | PATH=$no_boundary_mv:$PATH bash "$hook" warn | jq -r '.hookSpecificOutput.additionalContext // empty')
+expect_nothing "$out" "restored though the boundary could not be recorded (the next warn would restore it again)"
+[ ! -e "$a/restoring.boundary-1" ] || fail "the claim of a boundary that could not be recorded was kept"
+out=$(run warn s49 a1)
+case "$out" in *AGENT-STATE-S49*) ;; *) fail "the warn after a failed boundary write did not restore: ${out:0:300}" ;; esac
+[ "$(cat "$a/boundary")" = boundary-1 ] || fail "boundary holds '$(cat "$a/boundary")', expected boundary-1"
+# Each recorded boundary removes the claims older than the one it replaced.
+for u in boundary-2 boundary-3; do
+  compact_boundary "$f" "$u"
+  assistant_entry "$f" claude-opus-5-5 20000 true
+  run warn s49 a1 >/dev/null
+done
+claims=$(cd "$a" && echo restoring.*)
+[ "$claims" = "restoring.boundary-2 restoring.boundary-3" ] \
+  || fail "claims left: '$claims', expected the current boundary's and the one it replaced"
+pass
+
 case_name="a subagent's compaction, as the harness reports it: nothing from main/, main's warn lock kept, the subagent gets its own state"
 assistant_entry "$(main_transcript s38)" claude-opus-5-5 50000 false
 expect_nothing "$(run warn s38 "")" "5% of 1000000 is short of every warning point"
@@ -548,6 +580,11 @@ case "$out" in
 esac
 [ -e "$CONTEXT_GUARD_DIR/s41/main/warned.8" ] && fail "the main conversation's restore kept its warn lock"
 expect_nothing "$(run warn s41 "")" "the same boundary restored again"
+# A parallel tool call that read main/boundary before this one renamed it sees boundary-1 as new:
+# the restoring.<uuid> claim keeps the main conversation's state from being handed back twice.
+printf '%s\n' "MAIN-STATE-S41-B" >"$CONTEXT_GUARD_DIR/s41/main/STATE.md"
+printf '%s' "" >"$CONTEXT_GUARD_DIR/s41/main/boundary" # what the first main warn recorded
+expect_nothing "$(run warn s41 "")" "a main boundary already claimed was restored again"
 rm -f "$CLAUDE_CONFIG_DIR/settings.json"
 pass
 
