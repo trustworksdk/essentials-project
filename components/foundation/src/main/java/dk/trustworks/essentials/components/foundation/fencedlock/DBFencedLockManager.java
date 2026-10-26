@@ -957,11 +957,12 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
      * {@link VirtualMachineError}, {@link ThreadDeath} or {@link LinkageError} (an {@link ExceptionInInitializerError} or
      * {@link NoClassDefFoundError}, say), or any throwable with one in its cause or suppressed chain) is not recovered from:
      * it is logged at ERROR and ends the async acquiring of the lock.
-     * When it came from <code>lockAcquired</code>, the lock is released before that (best effort: when the release fails, this
-     * lock manager still stops confirming the lock, so it expires after the lock timeout), so it is not left held by this
+     * When it came from <code>lockAcquired</code>, the lock is released before that, so it is not left held by this
      * instance with nothing serving it.
-     * A critical error from releasing the lock after a non-critical failure of <code>lockAcquired</code> also stops this lock
-     * manager confirming the lock, so it expires after the lock timeout.
+     * When that release, or the release after a non-critical failure of <code>lockAcquired</code>, fails with a critical error
+     * in the DB, the lock is still released locally: this lock manager stops confirming it, so its row expires after the lock
+     * timeout, and <code>lockReleased</code> is called and {@link FencedLockEvents.LockReleased} published, so what
+     * <code>lockAcquired</code> started can be stopped before another instance takes the lock over.
      * The ended acquiring keeps its entry, so calling this method again for the same lock name does not restart it until
      * {@link #cancelAsyncLockAcquiring(LockName)} has been called or the lock manager has been stopped.
      */
@@ -1057,14 +1058,7 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
                         log.error(msg("[{}] Lock '{}' was acquired but its lockAcquired callback failed - releasing it "
                                       + "so the next attempt can retry rather than holding a lock nothing is serving",
                                       lockManagerInstanceId, lockName), e);
-                        // A critical error from the release itself (releaseLockInDB, say) escapes before releaseLock removes
-                        // the lock locally, and ends the async acquiring in the outer catch. Removing it here stops this lock
-                        // manager confirming it, so the lock row expires after the lock timeout rather than staying held unserved.
-                        try {
-                            releaseLock((LOCK) fencedLock);
-                        } finally {
-                            locksAcquiredByThisLockManager.remove(lockName, (LOCK) fencedLock);
-                        }
+                        releaseAfterFailedLockAcquired(lockName, (LOCK) fencedLock);
                     }
                 } else {
                     if (log.isTraceEnabled()) {
@@ -1097,16 +1091,41 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
     }
 
     /**
+     * Releases a lock whose <code>lockAcquired</code> callback failed with a non-critical error, so the next attempt of the
+     * async acquiring can retry. A failure of the release is rethrown as it is: the <code>lockAcquired</code> failure has been
+     * logged by the caller already and is not added to it.
+     * <p>
+     * A critical error from the release itself (<code>releaseLockInDB</code>, say) escapes before {@link #releaseLock} removes
+     * the lock locally, and ends the async acquiring in the caller's outer catch. Releasing it locally here first
+     * ({@link #releaseLocallyAfterFailedRelease(LockName, DBFencedLock, Throwable)}) stops this lock manager confirming it, so
+     * the lock row expires after the lock timeout rather than staying held unserved, and calls <code>lockReleased</code>, so
+     * what <code>lockAcquired</code> started is stopped before another instance can take the lock over.
+     *
+     * @param lockName the name of the lock
+     * @param lock     the lock that was acquired
+     */
+    private void releaseAfterFailedLockAcquired(LockName lockName, LOCK lock) {
+        try {
+            releaseLock(lock);
+        } catch (Throwable releaseFailure) {
+            releaseLocallyAfterFailedRelease(lockName, lock, releaseFailure);
+            throw releaseFailure;
+        }
+    }
+
+    /**
      * Best effort release of a lock whose <code>lockAcquired</code> callback failed with a critical error
      * ({@link dk.trustworks.essentials.shared.Exceptions#isCriticalError(Throwable)}), which the caller then rethrows, ending
      * the async acquiring of the lock. Without the release the lock would stay in {@link #locksAcquiredByThisLockManager}, so it
      * would keep being confirmed - no other instance could take it over - while nothing served it.
      * <p>
-     * The lock is removed from {@link #locksAcquiredByThisLockManager} even when the release fails, which stops its
-     * confirmation, so the lock row expires after the lock timeout. A release that throws (its <code>lockReleased</code>
-     * callback, say) is added to <code>criticalError</code> as suppressed, never thrown in its place, and the error is logged
-     * at ERROR afterwards, so the log line carries that failure too. A release that fails in the DB without throwing is
-     * logged by {@link #releaseLock} itself, and leaves the lock row to expire after the lock timeout.
+     * The lock is released locally even when the release throws before it got that far (a critical error from
+     * <code>releaseLockInDB</code>, say) - see {@link #releaseLocallyAfterFailedRelease(LockName, DBFencedLock, Throwable)}: it is
+     * no longer confirmed, so the lock row expires after the lock timeout, and its <code>lockReleased</code> callbacks run and
+     * {@link LockReleased} is published. A release that throws (its <code>lockReleased</code> callback, say) is added to
+     * <code>criticalError</code> as suppressed, never thrown in its place, and so is a failure of that local release; the error
+     * is logged at ERROR afterwards, so the log line carries those failures too. A release that fails in the DB without throwing
+     * is logged by {@link #releaseLock} itself, and leaves the lock row to expire after the lock timeout.
      *
      * @param lockName      the name of the lock
      * @param lock          the lock that was acquired
@@ -1117,13 +1136,47 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
             releaseLock(lock);
         } catch (Throwable releaseFailure) {
             addSuppressedOnce(criticalError, releaseFailure);
-        } finally {
-            locksAcquiredByThisLockManager.remove(lockName, lock);
+            releaseLocallyAfterFailedRelease(lockName, lock, criticalError);
         }
         log.error(msg("[{}] Lock '{}' was acquired but its lockAcquired callback failed with a critical error - the lock has been released "
-                      + "(or, where its release failed, is no longer confirmed by this instance, so it expires after the lock timeout) "
+                      + "(or, where its release in the DB failed, released locally only, so its row expires after the lock timeout) "
                       + "and the error is rethrown, which ends the async acquiring of the lock",
                       lockManagerInstanceId, lockName), criticalError);
+    }
+
+    /**
+     * Completes, locally, the release of a lock whose {@link #releaseLock} threw, so the lock is not left half released: a
+     * failure that escapes {@link #releaseLock} before it removes the lock from {@link #locksAcquiredByThisLockManager} (a
+     * critical error from <code>releaseLockInDB</code>, say) would otherwise leave it confirmed by this instance, or - removed
+     * but never marked released - reporting itself as held by this instance, with its <code>lockReleased</code> callbacks never
+     * run and no {@link LockReleased} published, while another instance takes it over once its row has expired.
+     * <p>
+     * Removes the lock from {@link #locksAcquiredByThisLockManager}, which stops its confirmation (the lock row expires after the
+     * lock timeout), and, when the lock still reports itself as held by this instance, marks it as released and notifies
+     * {@link LockReleased} ({@link #markAsReleasedAndNotify(DBFencedLock)}). A lock {@link #releaseLock} already marked as
+     * released (its <code>lockReleased</code> callback threw, say) is not notified again. A failure of this local release,
+     * critical or not, is added to <code>releaseFailure</code> as suppressed, never thrown in its place.
+     * <p>
+     * The remove goes by identity, not by {@link ConcurrentMap#remove(Object, Object)}: {@link DBFencedLock#equals(Object)}
+     * compares the lock name only, so that would also remove a newer acquisition of the same lock - one a
+     * <code>lockReleased</code> callback made on this thread through {@link #tryAcquireLock(LockName)}, say - which would then
+     * no longer be confirmed and would expire while its holder believes it holds it.
+     *
+     * @param lockName       the name of the lock
+     * @param lock           the lock whose release threw
+     * @param releaseFailure the failure that escapes to the caller, which any failure of the local release is added to as suppressed
+     */
+    @SuppressWarnings("PMD.CompareObjectsWithEquals")
+    private void releaseLocallyAfterFailedRelease(LockName lockName, LOCK lock, Throwable releaseFailure) {
+        locksAcquiredByThisLockManager.computeIfPresent(lockName, (name, held) -> held == lock ? null : held);
+        if (!lock.isLockedByThisLockManagerInstance()) {
+            return;
+        }
+        try {
+            markAsReleasedAndNotify(lock);
+        } catch (Throwable localReleaseFailure) {
+            addSuppressedOnce(releaseFailure, localReleaseFailure);
+        }
     }
 
     @Override

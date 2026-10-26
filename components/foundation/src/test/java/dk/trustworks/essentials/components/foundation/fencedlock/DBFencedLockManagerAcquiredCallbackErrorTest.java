@@ -213,6 +213,8 @@ class DBFencedLockManagerAcquiredCallbackErrorTest {
     @Test
     void a_release_in_the_db_failing_with_a_critical_error_after_one_in_lock_acquired_still_stops_confirming_the_lock() {
         var acquiredCalls = new AtomicInteger();
+        var acquiredLock  = new AtomicReference<FencedLock>();
+        var releasedLocks = new CopyOnWriteArrayList<FencedLock>();
         var criticalError = new ExceptionInInitializerError("lockAcquired fails critically");
         var releaseError  = new NoClassDefFoundError("releaseLockInDB fails critically");
         var logEvents     = captureLockManagerLog();
@@ -221,10 +223,10 @@ class DBFencedLockManagerAcquiredCallbackErrorTest {
             node.acquireLockAsync(LOCK_NAME, LockCallback.builder()
                                                          .onLockAcquired(lock -> {
                                                              acquiredCalls.incrementAndGet();
+                                                             acquiredLock.set(lock);
                                                              throw criticalError;
                                                          })
-                                                         .onLockReleased(lock -> {
-                                                         })
+                                                         .onLockReleased(releasedLocks::add)
                                                          .build());
 
             // The critical error from lockAcquired is what is logged - carrying the release's failure as suppressed
@@ -233,6 +235,16 @@ class DBFencedLockManagerAcquiredCallbackErrorTest {
             var logged = ((ThrowableProxy) logEvents.list.stream().filter(event -> event.getLevel() == Level.ERROR).findFirst().orElseThrow().getThrowableProxy()).getThrowable();
             assertThat(logged).isSameAs(criticalError);
             assertThat(logged.getSuppressed()).containsExactly(releaseError);
+
+            // The release failed in the DB, but the lock was released locally: it no longer reports itself as held here,
+            // lockReleased was called - so what lockAcquired started can be stopped before another instance takes the lock
+            // over - and LockReleased was published
+            assertThat(acquiredLock.get()).isNotNull();
+            assertThat(acquiredLock.get().isLockedByThisLockManagerInstance()).isFalse();
+            assertThat(releasedLocks).singleElement().isSameAs(acquiredLock.get());
+            assertThat(events).filteredOn(LockReleased.class::isInstance)
+                              .singleElement()
+                              .satisfies(event -> assertThat(((LockReleased) event).lock).isSameAs(acquiredLock.get()));
 
             // The release failed, so the row still names this instance - but it is no longer confirmed (the confirmation
             // interval is 100 ms), so it expires after the lock timeout; and no later tick ran
@@ -253,6 +265,8 @@ class DBFencedLockManagerAcquiredCallbackErrorTest {
     @Test
     void a_release_in_the_db_failing_with_a_critical_error_after_a_non_critical_one_in_lock_acquired_still_stops_confirming_the_lock() {
         var acquiredCalls = new AtomicInteger();
+        var acquiredLock  = new AtomicReference<FencedLock>();
+        var releasedLocks = new CopyOnWriteArrayList<FencedLock>();
         var callbackError = new RuntimeException("lockAcquired fails");
         var releaseError  = new NoClassDefFoundError("releaseLockInDB fails critically");
         var logEvents     = captureLockManagerLog();
@@ -261,10 +275,10 @@ class DBFencedLockManagerAcquiredCallbackErrorTest {
             node.acquireLockAsync(LOCK_NAME, LockCallback.builder()
                                                          .onLockAcquired(lock -> {
                                                              acquiredCalls.incrementAndGet();
+                                                             acquiredLock.set(lock);
                                                              throw callbackError;
                                                          })
-                                                         .onLockReleased(lock -> {
-                                                         })
+                                                         .onLockReleased(releasedLocks::add)
                                                          .build());
 
             // Two ERROR lines: the failed callback, then the release's critical error, which ends the async acquiring
@@ -274,6 +288,17 @@ class DBFencedLockManagerAcquiredCallbackErrorTest {
             assertThat(((ThrowableProxy) errors.get(0).getThrowableProxy()).getThrowable()).isSameAs(callbackError);
             assertThat(errors.get(1).getFormattedMessage()).contains("A critical error occurred in the async acquiring of lock", LOCK_NAME.toString());
             assertThat(((ThrowableProxy) errors.get(1).getThrowableProxy()).getThrowable()).isSameAs(releaseError);
+            assertThat(releaseError.getSuppressed()).isEmpty();
+
+            // The release failed in the DB, but the lock was released locally: it no longer reports itself as held here,
+            // lockReleased was called - so what lockAcquired started can be stopped before another instance takes the lock
+            // over - and LockReleased was published
+            assertThat(acquiredLock.get()).isNotNull();
+            assertThat(acquiredLock.get().isLockedByThisLockManagerInstance()).isFalse();
+            assertThat(releasedLocks).singleElement().isSameAs(acquiredLock.get());
+            assertThat(events).filteredOn(LockReleased.class::isInstance)
+                              .singleElement()
+                              .satisfies(event -> assertThat(((LockReleased) event).lock).isSameAs(acquiredLock.get()));
 
             // The release failed, so the row still names this instance - but it is no longer confirmed (the confirmation
             // interval is 100 ms), so it expires after the lock timeout; and no later tick ran
@@ -290,6 +315,126 @@ class DBFencedLockManagerAcquiredCallbackErrorTest {
         } finally {
             detachLockManagerLog(logEvents);
         }
+    }
+
+    @Test
+    void a_failing_local_release_after_a_critical_error_releasing_in_the_db_is_added_to_that_error_as_suppressed() {
+        var acquiredLock  = new AtomicReference<FencedLock>();
+        var callbackError = new RuntimeException("lockAcquired fails");
+        var releaseError  = new NoClassDefFoundError("releaseLockInDB fails critically");
+        var localError    = new AssertionError("lockReleased fails");
+        var logEvents     = captureLockManagerLog();
+        try {
+            storage.failNextReleaseWith = releaseError;
+            node.acquireLockAsync(LOCK_NAME, LockCallback.builder()
+                                                         .onLockAcquired(lock -> {
+                                                             acquiredLock.set(lock);
+                                                             throw callbackError;
+                                                         })
+                                                         .onLockReleased(lock -> {
+                                                             throw localError;
+                                                         })
+                                                         .build());
+
+            // The release's critical error, not the local release's failure, is what escapes the tick and is logged -
+            // carrying the local release's failure as suppressed
+            Awaitility.waitAtMost(Duration.ofSeconds(5))
+                      .untilAsserted(() -> assertThat(logEvents.list.stream().filter(event -> event.getLevel() == Level.ERROR)).hasSize(2));
+            var errors = logEvents.list.stream().filter(event -> event.getLevel() == Level.ERROR).toList();
+            assertThat(((ThrowableProxy) errors.get(1).getThrowableProxy()).getThrowable()).isSameAs(releaseError);
+            assertThat(releaseError.getSuppressed()).containsExactly(localError);
+
+            // ... and the local release was completed all the same: marked released and LockReleased published
+            assertThat(acquiredLock.get().isLockedByThisLockManagerInstance()).isFalse();
+            assertThat(events).filteredOn(LockReleased.class::isInstance)
+                              .singleElement()
+                              .satisfies(event -> assertThat(((LockReleased) event).lock).isSameAs(acquiredLock.get()));
+        } finally {
+            detachLockManagerLog(logEvents);
+        }
+    }
+
+    @Test
+    void a_lock_re_acquired_by_the_lock_released_callback_after_a_failed_lock_acquired_stays_held_and_confirmed() {
+        var acquiredCalls = new AtomicInteger();
+        var reacquired    = new AtomicReference<FencedLock>();
+        node.acquireLockAsync(LOCK_NAME, LockCallback.builder()
+                                                     .onLockAcquired(lock -> {
+                                                         if (acquiredCalls.incrementAndGet() == 1) {
+                                                             throw new RuntimeException("first lockAcquired fails");
+                                                         }
+                                                     })
+                                                     .onLockReleased(lock -> {
+                                                         // On the async acquiring's thread, inside the release of the lock whose
+                                                         // lockAcquired failed: the lock is free again, so this acquires it anew
+                                                         if (reacquired.get() == null) {
+                                                             reacquired.set(node.tryAcquireLock(LOCK_NAME).orElseThrow());
+                                                         }
+                                                     })
+                                                     .build());
+
+        Awaitility.waitAtMost(Duration.ofSeconds(5))
+                  .untilAsserted(() -> assertThat(reacquired.get()).isNotNull());
+        var reacquiredLock = reacquired.get();
+        assertThat(reacquiredLock.isLockedByThisLockManagerInstance()).isTrue();
+
+        // The newer acquisition is not dropped along with the failed one (DBFencedLock.equals compares the name only): it
+        // stays this lock manager's - the cached instance is returned - and its row keeps being confirmed, rather than
+        // expiring while its holder believes it holds it
+        Awaitility.waitAtMost(Duration.ofSeconds(5))
+                  .untilAsserted(() -> assertThat(storage.rows.get(LOCK_NAME).lockLastConfirmedTimestamp()).isAfter(reacquiredLock.getLockAcquiredTimestamp()));
+        var confirmed = storage.rows.get(LOCK_NAME).lockLastConfirmedTimestamp();
+        Awaitility.waitAtMost(Duration.ofSeconds(5))
+                  .untilAsserted(() -> assertThat(storage.rows.get(LOCK_NAME).lockLastConfirmedTimestamp()).isAfter(confirmed));
+        assertThat(node.tryAcquireLock(LOCK_NAME)).containsSame(reacquiredLock);
+        assertThat(storage.rows.get(LOCK_NAME).lockedBy()).isEqualTo("node");
+        assertThat(storage.rows.get(LOCK_NAME).token()).isEqualTo(reacquiredLock.getCurrentToken());
+        assertThat(node.isLockedByThisLockManagerInstance(LOCK_NAME)).isTrue();
+        // The async acquiring finds the lock held here, so it does not acquire it again
+        assertThat(acquiredCalls.get()).isEqualTo(1);
+    }
+
+    @Test
+    void a_lock_re_acquired_by_a_lock_released_callback_that_then_throws_after_a_failed_lock_acquired_stays_held_and_confirmed() {
+        var acquiredCalls = new AtomicInteger();
+        var reacquired    = new AtomicReference<FencedLock>();
+        node.acquireLockAsync(LOCK_NAME, LockCallback.builder()
+                                                     .onLockAcquired(lock -> {
+                                                         if (acquiredCalls.incrementAndGet() == 1) {
+                                                             throw new RuntimeException("first lockAcquired fails");
+                                                         }
+                                                     })
+                                                     .onLockReleased(lock -> {
+                                                         // On the async acquiring's thread, inside the release of the lock whose
+                                                         // lockAcquired failed: the lock is free again, so this acquires it anew -
+                                                         // and then fails, so the release throws after the newer acquisition has
+                                                         // been recorded, and the failed lock is released locally past it
+                                                         if (reacquired.get() == null) {
+                                                             reacquired.set(node.tryAcquireLock(LOCK_NAME).orElseThrow());
+                                                             throw new RuntimeException("lockReleased fails after re-acquiring the lock");
+                                                         }
+                                                     })
+                                                     .build());
+
+        Awaitility.waitAtMost(Duration.ofSeconds(5))
+                  .untilAsserted(() -> assertThat(reacquired.get()).isNotNull());
+        var reacquiredLock = reacquired.get();
+
+        // The local release of the failed acquisition removes that lock only (DBFencedLock.equals compares the name only), so
+        // the newer acquisition stays this lock manager's - the cached instance is returned - and its row keeps being
+        // confirmed, rather than expiring while its holder believes it holds it
+        Awaitility.waitAtMost(Duration.ofSeconds(5))
+                  .untilAsserted(() -> assertThat(storage.rows.get(LOCK_NAME).lockLastConfirmedTimestamp()).isAfter(reacquiredLock.getLockAcquiredTimestamp()));
+        var confirmed = storage.rows.get(LOCK_NAME).lockLastConfirmedTimestamp();
+        Awaitility.waitAtMost(Duration.ofSeconds(5))
+                  .untilAsserted(() -> assertThat(storage.rows.get(LOCK_NAME).lockLastConfirmedTimestamp()).isAfter(confirmed));
+        assertThat(reacquiredLock.isLockedByThisLockManagerInstance()).isTrue();
+        assertThat(node.tryAcquireLock(LOCK_NAME)).containsSame(reacquiredLock);
+        assertThat(storage.rows.get(LOCK_NAME).lockedBy()).isEqualTo("node");
+        assertThat(storage.rows.get(LOCK_NAME).token()).isEqualTo(reacquiredLock.getCurrentToken());
+        assertThat(node.isLockedByThisLockManagerInstance(LOCK_NAME)).isTrue();
+        // The async acquiring finds the lock held here, so it does not acquire it again
+        assertThat(acquiredCalls.get()).isEqualTo(1);
     }
 
     @Test
