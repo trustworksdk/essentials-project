@@ -76,9 +76,15 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  *     believed it held it: {@link #tryAcquireLock(LockName)} and {@link #tryAcquireLock(LockName, Duration)} return empty,
  *     {@link #acquireLock(LockName)} throws {@link IllegalStateException}, and the ticks of an async acquiring, one still
  *     running or one {@link #acquireLockAsync(LockName, LockCallback)} starts afterwards, do nothing, so its
- *     <code>lockAcquired</code> is not called. Stop and start the lock manager to start the lock confirmation again and
- *     acquire locks again - {@link #stop()} drops every async acquiring; call {@link #acquireLockAsync(LockName, LockCallback)}
- *     again after {@link #start()}, see {@link #acquireLockAsync(LockName, LockCallback)}</li>
+ *     <code>lockAcquired</code> is not called. This lock manager does not recover from it on its own: the way back is to
+ *     restart the application. A {@link #stop()} and {@link #start()} of the lock manager alone starts the lock confirmation
+ *     again, so it acquires and confirms locks again, but {@link #stop()} drops every async acquiring and {@link #start()}
+ *     schedules none of them again. A component that acquires its lock through
+ *     {@link #acquireLockAsync(LockName, LockCallback)} when it starts - an event processor, an exclusive event store
+ *     subscription, the scheduler; an inbox or an outbox when it starts consuming - is then not given its lock until it is
+ *     stopped and started too, after the lock manager (an inbox or an outbox: call <code>startConsuming()</code> again,
+ *     or <code>consume(messageConsumer)</code> after <code>stopConsuming()</code>, which drops its consumer); code of your
+ *     own calls {@link #acquireLockAsync(LockName, LockCallback)} again after {@link #start()}</li>
  *     <li>after {@link #stop()} has thrown a critical error, the lock manager is stopped ({@link #isStarted()} is
  *     <code>false</code>) and can be started again</li>
  *     <li>an async acquiring ended by a critical error keeps its entry - see {@link #acquireLockAsync(LockName, LockCallback)}
@@ -375,7 +381,8 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
         log.error(msg("[{}] The lock confirmation failed with {} - released the {} lock(s) this lock manager instance held locally only "
                       + "(their rows expire after the lock timeout) and the scheduled lock confirmation has ended: this lock manager "
                       + "acquires no lock from now on (tryAcquireLock returns empty, acquireLock throws, async acquiring acquires nothing), "
-                      + "until it is stopped and started again",
+                      + "until the application is restarted (or the lock manager is stopped and started, and after it every component "
+                      + "that acquires a lock through it with acquireLockAsync, which the lock manager's stop drops)",
                       lockManagerInstanceId, isCriticalError(failure) ? "a critical error" : "an unexpected failure", heldLocks.size()), failure);
     }
 
@@ -845,7 +852,13 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
 
     private void logNotAcquiringAsTheConfirmationHasEnded(LockName lockName) {
         log.debug("[{}] The scheduled lock confirmation has ended - not acquiring lock '{}', which this lock manager could not confirm, "
-                  + "until it is stopped and started again", lockManagerInstanceId, lockName);
+                  + "until the application is restarted, or the lock manager is stopped and started", lockManagerInstanceId, lockName);
+    }
+
+    private void logAsyncAcquiringNotAcquiringAsTheConfirmationHasEnded(LockName lockName) {
+        log.debug("[{}] The scheduled lock confirmation has ended - the async acquiring of lock '{}' is not acquiring it, as this lock manager "
+                  + "could not confirm it, until the application is restarted: a stop and start of the lock manager drops this async acquiring, "
+                  + "so its component must be stopped and started too (or acquireLockAsync called again) after it", lockManagerInstanceId, lockName);
     }
 
     /**
@@ -1033,7 +1046,8 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
             }
             if (confirmationEnded) {
                 throw new IllegalStateException(msg("[{}] The scheduled lock confirmation has ended - not acquiring lock '{}', which this lock manager "
-                                                    + "could not confirm, until it is stopped and started again", lockManagerInstanceId, lockName));
+                                                    + "could not confirm, until the application is restarted, or the lock manager is stopped and started",
+                                                    lockManagerInstanceId, lockName));
             }
             if (!pauseBeforeNextAcquireAttempt(syncAcquireLockPauseIntervalMs)) {
                 throw new IllegalStateException(msg("[{}] Interrupted while waiting to acquire lock '{}'", lockManagerInstanceId, lockName));
@@ -1153,7 +1167,7 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
                 return;
             }
             if (confirmationEnded) {
-                logNotAcquiringAsTheConfirmationHasEnded(lockName);
+                logAsyncAcquiringNotAcquiringAsTheConfirmationHasEnded(lockName);
                 return;
             }
             var existingLock = locksAcquiredByThisLockManager.get(lockName);

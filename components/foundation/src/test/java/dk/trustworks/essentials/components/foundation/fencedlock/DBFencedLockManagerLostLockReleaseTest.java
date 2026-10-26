@@ -55,7 +55,8 @@ import static org.assertj.core.api.Assertions.*;
  * ({@link dk.trustworks.essentials.shared.Exceptions#isCriticalError(Throwable)}) still escapes, rolling back the tick's
  * confirmations and ending the scheduled confirmation - but every lock still held is released locally, and the error logged at
  * ERROR, first. From then on the lock manager acquires no lock, which it could no longer confirm, until it is stopped and
- * started again.
+ * started again - and an async acquiring registered before the stop is not resumed by the start: it has to be registered
+ * again.
  */
 class DBFencedLockManagerLostLockReleaseTest {
     private static final LockName LOCK_NAME       = LockName.of("lost-lock");
@@ -391,6 +392,69 @@ class DBFencedLockManagerLostLockReleaseTest {
         var reacquiredLock = lockManager.tryAcquireLock(LOCK_NAME).orElseThrow();
         awaitConfirmationKeepsRunning(LOCK_NAME);
         assertThat(reacquiredLock.isLocked()).isTrue();
+    }
+
+    @Test
+    @SuppressWarnings("PMD.CloseResource") // otherLock, and the lock the re-registered async acquiring takes, are released by stop() in cleanup()
+    void an_async_acquiring_registered_before_the_confirmation_ended_is_not_resumed_by_a_stop_and_start_of_the_lock_manager() {
+        // Given an async acquiring that has acquired its lock
+        var asyncAcquired = new CopyOnWriteArrayList<FencedLock>();
+        var asyncReleased = new CopyOnWriteArrayList<FencedLock>();
+        var lockCallback = new LockCallback() {
+            @Override
+            public void lockAcquired(FencedLock lock) {
+                asyncAcquired.add(lock);
+            }
+
+            @Override
+            public void lockReleased(FencedLock lock) {
+                asyncReleased.add(lock);
+            }
+        };
+        lockManager.acquireLockAsync(LOCK_NAME, lockCallback);
+        Awaitility.waitAtMost(Duration.ofSeconds(5))
+                  .untilAsserted(() -> assertThat(asyncAcquired).hasSize(1));
+
+        // And a critical error that has ended the scheduled confirmation, releasing that lock locally
+        var criticalError = new ExceptionInInitializerError("LockAcquired subscriber fails critically");
+        var logEvents     = captureLockManagerLog();
+        try {
+            eventSubscriberAction = event -> {
+                if (event instanceof LockAcquired lockAcquired && lockAcquired.lock.getName().equals(LOCK_NAME)) {
+                    throw criticalError;
+                }
+            };
+            Awaitility.waitAtMost(Duration.ofSeconds(5))
+                      .untilAsserted(() -> {
+                          assertThat(asyncReleased).hasSize(1);
+                          assertThat(logEvents.list.stream().filter(event -> event.getLevel() == Level.ERROR)).hasSize(1);
+                      });
+        } finally {
+            ((Logger) LoggerFactory.getLogger(TestDBFencedLockManager.class)).detachAppender(logEvents);
+        }
+        eventSubscriberAction = event -> {
+        };
+
+        // When the lock manager is stopped and started again
+        lockManager.stop();
+        lockManager.start();
+
+        // Then the lock manager acquires locks again ...
+        var otherLock = lockManager.tryAcquireLock(OTHER_LOCK_NAME).orElseThrow();
+        assertThat(otherLock.isLocked()).isTrue();
+        // ... but the async acquiring is not resumed: stop() dropped it and start() schedules none again, so lockAcquired is
+        // not called again
+        Awaitility.await()
+                  .during(Duration.ofMillis(1000))
+                  .atMost(Duration.ofSeconds(3))
+                  .untilAsserted(() -> assertThat(asyncAcquired).hasSize(1));
+
+        // And it acquires its lock again once it is registered again
+        lockManager.acquireLockAsync(LOCK_NAME, lockCallback);
+        Awaitility.waitAtMost(Duration.ofSeconds(5))
+                  .untilAsserted(() -> assertThat(asyncAcquired).hasSize(2));
+        awaitConfirmationKeepsRunning(LOCK_NAME);
+        assertThat(asyncAcquired.getLast().isLocked()).isTrue();
     }
 
     private List<LockAcquired> lockAcquiredEvents() {
