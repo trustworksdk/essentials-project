@@ -9,7 +9,9 @@
 #               is left before the compaction point; also every agent's restore, the main
 #               conversation's included, after a compaction found in its own transcript
 #               (see "Whose compaction" below)
-#   precompact  PreCompact (auto|manual)       - write main/'s fallback snapshot
+#   precompact  PreCompact (auto|manual)       - write main/'s fallback snapshot, unless one
+#                                                written for a main restore still owed is kept
+#                                                (see "Whose compaction")
 #   restore     SessionStart (compact)         - does nothing (see "Whose compaction"); no longer
 #                                                registered, kept so a settings file that still
 #                                                registers it is harmless
@@ -25,8 +27,8 @@
 # main conversation's do, without an agent_id and with the main transcript_path, and the
 # compact_boundary line a compaction appends to its agent's transcript cannot be relied on to
 # be there yet when either hook runs. Neither hook can tell whose compaction it is, so
-# neither restores anything: precompact writes main/'s snapshot whoever compacts, and
-# SessionStart(compact) adds nothing. Every agent's restore is driven by its own transcript
+# neither restores anything: precompact writes main/'s snapshot whoever compacts (or keeps
+# one an owed main restore will hand back, below), and SessionStart(compact) adds nothing. Every agent's restore is driven by its own transcript
 # instead: its warn hands its state back when the transcript's last compact_boundary, wherever
 # in the file it is, has a uuid that is not the one kept in its state dir (boundary) - in the main
 # transcript only a line that is not isSidechain - so a compaction no warning preceded is
@@ -46,6 +48,18 @@
 # once; a claim whose uuid could not be written to boundary is removed, so the next warn
 # retries, and a written one removes the claims of the boundaries before the one it replaced.
 # A subagent's has no snapshot: its PreCompact writes main/'s.
+# Since the main restore waits for the main conversation's next warn, a subagent's PreCompact
+# can come between the main compaction and that restore, and it would replace the snapshot the
+# restore hands back with one taken later (still of the main transcript and git, as every
+# snapshot is, but no longer from right before the main compaction). So precompact keeps
+# main/'s snapshot while a main restore is owed: the main transcript's last compact_boundary
+# has a uuid that is not the one in main/boundary, and the snapshot was written since that uuid
+# was recorded (precompact-snapshot.boundary holds what main/boundary held when it was
+# written). main/ has no boundary file before its first warn, and that warn restores nothing,
+# so no snapshot is kept before it. Two limits: a PreCompact that runs before the main
+# compaction's boundary line is in the transcript still rewrites the snapshot, and a second
+# main compaction before the next main warn keeps the first one's snapshot, which that warn
+# hands back.
 # Each agent's percentage is taken against its own window, kept in its own state dir. The
 # main session's model is main/model or, when that is absent, the settings `model`; its
 # window is 1000000 when that names a [1m] model, else 200000. A subagent shares the main
@@ -102,9 +116,10 @@
 # compact_boundary in its transcript (see "Whose compaction" above).
 # Never fails the hook: every path exits 0.
 # Needs bash and jq (without jq it does nothing). Transcripts are read by jq (warn's usage
-# and main-model checks first take the last 500, then 5000 lines with POSIX `tail -n`; its
-# boundary check hands jq only the lines a POSIX `grep -F` finds in the whole file), so no GNU-only tool (tac, GNU
-# sed) is involved: it works on a stock macOS userland as well.
+# and main-model checks first take the last 500, then 5000 lines with POSIX `tail -n`; the
+# boundary check, warn's and precompact's, hands jq only the lines a POSIX `grep -F` finds in
+# the whole file), so no GNU-only tool (tac, GNU sed) is involved: it works on a stock macOS
+# userland as well.
 set -u
 case "${CONTEXT_GUARD:-on}" in off|0|false|no) exit 0 ;; esac
 umask 077
@@ -159,6 +174,7 @@ done
 state_file=$state_dir/STATE.md
 restored_file=$state_dir/STATE.restored.md # the STATE.md the last restore handed back
 snapshot_file=$state_dir/precompact-snapshot.md
+snapshot_boundary=$state_dir/precompact-snapshot.boundary # boundary's uuid when the snapshot was written
 boundary_file=$state_dir/boundary # uuid of the last compact_boundary seen and handled (see warn)
 
 emit() { # $1 event name, $2 text
@@ -448,6 +464,17 @@ case "$mode" in
     ;;
 
   precompact)
+    # A main restore still owed keeps the snapshot written for it (see "Whose compaction"):
+    # boundary is read once, before the snapshot is written, so a warn that records a new uuid
+    # meanwhile leaves the snapshot marked with the uuid before it, and not kept.
+    recorded=""
+    has_boundary=""
+    [ -e "$boundary_file" ] && has_boundary=1 && recorded=$(cat "$boundary_file" 2>/dev/null)
+    if [ -n "$has_boundary" ] && [ -s "$snapshot_file" ] && [ -e "$snapshot_boundary" ] \
+        && [ "$(cat "$snapshot_boundary" 2>/dev/null)" = "$recorded" ]; then
+      b=$(last_boundary)
+      [ -n "$b" ] && [ "$b" != "$recorded" ] && exit 0
+    fi
     {
       echo "# Pre-compaction snapshot ($(field trigger) compaction, $(date -u +%Y-%m-%dT%H:%M:%SZ))"
       echo
@@ -491,6 +518,15 @@ case "$mode" in
           "$transcript" 2>/dev/null
       fi
     } >"$snapshot_file" 2>/dev/null
+    # Written to a temporary file and renamed, not truncated in place; with no boundary file,
+    # the marker goes, so this snapshot is not kept.
+    rm -f "$snapshot_boundary.$$" 2>/dev/null
+    if [ -n "$has_boundary" ] && printf '%s' "$recorded" >"$snapshot_boundary.$$" 2>/dev/null; then
+      mv -f "$snapshot_boundary.$$" "$snapshot_boundary" 2>/dev/null
+    else
+      rm -f "$snapshot_boundary" 2>/dev/null
+    fi
+    rm -f "$snapshot_boundary.$$" 2>/dev/null
     ;;
 
   restore)

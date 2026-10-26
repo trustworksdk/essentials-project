@@ -21,7 +21,8 @@
 # compaction and whose state it hands back (every agent's own, from the warn after a
 # compact_boundary in its own transcript; nothing at SessionStart(compact), which cannot tell
 # a subagent's compaction from the main conversation's), STATE.md handed back once per write,
-# and the pre-compaction snapshot without GNU-only tools.
+# the pre-compaction snapshot kept for an owed main restore, and the pre-compaction snapshot
+# without GNU-only tools.
 #
 # Every case runs the hook as Claude Code does - hook JSON on stdin, the mode as $1 - against
 # fake transcripts in a temp dir. CONTEXT_GUARD_DIR, CLAUDE_CONFIG_DIR and CLAUDE_PROJECT_DIR
@@ -659,6 +660,58 @@ out=$(run warn s45 "")
 case "$out" in *MAIN-STATE-S45*) ;; *) fail "a subagent's compaction in between kept the main conversation's restore back: ${out:0:300}" ;; esac
 expect_nothing "$(run warn s45 "")" "the main conversation's compaction was handed back twice"
 rm -f "$CLAUDE_CONFIG_DIR/settings.json"
+pass
+
+# Which snapshot a PreCompact left is told by its trigger: the main conversation's compactions
+# below are manual, the subagents' auto.
+snapshot_trigger() { # $1 session; prints the trigger main/'s snapshot names
+  sed -n '1s/^# Pre-compaction snapshot (\([a-z]*\) compaction.*/\1/p' "$CONTEXT_GUARD_DIR/$1/main/precompact-snapshot.md" 2>/dev/null
+}
+
+case_name="a subagent's PreCompact while a main restore is owed keeps the main compaction's snapshot for that restore; otherwise every PreCompact rewrites it"
+m=$(main_transcript s52)
+assistant_entry "$m" claude-opus-5-5 30000 false
+run warn s52 "" >/dev/null # the first main warn: it records that there is no boundary yet
+compact s52 auto # a subagent's, no main restore owed
+[ "$(snapshot_trigger s52)" = auto ] || fail "no snapshot written: '$(snapshot_trigger s52)'"
+compact s52 manual # the main conversation's: its boundary is not in the transcript yet
+[ "$(snapshot_trigger s52)" = manual ] || fail "the main compaction's PreCompact did not rewrite a subagent's snapshot"
+compact_boundary "$m" boundary-1 false
+compact s52 auto # a subagent's, the main restore owed (the recorded boundary is empty)
+[ "$(snapshot_trigger s52)" = manual ] || fail "a subagent's PreCompact replaced the snapshot the owed main restore hands back"
+assistant_entry "$m" claude-opus-5-5 20000 false
+out=$(run warn s52 "")
+case "$out" in *"Pre-compaction snapshot (manual compaction"*) ;; *) fail "the main restore did not hand back the main compaction's snapshot: ${out:0:300}" ;; esac
+compact s52 auto # restored: no main restore owed
+[ "$(snapshot_trigger s52)" = auto ] || fail "a PreCompact after the main restore did not rewrite the snapshot"
+# The same with a uuid recorded: the next main compaction.
+compact s52 manual
+compact_boundary "$m" boundary-2 false
+compact s52 auto
+[ "$(snapshot_trigger s52)" = manual ] || fail "a subagent's PreCompact replaced the snapshot the second owed main restore hands back"
+assistant_entry "$m" claude-opus-5-5 21000 false
+out=$(run warn s52 "")
+case "$out" in *"Pre-compaction snapshot (manual compaction"*) ;; *) fail "the second main restore did not hand back the main compaction's snapshot: ${out:0:300}" ;; esac
+compact s52 auto
+[ "$(snapshot_trigger s52)" = auto ] || fail "a PreCompact after the second main restore did not rewrite the snapshot"
+pass
+
+case_name="a snapshot written before main/boundary's uuid was recorded (or before the first main warn) is not kept for an owed main restore"
+m=$(main_transcript s53)
+compact s53 manual # no boundary file yet
+[ "$(snapshot_trigger s53)" = manual ] || fail "no snapshot written: '$(snapshot_trigger s53)'"
+assistant_entry "$m" claude-opus-5-5 30000 false
+run warn s53 "" >/dev/null # the first main warn
+# A main compaction whose PreCompact did not run on this state (the guard switched off for it).
+compact_boundary "$m" boundary-1 false
+compact s53 auto
+[ "$(snapshot_trigger s53)" = auto ] || fail "a snapshot from before the first main warn was kept for the owed main restore"
+# Nor is one written before the boundary main/boundary now holds was recorded.
+assistant_entry "$m" claude-opus-5-5 20000 false
+run warn s53 "" >/dev/null # restores boundary-1 and records it
+compact_boundary "$m" boundary-2 false # again with no PreCompact on this state
+compact s53 manual
+[ "$(snapshot_trigger s53)" = manual ] || fail "a snapshot from before the recorded boundary was kept for the owed main restore"
 pass
 
 # While the main conversation waits on background agents, its transcript takes lines that are
