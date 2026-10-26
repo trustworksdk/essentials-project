@@ -742,11 +742,12 @@ at a defect in the engine, to be investigated, not retried. A charge that starts
 unit's lease row is running waits for that release's statement to return; a `releaseKeptOrderedUnit`, a kept unit's
 hand-back and a `stop()` wait for it no longer than their network wait bound, then give up with nothing charged: the
 request answers a new `KeptUnitRelease.Outcome`, `CLAIM_WAIT_TIMED_OUT` (kept apart from `BUSY`), having charged,
-dead-lettered and released nothing - ask again; it is not thrown, so `ShardOwnedQueuesApi.releaseKeptOrderedUnit`
-returns it as an entry like the other outcomes (over HTTP a 200 answer; the admin console shows it as its own badge).
-A step that fails on the database - a PostgreSQL `lock_timeout` among them - still throws its `SQLException`. The
-hand-back is retried later, and a `stop()` leaves that unit's lease unreleased, with a WARN.
-(`6337f7d89`, `2fdeb3db0`, `bfa961ec5`, `dbae0986f`, `7dbd517be`, `e699c9d44`, `895b1a498`, `52c5e943e`, `56790ca82`, `b785a52b2`, `ab601d493`, `311efc4ad`, `055e013d6`, `4cce8acbb`, `29e3893d2`, `2c7ab3791`, `6be1d7215`, `d562a4253`, `4efa1654f`, `cbf8a9c41`, `40202d673`, `f251ebbad`)
+dead-lettered and released nothing, also when the handler of a key it was to charge returns while it waits - ask
+again; it is not thrown, so `ShardOwnedQueuesApi.releaseKeptOrderedUnit` returns it as an entry like the other
+outcomes (over HTTP a 200 answer; the admin console shows it as its own badge). A step that fails on the database - a
+PostgreSQL `lock_timeout` among them - still throws its `SQLException`. The hand-back is retried later, and a `stop()`
+leaves that unit's lease unreleased, with a WARN.
+(`6337f7d89`, `2fdeb3db0`, `bfa961ec5`, `dbae0986f`, `7dbd517be`, `e699c9d44`, `895b1a498`, `52c5e943e`, `56790ca82`, `b785a52b2`, `ab601d493`, `311efc4ad`, `055e013d6`, `4cce8acbb`, `29e3893d2`, `2c7ab3791`, `6be1d7215`, `d562a4253`, `4efa1654f`, `cbf8a9c41`, `40202d673`, `f251ebbad`, `<!-- fix:U-002 -->`)
 
 **The unordered lane now charges a hung handler's delivery too, past the same bound.** It waits for no handler: a
 fair-share shed and a dead pump's hand-back release an unordered shard at once, and `stop()` once `shedGrace` has run

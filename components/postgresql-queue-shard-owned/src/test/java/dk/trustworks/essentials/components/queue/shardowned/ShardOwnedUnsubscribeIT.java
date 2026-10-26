@@ -2308,6 +2308,104 @@ class ShardOwnedUnsubscribeIT {
     }
 
     /**
+     * A release on request whose charge waits for another release of the kept unit's lease row, as above, while the
+     * handler of the key it read in a handler returns: nothing reads as owed by the time the wait gives up, yet the request
+     * still answers {@link KeptUnitRelease.Outcome#CLAIM_WAIT_TIMED_OUT} and leaves the row held, as the charge never
+     * started. It used to take the wait given up for a failure after the charge's writes - a WARN blaming a
+     * {@code QueueObserver} or a connection close - and went on to release the row while the other release still held its
+     * claim, answering {@code RELEASED}.
+     */
+    @Test
+    // awaitCallEnded shuts the request's executor down with a bound; close() would wait for it with none
+    @SuppressWarnings("PMD.CloseResource")
+    void a_release_on_request_whose_charge_outwaits_another_release_while_its_handler_returns_still_answers_claim_wait_timed_out_and_releases_nothing() throws Exception {
+        var         leaseTtl     = Duration.ofSeconds(3);
+        var         entered      = new CountDownLatch(1);
+        var         release      = new CountDownLatch(1);
+        LeasedOwner claimedOwner = null;
+        var         requestName  = "release-on-request-handler-returns";
+        var         requests     = threadOfItsOwn(requestName);
+        try (var queue = newQueue(PostgresqlMessageQueue.LifecycleHook.NONE, settingsWith(Duration.ofMillis(300), leaseTtl))) {
+            try {
+                queue.consume((messageId, key, payload, payloadType) -> {
+                    if (key != null) {
+                        entered.countDown();
+                        awaitQuietly(release, Duration.ofSeconds(60));
+                    }
+                }, ConsumerOptions.defaults());
+                var lanes = queue.registeredConsumers();
+                queue.enqueue(Message.ordered("in-handler".getBytes(StandardCharsets.UTF_8), 1, "ACC-1", 0));
+                assertThat(entered.await(20, TimeUnit.SECONDS)).as("premise: the key is in its handler").isTrue();
+
+                // Stopped, and not started again: nothing but the requests below releases the unit.
+                queue.stop();
+                var kept = keptOrderedFence(INSTANCE_ID);
+                Awaitility.await().atMost(Duration.ofSeconds(5))
+                          .untilAsserted(() -> assertThat(lanes).as("premise: queue.stop()'s budget thread has flushed the kept unit")
+                                                                .noneMatch(ShardOwnedQueue::handBackStillRunning));
+                var ordered   = lanes.stream().filter(lane -> !lane.keptOwners().isEmpty()).findFirst().orElseThrow();
+                var keptOwner = (OrderedShardOwner) ordered.keptOwners().stream().filter(owner -> owner.shard() == kept.shard()).findFirst().orElseThrow();
+                // Another release of the unit's row, its statement still running: it holds this claim until the statement returns
+                assertThat(keptOwner.claimReleaseUnlessMoveOwed()).as("premise: the release is claimed, no move owed").isTrue();
+                claimedOwner = keptOwner;
+
+                var bound   = ordered.stopNetworkWaitBound();
+                var request = CompletableFuture.supplyAsync(() -> {
+                    try {
+                        return queue.releaseKeptOrderedUnit(INSTANCE_ID, kept.shard());
+                    } catch (SQLException e) {
+                        throw new CompletionException(e);
+                    }
+                }, requests);
+                Awaitility.await().atMost(bound.plusSeconds(5))
+                          .until(() -> waitsForAReleaseClaim(requestName));
+                // The handler returns while the charge waits: nothing reads as owed from then on
+                release.countDown();
+                Awaitility.await().atMost(Duration.ofSeconds(5)).until(() -> keptOwner.inFlight() == 0);
+                assertThat(keptOwner.owesReleaseCharge(OrderedShardOwner.ReleaseChargeScope.EVERY_KEY_IN_HANDLER))
+                        .as("premise: with the handler returned, nothing reads as owed").isFalse();
+                assertThat(request.isDone()).as("premise: the handler returned while the charge still waited").isFalse();
+
+                assertThat(request.get(bound.plusSeconds(10).toMillis(), TimeUnit.MILLISECONDS).releases())
+                        .as("the request answers that its charge gave up waiting for the other release, though nothing is owed by then")
+                        .singleElement()
+                        .satisfies(timedOut -> {
+                            assertThat(timedOut.outcome()).isEqualTo(KeptUnitRelease.Outcome.CLAIM_WAIT_TIMED_OUT);
+                            assertThat(timedOut.keysInHandler()).as("the key read in a handler under the claim").containsExactly("ACC-1");
+                            assertThat(timedOut.charged()).as("nothing charged").isZero();
+                        });
+                assertThat(ordered.metrics().takeoverAttemptBumps.sum()).as("nothing charged").isZero();
+                assertThat(ownerOf(kept.shard())).as("nothing released: the row still names the instance").isEqualTo(INSTANCE_ID);
+                assertThat(fenceOf(kept.shard())).as("under the fence it was kept under").isEqualTo(kept.fence());
+
+                keptOwner.endReleaseClaim();
+                claimedOwner = null;
+
+                assertThat(queue.releaseKeptOrderedUnit(INSTANCE_ID, kept.shard()).releases()).as("asked again once the other release has ended, the unit is released")
+                                                                      .singleElement()
+                                                                      .satisfies(released -> assertThat(released.outcome()).isEqualTo(KeptUnitRelease.Outcome.RELEASED));
+                assertThat(ownerOf(kept.shard())).as("the row is released").isNull();
+            } finally {
+                if (claimedOwner != null) {
+                    claimedOwner.endReleaseClaim();
+                }
+                release.countDown();
+                awaitCallEnded(requests, "the release on request");
+            }
+        }
+    }
+
+    /**
+     * Whether the thread named {@code threadName} is waiting in a {@code ReleaseChargeLedger} for a release claim to end.
+     */
+    private static boolean waitsForAReleaseClaim(String threadName) {
+        return Thread.getAllStackTraces().entrySet().stream()
+                     .anyMatch(thread -> threadName.equals(thread.getKey().getName())
+                             && thread.getKey().getState() == Thread.State.TIMED_WAITING
+                             && Arrays.stream(thread.getValue()).anyMatch(frame -> "awaitNoReleaseClaimed".equals(frame.getMethodName())));
+    }
+
+    /**
      * A release on request the database refuses after its charge dead-lettered the message in the handler, asked again once
      * that handler has returned: the request asked again finds no key in a handler, yet its answer still names the charge
      * the refused request made and the key it dead-lettered. The refused request threw, so it gave no answer, so only the

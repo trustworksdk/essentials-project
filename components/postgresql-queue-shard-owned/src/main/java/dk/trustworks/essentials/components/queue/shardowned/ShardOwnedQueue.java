@@ -3075,14 +3075,20 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * is not a failed charge: it is logged at WARN here ({@link #orderedChargeFailedWithNothingOwed}) and the answer
      * returned, and the caller releases the unit. Thrown, it was reported as a charge that could not be made, and the unit
      * held for a heartbeat, or a release on request refused, though its attempts were counted and its messages moved.
+     * A {@link ReleaseClaimWaitTimedOutException} is thrown whatever is owed then: the charge gave up waiting for another
+     * release of the owner's lease row before it started, so nothing came after any write, and nothing is owed only because
+     * the handlers it was to charge have returned since. Taken for a failure after the writes, a release on request went on
+     * to release the row while that other release still held its claim, instead of answering
+     * {@link KeptUnitRelease.Outcome#CLAIM_WAIT_TIMED_OUT}.
      *
      * @param scope which messages in a handler to charge: {@code PAST_STUCK_HANDLER_TIMEOUT} for a shed or a dead-pump
      *              hand-back, {@code EVERY_KEY_IN_HANDLER} for a release on request or the hand-back of a kept unit
      * @param from  where the release comes from, as the WARN names it: {@code "in a fair-share shed"},
      *              {@code "from its dead pump"}, {@code "on request"} or {@code "on its hand-back"}
      * @return what the owner has charged and dead-lettered so far, this call included
-     * @throws SQLException when the charge or a dead-letter move fails; the caller then does not release this owner's unit,
-     *                      and its retry does not charge again what this call charged
+     * @throws SQLException when the charge or a dead-letter move fails, or the charge gives up waiting for another release of
+     *                      the owner's lease row ({@link ReleaseClaimWaitTimedOutException}); the caller then does not release
+     *                      this owner's unit, and its retry does not charge again what this call charged
      */
     private OrderedShardOwner.ReleaseCharge chargeKeysInHandlerBeforeRelease(LeasedOwner owner, OrderedShardOwner.ReleaseChargeScope scope,
                                                                              String from) throws SQLException {
@@ -3096,7 +3102,9 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             return ordered.chargeKeysInHandlerBeforeRelease(connection, scope);
         } catch (SQLException | RuntimeException | Error e) {
             Exceptions.rethrowIfCriticalError(e);
-            if (ordered.owesReleaseCharge(scope)) {
+            // A claim wait given up is a charge that never started, never a failure after its writes, even when the handlers it
+            // was to charge have returned while it waited and nothing reads as owed now
+            if (e instanceof ReleaseClaimWaitTimedOutException || ordered.owesReleaseCharge(scope)) {
                 throw e;
             }
             orderedChargeFailedWithNothingOwed(owner, from, e);
