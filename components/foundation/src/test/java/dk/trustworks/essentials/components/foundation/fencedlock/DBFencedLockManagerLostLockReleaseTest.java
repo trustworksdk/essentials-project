@@ -16,7 +16,9 @@
 
 package dk.trustworks.essentials.components.foundation.fencedlock;
 
+import dk.trustworks.essentials.components.foundation.fencedlock.FencedLockEvents.*;
 import dk.trustworks.essentials.components.foundation.transaction.*;
+import dk.trustworks.essentials.reactive.*;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.*;
 
@@ -24,8 +26,8 @@ import java.io.*;
 import java.time.*;
 import java.util.*;
 import java.util.concurrent.*;
-import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.BooleanSupplier;
+import java.util.concurrent.atomic.*;
+import java.util.function.*;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -41,6 +43,13 @@ import static org.assertj.core.api.Assertions.assertThat;
  * The DB release is best effort, so it must neither undo the confirmations made in the same tick (it runs in its own
  * {@link UnitOfWork}, after the confirmation one has completed) nor hold up the confirmation thread against a DB that has
  * just failed on IO (no DB release when the confirmation {@link UnitOfWork} failed on IO, and none after the first IO failure).
+ * <p>
+ * A non-critical {@link Error} (an {@link AssertionError}, say) from a <code>lockReleased</code> callback or a lock event
+ * subscriber, thrown on the confirmation thread, is handled like a {@link RuntimeException}: a lost lock is still released
+ * locally and {@link LockReleased} published (in the DB too, unless the confirmation {@link UnitOfWork} failed on IO - see
+ * above), the other confirmations of the tick are kept, and the scheduled confirmation keeps running. A critical error
+ * ({@link dk.trustworks.essentials.shared.Exceptions#isCriticalError(Throwable)}) still escapes: it rolls back the tick's
+ * confirmations and ends the scheduled confirmation.
  */
 class DBFencedLockManagerLostLockReleaseTest {
     private static final LockName LOCK_NAME       = LockName.of("lost-lock");
@@ -49,11 +58,26 @@ class DBFencedLockManagerLostLockReleaseTest {
     private BlockingReleaseLockStorage   storage;
     private ThreadLocalUnitOfWorkFactory unitOfWorkFactory;
     private TestDBFencedLockManager      lockManager;
+    /**
+     * Every {@link FencedLockEvents} the lock manager published
+     */
+    private List<FencedLockEvents>       events;
+    /**
+     * Run by the lock manager's sync event subscriber for every event, after recording it - may throw
+     */
+    private volatile Consumer<FencedLockEvents> eventSubscriberAction = event -> {
+    };
 
     @BeforeEach
     void setup() {
         storage = new BlockingReleaseLockStorage();
         unitOfWorkFactory = new ThreadLocalUnitOfWorkFactory();
+        events = new CopyOnWriteArrayList<>();
+        var eventBus = new LocalEventBus("lost-lock-release-test");
+        eventBus.addSyncSubscriber(event -> {
+            events.add((FencedLockEvents) event);
+            eventSubscriberAction.accept((FencedLockEvents) event);
+        });
         lockManager = new TestDBFencedLockManager(storage,
                                                   unitOfWorkFactory,
                                                   FencedLockManagerSettings.builder()
@@ -61,12 +85,15 @@ class DBFencedLockManagerLostLockReleaseTest {
                                                                            .setLockTimeOut(Duration.ofSeconds(3))
                                                                            .setLockConfirmationInterval(Duration.ofMillis(100))
                                                                            .setReleaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation(true)
-                                                                           .build());
+                                                                           .build(),
+                                                  eventBus);
         lockManager.start();
     }
 
     @AfterEach
     void cleanup() {
+        eventSubscriberAction = event -> {
+        };
         storage.allowReleaseInDB.countDown();
         lockManager.stop();
     }
@@ -148,6 +175,174 @@ class DBFencedLockManagerLostLockReleaseTest {
                   .untilAsserted(() -> assertThat(storage.releaseInDBUnitOfWorks).hasSize(1));
     }
 
+    @Test
+    void a_lost_lock_whose_lock_released_callback_fails_with_an_error_is_still_released_and_the_confirmations_of_the_tick_are_kept() {
+        // Given
+        storage.allowReleaseInDB.countDown();
+        var confirmedLock = lockManager.tryAcquireLock(OTHER_LOCK_NAME).orElseThrow();
+        var lostLock      = lockManager.tryAcquireLock(LOCK_NAME).orElseThrow();
+        lostLock.registerCallback(lockReleasedFailingWith(new AssertionError("lockReleased fails")));
+
+        // When
+        storage.confirmOutcomeByLock.put(LOCK_NAME, ConfirmOutcome.TAKEN_OVER);
+
+        // Then
+        verifyLostLockIsReleasedAndTheConfirmationOfTheTickIsKept(lostLock, confirmedLock);
+    }
+
+    @Test
+    void a_lost_lock_whose_lock_released_event_subscriber_fails_with_an_error_is_still_released_and_the_confirmations_of_the_tick_are_kept() {
+        // Given
+        storage.allowReleaseInDB.countDown();
+        var confirmedLock = lockManager.tryAcquireLock(OTHER_LOCK_NAME).orElseThrow();
+        var lostLock      = lockManager.tryAcquireLock(LOCK_NAME).orElseThrow();
+        eventSubscriberAction = event -> {
+            if (event instanceof LockReleased) {
+                throw new AssertionError("LockReleased subscriber fails");
+            }
+        };
+
+        // When
+        storage.confirmOutcomeByLock.put(LOCK_NAME, ConfirmOutcome.TAKEN_OVER);
+
+        // Then
+        verifyLostLockIsReleasedAndTheConfirmationOfTheTickIsKept(lostLock, confirmedLock);
+    }
+
+    @Test
+    void a_lock_released_callback_failing_with_an_error_while_every_lock_is_released_after_an_io_failure_does_not_end_the_confirmation() {
+        // Given
+        storage.allowReleaseInDB.countDown();
+        var lock      = lockManager.tryAcquireLock(LOCK_NAME).orElseThrow();
+        var otherLock = lockManager.tryAcquireLock(OTHER_LOCK_NAME).orElseThrow();
+        lock.registerCallback(lockReleasedFailingWith(new AssertionError("lockReleased fails")));
+        otherLock.registerCallback(lockReleasedFailingWith(new AssertionError("lockReleased fails")));
+
+        // When
+        unitOfWorkFactory.failCommitWithIOException = true;
+
+        // Then every lock is released locally, and LockReleased published for each
+        Awaitility.waitAtMost(Duration.ofSeconds(5))
+                  .untilAsserted(() -> {
+                      assertThat(lock.isLocked()).isFalse();
+                      assertThat(otherLock.isLocked()).isFalse();
+                      assertThat(lockReleasedEventsFor(LOCK_NAME)).hasSize(1);
+                      assertThat(lockReleasedEventsFor(OTHER_LOCK_NAME)).hasSize(1);
+                  });
+
+        // And once the DB is reachable again, a lock acquired afterwards is confirmed: the scheduled confirmation is still running
+        unitOfWorkFactory.failCommitWithIOException = false;
+        var reacquiredLock = lockManager.tryAcquireLock(LOCK_NAME).orElseThrow();
+        awaitConfirmationKeepsRunning(LOCK_NAME);
+        assertThat(reacquiredLock.isLocked()).isTrue();
+    }
+
+    @Test
+    void a_lock_acquired_event_subscriber_failing_with_an_error_during_confirmation_does_not_roll_back_the_confirmations_of_the_tick() {
+        // Given
+        var lock                    = lockManager.tryAcquireLock(LOCK_NAME).orElseThrow();
+        var otherLock               = lockManager.tryAcquireLock(OTHER_LOCK_NAME).orElseThrow();
+        var unitOfWorksOfFailedTicks = new CopyOnWriteArrayList<UnitOfWork>();
+
+        // When
+        eventSubscriberAction = event -> {
+            if (event instanceof LockAcquired lockAcquired && lockAcquired.lock.getName().equals(LOCK_NAME)) {
+                unitOfWorksOfFailedTicks.add(unitOfWorkFactory.getRequiredUnitOfWork());
+                throw new AssertionError("LockAcquired subscriber fails");
+            }
+        };
+
+        // Then the confirmation UnitOfWork of a tick in which the subscriber failed is committed, not rolled back
+        Awaitility.waitAtMost(Duration.ofSeconds(5))
+                  .untilAsserted(() -> {
+                      assertThat(unitOfWorksOfFailedTicks).isNotEmpty();
+                      assertThat(unitOfWorksOfFailedTicks.getFirst().status()).isNotEqualTo(UnitOfWorkStatus.Started);
+                  });
+        assertThat(unitOfWorksOfFailedTicks.getFirst().status()).isEqualTo(UnitOfWorkStatus.Committed);
+
+        // And both locks stay held and keep being confirmed
+        awaitConfirmationKeepsRunning(LOCK_NAME);
+        awaitConfirmationKeepsRunning(OTHER_LOCK_NAME);
+        assertThat(lock.isLocked()).isTrue();
+        assertThat(otherLock.isLocked()).isTrue();
+    }
+
+    @Test
+    void a_lock_acquired_event_subscriber_failing_with_a_critical_error_during_confirmation_rolls_back_the_tick_and_ends_the_confirmation() {
+        // Given
+        lockManager.tryAcquireLock(LOCK_NAME).orElseThrow();
+        lockManager.tryAcquireLock(OTHER_LOCK_NAME).orElseThrow();
+        var unitOfWorksOfFailedTicks = new CopyOnWriteArrayList<UnitOfWork>();
+
+        // When
+        eventSubscriberAction = event -> {
+            if (event instanceof LockAcquired lockAcquired && lockAcquired.lock.getName().equals(LOCK_NAME)) {
+                unitOfWorksOfFailedTicks.add(unitOfWorkFactory.getRequiredUnitOfWork());
+                throw new ExceptionInInitializerError("LockAcquired subscriber fails critically");
+            }
+        };
+
+        // Then the critical error escapes the confirmation loop: the confirmation UnitOfWork of that tick is rolled back
+        Awaitility.waitAtMost(Duration.ofSeconds(5))
+                  .untilAsserted(() -> {
+                      assertThat(unitOfWorksOfFailedTicks).isNotEmpty();
+                      assertThat(unitOfWorksOfFailedTicks.getFirst().status()).isNotEqualTo(UnitOfWorkStatus.Started);
+                  });
+        assertThat(unitOfWorksOfFailedTicks.getFirst().status()).isEqualTo(UnitOfWorkStatus.RolledBack);
+
+        // And the scheduled confirmation has ended: no lock is confirmed again
+        var lockAttempts      = storage.confirmAttempts(LOCK_NAME);
+        var otherLockAttempts = storage.confirmAttempts(OTHER_LOCK_NAME);
+        Awaitility.await()
+                  .during(Duration.ofMillis(500))
+                  .atMost(Duration.ofSeconds(2))
+                  .untilAsserted(() -> {
+                      assertThat(storage.confirmAttempts(LOCK_NAME)).isEqualTo(lockAttempts);
+                      assertThat(storage.confirmAttempts(OTHER_LOCK_NAME)).isEqualTo(otherLockAttempts);
+                  });
+        assertThat(unitOfWorksOfFailedTicks).hasSize(1);
+    }
+
+    private void verifyLostLockIsReleasedAndTheConfirmationOfTheTickIsKept(FencedLock lostLock, FencedLock confirmedLock) {
+        // The lost lock is released in the DB too, for the token it held
+        Awaitility.waitAtMost(Duration.ofSeconds(5))
+                  .untilAsserted(() -> assertThat(storage.releasedInDBTokens).containsExactly(storage.getInitialTokenValue()));
+        assertThat(lostLock.isLocked()).isFalse();
+        // And LockReleased is published for it
+        assertThat(lockReleasedEventsFor(LOCK_NAME)).hasSize(1);
+        // And the confirmation UnitOfWork of that tick - which also confirmed the other lock - is committed, not rolled back
+        assertThat(storage.lastConfirmationUnitOfWork.get(LOCK_NAME).status()).isEqualTo(UnitOfWorkStatus.Committed);
+        // And the scheduled confirmation keeps running
+        awaitConfirmationKeepsRunning(OTHER_LOCK_NAME);
+        assertThat(confirmedLock.isLocked()).isTrue();
+    }
+
+    private void awaitConfirmationKeepsRunning(LockName lockName) {
+        var attemptsBefore = storage.confirmAttempts(lockName);
+        Awaitility.waitAtMost(Duration.ofSeconds(5))
+                  .untilAsserted(() -> assertThat(storage.confirmAttempts(lockName)).isGreaterThanOrEqualTo(attemptsBefore + 3));
+    }
+
+    private List<LockReleased> lockReleasedEventsFor(LockName lockName) {
+        return events.stream()
+                     .filter(event -> event instanceof LockReleased lockReleased && lockReleased.lock.getName().equals(lockName))
+                     .map(LockReleased.class::cast)
+                     .toList();
+    }
+
+    private static LockCallback lockReleasedFailingWith(Error error) {
+        return new LockCallback() {
+            @Override
+            public void lockAcquired(FencedLock lock) {
+            }
+
+            @Override
+            public void lockReleased(FencedLock lock) {
+                throw error;
+            }
+        };
+    }
+
     private void verifyLostLockIsReleasedLocallyFirst(ConfirmOutcome lostOutcome) {
         // Given
         var lock = lockManager.tryAcquireLock(LOCK_NAME).orElseThrow();
@@ -190,8 +385,9 @@ class DBFencedLockManagerLostLockReleaseTest {
     static class TestDBFencedLockManager extends DBFencedLockManager<ThreadLocalUnitOfWork, DBFencedLock> {
         TestDBFencedLockManager(FencedLockStorage<ThreadLocalUnitOfWork, DBFencedLock> lockStorage,
                                 UnitOfWorkFactory<ThreadLocalUnitOfWork> unitOfWorkFactory,
-                                FencedLockManagerSettings settings) {
-            super(lockStorage, unitOfWorkFactory, settings, null);
+                                FencedLockManagerSettings settings,
+                                EventBus eventBus) {
+            super(lockStorage, unitOfWorkFactory, settings, eventBus);
         }
     }
 
@@ -206,8 +402,17 @@ class DBFencedLockManagerLostLockReleaseTest {
         final    Map<LockName, ConfirmOutcome>        confirmOutcomeByLock       = new ConcurrentHashMap<>();
         final    Map<LockName, ThreadLocalUnitOfWork> lastConfirmationUnitOfWork = new ConcurrentHashMap<>();
         final    List<ThreadLocalUnitOfWork>          releaseInDBUnitOfWorks     = new CopyOnWriteArrayList<>();
+        /**
+         * The number of {@link #confirmLockInDB} calls per lock name
+         */
+        final    Map<LockName, AtomicInteger>         confirmAttemptsByLock      = new ConcurrentHashMap<>();
         volatile ConfirmOutcome                       confirmOutcome             = ConfirmOutcome.CONFIRMED;
         volatile RuntimeException                     releaseInDBFailure;
+
+        int confirmAttempts(LockName lockName) {
+            var attempts = confirmAttemptsByLock.get(lockName);
+            return attempts == null ? 0 : attempts.get();
+        }
 
         @Override
         public void initializeLockStorage(DBFencedLockManager<ThreadLocalUnitOfWork, DBFencedLock> lockManager, ThreadLocalUnitOfWork uow) {
@@ -216,6 +421,7 @@ class DBFencedLockManagerLostLockReleaseTest {
         @Override
         public boolean confirmLockInDB(DBFencedLockManager<ThreadLocalUnitOfWork, DBFencedLock> lockManager, ThreadLocalUnitOfWork uow, DBFencedLock fencedLock, OffsetDateTime confirmedTimestamp) {
             lastConfirmationUnitOfWork.put(fencedLock.getName(), uow);
+            confirmAttemptsByLock.computeIfAbsent(fencedLock.getName(), name -> new AtomicInteger()).incrementAndGet();
             return switch (confirmOutcomeByLock.getOrDefault(fencedLock.getName(), confirmOutcome)) {
                 case CONFIRMED -> true;
                 case TAKEN_OVER -> false;

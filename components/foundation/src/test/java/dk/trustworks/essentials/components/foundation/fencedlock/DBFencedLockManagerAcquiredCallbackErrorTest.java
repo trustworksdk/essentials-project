@@ -515,4 +515,48 @@ class DBFencedLockManagerAcquiredCallbackErrorTest {
                           .singleElement()
                           .satisfies(event -> assertThat(((LockReleased) event).lock).isSameAs(lock));
     }
+
+    @Test
+    void lock_released_callbacks_failing_with_an_error_while_stopping_do_not_keep_the_other_locks_held_or_the_lock_manager_started() {
+        var otherLockName = LockName.of("acquired-callback-error-other-lock");
+        var lock          = node.tryAcquireLock(LOCK_NAME).orElseThrow();
+        var otherLock     = node.tryAcquireLock(otherLockName).orElseThrow();
+        for (var heldLock : List.of(lock, otherLock)) {
+            heldLock.registerCallback(LockCallback.builder()
+                                                  .onLockAcquired(_lock -> {
+                                                  })
+                                                  .onLockReleased(_lock -> {
+                                                      throw new AssertionError("lockReleased fails");
+                                                  })
+                                                  .build());
+        }
+
+        assertThatCode(node::stop).doesNotThrowAnyException();
+
+        // Every lock is released, in the DB too, and the lock manager is stopped
+        assertThat(lock.isLocked()).isFalse();
+        assertThat(otherLock.isLocked()).isFalse();
+        assertThat(storage.rows.get(LOCK_NAME).lockedBy()).isNull();
+        assertThat(storage.rows.get(otherLockName).lockedBy()).isNull();
+        assertThat(node.isStarted()).isFalse();
+    }
+
+    @Test
+    void a_lock_released_callback_failing_with_a_critical_error_while_stopping_is_thrown_from_stop() {
+        var lock          = node.tryAcquireLock(LOCK_NAME).orElseThrow();
+        var criticalError = new ExceptionInInitializerError("lockReleased fails critically");
+        var failed        = new AtomicBoolean();
+        lock.registerCallback(LockCallback.builder()
+                                          .onLockAcquired(_lock -> {
+                                          })
+                                          .onLockReleased(_lock -> {
+                                              // Once only, so the stop() in cleanup completes
+                                              if (failed.compareAndSet(false, true)) {
+                                                  throw criticalError;
+                                              }
+                                          })
+                                          .build());
+
+        assertThatThrownBy(node::stop).isSameAs(criticalError);
+    }
 }

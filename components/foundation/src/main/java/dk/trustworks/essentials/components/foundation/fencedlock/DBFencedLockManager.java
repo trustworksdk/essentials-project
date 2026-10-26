@@ -255,7 +255,10 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
                                 lostLocks.add(fencedLock);
                             }
                         }
-                    } catch (Exception e) {
+                    } catch (Throwable e) {
+                        // A non-critical Error (from a LockAcquired event subscriber, say) is handled like a RuntimeException:
+                        // escaping this loop, it would roll back the confirmations made in the tick and skip the locks after this one
+                        rethrowIfCriticalError(e);
                         log.error(msg("[{}] Technical failure while trying to confirm lock '{}'", lockManagerInstanceId, fencedLock.getName()), e);
                     }
                 });
@@ -308,16 +311,19 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
         }
         log.debug("[{}] Releasing lost lock '{}' locally: {}", lockManagerInstanceId, lock.getName(), lock);
         // Runs on the confirmation thread, partly outside any catch: a throwing lockReleased callback or event
-        // subscriber must not escape and end the scheduled confirmation.
+        // subscriber must not escape and end the scheduled confirmation. A non-critical Error (an AssertionError, say)
+        // is handled like a RuntimeException: escaping the onError handler of the confirmation UnitOfWork, it would end
+        // the scheduled confirmation; escaping the confirmation loop, it would roll back the confirmations made in the tick
+        // and skip the DB release of this lock (and, from markAsReleased, its LockReleased event).
         try {
             lock.markAsReleased();
-        } catch (Exception e) {
+        } catch (Throwable e) {
             rethrowIfCriticalError(e);
             log.error(msg("[{}] Failure while marking lost lock '{}' as released", lockManagerInstanceId, lock.getName()), e);
         }
         try {
             notify(new LockReleased(lock, this));
-        } catch (Exception e) {
+        } catch (Throwable e) {
             rethrowIfCriticalError(e);
             log.error(msg("[{}] Failure while notifying that lost lock '{}' was released", lockManagerInstanceId, lock.getName()), e);
         }
@@ -525,7 +531,11 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
                               lock.getName());
                     try {
                         lock.release();
-                    } catch (Exception e) {
+                    } catch (Throwable e) {
+                        // A non-critical Error from a lockReleased callback or a LockReleased event subscriber (an AssertionError,
+                        // say) is handled like a RuntimeException: escaping, it would leave the locks after this one held and
+                        // this lock manager started, with its async lock acquiring still running
+                        rethrowIfCriticalError(e);
                         if (IOExceptionUtil.isIOException(e)) {
                             log.debug(msg("[{}] Failed to release FencedLock with name '{}'",
                                           lockManagerInstanceId,
