@@ -771,6 +771,77 @@ public abstract class DBFencedLockManagerIT<LOCK_MANAGER extends DBFencedLockMan
         getLockManagerNode1().cancelAsyncLockAcquiring(lockName);
     }
 
+    /**
+     * A {@link DBFencedLockManager#stop()} keeps each async acquiring registered with the lock manager, and
+     * {@link DBFencedLockManager#start()} resumes it, for the callback it was registered with. Resumed while another node
+     * holds the lock, the acquiring stands by while that node confirms the lock - for several confirmation intervals - and
+     * takes the lock, for that same callback and with no new <code>acquireLockAsync</code>, once the other node releases it.
+     */
+    @Test
+    void a_stop_and_start_resumes_an_async_acquiring_without_taking_the_lock_from_the_node_that_took_it_over() {
+        var lockName      = LockName.of("resumedLock");
+        var node1Callback = new CountingLockCallback();
+        var node2Callback = new CountingLockCallback();
+
+        lockManagerNode1.acquireLockAsync(lockName, node1Callback);
+        Awaitility.waitAtMost(Duration.ofSeconds(10))
+                  .untilAsserted(() -> assertThat(node1Callback.acquired.get()).isEqualTo(1));
+
+        // Node 1 stops, which releases the lock, and node 2's async acquiring takes it over
+        lockManagerNode1.stop();
+        assertThat(node1Callback.released.get()).isEqualTo(1);
+        lockManagerNode2.acquireLockAsync(lockName, node2Callback);
+        Awaitility.waitAtMost(Duration.ofSeconds(10))
+                  .untilAsserted(() -> assertThat(node2Callback.acquired.get()).isEqualTo(1));
+        var node2Token = node2Callback.lastAcquired.getCurrentToken();
+        assertThat(node2Token).isEqualTo(node1Callback.lastAcquired.getCurrentToken() + 1L);
+
+        // Node 1 starts again: its resumed acquiring does not take the lock that node 2 holds and confirms
+        lockManagerNode1.start();
+        Awaitility.await()
+                  .during(Duration.ofSeconds(5))
+                  .atMost(Duration.ofSeconds(15))
+                  .untilAsserted(() -> {
+                      assertThat(node1Callback.acquired.get()).isEqualTo(1);
+                      assertThat(lockManagerNode2.isLockedByThisLockManagerInstance(lockName)).isTrue();
+                  });
+        assertThat(lockManagerNode1.isLockAcquiredByAnotherLockManagerInstance(lockName)).isTrue();
+        assertThat(node2Callback.released.get()).isZero();
+
+        // Node 2 cancels its acquiring, which releases the lock: node 1's resumed acquiring takes it, for the callback it was
+        // registered with before the stop, at the next fence token
+        lockManagerNode2.cancelAsyncLockAcquiring(lockName);
+        assertThat(node2Callback.released.get()).isEqualTo(1);
+        Awaitility.waitAtMost(Duration.ofSeconds(10))
+                  .untilAsserted(() -> assertThat(node1Callback.acquired.get()).isEqualTo(2));
+        assertThat(node1Callback.lastAcquired.getCurrentToken()).isEqualTo(node2Token + 1L);
+        assertThat(lockManagerNode1.isLockedByThisLockManagerInstance(lockName)).isTrue();
+        assertThat(lockManagerNode2.isLockAcquiredByAnotherLockManagerInstance(lockName)).isTrue();
+
+        lockManagerNode1.cancelAsyncLockAcquiring(lockName);
+        assertThat(node1Callback.released.get()).isEqualTo(2);
+    }
+
+    /**
+     * Counts the calls of each callback method, and keeps the last lock <code>lockAcquired</code> was called with
+     */
+    private static class CountingLockCallback implements LockCallback {
+        final    AtomicInteger acquired = new AtomicInteger();
+        final    AtomicInteger released = new AtomicInteger();
+        volatile FencedLock    lastAcquired;
+
+        @Override
+        public void lockAcquired(FencedLock lock) {
+            lastAcquired = lock;
+            acquired.incrementAndGet();
+        }
+
+        @Override
+        public void lockReleased(FencedLock lock) {
+            released.incrementAndGet();
+        }
+    }
+
     private static class TestLockCallback implements LockCallback {
         volatile FencedLock lockReleased;
         volatile FencedLock lockAcquired;

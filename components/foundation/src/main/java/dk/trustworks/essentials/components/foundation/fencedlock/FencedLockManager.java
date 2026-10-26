@@ -129,7 +129,11 @@ public interface FencedLockManager extends Lifecycle {
      * Asynchronously try to acquire a lock by the given name and call the {@link LockCallback#lockAcquired(FencedLock)}
      * when the lock is acquired<br>
      * To stop the background acquiring process, you need to call {@link #cancelAsyncLockAcquiring(LockName)} with the same
-     * lockName
+     * lockName<br>
+     * What becomes of the background acquiring when the lock manager is stopped and started again, and of a repeated call
+     * for the same lockName, is up to the implementation: the database-backed lock managers keep it across a stop and resume
+     * it on the start, and a repeated call with another callback replaces a kept one - see
+     * {@link DBFencedLockManager#acquireLockAsync(LockName, LockCallback)}
      *
      * @param lockName     the name of the lock
      * @param lockCallback the callback that's notified when a lock is acquired

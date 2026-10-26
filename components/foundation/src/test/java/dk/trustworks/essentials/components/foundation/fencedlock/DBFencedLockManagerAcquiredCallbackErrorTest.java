@@ -33,6 +33,7 @@ import java.time.*;
 import java.util.*;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.*;
+import java.util.concurrent.locks.ReentrantLock;
 
 import static org.assertj.core.api.Assertions.*;
 
@@ -299,6 +300,216 @@ class DBFencedLockManagerAcquiredCallbackErrorTest {
                       assertThat(storage.rows.get(LOCK_NAME).lockedBy()).isNull();
                   });
         assertThat(node.isLockedByThisLockManagerInstance(LOCK_NAME)).isFalse();
+    }
+
+    /**
+     * <code>start()</code> reschedules each kept registration while it holds the lock manager's own lock, so the first tick
+     * of a resumed acquiring runs at once and waits for that lock. A <code>cancelAsyncLockAcquiring</code> in that window
+     * cancels a tick that is already running: its interrupt does not end a wait for that lock, and with a driver that does
+     * not fail on a pending interrupt the tick then went on to acquire the lock for the cancelled registration, leaving it
+     * held by this instance with no registration that would release it. Here the test thread holds the lock manager's lock
+     * around <code>start()</code> (the lock is reentrant, so <code>start()</code> takes it again and returns with it still
+     * held), which leaves the resumed tick waiting for it as <code>start()</code> does.
+     */
+    @Test
+    void a_resumed_async_acquiring_cancelled_while_its_first_tick_waits_for_the_lock_managers_lock_does_not_acquire_the_lock() throws Exception {
+        storage.failLookupsWhileInterrupted = false;
+        var callback = new CountingLockCallback();
+        node.acquireLockAsync(LOCK_NAME, callback);
+        Awaitility.waitAtMost(Duration.ofSeconds(5))
+                  .untilAsserted(() -> assertThat(callback.acquired.get()).isEqualTo(1));
+        node.stop();
+        assertThat(callback.released.get()).isEqualTo(1);
+
+        var lockManagersLock = lockManagersReentrantLock(node);
+        lockManagersLock.lock();
+        try {
+            node.start();
+            // The resumed acquiring's first tick is running, and waits for the lock manager's lock
+            Awaitility.waitAtMost(Duration.ofSeconds(5))
+                      .until(() -> asyncAcquiringThreadsOf(node).stream().anyMatch(lockManagersLock::hasQueuedThread));
+            node.cancelAsyncLockAcquiring(LOCK_NAME);
+        } finally {
+            lockManagersLock.unlock();
+        }
+
+        // The tick, once it has the lock, finds its registration cancelled: the lock is not acquired, lockAcquired not called
+        Awaitility.await()
+                  .during(Duration.ofMillis(500))
+                  .atMost(Duration.ofSeconds(5))
+                  .untilAsserted(() -> {
+                      assertThat(callback.acquired.get()).isEqualTo(1);
+                      assertThat(storage.rows.get(LOCK_NAME).lockedBy()).isNull();
+                  });
+        assertThat(node.isLockedByThisLockManagerInstance(LOCK_NAME)).isFalse();
+    }
+
+    /**
+     * A component recreated after a stop and start of the lock manager registers its own callback for the lock name that
+     * the old one's registration was kept for: the new callback replaces the kept one. The lock the resumed acquiring
+     * acquired for the old callback is released first, and the next tick acquires it for the new one.
+     */
+    @Test
+    void acquireLockAsync_with_another_callback_replaces_the_callback_of_an_async_acquiring_resumed_by_start() {
+        var first = new CountingLockCallback();
+        node.acquireLockAsync(LOCK_NAME, first);
+        Awaitility.waitAtMost(Duration.ofSeconds(5))
+                  .untilAsserted(() -> assertThat(first.acquired.get()).isEqualTo(1));
+        node.stop();
+        node.start();
+        // start() resumed the kept registration: the lock is acquired for the first callback again
+        Awaitility.waitAtMost(Duration.ofSeconds(5))
+                  .untilAsserted(() -> assertThat(first.acquired.get()).isEqualTo(2));
+        assertThat(first.released.get()).isEqualTo(1);
+        var tokenAcquiredForTheFirstCallback = storage.rows.get(LOCK_NAME).token();
+
+        // The same callback again does nothing: the lock stays held for it
+        node.acquireLockAsync(LOCK_NAME, first);
+        assertThat(first.released.get()).isEqualTo(1);
+        assertThat(storage.rows.get(LOCK_NAME).token()).isEqualTo(tokenAcquiredForTheFirstCallback);
+
+        // Another callback replaces it: the lock held for the first callback is released, and acquired for the second
+        var second = new CountingLockCallback();
+        node.acquireLockAsync(LOCK_NAME, second);
+        assertThat(first.released.get()).isEqualTo(2);
+        Awaitility.waitAtMost(Duration.ofSeconds(5))
+                  .untilAsserted(() -> assertThat(second.acquired.get()).isEqualTo(1));
+        assertThat(storage.rows.get(LOCK_NAME).lockedBy()).isEqualTo("node");
+        assertThat(storage.rows.get(LOCK_NAME).token()).isEqualTo(tokenAcquiredForTheFirstCallback + 1);
+        assertThat(second.lastAcquired.getCurrentToken()).isEqualTo(tokenAcquiredForTheFirstCallback + 1);
+
+        // The second callback's registration was made after the start, so a third callback does not replace it ...
+        var third = new CountingLockCallback();
+        node.acquireLockAsync(LOCK_NAME, third);
+        Awaitility.await()
+                  .during(Duration.ofMillis(500))
+                  .atMost(Duration.ofSeconds(5))
+                  .untilAsserted(() -> {
+                      assertThat(first.acquired.get()).isEqualTo(2);
+                      assertThat(second.acquired.get()).isEqualTo(1);
+                      assertThat(second.released.get()).isZero();
+                      assertThat(third.acquired.get()).isZero();
+                  });
+
+        // ... and cancelling calls lockReleased on the second callback, the one the lock is held for
+        node.cancelAsyncLockAcquiring(LOCK_NAME);
+        assertThat(second.released.get()).isEqualTo(1);
+        assertThat(first.released.get()).isEqualTo(2);
+        assertThat(third.released.get()).isZero();
+        assertThat(storage.rows.get(LOCK_NAME).lockedBy()).isNull();
+    }
+
+    /**
+     * The same replacement, made while the lock manager is stopped - by a component recreated before the lock manager is
+     * started again: <code>start()</code> resumes the registration with the new callback, and the old one is not called again.
+     */
+    @Test
+    void acquireLockAsync_with_another_callback_while_the_lock_manager_is_stopped_replaces_the_callback_start_resumes() {
+        var first = new CountingLockCallback();
+        node.acquireLockAsync(LOCK_NAME, first);
+        Awaitility.waitAtMost(Duration.ofSeconds(5))
+                  .untilAsserted(() -> assertThat(first.acquired.get()).isEqualTo(1));
+        node.stop();
+        assertThat(first.released.get()).isEqualTo(1);
+
+        var second = new CountingLockCallback();
+        node.acquireLockAsync(LOCK_NAME, second);
+        node.start();
+
+        Awaitility.waitAtMost(Duration.ofSeconds(5))
+                  .untilAsserted(() -> assertThat(second.acquired.get()).isEqualTo(1));
+        Awaitility.await()
+                  .during(Duration.ofMillis(500))
+                  .atMost(Duration.ofSeconds(5))
+                  .untilAsserted(() -> {
+                      assertThat(first.acquired.get()).isEqualTo(1);
+                      assertThat(first.released.get()).isEqualTo(1);
+                      assertThat(second.acquired.get()).isEqualTo(1);
+                  });
+        assertThat(storage.rows.get(LOCK_NAME).lockedBy()).isEqualTo("node");
+
+        node.cancelAsyncLockAcquiring(LOCK_NAME);
+        assertThat(second.released.get()).isEqualTo(1);
+        assertThat(first.released.get()).isEqualTo(1);
+    }
+
+    /**
+     * The replacement releases the lock the resumed acquiring acquired for the kept callback. When that callback's
+     * <code>lockReleased</code> throws, the failure is logged at ERROR and the new callback is registered all the same: the
+     * next tick acquires the lock for it, and the kept callback is not called again.
+     */
+    @Test
+    void a_failing_lock_released_callback_of_the_replaced_callback_is_logged_and_the_new_callback_registered_all_the_same() {
+        var first        = new FailingReleaseLockCallback();
+        var releaseError = new IllegalStateException("lockReleased of the replaced callback fails");
+        var logEvents    = captureLockManagerLog();
+        try {
+            node.acquireLockAsync(LOCK_NAME, first);
+            Awaitility.waitAtMost(Duration.ofSeconds(5))
+                      .untilAsserted(() -> assertThat(first.acquired.get()).isEqualTo(1));
+            node.stop();
+            node.start();
+            Awaitility.waitAtMost(Duration.ofSeconds(5))
+                      .untilAsserted(() -> assertThat(first.acquired.get()).isEqualTo(2));
+            var tokenAcquiredForTheFirstCallback = storage.rows.get(LOCK_NAME).token();
+
+            first.failReleaseWith = releaseError;
+            var second = new CountingLockCallback();
+            assertThatCode(() -> node.acquireLockAsync(LOCK_NAME, second)).doesNotThrowAnyException();
+            assertThat(first.released.get()).isEqualTo(2);
+
+            var errors = logEvents.list.stream().filter(event -> event.getLevel() == Level.ERROR).toList();
+            assertThat(errors).hasSize(1);
+            assertThat(errors.getFirst().getFormattedMessage()).contains(LOCK_NAME.toString(), "replacing the callback");
+            assertThat(((ThrowableProxy) errors.getFirst().getThrowableProxy()).getThrowable()).isSameAs(releaseError);
+
+            Awaitility.waitAtMost(Duration.ofSeconds(5))
+                      .untilAsserted(() -> assertThat(second.acquired.get()).isEqualTo(1));
+            assertThat(second.lastAcquired.getCurrentToken()).isEqualTo(tokenAcquiredForTheFirstCallback + 1);
+            assertThat(storage.rows.get(LOCK_NAME).lockedBy()).isEqualTo("node");
+            Awaitility.await()
+                      .during(Duration.ofMillis(500))
+                      .atMost(Duration.ofSeconds(5))
+                      .untilAsserted(() -> {
+                          assertThat(first.acquired.get()).isEqualTo(2);
+                          assertThat(first.released.get()).isEqualTo(2);
+                          assertThat(second.acquired.get()).isEqualTo(1);
+                      });
+        } finally {
+            detachLockManagerLog(logEvents);
+        }
+    }
+
+    /**
+     * A critical error from the replaced callback's <code>lockReleased</code> is rethrown by <code>acquireLockAsync</code>,
+     * which then registers nothing: the lock, released before the callback ran, is not acquired again.
+     */
+    @Test
+    void a_critical_error_from_the_lock_released_callback_of_the_replaced_callback_is_rethrown() {
+        var first         = new FailingReleaseLockCallback();
+        var criticalError = new NoClassDefFoundError("lockReleased of the replaced callback fails critically");
+        node.acquireLockAsync(LOCK_NAME, first);
+        Awaitility.waitAtMost(Duration.ofSeconds(5))
+                  .untilAsserted(() -> assertThat(first.acquired.get()).isEqualTo(1));
+        node.stop();
+        node.start();
+        Awaitility.waitAtMost(Duration.ofSeconds(5))
+                  .untilAsserted(() -> assertThat(first.acquired.get()).isEqualTo(2));
+
+        first.failReleaseWith = criticalError;
+        var second = new CountingLockCallback();
+        assertThatThrownBy(() -> node.acquireLockAsync(LOCK_NAME, second)).isSameAs(criticalError);
+        assertThat(first.released.get()).isEqualTo(2);
+        assertThat(node.isLockedByThisLockManagerInstance(LOCK_NAME)).isFalse();
+
+        Awaitility.await()
+                  .during(Duration.ofMillis(500))
+                  .atMost(Duration.ofSeconds(5))
+                  .untilAsserted(() -> {
+                      assertThat(storage.rows.get(LOCK_NAME).lockedBy()).isNull();
+                      assertThat(first.acquired.get()).isEqualTo(2);
+                      assertThat(second.acquired.get()).isZero();
+                  });
     }
 
     @Test
@@ -886,6 +1097,69 @@ class DBFencedLockManagerAcquiredCallbackErrorTest {
                                throw error;
                            })
                            .build();
+    }
+
+    /**
+     * Counts the calls of each callback method, and keeps the last lock <code>lockAcquired</code> was called with
+     */
+    private static final class CountingLockCallback implements LockCallback {
+        final    AtomicInteger acquired = new AtomicInteger();
+        final    AtomicInteger released = new AtomicInteger();
+        volatile FencedLock    lastAcquired;
+
+        @Override
+        public void lockAcquired(FencedLock lock) {
+            lastAcquired = lock;
+            acquired.incrementAndGet();
+        }
+
+        @Override
+        public void lockReleased(FencedLock lock) {
+            released.incrementAndGet();
+        }
+    }
+
+    /**
+     * Counts the calls of each callback method; once {@link #failReleaseWith} is set, <code>lockReleased</code> throws it
+     * after counting the call
+     */
+    private static final class FailingReleaseLockCallback implements LockCallback {
+        final    AtomicInteger acquired = new AtomicInteger();
+        final    AtomicInteger released = new AtomicInteger();
+        volatile Throwable     failReleaseWith;
+
+        @Override
+        public void lockAcquired(FencedLock lock) {
+            acquired.incrementAndGet();
+        }
+
+        @Override
+        public void lockReleased(FencedLock lock) {
+            released.incrementAndGet();
+            var failure = failReleaseWith;
+            if (failure != null) {
+                Exceptions.sneakyThrow(failure);
+            }
+        }
+    }
+
+    /**
+     * The lock manager's own lock, which every tick, <code>start()</code> and <code>stop()</code> take
+     */
+    private static ReentrantLock lockManagersReentrantLock(DBFencedLockManager<?, ?> lockManager) throws ReflectiveOperationException {
+        var field = DBFencedLockManager.class.getDeclaredField("reentrantLock");
+        field.setAccessible(true);
+        return (ReentrantLock) field.get(lockManager);
+    }
+
+    /**
+     * The threads of the lock manager's async acquiring executor, named after its instance id
+     */
+    private static List<Thread> asyncAcquiringThreadsOf(DBFencedLockManager<?, ?> lockManager) {
+        var prefix = lockManager.getLockManagerInstanceId() + "-Lock-Acquiring-";
+        return Thread.getAllStackTraces().keySet().stream()
+                     .filter(thread -> thread.getName().startsWith(prefix))
+                     .toList();
     }
 
     private static ListAppender<ILoggingEvent> captureLockManagerLog() {

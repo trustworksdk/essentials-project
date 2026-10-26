@@ -103,9 +103,10 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
     /**
      * One entry per async acquiring registered with {@link #acquireLockAsync(LockName, LockCallback)} and not yet cancelled
      * with {@link #cancelAsyncLockAcquiring(LockName)}. {@link #stop()} cancels each entry's scheduled future but keeps the
-     * entry, and {@link #start()} schedules every kept entry again<br>
+     * entry, and {@link #start()} schedules every kept entry again, as a new entry<br>
      * Key: lock name<br>
-     * Value: the registration's {@link LockCallback} and its current {@link ScheduledFuture}
+     * Value: the registration's {@link LockCallback}, its <code>keptByStop</code> flag (see {@link AsyncLockAcquiring#keptByStop}),
+     * and its current {@link ScheduledFuture}
      */
     private final ConcurrentMap<LockName, AsyncLockAcquiring> asyncLockAcquirings;
     private final Duration                                    lockTimeOut;
@@ -226,13 +227,17 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
 
                 // Resume every async acquiring the last stop() kept. Each is rescheduled inside computeIfPresent, so a
                 // concurrent cancelAsyncLockAcquiring - which does not take reentrantLock - either removes the entry
-                // first, and nothing is scheduled for it, or removes the rescheduled entry and cancels its new future
+                // first, and nothing is scheduled for it, or removes the rescheduled entry and cancels its new future.
+                // The first tick of a rescheduled entry runs at once and waits for reentrantLock, which this holds, so
+                // that cancel can come while the tick is already running - a cancel(true) does not end that wait. The
+                // tick therefore acts only while its own entry is still the one in asyncLockAcquirings, which it checks
+                // once it has reentrantLock (asyncLockAcquiringTick)
                 var executor = asyncLockAcquiringExecutor;
                 for (var lockName : asyncLockAcquirings.keySet()) {
                     asyncLockAcquirings.computeIfPresent(lockName, (name, kept) -> {
                         log.debug("[{}] Resuming async Lock acquiring for lock '{}'", lockManagerInstanceId, name);
                         kept.scheduledFuture().cancel(true);
-                        return new AsyncLockAcquiring(kept.lockCallback(), scheduleAsyncLockAcquiring(executor, name, kept.lockCallback()));
+                        return scheduleAsyncLockAcquiring(executor, name, kept.lockCallback(), true);
                     });
                 }
 
@@ -1143,11 +1148,21 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
      * <p>
      * {@link #stop()} cancels the scheduled acquiring but keeps the registration (the lock name and this
      * <code>lockCallback</code>), and {@link #start()} schedules every kept registration again, an ended one included; only
-     * {@link #cancelAsyncLockAcquiring(LockName)} removes a registration for good. Called while one is kept for the same
-     * lock name - by a component on its own start, after the lock manager's - this method does nothing, and keeps the
-     * <code>lockCallback</code> of the kept registration. Called while the lock manager is not started, it registers nothing.
+     * {@link #cancelAsyncLockAcquiring(LockName)} removes a registration for good. Called for a lock name whose registration
+     * a {@link #stop()} kept - by a component recreated across a stop and start of the lock manager, say - with another
+     * <code>lockCallback</code> than the kept one, this method replaces the kept registration with one for the new
+     * <code>lockCallback</code>, as {@link #cancelAsyncLockAcquiring(LockName)} followed by this method would: the lock, when
+     * this instance holds it, is released (which calls <code>lockReleased</code> on the callbacks registered with the lock -
+     * the kept one, when its resumed acquiring acquired it), the acquiring goes on for the new <code>lockCallback</code>, and
+     * the kept one is not called again. A failure of that release (a <code>lockReleased</code> callback throwing, say) is
+     * logged and the new registration made all the same; a critical error is rethrown. While the lock manager is stopped,
+     * the new <code>lockCallback</code> replaces the kept one (no lock is held then), and {@link #start()} schedules it.
+     * Called with the kept <code>lockCallback</code> itself, or for a lock name whose registration was made since the last
+     * {@link #start()}, this method does nothing and keeps the registered <code>lockCallback</code>. Called while the lock
+     * manager is not started, it registers nothing new.
      */
     @Override
+    @SuppressWarnings("PMD.CompareObjectsWithEquals") // a registration's callback is the caller's instance, compared by identity
     public void acquireLockAsync(LockName lockName, LockCallback lockCallback) {
         requireNonNull(lockName, "You must supply a lockName");
         requireNonNull(lockCallback, "You must supply a lockCallback");
@@ -1159,14 +1174,34 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
             // being reset does stop()/start() around the reset, and a subscription manager shutting down in between
             // used to make this throw a NullPointerException on the caller's own (often non-pooled) thread.
             var executor = asyncLockAcquiringExecutor;
+            if (!started) {
+                // Every registration is a kept one while the lock manager is stopped: start() schedules it with this callback
+                var replaced = new boolean[1];
+                asyncLockAcquirings.computeIfPresent(lockName, (name, kept) -> {
+                    if (kept.lockCallback() == lockCallback) {
+                        return kept;
+                    }
+                    replaced[0] = true;
+                    return new AsyncLockAcquiring(lockCallback, true, kept.scheduledFuture());
+                });
+                if (replaced[0]) {
+                    log.debug("[{}] Lock Manager isn't started - replaced the callback of the kept async lock acquiring for lock '{}', "
+                              + "which start() resumes", lockManagerInstanceId, lockName);
+                    return;
+                }
+            }
             if (!started || stopping || shutdown != null || executor == null) {
                 log.debug("[{}] Lock Manager isn't started - ignoring async lock acquiring for lock '{}'", lockManagerInstanceId, lockName);
                 return;
             }
 
+            var registered = asyncLockAcquirings.get(lockName);
+            if (registered != null && registered.keptByStop() && registered.lockCallback() != lockCallback) {
+                replaceKeptAsyncLockAcquiring(lockName);
+            }
             asyncLockAcquirings.computeIfAbsent(lockName, _lockName -> {
                 log.debug("[{}] Starting async Lock acquiring for lock '{}'", lockManagerInstanceId, lockName);
-                return new AsyncLockAcquiring(lockCallback, scheduleAsyncLockAcquiring(executor, lockName, lockCallback));
+                return scheduleAsyncLockAcquiring(executor, lockName, lockCallback, false);
             });
         } finally {
             reentrantLock.unlock();
@@ -1174,36 +1209,110 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
     }
 
     /**
-     * An async acquiring registered with {@link #acquireLockAsync(LockName, LockCallback)}: the callback it was registered
-     * with, kept across {@link #stop()} so {@link #start()} can schedule it again, and the scheduled future of its ticks
-     * since the last (re)scheduling - cancelled while the lock manager is stopped
+     * Removes the registration a {@link #stop()} kept for the lock name, and {@link #start()} resumed, so that
+     * {@link #acquireLockAsync(LockName, LockCallback)} can register its other callback in its place - as
+     * {@link #cancelAsyncLockAcquiring(LockName)} does, which releases the lock when this instance holds it. A failure of that
+     * release is logged, not thrown, so the caller's callback is registered all the same: the release has removed the lock
+     * locally already when its <code>lockReleased</code> callback throws. A critical error is rethrown.
      *
-     * @param lockCallback    the callback the async acquiring was registered with
-     * @param scheduledFuture the future of its ticks ({@link #asyncLockAcquiringTick(LockName, LockCallback)})
+     * @param lockName the name of the lock
      */
-    private record AsyncLockAcquiring(LockCallback lockCallback, ScheduledFuture<?> scheduledFuture) {
+    private void replaceKeptAsyncLockAcquiring(LockName lockName) {
+        log.debug("[{}] Replacing the callback of the kept async lock acquiring for lock '{}' - releasing the lock if this instance holds it",
+                  lockManagerInstanceId, lockName);
+        try {
+            cancelAsyncLockAcquiring(lockName);
+        } catch (Throwable e) {
+            rethrowIfCriticalError(e);
+            log.error(msg("[{}] Releasing lock '{}' while replacing the callback of its kept async acquiring failed (a lockReleased callback or LockReleased subscriber threw) - registering the new callback all the same",
+                          lockManagerInstanceId, lockName), e);
+        }
     }
 
-    private ScheduledFuture<?> scheduleAsyncLockAcquiring(ScheduledExecutorService executor, LockName lockName, LockCallback lockCallback) {
-        return executor.scheduleAtFixedRate(() -> asyncLockAcquiringTick(lockName, lockCallback),
-                                            0,
-                                            lockConfirmationInterval.toMillis(),
-                                            TimeUnit.MILLISECONDS);
+    /**
+     * An async acquiring registered with {@link #acquireLockAsync(LockName, LockCallback)}: the callback it was registered
+     * with, kept across {@link #stop()} so {@link #start()} can schedule it again, and the scheduled future of its ticks
+     * since the last (re)scheduling - cancelled while the lock manager is stopped. Each (re)scheduling makes a new instance,
+     * and its ticks act only while that instance is the one in {@link #asyncLockAcquirings} (see
+     * {@link #asyncLockAcquiringTick(LockName, AsyncLockAcquiring)}), so it is compared by identity
+     */
+    private static final class AsyncLockAcquiring {
+        private final    LockCallback       lockCallback;
+        private final    boolean            keptByStop;
+        /**
+         * Set once, right after the scheduling, before the instance is put in {@link #asyncLockAcquirings}
+         */
+        private volatile ScheduledFuture<?> scheduledFuture;
+
+        /**
+         * @param lockCallback    the callback the async acquiring was registered with
+         * @param keptByStop      <code>true</code> for a registration {@link #start()} resumed, or one
+         *                        {@link #acquireLockAsync(LockName, LockCallback)} replaced while the lock manager was stopped:
+         *                        after {@link #start()}, {@link #acquireLockAsync(LockName, LockCallback)} with another callback
+         *                        replaces it. <code>false</code> for one registered since the last {@link #start()}; {@link #stop()}
+         *                        leaves the flag unchanged. While the lock manager is stopped,
+         *                        {@link #acquireLockAsync(LockName, LockCallback)} treats every registration as kept, whatever
+         *                        the flag says
+         * @param scheduledFuture the future of its ticks, or <code>null</code> when it is set right after the scheduling
+         */
+        private AsyncLockAcquiring(LockCallback lockCallback, boolean keptByStop, ScheduledFuture<?> scheduledFuture) {
+            this.lockCallback = lockCallback;
+            this.keptByStop = keptByStop;
+            this.scheduledFuture = scheduledFuture;
+        }
+
+        LockCallback lockCallback() {
+            return lockCallback;
+        }
+
+        boolean keptByStop() {
+            return keptByStop;
+        }
+
+        ScheduledFuture<?> scheduledFuture() {
+            return scheduledFuture;
+        }
+    }
+
+    /**
+     * Schedules the ticks of a new registration. Called under {@link #reentrantLock} and inside the compute that puts the
+     * registration in {@link #asyncLockAcquirings}: its first tick, which runs at once, waits for {@link #reentrantLock} and
+     * so finds the registration in place
+     */
+    private AsyncLockAcquiring scheduleAsyncLockAcquiring(ScheduledExecutorService executor, LockName lockName, LockCallback lockCallback, boolean keptByStop) {
+        var acquiring = new AsyncLockAcquiring(lockCallback, keptByStop, null);
+        acquiring.scheduledFuture = executor.scheduleAtFixedRate(() -> asyncLockAcquiringTick(lockName, acquiring),
+                                                                 0,
+                                                                 lockConfirmationInterval.toMillis(),
+                                                                 TimeUnit.MILLISECONDS);
+        return acquiring;
     }
 
     /**
      * A single tick of the background acquiring scheduled by {@link #acquireLockAsync(LockName, LockCallback)}: acquire
      * the lock if this instance doesn't hold it, or notice and report that another instance has taken it over.
+     * <p>
+     * The tick does nothing unless <code>acquiring</code> is still the registration in {@link #asyncLockAcquirings} once it
+     * holds {@link #reentrantLock}: a cancelled tick can already be running, waiting for that lock (behind {@link #start()},
+     * say), and a cancel's interrupt does not end that wait. This check does not cover a
+     * {@link #cancelAsyncLockAcquiring(LockName)} made after it, while the tick acquires the lock: that cancel does not take
+     * {@link #reentrantLock}.
      *
-     * @param lockName     the lock being acquired
-     * @param lockCallback the callback notified when the lock is acquired or lost
+     * @param lockName  the lock being acquired
+     * @param acquiring the registration this tick was scheduled for - its callback is notified when the lock is acquired or lost
      */
-    @SuppressWarnings("unchecked")
-    private void asyncLockAcquiringTick(LockName lockName, LockCallback lockCallback) {
+    @SuppressWarnings({"unchecked", "PMD.CompareObjectsWithEquals"})
+    private void asyncLockAcquiringTick(LockName lockName, AsyncLockAcquiring acquiring) {
+        var lockCallback        = acquiring.lockCallback();
         var criticalErrorLogged = false;
         try {
             reentrantLock.lock();
             if (!started || shutdown != null) {
+                return;
+            }
+            if (asyncLockAcquirings.get(lockName) != acquiring) {
+                log.debug("[{}] The async acquiring of lock '{}' this tick was scheduled for has been cancelled or replaced - not acquiring the lock for it",
+                          lockManagerInstanceId, lockName);
                 return;
             }
             if (confirmationEnded) {

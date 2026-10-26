@@ -226,7 +226,7 @@ class DBFencedLockManagerAcquireCommitFailureTest {
     /**
      * A lock table in memory, shared by every lock manager. Writes are staged in the {@link StagingUnitOfWork} and applied
      * on its commit - as compare-and-set, like the conditional updates of the real storages. Reads fail while the
-     * thread is interrupted, like an interruptible driver.
+     * thread is interrupted, like an interruptible driver, unless {@link #failLookupsWhileInterrupted} is cleared.
      */
     static class InMemoryLockStorage implements FencedLockStorage<StagingUnitOfWork, DBFencedLock> {
         final    ConcurrentMap<LockName, Row> rows = new ConcurrentHashMap<>();
@@ -255,6 +255,11 @@ class DBFencedLockManagerAcquireCommitFailureTest {
          */
         volatile LockName                     blockedLookupName;
         volatile CountDownLatch               blockedLookupGate;
+        /**
+         * When cleared, a look-up no longer fails while the thread is interrupted - a driver that does not fail on a pending
+         * interrupt
+         */
+        volatile boolean                      failLookupsWhileInterrupted = true;
         final AtomicInteger                   lookups = new AtomicInteger();
 
         @Override
@@ -337,7 +342,7 @@ class DBFencedLockManagerAcquireCommitFailureTest {
                 failNextLookup = false;
                 throw new UncheckedIOException(new IOException("Connection lost looking up the lock"));
             }
-            if (Thread.currentThread().isInterrupted()) {
+            if (failLookupsWhileInterrupted && Thread.currentThread().isInterrupted()) {
                 throw new IllegalStateException("Interrupted - an interruptible driver fails every operation while the interrupt is pending");
             }
             return Optional.ofNullable(rows.get(lockName))
