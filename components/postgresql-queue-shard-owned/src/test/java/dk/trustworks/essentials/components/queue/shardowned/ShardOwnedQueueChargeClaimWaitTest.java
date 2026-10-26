@@ -51,6 +51,28 @@ class ShardOwnedQueueChargeClaimWaitTest {
      * Part of the WARN {@code orderedChargeFailedWithNothingOwed} logs.
      */
     private static final String NOTHING_OWED_WARNING    = "has nothing left to charge before releasing ordered unit";
+    /**
+     * How often the two awaits before the premise that the charge still waits poll their condition.
+     */
+    private static final Duration PREMISE_POLL_INTERVAL = Duration.ofMillis(10);
+    /**
+     * How long the first await, until the charging thread waits for the release claim, may take. Generous: the charge's
+     * wait bound ({@link #CHARGE_WAIT_BOUND}) is timed from when that wait starts, so the thread's start and the charge's
+     * set-up before it do not count against the bound.
+     */
+    private static final Duration CHARGE_WAITING_AWAIT_LIMIT = Duration.ofSeconds(10);
+    /**
+     * How long the second await, until the handler has returned ({@code owner.inFlight() == 0}), may take. That await
+     * runs against the charge's wait bound ({@link #CHARGE_WAIT_BOUND}).
+     */
+    private static final Duration PREMISE_AWAIT_LIMIT   = Duration.ofSeconds(1);
+    /**
+     * The charging thread's network wait bound, timed from when its charge starts waiting for the release claim
+     * ({@code ReleaseChargeLedger.awaitNoReleaseClaimed}). Until the test asserts the charge still waits, that covers only
+     * the first await's last poll and the whole of the second await, so it is set well above {@link #PREMISE_AWAIT_LIMIT}:
+     * a slow machine fails that await rather than letting the bound run out first. The test waits out the whole bound.
+     */
+    private static final Duration CHARGE_WAIT_BOUND     = PREMISE_AWAIT_LIMIT.plus(PREMISE_POLL_INTERVAL).multipliedBy(3);
 
     @Test
     // shutdownNow() in the finally ends the charging thread; close() would wait for it with no bound
@@ -67,11 +89,12 @@ class ShardOwnedQueueChargeClaimWaitTest {
         var charging = Executors.newSingleThreadExecutor(Thread.ofPlatform().daemon().name(CHARGING_THREAD).factory());
         var logged   = captureQueueLog();
         try {
-            var charge = charging.submit(() -> NetworkWaitBound.call(Duration.ofSeconds(2), () -> chargeBeforeRelease(queue, owner, scope)));
-            await().atMost(Duration.ofSeconds(10)).until(ShardOwnedQueueChargeClaimWaitTest::chargeWaitsForTheReleaseClaim);
+            var charge = charging.submit(() -> NetworkWaitBound.call(CHARGE_WAIT_BOUND, () -> chargeBeforeRelease(queue, owner, scope)));
+            await().pollInterval(PREMISE_POLL_INTERVAL).atMost(CHARGE_WAITING_AWAIT_LIMIT)
+                   .until(ShardOwnedQueueChargeClaimWaitTest::chargeWaitsForTheReleaseClaim);
 
             handler.countDown();
-            await().atMost(Duration.ofSeconds(10)).until(() -> owner.inFlight() == 0);
+            await().pollInterval(PREMISE_POLL_INTERVAL).atMost(PREMISE_AWAIT_LIMIT).until(() -> owner.inFlight() == 0);
             assertThat(owner.owesReleaseCharge(scope)).as("premise: with the handler returned, nothing reads as owed").isFalse();
             assertThat(charge.isDone()).as("premise: the handler returned while the charge still waited").isFalse();
 
@@ -109,7 +132,7 @@ class ShardOwnedQueueChargeClaimWaitTest {
 
     private static Throwable catchExecution(Future<?> future) throws InterruptedException, TimeoutException {
         try {
-            future.get(10, TimeUnit.SECONDS);
+            future.get(CHARGE_WAIT_BOUND.plusSeconds(10).toMillis(), TimeUnit.MILLISECONDS);
             return null;
         } catch (ExecutionException e) {
             return e.getCause();
