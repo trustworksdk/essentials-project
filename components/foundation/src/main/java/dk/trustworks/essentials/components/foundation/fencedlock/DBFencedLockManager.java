@@ -32,7 +32,7 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
 import java.util.concurrent.locks.ReentrantLock;
 
-import static dk.trustworks.essentials.shared.Exceptions.rethrowIfCriticalError;
+import static dk.trustworks.essentials.shared.Exceptions.*;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 import static dk.trustworks.essentials.shared.MessageFormatter.msg;
 
@@ -919,6 +919,28 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
         return lock.map(value -> value.isLocked() && !value.isLockedByThisLockManagerInstance()).orElse(false);
     }
 
+    /**
+     * {@inheritDoc}
+     * <p>
+     * When the {@link LockCallback#lockAcquired(FencedLock)} callback throws - a {@link RuntimeException}, a non-critical
+     * {@link Error} or a checked exception thrown sneakily - the failure is logged and the lock released (which calls
+     * {@link LockCallback#lockReleased(FencedLock)}), and a later tick tries to acquire it again - this instance or another
+     * may get it; when this one does, the callback is called again.
+     * The same failure from <code>lockReleased</code>, when the async acquiring finds the lock lost, is logged and the acquiring
+     * carries on.
+     * <p>
+     * A critical error ({@link dk.trustworks.essentials.shared.Exceptions#isCriticalError(Throwable)} - a
+     * {@link VirtualMachineError}, {@link ThreadDeath} or {@link LinkageError} (an {@link ExceptionInInitializerError} or
+     * {@link NoClassDefFoundError}, say), or any throwable with one in its cause or suppressed chain) is not recovered from:
+     * it is logged at ERROR and ends the async acquiring of the lock.
+     * When it came from <code>lockAcquired</code>, the lock is released before that (best effort: when the release fails, this
+     * lock manager still stops confirming the lock, so it expires after the lock timeout), so it is not left held by this
+     * instance with nothing serving it.
+     * A critical error from releasing the lock after a non-critical failure of <code>lockAcquired</code> also stops this lock
+     * manager confirming the lock, so it expires after the lock timeout.
+     * The ended acquiring keeps its entry, so calling this method again for the same lock name does not restart it until
+     * {@link #cancelAsyncLockAcquiring(LockName)} has been called or the lock manager has been stopped.
+     */
     @Override
     public void acquireLockAsync(LockName lockName, LockCallback lockCallback) {
         requireNonNull(lockName, "You must supply a lockName");
@@ -957,6 +979,7 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
      */
     @SuppressWarnings("unchecked")
     private void asyncLockAcquiringTick(LockName lockName, LockCallback lockCallback) {
+        var criticalErrorLogged = false;
         try {
             reentrantLock.lock();
             if (!started || shutdown != null) {
@@ -983,11 +1006,18 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
                     locksAcquiredByThisLockManager.put(lockName, (LOCK) fencedLock);
                     try {
                         lockCallback.lockAcquired(fencedLock);
-                    } catch (RuntimeException | Error e) {
-                        // A critical error (see Exceptions.isCriticalError) is not recovered from here - it escapes the tick.
-                        // A non-critical Error (an AssertionError, say) is handled like a RuntimeException: escaping, it
-                        // would keep the lock held by this instance and end the scheduled acquiring of the lock for good.
-                        rethrowIfCriticalError(e);
+                    } catch (Throwable e) {
+                        // A critical error (see Exceptions.isCriticalError) is not recovered from here - it escapes the tick,
+                        // which ends the scheduled acquiring of the lock. The lock is released first, so it is not left held
+                        // and confirmed by this instance with nothing serving it.
+                        // A non-critical Error (an AssertionError, say) and a checked exception thrown sneakily (undeclared)
+                        // are handled like a RuntimeException: unhandled here, either would reach the outer catch, which only
+                        // logs it, and the lock would stay held by this instance with no later tick calling the callback again.
+                        if (isCriticalError(e)) {
+                            releaseLockAfterCriticalError(lockName, (LOCK) fencedLock, e);
+                            criticalErrorLogged = true;
+                            sneakyThrow(e);
+                        }
                         // The lock WAS acquired; it is the callback that failed. Keeping the lock would
                         // be the worst of both outcomes: this instance owns a lock it is not serving,
                         // no other instance can take it, and no later tick will ever call the callback
@@ -1003,7 +1033,14 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
                         log.error(msg("[{}] Lock '{}' was acquired but its lockAcquired callback failed - releasing it "
                                       + "so the next attempt can retry rather than holding a lock nothing is serving",
                                       lockManagerInstanceId, lockName), e);
-                        releaseLock((LOCK) fencedLock);
+                        // A critical error from the release itself (releaseLockInDB, say) escapes before releaseLock removes
+                        // the lock locally, and ends the async acquiring in the outer catch. Removing it here stops this lock
+                        // manager confirming it, so the lock row expires after the lock timeout rather than staying held unserved.
+                        try {
+                            releaseLock((LOCK) fencedLock);
+                        } finally {
+                            locksAcquiredByThisLockManager.remove(lockName, (LOCK) fencedLock);
+                        }
                     }
                 } else {
                     if (log.isTraceEnabled()) {
@@ -1018,14 +1055,51 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
                 locksAcquiredByThisLockManager.remove(lockName);
                 lockCallback.lockReleased(existingLock);
             }
-        } catch (Exception | Error e) {
-            // A non-critical Error (from a lockReleased callback, say) must not escape either: a task scheduled at a fixed
-            // rate that throws is never run again, which would end the acquiring of this lock for good
+        } catch (Throwable e) {
+            // A non-critical Error or a checked exception thrown sneakily (from a lockReleased callback, say) must not escape
+            // either: a task scheduled at a fixed rate that throws is never run again, which would end the acquiring of this
+            // lock for good.
+            // A critical error does escape, ending the acquiring of this lock. It is logged here first, because what it escapes
+            // into is the task's ScheduledFuture, which nothing reads - unless it came from lockAcquired and was logged there.
+            if (!criticalErrorLogged && isCriticalError(e)) {
+                log.error(msg("[{}] A critical error occurred in the async acquiring of lock '{}' - this ends the async acquiring of the lock",
+                              lockManagerInstanceId, lockName), e);
+            }
             rethrowIfCriticalError(e);
             log.error(msg("[{}] Technical error while trying to acquire lock '{}'", lockManagerInstanceId, lockName), e);
         } finally {
             reentrantLock.unlock();
         }
+    }
+
+    /**
+     * Best effort release of a lock whose <code>lockAcquired</code> callback failed with a critical error
+     * ({@link dk.trustworks.essentials.shared.Exceptions#isCriticalError(Throwable)}), which the caller then rethrows, ending
+     * the async acquiring of the lock. Without the release the lock would stay in {@link #locksAcquiredByThisLockManager}, so it
+     * would keep being confirmed - no other instance could take it over - while nothing served it.
+     * <p>
+     * The lock is removed from {@link #locksAcquiredByThisLockManager} even when the release fails, which stops its
+     * confirmation, so the lock row expires after the lock timeout. A release that throws (its <code>lockReleased</code>
+     * callback, say) is added to <code>criticalError</code> as suppressed, never thrown in its place, and the error is logged
+     * at ERROR afterwards, so the log line carries that failure too. A release that fails in the DB without throwing is
+     * logged by {@link #releaseLock} itself, and leaves the lock row to expire after the lock timeout.
+     *
+     * @param lockName      the name of the lock
+     * @param lock          the lock that was acquired
+     * @param criticalError the critical error the <code>lockAcquired</code> callback failed with
+     */
+    private void releaseLockAfterCriticalError(LockName lockName, LOCK lock, Throwable criticalError) {
+        try {
+            releaseLock(lock);
+        } catch (Throwable releaseFailure) {
+            addSuppressedOnce(criticalError, releaseFailure);
+        } finally {
+            locksAcquiredByThisLockManager.remove(lockName, lock);
+        }
+        log.error(msg("[{}] Lock '{}' was acquired but its lockAcquired callback failed with a critical error - the lock has been released "
+                      + "(or, where its release failed, is no longer confirmed by this instance, so it expires after the lock timeout) "
+                      + "and the error is rethrown, which ends the async acquiring of the lock",
+                      lockManagerInstanceId, lockName), criticalError);
     }
 
     @Override

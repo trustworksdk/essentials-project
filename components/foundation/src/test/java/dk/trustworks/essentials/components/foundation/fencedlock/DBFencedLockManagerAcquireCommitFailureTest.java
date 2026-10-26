@@ -239,6 +239,14 @@ class DBFencedLockManagerAcquireCommitFailureTest {
          */
         volatile boolean                      failNextLookup;
         /**
+         * Thrown by the next look-up, whatever it looks up, when set
+         */
+        volatile Error                        failNextLookupWith;
+        /**
+         * Thrown by the next release in the DB, when set
+         */
+        volatile Error                        failNextReleaseWith;
+        /**
          * Run by a commit of an acquire after it was applied in the DB and before it reports its failure
          */
         volatile Runnable                     afterAcquireApplied;
@@ -295,6 +303,11 @@ class DBFencedLockManagerAcquireCommitFailureTest {
          */
         @Override
         public boolean releaseLockInDB(DBFencedLockManager<StagingUnitOfWork, DBFencedLock> lockManager, StagingUnitOfWork uow, DBFencedLock fencedLock) {
+            var failure = failNextReleaseWith;
+            if (failure != null) {
+                failNextReleaseWith = null;
+                throw failure;
+            }
             var current = rows.get(fencedLock.getName());
             if (current == null || current.token() != fencedLock.getCurrentToken()) {
                 return false;
@@ -314,6 +327,11 @@ class DBFencedLockManagerAcquireCommitFailureTest {
                     Thread.currentThread().interrupt();
                     throw new IllegalStateException(e);
                 }
+            }
+            var failure = failNextLookupWith;
+            if (failure != null) {
+                failNextLookupWith = null;
+                throw failure;
             }
             if (failNextLookup) {
                 failNextLookup = false;
