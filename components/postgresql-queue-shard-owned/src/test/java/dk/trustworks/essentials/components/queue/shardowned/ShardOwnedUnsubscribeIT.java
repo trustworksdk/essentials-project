@@ -2132,6 +2132,164 @@ class ShardOwnedUnsubscribeIT {
     }
 
     /**
+     * {@link #a_unit_kept_again_after_a_takeover_past_the_stuck_handler_timeout_is_released_from_the_stop_that_holds_its_row},
+     * with another release of the first stop's entry holding its claim on that entry's owner
+     * ({@link LeasedOwner#claimReleaseUnlessMoveOwed()}, held by the test here) for longer than the request's network wait
+     * bound: that entry's charge gives up waiting, and the search goes on to the second stop's entry, which holds the row.
+     * The request answers {@link KeptUnitRelease.Outcome#RELEASED} for it, the message in its handler charged once. A
+     * request that ended the search at the entry whose charge gave up answered
+     * {@link KeptUnitRelease.Outcome#CLAIM_WAIT_TIMED_OUT} and left the unit kept by the second stop, a row it could have
+     * released.
+     */
+    @Test
+    void a_unit_kept_twice_whose_first_entrys_charge_outwaits_another_release_is_released_from_the_stop_that_holds_its_row() throws Throwable {
+        releaseOnRequestOfAUnitKeptTwiceWithItsFirstEntryClaimed("release-on-request-kept-twice", false, request -> {
+            assertThat(request.waited()).as("premise: the first entry's charge waited for the claim as long as the network wait bound")
+                                        .isGreaterThanOrEqualTo(request.bound());
+            assertThat(request.releases()).as("the entry that holds the row is released").singleElement().satisfies(answer -> {
+                assertThat(answer.outcome()).isEqualTo(KeptUnitRelease.Outcome.RELEASED);
+                assertThat(answer.keysInHandler()).containsExactly("ACC-1");
+                assertThat(answer.charged()).as("the message in the second entry's handler, charged once").isEqualTo(1);
+            });
+            assertThat(storedAttemptsOfOrderedKey("ACC-1")).as("one charge stored by the request").isEqualTo(request.attemptsBefore() + 1);
+            assertThat(ownerOf(request.keptAgain().shard())).as("the row is released").isNull();
+            assertThat(fenceOf(request.keptAgain().shard())).as("a release does not bump the fence").isEqualTo(request.keptAgain().fence());
+        });
+    }
+
+    /**
+     * {@link #a_unit_kept_twice_whose_first_entrys_charge_outwaits_another_release_is_released_from_the_stop_that_holds_its_row},
+     * with the second stop's entry's row taken meanwhile by another owner under a newer fence: nothing is released, and of
+     * the two entries - the first, whose charge gave up waiting before any fenced write of it could find its row taken, and
+     * the second, found taken - the request answers for the first, {@link KeptUnitRelease.Outcome#CLAIM_WAIT_TIMED_OUT},
+     * nothing charged, so the caller asks again. Answered {@link KeptUnitRelease.Outcome#ALREADY_TAKEN}, the caller stopped
+     * asking while this instance still kept the first entry.
+     */
+    @Test
+    void a_unit_kept_twice_whose_first_entrys_charge_outwaits_another_release_and_whose_second_entrys_row_was_taken_answers_claim_wait_timed_out() throws Throwable {
+        releaseOnRequestOfAUnitKeptTwiceWithItsFirstEntryClaimed("release-on-request-kept-twice-taken", true, request -> {
+            assertThat(request.waited()).as("premise: the first entry's charge waited for the claim as long as the network wait bound")
+                                        .isGreaterThanOrEqualTo(request.bound());
+            assertThat(request.releases()).as("one answer, for the entry whose charge gave up before any write of its own found its row taken")
+                                          .singleElement()
+                                          .satisfies(answer -> {
+                                              assertThat(answer.outcome()).isEqualTo(KeptUnitRelease.Outcome.CLAIM_WAIT_TIMED_OUT);
+                                              assertThat(answer.instanceId()).isEqualTo(INSTANCE_ID);
+                                              assertThat(answer.unit()).isEqualTo(request.keptAgain().shard());
+                                              assertThat(answer.keysInHandler()).containsExactly("ACC-1");
+                                              assertThat(answer.charged()).as("nothing charged").isZero();
+                                              assertThat(answer.deadLetteredKeys()).isEmpty();
+                                          });
+            assertThat(storedAttemptsOfOrderedKey("ACC-1")).as("nothing charged").isEqualTo(request.attemptsBefore());
+            assertThat(ownerOf(request.keptAgain().shard())).as("the new owner keeps the row").isEqualTo("other");
+            assertThat(fenceOf(request.keptAgain().shard())).as("under its fence").isEqualTo(request.keptAgain().fence() + 1);
+            assertThat(request.ordered().keptOrderedUnitNotHandedBack()).as("the first entry is still kept").isTrue();
+        });
+    }
+
+    /**
+     * What {@link #releaseOnRequestOfAUnitKeptTwiceWithItsFirstEntryClaimed} hands its check: the request's answer, how
+     * long it took, its network wait bound, the second stop's unit and fence, the ordered lane, and the message's stored
+     * attempts just before the request.
+     */
+    private record KeptTwiceRequest(List<KeptUnitRelease> releases,
+                                    Duration waited,
+                                    Duration bound,
+                                    UnitFence keptAgain,
+                                    ShardOwnedQueue ordered,
+                                    int attemptsBefore) {
+    }
+
+    /**
+     * The setup of {@link #a_unit_kept_again_after_a_takeover_past_the_stuck_handler_timeout_is_released_from_the_stop_that_holds_its_row}:
+     * two kept entries for one unit, the first stop's ahead of the second's, which holds the row. Once the second stop's
+     * budget thread has flushed, the test claims the release of the first entry's owner ({@link LeasedOwner#claimReleaseUnlessMoveOwed()}),
+     * points the row at another owner under a newer fence when {@code takeTheRow}, and asks for the unit's release on a
+     * thread named {@code requestName}; {@code check} runs with the answer while the claim is still held.
+     */
+    // awaitCallEnded shuts the request's executor down with a bound; close() would wait for it with none
+    @SuppressWarnings("PMD.CloseResource")
+    private void releaseOnRequestOfAUnitKeptTwiceWithItsFirstEntryClaimed(String requestName,
+                                                                         boolean takeTheRow,
+                                                                         ThrowingConsumer<KeptTwiceRequest> check) throws Throwable {
+        // A heartbeat every second; the takeover once the first handler has been there 3 s. The request's network wait
+        // bound is max(leaseTtl, SHUTDOWN_BUDGET).
+        var         leaseTtl            = Duration.ofSeconds(3);
+        var         stuckHandlerTimeout = Duration.ofSeconds(3);
+        var         entries             = new AtomicInteger();
+        var         entered             = new CountDownLatch(1);
+        var         release             = new CountDownLatch(1);
+        LeasedOwner claimedOwner        = null;
+        var         requests            = threadOfItsOwn(requestName);
+        var         settings            = settingsWith(Duration.ofMillis(300), leaseTtl).withStuckHandlerTimeout(stuckHandlerTimeout);
+        try (var queue = newQueue(PostgresqlMessageQueue.LifecycleHook.NONE, settings)) {
+            try {
+                queue.consume((messageId, key, payload, payloadType) -> {
+                    // Every delivery of the key holds its handler: the first, and the one the takeover delivers again.
+                    if (key != null) {
+                        entries.incrementAndGet();
+                        entered.countDown();
+                        awaitQuietly(release, Duration.ofSeconds(60));
+                    }
+                }, ConsumerOptions.defaults());
+                queue.enqueue(Message.ordered("in-handler".getBytes(StandardCharsets.UTF_8), 1, "ACC-1", 0));
+                assertThat(entered.await(20, TimeUnit.SECONDS)).as("premise: the key is in its handler").isTrue();
+
+                queue.stop();
+                var keptFirst = keptOrderedFence(INSTANCE_ID);
+                queue.start();
+                Awaitility.await().atMost(Duration.ofSeconds(15))
+                          .untilAsserted(() -> {
+                              assertThat(fenceOf(keptFirst.shard())).as("premise: taken over past the bound").isGreaterThan(keptFirst.fence());
+                              assertThat(entries).as("premise: the key's message delivered again, and held too").hasValue(2);
+                          });
+
+                queue.stop();
+                var keptAgain = keptOrderedFence(INSTANCE_ID);
+                assertThat(keptAgain.shard()).as("premise: the second stop kept the same unit").isEqualTo(keptFirst.shard());
+                assertThat(keptAgain.fence()).as("premise: under the takeover's newer fence").isGreaterThan(keptFirst.fence());
+                var lanes = queue.registeredConsumers();
+                Awaitility.await().atMost(Duration.ofSeconds(5))
+                          .untilAsserted(() -> assertThat(lanes).as("premise: the second stop's budget thread has flushed the kept unit")
+                                                                .noneMatch(ShardOwnedQueue::handBackStillRunning));
+                var ordered    = lanes.stream().filter(lane -> !lane.keptOwners().isEmpty()).findFirst().orElseThrow();
+                var keptOwners = ordered.keptOwners().stream().filter(owner -> owner.shard() == keptAgain.shard()).toList();
+                assertThat(keptOwners).as("premise: two kept entries for the unit, the first stop's ahead of the second's")
+                                      .extracting(LeasedOwner::fence)
+                                      .containsExactly(keptFirst.fence(), keptAgain.fence());
+                var firstOwner = keptOwners.getFirst();
+                // Another release of the first entry's row, its statement still running: it holds this claim until the statement returns
+                assertThat(firstOwner.claimReleaseUnlessMoveOwed()).as("premise: the first entry's release is claimed, no move owed").isTrue();
+                claimedOwner = firstOwner;
+                if (takeTheRow) {
+                    takeOrderedUnit(keptAgain.shard(), "other", keptAgain.fence() + 1);
+                }
+
+                var attemptsBefore = storedAttemptsOfOrderedKey("ACC-1");
+                var bound          = ordered.stopNetworkWaitBound();
+                var started        = System.nanoTime();
+                // On a thread of the test's own, so a request that waited for the claim with no bound fails this test rather
+                // than hanging it
+                var request = CompletableFuture.supplyAsync(() -> {
+                    try {
+                        return queue.releaseKeptOrderedUnit(INSTANCE_ID, keptAgain.shard());
+                    } catch (SQLException e) {
+                        throw new CompletionException(e);
+                    }
+                }, requests);
+                var releases = request.get(bound.plusSeconds(10).toMillis(), TimeUnit.MILLISECONDS).releases();
+                check.accept(new KeptTwiceRequest(releases, Duration.ofNanos(System.nanoTime() - started), bound, keptAgain, ordered, attemptsBefore));
+            } finally {
+                if (claimedOwner != null) {
+                    claimedOwner.endReleaseClaim();
+                }
+                release.countDown();
+                awaitCallEnded(requests, "the release on request");
+            }
+        }
+    }
+
+    /**
      * A release on request whose release of the kept unit's lease row the database refuses: with no lane of the queue
      * releasing anything, the request fails with that {@link SQLException}, and the unit is left as it was - kept, its row
      * still naming the instance under the fence it was kept under, no release reported. Asked again once the database lets
