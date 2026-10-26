@@ -34,6 +34,7 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.*;
 
@@ -60,13 +61,21 @@ class DBFencedLockManagerAcquiredCallbackErrorTest {
      * Every {@link FencedLockEvents} the lock manager published
      */
     private List<FencedLockEvents>                 events;
+    /**
+     * Run by the lock manager's sync event subscriber for every event, after recording it - may throw
+     */
+    private volatile Consumer<FencedLockEvents>    eventSubscriberAction = event -> {
+    };
 
     @BeforeEach
     void setup() {
         storage = new InMemoryLockStorage();
         events = new CopyOnWriteArrayList<>();
         var eventBus = new LocalEventBus("acquired-callback-error-test");
-        eventBus.addSyncSubscriber(event -> events.add((FencedLockEvents) event));
+        eventBus.addSyncSubscriber(event -> {
+            events.add((FencedLockEvents) event);
+            eventSubscriberAction.accept((FencedLockEvents) event);
+        });
         node = new TestDBFencedLockManager(storage,
                                            new StagingUnitOfWorkFactory(storage),
                                            FencedLockManagerSettings.builder()
@@ -80,6 +89,8 @@ class DBFencedLockManagerAcquiredCallbackErrorTest {
 
     @AfterEach
     void cleanup() {
+        eventSubscriberAction = event -> {
+        };
         node.stop();
     }
 
@@ -1161,6 +1172,36 @@ class DBFencedLockManagerAcquiredCallbackErrorTest {
         assertThatCode(node::stop).doesNotThrowAnyException();
         node.start();
         assertThat(node.tryAcquireLock(LOCK_NAME)).isPresent();
+    }
+
+    /**
+     * The lock manager is stopped by the time <code>stop()</code> rethrows its critical error, so
+     * {@link FencedLockEvents.FencedLockManagerStopped} is published before that - and a subscriber failing on it neither
+     * takes the place of the critical error nor gets lost: it is added to the critical error as suppressed.
+     */
+    @Test
+    @SuppressWarnings("PMD.CloseResource") // Releasing the lock is the job of node.stop(), the call under test
+    void a_fenced_lock_manager_stopped_subscriber_failing_after_a_critical_error_in_stop_is_added_to_the_critical_error() {
+        var lock          = node.tryAcquireLock(LOCK_NAME).orElseThrow();
+        var criticalError = new ExceptionInInitializerError("lockReleased fails critically");
+        lock.registerCallback(lockReleasedFailingWith(criticalError));
+        var subscriberFailure = new IllegalStateException("FencedLockManagerStopped subscriber fails");
+        eventSubscriberAction = event -> {
+            if (event instanceof FencedLockEvents.FencedLockManagerStopped) {
+                throw subscriberFailure;
+            }
+        };
+
+        var thrown = catchThrowable(node::stop);
+
+        // The critical error is thrown, carrying the subscriber's failure
+        assertThat(thrown).isSameAs(criticalError);
+        assertThat(thrown.getSuppressed()).containsExactly(subscriberFailure);
+        // ... once FencedLockManagerStopped is published, the lock released and the lock manager stopped
+        assertThat(events).filteredOn(FencedLockEvents.FencedLockManagerStopped.class::isInstance).hasSize(1);
+        assertThat(lock.isLockedByThisLockManagerInstance()).isFalse();
+        assertThat(storage.rows.get(LOCK_NAME).lockedBy()).isNull();
+        assertThat(node.isStarted()).isFalse();
     }
 
     @Test
