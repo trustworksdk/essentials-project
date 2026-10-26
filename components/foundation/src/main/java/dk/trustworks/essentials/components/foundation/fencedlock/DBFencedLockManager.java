@@ -1294,9 +1294,11 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
      * <p>
      * The tick does nothing unless <code>acquiring</code> is still the registration in {@link #asyncLockAcquirings} once it
      * holds {@link #reentrantLock}: a cancelled tick can already be running, waiting for that lock (behind {@link #start()},
-     * say), and a cancel's interrupt does not end that wait. This check does not cover a
-     * {@link #cancelAsyncLockAcquiring(LockName)} made after it, while the tick acquires the lock: that cancel does not take
-     * {@link #reentrantLock}.
+     * say), and a cancel's interrupt does not end that wait. A {@link #cancelAsyncLockAcquiring(LockName)} made after that
+     * check, while the tick acquires the lock - that cancel does not take {@link #reentrantLock}, and its interrupt need not
+     * abort a database round trip - is caught by a second check, made once the acquired lock is recorded in
+     * {@link #locksAcquiredByThisLockManager}: a tick that finds its registration gone then releases the lock, with the
+     * cancel's pending interrupt set aside for the release, and does not call <code>lockAcquired</code>.
      *
      * @param lockName  the lock being acquired
      * @param acquiring the registration this tick was scheduled for - its callback is notified when the lock is acquired or lost
@@ -1336,8 +1338,23 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
                 if (lock.isPresent()) {
                     log.debug("[{}] Async Acquired lock '{}'", lockManagerInstanceId, lockName);
                     var fencedLock = lock.get();
-                    fencedLock.registerCallback(lockCallback);
                     locksAcquiredByThisLockManager.put(lockName, (LOCK) fencedLock);
+                    // A cancelAsyncLockAcquiring made during the acquire above (it does not take reentrantLock) removes the
+                    // registration and then reads locksAcquiredByThisLockManager; this tick has recorded the lock there and
+                    // now reads the registration. So either the cancel finds the lock and releases it, or this tick finds the
+                    // registration gone and releases the lock itself. Outside shutdown the cancel's release in the DB waits
+                    // for reentrantLock, so it runs once this tick has called lockAcquired and calls lockReleased after it;
+                    // during shutdown its one bounded attempt may skip that wait or give it up, and then calls lockReleased
+                    // while lockAcquired may still be running. When both happen, the lock is released twice, and a
+                    // LockReleased subscriber can then see the event twice for that acquisition. The callback is registered
+                    // only after this check, so the cancelled one is never called for a lock it was not given
+                    if (asyncLockAcquirings.get(lockName) != acquiring) {
+                        log.debug("[{}] The async acquiring of lock '{}' was cancelled while this tick acquired the lock - releasing it",
+                                  lockManagerInstanceId, lockName);
+                        releaseLockOfCancelledAsyncAcquiring(lockName, (LOCK) fencedLock);
+                        return;
+                    }
+                    fencedLock.registerCallback(lockCallback);
                     try {
                         lockCallback.lockAcquired(fencedLock);
                     } catch (Throwable e) {
@@ -1396,6 +1413,40 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
             log.error(msg("[{}] Technical error while trying to acquire lock '{}'", lockManagerInstanceId, lockName), e);
         } finally {
             reentrantLock.unlock();
+        }
+    }
+
+    /**
+     * Releases a lock a tick of an async acquiring acquired after {@link #cancelAsyncLockAcquiring(LockName)} had removed its
+     * registration, so it is not left held and confirmed by this instance with no registration that would release it. No
+     * callback is registered with the lock, so no <code>lockReleased</code> is called; {@link LockReleased} is published.
+     * <p>
+     * The tick can get here with the cancel's interrupt pending (<code>cancel(true)</code>), which fails a release in the
+     * DB on a driver that fails on a pending interrupt (MongoDB's), so the pending interrupt is set aside for the release and
+     * restored afterwards, as in {@link #resolveAcquireWithUnknownCommitOutcome(DBFencedLock)}.
+     * <p>
+     * A failure of the release ({@link LockReleased} subscriber throwing, or a critical error from <code>releaseLockInDB</code>,
+     * say) completes the release locally ({@link #releaseLocallyAfterFailedRelease(LockName, DBFencedLock, Throwable)}), so this
+     * lock manager stops confirming the lock: a row the release did not free in the DB expires after the lock timeout. A
+     * non-critical failure is then logged; a critical error is rethrown.
+     *
+     * @param lockName the name of the lock
+     * @param lock     the lock the tick acquired
+     */
+    private void releaseLockOfCancelledAsyncAcquiring(LockName lockName, LOCK lock) {
+        var interrupted = Thread.interrupted();
+        try {
+            releaseLock(lock);
+        } catch (Throwable releaseFailure) {
+            releaseLocallyAfterFailedRelease(lockName, lock, releaseFailure);
+            rethrowIfCriticalError(releaseFailure);
+            log.error(msg("[{}] Releasing lock '{}', acquired by a tick of its async acquiring after that acquiring was cancelled, failed - "
+                          + "this lock manager no longer confirms the lock, so a row the release did not free expires after the lock timeout",
+                          lockManagerInstanceId, lockName), releaseFailure);
+        } finally {
+            if (interrupted) {
+                Thread.currentThread().interrupt();
+            }
         }
     }
 

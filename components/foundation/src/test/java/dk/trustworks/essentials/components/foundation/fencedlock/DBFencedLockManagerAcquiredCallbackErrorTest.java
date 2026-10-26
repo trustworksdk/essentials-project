@@ -31,7 +31,7 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.time.*;
 import java.util.*;
-import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
 import java.util.concurrent.locks.ReentrantLock;
 
@@ -342,6 +342,114 @@ class DBFencedLockManagerAcquiredCallbackErrorTest {
                       assertThat(storage.rows.get(LOCK_NAME).lockedBy()).isNull();
                   });
         assertThat(node.isLockedByThisLockManagerInstance(LOCK_NAME)).isFalse();
+    }
+
+    /**
+     * <code>cancelAsyncLockAcquiring</code> does not take the lock manager's lock, so it can land while a tick is in the
+     * database round trip of acquiring the lock, after the tick checked its registration. The cancel then finds no lock to
+     * release, and the tick went on to acquire the lock for the cancelled registration and call its <code>lockAcquired</code>,
+     * leaving the lock held and confirmed by this instance with no registration that would release it. Here the tick's look-up
+     * of the lock is held at a gate that an interrupt does not end - a driver whose round trip a cancel's interrupt does not
+     * abort - while the test cancels. The tick then releases the lock with the cancel's interrupt pending, and a release in
+     * the DB fails while the thread is interrupted, as on MongoDB, so the row is only freed when that release sets the
+     * interrupt aside.
+     */
+    @Test
+    void an_async_acquiring_cancelled_while_its_tick_acquires_the_lock_releases_the_lock_and_does_not_call_lock_acquired() {
+        storage.failLookupsWhileInterrupted = false;
+        storage.failReleasesWhileInterrupted = true;
+        storage.blockedLookupIgnoresInterrupt = true;
+        var gate = new CountDownLatch(1);
+        storage.blockedLookupName = LOCK_NAME;
+        storage.blockedLookupGate = gate;
+        var callback = new CountingLockCallback();
+        try {
+            node.acquireLockAsync(LOCK_NAME, callback);
+            // The tick has checked its registration and is in the look-up of the lock it is acquiring
+            Awaitility.waitAtMost(Duration.ofSeconds(5))
+                      .until(() -> storage.lookups.get() >= 1);
+
+            node.cancelAsyncLockAcquiring(LOCK_NAME);
+        } finally {
+            gate.countDown();
+        }
+
+        // The tick acquires the lock in the DB, finds its registration cancelled and releases the lock again: lockAcquired
+        // is not called, and nothing is left held by this instance
+        Awaitility.await()
+                  .during(Duration.ofMillis(500))
+                  .atMost(Duration.ofSeconds(5))
+                  .untilAsserted(() -> {
+                      assertThat(storage.rows.get(LOCK_NAME)).isNotNull();
+                      assertThat(storage.rows.get(LOCK_NAME).lockedBy()).isNull();
+                      assertThat(callback.acquired.get()).isZero();
+                  });
+        assertThat(callback.released.get()).isZero();
+        storage.blockedLookupGate = null;
+        assertThat(node.isLockedByThisLockManagerInstance(LOCK_NAME)).isFalse();
+        assertThat(events).filteredOn(LockReleased.class::isInstance).hasSize(1);
+    }
+
+    /**
+     * As {@link #an_async_acquiring_cancelled_while_its_tick_acquires_the_lock_releases_the_lock_and_does_not_call_lock_acquired()},
+     * but the tick's release of the lock fails in the DB with a critical error: the lock is still released locally, so this
+     * lock manager stops confirming it and its row expires after the lock timeout, and the critical error ends the async
+     * acquiring, logged at ERROR.
+     */
+    @Test
+    void a_release_in_the_db_failing_with_a_critical_error_after_a_cancel_during_the_ticks_acquire_still_stops_confirming_the_lock() {
+        storage.failLookupsWhileInterrupted = false;
+        storage.blockedLookupIgnoresInterrupt = true;
+        var gate = new CountDownLatch(1);
+        storage.blockedLookupName = LOCK_NAME;
+        storage.blockedLookupGate = gate;
+        var releaseError = new NoClassDefFoundError("releaseLockInDB fails critically");
+        var callback     = new CountingLockCallback();
+        var logEvents    = captureLockManagerLog();
+        try {
+            try {
+                node.acquireLockAsync(LOCK_NAME, callback);
+                // The tick has checked its registration and is in the look-up of the lock it is acquiring
+                Awaitility.waitAtMost(Duration.ofSeconds(5))
+                          .until(() -> storage.lookups.get() >= 1);
+
+                node.cancelAsyncLockAcquiring(LOCK_NAME);
+                storage.failNextReleaseWith = releaseError;
+            } finally {
+                gate.countDown();
+            }
+
+            // The release's critical error ends the async acquiring, logged at ERROR
+            Awaitility.waitAtMost(Duration.ofSeconds(5))
+                      .untilAsserted(() -> assertThat(logEvents.list.stream().filter(event -> event.getLevel() == Level.ERROR)).hasSize(1));
+            var error = logEvents.list.stream().filter(event -> event.getLevel() == Level.ERROR).findFirst().orElseThrow();
+            assertThat(error.getFormattedMessage()).contains("A critical error occurred in the async acquiring of lock", LOCK_NAME.toString());
+            assertThat(((ThrowableProxy) error.getThrowableProxy()).getThrowable()).isSameAs(releaseError);
+
+            // The release failed in the DB, but the lock was released locally: LockReleased was published, the released lock no
+            // longer reports itself as held here, and no callback was called (none was registered with the lock)
+            storage.blockedLookupGate = null;
+            assertThat(events).filteredOn(LockReleased.class::isInstance)
+                              .singleElement()
+                              .satisfies(event -> assertThat(((LockReleased) event).lock.isLockedByThisLockManagerInstance()).isFalse());
+            assertThat(callback.acquired.get()).isZero();
+            assertThat(callback.released.get()).isZero();
+
+            // The release failed, so the row still names this instance - but it is no longer confirmed (the confirmation
+            // interval is 100 ms), so it expires after the lock timeout
+            var lastConfirmed = storage.rows.get(LOCK_NAME).lockLastConfirmedTimestamp();
+            Awaitility.await()
+                      .during(Duration.ofMillis(600))
+                      .atMost(Duration.ofSeconds(5))
+                      .untilAsserted(() -> {
+                          assertThat(storage.rows.get(LOCK_NAME).lockedBy()).isEqualTo("node");
+                          assertThat(storage.rows.get(LOCK_NAME).lockLastConfirmedTimestamp()).isEqualTo(lastConfirmed);
+                          assertThat(callback.acquired.get()).isZero();
+                      });
+            assertThat(logEvents.list.stream().filter(event -> event.getLevel() == Level.ERROR)).hasSize(1);
+        } finally {
+            detachLockManagerLog(logEvents);
+        }
     }
 
     /**

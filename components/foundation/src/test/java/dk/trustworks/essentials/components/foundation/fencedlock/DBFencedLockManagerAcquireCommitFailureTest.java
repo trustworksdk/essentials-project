@@ -256,10 +256,20 @@ class DBFencedLockManagerAcquireCommitFailureTest {
         volatile LockName                     blockedLookupName;
         volatile CountDownLatch               blockedLookupGate;
         /**
+         * When set, a look-up blocked on {@link #blockedLookupGate} is not ended by an interrupt: it keeps waiting for the gate,
+         * then goes on with the interrupt pending - a database round trip that an interrupt does not abort
+         */
+        volatile boolean                      blockedLookupIgnoresInterrupt;
+        /**
          * When cleared, a look-up no longer fails while the thread is interrupted - a driver that does not fail on a pending
          * interrupt
          */
         volatile boolean                      failLookupsWhileInterrupted = true;
+        /**
+         * When set, a release in the DB fails while the thread is interrupted - a driver that fails on a pending interrupt,
+         * as the MongoDB driver does
+         */
+        volatile boolean                      failReleasesWhileInterrupted;
         final AtomicInteger                   lookups = new AtomicInteger();
 
         @Override
@@ -313,6 +323,9 @@ class DBFencedLockManagerAcquireCommitFailureTest {
                 failNextReleaseWith = null;
                 throw failure;
             }
+            if (failReleasesWhileInterrupted && Thread.currentThread().isInterrupted()) {
+                throw new IllegalStateException("Interrupted - an interruptible driver fails every operation while the interrupt is pending");
+            }
             var current = rows.get(fencedLock.getName());
             if (current == null || current.token() != fencedLock.getCurrentToken()) {
                 return false;
@@ -326,12 +339,7 @@ class DBFencedLockManagerAcquireCommitFailureTest {
             lookups.incrementAndGet();
             var gate = blockedLookupGate;
             if (gate != null && lockName.equals(blockedLookupName)) {
-                try {
-                    gate.await();
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    throw new IllegalStateException(e);
-                }
+                awaitBlockedLookupGate(gate);
             }
             var failure = failNextLookupWith;
             if (failure != null) {
@@ -347,6 +355,28 @@ class DBFencedLockManagerAcquireCommitFailureTest {
             }
             return Optional.ofNullable(rows.get(lockName))
                            .map(row -> createInitializedLock(lockManager, lockName, row.token(), row.lockedBy(), row.lockAcquiredTimestamp(), row.lockLastConfirmedTimestamp()));
+        }
+
+        private void awaitBlockedLookupGate(CountDownLatch gate) {
+            var interrupted = false;
+            try {
+                while (true) {
+                    try {
+                        gate.await();
+                        return;
+                    } catch (InterruptedException e) {
+                        if (!blockedLookupIgnoresInterrupt) {
+                            Thread.currentThread().interrupt();
+                            throw new IllegalStateException(e);
+                        }
+                        interrupted = true;
+                    }
+                }
+            } finally {
+                if (interrupted) {
+                    Thread.currentThread().interrupt();
+                }
+            }
         }
 
         @Override
