@@ -29,7 +29,7 @@ import org.junit.jupiter.api.*;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
-import java.time.Duration;
+import java.time.*;
 import java.util.*;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.*;
@@ -384,6 +384,69 @@ class DBFencedLockManagerAcquiredCallbackErrorTest {
         assertThat(secondReleasedCalls.get()).isEqualTo(1);
         assertThat(events).anySatisfy(event -> assertThat(event).isInstanceOfSatisfying(LockReleased.class,
                                                                                         released -> assertThat(released.lock).isSameAs(releasedLock.get())));
+    }
+
+    @Test
+    void a_lock_released_callback_failing_with_an_error_when_the_async_acquiring_finds_the_lock_lost_does_not_end_the_async_acquiring() {
+        var acquiredLocks         = new CopyOnWriteArrayList<FencedLock>();
+        var releasedCalls         = new AtomicInteger();
+        var releasedOnThread      = new AtomicReference<String>();
+        var releaseError          = new AssertionError("first lockReleased fails");
+        var logEvents             = captureLockManagerLog();
+        try {
+            node.acquireLockAsync(LOCK_NAME, LockCallback.builder()
+                                                         .onLockAcquired(lock -> {
+                                                             // markAsLocked below calls this too, with the lock naming the other instance
+                                                             if (lock.isLockedByThisLockManagerInstance()) {
+                                                                 acquiredLocks.add(lock);
+                                                             }
+                                                         })
+                                                         .onLockReleased(lock -> {
+                                                             if (releasedCalls.incrementAndGet() == 1) {
+                                                                 releasedOnThread.set(Thread.currentThread().getName());
+                                                                 throw releaseError;
+                                                             }
+                                                         })
+                                                         .build());
+            Awaitility.waitAtMost(Duration.ofSeconds(5))
+                      .untilAsserted(() -> assertThat(acquiredLocks).hasSize(1));
+            var heldLock = (DBFencedLock) acquiredLocks.get(0);
+
+            // Paused - and once the confirmation has logged that it skips, so none is in flight - the lock manager confirms no
+            // lock, so the lost lock is noticed by the async acquiring tick, which checks a held lock while paused too. Another
+            // instance takes the lock over: the row names it, and so does the lock held here, which stays recorded as acquired by
+            // this instance - the tick's lost-lock branch
+            node.pause();
+            Awaitility.waitAtMost(Duration.ofSeconds(5))
+                      .until(() -> logEvents.list.stream().anyMatch(event -> event.getFormattedMessage().contains("skipping confirmAllLocallyAcquiredLocks")));
+            var takenOverRow = storage.rows.get(LOCK_NAME);
+            var takenOverAt  = OffsetDateTime.now(Clock.systemUTC());
+            storage.rows.put(LOCK_NAME, new Row(takenOverRow.token() + 1, "other-node", takenOverAt, takenOverAt));
+            heldLock.markAsLocked(takenOverAt, "other-node", takenOverRow.token() + 1);
+
+            // The async acquiring tick called lockReleased, which failed
+            Awaitility.waitAtMost(Duration.ofSeconds(5))
+                      .untilAsserted(() -> assertThat(releasedCalls.get()).isEqualTo(1));
+            assertThat(releasedOnThread.get()).contains("-Lock-Acquiring-");
+
+            // The other instance releases the lock: the Error did not end the async acquiring, so a later tick acquires it again
+            var releasedRow = storage.rows.get(LOCK_NAME);
+            storage.rows.put(LOCK_NAME, new Row(releasedRow.token(), null, releasedRow.lockAcquiredTimestamp(), releasedRow.lockLastConfirmedTimestamp()));
+            node.resume();
+            Awaitility.waitAtMost(Duration.ofSeconds(5))
+                      .untilAsserted(() -> assertThat(acquiredLocks).hasSize(2));
+            assertThat(releasedCalls.get()).isEqualTo(1);
+            assertThat(acquiredLocks.get(1).isLockedByThisLockManagerInstance()).isTrue();
+            assertThat(storage.rows.get(LOCK_NAME).lockedBy()).isEqualTo("node");
+            assertThat(node.isLockedByThisLockManagerInstance(LOCK_NAME)).isTrue();
+
+            // ... and the Error was logged, once
+            assertThat(logEvents.list.stream().filter(event -> event.getLevel() == Level.ERROR))
+                    .singleElement()
+                    .satisfies(event -> assertThat(((ThrowableProxy) event.getThrowableProxy()).getThrowable()).isSameAs(releaseError));
+        } finally {
+            detachLockManagerLog(logEvents);
+        }
     }
 
     @Test
