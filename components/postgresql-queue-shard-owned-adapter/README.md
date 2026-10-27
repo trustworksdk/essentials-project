@@ -327,8 +327,8 @@ Everything else is served, including the three that used to throw and should not
 `int` carries `FORMAT_VERSION`, so a future format is distinguishable per row — it is the only field
 outside the envelope, hence the only one readable before deciding how to parse.
 
-Format 2, written since 0.60.1, embeds payload and metadata as JSON:
-`{"payloadType":"<class name>","payload":{...},"metaData":{...}}`. Format 1, written by 0.60.0, held
+Format 2, written since 0.61.0, embeds payload and metadata as JSON:
+`{"payloadType":"<class name>","payload":{...},"metaData":{...}}`. Format 1, written by 0.60.x, held
 them as JSON **strings**, so they appear escaped in the `*_readable` views for rows written then. Rows in
 format 1 — queued or dead-lettered — are still read, and a resurrected dead letter keeps its format.
 Metadata travels as its own envelope field rather than merged into the payload; a payload with its own

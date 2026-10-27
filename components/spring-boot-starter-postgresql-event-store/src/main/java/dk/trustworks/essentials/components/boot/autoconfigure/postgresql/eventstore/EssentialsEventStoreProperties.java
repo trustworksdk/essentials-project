@@ -1000,7 +1000,7 @@ public class EssentialsEventStoreProperties {
         /**
          * How many events an aggregate may get ahead of its newest snapshot before a new one is added, for an aggregate
          * whose snapshot policy does not say ({@code @AggregateSnapshotPolicy} has its own default, 100). Default 1000;
-         * 10 until 0.60.1, which added a snapshot - a serialization and an insert inside the command's transaction -
+         * 10 until 0.61.0, which added a snapshot - a serialization and an insert inside the command's transaction -
          * every tenth event.
          */
         private       int                                            defaultEveryNEvents      = 1000;

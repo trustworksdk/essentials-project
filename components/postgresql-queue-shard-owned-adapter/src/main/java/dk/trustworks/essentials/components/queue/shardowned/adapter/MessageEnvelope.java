@@ -51,7 +51,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  *         own and a custom serializer stays in charge of the application's types. It is read with
  *         {@link JSONSerializer#readProperties}: {@code payloadType} first, then the payload as that type, in one
  *         pass where the serializer can stream ({@link Jackson3JSONSerializer} does).</li>
- *     <li><b>{@value #FORMAT_VERSION_1}</b>, written by 0.60.0 — the payload and metadata held as JSON
+ *     <li><b>{@value #FORMAT_VERSION_1}</b>, written by 0.60.x — the payload and metadata held as JSON
  *         <em>strings</em> inside a flat object of three strings. Every message was therefore serialized
  *         twice on the way in and parsed twice on the way out, and its payload appeared escaped in
  *         {@code shard_queue_unordered_readable}. Measured on a typical event with three metadata entries,
@@ -83,7 +83,7 @@ public record MessageEnvelope(String payloadType, String payload, String metaDat
     public static final int FORMAT_VERSION = 2;
 
     /**
-     * The format 0.60.0 wrote: payload and metadata as JSON strings inside the envelope. Still read, never written.
+     * The format 0.60.x wrote: payload and metadata as JSON strings inside the envelope. Still read, never written.
      */
     public static final int FORMAT_VERSION_1 = 1;
 
@@ -178,7 +178,7 @@ public record MessageEnvelope(String payloadType, String payload, String metaDat
      * @deprecated says nothing about the format the bytes are in, and cannot read what this version writes. Use
      * {@link #deserialize(JSONSerializer, byte[], int, String, long)} with the row's format version.
      */
-    @Deprecated(forRemoval = true, since = "0.60.1")
+    @Deprecated(forRemoval = true, since = "0.61.0")
     public static Message deserialize(JSONSerializer jsonSerializer, byte[] bytes, String key, long order) {
         return deserialize(jsonSerializer, bytes, FORMAT_VERSION_1, key, order);
     }

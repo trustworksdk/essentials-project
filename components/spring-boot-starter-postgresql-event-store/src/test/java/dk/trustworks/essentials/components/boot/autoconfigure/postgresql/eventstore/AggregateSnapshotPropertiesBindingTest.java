@@ -33,7 +33,7 @@ class AggregateSnapshotPropertiesBindingTest {
             .withConfiguration(AutoConfigurations.of(TestConfiguration.class));
 
     /**
-     * 10 until 0.60.1
+     * 10 until 0.61.0
      */
     @Test
     void an_aggregate_without_a_snapshot_policy_is_snapshotted_every_1000_events_by_default() {

@@ -38,9 +38,9 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * A message 0.60.0 wrote in envelope format 1 must still be readable everywhere the adapter reads one: the admin
+ * A message 0.60.x wrote in envelope format 1 must still be readable everywhere the adapter reads one: the admin
  * listing, the dead-letter listing, and delivery - including after it has been dead-lettered and resurrected, which
- * keeps the format version it was written in. The format-1 rows are put in through the engine, exactly as 0.60.0
+ * keeps the format version it was written in. The format-1 rows are put in through the engine, exactly as 0.60.x
  * stored them, since nothing in this version writes that format any more.
  */
 @Testcontainers(disabledWithoutDocker = true)
@@ -144,7 +144,7 @@ class EnvelopeFormatsOnShardOwnedIT {
     }
 
     /**
-     * The bytes 0.60.0 wrote: payload and metadata serialized, then each held as a JSON string in a flat envelope.
+     * The bytes 0.60.x wrote: payload and metadata serialized, then each held as a JSON string in a flat envelope.
      */
     private static byte[] formatOne(OrderPlaced payload, String correlationId) {
         var json = EssentialsObjectMappers.createJSONSerializer();

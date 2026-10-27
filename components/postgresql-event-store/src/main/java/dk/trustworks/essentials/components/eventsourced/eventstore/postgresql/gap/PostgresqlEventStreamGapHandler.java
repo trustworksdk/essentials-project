@@ -223,12 +223,12 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
                                                        "   first_discovered TIMESTAMP WITH TIME ZONE NOT NULL\n," +
                                                        "   PRIMARY KEY (subscriber_id, aggregate_type, gap_global_event_order)\n" +
                                                        ")"),
-                       // Up to 0.60.0 an index on (subscriber_id, aggregate_type) was created here ("transient-gaps-index").
+                       // Up to 0.60.x an index on (subscriber_id, aggregate_type) was created here ("transient-gaps-index").
                        // It duplicated the primary key's leading columns, and every statement on the table filters on all
                        // of them; worse, with statistics taken while the table was small the planner preferred it, as the
                        // smaller index, and applied the gap orders as a filter - reading every outstanding gap of the
                        // subscriber to touch a few. Without it the orders are part of the primary-key lookup. Repeatable,
-                       // as an older instance restarting during a rolling upgrade creates it again; the change creating it
+                       // as a 0.60.x instance restarting during a rolling upgrade creates it again; the change creating it
                        // is no longer contributed, never edited, so its recorded checksum stays valid.
                        SchemaChange.repeatable("transient-gaps-index-dropped",
                                                TRANSIENT_SUBSCRIBER_GAPS_TABLE_NAME,

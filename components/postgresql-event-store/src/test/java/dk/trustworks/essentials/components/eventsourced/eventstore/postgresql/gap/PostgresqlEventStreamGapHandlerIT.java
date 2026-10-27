@@ -684,7 +684,7 @@ class PostgresqlEventStreamGapHandlerIT {
     }
 
     /**
-     * Up to 0.60.0 the gap tables came with an index on (subscriber_id, aggregate_type), which made the planner filter
+     * Up to 0.60.x the gap tables came with an index on (subscriber_id, aggregate_type), which made the planner filter
      * gap orders instead of looking them up. A database that has it loses it when the gap handler starts
      */
     @Test

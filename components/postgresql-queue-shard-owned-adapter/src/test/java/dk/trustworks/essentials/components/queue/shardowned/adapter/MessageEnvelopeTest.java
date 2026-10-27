@@ -110,7 +110,7 @@ class MessageEnvelopeTest {
     }
 
     /**
-     * Exactly the bytes 0.60.0 wrote - format 1, payload and metadata as JSON strings. A row like this can still be in a
+     * Exactly the bytes 0.60.x wrote - format 1, payload and metadata as JSON strings. A row like this can still be in a
      * queue or its dead-letter table, so it must stay readable for good. Written out literally, not produced by any code
      * that still exists, so a change to the reader cannot quietly change what "format 1" means.
      */

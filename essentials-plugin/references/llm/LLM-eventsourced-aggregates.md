@@ -803,8 +803,8 @@ essentials.eventstore.snapshots.durable.processing-timeout=5m
 essentials.eventstore.snapshots.aggregates.Orders.mode=async-in-memory
 ```
 Interval precedence: per-aggregate property > `@AggregateSnapshotPolicy.everyNEvents` (default 100) >
-`default-every-n-events` (default 1000; 10 before 0.60.1). Annotations on a non-bean aggregate apply only if it is
-declared through `EssentialsAggregateDeclarations`; before 0.60.1 they were silently ignored for repositories built as
+`default-every-n-events` (default 1000; 10 before 0.61.0). Annotations on a non-bean aggregate apply only if it is
+declared through `EssentialsAggregateDeclarations`; before 0.61.0 they were silently ignored for repositories built as
 beans at startup.
 ⚠️ `snapshot-table-name` / `durable.job-table-name` are concatenated into SQL — hardcoded values only, see [Security](#security).
 
