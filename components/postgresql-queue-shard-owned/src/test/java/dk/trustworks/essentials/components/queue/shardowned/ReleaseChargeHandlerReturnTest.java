@@ -411,9 +411,6 @@ class ReleaseChargeHandlerReturnTest {
         return new HandlerDispatch(command -> Thread.ofPlatform().daemon().start(command), 8);
     }
 
-    // DataSource's own loader, not the thread's context loader: a proxy class must be defined in a loader that sees
-    // its interface, which the context loader need not.
-    @SuppressWarnings("PMD.UseProperClassLoader")
     private static DataSource refusingConnectionsAfter(Runnable action) {
         return (DataSource) Proxy.newProxyInstance(DataSource.class.getClassLoader(), new Class<?>[]{DataSource.class},
                                                    (proxy, method, args) -> {
@@ -425,9 +422,6 @@ class ReleaseChargeHandlerReturnTest {
                                                    });
     }
 
-    // DataSource's own loader, not the thread's context loader: a proxy class must be defined in a loader that sees
-    // its interface, which the context loader need not.
-    @SuppressWarnings("PMD.UseProperClassLoader")
     private static DataSource noDatabase() {
         // Nothing here reaches the DataSource: every write goes through the connection each test passes.
         return (DataSource) Proxy.newProxyInstance(DataSource.class.getClassLoader(), new Class<?>[]{DataSource.class},

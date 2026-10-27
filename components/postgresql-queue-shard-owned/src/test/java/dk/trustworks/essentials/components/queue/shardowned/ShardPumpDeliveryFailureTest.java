@@ -414,10 +414,9 @@ class ShardPumpDeliveryFailureTest {
      * Hands out connections that are valid and refuse every statement, as a revoked grant would: the stub owners issue
      * none, so only the pump's own batched read meets it.
      */
-    // This test class's own loader, not the thread's context loader: a proxy class must be defined in a loader that sees
-    // its interface, which the context loader need not. The connection is a stateless stub handed out on every
-    // getConnection(), holding nothing to close. Identity is the correct equals() for a proxy.
-    @SuppressWarnings({"PMD.UseProperClassLoader", "PMD.CloseResource", "PMD.CompareObjectsWithEquals"})
+    // The connection is a stateless stub handed out on every getConnection(), holding nothing to close. Identity is the
+    // correct equals() for a proxy.
+    @SuppressWarnings({"PMD.CloseResource", "PMD.CompareObjectsWithEquals"})
     private static DataSource healthyDataSource() {
         var loader = ShardPumpDeliveryFailureTest.class.getClassLoader();
         var connection = (Connection) Proxy.newProxyInstance(loader, new Class<?>[]{Connection.class},
@@ -445,10 +444,9 @@ class ShardPumpDeliveryFailureTest {
      * Hands out connections whose every statement succeeds and returns no rows, so the pump's batched read completes and
      * is applied to the owners.
      */
-    // This test class's own loader, not the thread's context loader: a proxy class must be defined in a loader that sees
-    // its interface, which the context loader need not. The result set, statement and connection are stateless stubs,
-    // the same instance handed out on every call, holding nothing to close. Identity is the correct equals() for a proxy.
-    @SuppressWarnings({"PMD.UseProperClassLoader", "PMD.CloseResource", "PMD.CompareObjectsWithEquals"})
+    // The result set, statement and connection are stateless stubs, the same instance handed out on every call, holding
+    // nothing to close. Identity is the correct equals() for a proxy.
+    @SuppressWarnings({"PMD.CloseResource", "PMD.CompareObjectsWithEquals"})
     private static DataSource emptyResultDataSource() {
         var loader = ShardPumpDeliveryFailureTest.class.getClassLoader();
         var resultSet = (ResultSet) Proxy.newProxyInstance(loader, new Class<?>[]{ResultSet.class},

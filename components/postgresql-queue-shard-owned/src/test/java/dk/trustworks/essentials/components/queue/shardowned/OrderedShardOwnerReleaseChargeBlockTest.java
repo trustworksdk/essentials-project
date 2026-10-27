@@ -93,9 +93,6 @@ class OrderedShardOwnerReleaseChargeBlockTest {
         assertThat(pendingPoisonSeqs(owner)).as("nothing is queued for the dead-letter table").isEmpty();
     }
 
-    // DataSource's own loader, not the thread's context loader: a proxy class must be defined in a loader that sees
-    // its interface, which the context loader need not.
-    @SuppressWarnings("PMD.UseProperClassLoader")
     private static OrderedShardOwner owner() {
         var settings = ShardOwnerSettings.builder().build();
         // Nothing here reaches the DataSource: every write goes through the connection each test passes.

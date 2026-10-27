@@ -511,9 +511,6 @@ class ShardOwnedQueueReleaseLeaseRowsTest {
             Object answer(Method method, Object... args) throws Throwable;
         }
 
-        // The interface's own loader, not the thread's context loader: a proxy class must be defined in a loader that
-        // sees its interface, which the context loader need not.
-        @SuppressWarnings("PMD.UseProperClassLoader")
         private static <T> T proxy(Class<T> type, Answer answer) {
             return type.cast(Proxy.newProxyInstance(type.getClassLoader(), new Class<?>[]{type}, (proxy, method, args) -> answer.answer(method, args)));
         }

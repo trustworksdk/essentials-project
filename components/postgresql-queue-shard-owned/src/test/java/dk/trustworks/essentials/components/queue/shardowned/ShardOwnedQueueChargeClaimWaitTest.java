@@ -217,9 +217,8 @@ class ShardOwnedQueueChargeClaimWaitTest {
      * A {@code DataSource} handing out connections that may be bounded ({@link NetworkWaitBound}) and closed, and refuse
      * anything else: the charge here gives up before it sends a statement.
      */
-    // DataSource's own loader, not the thread's context loader: a proxy class must be defined in a loader that sees
-    // its interface, which the context loader need not. Identity is the correct equals() for a proxy.
-    @SuppressWarnings({"PMD.UseProperClassLoader", "PMD.CompareObjectsWithEquals"})
+    // Identity is the correct equals() for a proxy.
+    @SuppressWarnings("PMD.CompareObjectsWithEquals")
     private static final class AnsweringDataSource implements DataSource {
         @Override
         public Connection getConnection() {

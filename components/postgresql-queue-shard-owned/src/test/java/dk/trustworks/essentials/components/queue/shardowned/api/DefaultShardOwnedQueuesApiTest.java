@@ -82,9 +82,6 @@ class DefaultShardOwnedQueuesApiTest {
      * The API over a registry holding {@link #QUEUE} alone, whose {@link MessageQueue#releaseKeptOrderedUnit} throws
      * {@code failure} when it is given, and answers {@code answer} otherwise; every principal is allowed.
      */
-    // MessageQueue's own loader, not the thread's context loader: a proxy class must be defined in a loader that sees
-    // its interface, which the context loader need not.
-    @SuppressWarnings("PMD.UseProperClassLoader")
     private static ShardOwnedQueuesApi apiOverAQueue(KeptUnitReleases answer, SQLException failure) {
         var queue = (MessageQueue) Proxy.newProxyInstance(MessageQueue.class.getClassLoader(), new Class<?>[]{MessageQueue.class},
                                                           (proxy, method, args) -> {

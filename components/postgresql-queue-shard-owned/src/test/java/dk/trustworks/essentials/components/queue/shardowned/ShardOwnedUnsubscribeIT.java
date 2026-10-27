@@ -3918,9 +3918,6 @@ class ShardOwnedUnsubscribeIT {
             }
         }
 
-        // Connection's own loader, not the thread's context loader: a proxy class must be defined in a loader that sees
-        // its interface, which the context loader need not.
-        @SuppressWarnings("PMD.UseProperClassLoader")
         private Connection watched(Connection connection) {
             if (!Thread.currentThread().equals(statementThread.get())) {
                 return connection;

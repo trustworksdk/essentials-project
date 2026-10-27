@@ -240,9 +240,6 @@ class KeptUnitPhaseTest {
     /**
      * An owner nothing here asks anything of: the phase is the unit's own, never read from its owner.
      */
-    // LeasedOwner's own loader, not the thread's context loader: a proxy class must be defined in a loader that sees
-    // its interface, which the context loader need not.
-    @SuppressWarnings("PMD.UseProperClassLoader")
     private static LeasedOwner owner() {
         return (LeasedOwner) Proxy.newProxyInstance(LeasedOwner.class.getClassLoader(), new Class<?>[]{LeasedOwner.class},
                                                     (proxy, method, args) -> {

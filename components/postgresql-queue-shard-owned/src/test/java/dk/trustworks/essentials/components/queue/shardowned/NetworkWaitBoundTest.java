@@ -35,10 +35,9 @@ import static org.assertj.core.api.Assertions.*;
  * ever tightens. Unwrapped to {@link Connection} (or {@link Wrapper}), the bound connection gives itself, so a close of
  * what came back still sets the timeout back; unwrapped to a driver's own type it reaches the driver, as before.
  */
-// This test class's own loader, not the thread's context loader: a proxy class must be defined in a loader that sees its
-// interface, which the context loader need not. The connections the tests take are fakes holding nothing to close; a test
-// that closes one does so to assert what the close does. Identity is the correct equals() for a proxy.
-@SuppressWarnings({"PMD.UseProperClassLoader", "PMD.CloseResource", "PMD.CompareObjectsWithEquals"})
+// The connections the tests take are fakes holding nothing to close; a test that closes one does so to assert what the
+// close does. Identity is the correct equals() for a proxy.
+@SuppressWarnings({"PMD.CloseResource", "PMD.CompareObjectsWithEquals"})
 class NetworkWaitBoundTest {
 
     private static final Duration BOUND        = Duration.ofSeconds(30);

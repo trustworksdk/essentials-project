@@ -89,9 +89,6 @@ class OrderedShardOwnerKeysNamedAtReleaseTest {
         assertThat(pendingAcks(owner)).as("the acknowledgement queued while the flush ran is left unflushed").containsExactly(2L);
     }
 
-    // DataSource's own loader, not the thread's context loader: a proxy class must be defined in a loader that sees
-    // its interface, which the context loader need not.
-    @SuppressWarnings("PMD.UseProperClassLoader")
     private static OrderedShardOwner owner() {
         var settings = ShardOwnerSettings.builder().setShedGrace(SHED_GRACE).setStuckHandlerTimeout(STUCK_HANDLER_TIMEOUT).build();
         // Nothing here reaches the DataSource: every write goes through the connection each test passes.
@@ -172,9 +169,6 @@ class OrderedShardOwnerKeysNamedAtReleaseTest {
             this.duringFirstWrite = duringFirstWrite;
         }
 
-        // Connection's own loader, not the thread's context loader: a proxy class must be defined in a loader that sees
-        // its interface, which the context loader need not.
-        @SuppressWarnings("PMD.UseProperClassLoader")
         Connection connection() {
             return (Connection) Proxy.newProxyInstance(Connection.class.getClassLoader(), new Class<?>[]{Connection.class}, (proxy, method, args) -> {
                 switch (method.getName()) {
@@ -194,9 +188,6 @@ class OrderedShardOwnerKeysNamedAtReleaseTest {
             });
         }
 
-        // PreparedStatement's own loader, not the thread's context loader: a proxy class must be defined in a loader that
-        // sees its interface, which the context loader need not.
-        @SuppressWarnings("PMD.UseProperClassLoader")
         private PreparedStatement statement() {
             return (PreparedStatement) Proxy.newProxyInstance(PreparedStatement.class.getClassLoader(), new Class<?>[]{PreparedStatement.class},
                                                               (proxy, method, args) -> {

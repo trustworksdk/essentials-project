@@ -25,10 +25,23 @@
     <exclude name="AvoidLiteralsInIfCondition"/>
     <exclude name="NullAssignment"/>
     <exclude name="MissingSerialVersionUID"/>
-    <!-- A J2EE container rule; this library targets no EE container, and tests build JDK proxies with a class's own loader. -->
+    <!-- Both re-added below, with *Test / *IT classes suppressed. -->
     <exclude name="UseProperClassLoader"/>
-    <!-- Re-added below, with *Test / *IT classes suppressed. -->
     <exclude name="AvoidAccessibilityAlteration"/>
+  </rule>
+
+  <!-- Test classes (*Test / *IT, and classes nested in them) build JDK proxies with their own or the
+       interface's loader, which sees the interface where the thread's context loader need not. Every
+       other class, main or test helper, is still checked: in main code the loader decides which copy of
+       an application type is loaded (under Spring Boot DevTools the application's classes live in a
+       restart class loader, and the starters' EssentialsComponentsConfiguration sets the JSONSerializer's
+       class loader to the application context's), so a getClassLoader() there says in a suppression
+       why its loader is the right one. -->
+  <rule ref="category/java/errorprone.xml/UseProperClassLoader">
+    <properties>
+      <property name="violationSuppressXPath"
+                value="./ancestor-or-self::ClassDeclaration[ends-with(@SimpleName, 'Test') or ends-with(@SimpleName, 'IT')]"/>
+    </properties>
   </rule>
 
   <!-- Test classes (*Test / *IT, and classes nested in them) may set private state through
