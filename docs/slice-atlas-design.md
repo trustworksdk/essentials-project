@@ -250,16 +250,16 @@ releases focus. Text is never drawn below 11 px — below that the level of deta
 
 **Theme.** Light and dark, following `prefers-color-scheme` with a toggle that overrides it. Colours
 come from the Trustworks palette (the `tw-brand` plugin's `visual-style` skill): Aqua 100/80/60/40
-`#96B7B9 #AAC5C7 #BFD4D5 #D5E2E3`, Gul 100/80/60/40 `#F3D4A1 #F5DCB4 #F3E4CD #FAEDDA`, Lys grå
-`#EAEAEA`, Mørk grå `#666672`; font stack `"Neue Haas Grotesk Display Pro", "Neue Haas Grotesk Text
-Pro", Arial, sans-serif`. Light is the default surface (white, Lys grå panels, Mørk grå text). Event
+`#96B7B9 #AAC5C7 #BFD4D5 #D5E2E3`, Yellow 100/80/60/40 `#F3D4A1 #F5DCB4 #F3E4CD #FAEDDA`, Light grey
+`#EAEAEA`, Dark grey `#666672`; font stack `"Neue Haas Grotesk Display Pro", "Neue Haas Grotesk Text
+Pro", Arial, sans-serif`. Light is the default surface (white, Light grey panels, Dark grey text). Event
 Modeling keeps the method's own hues so a board reads like any other event model — **events orange,
-commands blue, views green** — toned to the palette: the orange is Gul 100 turned towards red at the
+commands blue, views green** — toned to the palette: the orange is Yellow 100 turned towards red at the
 same saturation, the blue and green take Aqua's muted weight (`atlas.html`'s token block has the
 values). This is the one deliberate departure from the brand's "no off-palette hues" rule, decided by
-the maintainer after a first version that mapped the roles onto Aqua and Gul read as unfamiliar.
+the maintainer after a first version that mapped the roles onto Aqua and Yellow read as unfamiliar.
 Otherwise the only off-palette hues are muted status colours (error, warn), as the brand allows. Dark mode
-keeps the same hues on a surface derived from Mørk grå, with stickies at reduced lightness so they do
+keeps the same hues on a surface derived from Dark grey, with stickies at reduced lightness so they do
 not glare. No gradients on working surfaces.
 
 ## 10. Lenses

@@ -10,9 +10,9 @@
    properties; lenses use the tokens and never a literal colour.
 
    Palette: Trustworks visual style. Aqua 100/80/60/40 #96B7B9 #AAC5C7 #BFD4D5 #D5E2E3,
-   Gul 100/80/60/40 #F3D4A1 #F5DCB4 #F3E4CD #FAEDDA, Lys grå #EAEAEA, Mørk grå #666672.
+   Yellow 100/80/60/40 #F3D4A1 #F5DCB4 #F3E4CD #FAEDDA, Light grey #EAEAEA, Dark grey #666672.
    Event Modeling keeps its own hues, toned to the palette (--evt / --cmd / --view below):
-   events orange, commands blue, views green; triggers Lys grå with a Mørk grå rule. Those three
+   events orange, commands blue, views green; triggers Light grey with a Dark grey rule. Those three
    and the muted status colours are the only off-palette hues.
 
    Token                     role
@@ -28,10 +28,10 @@
    --view / --view-rule      view sticky fill / rule               (Event Modeling green)
                              The one deliberate departure from the palette: the three Event
                              Modeling roles keep the method's own hues so a board reads like
-                             every other event model, toned to the brand — orange is Gul 100
+                             every other event model, toned to the brand — orange is Yellow 100
                              turned 8° towards red at the same saturation, blue and green take
                              Aqua's muted weight. Text on each passes 6.4:1 in both themes.
-   --trg / --trg-rule        trigger, automation, schedule sticky  (Lys grå + Mørk grå)
+   --trg / --trg-rule        trigger, automation, schedule sticky  (Light grey + Dark grey)
    --ext                     external-system sticky fill (dashed --trg-rule)
    --ctx-fill                bounded-context region fill
    --lane-fill               alternate board lane band
@@ -39,23 +39,23 @@
    --warn / --warn-bg        warn status (issues, missing tests, changed)
    --info / --info-bg        info status (muted)
    --ok                      resolved test, added
-   --p0 … --p11              process colours: three families (Aqua, Gul, Mørk grå) × four
+   --p0 … --p11              process colours: three families (Aqua, Yellow, Dark grey) × four
                              lightness steps, interleaved so neighbouring indices differ in
                              family. Light theme uses shades (dark enough for a 2px line on
                              white); dark theme uses tints of the same twelve.
        index  family  light     dark
        p0     aqua    #4F7F83   #96B7B9
-       p1     gul     #C08A2E   #F3D4A1
-       p2     grå     #666672   #B4B4BE
+       p1     yellow  #C08A2E   #F3D4A1
+       p2     grey    #666672   #B4B4BE
        p3     aqua    #2F5558   #BFD4D5
-       p4     gul     #8C6119   #FAEDDA
-       p5     grå     #3D3D45   #8D8D99
+       p4     yellow  #8C6119   #FAEDDA
+       p5     grey    #3D3D45   #8D8D99
        p6     aqua    #6E9DA1   #6E9497
-       p7     gul     #A8742A   #E3B871
-       p8     grå     #8D8D99   #D9D9DF
+       p7     yellow  #A8742A   #E3B871
+       p8     grey    #8D8D99   #D9D9DF
        p9     aqua    #1E3C3E   #D5E2E3
-       p10    gul     #6B4810   #C9A15F
-       p11    grå     #26262B   #EAEAEA
+       p10    yellow  #6B4810   #C9A15F
+       p11    grey    #26262B   #EAEAEA
    The block between the TOKENS markers is copied verbatim into the per-application index page
    (index.html, by slice_atlas.assemble_index), so the palette exists once: keep it tokens only.
    ====================================================================================== */
