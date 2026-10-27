@@ -1,0 +1,261 @@
+{
+  "schema": 2,
+  "projected_through": 31,
+  "asOf": "2026-10-27T09:57:39Z",
+  "active_learnings": [
+    {
+      "id": "L-001",
+      "predicate": {
+        "file": "essentials-plugin/**",
+        "rule": "todo"
+      },
+      "action": "suppress",
+      "origin_event": [
+        2
+      ],
+      "text": "don't flag todo in essentials-plugin/** — TODOs there are template placeholders the slice skills fill, their rendered goldens, or prose about that mechanism"
+    },
+    {
+      "id": "L-002",
+      "predicate": {
+        "file": ".github/workflows/**",
+        "rule": "print-call"
+      },
+      "action": "suppress",
+      "origin_event": [
+        3
+      ],
+      "text": "don't flag print-call in .github/workflows/** — stdout is the output there"
+    },
+    {
+      "id": "L-003",
+      "predicate": {
+        "file": "essentials-plugin/scripts/**",
+        "rule": "print-call"
+      },
+      "action": "suppress",
+      "origin_event": [
+        4
+      ],
+      "text": "don't flag print-call in essentials-plugin/scripts/** — stdout is the output there"
+    },
+    {
+      "id": "D-feat-slice-atlas-F-003",
+      "predicate": {
+        "file": ".devcontainer/scripts/post-create.sh",
+        "rule": "xxx"
+      },
+      "action": "suppress",
+      "origin_event": [
+        8
+      ],
+      "text": "XXXXXX in a mktemp template is the placeholder pattern, not a hygiene marker"
+    },
+    {
+      "id": "D-feat-slice-atlas-F-090",
+      "predicate": {
+        "file": "scripts/prepare-release.py",
+        "rule": "todo"
+      },
+      "action": "suppress",
+      "origin_event": [
+        9
+      ],
+      "text": "TODO is the name of the marker constant prepare-release.py writes into the notes and CHANGELOG on purpose; --check refuses to pass until it is filled in. Not a leftover TODO comment."
+    },
+    {
+      "id": "D-feat-slice-atlas-F-285",
+      "predicate": {},
+      "action": "advisory",
+      "origin_event": [
+        10
+      ],
+      "text": "Not a defect: The cascade cannot happen. ShardRuntime.SHARED is an IdentityHashMap keyed by the DataSource instance, and ShardOwnedLifecycleIT builds a brand-new HikariDataSource in @BeforeEach and closes it in @AfterEach. A borrow leaked by this test leaves its stopped runtime mapped under a DataSource no later test ever passes to acquireShared, so no later test can get a stopped runtime. What is left is one stale map entry per regression in a test JVM, and only when the test is already failing."
+    },
+    {
+      "id": "D-feat-slice-atlas-F-354",
+      "predicate": {
+        "file": "components/postgresql-queue-shard-owned/src/main/java/dk/trustworks/essentials/components/queue/shardowned/ShardOwnedQueue.java",
+        "rule": "CompareObjectsWithEquals"
+      },
+      "action": "suppress",
+      "origin_event": [
+        11,
+        12,
+        13
+      ],
+      "text": "Not a defect: the reference comparison is the intended semantics. Run is a private class with no equals/hashCode whose identity is the object (javadoc 'Why the run's identity'); equals() would be the same identity test."
+    },
+    {
+      "id": "D-feat-slice-atlas-F-491",
+      "predicate": {},
+      "action": "advisory",
+      "origin_event": [
+        14
+      ],
+      "text": "Not a defect: tryLock(STOP_WAITS_FOR_START) returns as soon as the lock is released; the full 2 s is spent only when another holder outlasts it, which is the documented bounded wait (javadoc lines 239-240)."
+    },
+    {
+      "id": "D-feat-slice-atlas-F-574",
+      "predicate": {
+        "file": "components/postgresql-queue-shard-owned/src/test/java/dk/trustworks/essentials/components/queue/shardowned/ShardOwnedOrderedWatermarkIT.java",
+        "rule": "CheckResultSet"
+      },
+      "action": "suppress",
+      "origin_event": [
+        15
+      ],
+      "text": "Not a defect: next() result is checked via assertThat(...).isTrue() naming the backend; PMD CheckResultSet does not see an AssertJ assertion as a use"
+    },
+    {
+      "id": "D-feat-slice-atlas-F-650",
+      "predicate": {
+        "file": "components/postgresql-queue-shard-owned/src/main/java/dk/trustworks/essentials/components/queue/shardowned/ShardOwnedStorage.java",
+        "rule": "SQL_INJECTION_JDBC"
+      },
+      "action": "suppress",
+      "origin_event": [
+        16
+      ],
+      "text": "Not a defect: The only concatenated identifier is `table`, and the method rejects any value other than the two ShardOwnedSchema constants before the SQL is built. The alias \"o\" is a literal, and ownedByClause concatenates only LEASE_TABLE and that alias. Every value is bound with set*. SpotBugs cannot see the guard, but injection is impossible."
+    },
+    {
+      "id": "D-feat-slice-atlas-F-693",
+      "predicate": {
+        "file": "essentials-plugin/tests/slice-golden/kotlin-decider-manifest/src/test/kotlin/com/example/shop/orders/views/order_list/OrderListProjectionIT.kt",
+        "rule": "detekt.style.UnusedPrivateProperty"
+      },
+      "action": "suppress",
+      "origin_event": [
+        17
+      ],
+      "text": "Not a defect: The IT is a scaffold stub: the autowired repository is the handle the three TODO bodies tell the user to assert against (assert the row, assert applied once, assert the store is cleared). It comes verbatim from the template, and the golden must byte-match it. Removing it would strip the scaffold of the thing the bodies are meant to use."
+    },
+    {
+      "id": "D-feat-slice-atlas-F-737",
+      "predicate": {},
+      "action": "advisory",
+      "origin_event": [
+        18
+      ],
+      "text": "Not a defect: The 500 is the catalog's stated contract, not an accident the test invents. behaviours.json:146 marks java/view_service_entity view.query-by-id implemented with the summary \"an unknown id throws NoSuchElementException, which no handler maps to 404\". The IT's class javadoc says each test asserts one implemented entry against the rendered, untouched skeleton, so that the implemented entries stay honest. A template change that maps the exception to 404 must change that summary too, and this test failing is how the harness forces the two to move together. Loosening it to isNotEqualTo(404) would also accept 200 or 400 and stop checking the stated behaviour."
+    },
+    {
+      "id": "D-feat-slice-atlas-F-806",
+      "predicate": {
+        "file": "components/admin-api-spec/src/test/java/dk/trustworks/essentials/components/adminapi/spec/OpenApiSpecGenerationTest.java",
+        "rule": "sysout"
+      },
+      "action": "suppress",
+      "origin_event": [
+        19
+      ],
+      "text": "Not a defect: Both printlns are inside `if (Boolean.getBoolean(\"openapi.regenerate\"))`, the opt-in regenerate mode a developer runs by hand with -Dopenapi.regenerate=true. They do not run on every test run. They are the feedback that regenerate run exists to give (whether it rewrote the spec, and where), and that branch returns before any assertion, so they stand in for no assertion. Moving them to SLF4J debug would hide that feedback from the developer who asked for it."
+    },
+    {
+      "id": "D-feat-slice-atlas-F-808",
+      "predicate": {
+        "file": "components/foundation-test/src/main/java/dk/trustworks/essentials/components/foundation/test/schema/SchemaReapplyLockProbe.java",
+        "rule": "CloseResource"
+      },
+      "action": "suppress",
+      "origin_event": [
+        20
+      ],
+      "text": "Not a defect: The executor created at line 81 is shut down in the outer `finally` on every path (`executor.shutdownNow()`). The inner `finally` rolls back the writer and cancels the reapply first, so the one submitted task cannot keep the thread alive. PMD cannot see a shutdown in `finally` as a close."
+    },
+    {
+      "id": "D-feat-slice-atlas-F-810",
+      "predicate": {
+        "file": "components/foundation/src/main/java/dk/trustworks/essentials/components/foundation/postgresql/PostgresqlCreateSchemaApplier.java",
+        "rule": "SQL_INJECTION_JDBC"
+      },
+      "action": "suppress",
+      "origin_event": [
+        21
+      ],
+      "text": "Not a defect: Line 195 is the `try {` around the backoff Thread.sleep and has no SQL. The applier's only Statement.execute is in execute() at line 244, and running raw DDL there is the class's contract: the statements are the schema changes the EssentialsSchemaContributors describe (framework or application code, not request data). DDL cannot take bind parameters, and they go straight to JDBC on purpose so PL/pgSQL bodies and `::` casts are not parsed as Jdbi parameters (javadoc at 238-241). Every objectName is checked with PostgresqlUtil.checkIsValidTableOrColumnName before anything runs (line 167). The build has no SpotBugs and no suppression convention to apply."
+    },
+    {
+      "id": "D-feat-slice-atlas-F-831",
+      "predicate": {
+        "file": "components/postgresql-event-store/src/test/java/dk/trustworks/essentials/components/eventsourced/eventstore/postgresql/subscription/SubscriptionStartFailureIT.java",
+        "rule": "LiteralsFirstInComparisons"
+      },
+      "action": "suppress",
+      "origin_event": [
+        22
+      ],
+      "text": "Not a defect: `method` is the java.lang.reflect.Method the proxy invocation handler is given for a call on the interface. A reflected method always has a non-null name, so `method.getName().equals(...)` cannot throw an NPE. Putting the literal first protects against nothing here."
+    },
+    {
+      "id": "D-feat-slice-atlas-F-838",
+      "predicate": {
+        "file": "components/foundation/src/main/java/dk/trustworks/essentials/components/foundation/postgresql/PostgresqlSchemaStatements.java",
+        "rule": "REDOS"
+      },
+      "action": "suppress",
+      "origin_event": [
+        23
+      ],
+      "text": "Not a defect: The pattern cannot backtrack catastrophically. It has a literal '$', then one optional group made of one required character from [A-Za-z_] followed by [A-Za-z0-9_]*, then a literal '$'. There is no nested or overlapping quantifier, and the only quantified run cannot match '$', so the attempt is linear in the length of the run. It is also only ever used with lookingAt() from a region starting at a '$' that startsDollarQuote has accepted, never with find() over the whole text. The spotbugs REDOS heuristic flags the shape `(X Y*)?`, not real ambiguity. A @SuppressFBWarnings would add a spotbugs-annotations dependency that the module does not have (no file in the repository uses it, and spotbugs is not in any pom - only the review tool runs it), so a suppression is not worth adding."
+    },
+    {
+      "id": "D-feat-slice-atlas-F-872",
+      "predicate": {},
+      "action": "advisory",
+      "origin_event": [
+        24
+      ],
+      "text": "Not a defect: On a processor's first start, `inboxes.getOrCreateInbox(config, inboxMessageHandlerDelegate)` creates the Inbox with this processor's consumer and starts consuming in its constructor. So hasAMessageConsumer() is already true, and that consumption is this start's own. That is the case the pinned test models. stop() always calls inbox.stopConsuming() in a finally, so a restarted processor finds no consumer and takes the consume() branch. Assigning consumingInbox only inside that branch, as proposed, would leave a failed first start consuming with nothing subscribed. The only way a consumer could belong to someone else is a second processor or component with the same InboxName, which is a misconfiguration that start() cannot detect anyway."
+    },
+    {
+      "id": "D-feat-slice-atlas-F-932",
+      "predicate": {
+        "file": "components/foundation/src/test/java/dk/trustworks/essentials/components/foundation/fencedlock/DBFencedLockManagerLostLockReleaseTest.java",
+        "rule": "UnusedAssignment"
+      },
+      "action": "suppress",
+      "origin_event": [
+        25
+      ],
+      "text": "Not a defect: PMD UnusedAssignment premise is false - eventSubscriberAction is a volatile field read on the confirmation thread by the sync subscriber; the test waits for that read's effect before the overwrite."
+    },
+    {
+      "id": "L-006",
+      "predicate": {
+        "file": "essentials-plugin/**",
+        "rule": "detekt.naming.PackageNaming"
+      },
+      "action": "suppress",
+      "origin_event": [
+        27
+      ],
+      "text": "Don't flag detekt PackageNaming in essentials-plugin/**: snake_case slice-id package segments (use_cases.place_order, views.order_list) are the slice layout the plugin publishes as a contract (sdd-contract.md §5); hyphens are illegal in JVM package directories, and the goldens are byte-exact render-slice.py output."
+    },
+    {
+      "id": "L-007",
+      "predicate": {
+        "file": "**/src/test/**",
+        "rule": "CloseResource"
+      },
+      "action": "suppress",
+      "origin_event": [
+        28
+      ],
+      "text": "Don't flag PMD CloseResource in test code: the tests shut their executors down with shutdown()/shutdownNow() in a finally on every path, which PMD does not count as a close."
+    },
+    {
+      "id": "L-008",
+      "predicate": {
+        "file": "**/src/test/**",
+        "rule": "CompareObjectsWithEquals"
+      },
+      "action": "suppress",
+      "origin_event": [
+        29
+      ],
+      "text": "Don't flag PMD CompareObjectsWithEquals in test code: the tests compare Thread objects, proxies and private run objects by identity on purpose; those types define no value equality, so equals() would mean the same and say it less plainly."
+    }
+  ]
+}

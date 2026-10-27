@@ -58,3 +58,6 @@ graphify-out
 .tw-code-review/reviews/
 .tw-code-review/logs/
 .tw-code-review/bridge-exports/
+
+# tw-code-review lock file left behind by its event-log writer (outside the managed block above)
+.tw-code-review/learnings/events.jsonl.lock

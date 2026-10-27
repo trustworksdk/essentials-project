@@ -1,0 +1,85 @@
+{
+  "files": {},
+  "history": [
+    {
+      "adopted": [
+        "1.0.0",
+        "0.27.1",
+        "0.16.0",
+        "0.14.0",
+        "0.9.0"
+      ],
+      "advisory": [],
+      "applied": [
+        "review-config@1.7.0"
+      ],
+      "at": "2026-10-21T08:59:12Z",
+      "from": null,
+      "notApplicable": [],
+      "skipped": [],
+      "to": "1.12.5"
+    },
+    {
+      "adopted": [],
+      "advisory": [],
+      "applied": [
+        "review-config@1.16.0"
+      ],
+      "at": "2026-10-21T17:02:27Z",
+      "from": "1.12.5",
+      "notApplicable": [],
+      "skipped": [],
+      "to": "1.17.1"
+    },
+    {
+      "adopted": [],
+      "advisory": [],
+      "applied": [],
+      "at": "2026-10-24T06:09:12Z",
+      "from": "1.17.1",
+      "notApplicable": [],
+      "skipped": [],
+      "to": "1.23.6"
+    },
+    {
+      "adopted": [],
+      "advisory": [],
+      "applied": [
+        "review-config@1.26.0"
+      ],
+      "at": "2026-10-24T11:11:11Z",
+      "from": "1.23.6",
+      "notApplicable": [],
+      "skipped": [],
+      "to": "1.26.0"
+    },
+    {
+      "adopted": [],
+      "advisory": [],
+      "applied": [
+        "review-config@1.42.0",
+        "review-config@1.41.0",
+        "review-config@1.40.0"
+      ],
+      "at": "2026-10-26T08:07:17Z",
+      "from": "1.26.0",
+      "notApplicable": [],
+      "skipped": [],
+      "to": "1.44.2"
+    },
+    {
+      "adopted": [],
+      "advisory": [],
+      "applied": [],
+      "at": "2026-10-27T07:03:58Z",
+      "from": "1.44.2",
+      "notApplicable": [],
+      "skipped": [],
+      "to": "1.49.0"
+    }
+  ],
+  "plugin": "tw-code-review",
+  "schema": 1,
+  "stampedAt": "2026-10-27T07:03:58Z",
+  "version": "1.49.0"
+}
