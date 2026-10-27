@@ -102,7 +102,12 @@ class ShardOwnedConnectionLossIT {
                               .as("every shard must resume delivering after its connection was cut")
                               .isEqualTo(50L));
 
+            // This read is the test's, not the engine's: terminateOtherBackends also killed the pool's idle
+            // connections, and the pool hands one out unvalidated if it was used within the last 500 ms. It
+            // failed 2-3 runs in 5 that way. The pool evicts a connection that failed like this, so a retry
+            // gets a live one.
             Awaitility.await().atMost(Duration.ofSeconds(30))
+                      .ignoreExceptionsInstanceOf(SQLException.class)
                       .untilAsserted(() -> assertThat(queue.remaining()).isZero());
         }
     }
