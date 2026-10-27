@@ -1385,7 +1385,7 @@ Not published; listed because they are the reference for how to use the framewor
     or with `essentials.life-cycles.start-life-cycles=false`, the lifecycle manager starts no `Lifecycle` bean, and the
     section now says so. Replacing the callback of a
     registration a lock manager `stop()` kept calls `lockReleased` on every callback registered with the lock, and
-    any other caller in the JVM holding it loses it too; the section now says so. (`<!-- fix:U-016 -->`)
+    any other caller in the JVM holding it loses it too; the section now says so. (`4898c9a9e`)
 - **`LLM-reactive.md`** listed a `SendCommandException(Object, Throwable)` constructor that does not exist; it now
   shows the real abstract `SendCommandException(Class<?>, String[, Exception])` hierarchy. (N-12, `302c1058`)
 - **Document DB** (`LLM-postgresql-document-db.md`):
@@ -1408,7 +1408,7 @@ Not published; listed because they are the reference for how to use the framewor
   commits the handler's writes) and `ESS-127` (a processor handler that catches and logs loses the event).
 - **`LLM/LLM-traps.md`** gains `ESS-129` (an async lock acquiring not cancelled in the component's own stop is
   resumed by the lock manager's next `start()`, with the old `LockCallback`) and `ESS-130` (`isStarted()` stays
-  `true` after the lock confirmation ended; check `isLockConfirmationEnded()`). (`<!-- fix:U-017 -->`)
+  `true` after the lock confirmation ended; check `isLockConfirmationEnded()`). (`072442303`)
 - **Corrections to the 0.60.0 release notes:**
   - §1.1.6 (`use-ordered-unordered-query`): "is now ignored" is true only for the Spring property
     `essentials.durable-queues.use-ordered-unordered-query`. `PostgresqlDurableQueuesBuilder.setUseOrderedUnorderedQuery`,
