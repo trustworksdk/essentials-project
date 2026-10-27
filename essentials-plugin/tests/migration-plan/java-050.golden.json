@@ -422,7 +422,7 @@
     {
       "id": "compile",
       "kind": "compile-and-fix",
-      "title": "Compile against 0.60.1 and rename any method of yours that clashes with the new AbstractEventProcessor and CommandHandler methods; add the fifteenth ShardOwnerSettings component to a record pattern over it",
+      "title": "Compile against 0.60.1 and rename any method of yours that clashes with the new AbstractEventProcessor and CommandHandler methods; add the new component to a record pattern over ShardOwnerSettings or SchemaChange",
       "release": "0.60.1",
       "phase": null,
       "ess": [],
@@ -439,6 +439,12 @@
           "line": 69,
           "token": "`ShardOwnerSettings`, a record, gains a fifteenth component",
           "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.1/docs/RELEASE-NOTES-0.60.1.md#L69"
+        },
+        {
+          "path": "docs/RELEASE-NOTES-0.60.1.md",
+          "line": 74,
+          "token": "`SchemaChange`, a record, gains a fifth component",
+          "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.1/docs/RELEASE-NOTES-0.60.1.md#L74"
         }
       ],
       "findings": []
@@ -454,9 +460,9 @@
       "cites": [
         {
           "path": "docs/RELEASE-NOTES-0.60.1.md",
-          "line": 129,
+          "line": 134,
           "token": "Silent behaviour changes",
-          "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.1/docs/RELEASE-NOTES-0.60.1.md#L129"
+          "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.1/docs/RELEASE-NOTES-0.60.1.md#L134"
         }
       ],
       "items": [
@@ -481,9 +487,9 @@
       "cites": [
         {
           "path": "docs/RELEASE-NOTES-0.60.1.md",
-          "line": 115,
+          "line": 120,
           "token": "Only if you run `essentials.schema.mode=validate`",
-          "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.1/docs/RELEASE-NOTES-0.60.1.md#L115"
+          "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.1/docs/RELEASE-NOTES-0.60.1.md#L120"
         }
       ],
       "items": [

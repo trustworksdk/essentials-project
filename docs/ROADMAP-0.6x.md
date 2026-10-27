@@ -51,7 +51,8 @@ creation fails naming it when it is missing (SB-2).
 
 ## P1: 0.60.x patch releases
 
-Bug fixes only; no API breaks. Everything planned here shipped in 0.60.1.
+Bug fixes only; no API breaks. Everything planned here before the 2026-10-14 review fix waves shipped in 0.60.1;
+the items below are still open.
 
 **`afterRollback` is never called on the Spring event-store unit of work (RW-1).**
 
@@ -105,7 +106,7 @@ Additive features.
 
 ### Turn the 0.60.1 warnings into failures
 
-0.60.1 shipped two checks as a WARN, because a patch must not reject a setup that works today. In 0.61 they fail:
+0.60.1 shipped three checks as a WARN, because a patch must not reject a setup that works today. In 0.61 they fail:
 
 - **The shard-owned queue builder requires a UnitOfWork factory (N-15).** Without one, every enqueue commits on its
   own, outside the caller's transaction. 0.60.1 logs a WARN at build time.
@@ -175,8 +176,9 @@ It changes what a custom strategy receives, so it belongs in a minor with a rele
   mentions it.
 - **Fix:** an additive `GenericType` method returning `Optional`, for example
   `resolveTypeArgument(Class<?> forType, Class<?> genericSupertype, int typeArgumentIndex)`, used by all three callers.
-  Then make `EventStreamDeciderCommandTypes` package-private again. It became `public` on the unreleased 0.60.1 line,
-  marked internal only in its javadoc: if 0.60.1 ships with it public, deprecate it for removal instead of hiding it.
+  Then remove `EventStreamDeciderCommandTypes` from the public API (make it package-private, or fold it into the new
+  resolver). 0.60.1 shipped it `public` and `@Deprecated(forRemoval = true, since = "0.60.1")`, so the removal can go
+  in the next minor.
 
 ### Observability
 
@@ -578,11 +580,6 @@ Everything planned here before 2026-10-13 shipped in 0.60.1.
   round today, and nothing says it must not. State it in the `REGISTERED` field and class javadoc ("REGISTERED, then a
   report's lock; never take REGISTERED while holding a report's lock"), and pin it with a test that registers and
   closes a second report in a loop while another thread renders the first, under `assertTimeoutPreemptively`.
-- **Two 0.60.1 changes the LLM docs do not mention yet (RW-9).** `DurableQueues.releaseUndeliveredMessage` (a message
-  that never reached a handler is handed back without charging an attempt; F-116) belongs in `LLM/LLM-foundation.md`'s
-  durable-queues section, and the root cause in shard-owned dead letters (`DeliveryErrorText`; F-130) in
-  `LLM/LLM-postgresql-queue-shard-owned.md`. Both were left out of the review fixes because an `LLM/` edit needs a
-  `plugin.json` version bump; ship them with the next plugin release.
 - **The Leadership Election example (RW-19).** The example in `LLM/LLM-foundation.md` § Leadership Election is a
   `SmartLifecycle` at `DEFAULT_PHASE`, so it starts after `DefaultLifecycleManager` (phase `Integer.MAX_VALUE - 1`)
   has started the lock manager, and stops before it. Three gaps:

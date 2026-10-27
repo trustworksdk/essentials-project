@@ -35,7 +35,7 @@
       "id": "compile",
       "kind": "compile-and-fix",
       "release": "to",
-      "title": "Compile against 0.60.1 and rename any method of yours that clashes with the new AbstractEventProcessor and CommandHandler methods; add the fifteenth ShardOwnerSettings component to a record pattern over it",
+      "title": "Compile against 0.60.1 and rename any method of yours that clashes with the new AbstractEventProcessor and CommandHandler methods; add the new component to a record pattern over ShardOwnerSettings or SchemaChange",
       "cites": [
         {
           "path": "docs/RELEASE-NOTES-0.60.1.md",
@@ -46,6 +46,11 @@
           "path": "docs/RELEASE-NOTES-0.60.1.md",
           "line": 69,
           "token": "`ShardOwnerSettings`, a record, gains a fifteenth component"
+        },
+        {
+          "path": "docs/RELEASE-NOTES-0.60.1.md",
+          "line": 74,
+          "token": "`SchemaChange`, a record, gains a fifth component"
         }
       ]
     },
@@ -57,7 +62,7 @@
       "cites": [
         {
           "path": "docs/RELEASE-NOTES-0.60.1.md",
-          "line": 129,
+          "line": 134,
           "token": "Silent behaviour changes"
         }
       ]
@@ -70,7 +75,7 @@
       "cites": [
         {
           "path": "docs/RELEASE-NOTES-0.60.1.md",
-          "line": 115,
+          "line": 120,
           "token": "Only if you run `essentials.schema.mode=validate`"
         }
       ]
@@ -82,7 +87,7 @@
       "phase": "review",
       "cite": {
         "path": "docs/RELEASE-NOTES-0.60.1.md",
-        "line": 87,
+        "line": 92,
         "token": "`Subscription.close()`, on the shard-owned engine, now calls `unsubscribe()`"
       }
     },
@@ -91,7 +96,7 @@
       "phase": "review",
       "cite": {
         "path": "docs/RELEASE-NOTES-0.60.1.md",
-        "line": 74,
+        "line": 79,
         "token": "`ShardOwnedStorage`, the shard-owned engine's SQL layer"
       }
     },
@@ -100,7 +105,7 @@
       "phase": "review",
       "cite": {
         "path": "docs/RELEASE-NOTES-0.60.1.md",
-        "line": 94,
+        "line": 99,
         "token": "The shard-owned Spring starter"
       }
     },
@@ -109,7 +114,7 @@
       "phase": "review",
       "cite": {
         "path": "docs/RELEASE-NOTES-0.60.1.md",
-        "line": 101,
+        "line": 106,
         "token": "The admin API contract declares the `queueName`"
       }
     },
@@ -118,7 +123,7 @@
       "phase": "review",
       "cite": {
         "path": "docs/RELEASE-NOTES-0.60.1.md",
-        "line": 557,
+        "line": 562,
         "token": "A rollback-only Spring transaction is rolled back on commit"
       }
     },
@@ -127,7 +132,7 @@
       "phase": "review",
       "cite": {
         "path": "docs/RELEASE-NOTES-0.60.1.md",
-        "line": 201,
+        "line": 206,
         "token": "A public `is`-getter no longer adds a property to persisted JSON"
       }
     },
@@ -136,7 +141,7 @@
       "phase": "review",
       "cite": {
         "path": "docs/RELEASE-NOTES-0.60.1.md",
-        "line": 363,
+        "line": 368,
         "token": "A `ViewEventProcessor` warns about event types it has no handler for"
       }
     },
@@ -145,7 +150,7 @@
       "phase": "deploy",
       "cite": {
         "path": "docs/RELEASE-NOTES-0.60.1.md",
-        "line": 115,
+        "line": 120,
         "token": "re-run `emit` and apply the new script"
       }
     }
@@ -156,7 +161,7 @@
       "reason": "a Java entity's non-public @Id field is made accessible, so the field no longer has to be public",
       "cite": {
         "path": "docs/RELEASE-NOTES-0.60.1.md",
-        "line": 1137,
+        "line": 1146,
         "token": "An entity with a non-public `@Id` field"
       }
     },
@@ -165,7 +170,7 @@
       "reason": "DocumentDbRepositoryFactory.createForCharSequenceTypeId(...) creates a repository for a Java CharSequenceType id, replacing the raw-typed create(...) workaround",
       "cite": {
         "path": "docs/RELEASE-NOTES-0.60.1.md",
-        "line": 804,
+        "line": 809,
         "token": "createForCharSequenceTypeId(Class|KClass)"
       }
     }

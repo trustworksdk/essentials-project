@@ -112,6 +112,7 @@ public interface EventStreamDeciderSupportsAggregateTypeChecker {
          * @throws IllegalArgumentException if decider is null
          */
         @Override
+        @SuppressWarnings("removal") // EventStreamDeciderCommandTypes is internal and public only for this call
         public boolean supports(EventStreamDecider<?, ?> decider) {
             requireNonNull(decider, "decider cannot be null");
 

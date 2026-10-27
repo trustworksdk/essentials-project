@@ -218,6 +218,11 @@ public interface DurableQueues {
 
     // Consume
     DurableQueueConsumer consumeFromQueue(ConsumeFromQueue config);
+    // Hand a claimed message that never reached a handler back to the queue (since 0.60.1): not a delivery attempt,
+    // so getRedeliveryAttempts() and getLastDeliveryError() are untouched; empty when it is no longer being delivered.
+    // The consumers call it when they stop. A default method falling back to retryMessage - a custom DurableQueues
+    // should override it.
+    Optional<QueuedMessage> releaseUndeliveredMessage(QueueEntryId queueEntryId, Duration deliveryDelay);
 
     // Dead Letter operations
     Optional<QueuedMessage> resurrectDeadLetterMessage(QueueEntryId id, Duration delay);

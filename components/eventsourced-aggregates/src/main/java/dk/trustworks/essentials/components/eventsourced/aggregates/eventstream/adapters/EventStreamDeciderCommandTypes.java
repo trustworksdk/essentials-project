@@ -30,7 +30,11 @@ import java.util.*;
  * {@link EventStreamDeciderCommandHandlerAdapter#handledCommandTypes()}, the startup checks of
  * {@link EventStreamDeciderAndAggregateTypeConfigurator} and the aggregate type routing of
  * {@link dk.trustworks.essentials.components.eventsourced.aggregates.eventstream.EventStreamDeciderSupportsAggregateTypeChecker.HandlesCommandsThatInheritFromCommandType}
+ *
+ * @deprecated internal; it was never meant to be called by an application, and it becomes package-private once a
+ * general type-argument resolver in {@code shared} replaces it
  */
+@Deprecated(forRemoval = true, since = "0.60.1")
 public final class EventStreamDeciderCommandTypes {
     private EventStreamDeciderCommandTypes() {
     }

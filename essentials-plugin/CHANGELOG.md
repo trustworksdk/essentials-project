@@ -364,6 +364,9 @@ targets, with a `-N` suffix for plugin-only releases.
 - **S2.1's objenesis row** says what Essentials 0.60.1 does without objenesis — context startup fails, naming
   `org.objenesis:objenesis` — and keeps the 0.60.0 behaviour (the first read fails) for a project still on 0.60.0;
   the generated backend POM comment and `stack-lint`'s `s2.1-objenesis` message follow it.
+- **The docs name two 0.60.1 additions they missed:** `DurableQueues.releaseUndeliveredMessage` in
+  `LLM-foundation.md`'s `DurableQueues` API, and the `Root cause:` summary a shard-owned dead letter's error now starts
+  with in `LLM-postgresql-queue-shard-owned.md` § Gotchas.
 
 ## 0.60.0-5 — targets Essentials 0.60.0
 - **Framework docs: 0.50.1 was never released** — the event-store reference now says the polling
