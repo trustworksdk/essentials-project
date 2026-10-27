@@ -1502,5 +1502,9 @@ Not published; listed because they are the reference for how to use the framewor
 - Minor updates: openapi-generator 7.26.0 for the generated admin client (its compiled API is unchanged against
   7.25.0), kafka-clients 4.4.0 in the examples, versions-maven-plugin 2.23.0 and central-publishing-maven-plugin
   0.12.0.
+- The Maven wrapper runs Maven 3.10.0 (was 3.9.16), the version the devcontainer installs. Releasing with Maven
+  3.10.0 needs central-publishing-maven-plugin 0.12.0: older releases leave Maven 3.10's staging metadata in the
+  bundle, which Central rejects with "Bundle has content that does NOT have a .pom file". The release workflow
+  still runs the runner's own `mvn`, not the wrapper.
 - `project-suppression.xml` drops the 30 dependency-check suppressions that no longer matched anything; the 23
   findings the remaining rules suppress are unchanged.
