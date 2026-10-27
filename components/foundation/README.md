@@ -637,6 +637,8 @@ lockManager.acquireLockAsync(LockName.of("ScheduledTask"), new LockCallback() {
 });
 ```
 
+A `stop()` of a database-backed lock manager (`PostgresqlFencedLockManager`, `MongoFencedLockManager`) cancels each async acquiring but keeps its registration (the lock name and its `LockCallback`), and its `start()` resumes every registration not cancelled with `cancelAsyncLockAcquiring`, logging each one at WARN. Call `cancelAsyncLockAcquiring(lockName)` in your component's own stop, or the next `start()` gives the lock to the old callback again.
+
 ### Ownership is per lock-manager instance, not per caller or thread
 
 A `FencedLock` excludes other lock-manager instances (other JVMs), never other callers in the same JVM. While a `FencedLockManager` holds a lock, a second `tryAcquireLock`/`acquireLock` for the same `LockName` - from another component, another thread or the same thread - returns the **same** `FencedLock` instance instead of an empty result, and `release()` by **either** caller releases the lock for both; another node can then acquire it while the first caller is still working. Callers in one JVM that share a lock name and must not overlap (e.g. a scheduled run and a manual trigger of the same job) need their own in-process guard, such as an `AtomicBoolean`, in front of the lock.
@@ -655,8 +657,11 @@ public interface FencedLockManager extends Lifecycle {
     void acquireLockAsync(LockName lockName, LockCallback lockCallback);
     void cancelAsyncLockAcquiring(LockName lockName);
     String getLockManagerInstanceId();
+    default boolean isLockConfirmationEnded();   // true once the lock confirmation ended (critical error) until stop()+start()
 }
 ```
+
+A started lock manager can stop acquiring locks: when a critical error ends its scheduled lock confirmation, the database-backed lock managers release locally every lock they hold (`lockReleased` is called and `LockReleased` published; the database rows are not released and expire after the lock timeout, so another instance can take a lock only after that) and publish `FencedLockEvents.LockConfirmationEnded`, and from then on `isLockConfirmationEnded()` returns `true` while `isStarted()` is still `true`. Until the lock manager is stopped and started again (or the application restarted), `tryAcquireLock` returns empty, `acquireLock` throws `IllegalStateException` and an `acquireLockAsync` acquires nothing. No starter registers a health indicator for this state; call `isLockConfirmationEnded()` from your own.
 
 The ownership predicates answer from different sources:
 - `FencedLockManager.isLockedByThisLockManagerInstance(LockName)` (like `isLockAcquired` and `isLockAcquiredByAnotherLockManagerInstance`) looks the lock row up in the database and compares the stored owner id with `getLockManagerInstanceId()`. It ignores the fence token and the last-confirmed timestamp, so a row left by a crashed process with the same instance id reads as held by this instance. A failed lookup returns `false`.

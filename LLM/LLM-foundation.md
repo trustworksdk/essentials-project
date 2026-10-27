@@ -613,6 +613,13 @@ lockManager.acquireLockAsync(LockName.of("ScheduledTask"), new LockCallback() {
 });
 ```
 
+**Async acquiring across a lock manager `stop()`/`start()`** (the database-backed `PostgresqlFencedLockManager` and `MongoFencedLockManager`):
+
+- `stop()` cancels each async acquiring but keeps its registration (the lock name and its `LockCallback`); `start()` resumes every registration not cancelled with `cancelAsyncLockAcquiring`, with the callback it holds, and logs each one at WARN. Call `cancelAsyncLockAcquiring(lockName)` in your component's own stop, or the next `start()` gives the lock to the old callback again.
+- While the lock manager is started, a repeated `acquireLockAsync` for a lock name registered since the last `start()`, or with the kept callback itself, does nothing and keeps the registered callback. One with another callback for a registration a `stop()` kept replaces it, as `cancelAsyncLockAcquiring` followed by `acquireLockAsync` would: the lock, when this instance holds it, is released first (which calls the old callback's `lockReleased` when it holds the lock), and after that the old callback is not called again. While it is stopped, a call with another callback replaces the registered one (no lock is held then) and `start()` schedules it; a call for a name with no registration registers nothing.
+
+**Lock confirmation ended:** when a critical error ends the scheduled lock confirmation, the lock manager releases locally every lock it holds (`lockReleased` is called and `LockReleased` published; the database rows are not released and expire after the lock timeout, so another instance can take a lock only after that) and publishes `FencedLockEvents.LockConfirmationEnded`; from then on `isLockConfirmationEnded()` returns `true` while `isStarted()` is still `true`. Until the lock manager is stopped and started again (or the application restarted), `tryAcquireLock` returns empty, `acquireLock` throws `IllegalStateException` and an async acquiring acquires nothing. No starter registers a health indicator for this state; call `isLockConfirmationEnded()` from your own.
+
 ### Pattern: Lock Status Queries
 
 ```java
