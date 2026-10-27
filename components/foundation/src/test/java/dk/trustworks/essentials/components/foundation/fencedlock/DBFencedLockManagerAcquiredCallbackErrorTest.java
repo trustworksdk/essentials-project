@@ -283,6 +283,54 @@ class DBFencedLockManagerAcquiredCallbackErrorTest {
         }
     }
 
+    /**
+     * <code>start()</code> resumes every registration the last <code>stop()</code> kept, also one whose component was
+     * discarded without calling <code>cancelAsyncLockAcquiring</code>: its callback is given the lock again and nothing else on
+     * this instance serves it. So each resumed registration is logged at WARN, naming the lock and the callback's class.
+     */
+    @Test
+    void start_logs_each_resumed_async_acquiring_at_warn_naming_the_lock_and_the_callbacks_class() {
+        var otherLockName = LockName.of("acquired-callback-error-other-lock");
+        var callback      = new CountingLockCallback();
+        var otherCallback = new CountingLockCallback();
+        node.acquireLockAsync(LOCK_NAME, callback);
+        node.acquireLockAsync(otherLockName, otherCallback);
+        Awaitility.waitAtMost(Duration.ofSeconds(5))
+                  .untilAsserted(() -> {
+                      assertThat(callback.acquired.get()).isEqualTo(1);
+                      assertThat(otherCallback.acquired.get()).isEqualTo(1);
+                  });
+
+        node.stop();
+        var logEvents = captureLockManagerLog();
+        try {
+            node.start();
+
+            var resumedWarnings = logEvents.list.stream()
+                                                .filter(event -> event.getLevel() == Level.WARN)
+                                                .map(ILoggingEvent::getFormattedMessage)
+                                                .filter(message -> message.contains("Resuming async lock acquiring"))
+                                                .toList();
+            assertThat(resumedWarnings).hasSize(2);
+            assertThat(resumedWarnings).filteredOn(message -> message.contains("'" + LOCK_NAME + "'"))
+                                       .singleElement()
+                                       .satisfies(message -> assertThat(message).contains(CountingLockCallback.class.getName(),
+                                                                                         "cancelAsyncLockAcquiring"));
+            assertThat(resumedWarnings).filteredOn(message -> message.contains("'" + otherLockName + "'"))
+                                       .singleElement()
+                                       .satisfies(message -> assertThat(message).contains(CountingLockCallback.class.getName()));
+
+            // The resumed registrations are given their locks again, through the same callbacks
+            Awaitility.waitAtMost(Duration.ofSeconds(5))
+                      .untilAsserted(() -> {
+                          assertThat(callback.acquired.get()).isEqualTo(2);
+                          assertThat(otherCallback.acquired.get()).isEqualTo(2);
+                      });
+        } finally {
+            detachLockManagerLog(logEvents);
+        }
+    }
+
     @Test
     void an_async_acquiring_cancelled_while_the_lock_manager_is_stopped_is_not_resumed_by_its_start() {
         var acquiredCalls = new AtomicInteger();

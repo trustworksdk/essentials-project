@@ -108,6 +108,14 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  *     for how to restart it</li>
  * </ul>
  *
+ * <h2>Async acquiring across a stop and start</h2>
+ * {@link #stop()} keeps the registration of every async acquiring (the lock name and its {@link LockCallback}), and
+ * {@link #start()} resumes each with the callback it holds, logging each resumed registration at WARN with the lock name and the
+ * callback's class. <b>A component must therefore call {@link #cancelAsyncLockAcquiring(LockName)} in its own stop</b>: one
+ * discarded without it has its registration resumed by the next {@link #start()}, and its callback is given the lock again
+ * with nothing serving it - and while this instance confirms the lock, no other instance takes it over. See
+ * {@link #acquireLockAsync(LockName, LockCallback)}.
+ *
  * @param <UOW>  the type of {@link UnitOfWork} required
  * @param <LOCK> the concrete type of {@link DBFencedLock} used
  */
@@ -273,11 +281,16 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
                 // The first tick of a rescheduled entry runs at once and waits for reentrantLock, which this holds, so
                 // that cancel can come while the tick is already running - a cancel(true) does not end that wait. The
                 // tick therefore acts only while its own entry is still the one in asyncLockAcquirings, which it checks
-                // once it has reentrantLock (asyncLockAcquiringTick)
+                // once it has reentrantLock (asyncLockAcquiringTick).
+                // Logged at WARN: a registration whose component was discarded without cancelAsyncLockAcquiring is resumed
+                // too, and its callback then holds the lock with nothing on this instance serving it
                 var executor = asyncLockAcquiringExecutor;
                 for (var lockName : asyncLockAcquirings.keySet()) {
                     asyncLockAcquirings.computeIfPresent(lockName, (name, kept) -> {
-                        log.debug("[{}] Resuming async Lock acquiring for lock '{}'", lockManagerInstanceId, name);
+                        log.warn("[{}] Resuming async lock acquiring for lock '{}' kept across the last stop(), with the LockCallback '{}'. " +
+                                         "A component that no longer wants the lock must call cancelAsyncLockAcquiring when it stops, " +
+                                         "or its callback is given the lock again",
+                                 lockManagerInstanceId, name, kept.lockCallback().getClass().getName());
                         kept.scheduledFuture().cancel(true);
                         return scheduleAsyncLockAcquiring(executor, name, kept.lockCallback(), true);
                     });
@@ -1291,8 +1304,10 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
      * restart it, call {@link #cancelAsyncLockAcquiring(LockName)} and then this method, or stop and start the lock manager.
      * <p>
      * {@link #stop()} cancels the scheduled acquiring but keeps the registration (the lock name and this
-     * <code>lockCallback</code>), and {@link #start()} schedules every kept registration again, an ended one included; only
-     * {@link #cancelAsyncLockAcquiring(LockName)} removes a registration for good. Called for a lock name whose registration
+     * <code>lockCallback</code>), and {@link #start()} schedules every kept registration again, an ended one included, and
+     * logs each one it resumes at WARN, naming the lock and the callback's class; only
+     * {@link #cancelAsyncLockAcquiring(LockName)} removes a registration for good, so a component must call it in its own
+     * stop, or the next {@link #start()} gives this <code>lockCallback</code> the lock again. Called for a lock name whose registration
      * a {@link #stop()} kept - by a component recreated across a stop and start of the lock manager, say - with another
      * <code>lockCallback</code> than the kept one, this method replaces the kept registration with one for the new
      * <code>lockCallback</code>, as {@link #cancelAsyncLockAcquiring(LockName)} followed by this method would: the lock, when

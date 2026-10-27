@@ -159,7 +159,11 @@ public interface FencedLockManager extends Lifecycle {
      * What becomes of the background acquiring when the lock manager is stopped and started again, and of a repeated call
      * for the same lockName, is up to the implementation: the database-backed lock managers keep it across a stop and resume
      * it on the start, and a repeated call with another callback replaces a kept one - see
-     * {@link DBFencedLockManager#acquireLockAsync(LockName, LockCallback)}
+     * {@link DBFencedLockManager#acquireLockAsync(LockName, LockCallback)}<br>
+     * <b>A component must call {@link #cancelAsyncLockAcquiring(LockName)} in its own stop</b>, or the database-backed lock
+     * managers' {@link #start()} resumes its registration with its <code>lockCallback</code>, which is given the lock again
+     * even when the component is gone. {@link DBFencedLockManager#start()} logs each registration it resumes at WARN, naming
+     * the lock and the callback's class
      *
      * @param lockName     the name of the lock
      * @param lockCallback the callback that's notified when a lock is acquired
