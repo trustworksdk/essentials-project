@@ -13,6 +13,7 @@ The open fixes and improvements planned for the 0.6x line. Every item here was c
   from the findings still open on 2026-10-27, checked against the code that day. Each names the review finding
   (`F-NNN`) it came from, so the finding can be closed when the item ships. The finding files are not committed, so
   each entry says everything needed to pick it up.
+  `DU-n` ids come from dependency-update rounds (`/tw-jvm:deps`): a bump that was tried, failed and was held back.
   Put it in the commit message that fixes the item, so the history can be searched by it.
 - When an item ships, delete it here and add its entry to `docs/NEXT_VERSION_RELEASE.md` in the same commit. When an
   item is partly done, rewrite it to say only what remains.
@@ -748,6 +749,24 @@ need no release-notes entry beyond §7 and can ship in any release.
   checks (for example `$base/main/refusal-shown`); or narrow the comment to say that the user sees only a refusal
   `start` detects, and that subagent-level refusals go to stderr by design. Update case `s31` to match either way.
   (review findings F-907)
+- **Jackson 3.2 breaks the missing-primitive wire-format probe (DU-1).** Tried on 2026-10-27: `jackson3-bom.version`
+  3.1.7 → 3.2.4 resolved cleanly, but two `foundation` unit tests failed
+  (`EssentialsObjectMappersWireFormatDeviationsTest.a_default_jackson_3_mapper_reports_each_way_it_differs` and
+  `failing_on_a_missing_primitive_is_reported`). Jackson 3.2 reads a primitive record component that is *absent* from
+  the document as `0`/`false` even with `FAIL_ON_NULL_FOR_PRIMITIVES` enabled; only an explicit `"quantity":null`
+  still throws. On 3.1.7 both throw. Plain-class fields were never affected. The Essentials mapper disables the
+  feature, so the persisted format is the same on both versions (`WireFormatCompatibilityTest` passed). What broke is
+  `WireFormatProbes`' "A missing primitive reads as its default" probe, which reads `{"id":"probe-1"}` into a
+  `record(String id, int quantity)`: on 3.2 it can no longer tell a mapper with the feature on from the Essentials
+  one, so `EssentialsObjectMappers.findWireFormatDeviations` stops reporting that drift. The bump was held back
+  because Spring Boot 4.1.2 manages Jackson 3.1.7: applications run 3.1.x, where an absent primitive still fails,
+  and testing Essentials on 3.2 would test a Jackson they do not run. Fix, when Spring Boot manages 3.2.x: make the
+  probe report correctly on every Jackson the starters support, either by also probing an explicit `null` (throws
+  on 3.1 and 3.2 alike when the feature is on) or by probing both shapes, and reword the aspect if it no longer
+  describes a missing primitive (its text is asserted by the test and echoed in `LLM/LLM-immutable-jackson.md` and
+  the `types-jackson3` and `immutable-jackson3` READMEs). Then drop the `jackson-annotations` exclude from the root
+  POM's `requireUpperBoundDeps` (3.2 pairs with annotations 2.22, as Jackson 2.22.x does), and run the full suite:
+  the integration tests never ran on 3.2.4.
 
 ---
 

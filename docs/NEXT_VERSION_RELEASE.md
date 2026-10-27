@@ -1493,3 +1493,14 @@ Not published; listed because they are the reference for how to use the framewor
   now that the engine depends on `foundation`. The class of that name in `postgresql-queue-shard-owned-adapter` still
   works, deprecated for removal, and delegates to it. The Spring starter's bean is now the engine's class, which
   breaks injecting the adapter's (§1) (`a1dfba074`).
+- **Built and tested against Spring Boot 4.1.2** (was 4.1.1) **and Jackson 3.1.7** (was 3.1.5), the Jackson that
+  Spring Boot 4.1.2 manages. The root POM no longer holds Tomcat (11.0.26) and Netty (4.2.18.Final) ahead of Spring
+  Boot for CVEs: 4.1.2 manages the fixed releases, Tomcat 11.0.27 and Netty 4.2.19.Final.
+- Patch updates: Kotlin 2.4.21, the Jackson 2 BOM 2.22.4 (used only by swagger, Avro and the generated admin
+  client), byte-buddy 1.18.16, swagger-core 2.2.55, maven-surefire-plugin and maven-failsafe-plugin 3.6.1, and
+  snappy-java 1.1.10.12 in the examples.
+- Minor updates: openapi-generator 7.26.0 for the generated admin client (its compiled API is unchanged against
+  7.25.0), kafka-clients 4.4.0 in the examples, versions-maven-plugin 2.23.0 and central-publishing-maven-plugin
+  0.12.0.
+- `project-suppression.xml` drops the 30 dependency-check suppressions that no longer matched anything; the 23
+  findings the remaining rules suppress are unchanged.
