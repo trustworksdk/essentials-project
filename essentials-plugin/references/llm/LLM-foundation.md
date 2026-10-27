@@ -616,7 +616,7 @@ lockManager.acquireLockAsync(LockName.of("ScheduledTask"), new LockCallback() {
 **Async acquiring across a lock manager `stop()`/`start()`** (the database-backed `PostgresqlFencedLockManager` and `MongoFencedLockManager`):
 
 - `stop()` cancels each async acquiring but keeps its registration (the lock name and its `LockCallback`); `start()` resumes every registration not cancelled with `cancelAsyncLockAcquiring`, with the callback it holds, and logs each one at WARN. Call `cancelAsyncLockAcquiring(lockName)` in your component's own stop, or the next `start()` gives the lock to the old callback again.
-- While the lock manager is started, a repeated `acquireLockAsync` for a lock name registered since the last `start()`, or with the kept callback itself, does nothing and keeps the registered callback. One with another callback for a registration a `stop()` kept replaces it, as `cancelAsyncLockAcquiring` followed by `acquireLockAsync` would: the lock, when this instance holds it, is released first (which calls the old callback's `lockReleased` when it holds the lock), and after that the old callback is not called again. While it is stopped, a call with another callback replaces the registered one (no lock is held then) and `start()` schedules it; a call for a name with no registration registers nothing.
+- While the lock manager is started, a repeated `acquireLockAsync` for a lock name registered since the last `start()`, or with the kept callback itself, does nothing and keeps the registered callback. One with another callback for a registration a `stop()` kept replaces it, as `cancelAsyncLockAcquiring` followed by `acquireLockAsync` would: the lock, when this instance holds it, is released first (which calls `lockReleased` on every callback registered with the lock, the old callback included when its resumed acquiring acquired it; any other caller in this JVM holding the same lock loses it too, see [Ownership is per lock-manager instance](#ownership-is-per-lock-manager-instance-not-per-caller-or-thread)), and after that the old callback is not called again. A failure of that release (a `lockReleased` callback throwing, say) is logged and the new callback is registered all the same; a critical error is rethrown. While it is stopped, a call with another callback replaces the registered one (no lock is held then) and `start()` schedules it; a call for a name with no registration registers nothing.
 
 **Lock confirmation ended:** when a critical error ends the scheduled lock confirmation, the lock manager releases locally every lock it holds (`lockReleased` is called and `LockReleased` published; the database rows are not released and expire after the lock timeout, so another instance can take a lock only after that) and publishes `FencedLockEvents.LockConfirmationEnded`; from then on `isLockConfirmationEnded()` returns `true` while `isStarted()` is still `true`. Until the lock manager is stopped and started again (or the application restarted), `tryAcquireLock` returns empty, `acquireLock` throws `IllegalStateException` and an async acquiring acquires nothing. No starter registers a health indicator for this state; call `isLockConfirmationEnded()` from your own.
 
@@ -683,15 +683,25 @@ A lone `@Scheduled(fixedDelay = …)` method never overlaps itself, so the guard
 ### Leadership Election
 
 ```java
-@Component
-public class LeaderElection {
-    private volatile boolean isLeader = false;
-    @Autowired private FencedLockManager lockManager;
+import org.springframework.context.SmartLifecycle;
+import org.springframework.stereotype.Component;
 
-    @PostConstruct
-    public void startElection() {
+@Component
+public class LeaderElection implements SmartLifecycle {          // Spring's SmartLifecycle at its default phase - see below
+    private static final LockName LEADER_LOCK = LockName.of("service-leader");
+
+    private final    FencedLockManager lockManager;
+    private volatile boolean           isLeader = false;
+    private volatile boolean           running  = false;
+
+    public LeaderElection(FencedLockManager lockManager) {
+        this.lockManager = lockManager;
+    }
+
+    @Override
+    public void start() {                                         // runs after the lifecycle manager has started the lock manager
         lockManager.acquireLockAsync(
-            LockName.of("service-leader"),
+            LEADER_LOCK,
             new LockCallback() {
                 @Override
                 public void lockAcquired(FencedLock lock) {
@@ -706,9 +716,24 @@ public class LeaderElection {
                 }
             }
         );
+        running = true;
+    }
+
+    @Override
+    public void stop() {                                          // runs before the lock manager stops
+        running = false;
+        lockManager.cancelAsyncLockAcquiring(LEADER_LOCK);        // releases the lock when this instance holds it; without this
+                                                                  // the lock manager's next start() gives the lock to this callback again
+    }
+
+    @Override
+    public boolean isRunning() {
+        return running;
     }
 }
 ```
+
+Why `SmartLifecycle` at the default phase, and not `@PostConstruct`: the starters' `DefaultLifecycleManager` starts every Essentials `Lifecycle` bean not started yet, the lock manager included, in its own `start()` at phase `Integer.MAX_VALUE - 1` (unless it is set to start none of them: `essentials.life-cycles.start-life-cycles=false` under either starter, or `essentials.schema.mode=emit` under `spring-boot-starter-postgresql`), and a `SmartLifecycle` at `SmartLifecycle.DEFAULT_PHASE` (`Integer.MAX_VALUE`) starts after it and stops before it. `@PostConstruct` runs before either, and `spring-boot-starter-postgresql` starts the lock manager when it creates it only in `essentials.schema.mode=create`. So under `spring-boot-starter-postgresql` outside `create`, with the lifecycle manager starting none of them, nothing starts the lock manager and this example elects no leader either: with `start-life-cycles=false`, start the lock manager yourself before this bean starts; in `emit` mode no `Lifecycle` bean is started, by design. An `acquireLockAsync` for a lock name with no registration, made while the lock manager is not started, registers nothing and logs only at DEBUG: no leader is ever elected, and nothing above DEBUG says so. Do not implement Essentials' `Lifecycle` here instead: `DefaultLifecycleManager` starts those beans one after another in the order the application context returns them, so nothing makes this one start after the lock manager.
 
 ### Implementations
 

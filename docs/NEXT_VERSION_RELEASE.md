@@ -1376,6 +1376,16 @@ Not published; listed because they are the reference for how to use the framewor
     application code. They now use `lock.release()` or try-with-resources. The `@return` Javadoc of
     `FencedLockManager.isLockAcquiredByAnotherLockManagerInstance` said the opposite of what the method returns.
     (N-12, `360c1e99`, `302c1058`)
+  - The Leadership Election example in `LLM-foundation.md` called `acquireLockAsync` from `@PostConstruct` and
+    never cancelled it. Under `spring-boot-starter-postgresql` outside `essentials.schema.mode=create` the lock
+    manager is not started yet at that point, so the call registered nothing and logged only at DEBUG: no leader
+    was ever elected. The example is now a Spring `SmartLifecycle` at the default phase, which starts after the
+    lifecycle manager has started the lock manager and stops before it, so a leader is elected in
+    `essentials.schema.mode=validate` and `external` too; its `stop()` calls `cancelAsyncLockAcquiring`. In `emit` mode,
+    or with `essentials.life-cycles.start-life-cycles=false`, the lifecycle manager starts no `Lifecycle` bean, and the
+    section now says so. Replacing the callback of a
+    registration a lock manager `stop()` kept calls `lockReleased` on every callback registered with the lock, and
+    any other caller in the JVM holding it loses it too; the section now says so. (`<!-- fix:U-016 -->`)
 - **`LLM-reactive.md`** listed a `SendCommandException(Object, Throwable)` constructor that does not exist; it now
   shows the real abstract `SendCommandException(Class<?>, String[, Exception])` hierarchy. (N-12, `302c1058`)
 - **Document DB** (`LLM-postgresql-document-db.md`):
