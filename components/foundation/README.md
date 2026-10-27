@@ -637,7 +637,7 @@ lockManager.acquireLockAsync(LockName.of("ScheduledTask"), new LockCallback() {
 });
 ```
 
-A `stop()` of a database-backed lock manager (`PostgresqlFencedLockManager`, `MongoFencedLockManager`) cancels each async acquiring but keeps its registration (the lock name and its `LockCallback`), and its `start()` resumes every registration not cancelled with `cancelAsyncLockAcquiring`, logging each one at WARN. Call `cancelAsyncLockAcquiring(lockName)` in your component's own stop, or the next `start()` gives the lock to the old callback again.
+A `stop()` of a database-backed lock manager (`PostgresqlFencedLockManager`, `MongoFencedLockManager`) cancels each async acquiring but keeps its registration (the lock name and its `LockCallback`), and its `start()` resumes every registration not cancelled with `cancelAsyncLockAcquiring`, logging each one at WARN. Call `cancelAsyncLockAcquiring(lockName)` in your component's own stop, or the next `start()` gives the lock to the old callback again. A component recreated across the `stop()`/`start()` may call `acquireLockAsync` again: while the lock manager is started, one with another callback for a registration a `stop()` kept replaces it, as `cancelAsyncLockAcquiring` followed by `acquireLockAsync` would (the lock, when this instance holds it, is released first, which calls `lockReleased` on the callbacks registered with it), and one with the kept callback itself, or for a lock name registered since the last `start()`, does nothing. While it is stopped, a call with another callback replaces the kept one and `start()` schedules it; a call for a lock name with no registration registers nothing.
 
 ### Ownership is per lock-manager instance, not per caller or thread
 
