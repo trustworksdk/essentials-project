@@ -546,7 +546,7 @@ public interface FencedLockManager extends Lifecycle {
     boolean isLockedByThisLockManagerInstance(LockName lockName);
     boolean isLockAcquiredByAnotherLockManagerInstance(LockName lockName);
     String getLockManagerInstanceId();
-    default boolean isLockConfirmationEnded();   // true once the lock confirmation ended (critical error) until stop()+start(); see FencedLockEvents.LockConfirmationEnded
+    default boolean isLockConfirmationEnded() { return false; }   // DB-backed managers: true once the lock confirmation ended (critical error) until stop()+start(); see FencedLockEvents.LockConfirmationEnded
 }
 
 // dk.trustworks.essentials.components.foundation.fencedlock.FencedLock

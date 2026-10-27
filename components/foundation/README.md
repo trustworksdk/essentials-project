@@ -657,7 +657,7 @@ public interface FencedLockManager extends Lifecycle {
     void acquireLockAsync(LockName lockName, LockCallback lockCallback);
     void cancelAsyncLockAcquiring(LockName lockName);
     String getLockManagerInstanceId();
-    default boolean isLockConfirmationEnded();   // true once the lock confirmation ended (critical error) until stop()+start()
+    default boolean isLockConfirmationEnded() { return false; }   // DB-backed managers: true once the lock confirmation ended (critical error) until stop()+start()
 }
 ```
 
