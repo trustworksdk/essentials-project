@@ -1,0 +1,54 @@
+{
+  "allowWords": [
+    {
+      "word": "Nørrebro",
+      "rule": "danish-chars",
+      "glob": "docs/event-sourcing-vs-crud/*"
+    }
+  ],
+  "allowPhrases": [
+    {
+      "phrase": "Novo Nordisk A/S B",
+      "rule": "orgs-names",
+      "glob": "examples/essentials-trading-demo/src/main/java/dk/trustworks/essentials/examples/trading/_demo_harness/TradingSimulationIds.java"
+    },
+    {
+      "phrase": "NOVO-B",
+      "rule": "orgs-names",
+      "glob": "examples/essentials-trading-demo/src/main/java/dk/trustworks/essentials/examples/trading/_demo_harness/TradingSimulationIds.java"
+    },
+    {
+      "phrase": "NOVO-B",
+      "rule": "orgs-names",
+      "glob": "examples/essentials-trading-demo/README.md"
+    },
+    {
+      "phrase": "Kære {:firstName} {:lastName}",
+      "glob": "shared/src/test/java/dk/trustworks/essentials/shared/MessageFormatterTest.java"
+    },
+    {
+      "phrase": "Kære John Doe",
+      "glob": "shared/src/test/java/dk/trustworks/essentials/shared/MessageFormatterTest.java"
+    },
+    {
+      "phrase": "Jeppe Cramon · Trustworks · `jeppe.cramon@trustworks.dk`",
+      "rule": "pii-email-address",
+      "glob": "essentials-plugin/README.md"
+    },
+    {
+      "phrase": "TODO: the ONE invariant method this bounded context's first command slice maps to.",
+      "rule": "personal-notes",
+      "glob": "essentials-plugin/tests/slice-golden/**/render.json"
+    },
+    {
+      "phrase": "TODO: implement {@link #send} with the real transport.",
+      "rule": "personal-notes",
+      "glob": "essentials-plugin/tests/slice-golden/**/render.json"
+    },
+    {
+      "phrase": "TODO: implement [send] with the real transport.",
+      "rule": "personal-notes",
+      "glob": "essentials-plugin/tests/slice-golden/**/render.json"
+    }
+  ]
+}
