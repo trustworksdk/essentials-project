@@ -4,7 +4,7 @@
     <parent>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
-        <version>4.1.0</version>
+        <version>4.1.99</version> <!-- above the stack-pins.md Boot patch on purpose; a synthetic patch no pin lands on -->
         <relativePath/>
     </parent>
     <groupId>com.example.billing</groupId>

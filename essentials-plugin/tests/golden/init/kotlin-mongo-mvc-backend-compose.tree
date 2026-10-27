@@ -773,7 +773,7 @@ esac
     <parent>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
-        <version>4.1.1</version>
+        <version>4.1.2</version>
         <relativePath/>
     </parent>
 
@@ -791,7 +791,7 @@ esac
         <java.version>25</java.version>
         <!-- Spring Boot manages Kotlin too; this property is what overrides it. Load-bearing on a Java
              project as well: postgresql-document-db is written in Kotlin (S2.1). -->
-        <kotlin.version>2.4.20</kotlin.version>
+        <kotlin.version>2.4.21</kotlin.version>
         <!-- One property drives every Essentials artifact (S1). -->
         <essentials.version>0.60.0</essentials.version>
         <springdoc.version>3.1.1</springdoc.version>
@@ -858,4 +858,4 @@ When using any planner/implementer tooling at this workspace level: either `cd g
 
 For full project context, framework-knowledge auto-loading (the `essentials-docs` skill), conventions, and commands, see **`golden/CLAUDE.md`** — that file is the project-level source of truth.
 === HOOK maven-wrapper (cwd .) ===
-mvn -N -B -q org.apache.maven.plugins:maven-wrapper-plugin:3.3.4:wrapper -Dmaven=3.9.16 -Dtype=only-script
+mvn -N -B -q org.apache.maven.plugins:maven-wrapper-plugin:3.3.4:wrapper -Dmaven=3.10.0 -Dtype=only-script

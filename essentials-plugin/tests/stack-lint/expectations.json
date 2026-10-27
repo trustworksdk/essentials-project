@@ -78,6 +78,7 @@
       "expectFacts": {"language": "java", "db": "mongo", "web": "webmvc", "frontend": "standalone", "bootVersion": "4.1.0",
                       "frontendTooling": "other"},
       "findings": [
+        {"check": "s1-boot-patch", "file": "pom.xml", "line": 17},
         {"check": "s2.1-objenesis", "file": "backend/pom.xml", "line": 15},
         {"check": "s1-java-baseline", "file": "pom.xml", "line": 12},
         {"check": "s2-mongo-keys", "file": "backend/src/main/resources/application.yml", "line": 6},
@@ -112,6 +113,7 @@
       "expectFacts": {"language": "java", "db": "mongo", "web": "webmvc", "frontend": "standalone",
                       "frontendTooling": "next"},
       "findings": [
+        {"check": "s1-boot-patch", "file": "pom.xml", "line": 4},
         {"check": "s2.1-objenesis", "file": "backend/pom.xml", "line": 15},
         {"check": "s8-standalone-base-url", "file": "frontend/lib/api/mutator.ts", "line": null},
         {"check": "s8-standalone-cors-value", "file": "backend/src/main/java/com/example/shop/config/OriginsConfig.java", "line": 9},
@@ -143,6 +145,7 @@
       "exit": 1,
       "expectFacts": {"language": "java", "db": null, "web": "webflux"},
       "findings": [
+        {"check": "s1-boot-patch", "file": "pom.xml", "line": 4},
         {"check": "s1-one-essentials-version", "file": "pom.xml", "line": 21},
         {"check": "s1-one-essentials-version", "file": "pom.xml", "line": 26},
         {"check": "s1-one-essentials-version", "file": "pom.xml", "line": 31},
@@ -158,6 +161,7 @@
       "exit": 1,
       "expectFacts": {"language": "kotlin", "db": "pg-event-sourced", "web": "none"},
       "findings": [
+        {"check": "s1-boot-patch", "file": "pom.xml", "line": 4},
         {"check": "s2.1-objenesis", "file": "pom.xml", "line": 18},
         {"check": "s3.4-persistence-serializer", "file": "src/main/kotlin/com/example/ledger/PersistenceSerializerConfiguration.kt", "line": 15},
         {"check": "s1-kotlin-compiler-floor", "file": "pom.xml", "line": 40, "targetOnly": false},
@@ -183,6 +187,7 @@
       "exit": 1,
       "expectFacts": {"language": "java", "web": "webmvc"},
       "findings": [
+        {"check": "s1-boot-patch", "file": "pom.xml", "line": 4},
         {"check": "s2.1-objenesis", "file": "backend/pom.xml", "line": 15},
         {"check": "s4-typed-edge-unregistered", "file": "backend/src/main/java/com/example/shop/orders/OrderLookupController.java", "line": 16},
         {"check": "s4-typed-edge-unregistered", "file": "backend/src/main/java/com/example/shop/orders/OrderLookupController.java", "line": 17},
@@ -194,11 +199,24 @@
       "exit": 1,
       "expectFacts": {"language": "kotlin", "web": "webflux"},
       "findings": [
+        {"check": "s1-boot-patch", "file": "pom.xml", "line": 4},
+        {"check": "s1-kotlin-patch", "file": "pom.xml", "line": 20, "targetOnly": false, "appliesWithUpgrade": false},
         {"check": "s2.1-objenesis", "file": "backend/pom.xml", "line": 16},
         {"check": "s4-typed-edge-unregistered", "file": "backend/src/main/kotlin/com/example/golden/shipping/ShipmentLookup.kt", "line": 13},
         {"check": "s4-typed-edge-convention", "file": "backend/src/main/kotlin/com/example/golden/shipping/ShipmentLookup.kt", "line": 13},
         {"check": "s7-model-converter", "file": "backend/pom.xml", "line": 64},
         {"check": "s7-key-order", "file": "backend/src/main/resources/application.yml", "line": 10}
+      ]
+    },
+    "violating/java-platform-lag": {
+      "exit": 1,
+      "expectFacts": {"language": "java", "db": "pg-crud", "web": "none", "frontend": "none", "appPom": "pom.xml",
+                      "bootVersion": "4.1.0"},
+      "findings": [
+        {"check": "s1-boot-patch", "file": "pom.xml", "line": 4, "targetOnly": false, "appliesWithUpgrade": false},
+        {"check": "s3.1-jackson3-override", "file": "pom.xml", "line": 16},
+        {"check": "s3.1-jackson3-override", "file": "pom.xml", "line": 78},
+        {"check": "s11-maven-wrapper", "file": ".mvn/wrapper/maven-wrapper.properties", "line": 3}
       ]
     },
     "violating/not-essentials": {

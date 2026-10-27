@@ -1279,6 +1279,18 @@ entries are in [`essentials-plugin/CHANGELOG.md`](../essentials-plugin/CHANGELOG
   stale statistics on a draining queue table, handlers that hold a connection, and the shard-owned attempt counting
   and shared-instance-id WARN.
 - **Fixed:** `/essentials:slice-enrich` no longer suggests a hand edit for a value `apply` refused.
+- **`/essentials:upgrade` suggests the platform versions Essentials itself builds with, and warns against
+  Jackson 3.2.** New projects from `/essentials:init` get Spring Boot 4.1.2, Kotlin 2.4.21 and a Maven 3.10.0
+  wrapper. On an existing project, upgrade now reports a Spring Boot 4.1.x patch below 4.1.2 (4.1.2 manages the
+  Tomcat and Netty releases with the CVE fixes, Tomcat CVE-2026-66299 among them), a Kotlin compiler below 2.4.21
+  and a Maven wrapper below 3.10.0, each as Advisory, and offers each move on its own: nothing changes without your
+  yes, and none of them is folded into an Essentials version upgrade. It also reports, as Should-fix, an
+  application that overrides Jackson 3 to 3.2 or newer (`jackson-bom.version`, the `tools.jackson:jackson-bom`
+  import, or a `tools.jackson` artifact's version): Jackson 3.2 reads a primitive record component that is absent
+  from the JSON as `0`/`false` even with `FAIL_ON_NULL_FOR_PRIMITIVES` enabled, which blinds the Essentials
+  wire-format check to that drift, and Essentials 0.60.x is built and tested only on the Jackson 3.1.x Spring Boot
+  manages. Remove the override and let Spring Boot manage Jackson 3. `/essentials:review` reports the same
+  findings.
 
 **`0.60.0-6`**
 

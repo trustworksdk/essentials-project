@@ -247,6 +247,101 @@ class BootParentOp(unittest.TestCase):
         self.assertTrue(boot[0].mechanical)
 
 
+
+class PlatformFloors(unittest.TestCase):
+    """The patch floors and the Jackson 3 ceiling at their boundaries, against the live pins: at the pin is
+    silent, one patch below fires once, and neither floor rule ever fires beside the rule above it."""
+
+    LAG = Path(__file__).resolve().parent / "violating" / "java-platform-lag"
+    KOTLIN = Path(__file__).resolve().parent / "clean" / "kotlin-pges-flux-embedded"
+
+    def setUp(self):
+        self.pins = sl.read_pins(sl.PLUGIN / sl.PINS_REL)
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+
+    def copy(self, base):
+        root = Path(self.tmp.name) / "p"
+        shutil.copytree(base, root)
+        return root
+
+    def lint(self, root):
+        lint = sl.Lint(root, self.pins, {})
+        lint.run()
+        return lint
+
+    @staticmethod
+    def checks(lint, check):
+        return [f for f in lint.findings if f.rule.check == check]
+
+    @staticmethod
+    def edit(path, old, new):
+        text = path.read_text(encoding="utf-8")
+        assert old in text, (path, old)
+        path.write_text(text.replace(old, new), encoding="utf-8")
+
+    @staticmethod
+    def one_below(version):
+        parts = [int(x) for x in version.split(".")]
+        i = max(i for i, x in enumerate(parts) if x > 0)
+        parts[i] -= 1
+        return ".".join(str(x) for x in parts)
+
+    def test_boot_at_the_pin_is_silent_and_one_patch_below_fires(self):
+        root = self.copy(self.LAG)
+        pom = root / "pom.xml"
+        pin = self.pins["spring-boot-starter-parent"]
+        self.edit(pom, "<version>4.1.0</version>", f"<version>{pin}</version>")
+        self.assertEqual(self.checks(self.lint(root), "s1-boot-patch"), [])
+        if pin.endswith(".0"):
+            self.skipTest("the Boot pin is a line's first release: no earlier patch on its line")
+        below = self.one_below(pin)
+        self.edit(pom, f"<version>{pin}</version>", f"<version>{below}</version>")
+        lint = self.lint(root)
+        found = self.checks(lint, "s1-boot-patch")
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0].ops[0]["to"], pin)
+        self.assertEqual(self.checks(lint, "s1-boot-line"), [])
+
+    def test_kotlin_at_the_pin_is_silent_below_it_fires_once(self):
+        root = self.copy(self.KOTLIN)
+        pom = root / "pom.xml"
+        pin = self.pins["kotlin.version"]
+        self.edit(pom, "<kotlin.version>2.4.99</kotlin.version>", f"<kotlin.version>{pin}</kotlin.version>")
+        self.assertEqual(self.checks(self.lint(root), "s1-kotlin-patch"), [])
+        self.edit(pom, f"<kotlin.version>{pin}</kotlin.version>",
+                  f"<kotlin.version>{self.one_below(pin)}</kotlin.version>")
+        lint = self.lint(root)
+        self.assertEqual(len(self.checks(lint, "s1-kotlin-patch")), 1)
+        self.assertEqual(self.checks(lint, "s1-kotlin-compiler-floor"), [])
+        self.assertEqual(self.checks(lint, "s1-kotlin-patch")[0].ops,
+                         [{"op": "set-property", "pom": "pom.xml", "name": "kotlin.version",
+                           "from": self.one_below(pin), "to": pin}])
+
+    def test_maven_wrapper_at_the_pin_is_silent_and_no_wrapper_is_not_run(self):
+        root = self.copy(self.LAG)
+        props = root / ".mvn" / "wrapper" / "maven-wrapper.properties"
+        pin = self.pins["Maven"]
+        self.edit(props, "3.9.9/apache-maven-3.9.9", f"{pin}/apache-maven-{pin}")
+        self.assertEqual(self.checks(self.lint(root), "s11-maven-wrapper"), [])
+        props.unlink()
+        lint = self.lint(root)
+        self.assertEqual(self.checks(lint, "s11-maven-wrapper"), [])
+        self.assertIn("s11-maven-wrapper", {c for nr in lint.not_run for c in nr["checks"]})
+
+    def test_jackson_on_the_managed_minor_is_silent(self):
+        root = self.copy(self.LAG)
+        pom = root / "pom.xml"
+        self.edit(pom, "<jackson-bom.version>3.2.4</jackson-bom.version>",
+                  "<jackson-bom.version>3.1.9</jackson-bom.version>")
+        self.edit(pom, "<version>3.2.1</version>", "<version>3.1.9</version>")
+        self.assertEqual(self.checks(self.lint(root), "s3.1-jackson3-override"), [])
+
+    def test_jackson_property_read_by_the_import_is_reported_once_where_it_is_set(self):
+        found = self.checks(self.lint(self.LAG), "s3.1-jackson3-override")
+        self.assertEqual([(f.file, f.line) for f in found], [("pom.xml", 16), ("pom.xml", 78)])
+        self.assertTrue(all(not f.mechanical and "FAIL_ON_NULL_FOR_PRIMITIVES" in f.message for f in found))
+
 class StripComments(unittest.TestCase):
     def test_urls_in_strings_survive(self):
         out = sl.strip_comments('val u = "http://localhost" // gone\n/* x\n y */ val z = 1')

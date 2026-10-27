@@ -272,6 +272,22 @@ targets, with a `-N` suffix for plugin-only releases.
   (`LLM-postgresql-queue-shard-owned.md`). `ShardOwnedSchemaContributor` is now
   `dk.trustworks.essentials.components.queue.shardowned.ShardOwnedSchemaContributor`; the adapter module's class of
   that name is deprecated and delegates to it.
+- **Platform floors the Essentials build runs on, and a warning against Jackson 3.2.** `stack-pins.md` moves
+  `spring-boot-starter-parent` 4.1.1 → 4.1.2, `kotlin.version` 2.4.20 → 2.4.21 and Maven 3.9.16 → 3.10.0, the
+  versions the Essentials repository now builds and tests with, so `/essentials:init` renders them. Spring Boot
+  4.1.2 manages Tomcat 11.0.27 and Netty 4.2.19.Final, which carry the CVE fixes (Tomcat CVE-2026-66299 among
+  them) Essentials had overridden 4.1.1's managed versions for. `stack-lint` gains four checks, and
+  `/essentials:upgrade` offers each finding on its own, never silently and never as part of the Essentials
+  upgrade (Group D): `s1-boot-patch` (Advisory) — Spring Boot on the 4.1 line but below 4.1.2; `s1-kotlin-patch`
+  (Advisory) — a Kotlin compiler at or above the 2.3 floor but below 2.4.21; `s11-maven-wrapper` (Advisory) — a
+  Maven wrapper that downloads a Maven older than 3.10.0 (not run without a wrapper); `s3.1-jackson3-override`
+  (Should-fix) — `jackson-bom.version`, the `tools.jackson:jackson-bom` import or a `tools.jackson` artifact
+  overridden to Jackson 3.2 or newer. Jackson 3.2 reads a primitive record component absent from the document as
+  `0`/`false` even with `FAIL_ON_NULL_FOR_PRIMITIVES` enabled, so `EssentialsObjectMappers.findWireFormatDeviations`
+  stops reporting that drift, and Essentials 0.60.x is built and tested only on the Jackson 3.1.x Spring Boot
+  manages; the fix is to remove the override. The stack contract states the floors (S1, S11) and the Jackson 3
+  rule (S3.1), and `stack-pins.md` gains a non-pin `Jackson 3` row naming the managed minor, which the check reads.
+  Each floor fires only below its pin, and never beside `s1-boot-line` or `s1-kotlin-compiler-floor`.
 
 ## 0.60.0-6 — targets Essentials 0.60.0
 - **`/essentials:upgrade` now moves a project to the plugin's Essentials release, code included.** A

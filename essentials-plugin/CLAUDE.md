@@ -275,9 +275,13 @@ that load.
   each step is verified, and the project's full build gates the move — a release move has no
   compile-only outcome. Slice source is edited there and only there, for API migrations alone: per
   call site, each confirmed, only where a review-scan signature or a compiler error pins it, never
-  structural — structure stays `slice-check`'s. The one pin move outside a release is
-  `s1-kotlin-compiler-floor`: a Kotlin compiler that cannot target the project's own Java baseline
-  is a project that does not compile, not a lag. Upgrade reads the project's own `essentials.version`,
+  structural — structure stays `slice-check`'s. The pin moves outside a release are
+  `s1-kotlin-compiler-floor` — a Kotlin compiler that cannot target the project's own Java baseline
+  is a project that does not compile, not a lag — and the floors the Essentials build itself runs on,
+  `s1-boot-patch`, `s1-kotlin-patch` and `s11-maven-wrapper` (plus `s3.1-jackson3-override`, which
+  removes an override rather than moving a pin): each a named `stack-lint` finding reported only on the
+  wrong side of its `stack-pins.md` row, offered on its own with a yes, never folded into Group D. Still no
+  general lag report. Upgrade reads the project's own `essentials.version`,
   and a finding that only holds on the plugin's Essentials release (`appliesWithUpgrade` in
   stack-lint's JSON) is never offered on its own in Group C — its fix would break an application
   still on its older release — but applied by Group D, right after the pins move. Upgrade's Group C is

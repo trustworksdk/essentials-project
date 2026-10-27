@@ -40,7 +40,7 @@
       "pin": "spring-boot-starter-parent",
       "current": "4.0.8",
       "at": "pom.xml:4",
-      "target": "4.1.1",
+      "target": "4.1.2",
       "status": "move",
       "fix": {
         "mechanical": true,
@@ -52,7 +52,7 @@
             "groupId": "org.springframework.boot",
             "artifactId": "spring-boot-starter-parent",
             "from": "4.0.8",
-            "to": "4.1.1"
+            "to": "4.1.2"
           }
         ]
       },
@@ -96,7 +96,7 @@
       "pin": "kotlin.version",
       "current": null,
       "at": null,
-      "target": "2.4.20",
+      "target": "2.4.21",
       "status": "not set",
       "fix": {
         "mechanical": false,

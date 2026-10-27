@@ -59,11 +59,18 @@ runtime rejects them with `UnsupportedClassVersionError`.
 Every Essentials artifact is pinned from **one** `essentials.version` property. Mixed Essentials
 versions on one classpath is not a supported configuration.
 
+Within that line the application SHOULD be on at least the Spring Boot patch release `stack-pins.md`
+pins for `spring-boot-starter-parent`, and a Kotlin application's compiler on at least its
+`kotlin.version` pin: those are the releases the Essentials build itself is tested on, and an
+earlier Boot patch manages dependency releases that lack security fixes a later one carries. Below
+either is a lag, not a break — the application still builds and runs.
+
 Concrete versions are **not** listed here — they live in `stack-pins.md`, which is the single
 place a version rots. Nothing else in this directory may name a version number.
 
 > Proof: `references/llm/LLM.md` § Quick Facts (Java 25+, Spring Boot 4.1.x). The `--release`
-> level is the Essentials root `pom.xml`'s `java.release.version`. Concrete pins: `stack-pins.md`.
+> level is the Essentials root `pom.xml`'s `java.release.version`; the patch floors are its
+> `spring-boot.version` and `kotlin.version`. Concrete pins: `stack-pins.md`.
 
 ## S2 — Module selection (MUST pick exactly one persistence profile)
 
@@ -177,6 +184,13 @@ at startup. No Essentials artifact needs Jackson 2's `com.fasterxml.jackson.core
 comes with Jackson 3's databind. SpringDoc does need it: `springdoc-openapi-starter-common` brings it
 through swagger-core, so a *transitive* Jackson 2 databind on the classpath is expected and harmless.
 The guard is against the Jackson 2 Essentials modules above, not against databind.
+Jackson 3 itself stays at the version Spring Boot manages: the Essentials release is built and
+tested on that Jackson 3 minor, which `stack-pins.md` names, and its wire-format check
+(`EssentialsObjectMappers.findWireFormatDeviations`) is calibrated to it. Do not override
+`jackson-bom.version`, the `tools.jackson:jackson-bom` import or a `tools.jackson` artifact's version
+to a newer Jackson 3 minor. On the next one, a primitive record component absent from the document
+reads as `0`/`false` even with `FAIL_ON_NULL_FOR_PRIMITIVES` enabled, so the check stops reporting
+that drift, and the application runs a Jackson its Essentials release was never tested on.
 
 **S3.2 — The persistence serializer is built by `EssentialsObjectMappers` and ignores module
 beans.** The starters' `JSONSerializer` (`pg-crud`, `mongo`) and `JSONEventSerializer`
@@ -211,8 +225,11 @@ way to construct the type, Jackson 3 uses the sole constructor regardless.
 
 > Proof: `references/llm/LLM-types-jackson.md` § Quick Facts and § Spring Boot 4 (web mapper);
 > `references/llm/LLM-foundation.md` § JSONSerializer (the canonical mapper, the Jackson 2 jar
-> guard, constructor parameter names); the Kotlin persistence serializer is in
-> `kotlin-spring-boot.md`.
+> guard, constructor parameter names, and `findWireFormatDeviations`' missing-primitive probe); the
+> Kotlin persistence serializer is in `kotlin-spring-boot.md`. Spring Boot manages Jackson 3 through
+> `spring-boot-dependencies`' `jackson-bom.version` property and its `tools.jackson:jackson-bom`
+> import; the next minor's missing-primitive behaviour, and why Essentials holds back from it, is
+> recorded in the Essentials repository's `docs/ROADMAP-0.6x.md` (DU-1).
 
 ## S4 — The typed edge (MUST if any endpoint takes a semantic type)
 
@@ -449,10 +466,15 @@ A **`skip-frontend` profile** must exist on any project whose package phase buil
 backend-only development does not pay for a Node install. Without it, `mvn spring-boot:run`
 during backend work runs `npm ci` and a Vite build.
 
+A **Maven wrapper**, where the project has one, SHOULD download at least the Maven release
+`stack-pins.md` pins — the one the Essentials build's own wrapper runs and `/essentials:init`
+generates. An older one still builds; it is a lag, not a break.
+
 > Proof: build configuration, inlined in `frontend-react.md` § Mode A. The property names are
 > Spring Boot's own (`spring-boot-dependencies` imports `testcontainers-bom`, `mockito-bom` and
 > `mongodb-driver-bom` at `${testcontainers.version}`, `${mockito.version}`, `${mongodb.version}`).
-> Every version is in `stack-pins.md`.
+> Every version is in `stack-pins.md`. The Maven pin is the release the Essentials repository's own
+> `.mvn/wrapper/maven-wrapper.properties` downloads.
 
 ---
 
@@ -470,7 +492,8 @@ files (`/essentials:upgrade` Group C and `/essentials:review` run it); the rest 
       stdlib/reflect on Postgres profiles (S2.1) — most of these compile and then kill context startup
 - [ ] Mongo connection properties use `spring.mongodb.*`, not `spring.data.mongodb.*`; the
       database and the test container are replica sets (S2)
-- [ ] Jackson 3 only — no 0.50-era `types-jackson` / `immutable-jackson` jar resolved (S3.1)
+- [ ] Jackson 3 only — no 0.50-era `types-jackson` / `immutable-jackson` jar resolved, and Jackson 3
+      left at the version Spring Boot manages (S3.1)
 - [ ] Extra persistence modules come from an own `JSONSerializer` / `JSONEventSerializer` bean built on `EssentialsObjectMappers`, never a module `@Bean` or a hand-built mapper (S3.2)
 - [ ] `EssentialTypesJacksonModule` reaches the **web** mapper — via the starter's bean, or explicitly when Boot's `JsonMapper` is replaced (S3.3)
 - [ ] Event/payload constructor parameter names match their JSON properties (S3.5)

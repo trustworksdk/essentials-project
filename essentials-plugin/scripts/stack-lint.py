@@ -104,7 +104,7 @@ MONGO_MOVED["spring.data.mongodb.uuid-representation"] = "spring.mongodb.represe
 MONGO_MOVED["spring.data.mongodb.grid-fs-database"] = "spring.data.mongodb.gridfs.database"
 # Looked up by relaxed-binding form (see norm_key).
 MONGO_MOVED = {re.sub(r"[-_]", "", k.lower()): v for k, v in MONGO_MOVED.items()}
-# Declaring these instead of a starter is how a context ends up half-configured (contract :75).
+# Declaring these instead of a starter is how a context ends up half-configured (contract :87).
 LOOSE_COMPONENTS = {
     "postgresql-queue", "postgresql-distributed-fenced-lock", "postgresql-event-store",
     "spring-postgresql-event-store", "springdata-mongo-queue", "springdata-mongo-distributed-fenced-lock",
@@ -161,111 +161,125 @@ RULES_LIST = [
     Rule("s1-kotlin-compiler-floor", "S1", "Blocking",
          [("C", 55, "application runs on"), ("K", 38, "The compiler floor is nonetheless")],
          "kotlin.version below the Kotlin compiler floor stack-pins.md states", target_only=True),
+    # Patch floors within a supported line: a lag, not a break, so Advisory and never target-only — the
+    # application runs on the line it is on, and the move is offered on its own (upgrade Step 4).
+    Rule("s1-boot-patch", "S1", "Advisory", [("C", 62, "at least the Spring Boot patch release")],
+         "Spring Boot on the line stack-pins.md targets but below its patch release",
+         "root pom.xml spring-boot.version: the patch the Essentials build is tested on"),
+    Rule("s1-kotlin-patch", "S1", "Advisory",
+         [("C", 64, "`kotlin.version` pin: those are the releases"), ("K", 38, "The compiler floor is nonetheless")],
+         "kotlin.version at or above the compiler floor but below the stack-pins.md pin",
+         "root pom.xml kotlin.version: the compiler the Essentials build uses"),
     # S2 ---------------------------------------------------------------------------------------
-    Rule("s2-one-starter", "S2", "Blocking", [("C", 68, "MUST pick exactly one persistence profile"),
-                                              ("C", 80, "declaring the *components* individually")],
+    Rule("s2-one-starter", "S2", "Blocking", [("C", 75, "MUST pick exactly one persistence profile"),
+                                              ("C", 87, "declaring the *components* individually")],
          "no persistence starter, or starters of two profiles"),
-    Rule("s2-redundant-starter", "S2", "Advisory", [("C", 79, "Declaring both is")],
+    Rule("s2-redundant-starter", "S2", "Advisory", [("C", 86, "Declaring both is")],
          "the event-store starter and the PostgreSQL starter both declared"),
     Rule("s2-eventsourced-aggregates", "S2", "Blocking",
-         [("C", 88, "`eventsourced-aggregates`; on Kotlin also `kotlin-eventsourcing`")],
+         [("C", 95, "`eventsourced-aggregates`; on Kotlin also `kotlin-eventsourcing`")],
          "eventsourced-aggregates not declared on pg-event-sourced (optional in the starter, so not transitive)",
          "components/spring-boot-starter-postgresql-event-store/pom.xml:105-110 (<optional>true</optional>)"),
     Rule("s2-kotlin-eventsourcing", "S2", "Blocking",
-         [("C", 88, "`eventsourced-aggregates`; on Kotlin also `kotlin-eventsourcing`")],
+         [("C", 95, "`eventsourced-aggregates`; on Kotlin also `kotlin-eventsourcing`")],
          "kotlin-eventsourcing not declared on a Kotlin pg-event-sourced project (no starter depends on it)",
          "no starter POM names kotlin-eventsourcing (components/spring-boot-starter-*/pom.xml)"),
     Rule("s2-kotlin-eventsourcing-on-java", "S2", "Should-fix",
-         [("C", 91, "A Java project must not carry `kotlin-eventsourcing`")],
+         [("C", 98, "A Java project must not carry `kotlin-eventsourcing`")],
          "kotlin-eventsourcing declared on a Java project, whose decider family lives in eventsourced-aggregates"),
     Rule("s2-document-db", "S2", "Advisory",
-         [("C", 89, "`postgresql-document-db`, when read models use the document store")],
+         [("C", 96, "`postgresql-document-db`, when read models use the document store")],
          "postgresql-document-db not declared on a Postgres profile (no starter depends on it)",
          "components/spring-boot-starter-postgresql/pom.xml, …-event-store/pom.xml: no postgresql-document-db"),
-    Rule("s2-mongo-keys", "S2", "Blocking", [("C", 141, "connection properties are `spring.mongodb.*`")],
+    Rule("s2-mongo-keys", "S2", "Blocking", [("C", 148, "connection properties are `spring.mongodb.*`")],
          "a spring.data.mongodb.* key, unbound in Boot 4",
          "LLM/LLM-spring-boot-starter-modules.md:684"),
     # S2.1 -------------------------------------------------------------------------------------
-    Rule("s2.1-jdbc-starter", "S2.1", "Blocking", [("C", 113, "`spring-boot-starter-jdbc`")],
+    Rule("s2.1-jdbc-starter", "S2.1", "Blocking", [("C", 120, "`spring-boot-starter-jdbc`")],
          "spring-boot-starter-jdbc missing on a Postgres profile",
          "components/spring-boot-starter-postgresql/pom.xml:46-49 (provided)"),
-    Rule("s2.1-postgresql-driver", "S2.1", "Blocking", [("C", 114, "`org.postgresql:postgresql`")],
+    Rule("s2.1-postgresql-driver", "S2.1", "Blocking", [("C", 121, "`org.postgresql:postgresql`")],
          "PostgreSQL JDBC driver missing on a Postgres profile",
          "components/spring-boot-starter-postgresql/pom.xml:157-160 (provided)"),
-    Rule("s2.1-jdbi", "S2.1", "Blocking", [("C", 115, "`jdbi3-core`, `jdbi3-postgres`")],
+    Rule("s2.1-jdbi", "S2.1", "Blocking", [("C", 122, "`jdbi3-core`, `jdbi3-postgres`")],
          "jdbi3-core / jdbi3-postgres missing on a Postgres profile",
          "components/spring-boot-starter-postgresql/pom.xml:147-154 (provided)"),
-    Rule("s2.1-kotlin-stdlib", "S2.1", "Blocking", [("C", 116, "`kotlin-stdlib-jdk8`, `kotlin-reflect`")],
+    Rule("s2.1-kotlin-stdlib", "S2.1", "Blocking", [("C", 123, "`kotlin-stdlib-jdk8`, `kotlin-reflect`")],
          "kotlin-stdlib missing on a Postgres profile (either language)",
          "components/postgresql-document-db/pom.xml:50-52 (provided)"),
-    Rule("s2.1-kotlin-reflect", "S2.1", "Blocking", [("C", 116, "`kotlin-stdlib-jdk8`, `kotlin-reflect`")],
+    Rule("s2.1-kotlin-reflect", "S2.1", "Blocking", [("C", 123, "`kotlin-stdlib-jdk8`, `kotlin-reflect`")],
          "kotlin-reflect missing on a Postgres profile (either language)",
          "components/postgresql-document-db/pom.xml:44-46 (provided)"),
-    Rule("s2.1-data-mongodb", "S2.1", "Blocking", [("C", 117, "`spring-boot-starter-data-mongodb`")],
+    Rule("s2.1-data-mongodb", "S2.1", "Blocking", [("C", 124, "`spring-boot-starter-data-mongodb`")],
          "spring-boot-starter-data-mongodb missing on the mongo profile",
          "components/spring-boot-starter-mongodb/pom.xml:46-49 (provided)"),
-    Rule("s2.1-jackson3-databind", "S2.1", "Blocking", [("C", 118, "`tools.jackson.core:jackson-databind`")],
+    Rule("s2.1-jackson3-databind", "S2.1", "Blocking", [("C", 125, "`tools.jackson.core:jackson-databind`")],
          "Jackson 3 databind missing on an application with no Boot web or Jackson starter",
          "components/spring-boot-starter-postgresql/pom.xml:141-144 (provided)"),
-    Rule("s2.1-objenesis", "S2.1", "Blocking", [("C", 119, "`org.objenesis:objenesis`")],
+    Rule("s2.1-objenesis", "S2.1", "Blocking", [("C", 126, "`org.objenesis:objenesis`")],
          "objenesis missing: startup and writes succeed, the first read of a persisted object fails",
          "immutable-jackson3/pom.xml:48-53 (provided)"),
-    Rule("s2.1-reactor-core", "S2.1", "Blocking", [("C", 120, "`reactor-core`")],
+    Rule("s2.1-reactor-core", "S2.1", "Blocking", [("C", 127, "`reactor-core`")],
          "reactor-core missing on a non-WebFlux application",
          "components/spring-boot-starter-postgresql/pom.xml:128-130 (provided)"),
-    Rule("s2.1-scope", "S2.1", "Blocking", [("C", 132, "compile scope in the application")],
+    Rule("s2.1-scope", "S2.1", "Blocking", [("C", 139, "compile scope in the application")],
          "an S2.1 dependency declared provided/test/system — not on the runtime classpath"),
-    Rule("s2.1-runtime-scope", "S2.1", "Advisory", [("C", 132, "compile scope in the application")],
+    Rule("s2.1-runtime-scope", "S2.1", "Advisory", [("C", 139, "compile scope in the application")],
          "an S2.1 dependency declared at runtime scope instead of compile"),
     # S3 ---------------------------------------------------------------------------------------
-    Rule("s3.1-jackson2-essentials-module", "S3.1", "Blocking", [("C", 173, "`immutable-jackson` are gone")],
+    Rule("s3.1-jackson2-essentials-module", "S3.1", "Blocking", [("C", 180, "`immutable-jackson` are gone")],
          "a Jackson 2 Essentials module (types-jackson / immutable-jackson) declared",
          "root pom.xml modules: only types-jackson3 / immutable-jackson3 are built"),
     # 0.50.0: both starter POMs declare com.fasterxml.jackson.core:jackson-databind `provided`, and
     # EssentialsComponentsConfiguration / EventStoreConfiguration.jsonSerializer take
     # List<com.fasterxml.jackson.databind.Module> (javap on the 0.50.0 jars).
-    Rule("s3.1-jackson2-databind", "S3.1", "Advisory", [("C", 175, "No Essentials artifact needs Jackson 2's")],
+    Rule("s3.1-jackson2-databind", "S3.1", "Advisory", [("C", 182, "No Essentials artifact needs Jackson 2's")],
          "Jackson 2 jackson-databind declared; nothing in Essentials uses it", target_only=True),
-    Rule("s3.3-own-json-mapper", "S3.3", "Blocking", [("C", 196, "replaces Boot's `JsonMapper` with its own bean")],
+    # Not mechanical: removing the override can change what else resolves (a library that wanted that Jackson).
+    Rule("s3.1-jackson3-override", "S3.1", "Should-fix", [("C", 191, "to a newer Jackson 3 minor")],
+         "Jackson 3 overridden to a newer minor than the one Spring Boot manages and Essentials is tested on",
+         "docs/ROADMAP-0.6x.md DU-1: on 3.2 WireFormatProbes' missing-primitive probe stops reporting; "
+         "EssentialsObjectMappersWireFormatDeviationsTest fails"),
+    Rule("s3.3-own-json-mapper", "S3.3", "Blocking", [("C", 210, "replaces Boot's `JsonMapper` with its own bean")],
          "a JsonMapper bean that does not register EssentialTypesJacksonModule"),
     Rule("s3.4-jackson-module-kotlin", "S3.4", "Blocking",
-         [("C", 198, "Kotlin types are covered by neither mapper"),
+         [("C", 212, "Kotlin types are covered by neither mapper"),
           ("K", 76, "`tools.jackson.module:jackson-module-kotlin`")],
          "Kotlin project without Jackson 3 jackson-module-kotlin"),
     Rule("s3.4-persistence-serializer", "S3.4", "Blocking",
-         [("C", 186, "comes from your own `JSONSerializer` / `JSONEventSerializer` bean"),
+         [("C", 200, "comes from your own `JSONSerializer` / `JSONEventSerializer` bean"),
           ("K", 84, "its **type is the load-bearing part**")],
          "Kotlin project without its own persistence serializer bean carrying KotlinModule",
          "EventStoreConfiguration.java:567-571 and postgresql EssentialsComponentsConfiguration.java:472-477 "
          "(@ConditionalOnMissingBean, back off by type); EssentialsObjectMappers.java:54"),
     Rule("s3.5-java-parameters", "S3.5", "Blocking",
-         [("C", 207, "Compile with parameter names retained"), ("J", 19, "`maven-compiler-plugin` with `-parameters`"),
+         [("C", 221, "Compile with parameter names retained"), ("J", 19, "`maven-compiler-plugin` with `-parameters`"),
           ("K", 31, "still carry `-parameters`")],
          "javac does not retain parameter names",
          "spring-boot-starter-parent pom: maven-compiler-plugin <parameters>true</parameters>"),
     Rule("s3.5-kotlin-allopen", "S3.5", "Blocking",
-         [("C", 207, "Compile with parameter names retained"), ("K", 18, "`spring` compiler plugin")],
+         [("C", 221, "Compile with parameter names retained"), ("K", 18, "`spring` compiler plugin")],
          "kotlin-maven-plugin without the all-open spring compiler plugin"),
     Rule("s3.5-kotlin-jsr305", "S3.5", "Blocking",
-         [("C", 207, "Compile with parameter names retained"), ("K", 26, "`-Xjsr305=strict`")],
+         [("C", 221, "Compile with parameter names retained"), ("K", 26, "`-Xjsr305=strict`")],
          "kotlin-maven-plugin without -Xjsr305=strict"),
     Rule("s3.5-kotlin-param-property", "S3.5", "Blocking",
-         [("C", 207, "Compile with parameter names retained"),
+         [("C", 221, "Compile with parameter names retained"),
           ("K", 27, "`-Xannotation-default-target=param-property`")],
          "kotlin-maven-plugin without -Xannotation-default-target=param-property"),
     # S4 ---------------------------------------------------------------------------------------
-    Rule("s4-configurer-missing", "S4", "Blocking", [("C", 219, "auto-configures nothing")],
+    Rule("s4-configurer-missing", "S4", "Blocking", [("C", 236, "auto-configures nothing")],
          "types-spring-web declared but no Essentials web configurer imported",
          "types-spring-web has no META-INF (no AutoConfiguration.imports)"),
-    Rule("s4-configurer-count", "S4", "Blocking", [("C", 225, "whichever web stack you are on")],
+    Rule("s4-configurer-count", "S4", "Blocking", [("C", 242, "whichever web stack you are on")],
          "more than one Essentials web configurer imported"),
-    Rule("s4-configurer-web-mismatch", "S4", "Blocking", [("C", 225, "whichever web stack you are on")],
+    Rule("s4-configurer-web-mismatch", "S4", "Blocking", [("C", 242, "whichever web stack you are on")],
          "the imported configurer is for the other web stack",
          "EssentialsWebFluxConfigurer.java:47 implements WebFluxConfigurer; "
          "EssentialsWebMvcConfigurer.java:51 implements WebMvcConfigurer"),
     Rule("s4-typed-edge-unregistered", "S4", "Blocking",
-         [("C", 217, "MUST if any endpoint takes a semantic type"),
-          ("C", 241, "a missing converter surfaces as HTTP **500**"),
+         [("C", 234, "MUST if any endpoint takes a semantic type"),
+          ("C", 258, "a missing converter surfaces as HTTP **500**"),
           ("J", 79, "`types-spring-web` and the `@Import`")],
          "an endpoint parameter typed as a SingleValueType only the Essentials converter can bind, "
          "with that converter unregistered",
@@ -273,127 +287,130 @@ RULES_LIST = [
          "String->JSR310SingleValueType); spring-core 7.0.9 ObjectToObjectConverter binds a String "
          "constructor or static valueOf/of/from(String) itself"),
     Rule("s4-typed-edge-convention", "S4", "Should-fix",
-         [("C", 229, "Import it whenever a Java `SingleValueType` id is at the edge"),
+         [("C", 246, "Import it whenever a Java `SingleValueType` id is at the edge"),
           ("J", 79, "`types-spring-web` and the `@Import`")],
          "an endpoint parameter typed as a SingleValueType that binds today only through Spring's String route, "
          "with the Essentials converter unregistered",
          "spring-core 7.0.9 ObjectToObjectConverter: static valueOf/of/from(String), then a String constructor"),
     Rule("s4-types-spring-web-missing", "S4", "Advisory",
-         [("C", 219, "auto-configures nothing"), ("J", 79, "`types-spring-web` and the `@Import`")],
+         [("C", 236, "auto-configures nothing"), ("J", 79, "`types-spring-web` and the `@Import`")],
          "Java web application without types-spring-web"),
     # S5 ---------------------------------------------------------------------------------------
-    Rule("s5-document-db-factory", "S5", "Should-fix", [("C", 275, "`DocumentDbRepositoryFactory` bean built from")],
+    Rule("s5-document-db-factory", "S5", "Should-fix", [("C", 292, "`DocumentDbRepositoryFactory` bean built from")],
          "postgresql-document-db declared but no DocumentDbRepositoryFactory bean",
          "DocumentDbRepository.kt:536 (plain class, no auto-configuration)"),
-    Rule("s5-mongo-document-db", "S5", "Should-fix", [("C", 276, "on the `mongo` profile there is no such thing")],
+    Rule("s5-mongo-document-db", "S5", "Should-fix", [("C", 293, "on the `mongo` profile there is no such thing")],
          "postgresql-document-db declared on the mongo profile"),
     # 0.50.0: EssentialsComponentsProperties.java:286 binds durable-queues.transactional-mode.
-    Rule("s5-transactional-mode", "S5", "Should-fix", [("C", 271, "binds to nothing")],
+    Rule("s5-transactional-mode", "S5", "Should-fix", [("C", 288, "binds to nothing")],
          "essentials.durable-queues.transactional-mode in configuration",
          "docs/MIGRATION-0.60.md:542; EssentialsComponentsProperties.java:292-303 (no such field)",
          target_only=True),
-    Rule("s5-aggregate-declarations", "S5", "Should-fix", [("C", 281, "`EssentialsAggregateDeclarations`")],
+    Rule("s5-aggregate-declarations", "S5", "Should-fix", [("C", 298, "`EssentialsAggregateDeclarations`")],
          "an aggregate policy annotation on a class no EssentialsAggregateDeclarations bean declares",
          "AggregateSnapshotPolicy.java:38-40, AggregateClosingBooksPolicy.java:38 (@Target TYPE); "
          "EssentialsAggregateDeclarations.java:49; LLM/LLM-eventsourced-aggregates.md:671-674"),
     # S7 ---------------------------------------------------------------------------------------
-    Rule("s7-spec-generation", "S7", "Advisory", [("C", 318, "generated from the code, never hand-written")],
+    Rule("s7-spec-generation", "S7", "Advisory", [("C", 335, "generated from the code, never hand-written")],
          "nothing generates contracts/openapi.json: no test writing it from /v3/api-docs, no springdoc maven plugin"),
-    Rule("s7-contract-file", "S7", "Advisory", [("C", 320, "checked-in `contracts/openapi.json`")],
+    Rule("s7-contract-file", "S7", "Advisory", [("C", 337, "checked-in `contracts/openapi.json`")],
          "no committed spec: the frontend generator's input, or contracts/openapi.json, does not exist"),
     Rule("s7-frontend-input", "S7", "Advisory",
-         [("C", 320, "checked-in `contracts/openapi.json`"),
+         [("C", 337, "checked-in `contracts/openapi.json`"),
           ("F", 71, "target: '../contracts/openapi.json'")],
          "the frontend generator reads a live /v3/api-docs URL instead of the committed spec"),
     Rule("s7-forked-pipeline", "S7", "Advisory",
-         [("C", 330, "The forked-app shape fails"), ("C", 329, "a DB-less spec-export profile")],
+         [("C", 347, "The forked-app shape fails"), ("C", 346, "a DB-less spec-export profile")],
          "left over from the forked-app spec pipeline: springdoc-openapi-maven-plugin, a spring-boot-maven-plugin "
          "start/stop execution, or an application-openapi config"),
     Rule("s7-key-order", "S7", "Advisory",
-         [("C", 321, "keys sorted (`springdoc.writer-with-order-by-keys:")],
+         [("C", 338, "keys sorted (`springdoc.writer-with-order-by-keys:")],
          "springdoc runs without springdoc.writer-with-order-by-keys: true, so the committed spec's key order "
          "follows the code"),
     # 0.50.0: types-spring-web has no SingleValueTypeModelConverter (jar listing; the tag's source tree).
-    Rule("s7-model-converter", "S7", "Advisory", [("C", 338, "`SingleValueTypeModelConverter` as a bean")],
+    Rule("s7-model-converter", "S7", "Advisory", [("C", 355, "`SingleValueTypeModelConverter` as a bean")],
          "springdoc runs but SingleValueTypeModelConverter is not registered: the spec types semantic ids as objects",
          "types-spring-web/src/main/java/dk/trustworks/essentials/types/spring/web/SingleValueTypeModelConverter.java "
          "(a swagger-core ModelConverter; no auto-configuration in types-spring-web)", target_only=True),
     # S8 ---------------------------------------------------------------------------------------
     Rule("s8-embedded-cors", "S8", "Should-fix",
-         [("C", 356, "pick a mode explicitly and configure only that mode's pieces"),
+         [("C", 373, "pick a mode explicitly and configure only that mode's pieces"),
           ("F", 197, "Do not configure CORS")],
          "embedded frontend with a CORS configuration"),
     Rule("s8-embedded-base-url", "S8", "Should-fix",
-         [("C", 356, "pick a mode explicitly and configure only that mode's pieces"),
+         [("C", 373, "pick a mode explicitly and configure only that mode's pieces"),
           ("F", 200, "Do not set an API base URL")],
          "embedded frontend with an API base URL set"),
     Rule("s8-embedded-spa-filter", "S8", "Should-fix",
-         [("C", 356, "pick a mode explicitly and configure only that mode's pieces"),
+         [("C", 373, "pick a mode explicitly and configure only that mode's pieces"),
           ("F", 151, "A SPA fallback filter")],
          "embedded frontend without a SPA fallback to index.html"),
     Rule("s8-embedded-static-copy", "S8", "Should-fix",
-         [("C", 356, "pick a mode explicitly and configure only that mode's pieces"),
+         [("C", 373, "pick a mode explicitly and configure only that mode's pieces"),
           ("F", 141, "`maven-resources-plugin` copies `frontend/dist`")],
          "embedded frontend whose build output is not copied into static resources"),
     Rule("s8-standalone-base-url", "S8", "Blocking",
-         [("C", 362, "fetch mutator Orval's config names reads and prefixes"),
+         [("C", 379, "fetch mutator Orval's config names reads and prefixes"),
           ("F", 264, "configured *and consumed*")],
          "standalone frontend whose fetch mutator does not prefix a build-time base-URL variable onto the request"),
     Rule("s8-standalone-cors-source", "S8", "Blocking",
-         [("C", 356, "pick a mode explicitly and configure only that mode's pieces"),
+         [("C", 373, "pick a mode explicitly and configure only that mode's pieces"),
           ("F", 214, "expressed as a `CorsConfigurationSource` bean")],
          "standalone frontend and no CorsConfigurationSource bean"),
     Rule("s8-standalone-cors-webfilter", "S8", "Should-fix",
-         [("C", 356, "pick a mode explicitly and configure only that mode's pieces"),
+         [("C", 373, "pick a mode explicitly and configure only that mode's pieces"),
           ("F", 218, "Expose the source, not a standalone `CorsWebFilter`")],
          "CORS applied by a standalone CorsWebFilter/CorsFilter bean"),
     Rule("s8-standalone-cors-value", "S8", "Blocking",
-         [("C", 356, "pick a mode explicitly and configure only that mode's pieces"),
+         [("C", 373, "pick a mode explicitly and configure only that mode's pieces"),
           ("F", 246, "Bind the origin list with `@ConfigurationProperties`, never `@Value`")],
          "CORS origins bound with @Value to a key configured as a list"),
     Rule("s8-standalone-cors-value-scalar", "S8", "Should-fix",
-         [("C", 356, "pick a mode explicitly and configure only that mode's pieces"),
+         [("C", 373, "pick a mode explicitly and configure only that mode's pieces"),
           ("F", 246, "Bind the origin list with `@ConfigurationProperties`, never `@Value`"),
           ("F", 251, "breaks the day someone")],
          "CORS origins bound with @Value to a scalar, or to a key no application* file sets"),
     Rule("s8-standalone-cors-wildcard", "S8", "Blocking",
-         [("C", 356, "pick a mode explicitly and configure only that mode's pieces"),
+         [("C", 373, "pick a mode explicitly and configure only that mode's pieces"),
           ("F", 215, "`allowCredentials = true` **cannot**")],
          "wildcard origin combined with allowCredentials"),
     Rule("s8-standalone-dead-spa", "S8", "Advisory",
-         [("C", 356, "pick a mode explicitly and configure only that mode's pieces"),
+         [("C", 373, "pick a mode explicitly and configure only that mode's pieces"),
           ("F", 295, "SPA filter is dead code in this mode")],
          "standalone frontend with a backend SPA fallback"),
     Rule("s8-generated-gitignore", "S8", "Should-fix",
-         [("C", 352, "contract-first pipeline of S7"),
+         [("C", 369, "contract-first pipeline of S7"),
           ("F", 82, "`generated/` and `model/` must not be committed")],
          "the generated API client is not git-ignored"),
     # S9 ---------------------------------------------------------------------------------------
     Rule("s9-admin-spi", "S9", "Should-fix",
-         [("C", 384, "`EssentialsAuthenticatedUser` and `EssentialsSecurityProvider`")],
+         [("C", 401, "`EssentialsAuthenticatedUser` and `EssentialsSecurityProvider`")],
          "an admin starter without the two security SPIs",
          "shared/src/main/java/dk/trustworks/essentials/shared/security/"
          "{EssentialsSecurityProvider,EssentialsAuthenticatedUser}.java"),
     # S10 --------------------------------------------------------------------------------------
-    Rule("s10-tc1-coordinates", "S10", "Advisory", [("C", 399, "The 1.x coordinates no longer resolve")],
+    Rule("s10-tc1-coordinates", "S10", "Advisory", [("C", 416, "The 1.x coordinates no longer resolve")],
          "a Testcontainers 1.x artifact coordinate",
          "~/.m2 org/testcontainers/testcontainers-{postgresql,mongodb} at the testcontainers-bom pin"),
-    Rule("s10-tc-package", "S10", "Advisory", [("C", 424, "`org.testcontainers.postgresql.PostgreSQLContainer`")],
+    Rule("s10-tc-package", "S10", "Advisory", [("C", 441, "`org.testcontainers.postgresql.PostgreSQLContainer`")],
          "a container class imported from the deprecated org.testcontainers.containers package",
          "testcontainers-postgresql jar at the pin: org.testcontainers.containers.PostgreSQLContainer is "
          "@Deprecated, org.testcontainers.postgresql.PostgreSQLContainer is not generic (javap); "
          "likewise testcontainers-mongodb MongoDBContainer"),
     Rule("s10-webtestclient-package", "S10", "Advisory",
-         [("C", 416, "`@AutoConfigureWebTestClient` is no longer in")],
+         [("C", 433, "`@AutoConfigureWebTestClient` is no longer in")],
          "@AutoConfigureWebTestClient imported from its Boot 3 package"),
-    Rule("s10-failsafe", "S10", "Advisory", [("C", 397, "Failsafe runs those during `verify`")],
+    Rule("s10-failsafe", "S10", "Advisory", [("C", 414, "Failsafe runs those during `verify`")],
          "integration tests present but maven-failsafe-plugin is not bound",
          "spring-boot-starter-parent pom: failsafe is in pluginManagement only"),
     # S11 --------------------------------------------------------------------------------------
-    Rule("s11-skip-frontend", "S11", "Should-fix", [("C", 448, "**`skip-frontend` profile** must exist")],
+    Rule("s11-skip-frontend", "S11", "Should-fix", [("C", 465, "**`skip-frontend` profile** must exist")],
          "frontend-maven-plugin without a skip-frontend profile"),
-    Rule("s11-boot-parent", "S11", "Advisory", [("C", 441, "`spring-boot-starter-parent` is the parent POM")],
+    Rule("s11-boot-parent", "S11", "Advisory", [("C", 458, "`spring-boot-starter-parent` is the parent POM")],
          "the reactor does not inherit spring-boot-starter-parent"),
+    Rule("s11-maven-wrapper", "S11", "Advisory", [("C", 469, "**Maven wrapper**, where the project has one")],
+         "the Maven wrapper downloads a Maven below the stack-pins.md pin",
+         "root .mvn/wrapper/maven-wrapper.properties distributionUrl"),
 ]
 RULES = {r.check: r for r in RULES_LIST}
 # Slugs that were emitted once and are retired: never reuse one for a different check. The forked-app
@@ -1379,12 +1396,19 @@ class Lint:
         self.facts["bootVersion"] = boot_version
         want = ".".join(self.pins["spring-boot-starter-parent"].split(".")[:2])
         if boot_version is None or boot_where is None:
-            self.skip(["s1-boot-line"], "no spring-boot-starter-parent or spring-boot-dependencies import found")
+            self.skip(["s1-boot-line", "s1-boot-patch"],
+                      "no spring-boot-starter-parent or spring-boot-dependencies import found")
         elif ".".join(boot_version.split(".")[:2]) != want:
             self.add("s1-boot-line", boot_where[0], boot_where[1],
                      f"Spring Boot {boot_version} — Essentials targets the {want}.x line; other lines are unsupported",
                      f"move the Boot version to the {want}.x line (stack-pins.md), as a deliberate upgrade",
                      boot_ops)
+        elif version_below(boot_version, target):
+            self.add("s1-boot-patch", boot_where[0], boot_where[1],
+                     f"Spring Boot {boot_version} is on the {want}.x line but below {target}, the patch the Essentials "
+                     "build is tested on; an earlier patch manages dependency releases without the security fixes "
+                     "a later one carries",
+                     f"raise the Boot version to {target} (stack-pins.md)", boot_ops)
         # Java baseline: java.version (spring-boot-starter-parent feeds maven.compiler.release from it)
         floor_m = re.match(r"\d+", self.pins["java.version"])
         if floor_m is None:
@@ -1456,7 +1480,8 @@ class Lint:
                      ops, mechanical=has_prop)
 
     def _kotlin_floor(self, pom, java_floor):
-        """kotlin.version (or kotlin-maven-plugin's own <version>) below the floor stack-pins.md states."""
+        """kotlin.version (or kotlin-maven-plugin's own <version>) below the floor stack-pins.md states
+        (s1-kotlin-compiler-floor), or at or above it but below the kotlin.version pin (s1-kotlin-patch)."""
         want = self.pins["kotlin.floor"]
         v, where, line = self.p.prop(pom, "kotlin.version")
         plugin_version = None
@@ -1470,25 +1495,15 @@ class Lint:
                     if resolved and "${" not in resolved:
                         v, where, line, plugin_version = resolved, p, node.line, node.text.strip()
         if v is None or where is None:
-            self.skip(["s1-kotlin-compiler-floor"],
+            self.skip(["s1-kotlin-compiler-floor", "s1-kotlin-patch"],
                       "no kotlin.version property and no kotlin-maven-plugin <version> in the project — the "
                       "parent's managed Kotlin applies")
             return
         have = version_tuple(v)
         if have is None:
-            self.skip(["s1-kotlin-compiler-floor"], f"Kotlin version `{v}` is not a version number")
+            self.skip(["s1-kotlin-compiler-floor", "s1-kotlin-patch"], f"Kotlin version `{v}` is not a version number")
             return
-        if not version_below(".".join(str(x) for x in have[:2]), want):
-            return
-        # The floor exists because a compiler below it cannot target the Java baseline. A project whose own
-        # java.version is already there does not compile today, whatever Essentials release it pins.
-        java_v, _, _ = self.p.prop(pom, "java.version")
-        java_m = re.fullmatch(r"(?:1\.)?(\d+)", (java_v or "").strip())
-        holds_now = java_m is not None and int(java_m.group(1)) >= java_floor
         pin = self.pins["kotlin.version"]
-        message = (f"Kotlin {v} is below the compiler floor {want}: a compiler older than {want} cannot "
-                   f"target JVM {java_floor}"
-                   + (f", and java.version is {java_v}, so the Kotlin sources do not compile" if holds_now else ""))
         if plugin_version is not None:
             ops = [{"op": "replace-text", "file": where.rel, "line": line,
                     "from": f"<version>{plugin_version}</version>", "to": f"<version>{pin}</version>"}]
@@ -1496,6 +1511,22 @@ class Lint:
         else:
             ops = [{"op": "set-property", "pom": where.rel, "name": "kotlin.version", "from": v, "to": pin}]
             fix = f"raise kotlin.version to {pin}, the stack-pins.md pin"
+        if not version_below(".".join(str(x) for x in have[:2]), want):
+            # At or above the floor: the project compiles, so below the pin is a lag (Advisory), never both.
+            if version_below(v, pin):
+                self.add("s1-kotlin-patch", where.rel, line,
+                         f"Kotlin {v} is at or above the compiler floor {want} but below {pin}, the compiler the "
+                         "Essentials build uses",
+                         fix, ops, mechanical=False)
+            return
+        # The floor exists because a compiler below it cannot target the Java baseline. A project whose own
+        # java.version is already there does not compile today, whatever Essentials release it pins.
+        java_v, _, _ = self.p.prop(pom, "java.version")
+        java_m = re.fullmatch(r"(?:1\.)?(\d+)", (java_v or "").strip())
+        holds_now = java_m is not None and int(java_m.group(1)) >= java_floor
+        message = (f"Kotlin {v} is below the compiler floor {want}: a compiler older than {want} cannot "
+                   f"target JVM {java_floor}"
+                   + (f", and java.version is {java_v}, so the Kotlin sources do not compile" if holds_now else ""))
         self.add("s1-kotlin-compiler-floor", where.rel, line, message, fix, ops, mechanical=False,
                  target_only=not holds_now)
 
@@ -1652,6 +1683,7 @@ class Lint:
                          "remove it unless a non-Essentials library needs it",
                          [{"op": "remove-dependency", "pom": d.pom.rel, "line": d.line, "groupId": d.g,
                            "artifactId": d.a}], mechanical=False)
+        self._jackson3_override()
         # S3.3: an own JsonMapper bean without EssentialTypesJacksonModule
         for s in self.main:
             pats = [r"\bfun\s+\w+\s*\([^)]*\)\s*:\s*(?:tools\.jackson\.databind\.json\.)?JsonMapper\b",
@@ -1716,6 +1748,54 @@ class Lint:
                      f"declare your own {want} bean built on "
                      "EssentialsObjectMappers.createJackson3ObjectMapper(KotlinModule…)",
                      mechanical=False)
+
+    def _jackson3_override(self):
+        """S3.1: Jackson 3 overridden above the minor stack-pins.md's `Jackson 3` row names (the one Boot manages).
+
+        Read: the `jackson-bom.version` property Boot's parent reads, and the version of any `tools.jackson*`
+        dependency or managed dependency (the `tools.jackson:jackson-bom` import included). A version taken from
+        a property is reported once, where the property is set."""
+        row = next((v for k, v in self.pins.items() if k.startswith("Jackson 3")), "")
+        m = re.search(r"(\d+)\.(\d+)\.x", row)
+        if m is None:
+            self.skip(["s3.1-jackson3-override"], "stack-pins.md has no `Jackson 3` row naming the managed minor")
+            return
+        tested = (int(m.group(1)), int(m.group(2)))
+        ess = ".".join(self.pins["essentials.version"].split(".")[:2])
+        sites = {}
+
+        def above(value):
+            t = version_tuple(value)
+            return t is not None and len(t) >= 2 and t[:2] > tested
+
+        for pom in self.p.poms:
+            if "jackson-bom.version" in pom.props:
+                raw, line = pom.props["jackson-bom.version"]
+                resolved = self.p.resolve(pom, raw)
+                if above(resolved):
+                    sites.setdefault((pom.rel, line), f"jackson-bom.version is {resolved}")
+        for d in list(self.p.all_deps()) + list(self.p.all_deps(managed=True)):
+            if not (d.g == "tools.jackson" or d.g.startswith("tools.jackson.")) or not d.v:
+                continue
+            raw = d.v.strip()
+            resolved = self.p.resolve(d.pom, raw)
+            if not above(resolved):
+                continue
+            ref = re.fullmatch(r"\$\{([^}]+)\}", raw)
+            _, where, line = self.p.prop(d.pom, ref.group(1)) if ref else (None, None, None)
+            if ref and where is not None:
+                sites.setdefault((where.rel, line), f"{ref.group(1)} is {resolved}, the version of {d.g}:{d.a}")
+            else:
+                sites.setdefault((d.pom.rel, d.line), f"{d.g}:{d.a} is versioned {resolved}")
+        for (rel, line), what in sorted(sites.items(), key=lambda s: (s[0][0], s[0][1] or 0)):
+            message = (f"{what}, a newer Jackson 3 minor than Spring Boot manages; Essentials {ess}.x is built "
+                       f"and tested on the Jackson {tested[0]}.{tested[1]}.x Spring Boot manages")
+            if tested < (3, 2):
+                message += (". From Jackson 3.2 on, a primitive record component absent from the document reads as "
+                            "0/false even with FAIL_ON_NULL_FOR_PRIMITIVES enabled, so "
+                            "EssentialsObjectMappers.findWireFormatDeviations stops reporting that drift")
+            self.add("s3.1-jackson3-override", rel, line, message,
+                     "remove the override and let Spring Boot manage Jackson 3", mechanical=False)
 
     def s3_5(self):
         pom = self.app
@@ -2296,6 +2376,42 @@ class Lint:
                          "declare maven-failsafe-plugin with the integration-test and verify goals",
                          mechanical=False)
 
+    # -- S11 -------------------------------------------------------------------------------------
+    # s11-boot-parent is decided in s1 (it needs the Boot parent lookup) and s11-skip-frontend in s8.
+
+    def s11(self):
+        """The Maven the project's wrapper downloads, against the stack-pins.md Maven pin.
+
+        Read straight from the root's .mvn/wrapper/maven-wrapper.properties: `.mvn` is in SKIP_DIRS, so the
+        project walk never lists it. No wrapper is not a finding — the project builds with whatever mvn runs it."""
+        pin = self.pins.get("Maven", "")
+        if version_tuple(pin) is None:
+            self.skip(["s11-maven-wrapper"], "stack-pins.md has no Maven pin")
+            return
+        props = self.root / ".mvn" / "wrapper" / "maven-wrapper.properties"
+        if not props.is_file():
+            self.skip(["s11-maven-wrapper"], "no .mvn/wrapper/maven-wrapper.properties: the project has no Maven wrapper")
+            return
+        rel = self.p.rel(props)
+        for n, raw in enumerate(props.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+            if not re.match(r"\s*distributionUrl\s*[=:]", raw):
+                continue
+            m = re.search(r"apache-maven/([^/\s]+)/apache-maven-\1-bin\.zip", raw)
+            if m is None:
+                self.skip(["s11-maven-wrapper"],
+                          f"{rel}:{n} distributionUrl names no apache-maven/<version>/apache-maven-<version>-bin.zip")
+                return
+            have = m.group(1)
+            if version_below(have, pin):
+                self.add("s11-maven-wrapper", rel, n,
+                         f"the Maven wrapper downloads Maven {have}; the Essentials build and /essentials:init run "
+                         f"{pin}",
+                         f"point distributionUrl at Maven {pin} (stack-pins.md)",
+                         [{"op": "replace-text", "file": rel, "line": n, "from": m.group(0),
+                           "to": f"apache-maven/{pin}/apache-maven-{pin}-bin.zip"}])
+            return
+        self.skip(["s11-maven-wrapper"], f"{rel} has no distributionUrl")
+
     def run(self):
         self.s1()
         self.s2()
@@ -2308,6 +2424,7 @@ class Lint:
         self.s8()
         self.s9()
         self.s10()
+        self.s11()
         self.facts["appPom"] = self.app.rel
         v, _, _ = self.p.prop(self.app, "java.version")
         self.facts["javaVersion"] = v
