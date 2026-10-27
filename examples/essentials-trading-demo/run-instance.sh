@@ -35,6 +35,10 @@
 #
 # 2. A distinct HTTP port, or the second instance dies on bind.
 #
+# FULL JIT: `spring-boot:run` adds -XX:TieredStopAtLevel=1 (C1 only, for a faster start) unless
+# optimizedLaunch=false. This script turns that off: under load the C1-only JVM took ~1.5x the CPU and
+# three times the booked p99 (_demo_harness/CLAUDE.md, "The JVM's CPU at the opens").
+#
 # STOPPING: Ctrl-C is enough and is graceful. The signal reaches the forked application
 # JVM because it shares the terminal's foreground process group, Spring's shutdown hook
 # runs, and the engine releases every lease and deregisters the instance on the way out —
@@ -59,6 +63,7 @@ cd "$(dirname "$0")/../.."
 
 JAVA_HOME="${JAVA_HOME:-/usr/lib/jvm/temurin-25-jdk-arm64}" \
 exec ./mvnw -o -pl examples/essentials-trading-demo -DskipDependencyCheck=true \
+    -Dspring-boot.run.optimizedLaunch=false \
     -Dspring-boot.run.profiles="${PROFILES}" \
     -Dspring-boot.run.jvmArguments="-Dserver.port=${PORT}" \
     -Dspring-boot.run.arguments="--essentials.shard-owned-queue.instance-id=demo-${N}${COMPOSE_PROFILES:+ --spring.docker.compose.profiles.active=${COMPOSE_PROFILES}}" \

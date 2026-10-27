@@ -610,7 +610,10 @@ simulators, the application started with plain `java` from `target/classes`:
 | C1 only (`spring-boot:run` default) | 163 / 397 / 405 % | 240 ms / 1 238 ms | 686 ms |
 | Tiered, C2 (plain `java`) | 104 / 254 / 293 % | 213 ms / 399 ms | 187 ms |
 
-So every load measurement above was probably taken on C1-only code. Under C2 the opens no longer saturate the 8 cores;
+The load-driver measurements above (phase 6, 2026-10-23 to 10-27) were probably taken on C1-only code: their runner
+scripts are gone, but the opens' 350-400 % measured on 10-27 matches this C1 run, not the C2 one, on nearly the same
+code. The EF-2 order-flow runs (2026-10-20 to 10-22) passed `optimizedLaunch=false` and are C2. Comparisons inside one
+series stay valid in direction; absolute CPU and latency do not carry over. Under C2 the opens no longer saturate the 8 cores;
 the setup phase (2 000 registrations and logins, BCrypt) is the only stretch above 60 %. Measure with plain `java`, or
 pass `optimizedLaunch=false`.
 
