@@ -233,7 +233,8 @@ ordinary, silent duplicate.
   uses `END_OF_DAY` on the wall clock in `America/New_York`, and switches its `periodSource` when EF-1 lands —
   period ids are `yyyy-MM-dd` either way, so nothing migrates.
 - **Snapshots:** every 100 events, as today. With a fill per event and a roll per business day, an active account
-  stays well inside that.
+  stays well inside that. *Changed to 25 on 2026-10-27: under load most accounts never reached 100 events, so every
+  load replayed the whole history (`_demo_harness/CLAUDE.md`, "Snapshot interval").*
 - **Realized P&L resets per period**; lifetime P&L is a view.
 
 ---

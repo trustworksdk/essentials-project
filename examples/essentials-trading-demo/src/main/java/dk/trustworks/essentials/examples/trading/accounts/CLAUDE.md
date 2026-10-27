@@ -5,7 +5,8 @@ The trading account ledger: cash buckets, positions, holds, reservations, and th
 `TradingAccount`, and `brokerage` was deleted in phase 4 (generation archival moved here).
 
 **Write style: aggregate (§R5)** — `Account` behind `Accounts` (a `ClosingBooksLogicalAggregateRepository`), closing
-books `END_OF_DAY` in New York until EF-1, snapshots every 100 events.
+books `END_OF_DAY` in New York until EF-1, snapshots every 25 events (100 left most accounts without a snapshot;
+`_demo_harness/CLAUDE.md`, "Snapshot interval").
 
 ## Rules that are easy to break
 

@@ -597,3 +597,45 @@ stopped every `Orders` subscriber for 65 s (booked p99 94.5 s, a dead letter).
 - Side findings, not chased: ~240 ordered-unit "delivered key_order N after N+2" warnings per run on the settlement
   queue, each followed by a failed `RecordSettlementReport` (retried; checks pass); ~4 000 more webhook acceptances
   consumed than orders, so some copies pass the intake's deduplication.
+
+### The JVM's CPU at the opens, 2026-10-27 - and the JIT every earlier run used
+
+**`spring-boot:run` runs the JVM with the C1 compiler only.** The Spring Boot Maven plugin adds
+`-XX:TieredStopAtLevel=1` unless `-Dspring-boot.run.optimizedLaunch=false`, and `run-instance.sh` launches through it.
+Same 300/s profile, business days only, 7 days, `compose,simulators`, queue load generator off, fresh database and
+simulators, the application started with plain `java` from `target/classes`:
+
+| JIT | JVM CPU while trading, p50 / p99 / max | Placed → booked p50 / p99 | Filled → booked p99 |
+|---|---|---|---|
+| C1 only (`spring-boot:run` default) | 163 / 397 / 405 % | 240 ms / 1 238 ms | 686 ms |
+| Tiered, C2 (plain `java`) | 104 / 254 / 293 % | 213 ms / 399 ms | 187 ms |
+
+So every load measurement above was probably taken on C1-only code. Under C2 the opens no longer saturate the 8 cores;
+the setup phase (2 000 registrations and logins, BCrypt) is the only stretch above 60 %. Measure with plain `java`, or
+pass `optimizedLaunch=false`.
+
+Where the JVM's CPU went while trading (C2, JFR `settings=default`): `Accounts.getAccount` 26 % of the samples, almost
+all replaying events (snapshot loads 1.2 %); `PatternMatchingMethodInvoker` 19 %, of which ~7 % went to log
+descriptions built on every call with trace logging off (fixed in the library, `81e3e158`); the Spring Security filter
+chain 5 %.
+
+### Snapshot interval, 2026-10-27
+
+`Account` snapshotted every 100 events, but under this load an account sees ~65 events per run, so most accounts never
+got a snapshot and every load replayed the whole history. Same profile as above, C2, two alternating runs per arm,
+`essentials.eventstore.snapshots.aggregates[Accounts].every-n-events` overriding the annotation:
+
+| Arm | JFR samples while trading | CPU-seconds (`top`) | `getAccount` / rehydrate / snapshot store samples | Snapshot inserts | Booked p99 |
+|---|---|---|---|---|---|
+| every 100, before the invoker fix | 6 885 | 365 | 1 645 / 1 534 / 80 | 228 | 379, 408 ms |
+| every 100 | 6 244 | 354 | 1 172 / 1 038 / 80 | 238 | 370, 366 ms |
+| **every 25 (now the policy)** | **5 798** | **340** | 792 / 482 / 325 | 4 228 | 351, 565 ms |
+| every 10 | 5 872 | 346 | 660 / 280 / 452 | 12 158 | 359, 338 ms |
+
+- 25 cuts the JVM's samples ~7 % against 100; 10 replays less again but pays it back in snapshot writes (three times
+  the inserts of 25, each a serialization and an insert inside the command's transaction, as the policy is `SYNC`).
+- Latency did not move beyond the spread (the 565 ms is one run; its pair was 351 ms): at this load the demo is not
+  CPU-bound under C2, so the saving is headroom.
+- Every run passed every check. Scripts and per-run lines: `~/trading-demo-profiling/cpu-2026-10-27/` on the machine
+  that ran them (`rush-prof.sh`, `sweep.sh`, `JfrHot.java`); the exchange's `/test/reset` takes minutes after a full
+  run, so the runner recreates only the two simulator containers and their own volumes instead.

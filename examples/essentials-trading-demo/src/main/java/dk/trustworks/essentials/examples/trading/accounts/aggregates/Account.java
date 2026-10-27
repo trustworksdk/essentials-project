@@ -35,7 +35,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 /**
  * A customer's trading account: the ledger of cash, positions, holds and reservations (design
  * {@code docs/design/phase-1-account-core.md} §3–§6). One generation per business day under closing books; snapshots
- * every 100 events.
+ * every 25 events (measured against 100 and 10: {@code _demo_harness/CLAUDE.md}, "Snapshot interval").
  *
  * <h2>Two kinds of command</h2>
  * <ul>
@@ -60,7 +60,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  */
 @AggregateSnapshotPolicy(aggregateType = "Accounts",
                          mode = SnapshotExecutionMode.SYNC,
-                         everyNEvents = 100)
+                         everyNEvents = 25)
 @AggregateClosingBooksPolicy(aggregateType = "Accounts",
                              triggerMode = ClosingBooksTriggerMode.ON_ACCESS,
                              defaultPolicy = ClosingBooksDefaultPolicyType.TIME_BOUNDARY,
