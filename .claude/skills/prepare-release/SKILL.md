@@ -21,9 +21,13 @@ Stop and report at the first one that fails.
 
 1. **Nothing else is writing to this checkout.** Every background agent has finished and no other Maven run is
    active (root `CLAUDE.md`, "`target/` has more than one writer").
-2. **The branch is the intended release source.** `git branch --show-current`. Ask the maintainer which ref the
-   release is cut from: README's compatibility table links `tree/release/<major.minor>` branches, so check whether
-   that branch exists (`git ls-remote --heads origin release/<major.minor>`) and whether it is the source.
+2. **The branch will reach main as the release.** Releases are tagged on `main`: the release commit is prepared on
+   a branch of its own, goes to `main` by pull request, and the maintainer tags `main` after the merge. There are
+   no `release/<major.minor>` branches; README's compatibility table links `main` and the release tags. So:
+   `git branch --show-current` must not be `main`, and the branch must hold everything the release notes describe.
+   On a feature branch, offer to rename it `release/<version>` (`git branch -m`; safe only while it is not on
+   origin, `git ls-remote --heads origin <branch>`). Check `git rev-list --left-right --count HEAD...origin/main`:
+   behind `main` means merge `main` in first, or the release misses what `main` has.
 3. **The files the script touches are clean.**
    `git status --porcelain -- docs LLM README.md essentials-plugin '*.java' '*.kt' '**/CLAUDE.md'` prints nothing.
    Untracked root files (`GITHUB-RELEASE-*.md`, reports) are fine; they are never committed.
@@ -145,8 +149,10 @@ prints `??`) and passed `check.py`; name it in the hand-over. Then print these f
 stop. Do not run them.
 
 ```bash
-git push origin <branch>                         # then land on main as usual; the plugin marketplace goes live when main has the new plugin.json
-git tag -a <version> -m "Essentials <version>"   # on the release-source commit agreed in §0.2; previous tags are annotated too
+git push -u origin <branch>                      # open the pull request into main; the plugin marketplace goes live when main has the new plugin.json
+# after the pull request is merged:
+git switch main && git pull --ff-only
+git tag -a <version> -m "Essentials <version>"   # on main's merge commit; previous tags are annotated too
 git push origin <version>
 gh release view <previous tag> --json name       # copy its title format
 gh release create <version> --verify-tag --title "<title>" --notes-file GITHUB-RELEASE-<version>.md   # fires the Maven Central deploy
