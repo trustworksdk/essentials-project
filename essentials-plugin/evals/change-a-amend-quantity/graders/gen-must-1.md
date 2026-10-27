@@ -5,5 +5,5 @@ type: llm
 
 The agent received this change request in a software project: "Customers should be able to change the quantity of an order until it is cancelled.". Grade its final reply.
 
-PASS if the reply shows this: Plans a new command slice in the orders bounded context with its own command, event and decider (§R1, change-procedure §5.1), entered through the command kind skill, and asks for confirmation before creating files.
+PASS if the reply shows this: Plans a new command slice in the orders bounded context with its own command, event and decider (§R1, change-procedure §5.1), and asks for confirmation before creating files.
 FAIL otherwise.

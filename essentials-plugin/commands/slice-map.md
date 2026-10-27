@@ -36,7 +36,7 @@ the Slice Atlas page instead; it shares Steps 1–4 below.
 |---|---|
 | `<path>` | Module or source root. Default: the resolved package root |
 | `--bc <name>` | Restrict to one bounded context |
-| `--md <file>` | Also write the text report as Markdown at a user-supplied path |
+| `--md <file>` | Also write the text report as Markdown at a user-supplied path, with the Write tool (a shell redirect fails where Bash may not write) |
 | `--html [<file>]` | **Retired.** The page is `/essentials:slice-map-html`. Given the flag, say the page moved there and run that command's steps with `<file>` as its `--out`, so an old habit still works |
 | `--view <name>` | Print one section only: `contexts` (default), `graph`, `flow`, `data`, `endpoints` |
 
@@ -66,16 +66,16 @@ creates them.
 
 ## Step 2 — Read the manifests and the source facts, by script
 
-Three script runs produce everything Steps 2–4 need. Run them over the same `<root>` from the same
-working directory. The two `slice-source.py` documents go to a temporary directory outside the project
-(`mktemp -d`), never into the project, which this command does not write to:
+Three script runs produce everything Steps 2–4 need, in one command over the same `<root>` from the
+same working directory. The two `slice-source.py` documents reach `map` by process substitution, so
+nothing is written anywhere — no temporary directory, and never the project, which this command does
+not write to:
 
 ```bash
-tmp=$(mktemp -d)
-uv run --script ${CLAUDE_PLUGIN_ROOT}/scripts/slice-source.py <root> --json          > "$tmp/facts.json"
-uv run --script ${CLAUDE_PLUGIN_ROOT}/scripts/slice-source.py <root> --check --json  > "$tmp/check.json"
 uv run --script ${CLAUDE_PLUGIN_ROOT}/scripts/slice-index.py map <root> \
-    --source-facts "$tmp/facts.json" --source-check "$tmp/check.json" [--bc <name>]
+    --source-facts <(uv run --script ${CLAUDE_PLUGIN_ROOT}/scripts/slice-source.py <root> --json) \
+    --source-check <(uv run --script ${CLAUDE_PLUGIN_ROOT}/scripts/slice-source.py <root> --check --json) \
+    [--bc <name>]
 ```
 
 All three carry their pinned `pyyaml` in inline script metadata, which `uv run --script` installs.
@@ -83,6 +83,8 @@ Which runner applies is the `uv` line of `"${CLAUDE_PLUGIN_ROOT}/scripts/doctor.
 first: `ok` ⇒ `uv run --script` as above; `FALLBACK` or `PARTIAL` ⇒ `python3 <script>` in its place,
 which uses the `pyyaml` already installed; `MISSING` (no `uv`, and no `python3` 3.11+ with `pyyaml`) ⇒
 `slice-index.py` cannot run: stop, as for exit 2 below, and quote doctor's lines for what to install.
+`uv run --script` can also fail where doctor said `ok`, for want of a writable cache (a read-only
+filesystem, a sandbox that allows no writes): rerun with `python3 <script>` for all three.
 The output of `map` is the data contract of Step 6, complete. **Take it as it is.** Do not re-read the
 manifests to re-derive a field, and do not add a node, edge or flag the script did not emit.
 
@@ -90,10 +92,10 @@ manifests to re-derive a field, and do not add a node, edge or flag the script d
 |---|---|---|
 | `slice-index.py map` | 0 | the map is complete |
 | | 1 | at least one manifest did not parse. It is still in the map, as a broken row with an `error` flag. Report it (below) |
-| | 2 | could not run (no `pyyaml`, bad root, unreadable facts file). Stop and say why. Do not build the map by hand |
+| | 2 | could not run (no `pyyaml`, bad root, unreadable facts). Stop and say why. Do not build the map by hand — except "`--source-facts …` is empty": that `slice-source.py` run wrote no JSON (its exit 2, below) |
 | | 3 | no `slice.yaml` under the root: the Step 1 redirect to `/essentials:slice-discover` |
 | `slice-source.py` | 0, 1, 3 | JSON was written: pass it to `map` (1 and 3 are the audit's findings and gaps, which `map` turns into flags) |
-| | 2 | no JSON (no `pyyaml` for `--check`, or a bad root). Run `map` without that `--source-…` flag and say so. `package`, `files`, payloads and read-model columns are then `null`/`[]`, and the two source divergence checks read **not checked** |
+| | 2 | no JSON (no `pyyaml` for `--check`, or a bad root): `map` exits 2 naming that flag's input as empty, after `slice-source.py`'s own stderr. Run `map` without that `--source-…` flag and say so. `package`, `files`, payloads and read-model columns are then `null`/`[]`, and the two source divergence checks read **not checked** |
 
 What the scripts read, so you can explain the map:
 
@@ -397,7 +399,7 @@ html` still does — a single-graph page a script can publish — and `render-ch
 
 ```bash
 uv run --script ${CLAUDE_PLUGIN_ROOT}/scripts/slice-index.py html <root> --out <path> \
-    --source-facts "$tmp/facts.json" --source-check "$tmp/check.json" [--bc <name>]
+    --source-facts <(…slice-source.py <root> --json) --source-check <(…slice-source.py <root> --check --json) [--bc <name>]
 ```
 
 The script substitutes the `map` JSON for the single line

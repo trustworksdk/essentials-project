@@ -14,6 +14,7 @@
     "slice.render.agent": { "since": "0.60.1", "entry": "scripts/render-slice.py", "interface": 1 },
     "slice.render.tests-none": { "since": "0.60.1" },
     "slice.render.manifest": { "since": "0.60.1" },
+    "slice.render.emit": { "since": "0.60.1" },
     "slice.render.report": { "since": "0.60.1", "reportVersion": 1 },
     "schema.sdd-keys": { "since": "0.60.1", "schemaVersion": "1.4" }
   },

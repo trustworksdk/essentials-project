@@ -441,7 +441,9 @@ def change_case(c: dict[str, Any]) -> dict[Path, str]:
     g = d / "graders"
     head = f"The agent received this change request in a software project: \"{request}\". Grade its final reply.\n\n"
     cls = c.get("class")
-    if cls != "silent":
+    # A class-E request (config, wiring, build) need not reach the router: it may fire and say "Class E", or
+    # never fire and do the work plainly. Its must/must_not graders check that no slice machinery leaked in.
+    if cls not in ("silent", "E"):
         out[g / "gen-skill-fired.md"] = grader(f"{src} (routing)", "tool_used", tool="Skill",
                                                input_match=r'"skill"\s*:\s*"(?:[\w-]+:)?essentials-change"')
     if cls == "ask":
@@ -455,6 +457,10 @@ def change_case(c: dict[str, Any]) -> dict[Path, str]:
                 "FAIL if it says nothing about it, imposes slice structure on the change, or dwells on it.")
     elif cls is None or cls == "silent":
         body = None
+    elif cls == "E":
+        body = (f"PASS if the reply handles the request as {CLASS_TEXT['E']} (class E): it names class E, or it "
+                "simply does or proposes the change without classifying it as a slice change.\n"
+                "FAIL if it classifies it as class A, B, C or D, or treats it as a change to a slice.")
     else:
         allowed = cls if isinstance(cls, list) else [cls]
         if not allowed or any(x not in CLASSES for x in allowed):
@@ -466,8 +472,12 @@ def change_case(c: dict[str, Any]) -> dict[Path, str]:
         out[g / "gen-class.md"] = grader(f"{src} class", "llm", head + body, weight=2)
     if c.get("slices"):
         ids = ", ".join(f"`{s}`" for s in c["slices"])
+        # An ask case has not settled whether the change belongs to the existing slice: it names it as the one the
+        # question is about.
+        role = ("as the existing slice the request concerns — the one that would be extended if the answer is the "
+                "same intent" if cls == "ask" else "as the slice(s) the change belongs to")
         out[g / "gen-owner.md"] = grader(f"{src} slices", "llm", head + (
-            f"PASS if the reply names {ids} as the slice(s) the change belongs to, by id or by the slice's directory "
+            f"PASS if the reply names {ids} {role}, by id or by the slice's directory "
             "(for example `orders/views/order_list`).\nFAIL if it attributes the change to a different slice or names none."))
     if c.get("lane"):
         out[g / "gen-lane.md"] = grader(f"{src} lane", "llm", head + (

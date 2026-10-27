@@ -18,7 +18,9 @@ Usage
     render-slice.py render   --lang L --kind K --lane N --main-root DIR --test-root DIR
                              [--project-root DIR] [--new-bc] [--with-state] [--wire]
                              [--tests stub|none] [--manifest FILE]
-                             [--inputs FILE.json] [--set name=value ...] [--dry-run] [--json]
+                             [--inputs FILE.json] [--set name=value ...] [--dry-run | --emit [--only PATH]]
+                             [--json]
+    render-slice.py verify   <the options of render, without --dry-run and --emit>
     render-slice.py requires --lang L --kind K --lane N [--new-bc] --build FILE [--json]
     render-slice.py check         [--golden DIR]
     render-slice.py update-golden [--golden DIR]
@@ -51,18 +53,34 @@ value the render used, a key the template has and the manifest lacks is added, a
 (`flow`, `scenarios`, `requirements`, `summary`, `x-*`, …) is kept byte for byte; `schemaVersion` is
 never lowered.
 
+`--emit` is for a filesystem this process may not write (a sandbox that lets the agent's file tool
+write but not its shell): it validates and renders exactly as `render` would, wiring included, writes
+nothing, and prints the `--json` report with every file to write in `files` — `path` (relative to
+--project-root), `role` (`wiring` for an existing file only a wiring edit changes), `action` (`create` or
+`replace`) and `content`, the exact text; `--only PATH` prints that one file's content, raw, instead. Run
+again part-way through the writes, `--emit` accepts a target that already exists only when it holds
+exactly what it would emit. The caller writes each file verbatim, then runs `verify` with the
+same options: it renders again in memory and compares every target byte for byte, read-only, and reports
+`verify.missing` and `verify.differs`. Only exit 0 there means the slice was rendered. Because verify
+runs after the files exist, it takes them as expected rather than refusing them; a wiring edit counts as
+made when re-applying it changes nothing, and an application-level DeciderWiring identical to the render's
+counts as written, any other as the application's own (as render treats it).
+
 The `render` interface is versioned (INTERFACE): within one interface version, options and `--json`
 report fields are only ever added. `references/sdd-contract.md` is the contract another plugin's
 agent drives it by.
 
 Exit codes
 ----------
-    0   rendered / check clean / every precondition present
-    1   check found a difference / requires found a missing module
+    0   rendered / emitted / verify identical / check clean / every precondition present
+    1   check or verify found a difference / requires found a missing module
     2   could not render: bad or missing input, unknown or unfilled placeholder, a leftover
         `{{` or `__` after substitution, a target that already exists, a refused combination.
         Nothing is written — a failure part-way through the writes or the wiring edits restores
         every file it touched before exiting. One `render-slice: …` line on stderr says why.
+    4   `render` cannot write a target (EROFS, EACCES): every target is checked before the first write,
+        so nothing is written. One `render-slice: cannot write …` line on stderr names the path and the
+        cause and says to re-run with --emit.
     any other code from `render` is a crash; it too restores what it touched before it propagates.
 
 Wiring (`--wire`) is reported per edit as `applied`, `present` (already there) or `manual`
@@ -78,6 +96,7 @@ from __future__ import annotations
 
 import argparse
 import difflib
+import errno
 import json
 import os
 import re
@@ -386,16 +405,21 @@ def stray_files(bc_dir: Path) -> list[Path]:
     return out
 
 
-def preflight(lang, kind, lane, values, main_root, new_bc, planned, manifest: Path | None):
+def bc_dir_of(main_root: Path, values: dict[str, str]) -> Path:
+    return main_root / Path(*values["packagePath"].split(".")) / values["bc"]
+
+
+def preflight(lang, kind, lane, values, main_root, new_bc, planned, manifest: Path | None, verify=False):
     """Refuse what must not be rendered. Returns (planned, kept): the files to write, and the
-    orientation files a --manifest render leaves exactly as they are."""
+    orientation files a --manifest render leaves exactly as they are. `verify` compares with a render
+    already on disk, so the targets existing is expected there, not refused."""
     bc_dir = main_root / Path(*values["packagePath"].split(".")) / values["bc"]
     top, key = SLICE_DIR[kind]
     slice_dir = bc_dir / top / values[key]
     if manifest is not None and manifest.resolve() != (slice_dir / "slice.yaml").resolve():
         raise RenderError(f"--manifest {manifest} is not this slice's manifest: rendering "
                           f"{values['bc']}.{values[key]} writes {slice_dir / 'slice.yaml'}")
-    if new_bc and bc_dir.exists():
+    if new_bc and bc_dir.exists() and not verify:
         if manifest is None:
             raise RenderError(f"{bc_dir} already exists — it is not a new bounded context; drop --new-bc")
         strays = stray_files(bc_dir)
@@ -413,7 +437,7 @@ def preflight(lang, kind, lane, values, main_root, new_bc, planned, manifest: Pa
         if found != lane:
             raise RenderError(f"{bc_dir} looks like the {found} lane, not {lane} (slice-authoring.md §1b); "
                               "a BC showing two lanes is Blocking — stop and report it")
-    if slice_dir.exists():
+    if slice_dir.exists() and not verify:
         if manifest is None:
             raise RenderError(f"{slice_dir} already exists — never merge into an existing slice")
         extra = sorted(p.name for p in slice_dir.iterdir() if p.name not in ORIENTATION or not p.is_file())
@@ -431,7 +455,7 @@ def preflight(lang, kind, lane, values, main_root, new_bc, planned, manifest: Pa
         keep = {slice_dir / "CLAUDE.md"} | ({bc_dir / "CLAUDE.md"} if new_bc else set())
         kept = [f.dest for f in planned if f.dest in keep and f.dest.exists()]
         planned = [f for f in planned if f.dest not in kept]
-    clashes = [str(f.dest) for f in planned if f.dest.exists()
+    clashes = [str(f.dest) for f in planned if f.dest.exists() and not verify
                and not (manifest is not None and f.dest == slice_dir / "slice.yaml")]
     if clashes:
         raise RenderError("refusing to overwrite existing file(s): " + ", ".join(clashes))
@@ -839,6 +863,50 @@ def bc_facts(bc_dir: Path, lang: str, lane: str) -> dict[str, str]:
 
 # ---------------------------------------------------------------- writing
 
+class Stage:
+    """A render's writes, held in memory: what --emit prints, what verify compares with the disk, and
+    what a render checks it can write before it writes the first file. A read sees the staged text
+    first, so a wiring edit to a file the same render creates (a new BC's configuration) edits that."""
+
+    def __init__(self):
+        self.files: dict[Path, str] = {}
+
+    def write(self, path: Path, text: str) -> None:
+        self.files[path] = text
+
+    def read(self, path: Path) -> str:
+        return self.files[path] if path in self.files else path.read_text(encoding="utf-8")
+
+    def is_file(self, path: Path) -> bool:
+        return path in self.files or path.is_file()
+
+
+class NotWritable(Exception):
+    """A target the render cannot write (EROFS, EACCES): exit 4, nothing written."""
+
+
+def unwritable(paths) -> tuple[Path, int] | None:
+    """The first target that cannot be written, with the errno that says why — checked before the first
+    write, so a filesystem this process may not write leaves no partial slice."""
+    for path in paths:
+        target = path
+        while not target.exists():
+            target = target.parent
+        if os.access(target, os.W_OK | (os.X_OK if target.is_dir() else 0)):
+            continue
+        try:
+            readonly = bool(os.statvfs(target).f_flag & os.ST_RDONLY)
+        except (AttributeError, OSError):
+            readonly = False
+        return target, errno.EROFS if readonly else errno.EACCES
+    return None
+
+
+def not_writable(path, code: int) -> NotWritable:
+    return NotWritable(f"cannot write {path}: {os.strerror(code)} ({errno.errorcode[code]}) — nothing written; "
+                       "re-run with --emit")
+
+
 class Txn:
     """Every file a render creates or edits, so a failure part-way leaves the project as it was."""
 
@@ -846,6 +914,12 @@ class Txn:
         self.created: list[Path] = []
         self.dirs: list[Path] = []
         self.originals: dict[Path, bytes] = {}
+
+    def read(self, path: Path) -> str:
+        return path.read_text(encoding="utf-8")
+
+    def is_file(self, path: Path) -> bool:
+        return path.is_file()
 
     def write(self, path: Path, text: str) -> None:
         if path.exists():
@@ -891,11 +965,11 @@ def insert_import(text: str, line: str, own_prefix: str) -> str:
     return "\n".join(lines)
 
 
-def wire_bean(path: Path, lang: str, values: dict[str, str], txn: "Txn") -> dict:
+def wire_bean(path: Path, lang: str, values: dict[str, str], txn: "Txn | Stage") -> dict:
     entry = {"path": path, "edit": f"@Bean {values['sliceCamel']}Decider()"}
-    if not path.is_file():
+    if not txn.is_file(path):
         return {**entry, "status": "manual", "reason": "configuration class not found"}
-    text = path.read_text(encoding="utf-8")
+    text = txn.read(path)
     slice_pkg = f"{values['packagePath']}.{values['bc']}.use_cases.{values['slice']}"
     decider = f"{values['Slice']}Decider"
     if lang == "java":
@@ -922,12 +996,12 @@ def wire_bean(path: Path, lang: str, values: dict[str, str], txn: "Txn") -> dict
     return {**entry, "status": "applied"}
 
 
-def wire_permits(path: Path, values: dict[str, str], txn: "Txn") -> dict:
+def wire_permits(path: Path, values: dict[str, str], txn: "Txn | Stage") -> dict:
     event = values["Event"]
     entry = {"path": path, "edit": f"permits += {event}"}
-    if not path.is_file():
+    if not txn.is_file(path):
         return {**entry, "status": "manual", "reason": "sealed event parent not found"}
-    text = path.read_text(encoding="utf-8")
+    text = txn.read(path)
     m = PERMITS_LINE.search(text)
     if not m:
         return {**entry, "status": "manual", "reason": "single-line 'permits … {   // /essentials:add-slice "
@@ -940,14 +1014,17 @@ def wire_permits(path: Path, values: dict[str, str], txn: "Txn") -> dict:
     return {**entry, "status": "applied"}
 
 
-def configurators(main_root: Path) -> list[Path]:
-    """Every source file under main_root that constructs a decider configurator."""
-    return sorted(p for p in main_root.rglob("*") if p.suffix in (".java", ".kt") and p.is_file()
-                  and CONFIGURATOR_CALL.search(p.read_text(encoding="utf-8")))
+def configurators(main_root: Path, stage: Stage | None = None) -> list[Path]:
+    """Every source file under main_root that constructs a decider configurator, staged files included."""
+    staged = stage.files if stage else {}
+    paths = {p for p in main_root.rglob("*") if p.suffix in (".java", ".kt") and p.is_file()}
+    paths |= {p for p in staged if p.suffix in (".java", ".kt") and p.is_relative_to(main_root)}
+    return sorted(p for p in paths
+                  if CONFIGURATOR_CALL.search(staged[p] if p in staged else p.read_text(encoding="utf-8")))
 
 
-def check_configurator(main_root: Path, written: Path | None) -> dict:
-    found = configurators(main_root)
+def check_configurator(main_root: Path, written: Path | None, txn: "Txn | Stage") -> dict:
+    found = configurators(main_root, txn if isinstance(txn, Stage) else None)
     entry = {"path": written or (found[0] if found else main_root), "edit": "one decider configurator per application"}
     if len(found) == 1:
         return {**entry, "status": "applied" if written == found[0] else "present"}
@@ -961,13 +1038,13 @@ def check_configurator(main_root: Path, written: Path | None) -> dict:
                       "fails with MultipleCommandHandlersFoundException"}
 
 
-def wire(lang, kind, lane, values, main_root, txn: "Txn", app_wiring: Path | None = None) -> list[dict]:
+def wire(lang, kind, lane, values, main_root, txn: "Txn | Stage", app_wiring: Path | None = None) -> list[dict]:
     if kind != "command":
         return []
     bc_dir = main_root / Path(*values["packagePath"].split(".")) / values["bc"]
     out = []
     if lane == "decider":
-        out.append(check_configurator(main_root, app_wiring))
+        out.append(check_configurator(main_root, app_wiring, txn))
         out.append(wire_bean(bc_dir / "config" / f"{values['Bc']}Configuration.{EXT[lang]}", lang, values, txn))
     if lang == "java":
         out.append(wire_permits(bc_dir / "events" / f"{values['Aggregate']}Event.java", values, txn))
@@ -1027,7 +1104,10 @@ def behaviour_report(lang: str, fams: list[str], planned: list[Planned], rel) ->
 
 def render(lang, kind, lane, values, project_root: Path, main_root: Path, test_root: Path,
            new_bc=False, with_state=False, do_wire=False, dry_run=False, tests="stub",
-           manifest: Path | None = None, sources: dict[str, str] | None = None) -> dict:
+           manifest: Path | None = None, sources: dict[str, str] | None = None, mode: str = "write") -> dict:
+    """mode `write` renders into the project; `emit` and `verify` stage the same render in memory and
+    write nothing — emit adds each file's content to the report, verify compares it with the disk."""
+    verify = mode == "verify"
     sources = dict(sources or {k: "set" for k in values})
     existing = manifest_inputs(manifest, kind, lang, lane, values, sources) if manifest is not None else None
     if not new_bc and "packagePath" in values and "bc" in values:
@@ -1037,17 +1117,34 @@ def render(lang, kind, lane, values, project_root: Path, main_root: Path, test_r
                 values[k], sources[k] = v, "project"
     values = derive(values, lane)
     validate(values)
-    fams, planned = plan_render(lang, kind, lane, values, main_root, test_root, new_bc, with_state)
-    app_wiring = None
-    if APP_WIRING in fams:
-        # Create-if-absent: the application's one configurator is written by the first decider BC only.
-        app_dir = main_root / Path(*values["packagePath"].split("."))
-        app_file = next(f.dest for f in planned if f.dest.parent == app_dir)
-        if app_file.exists() or configurators(main_root):
-            planned = [f for f in planned if f.dest != app_file]
-        else:
-            app_wiring = app_file
-    planned, kept = preflight(lang, kind, lane, values, main_root, new_bc, planned, manifest)
+    fams, rendered = plan_render(lang, kind, lane, values, main_root, test_root, new_bc, with_state)
+
+    def plan(tolerant: bool):
+        planned, app_wiring = rendered, None
+        if APP_WIRING in fams:
+            # Create-if-absent: the application's one configurator is written by the first decider BC only.
+            app_dir = main_root / Path(*values["packagePath"].split("."))
+            app = next(f for f in planned if f.dest.parent == app_dir)
+            app_file = app.dest
+            # verify cannot tell the configurator a render wrote from one the application already had: an
+            # identical file counts as written, any other as the application's own, as render would treat it.
+            ours = tolerant and app_file.is_file() and app_file.read_bytes() == app.text.encode("utf-8")
+            if not ours and (app_file.exists() or configurators(main_root)):
+                planned = [f for f in planned if f.dest != app_file]
+            else:
+                app_wiring = app_file
+        return (*preflight(lang, kind, lane, values, main_root, new_bc, planned, manifest, tolerant), app_wiring)
+
+    # An --emit run again part-way through writing its files (the caller fetching them in parts) finds
+    # some targets already there; it is refused below unless each one holds exactly what it would emit.
+    resumed: RenderError | None = None
+    try:
+        planned, kept, app_wiring = plan(verify)
+    except RenderError as refused:
+        if mode != "emit":
+            raise
+        resumed = refused
+        planned, kept, app_wiring = plan(True)
     if tests == "none":
         planned = [f for f in planned if f.role != "test"]
     top, key = SLICE_DIR[kind]
@@ -1080,17 +1177,49 @@ def render(lang, kind, lane, values, project_root: Path, main_root: Path, test_r
               "wiring": [], "todos": [], "behaviours": behaviours, "stubTests": stubs}
     if dry_run:
         return report
+    stage = Stage()
+    for f in planned:
+        stage.write(f.dest, f.text)
+    if do_wire:
+        report["wiring"] = [{**w, "path": rel(w["path"])}
+                            for w in wire(lang, kind, lane, values, main_root, stage, app_wiring)]
+    report["todos"] = todos(planned, rel)
+    if mode == "emit":
+        if resumed is not None:
+            scope = bc_dir_of(main_root, values) if new_bc else manifest_dest.parent
+            foreign = [p for p in scope.rglob("*") if p.is_file() and p not in stage.files and p not in kept] \
+                if scope.is_dir() else []
+            differ = [f.dest for f in planned if f.dest.is_file() and not (manifest and f.dest == manifest_dest)
+                      and f.dest.read_bytes() != stage.files[f.dest].encode("utf-8")]
+            if foreign or differ:
+                raise resumed
+        roles = {f.dest: f.role for f in planned}
+        report["files"] = [{"path": rel(p), "role": roles.get(p, "wiring"),
+                            "action": "replace" if p.exists() else "create", "content": stage.files[p]}
+                           for p in sorted(stage.files)]
+        return report
+    if verify:
+        # A wiring edit staged here is one the disk lacks: re-wiring a wired file stages nothing.
+        missing = sorted(rel(p) for p in stage.files if not p.is_file())
+        differs = sorted(rel(p) for p in stage.files
+                         if p.is_file() and p.read_bytes() != stage.files[p].encode("utf-8"))
+        report["verify"] = {"checked": sorted(rel(p) for p in stage.files), "missing": missing, "differs": differs}
+        return report
+    blocked = unwritable(stage.files)
+    if blocked:
+        raise not_writable(*blocked)
     txn = Txn()
     try:
-        for f in planned:
-            txn.write(f.dest, f.text)
-        if do_wire:
-            report["wiring"] = [{**w, "path": rel(w["path"])}
-                                for w in wire(lang, kind, lane, values, main_root, txn, app_wiring)]
+        for path, text in stage.files.items():
+            txn.write(path, text)
+    except OSError as e:
+        txn.rollback()
+        if e.errno in (errno.EROFS, errno.EACCES, errno.EPERM):
+            raise not_writable(e.filename, e.errno) from e
+        raise
     except BaseException:
         txn.rollback()
         raise
-    report["todos"] = todos(planned, rel)
     return report
 
 
@@ -1236,20 +1365,30 @@ def main(argv: list[str] | None = None) -> int:
         p.add_argument("--lane", required=True, choices=LANES)
         p.add_argument("--new-bc", action="store_true", help="scaffold the bounded context first (command only)")
 
+    def slice_args(p):
+        shape(p)
+        p.add_argument("--main-root", required=True, help="e.g. backend/src/main/kotlin")
+        p.add_argument("--test-root", required=True, help="e.g. backend/src/test/kotlin")
+        p.add_argument("--project-root", default=".", help="paths in the report are relative to this")
+        p.add_argument("--with-state", action="store_true", help="decider lane: also emit the per-slice State + Evolver")
+        p.add_argument("--wire", action="store_true", help="apply the @Bean and permits edits at their anchors")
+        p.add_argument("--inputs", help="JSON object of placeholder values")
+        p.add_argument("--set", action="append", metavar="NAME=VALUE", help="a placeholder value (repeatable)")
+        p.add_argument("--tests", choices=("stub", "none"), default="stub",
+                       help="stub (default): also write the stub tests; none: write nothing under --test-root")
+        p.add_argument("--manifest", help="render from this existing slice.yaml at the slice's own path, and update it")
+        p.add_argument("--json", action="store_true")
+
     r = sub.add_parser("render", help="render one slice into a project")
-    shape(r)
-    r.add_argument("--main-root", required=True, help="e.g. backend/src/main/kotlin")
-    r.add_argument("--test-root", required=True, help="e.g. backend/src/test/kotlin")
-    r.add_argument("--project-root", default=".", help="paths in the report are relative to this")
-    r.add_argument("--with-state", action="store_true", help="decider lane: also emit the per-slice State + Evolver")
-    r.add_argument("--wire", action="store_true", help="apply the @Bean and permits edits at their anchors")
-    r.add_argument("--inputs", help="JSON object of placeholder values")
-    r.add_argument("--set", action="append", metavar="NAME=VALUE", help="a placeholder value (repeatable)")
-    r.add_argument("--tests", choices=("stub", "none"), default="stub",
-                   help="stub (default): also write the stub tests; none: write nothing under --test-root")
-    r.add_argument("--manifest", help="render from this existing slice.yaml at the slice's own path, and update it")
+    slice_args(r)
     r.add_argument("--dry-run", action="store_true", help="validate and list the files; write nothing")
-    r.add_argument("--json", action="store_true")
+    r.add_argument("--emit", action="store_true",
+                   help="validate and print every file's content and action as JSON; write nothing")
+    r.add_argument("--only", metavar="PATH",
+                   help="with --emit: print only this file's content, raw (a files[].path of the report)")
+
+    v = sub.add_parser("verify", help="compare the files a render with the same options writes with the disk")
+    slice_args(v)
 
     q = sub.add_parser("requires", help="list the modules a slice needs that the build file does not declare")
     shape(q)
@@ -1268,11 +1407,35 @@ def main(argv: list[str] | None = None) -> int:
     if args.templates:
         TEMPLATES = Path(args.templates).resolve()
     try:
-        if args.cmd == "render":
+        if args.cmd == "verify":
             rep = render(args.lang, args.kind, args.lane, load_inputs(args), Path(args.project_root),
                          Path(args.main_root), Path(args.test_root), args.new_bc, args.with_state,
-                         args.wire, args.dry_run, args.tests, Path(args.manifest) if args.manifest else None)
+                         args.wire, False, args.tests, Path(args.manifest) if args.manifest else None, mode="verify")
+            bad = rep["verify"]["missing"] + rep["verify"]["differs"]
             if args.json:
+                print(json.dumps(rep, indent=2, ensure_ascii=False))
+            else:
+                for p in rep["verify"]["missing"]:
+                    print(f"missing {p}")
+                for p in rep["verify"]["differs"]:
+                    print(f"differs {p}")
+                if not bad:
+                    print(f"verified {len(rep['verify']['checked'])} file(s): identical to the render")
+            return 1 if bad else 0
+        if args.cmd == "render":
+            if args.only and not args.emit:
+                raise RenderError("--only needs --emit")
+            rep = render(args.lang, args.kind, args.lane, load_inputs(args), Path(args.project_root),
+                         Path(args.main_root), Path(args.test_root), args.new_bc, args.with_state,
+                         args.wire, args.dry_run and not args.emit, args.tests,
+                         Path(args.manifest) if args.manifest else None, mode="emit" if args.emit else "write")
+            if args.only:
+                content = next((f["content"] for f in rep["files"] if f["path"] == args.only), None)
+                if content is None:
+                    raise RenderError(f"--only {args.only}: not a file this render emits (files[].path of --emit)")
+                sys.stdout.write(content)
+                return 0
+            if args.json or args.emit:
                 print(json.dumps(rep, indent=2, ensure_ascii=False))
             else:
                 verb = "would write" if args.dry_run else "wrote"
@@ -1317,6 +1480,9 @@ def main(argv: list[str] | None = None) -> int:
     except RenderError as e:
         print(f"render-slice: {e}", file=sys.stderr)
         return 2
+    except NotWritable as e:
+        print(f"render-slice: {e}", file=sys.stderr)
+        return 4
     except (OSError, json.JSONDecodeError) as e:
         print(f"render-slice: {e}", file=sys.stderr)
         return 2

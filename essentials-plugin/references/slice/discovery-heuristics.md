@@ -190,7 +190,7 @@ is reported after §4's four and §7's findings, never above them, and never wit
 
 | Signal | Report |
 |---|---|
-| An identifier of a type the BC owns or references — an entity's `@Id`, an `accountId`, a `shipmentId` — typed `String`, `Long`/`long`, `Integer` or `UUID` in a controller signature (`@PathVariable String accountId`), a service method (`transfer(String fromAccountId, String toAccountId, …)`) or an entity field (`Shipment.accountId : String`) | **Once per BC**: the ids involved and roughly how many sites carry each. Not one finding per parameter — a list of forty `String` parameters buries the sole-writer finding it ranks below |
+| An identifier of a type the BC owns or references — an entity's `@Id`, an `accountId`, a `shipmentId` — typed `String`, `Long`/`long`, `Integer` or `UUID` in a controller signature (`@PathVariable String accountId`), a service method (`transfer(String fromAccountId, String toAccountId, …)`) or an entity field (`Shipment.accountId : String`) | **Once per BC**: the ids involved, roughly how many sites carry each, and the files they sit in by type name (`AccountController`, `TransferService.transfer`, `Shipment.accountId`). Not one finding per parameter — a list of forty `String` parameters buries the sole-writer finding it ranks below |
 
 The target is `rules/slice-design.md` § Directory vocabulary (`types/` holds the BC's ids) and
 §R2's "the command and the view *are* the contract", where a semantic id as the `@PathVariable` is

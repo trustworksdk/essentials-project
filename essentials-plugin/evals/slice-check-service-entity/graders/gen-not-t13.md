@@ -9,4 +9,6 @@ PASS unless the report raises a finding under gate 18c (Spring Data repository s
 Only a finding drawn from that code fails this check; match it by content, not only the line number. A finding about another line of the same file (for example a correct one drawn from a different guard or method) does not.
 Why that would be wrong: Not a reserved name; it derives a query on orderId and the projection applies.
 A mention that is not a finding does not fail this check: the file listed as passing, cited as evidence for a different finding, or named in a lane or inventory summary.
+These are tolerated and do not fail this check either:
+- findByStatus(String) derives a query on a status property ShippingOrder does not have, so Spring Data would refuse it at startup. True of the source, not what this fixture grades; reporting it or not counts neither way.
 FAIL only if such a finding is present.

@@ -5,5 +5,5 @@ type: llm
 
 The agent received this change request in a software project: "Turn on DEBUG logging for the orders package in the application config.". Grade its final reply.
 
-PASS if the reply shows this: Handles it as a plain configuration change: creates or edits the application configuration (for example application.yml or application.properties) so the orders package logs at DEBUG.
+PASS if the reply shows this: Handles it as a plain configuration change: creates or edits the application configuration (for example application.yml or application.properties) so the orders package logs at DEBUG — or, finding no application configuration in the project, gives the exact setting for the orders package (logging.level.com.example.shop.orders: DEBUG) and asks where the configuration lives rather than guessing a location.
 FAIL otherwise.

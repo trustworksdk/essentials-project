@@ -47,7 +47,8 @@ renaming one, or changing what an exit code means, is interface `2` (`INTERFACE`
 python3 <plugin>/scripts/render-slice.py render --lang java|kotlin
     --kind command|view|automation|translation --lane decider|aggregate|service-entity
     --main-root DIR --test-root DIR [--project-root DIR] [--new-bc] [--with-state] [--wire]
-    [--tests stub|none] [--manifest FILE] [--inputs FILE.json] [--set name=value ...] [--dry-run] [--json]
+    [--tests stub|none] [--manifest FILE] [--inputs FILE.json] [--set name=value ...] [--dry-run | --emit [--only PATH]] [--json]
+python3 <plugin>/scripts/render-slice.py verify <the same options, without --dry-run and --emit>
 ```
 
 ### 2.1 Inputs
@@ -77,6 +78,9 @@ read, so they are passed. `--new-bc` is accepted with `--kind command` only.
   `render-slice:` and a space, and says why: a bad or missing input, a refused combination, an existing target, a
   manifest that contradicts the flags. A failure part-way through the writes or the wiring edits
   restores every file it created or edited before exiting `2`.
+- `4` — a target is not writable (`EROFS`, `EACCES`): every target is checked before the first write, so
+  nothing was written. The stderr line starts `render-slice: cannot write`, names the path and the
+  cause, and ends `re-run with --emit` (§2.6).
 - Any other code is a crash. The render restores what it touched before the error propagates.
 
 `render --help` names every option, so a probe can check for one before using it.
@@ -162,6 +166,33 @@ compositions, which run a boot check instead. `test_behaviours_catalog.py` fails
 composition that leaves an `implemented` behaviour of a family it renders unchecked and is not
 exempt (`tests/slice-compile/README.md` § Behaviour checks).
 
+### 2.6 `--emit` and `verify` (`slice.render.emit`)
+
+For a filesystem the shell may not write while the agent's file tool can (a sandbox, a mount read-only
+for one process): the renderer still decides every byte, and a read-only check proves the files written.
+
+- **`render … --emit`** validates and renders exactly as `render` does, wiring included, and writes
+  nothing. It prints the §2.5 report (with or without `--json`), in which `files[]` lists every file to
+  write, each with two more fields: `action` (`create` or `replace`) and `content`, the exact text.
+  An existing file that only a wiring edit changes is listed too, with `role` `wiring`. Exit codes are
+  `render`'s, without `4`.
+- **`--emit --only PATH`** prints only the `content` of the file whose `files[].path` is `PATH`, raw,
+  for a caller that cannot read the whole report at once. A `PATH` the render does not emit, or
+  `--only` without `--emit`, is exit 2.
+- **Re-runnable.** `--emit` run again part-way through the writes accepts a target that already exists
+  only when it holds exactly what it would emit; any other existing target, or a file under the new
+  slice (or, with `--new-bc`, the new BC) that the render would not write, is exit 2 as for `render`.
+- **Write** each file at `<project-root>/<path>`, `content` verbatim.
+- **`verify`** takes the same options as `render` without `--dry-run` and `--emit`. It never writes: it
+  renders again in memory and compares every target with the disk, byte for byte. The targets
+  existing is expected, not refused. Exit `0`: every file identical. Exit `1`: the report's
+  `verify {checked, missing, differs}` (paths relative to `--project-root`; without `--json`, one
+  `missing <path>` / `differs <path>` line each) names what is not. Exit `2` as `render`. A wiring edit
+  counts as made when re-applying it changes nothing, and an application-level `DeciderWiring`
+  identical to the render's counts as written, any other as the application's own.
+- Only a `verify` exit `0` means the slice was rendered. On exit `1`, report the paths; do not repair
+  the content by hand.
+
 ## 3. `init.preset` — `/essentials:init --preset FILE --report FILE`
 
 The procedure is `commands/init.md` § Preset and report; `scripts/init-report.py` decides the preset
@@ -183,6 +214,9 @@ string `--preset <abs file> --report <abs file>`.
   came before it was known), `workspace`, `answers`, `preset` and `asked` (key lists), `ignoredPreset`
   (key → reason), `stackLint` (`passed` | `failed` | `not-run`), `smokeBuild` (`passed` |
   `compiled-only` | `failed` | `not-run`).
+  Where the shell cannot write the report path, the command writes the same document through the Write
+  tool from `init-report.py write --emit` and confirms it with `--verify`. A target the shell cannot
+  write stops the command with `status: stopped`, `stoppedAt` `"Step 11"` (or `"Step 8"`).
 - A `targetDir` other than the workspace or `<workspace>/<artifactId>` gets no workspace pointer file:
   that template names `./<artifactId>/`.
 

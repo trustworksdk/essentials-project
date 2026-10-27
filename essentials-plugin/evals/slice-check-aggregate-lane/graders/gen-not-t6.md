@@ -10,5 +10,6 @@ Only a finding drawn from that code fails this check; match it by content, not o
 Why that would be wrong: Multi-parameter discriminator: ?minAmount=&maxAmount= bound together by one handler.
 A mention that is not a finding does not fail this check: the file listed as passing, cited as evidence for a different finding, or named in a lane or inventory summary.
 These are tolerated and do not fail this check either:
+- F4, the ESS-G6 discriminator finding on views/invoice_list/slice.yaml:17, citing paidInvoices() (:28/:29) and byAmount() (:35/:36) as the handlers that each bind only part of ?paid=true&minAmount=. That is F4's evidence, not a finding against these mappings or against the class.
 - A 'no test' finding on any slice. Every manifest here says tests.*.present: false and the fixture has no test tree; the law rates a view slice with no test Should-fix, so such a finding is correct but not what this fixture grades.
 FAIL only if such a finding is present.

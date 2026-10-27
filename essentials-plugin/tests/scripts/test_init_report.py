@@ -12,11 +12,13 @@ import contextlib
 import importlib.util
 import io
 import json
+import os
 import re
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 PLUGIN = Path(__file__).resolve().parents[2]
 SCRIPT = PLUGIN / "scripts" / "init-report.py"
@@ -270,6 +272,48 @@ class WriteTest(Workspace):
                 self.assertEqual(code, 2)
                 self.assertIsNone(report)
                 self.assertTrue(err.startswith("init-report: "), err)
+
+    def test_answers_from_stdin(self):
+        with mock.patch.object(sys, "stdin", io.StringIO(json.dumps(ANSWERS))):
+            code, report, err = self.write("--status", "rendered", "--answers", "-")
+        self.assertEqual(code, 0, err)
+        assert report is not None
+        self.assertEqual(report["answers"], ANSWERS)
+
+    def emit_args(self, report: Path) -> list[str]:
+        return ["write", "--report", str(report), "--workspace", str(self.ws), "--status", "rendered",
+                "--answers", str(self.file("answers.json", ANSWERS))]
+
+    def test_emit_writes_nothing_and_verify_compares_bytes(self):
+        report = self.ws / "cache" / "report.json"
+        code, out, err = run(*self.emit_args(report), "--emit")
+        self.assertEqual(code, 0, err)
+        self.assertFalse(report.parent.exists())
+        files = json.loads(out)["files"]
+        self.assertEqual([(f["path"], f["action"]) for f in files], [(str(report), "create")])
+        self.assertEqual(run(*self.emit_args(report), "--verify")[:2], (1, f"{report}\n"))  # missing
+        report.parent.mkdir()
+        report.write_text(files[0]["content"], encoding="utf-8")       # what the caller's Write tool does
+        self.assertEqual(run(*self.emit_args(report), "--verify")[0], 0)
+        self.assertEqual(json.loads(run(*self.emit_args(report), "--emit")[1])["files"][0]["action"], "replace")
+        code, _, err = run(*self.emit_args(report))                     # the plain write is the same bytes
+        self.assertEqual((code, run(*self.emit_args(report), "--verify")[0]), (0, 0), err)
+        report.write_bytes(report.read_bytes()[:-2] + b"X\n")           # one byte changed
+        self.assertEqual(run(*self.emit_args(report), "--verify")[:2], (1, f"{report}\n"))
+
+    @unittest.skipIf(os.geteuid() == 0, "root writes through file modes")
+    def test_unwritable_report_writes_nothing(self):
+        locked = self.ws / "locked"
+        locked.mkdir()
+        locked.chmod(0o555)
+        self.addCleanup(locked.chmod, 0o755)
+        for report in (locked / "report.json", locked / "deeper" / "report.json"):
+            with self.subTest(report=report):
+                code, out, err = run(*self.emit_args(report))
+                self.assertEqual((code, out), (4, ""))
+                self.assertIn("EACCES", err)
+                self.assertIn("re-run with --emit", err)
+                self.assertEqual(list(locked.iterdir()), [])
 
     def test_value_sets_for_lint_and_smoke_are_closed(self):
         with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):

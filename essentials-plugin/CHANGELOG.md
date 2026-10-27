@@ -368,6 +368,52 @@ targets, with a `-N` suffix for plugin-only releases.
   `LLM-foundation.md`'s `DurableQueues` API, and the `Root cause:` summary a shard-owned dead letter's error now starts
   with in `LLM-postgresql-queue-shard-owned.md` § Gotchas.
 
+- **Commands work where the shell cannot write.** A sandbox that denies Bash every write (Claude Code 2.1.311's
+  `claude plugin eval` does, and a read-only mount or an unwritable `TMPDIR` does the same) used to break the
+  commands that hand one script's output to the next through a scratch file. `/essentials:review`, `slice-map`,
+  `slice-map-html`, `slice-enrich`, `slice-check`, `init` and `upgrade` no longer write scratch files: script
+  inputs go through a pipe, standard input (`-`) or process substitution, and `slice-map-html --diff` reads its
+  baseline from `git archive` in memory when no temporary directory can be made (slices, edges and messages are
+  compared; issues are not). Where `uv run` fails on a read-only cache, the commands run the scripts with
+  `python3`, and `/essentials:doctor` reports that uv as `cache read-only → python3 fallback`, a warning rather
+  than a stop.
+- **Writers fail closed, and a verified fallback writes instead.** `render-slice.py render`,
+  `slice-enrich.py apply`, `slice-index.py atlas`, `init-render.py` and `init-report.py write` check every target
+  before their first write and exit 4 on a read-only filesystem or a denied write (EROFS/EACCES), writing nothing.
+  - Slices: the kind skills then run `render --emit`, which prints every file's exact content (`--only <path>`
+    prints one, and a re-run part-way accepts only existing files identical to its output), write each
+    file verbatim with the Write tool, and the new read-only `render-slice.py verify`
+    must match them byte for byte before the slice counts as rendered (`slice-authoring.md` §4b; capability
+    `slice.render.emit`, `sdd-contract.md` §2.6). A rendered file is still never written freehand.
+  - `/essentials:slice-enrich` does the same with `slice-enrich.py apply --emit` and `slice-enrich.py verify`,
+    and gains the Write tool for that alone; the model still never edits a `slice.yaml` itself.
+  - `/essentials:init` writes its `--report` the same way (`init-report.py write --emit` / `--verify`). A
+    project directory the shell cannot write stops it with `status: stopped` before the first file.
+  - The Slice Atlas page is too large for that: on exit 4 `slice-index.py atlas` still prints the page's
+    summary line with its issue counts as `NOT written`, and the command asks for a writable `--out`.
+    `/essentials:upgrade` names a lint-gate install it could not write under what remains.
+- **Fixed: `/essentials:review` hid the change's own findings when it could not extract the base tree.** With no
+  writable temporary directory, every whole-tree finding was counted as pre-existing, so findings on lines the
+  change added were counted, not listed, in a report that still read as complete. The review now lists a
+  whole-tree finding on an added line as the change's own and names the skipped base comparison under Not run.
+  The report also copies the scripts' own Not run entries next to any limit of the run, and no longer calls a
+  tree "clean".
+- **`essentials-change` fires on bug reports and on changed rules or limits**, not only on feature requests. It
+  asks for a yes before growing a slice even when the request names the exact endpoint or field to add; it no
+  longer asks "new slice or extend?" when the slice law's own test already answers it (a view keyed differently
+  from the existing one, for example); and its plan for a new slice names the bounded context's lane.
+- **`/essentials:slice-check`: a bounded context with no lane is not judged under a guessed one.** A context with
+  two write styles, or entities beside the event store, lists its lane-dependent gates under "Gates not run",
+  and conflicting declared lanes show on its lane line. A finder that loads rows for writing is no longer
+  reported as read-side drift (gate 15(b)), and a project with no test tree reports its untested view slices
+  instead of "Input missing".
+- **`/essentials:slice-discover` numbers its findings by payoff tier.** Lane-specific findings
+  (`discovery-heuristics.md` §7) come after the lane tier, unnumbered; a sole-writer finding names every writer;
+  the cohesion tier names every god file with its slice count; and primitive ids are summarised once per
+  bounded context.
+- **Eval cases corrected.** Expectations in the change-router, slice-check, slice-discover and slice-enrich
+  fixtures that marked correct replies down are reworded or re-rated, and their graders regenerated.
+
 ## 0.60.0-5 — targets Essentials 0.60.0
 - **Framework docs: 0.50.1 was never released** — the event-store reference now says the polling
   transaction leak (a connection left `idle in transaction` when a subscription was disposed after an

@@ -23,13 +23,17 @@ Usage
     init-report.py write --report R --status rendered|stopped [--stopped-at STEP] --workspace W
                          [--preset F] [--answers A] [--target DIR] [--asked k,k,…]
                          [--stack-lint passed|failed|not-run]
-                         [--smoke-build passed|compiled-only|failed|not-run]
-        Write the report to R. `--answers` is the answers.json Step 10 wrote; with `rendered` it is
-        required and must pass the renderer's own validation. `--asked` defaults, for `rendered`, to
+                         [--smoke-build passed|compiled-only|failed|not-run] [--emit | --verify]
+        Write the report to R. `--answers` is the answers JSON of Step 10, `-` for standard input; with
+        `rendered` it is required and must pass the renderer's own validation. `--asked` defaults, for `rendered`, to
         `targetMode` (when no usable target key was preset) plus every answer key the preset did not
         supply, and to nothing for `stopped`. A key in `--asked` is never also listed under `preset`
         (a preset value the user changed at the Step 7 confirmation was asked). `--target` defaults
         to what the preset and the answers decide.
+        --emit writes nothing and prints {"files": [{"path": R (absolute), "content": <the exact text>,
+        "action": "create" | "replace"}]}, for a caller that writes the file with another tool.
+        --verify writes nothing: it builds the report again from the same arguments and compares it
+        with the bytes at R.
 
 The report (`contractVersion` 1 grows only by addition):
 
@@ -45,8 +49,11 @@ to the workspace; supersedes `targetMode`, which is then ignored).
 
 Exit codes
 ----------
-    0   printed (preset) / written (write)
-    2   could not run (bad arguments, `--answers` that the renderer would reject, an unwritable report)
+    0   printed (preset) / written (write) / emitted (--emit) / R holds exactly the report (--verify)
+    1   --verify: R is missing or differs (the path is printed)
+    2   could not run (bad arguments, `--answers` that the renderer would reject)
+    4   R cannot be written (EROFS, EACCES: a read-only mount, a sandbox that allows no writes); checked
+        before anything is written, so nothing is. Re-run with --emit
 
 Standard library only; Python 3.11+.
 """
@@ -218,7 +225,7 @@ def read_answers(path: Path | None, status: str) -> dict:
             raise ReportError("--answers is required with --status rendered")
         return {}
     try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
+        raw = json.loads(sys.stdin.read() if str(path) == "-" else path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ReportError(f"cannot read answers {path}: {exc}")
     if status == "rendered":
@@ -276,8 +283,19 @@ def build_report(args) -> dict:
     return report
 
 
+class Unwritable(ReportError):
+    """The report's directory cannot be written (exit 4), found before anything was written."""
+
+
+def report_text(report: dict) -> str:
+    return json.dumps(report, indent=2, ensure_ascii=False) + "\n"
+
+
 def write_report(path: Path, report: dict) -> None:
-    text = json.dumps(report, indent=2, ensure_ascii=False) + "\n"
+    text = report_text(report)
+    refused = ir.unwritable([path.parent])
+    if refused:
+        raise Unwritable(f"cannot write the report: {refused} — nothing written; re-run with --emit")
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_name(path.name + ".tmp")
@@ -304,6 +322,9 @@ def main(argv=None) -> int:
     w.add_argument("--asked")
     w.add_argument("--stack-lint", choices=STACK_LINT, default="not-run")
     w.add_argument("--smoke-build", choices=SMOKE_BUILD, default="not-run")
+    how = w.add_mutually_exclusive_group()
+    how.add_argument("--emit", action="store_true", help="print the file as JSON instead of writing it")
+    how.add_argument("--verify", action="store_true", help="compare the report at --report with a fresh build")
     args = ap.parse_args(argv)
     try:
         if args.cmd == "preset":
@@ -312,12 +333,27 @@ def main(argv=None) -> int:
             print(json.dumps({"preset": usable, "ignored": ignored, "ask": to_ask(usable),
                               "target": resolve_target(usable, {}, workspace)}, indent=2, ensure_ascii=False))
             return 0
-        write_report(args.report, build_report(args))
+        report = build_report(args)
+        path = Path(os.path.abspath(args.report))
+        if args.emit:
+            print(json.dumps({"files": [{"path": str(path), "content": report_text(report),
+                                         "action": "replace" if path.exists() else "create"}]},
+                             indent=2, ensure_ascii=False))
+            return 0
+        if args.verify:
+            try:
+                same = path.read_bytes() == report_text(report).encode("utf-8")
+            except OSError:
+                same = False
+            if not same:
+                print(path)
+            return 0 if same else 1
+        write_report(args.report, report)
         print(args.report)
         return 0
     except ReportError as exc:
         print(f"init-report: {exc}", file=sys.stderr)
-        return 2
+        return 4 if isinstance(exc, Unwritable) else 2
 
 
 if __name__ == "__main__":

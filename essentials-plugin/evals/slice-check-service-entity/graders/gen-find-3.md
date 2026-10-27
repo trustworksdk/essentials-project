@@ -9,5 +9,5 @@ PASS if the report contains a finding that matches all of:
 - it concerns `src/main/java/com/example/shipping/persistence/ShippingOrders.java` (symbol `ShippingOrders.findByShipped`)
 - it is filed under gate 15b (Write-repository purity and placement), id ESS-G15b, or plainly describes that check
 - its severity is Should-fix
-- its substance: A finder on the write repository whose only caller is a read path; it belongs to views/order_status.
+- its substance: A screen-shaped finder on the write repository (rules/slice-design.md names findByShipped(boolean) as the example) that no write path calls; views/order_status already declares its own findByShipped on OrderStatusQueries, so the read side is being served from the write model. Saying it has no caller and should be deleted is the same finding.
 FAIL if no finding matches, or the matching one has a different severity. Ignore formatting, ordering and other findings.

@@ -31,7 +31,9 @@
 #   python3   >= 3.11, hard for every profile: each runs a script
 #   uv        runs the scripts that pin pyyaml / jsonschema (PEP 723). Without it python3 runs them where
 #             those packages are installed, so the status is ok, fallback (both importable), partial
-#             (pyyaml only: slice-lint.py cannot run) or missing (neither runs)
+#             (pyyaml only: slice-lint.py cannot run) or missing (neither runs). A uv whose cache directory
+#             (`uv cache dir`) this shell cannot write — a read-only mount, a sandbox whose Bash may not write —
+#             fails every `uv run`, so it counts as no uv: found reads "cache read-only → python3 fallback"
 #   java      the major of the `java.version` row of references/stack/stack-pins.md, or newer; read from
 #             that file on every run, never written here. $JAVA_HOME/bin/java first, as Maven uses it
 #   maven     mvn; a ./mvnw in the working directory serves /essentials:upgrade, not init's wrapper hook
@@ -60,7 +62,8 @@
 #   "impacts" is empty for a requirement whose status is ok.
 #
 # Exit: 0 nothing blocking for the profile; 1 a blocking requirement (the verdict names it); 2 usage.
-# Read-only: it probes, it never installs or changes anything.
+# Read-only: it probes, it never installs or changes anything. The one write is the uv cache probe: an empty file
+# created in that directory (or its nearest existing ancestor) and removed at once.
 
 set -o pipefail
 
@@ -151,19 +154,44 @@ if have python3; then
     fi
 fi
 
-uv_found="<null>"
+# writable DIR: can this shell create a file in DIR, or in its nearest existing ancestor? Tried, not asked of
+# `test -w`, which a sandbox can answer yes to and then refuse the write.
+writable() {
+    local d=$1 probe
+    while [ ! -e "$d" ] && [ -n "$d" ]; do d=${d%/*}; done
+    [ -n "$d" ] || d=/
+    [ -d "$d" ] || return 1
+    probe="$d/.essentials-doctor-probe.$$"
+    { : >"$probe"; } 2>/dev/null || return 1
+    rm -f "$probe" 2>/dev/null
+    return 0
+}
+
+uv_status=missing uv_found="<null>" uv_cache=""
 if have uv; then
     v=$(uv --version 2>/dev/null)
     re='^uv ([^[:space:]]+)'
     if [[ $v =~ $re ]]; then uv_found=${BASH_REMATCH[1]}; else uv_found="uv"; fi
     uv_status=ok
-elif $py_yaml && $py_jsonschema; then
-    uv_status=fallback uv_found="no uv; python3 has pyyaml and jsonschema"
-elif $py_yaml; then
-    uv_status=partial uv_found="no uv; python3 has pyyaml, not jsonschema"
-else
-    uv_status=missing
-    [ "$py_status" = ok ] && uv_found="no uv; python3 has neither pyyaml nor jsonschema"
+    d=$(uv cache dir 2>/dev/null)
+    case $d in /*) writable "$d" || uv_cache=$d ;; esac
+fi
+if [ "$uv_status" != ok ] || [ -n "$uv_cache" ]; then
+    # no uv, or one whose every `uv run` fails: what python3 alone can run decides the status
+    no_uv="no uv"
+    [ -z "$uv_cache" ] || no_uv="uv $uv_found, but its cache $uv_cache is read-only"
+    if $py_yaml && $py_jsonschema; then
+        if [ -n "$uv_cache" ]; then
+            uv_status=fallback uv_found="cache read-only → python3 fallback (uv $uv_found, $uv_cache)"
+        else
+            uv_status=fallback uv_found="$no_uv; python3 has pyyaml and jsonschema"
+        fi
+    elif $py_yaml; then
+        uv_status=partial uv_found="$no_uv; python3 has pyyaml, not jsonschema"
+    else
+        uv_status=missing uv_found="<null>"
+        [ "$py_status" = ok ] && uv_found="$no_uv; python3 has neither pyyaml nor jsonschema"
+    fi
 fi
 
 java_pin=""

@@ -8,5 +8,5 @@ The agent's final message is the report `/essentials:slice-enrich` printed for a
 PASS if the report contains a finding that matches all of:
 - it concerns `src/main/java/com/example/library/lending/use_cases/return_book/ReturnBookDecider.java`
 - it also cites `src/main/java/com/example/library/lending/use_cases/schedule_reminder/ScheduleReminderDecider.java`
-- its substance: lending.return_book gets the one invariant "Only a copy on loan can be returned" (enforcedBy ReturnBookDecider#handle), and lending.schedule_reminder the one invariant "A reminder is never planned more than 30 days ahead" (enforcedBy ScheduleReminderDecider#handle).
+- its substance: lending.return_book gets the one invariant "Only a copy on loan can be returned" (enforcedBy ReturnBookDecider#handle), and lending.schedule_reminder the one invariant "A reminder is never planned more than 30 days ahead" (enforcedBy ScheduleReminderDecider#handle). The two are drafts for two slices, so the report may give them in separate places, one under each slice.
 FAIL if no finding matches. Ignore formatting, ordering and other findings.

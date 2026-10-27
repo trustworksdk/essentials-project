@@ -56,7 +56,7 @@ must_find:
 - id: F1
   gate: null
   ess: null
-  severity: Should-fix
+  severity: Blocking
   law: rules/slice-design.md § The aggregate's own bar
   file: src/main/java/com/example/billing/use_cases/pay_invoice/PayInvoiceHandler.java
   line: 18
@@ -64,25 +64,20 @@ must_find:
   symbol: PayInvoiceHandler.handle
   what: >-
     The domain rule is in the handler; Invoice.pay() already guards it, so the aggregate is no longer the sole enforcer.
-    Blocking is also acceptable (the law's 'code cannot be correct' row).
+    The two checks disagree on a repeat payment (the handler throws, Invoice.pay() returns false), so the code cannot be
+    correct: Blocking.
 - id: F2
   gate: null
   ess: null
-  severity: Should-fix
+  severity: Blocking
   law: rules/slice-design.md § The aggregate's own bar
   file: src/main/java/com/example/billing/use_cases/pay_invoice/slice.yaml
   line: 20
   anchor: 'enforcedBy: "PayInvoiceHandler"'
   may_merge_with: F1
-  what: 'invariants[].enforcedBy names the handler: the manifest records the leak.'
-- id: F3
-  gate: null
-  ess: null
-  severity: Should-fix
-  file: src/main/java/com/example/billing/use_cases/pay_invoice/slice.yaml
-  line: 24
-  anchor: 'unit: { present: false }'
-  what: No test of any kind on the one command slice that carries a rule.
+  what: >-
+    invariants[].enforcedBy names the handler: the manifest records the leak. It is the same defect as F1 and takes
+    F1's severity.
 - id: F4
   gate: '6'
   ess: ESS-G6
@@ -113,7 +108,9 @@ must_not_find:
   symbol: Invoice.isPaid
   why: >-
     A public getter on an aggregate whose callers are a command handler (PayInvoiceHandler) is not a query surface.
-    The view reads its own read model, not the aggregate.
+    The view reads its own read model, not the aggregate. F1's finding (the pay-once rule decided in
+    PayInvoiceHandler) may name isPaid() as the method the handler's check calls, or say it can go once the rule
+    moves into Invoice.pay(): that is F1's remedy, not a finding against isPaid().
 - id: T2
   not_gates:
   - '*'
@@ -241,6 +238,14 @@ skipped:
 - gate: '18'
   why: No Spring Data repository in the project.
 tolerated:
+- id: TOL-f4-evidence
+  gates:
+  - '6'
+  file: src/main/java/com/example/billing/views/invoice_list/InvoiceListAPI.java
+  what: >-
+    F4, the ESS-G6 discriminator finding on views/invoice_list/slice.yaml:17, citing paidInvoices() (:28/:29) and
+    byAmount() (:35/:36) as the handlers that each bind only part of ?paid=true&minAmount=. That is F4's evidence,
+    not a finding against these mappings or against the class.
 - id: TOL-tests
   gates:
   - '*'

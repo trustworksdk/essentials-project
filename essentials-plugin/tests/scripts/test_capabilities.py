@@ -21,7 +21,7 @@ SCHEMA = json.loads((PLUGIN / "references" / "slice" / "slice-yaml.schema.json")
 CONTRACT = (PLUGIN / "references" / "sdd-contract.md").read_text(encoding="utf-8")
 
 KNOWN = {"init.preset", "slice.render.agent", "slice.render.tests-none", "slice.render.manifest",
-         "slice.render.report", "slice.lane.cqrs", "schema.sdd-keys"}
+         "slice.render.emit", "slice.render.report", "slice.lane.cqrs", "schema.sdd-keys"}
 
 
 def load(name: str, path: Path):
@@ -80,6 +80,14 @@ class CapabilitiesTest(unittest.TestCase):
         for option in ("--main-root", "--test-root", "--set", "--json", "--wire", "--new-bc", "--project-root",
                        "--tests", "--manifest"):
             self.assertIn(option, out.getvalue(), "the --help probe another plugin runs")
+        if "slice.render.emit" in CAPS["capabilities"]:
+            self.assertIn("--emit", out.getvalue())
+            self.assertIn("--only", out.getvalue())
+            verify = io.StringIO()
+            with contextlib.redirect_stdout(verify), self.assertRaises(SystemExit):
+                rs.main(["verify", "--help"])
+            self.assertIn("--main-root", verify.getvalue(), "verify takes render's options")
+            self.assertIn("\n    4 ", rs.__doc__ or "", "exit 4 is documented")
         cqrs = CAPS["capabilities"].get("slice.lane.cqrs")
         if cqrs is not None:
             self.assertRegex(cqrs["lane"], r"^[a-z][a-z0-9-]{0,63}$")

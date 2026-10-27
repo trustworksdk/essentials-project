@@ -20,6 +20,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -300,6 +301,76 @@ class Apply(Base):
         self.assertIn(lint.returncode, (0, 1), lint.stderr)
         findings = [f for f in json.loads(lint.stdout)["findings"] if "waitlist" not in f["file"]]
         self.assertEqual(findings, [])
+
+    def test_stdin_for_the_facts_and_the_accepted_set(self):
+        """No file need be written to hand one script's output to the next (a sandbox with no writable
+        directory): `-` reads standard input, and what slice-source left unparsed is named on stderr."""
+        by_file = self.proposal()
+        r = subprocess.run([sys.executable, str(SCRIPT), "propose", ROOT_ARG, "--source-facts", "-", "--json"],
+                           input=self.facts.read_text(encoding="utf-8"), cwd=PLUGIN, capture_output=True,
+                           text=True, timeout=120)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(json.loads(r.stdout), by_file)
+        facts = json.loads(self.facts.read_text(encoding="utf-8"))
+        facts["unparsed"] = [{"file": "src/X.java", "line": 3, "what": "source file", "reason": "unbalanced"}]
+        r = subprocess.run([sys.executable, str(SCRIPT), "propose", ROOT_ARG, "--source-facts", "-", "--json"],
+                           input=json.dumps(facts), cwd=PLUGIN, capture_output=True, text=True, timeout=120)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("src/X.java:3  source file: unbalanced", r.stderr)
+        root = self.copy()
+        r = subprocess.run([sys.executable, str(SCRIPT), "apply", str(root), "-", "--dry-run"],
+                           input=ACCEPTED.read_text(encoding="utf-8"), cwd=PLUGIN, capture_output=True, text=True,
+                           timeout=120)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout, run(SCRIPT, "apply", root, self.accepted(), "--dry-run").stdout)
+
+    @unittest.skipIf(os.geteuid() == 0, "root writes through file modes")
+    def test_a_manifest_that_cannot_be_written_writes_nothing(self):
+        root = self.copy()
+        before = tree_digest(root)
+        accepted = json.loads(ACCEPTED.read_text(encoding="utf-8"))
+        locked = root / sorted(s["path"] for s in accepted["slices"] if s.get("accept"))[-1]
+        locked.chmod(0o444)
+        self.addCleanup(locked.chmod, 0o644)
+        r = run(SCRIPT, "apply", root, self.accepted())
+        self.assertEqual(r.returncode, 4, r.stdout + r.stderr)
+        self.assertIn("EACCES", r.stderr)
+        self.assertIn("nothing written; re-run with --emit", r.stderr)
+        self.assertEqual(r.stdout, "")
+        self.assertEqual(tree_digest(root), before)
+
+    def test_emit_writes_nothing_and_verify_checks_the_written_bytes(self):
+        applied = self.copy()
+        self.assertEqual(run(SCRIPT, "apply", applied, self.accepted()).returncode, 0)
+        root = self.copy()
+        before = tree_digest(root)
+        locked = sorted(root.rglob("slice.yaml"))
+        for f in locked:
+            f.chmod(0o444)
+        r = run(SCRIPT, "apply", root, self.accepted(), "--emit")
+        for f in locked:
+            f.chmod(0o644)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(tree_digest(root), before)
+        emitted = json.loads(r.stdout)
+        self.assertTrue(emitted["files"])
+        self.assertTrue(all(f["action"] == "replace" for f in emitted["files"]))
+        self.assertTrue(any(line.startswith("would write ") for line in emitted["report"]))
+        r = run(SCRIPT, "verify", root, *emitted["verify"])
+        self.assertEqual(r.returncode, 1)
+        self.assertEqual(r.stdout.count("differs "), len(emitted["files"]))
+        for f in emitted["files"]:
+            Path(f["path"]).write_bytes(f["content"].encode("utf-8"))
+        self.assertEqual(tree_digest(root), tree_digest(applied))
+        r = run(SCRIPT, "verify", root, *emitted["verify"])
+        self.assertEqual((r.returncode, r.stdout.strip()), (0, f"identical {len(emitted['files'])} file(s)"))
+        first = Path(emitted["files"][0]["path"])
+        first.write_text(first.read_text(encoding="utf-8") + "# by hand\n", encoding="utf-8")
+        r = run(SCRIPT, "verify", root, *emitted["verify"])
+        self.assertEqual(r.returncode, 1)
+        self.assertEqual(r.stdout.strip(), f"differs  {first}")
+        r = run(SCRIPT, "verify", root, f"../x/slice.yaml={'0' * 64}")
+        self.assertEqual(r.returncode, 2)
 
     def test_second_run_writes_nothing(self):
         root = self.copy()

@@ -204,8 +204,9 @@ grep -n "${PREFIX}.githooks/pre-commit" "${TOP}/${HOOKS}/pre-commit" 2>/dev/null
   its own beyond the template's, show the diff and offer to merge rather than replace.
 
   **Measure the refresh before offering it**, exactly as `/essentials:slice-check` § Refreshing the
-  lint gate does (into `/tmp/essentials-upgrade/` instead): the project's copy with `--json`, then the
-  plugin's copy over the same tree with `--baseline` of that output. What the second run prints is
+  lint gate does: the plugin's copy over the project with `--baseline` of the project's copy's `--json`
+  output, handed over by process substitution so no file is written —
+  `slice-lint.py . --json --baseline <(uv run --script scripts/slice-lint.py . --schema scripts/slice-yaml.schema.json --json)`. What the second run prints is
   what the refresh adds, and every one of those findings fails the hook and CI. State it in the offer:
   "the refresh adds N findings in `<files>`; the hook and CI fail on them until they are fixed". Then
   offer the manifest fixes **before** the refresh, one file at a time, by that section's list — for
@@ -368,8 +369,7 @@ Only when `facts.essentialsBehind` is `true`. The plan is a script's, and it is 
 never re-derived, reordered or added to:
 
 ```bash
-mkdir -p /tmp/essentials-upgrade
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/migration-plan.py" . --json > /tmp/essentials-upgrade/plan.json
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/migration-plan.py" . --json    # read from standard output; nothing is written
 ```
 
 Pass `--from <PROJECT_ESSENTIALS>` when Step 1 resolved it through Maven. The plan chains the
@@ -397,10 +397,12 @@ Then check what applying the plan needs, for the report; `--check` needs none of
 ```bash
 git status --porcelain --untracked-files=no                     # must print nothing: a clean working tree
 docker info >/dev/null 2>&1 && echo docker-ok                   # the gate starts the context on Testcontainers
+p=".essentials-write-probe.$$"; : > "$p" && rm -f "$p" && echo write-ok   # the branch, the edits and the build write here
 git rev-parse --verify --quiet "refs/heads/essentials-${TO}"    # must not exist yet (TO = the plan's `to`)
 ```
 
-Changes in the tree, no Docker, no git repository, or an `essentials-<to>` branch that exists and is
+Changes in the tree, no Docker, no git repository, a project this shell cannot write (no `write-ok`: a
+read-only mount, a sandbox that allows no writes), or an `essentials-<to>` branch that exists and is
 not the current one block Group D for this run; the report says which, and the run offers everything else. A release
 move has no compile-only outcome: without Docker it does not start.
 
@@ -470,12 +472,24 @@ and confirmed rather than applied.
 
 **A scratch render** supplies whole files the contract describes and a fix needs — the
 `OpenApiContractIT` of C9, a `config/` class, the workspace pointer of B2, the README section of A2.
-Write an answers file from the project's facts (language, profile, web stack, frontend mode, whether
+Build the answers JSON from the project's facts (language, profile, web stack, frontend mode, whether
 `backend/compose.yml` exists, `lintGate: none` unless A2 needs the README section, the name and
-coordinates from the POM, and the package of the `@SpringBootApplication` class), render it into an
-empty scratch directory with
-`python3 "${CLAUDE_PLUGIN_ROOT}/scripts/init-render.py" --answers F --out /tmp/essentials-upgrade/render`
-(plus `--workspace-out /tmp/essentials-upgrade/workspace` for the B2 pointer), and offer the file the finding needs (`OpenApiContractIT` extends the rendered `IntegrationTestBase`;
+coordinates from the POM, and the package of the `@SpringBootApplication` class) and render it into an
+empty scratch directory outside the project, the answers on standard input (inside the JSON, each `'`
+as `'\''`):
+
+```bash
+S=$(mktemp -d)
+printf '%s\n' '<answers JSON>' | python3 "${CLAUDE_PLUGIN_ROOT}/scripts/init-render.py" --answers - \
+  --out "$S/render" --workspace-out "$S/workspace"     # --workspace-out only for the B2 pointer
+```
+
+Where `mktemp -d` fails (a read-only filesystem, a sandbox that allows no writes), print the render
+instead: the same pipe with `--tree` in place of `--out` and `--workspace-out`. A file is the text under
+its `=== FILE <path> (<mode>) ===` line up to the next `===` line, the workspace pointer is
+`@workspace/CLAUDE.md` (a closing `\ No newline at end of file` line means its last line has none), and
+`=== COPY <path> <- <plugin path>` is that plugin file unchanged. Then offer
+the file the finding needs (`OpenApiContractIT` extends the rendered `IntegrationTestBase`;
 offer that too when the project has no base of its own). Never copy more than the finding needs, and
 never over a file the project already has — the project's version wins, and the difference is a
 conversation.
@@ -701,7 +715,13 @@ silently unparseable.
 - The Step 7 verification fails in a way `/essentials:init` Step 13.7's table does not explain ⇒
   stop and report, with the command output. Do not improvise dependencies until it starts.
 - `migration-plan.py` exits 2 ⇒ Group D not run, with its stderr line; the rest of the run goes on.
-- Uncommitted changes, no Docker, no git repository, or an `essentials-<to>` branch that exists and
-  is not the current one ⇒ Group D blocked for this run, with the reason; `--check` and Groups A–C are unaffected.
+- Uncommitted changes, no Docker, no git repository, a project this shell cannot write, or an
+  `essentials-<to>` branch that exists and is not the current one ⇒ Group D blocked for this run, with
+  the reason; `--check` and Groups A–C are unaffected.
+- A shell command of a fix fails with `Read-only file system` or `Permission denied` (a copy, a
+  `chmod`, `git config`) ⇒ the shell cannot write the project. Fixes made with the Edit or Write tool
+  still go; A2's install, refresh and activation do not — the script must stay executable and the
+  activation is `git config` — and are never retyped with the Write tool. Stop offering them, and name
+  each in the closing "what remains" with the error.
 - A Group D step or the gate fails ⇒ the Fail-safe of Step 7.5: name the step, map the symptom, offer
   that step's revert, stop. Never pile on changes until it boots.

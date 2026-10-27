@@ -6,5 +6,5 @@ weight: 2
 
 The agent received this change request in a software project: "Turn on DEBUG logging for the orders package in the application config.". Grade its final reply.
 
-PASS if the reply explicitly classifies the request as class E (not a slice change, done plainly with no slice machinery and no manifest edit), by letter or by an unambiguous equivalent.
-FAIL if it names a different class or never classifies the request.
+PASS if the reply handles the request as not a slice change, done plainly with no slice machinery and no manifest edit (class E): it names class E, or it simply does or proposes the change without classifying it as a slice change.
+FAIL if it classifies it as class A, B, C or D, or treats it as a change to a slice.

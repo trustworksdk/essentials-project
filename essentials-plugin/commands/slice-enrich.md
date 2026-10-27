@@ -7,7 +7,7 @@ description: >
   tests; the model drafts only from that evidence, the user accepts each journey and slice, and the
   script writes only what was accepted, only where the field is absent. --dry-run writes nothing.
 user-invocable: true
-allowed-tools: [Read, Bash, Glob, Grep, AskUserQuestion]
+allowed-tools: [Read, Bash, Write, Glob, Grep, AskUserQuestion]
 argument-hint: "[<path>] [--bc <name>] [--fields <list>] [--dry-run]"
 ---
 
@@ -28,7 +28,9 @@ Two scripts do everything mechanical. `slice-enrich.py propose` computes every c
 evidence; `slice-enrich.py apply` writes the accepted values. **The model's job is the prose a script
 cannot write** — a scenario's name and the steps the script could not extract, a summary sentence, a
 journey name — and the conversation. It never edits a `slice.yaml` by hand, never re-derives a journey or
-a test mapping the script reported, and never drafts a field the script reported no evidence for.
+a test mapping the script reported, and never drafts a field the script reported no evidence for. The
+Write tool is for one thing only: copying `apply --emit`'s output verbatim when Bash cannot write
+(Step 6, exit 4), checked byte for byte by `slice-enrich.py verify`.
 
 **Writes only the manifests, only the fields accepted, only where they are absent.** No source, no tests,
 no `CLAUDE.md`, no git state.
@@ -51,7 +53,9 @@ exist without manifests, point at `/essentials:slice-check --fix-manifests`, whi
 
 Then the runner: `"${CLAUDE_PLUGIN_ROOT}/scripts/doctor.sh" --for slice`, whose `uv` line picks
 `uv run --script` or `python3 <script>` exactly as in `slice-check.md` Step 1.5. `MISSING` for the runner
-means stop and quote doctor's lines.
+means stop and quote doctor's lines. `uv run --script` can also fail where doctor said `ok`, for want of
+a writable cache (a read-only filesystem, a sandbox that allows no writes): use `python3 <script>` for
+every script from then on.
 
 **A dirty working tree:** say so before Step 3 and recommend committing first. The diff is the only review
 the written manifests get (`manifest-reconciliation.md` §6). Unless `--dry-run`, ask once whether to go on.
@@ -77,15 +81,16 @@ validates against anyway.
 ## Step 3 — Propose
 
 ```bash
-tmp=$(mktemp -d)
-uv run --script ${CLAUDE_PLUGIN_ROOT}/scripts/slice-source.py <root> --json > "$tmp/facts.json"
 uv run --script ${CLAUDE_PLUGIN_ROOT}/scripts/slice-enrich.py propose <root> \
-    --source-facts "$tmp/facts.json" [--bc <name>] [--fields <list>] --json > "$tmp/proposal.json"
+    --source-facts <(uv run --script ${CLAUDE_PLUGIN_ROOT}/scripts/slice-source.py <root> --json) \
+    [--bc <name>] [--fields <list>] --json
 ```
 
-The temporary directory is outside the project. `slice-source.py` exits 0, 1 and 3 with JSON written (3:
-some source could not be read — say which files, from its `unparsed`, because evidence in them was not
-seen); 2 wrote none: stop, because `propose` has no evidence without the facts.
+Nothing is written: the facts reach `propose` by process substitution, and the proposal is its standard
+output. When `slice-source.py` could not read some source (its exit 3), `propose` names each place on
+stderr — say which files, because evidence in them was not seen. When it wrote no JSON (its exit 2),
+`propose` exits 2, "cannot read --source-facts: … is empty": stop, because `propose` has no evidence without
+the facts.
 
 | `slice-enrich.py propose` | What it means here |
 |---|---|
@@ -160,12 +165,19 @@ Build the accepted set (contract P2): the proposal JSON, each accepted
 journey given its final `name`, and each slice's `proposals` replaced by `accept: {field: value}` holding
 only the final values the user approved, in manifest shape. `apply` reads only each slice's `path` and
 `accept`, so resolve journeys yourself: `flow` is the accepted journey name, or the list of names. A
-slice with no accepted field gets no `accept`. Write it into the temporary directory with a heredoc through Bash, never into the project:
+slice with no accepted field gets no `accept`. `apply` reads nothing else, so the set it is given may be
+just `schema` and the slices that carry an `accept`, each with its `path`. Hand it to `apply` on standard
+input, as one single-quoted shell word, never through a file and never in the project:
 
 ```bash
-uv run --script ${CLAUDE_PLUGIN_ROOT}/scripts/slice-enrich.py apply <root> "$tmp/accepted.json" [--dry-run]
+printf '%s\n' '<the accepted set as JSON>' | \
+    uv run --script ${CLAUDE_PLUGIN_ROOT}/scripts/slice-enrich.py apply <root> - [--dry-run]
 uv run --script ${CLAUDE_PLUGIN_ROOT}/scripts/slice-lint.py <project-root> --json
 ```
+
+Inside the JSON write each `'` as `'\''`, which closes the quote, adds the apostrophe and reopens it; every
+other character goes in as it is. Not a heredoc: zsh writes every heredoc to a temporary file, and bash a
+large one, and both fail where no directory is writable.
 
 It prints one line per manifest — `written <path>: <fields>`, `would write …`, `unchanged <path>` or
 `refused <path>: <reason>` — and the report takes them verbatim. It writes each manifest as a text edit that keeps every existing byte, quotes every `path`, stamps
@@ -177,8 +189,29 @@ before writing it.
 | 0 | every accepted field written, or already present with the accepted value (`unchanged`, which is what a second run reports). With `--dry-run`, the unified diffs come first, then the `would write` lines |
 | 1 | some entries refused, the rest written. A refusal is a field that became present with another value since `propose` (that manifest is left untouched), a projection written as a flow mapping (its `consistency` is refused, not rewritten), or a result that adds a schema error the file did not already have. Report each as the script words it; never write the refused value by hand, and never tell the user to (no hand edit, no rewriting a flow-mapped projection in block style to get it in) - the refusal line is the whole report on it |
 | 2 | could not run. Nothing is written. Stop and say why |
+| 4 | a manifest cannot be written — EROFS or EACCES: a read-only mount, a sandbox that allows no writes. Every manifest was checked before the first write, so **nothing is written**. Write through the Write tool instead, as below |
 
-Skip the second `slice-lint.py` under `--dry-run`. Otherwise compare its findings with Step 2's: a
+**Bash cannot write (exit 4).** The script still computes every byte; the model only copies. Rerun the
+same `apply` with `--emit` in place of the write (same accepted set, same pipe). It writes nothing and
+prints one JSON document: `files` (each `path`, `content`, `action: "replace"`, `sha256`), `report` (the
+lines `apply` would print, `would write …` for each file) and `verify` (one `PATH=SHA256` per file). It
+exits 0 or 1 exactly as `apply` would; on 1 the refusals are in `report` and the files listed are still
+the ones to write. Write each `files[].content` to its `path` with the Write tool, verbatim — the whole
+file, not an edit, nothing added, removed or reformatted. Then:
+
+```bash
+uv run --script ${CLAUDE_PLUGIN_ROOT}/scripts/slice-enrich.py verify <root> <each verify entry, quoted>
+```
+
+Only verify exit 0 (`identical N file(s)`) means the manifests were written. It compares each file with
+the merged bytes `--emit` computed from the tree before the write — a fresh `apply` cannot check that,
+since the fields are present once written. Exit 1 names each file that `differs` or is `missing`: report
+those as not written, and do not repair them by hand or write them again from memory; rerun the command
+in a shell that can write the project. The model still never edits a `slice.yaml` itself: what it writes
+is the script's output, and verify proves it. If the Write tool is refused too, stop
+writing; run verify all the same, so the report names exactly which files did and did not change. With `--dry-run`, exit 4 never arises: it writes nothing.
+
+Skip the second `slice-lint.py` under `--dry-run` and when nothing was written. Otherwise compare its findings with Step 2's: a
 finding that is new on a manifest `apply` wrote is a defect in the write — report it plainly, with the
 file, and do not repair it here.
 
@@ -193,7 +226,10 @@ file, and do not repair it here.
 - the fields no code can evidence (`notInferable`), as one line — never per slice;
 - "run `/essentials:slice-map-html` to see the journeys and scenarios".
 
-With `--dry-run`, say that nothing was written.
+With `--dry-run`, say that nothing was written. After the exit-4 fallback, report `--emit`'s `report` lines
+as `apply`'s, with `written` for `would write` once verify exited 0, and say it in one line: "Written
+with the Write tool — Bash could not write the project (the script's line); verify: identical N file(s)".
+When verify exited 1 or Write was refused, say **Not written** with the paths instead.
 
 ## Out of scope — state these if asked
 
@@ -218,6 +254,8 @@ type of another slice, a `generator: sdd` manifest, a manifest that does not par
 already declares `flow:`, a present-but-empty field, and a projection in flow style.
 `tests/scripts/test_slice_enrich.py` byte-diffs `propose` against goldens in `tests/slice-enrich/golden/`
 and checks that `apply` writes only absent fields, keeps bytes and comments, quotes paths, stamps 1.4,
-refuses a field that became present and an invalid result, writes nothing under `--dry-run`, and is
-idempotent on a second run. The eval case `evals/slice-enrich-library/` scores this command's drafting
+refuses a field that became present and an invalid result, writes nothing under `--dry-run` or `--emit`,
+that `--emit`'s files written verbatim equal what `apply` writes and `verify` passes on them and fails on
+a hand edit, that a read-only manifest makes `apply` write nothing (exit 4), and that it is idempotent on
+a second run. The eval case `evals/slice-enrich-library/` scores this command's drafting
 against the fixture's `expected.yaml`.

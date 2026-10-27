@@ -7,5 +7,6 @@ The agent's final message is the report `/essentials:slice-discover` printed for
 
 PASS unless the report raises a finding of any kind about `src/main/java/com/example/shop/controller/OrderController.java` line 36, `public Order get(@PathVariable String orderId) {` (or what that line declares), described as: orders.get_order as its own view slice.
 Only a finding drawn from that code fails this check; match it by content, not only the line number. A finding about another line of the same file (for example a correct one drawn from a different guard or method) does not.
+Why that would be wrong: list() and get() return the same shape over the same model: one view slice with two queries. P6 (the entity returned from the API) is drawn from this same line and is correct; only get() proposed as a slice of its own fails this check.
 A mention that is not a finding does not fail this check: the file listed as passing, cited as evidence for a different finding, or named in a lane or inventory summary.
 FAIL only if such a finding is present.

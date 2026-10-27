@@ -122,6 +122,16 @@ slices:
     file: src/main/java/com/example/shop/integration/PaymentGatewayClient.java
     line: 10
     anchor: public class PaymentGatewayClient {
+  - kind: command or unclassified, with no entry point
+    slice: billing.issue_invoice
+    file: src/main/java/com/example/shop/service/BillingService.java
+    line: 39
+    anchor: 'public String issueInvoice(String orderId, BigDecimal amount) {'
+  - kind: command proposed as the remedy for the sole-writer finding, split out of payInvoice's Order write
+    slice: orders.mark_order_paid
+    file: src/main/java/com/example/shop/service/BillingService.java
+    line: 34
+    anchor: order.setStatus("PAID");
   order_controller_splits_into: 4
 must_find:
 - id: P1
@@ -145,7 +155,10 @@ must_find:
   file: src/main/java/com/example/shop/controller/OrderController.java
   line: 10
   anchor: public class OrderController {
-  what: OrderController → 4 slices; OrderService → 4 slices. Reported as slice counts, not line counts.
+  what: >-
+    OrderController → 4 slices; OrderService → 4 slices. Reported as slice counts, not line counts. "Ranked #2"
+    means the cohesion tier, after the sole-writer finding(s): a report that numbers a second sole-writer finding
+    separately and so lists cohesion third still ranks it correctly.
 - id: P3
   rank: 3
   gate: null
@@ -155,18 +168,20 @@ must_find:
   file: src/main/java/com/example/shop/service/BillingService.java
   line: 14
   anchor: private final OrderRepository orders;
-  what: BillingService reaches into orders' entity and repository directly.
+  what: >-
+    BillingService reaches into orders' entity and repository directly. "Ranked #3" means the boundary tier, after
+    sole-writer and cohesion, however many findings those tiers hold.
 - id: P4
   rank: 4
   gate: null
   ess: null
   severity: null
   kind: lane
-  file: pom.xml
-  line: 19
-  anchor: <artifactId>spring-boot-starter-data-jpa</artifactId>
   what: >-
-    No sanctioned R5 lane; nearest is service-entity. Rung 4 is a later choice, not a recommendation now.
+    The whole project (no Essentials on the classpath): no sanctioned R5 lane, `none (nearest: service-entity)`,
+    the same in each candidate context. Reported as nearest, never as being on the lane, and adopting a lane is
+    left to the ladder's optional rung 4. "Ranked #4" means the lane tier, after sole-writer, cohesion and
+    boundary, however many findings those tiers hold.
 - id: P5
   rank: null
   gate: null
@@ -197,25 +212,27 @@ must_find:
   file: src/main/java/com/example/shop/controller/InvoiceController.java
   line: 16
   anchor: public void pay(@PathVariable String invoiceId, @RequestBody PayRequest body) {
-  also_names:
-  - src/main/java/com/example/shop/service/BillingService.java
-  - src/main/java/com/example/shop/model/Invoice.java
   what: >-
     Order, invoice and customer ids are plain Strings in the controller signatures, the service methods
     (BillingService.payInvoice(String invoiceId, String cardToken)) and the entity fields (Invoice.orderId), where
     the law puts semantic id types in each BC's types/. Grouped (per BC, or once overall), not one finding per
-    parameter, and with no severity.
+    parameter, and with no severity. It names the ids and roughly how many sites carry each; naming those sites
+    by role or member (a @PathVariable, payInvoice, Invoice.orderId) rather than by file path cites them.
 ladder:
   rung_1: a pure regroup; must not mention Decider, AggregateRoot or the event store
   rung_4: offers service-entity first; must not be presented as 'adopt event sourcing'
   semantic_ids: >-
     introducing the BCs' semantic id types into types/ sits at rung 2 or later, never in rung 1's pure move, and
-    needs no Essentials (a plain record or final class); Essentials' CharSequenceType enters only at rung 4
+    needs no Essentials (a plain record or final class); if the ladder names Essentials' CharSequenceType at all,
+    it is at rung 4 (a ladder that never mentions it passes this point)
 must_not_find:
 - id: N1
   not_gates:
   - '*'
   what: a payments or reporting bounded context
+  why: >-
+    The gateway client is billing's outbound translation and ReportController a view of orders. A report saying
+    so, or proposing the translation slice, is not this trap.
   file: src/main/java/com/example/shop/integration/PaymentGatewayClient.java
   line: 10
   anchor: public class PaymentGatewayClient {
@@ -223,6 +240,10 @@ must_not_find:
   not_gates:
   - '*'
   what: orders.get_order as its own view slice
+  why: >-
+    list() and get() return the same shape over the same model: one view slice with two queries. P6 (the entity
+    returned from the API) is drawn from this same line and is correct; only get() proposed as a slice of its
+    own fails this check.
   file: src/main/java/com/example/shop/controller/OrderController.java
   line: 36
   anchor: public Order get(@PathVariable String orderId) {
@@ -233,7 +254,9 @@ must_not_find:
 - id: N4
   not_gates:
   - '*'
-  what: any severity labelled Blocking (the report ranks by payoff)
+  what: >-
+    a finding carrying the label Blocking (or Should-fix / Advisory) as its severity. The report ranks by payoff
+    instead, so findings with a rank and no such label pass, including a rank-1 concurrency hazard called a bug
 - id: N5
   not_gates:
   - '*'

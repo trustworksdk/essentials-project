@@ -93,6 +93,13 @@ WORK=$(mktemp -d)
 TOP=$(git rev-parse --show-toplevel)
 ```
 
+**No writable temporary directory** (`mktemp -d` fails: a read-only filesystem, a sandbox that allows no
+writes): there is no `WORK` and so no `BASE_TREE`. Do not stop, and do not write into the project. Run
+the same commands with each output piped instead of stored: the diff into `review-scan.py --diff -`,
+every script's `--json` read from its standard output. `uv run --script` may fail here too, for want of a
+writable cache: run that script with `python3`, as Step 0 says for a `uv` line that is not `ok`. Step 3d
+then attributes by the change's added lines, and **Not run** names the base-tree comparison with the reason.
+
 Produce four things: `BASE` (a commit), `HEAD_TREE` (a directory holding the new side), `BASE_TREE` (a
 directory holding the old side), and `$WORK/change.diff` (a unified diff from old to new).
 
@@ -220,7 +227,11 @@ not compared, because the change moves them. Everything else is **pre-existing**
 the report, never listed, with the command that lists it (`/essentials:upgrade --check` for the stack,
 `/essentials:slice-check` for the slice law). In `<path>` mode there is no base run: every whole-tree
 finding under the path belongs to the review. With no `BASE_TREE` in the other modes (the base could not
-be extracted), say so and treat every whole-tree finding as pre-existing rather than guess.
+be extracted), say so and attribute by the diff instead: a whole-tree finding whose file and line are a
+line the diff adds (a `+` line, numbered on the new side) belongs to the change; a finding with no line,
+or on a line the diff did not add, is pre-existing. It is the scope Step 4 applies to judgement findings:
+what the change wrote is still listed, and nothing it did not touch is. Never treat every whole-tree
+finding as pre-existing — that hides the very findings the change introduced.
 
 `review-scan` reads only added lines, so all of its findings belong to the change.
 
@@ -335,8 +346,10 @@ Rules for the report:
 - **Not run is never omitted.** Every check that did not run is listed with its reason — a missing
   script dependency, no `pom.xml`, not on the law, a `notRun` or `unverified` entry, a file too large to
   read. A report with no findings says **"no findings in the checks that ran"**, followed by the Not run
-  list, and never "clean", "passes" or "LGTM" while that list is non-empty. When everything ran, the Not
-  run block says `none`.
+  list, and never "clean", "passes" or "LGTM" while that list is non-empty — not even of something else:
+  a working tree with no uncommitted changes is "no uncommitted changes", never "(clean)". When everything ran, the Not
+  run block says `none`. A limit of the run itself (no base tree) is added to the list, never put in
+  place of the scripts' own `notRun` entries: copy each of those as well.
 - **Nothing pre-existing is listed.** It is counted, with the command that lists it.
 - **Repairs are routed, not performed** (outside `--fix`): a manifest drift → `/essentials:slice-check
   --fix-manifests`; one of slice-check's three structural fixes → `/essentials:slice-check --fix-source`;
@@ -421,5 +434,7 @@ An op not in this table is not applied: report it as unknown and leave the row f
   another base silently.
 - A script exits 2 ⇒ its checks go under **Not run** with the script's message; the run continues
   with the others.
+- `mktemp -d` fails ⇒ Step 2's no-writable-directory path: scripts piped, no base tree, attribution by
+  added lines (Step 3d), the base-tree comparison under **Not run**.
 - The change list is large ⇒ judge every in-scope file or list the ones not judged under **Not run**
   ("judgement: `<n>` files not read"); never sample silently.

@@ -24,8 +24,8 @@ draws, filters and navigates. **The model's whole job here is to run the scripts
 they print.** It never reads a manifest to build the page and never edits the page.
 
 **Read-only. Writes the page at a path the user agreed to, and nothing else** — no source, no manifests,
-no git state (the baseline is read with `git archive` into a temporary directory, never a worktree or a
-checkout).
+no git state (the baseline is read with `git archive` into a temporary directory, or in memory where none
+can be made, never a worktree or a checkout).
 
 ## Arguments
 
@@ -62,6 +62,7 @@ project builds with Gradle — and **ask once** before writing, offering the pro
 user's choice. A build directory is already git-ignored, which suits a page you regenerate rather than
 commit. Never choose the path silently: this plugin owns no directory (`CLAUDE.md` design invariants).
 Once the user has agreed, create the parent directory if it is missing (`mkdir -p`); write nothing else.
+A `mkdir -p` refused for a read-only filesystem or a denied permission is Step 4's exit 4: report it as there.
 
 With several applications (Step 1) the output is a directory, not a file: propose `target/slice-map/` —
 `build/slice-map/` with Gradle — name the applications and say it will hold one `<id>.html` per
@@ -89,15 +90,15 @@ was counted against.
 
 Doctor first, for the runner, exactly as in `slice-map.md` Step 2:
 `"${CLAUDE_PLUGIN_ROOT}/scripts/doctor.sh" --for slice`, whose `uv` line picks `uv run --script` or
-`python3`; `MISSING` means stop and quote doctor's lines. Then the two `slice-source.py` runs into a
-temporary directory outside the project, and the page:
+`python3`; `MISSING` means stop and quote doctor's lines. `uv run --script` can also fail where doctor
+said `ok`, for want of a writable cache: rerun with `python3 <script>` for all three. Then the page, in
+one command — the two `slice-source.py` documents reach it by process substitution, so no file is
+written but the page:
 
 ```bash
-tmp=$(mktemp -d)
-uv run --script ${CLAUDE_PLUGIN_ROOT}/scripts/slice-source.py <root> --json          > "$tmp/facts.json"
-uv run --script ${CLAUDE_PLUGIN_ROOT}/scripts/slice-source.py <root> --check --json  > "$tmp/check.json"
 uv run --script ${CLAUDE_PLUGIN_ROOT}/scripts/slice-index.py atlas <root> --out <file> \
-    --source-facts "$tmp/facts.json" --source-check "$tmp/check.json" \
+    --source-facts <(uv run --script ${CLAUDE_PLUGIN_ROOT}/scripts/slice-source.py <root> --json) \
+    --source-check <(uv run --script ${CLAUDE_PLUGIN_ROOT}/scripts/slice-source.py <root> --check --json) \
     [--before-ref <baseline>] [--bc <name>]
 ```
 
@@ -108,19 +109,25 @@ the baseline does not hold is diffed against nothing). `--bc` opens every page t
 it; the others open as default.
 
 The `slice-source.py` exit codes mean what `slice-map.md` Step 2 says: 0, 1 and 3 wrote JSON; 2 wrote
-none, so drop that `--source-…` flag and say that payloads, columns and the source checks read **not
-checked** on the page.
+none — `atlas` then exits 2 naming that flag's input as empty — so drop that `--source-…` flag and say
+that payloads, columns and the source checks read **not checked** on the page.
 
 | `slice-index.py atlas` | What it means here |
 |---|---|
 | 0 | the page is written and the map is complete |
 | 1 | the page is written, and at least one manifest did not parse. The page draws each one as a red error card in its context under a "map incomplete" banner — an omitted slice would be invisible, a red card is not. Say so, and apply the braced-path check of `slice-map.md` Step 2: when every failure is an unquoted path containing `{`, offer one rerun with `--repair-braced-paths`, and name `/essentials:slice-check --fix-manifests` as the repair |
-| 2 | could not run (no `pyyaml`, a bad root, an unreadable baseline, an unwritable `--out`), or `--out` over a root holding several applications — the message names them; rerun with `--per-app` (Step 1). With `--per-app`, a page that could not be written: the others are, the index lists it as not written, and stderr says why. Stop and say why. Never build a page by hand |
+| 2 | could not run (no `pyyaml`, a bad root, an unreadable baseline), or `--out` over a root holding several applications — the message names them; rerun with `--per-app` (Step 1). With `--per-app`, a page that could not be written: the others are, the index lists it as not written, and stderr says why. Stop and say why. Never build a page by hand |
 | 3 | no `slice.yaml` under the root: the Step 1 redirect |
+| 4 | the page cannot be written — EROFS or EACCES: a read-only mount, a sandbox that allows no writes. Nothing was written (with `--per-app`, no page and no index), but the map was computed: stdout still has its summary line, `slice-index: NOT written <file> — … · issues N error, N warn, N info · …` (one per page with `--per-app`), and stderr names the path it could not write. The page is too large to hand to the Write tool (~300 KB, inlined scripts), so this command degrades here and must not build a page by hand: report **Not written** with the stderr line — the path — then the summary lines verbatim, and tell the user to rerun with a writable `--out` (or `--per-app`), or in a shell that can write `<file>` |
 
 A baseline `git archive` cannot read — a shallow clone without the merge base, a mistyped ref — is exit
 2. When the baseline was Step 3's default rather than one the user named, rerun once without it and say
 that the Diff lens has no baseline, and why.
+
+**No temporary directory** (a read-only filesystem, a sandbox): `--before-ref` still works, and stderr
+says how — the baseline is its manifests, read from `git archive` in memory, because `slice-source.py`
+needs a tree on disk. Slices, edges and messages are compared as usual; issues are not, so the summary
+line has no `issues +N new / −M fixed`. Say so under the baseline line in the report.
 
 ## Step 5 — Report
 

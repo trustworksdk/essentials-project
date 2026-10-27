@@ -82,6 +82,21 @@ def run(*args, cwd=PLUGIN):
                           timeout=120)
 
 
+# slice-index.py run where no temporary directory can be made, as under a sandbox that allows no writes.
+NO_TMP = """import runpy, sys, tempfile
+def refuse(*a, **k):
+    raise FileNotFoundError(2, "No usable temporary directory found")
+tempfile.TemporaryDirectory = refuse
+sys.argv = sys.argv[1:]
+runpy.run_path(sys.argv[0], run_name="__main__")
+"""
+
+
+def run_without_tmp(*args):
+    return subprocess.run([sys.executable, "-c", NO_TMP, str(INDEX), *map(str, args)], cwd=PLUGIN,
+                          capture_output=True, text=True, timeout=120)
+
+
 def source_facts(root: Path, out: Path):
     """slice-source --json and --check --json for root, as the two map options that take them."""
     args = []
@@ -548,6 +563,75 @@ class Diff(unittest.TestCase):
         self.assertIn("diff vs HEAD", r.stdout)
         d["before"]["sha"] = "<sha>"
         golden(self, GOLDEN / "atlas.diff.json", json.dumps(d, indent=2, ensure_ascii=False, sort_keys=True) + "\n")
+
+    def test_before_ref_without_a_temporary_directory(self):
+        """No temporary directory: the baseline is its manifests, read from `git archive` in memory. Slices,
+        edges and messages diff as with the unpacked tree; issues are not compared, and stderr says so."""
+        facts = source_facts(self.app, self.tmp)
+        args = ["atlas", self.app, "--template", self.tpl, "--sha", "after", "--before-ref", "HEAD", *facts]
+        r = run(*args, "--out", self.tmp / "tree.html")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        status = git(self.repo, "status", "--porcelain")
+        page = self.tmp / "memory.html"
+        page.write_text("stale", encoding="utf-8")  # the probe opens an existing page without truncating it
+        r = run_without_tmp(*args, "--out", page)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("no temporary directory", r.stderr)
+        self.assertIn("issues are not", r.stderr)
+        self.assertEqual(git(self.repo, "status", "--porcelain"), status)
+        tree, memory = (page_data((self.tmp / f"{n}.html").read_text(encoding="utf-8"))["diff"]
+                        for n in ("tree", "memory"))
+        self.assertEqual(memory["before"], {**tree["before"], "issuesKnown": False})
+        self.assertEqual(memory["issues"], {"new": [], "fixed": []})
+        self.assertTrue(tree["issues"]["fixed"])
+        self.assertEqual([s["id"] for s in memory["slices"]["removed"]], [s["id"] for s in tree["slices"]["removed"]])
+        for key in ("edges", "messages"):
+            self.assertEqual(memory[key], tree[key], key)
+        self.assertEqual(memory["slices"]["added"], tree["slices"]["added"])
+        self.assertEqual(memory["slices"]["changed"], tree["slices"]["changed"])
+
+    def test_before_ref_without_a_temporary_directory_per_app(self):
+        tpl = self.tmp / "tpl" / "atlas.html"
+        tpl.parent.mkdir()
+        tpl.write_text(TEMPLATE + TOKENS, encoding="utf-8")
+        r = run_without_tmp("atlas", self.repo, "--per-app", self.tmp / "pages", "--template", tpl,
+                            "--sha", "x", "--before-ref", "HEAD")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        d = page_data((self.tmp / "pages" / "repo.html").read_text(encoding="utf-8"))["diff"]
+        self.assertEqual(d["before"]["issuesKnown"], False)
+        self.assertIn("shipping.nightly_reship", [s["id"] for s in d["slices"]["removed"]])
+
+    def test_source_facts_by_process_substitution_and_empty(self):
+        """A pipe is read once even though the in-memory baseline needs the facts a second time; an empty
+        one is the feeding slice-source run's exit 2, named as such."""
+        facts = source_facts(self.app, self.tmp)
+        r = subprocess.run([sys.executable, "-c", NO_TMP, str(INDEX), "atlas", str(self.app), "--out",
+                            str(self.tmp / "p.html"), "--template", str(self.tpl), "--before-ref", "HEAD",
+                            "--source-facts", "-", "--source-check", str(facts[3])],
+                           input=Path(facts[1]).read_text(encoding="utf-8"), cwd=PLUGIN, capture_output=True,
+                           text=True, timeout=120)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        r = subprocess.run([sys.executable, str(INDEX), "map", str(self.app), "--source-facts", "-"], input="",
+                           cwd=PLUGIN, capture_output=True, text=True, timeout=120)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("is empty", r.stderr)
+        self.assertIn("exit 2", r.stderr)
+
+    @unittest.skipIf(os.geteuid() == 0, "root writes through file modes")
+    def test_an_unwritable_page_exits_4_and_writes_nothing(self):
+        locked = self.tmp / "locked"
+        locked.mkdir()
+        locked.chmod(0o555)  # empty, so tearDown still removes it
+        for argv in (["--out", locked / "p.html"], ["--out", locked / "new" / "p.html"],
+                     ["--per-app", locked / "pages"]):
+            with self.subTest(argv=argv):
+                r = run("atlas", self.app, "--template", self.tpl, *argv)
+                self.assertEqual(r.returncode, 4, r.stderr)
+                self.assertIn("EACCES", r.stderr)
+                self.assertIn("nothing written; re-run with a writable", r.stderr)
+                self.assertRegex(r.stdout, r"^slice-index: NOT written .*/p(ages/app)?\.html — .* · issues \d+ error")
+                self.assertNotIn("wrote", r.stdout)
+                self.assertEqual(list(locked.iterdir()), [])
 
     def test_before_map(self):
         old = json.loads(run("map", FIXTURE, "--sha", "old").stdout)

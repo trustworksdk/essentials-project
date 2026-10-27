@@ -9,6 +9,7 @@ import contextlib
 import importlib.util
 import io
 import json
+import os
 import re
 import shutil
 import tempfile
@@ -590,6 +591,163 @@ class RenderInterfaceTest(unittest.TestCase):
                                      "--new-bc", "--manifest", str(manifest))
         self.assertEqual(code, 2)
         self.assertIn("more than orientation files", err)
+
+
+class EmitAndVerifyTest(unittest.TestCase):
+    """--emit, verify and exit 4: the path for a filesystem this process may not write, where the caller writes
+    the emitted files with another tool and verify proves the bytes (slice-authoring.md §4b)."""
+
+    CANCEL = {"packagePath": "com.example.shop", "bc": "orders", "slice": "cancel_order", "Command": "CancelOrder",
+              "Event": "OrderCancelled"}
+
+    def setUp(self):
+        self.p = Project()
+
+    def tearDown(self):
+        self.p.close()
+
+    def snapshot(self) -> dict[str, bytes]:
+        return {f: (self.p.root / f).read_bytes() for f in self.p.files()}
+
+    def verify(self, values: dict[str, str], *flags: str) -> tuple[int, dict]:
+        code, out, err = run("verify", "--lang", "java", "--kind", "command", "--lane", "decider",
+                             "--main-root", str(self.p.main), "--test-root", str(self.p.test),
+                             "--project-root", str(self.p.root), "--json", *flags, *sets(values))
+        self.assertIn(code, (0, 1), err)
+        return code, json.loads(out)["verify"]
+
+    def write_emitted(self, out: str) -> dict:
+        rep = json.loads(out)
+        for f in rep["files"]:
+            (self.p.root / f["path"]).parent.mkdir(parents=True, exist_ok=True)
+            (self.p.root / f["path"]).write_bytes(f["content"].encode("utf-8"))
+        return rep
+
+    def test_emit_writes_nothing_and_its_files_are_what_render_writes(self):
+        code, out, err = self.p.render("command", "decider", {**BASE, **PLACE}, "--new-bc", "--wire", "--emit")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.p.files(), [], "--emit writes nothing")
+        rep = json.loads(out)
+        self.assertEqual({f["action"] for f in rep["files"]}, {"create"})
+        self.assertTrue(rep["todos"])
+        emitted = {f["path"]: f["content"].encode("utf-8") for f in rep["files"]}
+        self.assertEqual(self.p.render("command", "decider", {**BASE, **PLACE}, "--new-bc", "--wire")[0], 0)
+        self.assertEqual(self.snapshot(), emitted)
+
+    def test_emit_lists_a_wiring_edit_as_a_replace(self):
+        self.assertEqual(self.p.render("command", "decider", {**BASE, **PLACE}, "--new-bc", "--wire")[0], 0)
+        before = self.snapshot()
+        code, out, err = self.p.render("command", "decider", self.CANCEL, "--wire", "--emit")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.snapshot(), before)
+        replaced = sorted((f["path"], f["role"]) for f in json.loads(out)["files"] if f["action"] == "replace")
+        self.assertEqual(replaced, [("src/main/java/com/example/shop/orders/config/OrdersConfiguration.java", "wiring"),
+                                    ("src/main/java/com/example/shop/orders/events/OrderEvent.java", "wiring")])
+
+    def test_emit_runs_again_part_way_through_the_writes(self):
+        flags = ("--new-bc", "--wire", "--emit")
+        files = json.loads(self.p.render("command", "decider", {**BASE, **PLACE}, *flags)[1])["files"]
+        half = [f for f in files if "/orders/" in f["path"]][:6]
+        for f in half:
+            (self.p.root / f["path"]).parent.mkdir(parents=True, exist_ok=True)
+            (self.p.root / f["path"]).write_text(f["content"])
+        code, out, err = self.p.render("command", "decider", {**BASE, **PLACE}, *flags)
+        self.assertEqual(code, 0, err)
+        self.assertEqual({f["path"]: f["content"] for f in json.loads(out)["files"]},
+                         {f["path"]: f["content"] for f in files}, "the same files, whichever already exist")
+        # A target that holds anything else is still refused, as is a file the render would not write.
+        victim = self.p.root / half[0]["path"]
+        victim.write_text(half[0]["content"] + "// edited\n")
+        code, _, err = self.p.render("command", "decider", {**BASE, **PLACE}, *flags)
+        self.assertEqual(code, 2)
+        self.assertIn("already exists", err)
+        victim.write_text(half[0]["content"])
+        (self.p.bc / "Stray.java").write_text("x")
+        self.assertEqual(self.p.render("command", "decider", {**BASE, **PLACE}, *flags)[0], 2)
+
+    def test_emit_only_prints_one_file_raw(self):
+        files = json.loads(self.p.render("command", "decider", {**BASE, **PLACE}, "--new-bc", "--wire", "--emit")[1])["files"]
+        target = next(f for f in files if f["path"].endswith("PlaceOrderDecider.java"))
+        code, out, err = self.p.render("command", "decider", {**BASE, **PLACE}, "--new-bc", "--wire", "--emit",
+                                       "--only", target["path"])
+        self.assertEqual((code, out), (0, target["content"]), err)
+        code, _, err = self.p.render("command", "decider", {**BASE, **PLACE}, "--new-bc", "--emit", "--only", "nope.java")
+        self.assertEqual(code, 2)
+        self.assertIn("not a file this render emits", err)
+        code, _, err = self.p.render("command", "decider", {**BASE, **PLACE}, "--new-bc", "--only", target["path"])
+        self.assertEqual((code, self.p.files()), (2, []))
+        self.assertIn("--only needs --emit", err)
+
+    def test_verify_passes_on_the_emitted_files_and_names_a_one_byte_change(self):
+        self.write_emitted(self.p.render("command", "decider", {**BASE, **PLACE}, "--new-bc", "--wire", "--emit")[1])
+        code, rep = self.verify({**BASE, **PLACE}, "--new-bc", "--wire")
+        self.assertEqual((code, rep["missing"], rep["differs"]), (0, [], []))
+        before = self.snapshot()
+        decider = next(self.p.root.rglob("PlaceOrderDecider.java"))
+        decider.write_bytes(decider.read_bytes() + b" ")
+        code, rep = self.verify({**BASE, **PLACE}, "--new-bc", "--wire")
+        self.assertEqual((code, rep["differs"]), (1, [decider.relative_to(self.p.root).as_posix()]))
+        decider.unlink()
+        code, rep = self.verify({**BASE, **PLACE}, "--new-bc", "--wire")
+        self.assertEqual((code, rep["missing"]), (1, [decider.relative_to(self.p.root).as_posix()]))
+        before.pop(decider.relative_to(self.p.root).as_posix())
+        self.assertEqual(self.snapshot(), before, "verify writes nothing")
+
+    def test_verify_names_a_wiring_edit_that_was_not_made(self):
+        self.assertEqual(self.p.render("command", "decider", {**BASE, **PLACE}, "--new-bc", "--wire")[0], 0)
+        rep = json.loads(self.p.render("command", "decider", self.CANCEL, "--wire", "--emit")[1])
+        for f in rep["files"]:
+            if f["role"] != "wiring":
+                (self.p.root / f["path"]).parent.mkdir(parents=True, exist_ok=True)
+                (self.p.root / f["path"]).write_text(f["content"])
+        code, rep = self.verify(self.CANCEL, "--wire")
+        self.assertEqual((code, rep["missing"]), (1, []))
+        self.assertEqual(rep["differs"], ["src/main/java/com/example/shop/orders/config/OrdersConfiguration.java",
+                                          "src/main/java/com/example/shop/orders/events/OrderEvent.java"])
+
+    def test_verify_after_a_manifest_render(self):
+        d = self.p.bc / "use_cases" / "place_order"
+        d.mkdir(parents=True)
+        (d / "slice.yaml").write_text(SDD_MANIFEST)
+        values = {"packagePath": "com.example.shop", "AggregateType": "Orders"}
+        flags = ("--new-bc", "--wire", "--manifest", str(d / "slice.yaml"))
+        rep = self.write_emitted(self.p.render("command", "decider", values, *flags, "--emit")[1])
+        self.assertIn(("src/main/java/com/example/shop/orders/use_cases/place_order/slice.yaml", "replace"),
+                      [(f["path"], f["action"]) for f in rep["files"]])
+        code, rep = self.verify(values, *flags)
+        self.assertEqual((code, rep["missing"], rep["differs"]), (0, [], []))
+
+    @unittest.skipIf(hasattr(os, "geteuid") and os.geteuid() == 0, "root writes through 0555")
+    def test_render_into_a_read_only_directory_exits_4_and_writes_nothing(self):
+        self.p.render("command", "decider", {**BASE, **PLACE}, "--new-bc", "--wire")
+        before = self.snapshot()
+        # The new slice's own directory is writable; the use_cases directory it goes in, and the wiring, are not.
+        modes = {}
+        for d in [self.p.bc / "use_cases", *[p for p in self.p.bc.rglob("*") if p.is_file()]]:
+            modes[d] = d.stat().st_mode
+            d.chmod(0o555 if d.is_dir() else 0o444)
+        try:
+            code, out, err = self.p.render("command", "decider", self.CANCEL, "--wire")
+        finally:
+            for d, mode in modes.items():
+                d.chmod(mode)
+        self.assertEqual((code, out), (4, ""))
+        self.assertRegex(err, r"^render-slice: cannot write .+ \((EACCES|EROFS)\) — nothing written; "
+                              r"re-run with --emit\n$")
+        self.assertEqual(self.snapshot(), before)
+
+    @unittest.skipIf(hasattr(os, "geteuid") and os.geteuid() == 0, "root writes through 0555")
+    def test_a_read_only_project_root(self):
+        self.p.root.chmod(0o555)
+        try:
+            code, _, err = self.p.render("command", "decider", {**BASE, **PLACE}, "--new-bc", "--wire")
+            emit, out, _ = self.p.render("command", "decider", {**BASE, **PLACE}, "--new-bc", "--wire", "--emit")
+        finally:
+            self.p.root.chmod(0o755)
+        self.assertEqual(code, 4, err)
+        self.assertIn("re-run with --emit", err)
+        self.assertEqual((emit, self.p.files()), (0, []))
+        self.assertTrue(json.loads(out)["files"])
 
 
 class ManifestReaderTest(unittest.TestCase):

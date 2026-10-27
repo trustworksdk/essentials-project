@@ -4,7 +4,8 @@ description: >
   Handle a spoken change request in a Trustworks Essentials slice-architecture project — add, extend,
   amend, fix, or retire a feature, endpoint, command, query, event, read model, projection,
   automation, or external integration — when the user describes the change in prose rather than
-  running a command. Applies only where the slice law is in force: `.claude/rules/essentials-slices.md`
+  running a command, including a bug report against existing behaviour ("Bug: …", "X should be Y")
+  and a changed rule, limit or field. Use it before editing code. Applies only where the slice law is in force: `.claude/rules/essentials-slices.md`
   exists, a `slice.yaml` is present, or the build declares `dk.trustworks.essentials`. Classifies the
   request, finds the owning slice from its manifest, applies rules/slice-design.md, and enters the
   matching scaffolding skill when the change turns out to need a new slice.
@@ -62,19 +63,25 @@ Then apply §3 to locate the owning slice **from the manifests**, and §4 to est
 context's §R5 lane. Read the slice's own `CLAUDE.md` before editing it.
 
 Where A and B are both arguable, put the law's question to the user — §R1 for commands, §R2 test 1 for
-views — rather than resolving it silently.
+views — rather than resolving it silently. *Arguable* means the law's question has no answer in the
+request and the code (§2) — not that the code could be written either way. When the test answers it,
+name the class and the reason, and do not offer the other class as an option.
 
 ## Step 3 — Confirm
 
 State, in three lines:
 
 1. the classification and why,
-2. the slice(s) that will change, by id and path,
+2. the slice(s) that will change, by id and path — and for a new slice or changed write behaviour,
+   the bounded context's lane (§4),
 3. what will be created, edited, or deleted.
 
-Then get a yes. The user described a change in prose; they did not ask for six files to appear. For a
-class-E change, or a one-line fix inside a slice that changes no structure, a confirmation is noise —
-say what you are doing and do it.
+Then get a yes, and end the turn at the question: no Write or Edit before it. The user described a
+change in prose; they did not ask for six files to appear. That holds when the request already names
+exactly what to add — an endpoint, a query, a field — because it still grows a slice's surface and its
+manifest. The only exceptions: a class-E change, or a one-line fix inside a slice that changes no
+structure (no new endpoint, handler, event, field or manifest entry). For those a confirmation is
+noise — say what you are doing and do it.
 
 ## Step 4 — Route
 

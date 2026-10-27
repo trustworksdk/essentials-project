@@ -85,12 +85,25 @@ Exit codes
         could not be written (the others are), which outranks 1
     3   no slice.yaml under ROOT: nothing is declared, so there is nothing to map
         (/essentials:slice-discover is the command for that case)
+    4   `atlas`: the page (or, with --per-app, any page or the index) cannot be written — EROFS, EACCES:
+        a read-only mount, a sandbox that allows no writes. Checked before anything is written, so
+        nothing is; the map is still computed and its summary line printed, as `NOT written <out>`,
+        issue counts included. There is no --emit: the page inlines the Atlas's scripts, far too large
+        to hand to another tool
+
+--source-facts and --source-check take `-` for standard input (one of them), or a process
+substitution `<(slice-source.py ROOT --json)`: neither needs a writable directory. --before-ref unpacks
+the baseline into a temporary directory to run slice-source on it; where no temporary directory can be
+made, the baseline is read from `git archive` in memory, manifests only, and its issues are not
+compared (`issuesKnown` false), which stderr says.
 """
 
 from __future__ import annotations
 
 import argparse
+import errno
 import importlib
+import io
 import json
 import os
 import re
@@ -124,6 +137,38 @@ ROLE_FLOOR = {"command": 0, "event": 2, "external": 2}
 
 class UsageError(Exception):
     pass
+
+
+class Unwritable(UsageError):
+    """A page this process cannot write (exit 4), found before anything was written."""
+
+
+def unwritable(paths):
+    """The first of `paths` this process cannot write, as "PATH: ERRNO (reason)", or None. Probed, not
+    asked of os.access, which a sandbox can answer yes to and then refuse the write: an existing file is
+    opened for update without truncating it; for any other path a probe file is created and removed in
+    the path itself when it is a directory, else in its nearest existing ancestor. A copy of
+    init-render.py's; slice-enrich.py uses this one."""
+    probed = set()
+    for path in paths:
+        path = Path(os.path.abspath(path))
+        try:
+            if path.is_file():
+                with open(path, "r+b"):
+                    pass
+                continue
+            d = path if path.is_dir() else path.parent
+            while not d.exists() and d != d.parent:
+                d = d.parent
+            if d in probed:
+                continue
+            probed.add(d)
+            fd, probe = tempfile.mkstemp(prefix=".essentials-probe-", dir=d)
+            os.close(fd)
+            os.unlink(probe)
+        except OSError as exc:
+            return f"{path}: {errno.errorcode.get(exc.errno, exc.errno)} ({exc.strerror})"
+    return None
 
 
 # ---------------------------------------------------------------- loading
@@ -213,29 +258,64 @@ def load(root: Path, repair: bool, exclude=()):
         except OSError as exc:
             out.append((rel, None, f"unreadable: {exc}", []))
             continue
-        try:
-            doc = yaml.safe_load(text)
-        except yaml.YAMLError as exc:
-            mark = getattr(exc, "problem_mark", None)
-            where = f" (line {mark.line + 1})" if mark is not None else ""
-            error = f"slice.yaml is not valid YAML{where}"
-            if repair:
-                fixed, changed = repair_braced_paths(text)
-                if changed:
-                    try:
-                        doc = yaml.safe_load(fixed)
-                    except yaml.YAMLError:
-                        doc = None
-                    if isinstance(doc, dict):
-                        out.append((rel, doc, None, changed))
-                        continue
-            out.append((rel, None, error, []))
-            continue
-        if not isinstance(doc, dict):
-            out.append((rel, None, "slice.yaml parses, but is not a mapping at the root", []))
-            continue
-        out.append((rel, doc, None, []))
+        out.append(parse_manifest(rel, text, repair))
     return out
+
+
+def parse_manifest(rel, text, repair):
+    """One manifest's text as load() returns it: (rel_dir, doc or None, error or None, repaired_lines)."""
+    import yaml
+
+    try:
+        doc = yaml.safe_load(text)
+    except yaml.YAMLError as exc:
+        mark = getattr(exc, "problem_mark", None)
+        where = f" (line {mark.line + 1})" if mark is not None else ""
+        error = f"slice.yaml is not valid YAML{where}"
+        if repair:
+            fixed, changed = repair_braced_paths(text)
+            if changed:
+                try:
+                    doc = yaml.safe_load(fixed)
+                except yaml.YAMLError:
+                    doc = None
+                if isinstance(doc, dict):
+                    return rel, doc, None, changed
+        return rel, None, error, []
+    if not isinstance(doc, dict):
+        return rel, None, "slice.yaml parses, but is not a mapping at the root", []
+    return rel, doc, None, []
+
+
+def load_ref(root: Path, ref: str, repair: bool, exclude=(), missing_ok=False):
+    """load() over ROOT as of REF, read from `git archive` in memory — nothing unpacked, nothing written.
+    Returns (manifests, short sha); a ROOT that REF does not hold is no manifests when `missing_ok`."""
+    def git(*argv, cwd=root):
+        r = subprocess.run(["git", "-C", str(cwd), *argv], capture_output=True, timeout=300)
+        if r.returncode != 0:
+            raise ValueError(f"git {argv[0]} {ref}: {r.stderr.decode('utf-8', 'replace').strip()}")
+        return r.stdout
+
+    top = Path(git("rev-parse", "--show-toplevel").decode("utf-8").strip()).resolve()
+    sha = git("rev-parse", "--short", ref + "^{commit}").decode("utf-8").strip()
+    rel = root.resolve().relative_to(top).as_posix()
+    if missing_ok and rel != "." and subprocess.run(["git", "-C", str(top), "cat-file", "-e", f"{sha}:{rel}"],
+                                                    capture_output=True, timeout=60).returncode != 0:
+        return [], sha
+    data = git("archive", "--format=tar", sha, *(["--", rel] if rel != "." else []), cwd=top)
+    prefix = "" if rel == "." else rel + "/"
+    out = []
+    with tarfile.open(fileobj=io.BytesIO(data)) as tar:
+        for member in tar:
+            parts = member.name[len(prefix):].split("/")
+            if not (member.isfile() and member.name.startswith(prefix) and parts[-1] == "slice.yaml"):
+                continue
+            here = "/".join(parts[:-1]) or "."
+            if any(d in SKIP_DIRS for d in parts[:-1]) or _within(here, exclude):
+                continue
+            text = tar.extractfile(member).read().decode("utf-8", "replace")
+            out.append(parse_manifest(here, text, repair))
+    return sorted(out, key=lambda m: m[0]), sha
 
 
 # ---------------------------------------------------------------- normalising
@@ -969,17 +1049,28 @@ def build_index(args):
     return index
 
 
+SOURCE_DOCS = {}
+
+
 def read_source_docs(args):
-    """The --source-facts and --source-check documents, in that order."""
+    """The --source-facts and --source-check documents, in that order. Each is read once and kept: `-`
+    and a process substitution cannot be read twice, and the in-memory baseline reads the facts again."""
     docs = []
     for source in (args.source_facts or []) + (args.source_check or []):
+        if source in SOURCE_DOCS:
+            docs.append(SOURCE_DOCS[source])
+            continue
         try:
             text = sys.stdin.read() if source == "-" else Path(source).read_text(encoding="utf-8")
+            if not text.strip():
+                raise UsageError(f"--source-facts {source} is empty: the slice-source.py run that feeds it "
+                                 "wrote no JSON (its exit 2) — run without that flag")
             facts = json.loads(text)
         except (OSError, ValueError) as exc:
             raise UsageError(f"cannot read --source-facts {source}: {exc}")
         if not isinstance(facts, dict):
             raise UsageError(f"--source-facts {source} must hold a JSON object")
+        SOURCE_DOCS[source] = facts
         docs.append(facts)
     return docs
 
@@ -1150,7 +1241,11 @@ def cmd_atlas(args):
     data = build_map(index, args)
     if initial_bc and initial_bc not in {c["id"] for c in data["contexts"]}:
         raise UsageError(f"no slice declares bc: {initial_bc}")
+    refused = unwritable([args.out])
     atlas_data(args, data, index, initial_bc, args.focus)
+    if refused:  # the map is computed all the same, so the summary still counts its issues
+        print(atlas_summary(args.out, data, index.broken, written=False))
+        raise Unwritable(f"cannot write {refused} — nothing written; re-run with a writable --out")
     write_page(args, data, Path(args.out))
     print(atlas_summary(args.out, data, index.broken))
     return 1 if index.broken else 0
@@ -1267,7 +1362,8 @@ def cmd_atlas_per_app(args):
     runs = app_runs(args)
     if runs is None:
         return no_manifests(args)
-    d = out_dir(args)
+    refused = unwritable([Path(args.per_app) / n for n in [f"{app['id']}.html" for app, *_ in runs] + ["index.html"]])
+    d = Path(args.per_app) if refused else out_dir(args)
     maps = []
     for app, ns, index, docs in runs:
         ns.bc = None
@@ -1275,7 +1371,8 @@ def cmd_atlas_per_app(args):
     if args.bc and not any(args.bc in {c["id"] for c in m["contexts"]} for m in maps):
         raise UsageError(f"no slice declares bc: {args.bc}")
     rows, failed = [], False
-    for (app, ns, index, _), data in zip(runs, maps):
+    for (app, ns, index, docs), data in zip(runs, maps):
+        ns.source_docs = docs
         out = d / f"{app['id']}.html"
         bc = args.bc if args.bc in {c["id"] for c in data["contexts"]} else None
         focus = args.focus if args.focus and has_target(data, args.focus) else None
@@ -1284,14 +1381,17 @@ def cmd_atlas_per_app(args):
             ns.before_map = str(base) if base.is_file() else None
         try:
             atlas_data(ns, data, index, bc, focus)
-            write_page(ns, data, out)
+            if not refused:
+                write_page(ns, data, out)
         except UsageError as exc:
             print(f"slice-index: {app['id']}: {exc}", file=sys.stderr)
             rows.append(index_row(app, None, index, str(exc)))
             failed = True
             continue
-        print(atlas_summary(out, data, index.broken))
+        print(atlas_summary(out, data, index.broken, written=not refused))
         rows.append(index_row(app, data, index, None))
+    if refused:
+        raise Unwritable(f"cannot write {refused} — nothing written; re-run with a writable --per-app directory")
     index_path = d / "index.html"
     label = args.root_label if args.root_label is not None else root_label(Path(args.root))
     page_data = {"meta": {"root": label, "sha": runs[0][1].sha,
@@ -1382,13 +1482,18 @@ def before_diff(args, after):
         return slice_atlas.diff(before, after)
     if not args.before_ref:
         return None
-    with tempfile.TemporaryDirectory(prefix="slice-atlas-") as tmp:
-        try:
-            root, sha = slice_atlas.extract_ref(Path(args.root), args.before_ref, Path(tmp) / "tree",
-                                                missing_ok=getattr(args, "app", None) is not None)
-        except (OSError, ValueError, tarfile.TarError) as exc:
-            raise UsageError(f"--before-ref: {exc}")
-        before = before_map(args, root, sha, Path(tmp))
+    try:
+        scratch = tempfile.TemporaryDirectory(prefix="slice-atlas-")
+    except OSError as exc:
+        before, sha = before_map_in_memory(args, exc)
+    else:
+        with scratch as tmp:
+            try:
+                root, sha = slice_atlas.extract_ref(Path(args.root), args.before_ref, Path(tmp) / "tree",
+                                                    missing_ok=getattr(args, "app", None) is not None)
+            except (OSError, ValueError, tarfile.TarError) as exc:
+                raise UsageError(f"--before-ref: {exc}")
+            before = before_map(args, root, sha, Path(tmp))
     out = slice_atlas.diff(before, after)
     out["before"].update({"sha": sha, "ref": args.before_ref})
     return out
@@ -1419,10 +1524,39 @@ def before_map(args, root, sha, tmp):
     return build_map(index, ns)
 
 
-def atlas_summary(out, data, broken):
+def before_map_in_memory(args, why):
+    """The baseline map where no temporary directory can be made (a read-only filesystem, a sandbox):
+    the manifests read from `git archive` in memory. slice-source needs a tree on disk, so the baseline
+    takes the current --source-facts (a scenario's test resolves as it does now, and only the manifest
+    is compared), and its issues are dropped — the diff then calls no issue new or fixed (`issuesKnown`
+    false) rather than counting a source-derived one as new or fixed."""
+    try:
+        loaded, sha = load_ref(Path(args.root), args.before_ref, getattr(args, "repair_braced_paths", False),
+                               getattr(args, "exclude", ()), missing_ok=getattr(args, "app", None) is not None)
+    except (OSError, ValueError, tarfile.TarError) as exc:
+        raise UsageError(f"--before-ref: {exc}")
+    print(f"slice-index: no temporary directory ({why}): the {args.before_ref} baseline is its manifests, "
+          "read in memory — slices and edges are compared, issues are not", file=sys.stderr)
+    if not loaded:
+        return {"meta": {"sha": sha}, "slices": []}, sha
+    index = Index(loaded)
+    index.divergence()
+    ns = argparse.Namespace(**vars(args))
+    ns.bc, ns.sha, ns.root_label = None, sha, args.before_ref
+    ns.source_check, ns.skipped, ns.app = None, [], None
+    docs = getattr(args, "source_docs", None)  # an application's, re-rooted (cmd_atlas_per_app)
+    if docs is None and args.source_facts:
+        docs = read_source_docs(args)
+    before = build_map(index, ns, None if docs is None else docs[:len(args.source_facts or [])])
+    before.pop("issues")
+    return before, sha
+
+
+def atlas_summary(out, data, broken, written=True):
     counts = {lvl: sum(1 for i in data["issues"] if i["level"] == lvl) for lvl in ("error", "warn", "info")}
     n = plural
-    line = (f"slice-index: wrote {out} — {n(data['meta']['sliceCount'], 'slice', 'slices')}"
+    line = (f"slice-index: {'wrote' if written else 'NOT written'} {out}"
+            f" — {n(data['meta']['sliceCount'], 'slice', 'slices')}"
             f" in {n(data['meta']['bcCount'], 'context', 'contexts')}"
             f" · {n(len(data['processes']), 'process', 'processes')}"
             f" · issues {counts['error']} error, {counts['warn']} warn,"
@@ -1656,7 +1790,7 @@ def main(argv=None):
         return args.fn(args)
     except UsageError as exc:
         print(f"slice-index: {exc}", file=sys.stderr)
-        return 2
+        return 4 if isinstance(exc, Unwritable) else 2
 
 
 if __name__ == "__main__":

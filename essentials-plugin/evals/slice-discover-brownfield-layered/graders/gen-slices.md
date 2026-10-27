@@ -16,5 +16,7 @@ PASS if the report proposes exactly 7 candidate slices (names may differ slightl
 It may additionally list these outside the count, or not at all:
 - automation `billing.payment_reminders` (from `src/main/java/com/example/shop/service/PaymentReminderJob.java`)
 - translation `payment_gateway` (from `src/main/java/com/example/shop/integration/PaymentGatewayClient.java`)
+- command or unclassified, with no entry point `billing.issue_invoice` (from `src/main/java/com/example/shop/service/BillingService.java`)
+- command proposed as the remedy for the sole-writer finding, split out of payInvoice's Order write `orders.mark_order_paid` (from `src/main/java/com/example/shop/service/BillingService.java`)
 OrderController must be shown splitting into 4 slices.
 FAIL if the count differs or a listed slice is missing or merged into another.

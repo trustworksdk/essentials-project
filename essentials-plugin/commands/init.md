@@ -51,7 +51,7 @@ step asks, exactly as written. Another plugin's agent (sdd hands over to this co
 Either may come alone. Both are a contract, so `scripts/init-report.py` decides and writes them, never
 the model.
 
-**`--preset <file>`** is a JSON object with any subset of the ten `answers.json` keys (Step 10) and
+**`--preset <file>`** is a JSON object with any subset of the ten answer keys (Step 10) and
 their value sets, plus `targetMode` (`current` = Step 1's "In the current directory", `subdirectory` =
 "In a new subdirectory") and `targetDir` (absolute, or relative to the workspace; supersedes
 `targetMode`). Before Step 0's questions, run:
@@ -78,16 +78,22 @@ rendered the project — every stop or abort in the steps and § Error handling 
 or the build failed; `--stack-lint` and `--smoke-build` carry that.
 
 ```bash
+printf '%s\n' '<answers JSON>' | \
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/init-report.py" write --report "<file>" --workspace "${WORKSPACE_DIR}" \
-  --status rendered --preset "<preset file>" --answers /tmp/essentials-init/answers.json \
+  --status rendered --preset "<preset file>" --answers - \
   --target "${TARGET_DIR}" --stack-lint "${LINT_RESULT}" --smoke-build "${SMOKE_RESULT}"
 #   stack-lint: passed | failed | not-run      smoke-build: passed | compiled-only | failed | not-run
 ```
 
-Leave out `--preset` when there was none, and `--answers` or `--target` when the stop came before they
-existed. `--asked k,k,…` (comma-separated keys) is needed only on a stop — the keys asked so far — or
+`<answers JSON>` is Step 10's. Leave out `--preset` when there was none, and the pipe with `--answers`,
+or `--target`, when the stop came before they existed. `--asked k,k,…` (comma-separated keys) is needed only on a stop — the keys asked so far — or
 when the user changed a preset value at Step 7; otherwise it defaults to every key the preset did not
-supply. Exit 2 is a wrong call: fix it from the `init-report:` line and rerun. Only where the script
+supply. Exit 2 is a wrong call: fix it from the `init-report:` line and rerun. **Exit 4** is a report
+path this shell cannot write (EROFS or EACCES: a read-only mount, a sandbox that allows no writes);
+nothing was written. Rerun the same command with `--emit`, write the one file it prints with the Write
+tool, its `content` verbatim at its `path`, then rerun with `--verify` in place of `--emit`: only exit 0
+means the report is written. Exit 1 names the path that differs — report that and stop, never correct
+the file by hand. Say in one line of Step 14 that the report was written this way. Only where the script
 cannot run — `CLAUDE_PLUGIN_ROOT` unset or no Python 3.11 — write the report by hand, exactly this,
 plus `"essentialsVersion"` from the § Version stamp command when the plugin root is known:
 
@@ -342,14 +348,14 @@ obligations come with it: `/essentials:slice-check` gate 12 reports a project co
 the plugin's alongside the rules-pointer staleness check, and `/essentials:upgrade` Group A2 does the
 same — both *offer* a refresh and never overwrite silently.
 
-## Step 10 — Write the answers
+## Step 10 — The answers
 
-```bash
-mkdir -p /tmp/essentials-init
-```
-
-Write `/tmp/essentials-init/answers.json` with exactly these keys (the renderer rejects unknown
-keys, a missing one, and a value outside its set):
+The answers are one JSON object, never written to a file: Steps 11 and 12, and the report, hand it to
+the scripts on standard input as one single-quoted shell word — `printf '%s\n' '<answers JSON>' | …
+--answers -`. Inside it write each `'` (a project name can hold one) as `'\''`, which closes the quote,
+adds the apostrophe and reopens it. Not a heredoc: zsh writes every heredoc to a temporary file, which
+fails where no directory is writable. It has exactly these keys (the renderer rejects unknown keys, a
+missing one, and a value outside its set):
 
 ```json
 {"language": "kotlin",
@@ -372,16 +378,20 @@ the user confirmed it — or each as the preset supplied it.
 
 ```bash
 # Subdirectory mode: the project, plus the workspace pointer at the invocation root
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/init-render.py" --answers /tmp/essentials-init/answers.json \
+printf '%s\n' '<answers JSON>' | python3 "${CLAUDE_PLUGIN_ROOT}/scripts/init-render.py" --answers - \
   --out "${TARGET_DIR}" --workspace-out "${WORKSPACE_DIR}"
 
 # Current-directory mode: one --preserve per entry Step 8 listed (here: an existing CLAUDE.md and .gitignore)
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/init-render.py" --answers /tmp/essentials-init/answers.json \
+printf '%s\n' '<answers JSON>' | python3 "${CLAUDE_PLUGIN_ROOT}/scripts/init-render.py" --answers - \
   --out "${TARGET_DIR}" --preserve CLAUDE.md --preserve .gitignore
 ```
 
 Exit 0 prints the target directory. **Exit 2 means nothing usable was written** — report the
-`init-render:` line from stderr verbatim and stop. Never write the project, or any file of it, by
+`init-render:` line from stderr verbatim and stop. **Exit 4 means nothing was written at all**: this
+shell cannot write the target (EROFS or EACCES — a read-only mount, a sandbox that allows no writes),
+found before the first file. Report the line verbatim and stop: a project needs a directory the shell
+can write, for its executable files and for every later step (the wrapper, the hook, the build), so
+there is no other way to render it. Never write the project, or any file of it, by
 hand as a fallback: a hand-written file is exactly the non-determinism the renderer exists to
 remove.
 
@@ -428,7 +438,7 @@ Two files cannot be rendered: the Maven wrapper (a download) and the frontend lo
 resolution). The manifest names the commands that create them, with their pins already substituted:
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/init-render.py" --answers /tmp/essentials-init/answers.json --hooks
+printf '%s\n' '<answers JSON>' | python3 "${CLAUDE_PLUGIN_ROOT}/scripts/init-render.py" --answers - --hooks
 ```
 
 That prints a JSON list of `{"id", "cwd", "run", "why"}`. Run each `run` from `${TARGET_DIR}/<cwd>`,
@@ -557,14 +567,14 @@ as a plugin bug to file. Do not patch the project. Exit 2: report the stderr lin
 cd "${TARGET_DIR}"
 if [ -x ./mvnw ]; then MVN=./mvnw; else MVN=mvn; fi
 SKIP=""; [ "${FRONTEND}" = embedded ] && SKIP=-Pskip-frontend     # the SPA is checked in 3.
-cp contracts/openapi.json /tmp/essentials-init/openapi.seed.json
+SEED=$(cksum < contracts/openapi.json)                             # a checksum, so no copy needs a scratch file
 
 if docker info >/dev/null 2>&1; then
   # Compile, unit tests, then the integration tests against a Testcontainers database:
   # ApplicationContextIT starts the context, OpenApiContractIT regenerates the spec,
   # CorsPreflightIT sends a preflight through the security chain (standalone).
   "$MVN" -B verify $SKIP 2>&1 | tail -60
-  cmp -s contracts/openapi.json /tmp/essentials-init/openapi.seed.json || echo "SPEC CHANGED"
+  [ "$(cksum < contracts/openapi.json)" = "$SEED" ] || echo "SPEC CHANGED"
 else
   # No Docker: compile only. The context start is NOT tested.
   "$MVN" -B test-compile $SKIP 2>&1 | tail -30
@@ -704,7 +714,10 @@ With `--report`, every stop below that comes before Step 11 has rendered the pro
   message; never overwrite.
 - `init-render.py` exits 2 (unknown placeholder or pin, a malformed template, bad answers, a
   non-empty target) ⇒ report its message verbatim and stop. An unknown placeholder or pin is a
-  plugin defect; bad answers are yours — fix the answers file and rerun.
+  plugin defect; bad answers are yours — fix the answers JSON and rerun.
+- `init-render.py` exits 4, or Step 8's `mkdir -p` fails with `Read-only file system` or `Permission
+  denied` ⇒ the target is not writable from this shell; nothing was written. Report the line and stop,
+  with `--status stopped --stopped-at "Step 11"` (or `"Step 8"`) when `--report` was given.
 - A pin the render needs and `stack-pins.md` does not list surfaces as that exit 2. Do not guess a
   version.
 - `stack-lint.py` reports a finding on a fresh render, or the Step 13.7 build fails ⇒ **stop and

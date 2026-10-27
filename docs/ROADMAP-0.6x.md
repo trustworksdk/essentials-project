@@ -629,12 +629,13 @@ Everything planned here before 2026-10-13 shipped in 0.60.1.
   `skipTests`). Generated projects take failsafe from Spring Boot, which still manages 3.5.6 in 4.1.2 (the current pin), so they
   are safe today. When the Boot pin moves, check the managed failsafe version; at 3.6+, add the same property to the backend
   POM template and a `stack-lint` rule.
-- **Eval failures older than the grader fix (NW-7).** One run each on 2026-10-12, all also failing in the earlier
-  3-run results: `slice-check-aggregate-lane` (`gen-find-f3`; `gen-not-t5`/`t6`, the gate-6 row citing the handlers
-  at `:29`/`:36`), `slice-check-multi-lane` (`gen-find-ml-3`, `gen-lanes`), `slice-check-service-entity`
-  (`gen-find-3`; `gen-not-t3`, a "beyond the gates" finding on `findByIdIn`; `gen-not-t10`) and
-  `slice-discover-brownfield-layered` (0.71: find, ladder and slices graders, `gen-not-n4`). Triage each as a skill
-  defect or a grader defect, as was done for `gen-not-e-t1`/`t3` and the `review-service-entity` expectations.
+- **`slice-discover-brownfield-layered` below a clean pass (NW-7).** The other slice-check cases were triaged on
+  2026-10-27 and now score 0.94-1.00. This case scored 0.83 with no run passing, because the report numbered
+  `discovery-heuristics.md` §7's findings into the payoff tiers (`1c`, `2a`) and left `OrderController` out of the
+  cohesion tier. `commands/slice-discover.md` now says §7 findings come after the lane tier, unnumbered. Run the case
+  3 times to confirm. Also open: the `service-entity` fixture's `OrderStatusQueries.findByStatus` derives on a
+  property that does not exist, so it would fail at startup. Its `expected.yaml` tolerates a report of it; fix the
+  source or keep it as a deliberate trap.
 - **Profile-aware project `CLAUDE.md` (DOC-2).** The templates are done. Two pieces remain:
   - Scope init's "say which write styles the project can use" to the chat reply, and make it aware of the DB
     profile (no event-sourced lanes on `pg-crud` or `mongo`).
@@ -702,9 +703,13 @@ need no release-notes entry beyond §7 and can ship in any release.
   on an empty local repository every lane downloads the same artifacts at once. Maven 3.9 resolves that safely only
   with named file locks. Either warm the repository with one case before fanning out, or pass
   `-Daether.syncContext.named.factory=file-lock -Daether.syncContext.named.nameMapper=file-gav` to each lane.
-- **Confirm the `review-service-entity` expectation fix (NW-12).** `gen-not-run` failed in all three runs before its
-  expectations were corrected (NR1/NR2), and has been run once since. Run that case three times and confirm it passes
-  every time.
+- **The review evals no longer exercise the base-tree path (NW-12).** Since Claude Code 2.1.311 the eval sandbox gives
+  Bash no writable directory, even in a case that grants Write and Edit, so `mktemp -d` fails and every `review-*` run takes
+  `/essentials:review`'s no-writable-directory path (scripts piped, findings attributed by the diff's added lines). That
+  path is what made `review-service-entity` pass again (3 of 3 at 1.00 twice on 2026-10-27), but the normal path, which
+  extracts the base tree and compares the base run, is now checked by no eval. Re-run both review cases on a Claude Code
+  whose eval sandbox lets Bash write `$TMPDIR`, or by hand with `claude --plugin-dir essentials-plugin`, before relying
+  on it.
 - **One completion protocol in `plugin-check.sh`'s parallel steps (RW-10; review F-114).** `run_steps_parallel`
   learns that a step finished from a `.rc` file the step's EXIT trap writes, and since 0.60.1 also from `kill -0` plus
   `wait PID` when that file never appears (a SIGKILL). The second path alone covers every case on bash 4.4+, the

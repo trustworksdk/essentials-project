@@ -4,13 +4,15 @@ Run from the plugin root:  python3 -m unittest discover -s tests/scripts -p 'tes
 
 Every case runs doctor.sh on a PATH that holds only stub tools written here, so the result does not depend on what
 the machine has installed: a python3 that reports a chosen version and fails the imports it is told to, a java with a
-chosen major, a docker whose daemon is up or down, mvn, npm, uv and rg present or absent. JAVA_HOME is unset, so java
+chosen major, a docker whose daemon is up or down, mvn, npm, uv (with a writable or a read-only cache) and rg
+present or absent. JAVA_HOME is unset, so java
 is found on that PATH. The JDK it needs is read from stack-pins.md here too, exactly as doctor.sh reads it.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -68,6 +70,7 @@ class Machine:
     """A temporary bin directory of stubs, and a working directory to run doctor.sh in."""
 
     def __init__(self, *, py: str | None, yaml: bool = False, jsonschema: bool = False, uv: bool = False,
+                 uv_cache_read_only: bool = False,
                  java_major: int | None = None, docker_daemon: bool | None = None, mvn: bool = True,
                  npm: bool = True, rg: bool = False, git: bool = False, mvnw: bool = False) -> None:
         self._tmp = tempfile.TemporaryDirectory()
@@ -79,7 +82,11 @@ class Machine:
         if py is not None:
             stub(self.bin, "python3", python3(py, yaml, jsonschema))
         if uv:
-            stub(self.bin, "uv", "echo 'uv 0.9.0 (abc 2026-01-01)'\n")
+            self.uv_cache = root / "uv-cache"
+            self.uv_cache.mkdir()
+            if uv_cache_read_only:
+                self.uv_cache.chmod(0o555)  # empty, so cleanup still removes it
+            stub(self.bin, "uv", f'case "$1" in cache) echo "{self.uv_cache}" ;; *) echo \'uv 0.9.0 (abc 2026-01-01)\' ;; esac\n')
         if java_major is not None:
             stub(self.bin, "java", java(java_major))
         if docker_daemon is not None:
@@ -247,6 +254,32 @@ class DoctorTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(requirement(doc, "uv")["status"], "fallback")
         self.assertEqual({i["effect"] for i in requirement(doc, "uv")["impacts"]}, {"fallback"})
+
+    def test_uv_with_a_read_only_cache_falls_back_to_python3(self) -> None:
+        """Every `uv run` fails where its cache cannot be written (a read-only mount, a sandbox): a warning,
+        never a stop, while python3 has both packages."""
+        if os.geteuid() == 0:
+            self.skipTest("root writes a 0555 directory")
+        m = self.machine(py="3.12.0", yaml=True, jsonschema=True, uv=True, uv_cache_read_only=True)
+        code, doc = m.json("slice")
+        self.assertEqual(code, 0)
+        uv = requirement(doc, "uv")
+        self.assertEqual(uv["status"], "fallback")
+        self.assertFalse(uv["blocking"])
+        self.assertEqual(uv["found"], f"cache read-only → python3 fallback (uv 0.9.0, {m.uv_cache})")
+        self.assertEqual({i["effect"] for i in uv["impacts"]}, {"fallback"})
+        self.assertRegex(m.run("--for", "slice").stdout, r"(?m)^FALLBACK\s+uv\s+cache read-only → python3 fallback")
+        m.uv_cache.chmod(0o755)
+        self.assertEqual(requirement(m.json("slice")[1], "uv")["status"], "ok", "a writable cache is plain ok")
+
+    def test_uv_with_a_read_only_cache_and_no_jsonschema_is_partial(self) -> None:
+        if os.geteuid() == 0:
+            self.skipTest("root writes a 0555 directory")
+        m = self.machine(py="3.12.0", yaml=True, uv=True, uv_cache_read_only=True)
+        uv = requirement(m.json("slice")[1], "uv")
+        self.assertEqual(uv["status"], "partial")
+        self.assertEqual(uv["found"], f"uv 0.9.0, but its cache {m.uv_cache} is read-only; python3 has pyyaml, "
+                                      "not jsonschema")
 
     def test_missing_tools(self) -> None:
         m = self.machine(py=None, mvn=False, npm=False)

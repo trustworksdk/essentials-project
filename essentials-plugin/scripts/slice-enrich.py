@@ -24,17 +24,30 @@ constructor calls — are read here, so slice-source.py's goldens do not move.
 Usage
 -----
     slice-enrich.py propose ROOT --source-facts FILE [--bc BC] [--fields f,…] [--json]
-    slice-enrich.py apply   ROOT ACCEPTED.json [--dry-run]
+    slice-enrich.py apply   ROOT ACCEPTED.json [--dry-run | --emit]
+    slice-enrich.py verify  ROOT PATH=SHA256 ...
 
     propose   every absent field a manifest could gain, with the evidence for it (contract P1,
-              docs/slice-enrich-design.md §5.2). FILE is `slice-source.py ROOT --json` on the same ROOT.
+              docs/slice-enrich-design.md §5.2). FILE is `slice-source.py ROOT --json` on the same ROOT:
+              `-` for standard input, or a process substitution, so no file need be written. What
+              slice-source left unparsed is named on stderr, since evidence in it was not seen.
               --bc keeps that context's slices (journeys are computed over the whole project);
               --fields limits the fields considered. A text summary unless --json.
     apply     writes the accepted values (contract P2, §5.5): the proposal JSON with each slice's
               `proposals` replaced by `accept: {field: value}`. Only fields still absent are written,
               as a text insertion that keeps every existing byte. The result must parse and must not
               fail references/slice/slice-yaml.schema.json in any way the file did not already.
-              --dry-run prints a unified diff per file and writes nothing.
+              --dry-run prints a unified diff per file and writes nothing. ACCEPTED.json may be `-`,
+              standard input. Every manifest to write is probed for writability first, so a read-only
+              tree writes nothing at all (exit 4).
+              --emit, for a process that may not write (a sandbox whose Bash has no writable directory):
+              the same merge, nothing written; stdout is one JSON document, {"files": [{path, content,
+              action: "replace", sha256}], "report": [the lines apply prints], "verify": ["PATH=SHA256",
+              …]}. The caller writes each content verbatim, then runs verify with those arguments.
+    verify    read-only: each PATH (absolute, or relative to ROOT; a slice.yaml under ROOT) must hold
+              exactly the bytes whose SHA-256 is given. It compares with the merged bytes --emit computed
+              from the tree before the write, not with a fresh merge — after the write the fields are
+              present, and a merge of a present field writes nothing, so it would prove nothing.
 
 `accept` values are in manifest shape: `flow` a name or a list of names, `scenarios`, `invariants` and
 `maps` lists of their schema items, `summary` and `tier` strings, `featureFlag` an object, and
@@ -45,13 +58,19 @@ Exit codes
 ----------
     propose   0 proposal written (possibly empty) · 2 could not run · 3 no slice.yaml under ROOT
     apply     0 written (or, with --dry-run, would be) · 1 some entries refused (reported; the rest
-              written) · 2 could not run (nothing written)
+              written) · 2 could not run (nothing written) · 4 a manifest cannot be written (EROFS,
+              EACCES: a read-only mount, a sandbox that allows no writes) — nothing written; --emit and
+              --dry-run still work. --emit exits 0 or 1 the same way: the files it lists are still the
+              ones to write
+    verify    0 every file identical · 1 a file differs or is missing (each named on stdout) · 2 could not
+              run
 """
 
 from __future__ import annotations
 
 import argparse
 import difflib
+import hashlib
 import importlib.util
 import json
 import re
@@ -1173,7 +1192,7 @@ def schema_errors(validator, doc):
     return {error_key(e) for e in validator.iter_errors(doc)}
 
 
-def apply(root: Path, accepted: dict, dry_run: bool):
+def apply(root: Path, accepted: dict, dry_run: bool, emit: bool = False):
     import yaml
     from jsonschema import validators
 
@@ -1231,12 +1250,23 @@ def apply(root: Path, accepted: dict, dry_run: bool):
         if new == text:
             report.append(f"unchanged {rel}")
             continue
-        report.append(f"{'would write' if dry_run else 'written'} {rel}: " + ", ".join(written))
+        report.append(f"{'would write' if dry_run or emit else 'written'} {rel}: " + ", ".join(written))
         if dry_run:
             diffs.append("".join(difflib.unified_diff(text.splitlines(keepends=True), new.splitlines(keepends=True),
                                                       f"a/{rel}", f"b/{rel}")))
         else:
             writes.append((target, new))
+    if emit:
+        files = [{"path": str(target), "content": new, "action": "replace", "sha256": sha256(new.encode("utf-8"))}
+                 for target, new in writes]
+        json.dump({"files": files, "report": report, "verify": [f"{f['path']}={f['sha256']}" for f in files]},
+                  sys.stdout, indent=2, ensure_ascii=False)
+        sys.stdout.write("\n")
+        return 1 if refused else 0
+    blocked = si.unwritable([target for target, _ in writes])
+    if blocked:
+        print(f"slice-enrich: cannot write {blocked} — nothing written; re-run with --emit", file=sys.stderr)
+        return 4
     for target, new in writes:
         target.write_bytes(new.encode("utf-8"))
     for d in diffs:
@@ -1245,7 +1275,48 @@ def apply(root: Path, accepted: dict, dry_run: bool):
     return 1 if refused else 0
 
 
+def sha256(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def verify(root: Path, expected: list[str]) -> int:
+    """Each PATH=SHA256 against the file on disk; read-only. 1 names every file that differs."""
+    base = root.resolve()
+    checks = []
+    for arg in expected:
+        path, sep, digest = arg.rpartition("=")
+        if not sep or not path or not re.fullmatch(r"[0-9a-f]{64}", digest):
+            raise UsageError(f"not PATH=SHA256: {arg}")
+        target = (base / path).resolve()
+        if target.name != "slice.yaml" or base not in target.parents:
+            raise UsageError(f"not a slice.yaml under ROOT: {path}")
+        checks.append((target, digest))
+    differs = []
+    for target, digest in checks:
+        try:
+            ok = sha256(target.read_bytes()) == digest
+        except OSError as exc:
+            differs.append(f"missing  {target}: {exc.strerror}")
+            continue
+        if not ok:
+            differs.append(f"differs  {target}")
+    if differs:
+        print("\n".join(differs))
+        return 1
+    print(f"identical {len(checks)} file(s)")
+    return 0
+
+
 # ---------------------------------------------------------------- CLI
+
+
+def read_input(path):
+    """A file argument's text; `-` is standard input. Empty is an error of its own: the run that was
+    to feed it (a pipe, a process substitution) wrote nothing."""
+    text = sys.stdin.read() if path == "-" else Path(path).read_text(encoding="utf-8")
+    if not text.strip():
+        raise ValueError(f"{path} is empty — the command that feeds it wrote nothing")
+    return text
 
 
 def main(argv=None):
@@ -1254,14 +1325,19 @@ def main(argv=None):
     sub = parser.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("propose", help="every absent field and its evidence")
     p.add_argument("root")
-    p.add_argument("--source-facts", required=True, help="`slice-source.py ROOT --json` output")
+    p.add_argument("--source-facts", required=True, help="`slice-source.py ROOT --json` output, - for stdin")
     p.add_argument("--bc", help="this bounded context's slices only")
     p.add_argument("--fields", help="comma-separated subset of: " + ", ".join(FIELDS))
     p.add_argument("--json", action="store_true")
     a = sub.add_parser("apply", help="write the accepted values")
     a.add_argument("root")
-    a.add_argument("accepted")
-    a.add_argument("--dry-run", action="store_true", help="print the diffs, write nothing")
+    a.add_argument("accepted", help="the accepted set (contract P2), - for stdin")
+    mode = a.add_mutually_exclusive_group()
+    mode.add_argument("--dry-run", action="store_true", help="print the diffs, write nothing")
+    mode.add_argument("--emit", action="store_true", help="print the files to write as JSON, write nothing")
+    v = sub.add_parser("verify", help="check the files written from --emit, byte for byte")
+    v.add_argument("root")
+    v.add_argument("expected", nargs="+", metavar="PATH=SHA256", help="--emit's `verify` list")
     try:
         args = parser.parse_args(argv)
     except SystemExit as exc:
@@ -1281,11 +1357,18 @@ def main(argv=None):
             if unknown:
                 raise UsageError("unknown field(s): " + ", ".join(unknown) + " — one of " + ", ".join(FIELDS))
             try:
-                facts = json.loads(Path(args.source_facts).read_text(encoding="utf-8"))
+                facts = json.loads(read_input(args.source_facts))
             except (OSError, ValueError) as exc:
                 raise UsageError(f"cannot read --source-facts: {exc}") from None
             if not isinstance(facts, dict) or facts.get("tool") != "slice-source" or facts.get("mode") != "facts":
                 raise UsageError("--source-facts is not the output of `slice-source.py ROOT --json`")
+            unparsed = [u for u in facts.get("unparsed") or [] if isinstance(u, dict)]
+            if unparsed:
+                print(f"slice-enrich: slice-source could not read {len(unparsed)} place(s)"
+                      " — evidence there was not seen:", file=sys.stderr)
+                for u in unparsed:
+                    print(f"  {u.get('file')}:{u.get('line') or '-'}  {u.get('what')}: {u.get('reason')}",
+                          file=sys.stderr)
             data = propose(root.resolve(), args.root, facts, args.bc, fields)
             if data is None:
                 print(f"slice-enrich: no slice.yaml under {args.root} — /essentials:slice-discover", file=sys.stderr)
@@ -1296,17 +1379,19 @@ def main(argv=None):
             else:
                 print_text(data)
             return 0
+        if args.cmd == "verify":
+            return verify(root, args.expected)
         try:
             import jsonschema  # noqa: F401
         except ImportError:
             raise UsageError("apply validates against the schema and needs jsonschema — uv run --script") from None
         try:
-            accepted = json.loads(Path(args.accepted).read_text(encoding="utf-8"))
+            accepted = json.loads(read_input(args.accepted))
         except (OSError, ValueError) as exc:
             raise UsageError(f"cannot read {args.accepted}: {exc}") from None
         if not isinstance(accepted, dict) or accepted.get("schema") != "slice-enrich/1":
             raise UsageError(f"{args.accepted} is not a slice-enrich/1 document")
-        return apply(root, accepted, args.dry_run)
+        return apply(root, accepted, args.dry_run, args.emit)
     except UsageError as exc:
         print(f"slice-enrich: {exc}", file=sys.stderr)
         return 2

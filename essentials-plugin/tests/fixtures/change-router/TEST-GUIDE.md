@@ -29,11 +29,11 @@ The worked-example cases cover every class and the §5 decision points:
 | `a-amend-quantity` | change an order's quantity | A | new command slice | a second intent is a second slice, never a second method (§5.1) |
 | `a-sku-totals-view` | total quantity per SKU | A | new view slice | a different read-model shape is a different view (§R2 test 1) |
 | `c-rename-sku` | rename `sku` to `productCode` | C | `place_order`, `order_list`, `warehouse` | decompose, producer first (§5.9); the stored event's JSON changes |
-| `d-cancelled-at` | show when an order was cancelled | D (or C) | `orders.order_list` | in-place rebuild is the default, a `_v2` twin the exception (§5.3) |
-| `e-debug-logging` | DEBUG logging for orders | E | none | not a slice change: no manifest edit |
+| `d-cancelled-at` | show when an order was cancelled | D (or C) | `orders.order_list` | the view is extended in place, never a `_v2` twin (§5.3); `OrderCancelled` carries no time, so `cancel_order` adds it to the event first (§5.9) |
+| `e-debug-logging` | DEBUG logging for orders | E | none | not a slice change: no manifest edit. The router need not fire; the tree has no application config, so asking where it lives passes |
 | `b-screening-inclusive` | the screening limit is inclusive | B | `orders.screen_order` | a one-line fix needs no confirmation round |
 | `retire-screening` | remove order screening | — | `orders.screen_order` | retirement deletes directory, manifest, tests and wiring together (§5.10) |
-| `c-rejected-event` | a distinct `OrderRejected` event | C (or A) | `orders.screen_order` | one variant per file; consumers are declared changes (§5.4) |
+| `c-rejected-event` | a distinct `OrderRejected` event | C (or A) | `orders.screen_order` and the event's producer | one variant per file; an automation emits no events, so a command slice produces it; consumers are declared changes (§5.4) |
 | `b-warehouse-cancel` | tell the warehouse about cancellations | B | `orders.warehouse` | extend the translation, do not fork it |
 | `helper-pushback` | a shared `OrderValidationHelper` | — | none | the only sanctioned sharing is `_shared/` State + Evolver (§5.5) |
 | `dto-pushback` | a request DTO and a mapper | — | `orders.place_order` | the command is the contract (§5.7) |

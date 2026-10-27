@@ -98,6 +98,9 @@ that load.
   `stack-lint.py`, `review-scan.py`, `migration-plan.py`, `slice-enrich.py` — plus `slice_atlas.py` and `slice_atlas_layout.py`, modules `slice-index.py` imports, with no CLI of their own. The model elicits, reads code for what a script cannot decide, merges into files
   the user already has, and diagnoses failures. It never writes a rendered file freehand and never
   re-derives what a script reports: a model doing mechanical work produces confident wrong answers.
+  Where the shell cannot write, a writer exits 4 before its first write; its `--emit` output then goes
+  through the Write tool verbatim and its read-only `verify` proves the bytes. That is the script's output,
+  not freehand, and nothing counts as written until `verify` exits 0.
   Every script is Python ≥ 3.11 and either standard library only (`#!/usr/bin/env python3`) or
   pins its dependencies in PEP 723 inline metadata and runs with `uv run --script`. The pins
   travel with the copy init installs into projects. Scripts are Pyright-clean in basic mode.
@@ -242,7 +245,8 @@ that load.
 - **`/essentials:slice-enrich` drafts only from evidence, and only a person writes.** It is the one writer of
   human-owned fields (`manifest-reconciliation.md` §1): every draft cites code or a test, nothing is written
   without a yes per journey and per slice, a present field is never proposed for, and a scenario comes only
-  from an existing test. `scripts/slice-enrich.py` writes; the command has no Write or Edit tool.
+  from an existing test. `scripts/slice-enrich.py` writes. The command has no Edit tool, and uses Write only for the fallback
+  where the shell cannot write: `apply --emit`'s content verbatim, proven by `slice-enrich.py verify`.
   `--fix-manifests` still writes no human-owned field, and slice-lint and slice-source still never write.
 - **`/essentials:slice-map` and `/essentials:slice-map-html` render, never grade.** `scripts/slice-index.py` computes the map from the manifests, `scripts/slice-source.py` adds the facts a manifest does not carry, and `scripts/slice_atlas.py` the checks that need the whole project. The map shows a closed set of checks and stops there: eight cheap divergence checks — manifest parses, directory exists, kind matches location, handled events declared, endpoint appears in source, id uniqueness, twin pairing, and dangling consume (`consumes` ∪ `projections[].from`) — plus the completeness rule (a read-model column no inbound event carries a field for) and the scenario and adoption checks (`given` unpublished, unknown field, test missing, malformed, no `flow:`, no scenarios), all listed in `commands/slice-map.md` Step 4. Their levels are annotations, never severities. Every R1–R5 gate, every severity, and every `--fix` belongs to `/essentials:slice-check`; a map that starts scoring becomes a second, weaker audit and the two then disagree in front of the user. Its counterpart rule is `slice-discover`'s: `slice-map` requires manifests and redirects without them, `slice-discover` redirects *with* them.
 - **`/essentials:init` renders the project from `references/init-assets/project/` with

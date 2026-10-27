@@ -80,7 +80,8 @@ must_find:
   what: >-
     lending.return_book gets the one invariant "Only a copy on loan can be returned" (enforcedBy
     ReturnBookDecider#handle), and lending.schedule_reminder the one invariant "A reminder is never
-    planned more than 30 days ahead" (enforcedBy ScheduleReminderDecider#handle).
+    planned more than 30 days ahead" (enforcedBy ScheduleReminderDecider#handle). The two are drafts for
+    two slices, so the report may give them in separate places, one under each slice.
 - id: E6
   severity: null
   file: src/main/java/com/example/library/lending/use_cases/renew_loan/slice.yaml
@@ -103,10 +104,13 @@ must_find:
   what: >-
     lending.borrow_book's drafted scenarios come from its mapped test methods, each linked to its test:
     BorrowBookDeciderTest#lendsAnAvailableCopy, BorrowBookDeciderTest#refusesASecondLoan (named "a copy out
-    on loan is not lent twice", its then an IllegalStateException error) and, where the method shows enough
-    to name a when and a then, BorrowBookDeciderTest#zeroDayLoan (then the IllegalArgumentException "A loan
-    lasts at least one day") and ReturnBookAfterLoanTest#lendsACopyThatCameBack. A scenario whose when or
-    then the method does not show may be left out, saying so; it is never filled from elsewhere.
+    on loan is not lent twice", its then an IllegalStateException error) and
+    ReturnBookAfterLoanTest#lendsACopyThatCameBack, whose then may be completed from that same method's
+    assertion. BorrowBookDeciderTest#zeroDayLoan (then the IllegalArgumentException "A loan lasts at least
+    one day") may be drafted or left out, and either matches: its when is built by a call to a fixture
+    helper, so a draft names that when without values, and a report that leaves the scenario out says it
+    could not name the when from the method. A part the method does not show is never filled from
+    elsewhere.
 - id: E8
   severity: null
   file: src/test/java/com/example/library/lending/ScheduleReminderTest.java
