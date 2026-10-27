@@ -996,16 +996,24 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
     private static final long NO_WAIT_LIMIT = -1L;
 
     /**
+     * The one wording of an acquire refused because the scheduled lock confirmation has ended: the log line of
+     * {@link #logNotAcquiringAsTheConfirmationHasEnded(LockName)} and the exception {@link #acquireLock(LockName)} throws.
+     * Its arguments are the {@code lockManagerInstanceId} and the {@link LockName}
+     */
+    private static final String NOT_ACQUIRING_AS_THE_CONFIRMATION_HAS_ENDED =
+            "[{}] The scheduled lock confirmation has ended - not acquiring lock '{}', which this lock manager could not confirm, "
+            + "until the application is restarted, or the lock manager is stopped and started";
+
+    /**
      * Logs a refused acquire at WARN the first time for each lock name since the scheduled lock confirmation ended, and at
      * DEBUG after that, so a caller that retries does not repeat the WARN
      */
     private void logNotAcquiringAsTheConfirmationHasEnded(LockName lockName) {
-        var message = "[{}] The scheduled lock confirmation has ended - not acquiring lock '{}', which this lock manager could not confirm, "
-                      + "until the application is restarted, or the lock manager is stopped and started";
         if (acquiresRefusedAsTheConfirmationHasEnded.add(lockName)) {
-            log.warn(message + " (logged at WARN for the first refused acquire of this lock, at DEBUG after that)", lockManagerInstanceId, lockName);
+            log.warn(NOT_ACQUIRING_AS_THE_CONFIRMATION_HAS_ENDED + " (logged at WARN for the first refused acquire of this lock, at DEBUG after that)",
+                     lockManagerInstanceId, lockName);
         } else {
-            log.debug(message, lockManagerInstanceId, lockName);
+            log.debug(NOT_ACQUIRING_AS_THE_CONFIRMATION_HAS_ENDED, lockManagerInstanceId, lockName);
         }
     }
 
@@ -1207,9 +1215,7 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
                 throw new IllegalStateException(msg("[{}] Shutting down while waiting to acquire lock '{}'", lockManagerInstanceId, lockName));
             }
             if (confirmationEnded) {
-                throw new IllegalStateException(msg("[{}] The scheduled lock confirmation has ended - not acquiring lock '{}', which this lock manager "
-                                                    + "could not confirm, until the application is restarted, or the lock manager is stopped and started",
-                                                    lockManagerInstanceId, lockName));
+                throw new IllegalStateException(msg(NOT_ACQUIRING_AS_THE_CONFIRMATION_HAS_ENDED, lockManagerInstanceId, lockName));
             }
             if (!pauseBeforeNextAcquireAttempt(syncAcquireLockPauseIntervalMs)) {
                 throw new IllegalStateException(msg("[{}] Interrupted while waiting to acquire lock '{}'", lockManagerInstanceId, lockName));
