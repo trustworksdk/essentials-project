@@ -25,6 +25,8 @@
     <exclude name="AvoidLiteralsInIfCondition"/>
     <exclude name="NullAssignment"/>
     <exclude name="MissingSerialVersionUID"/>
+    <!-- A J2EE container rule; this library targets no EE container, and tests build JDK proxies with a class's own loader. -->
+    <exclude name="UseProperClassLoader"/>
     <!-- Re-added below, with *Test / *IT classes suppressed. -->
     <exclude name="AvoidAccessibilityAlteration"/>
   </rule>
