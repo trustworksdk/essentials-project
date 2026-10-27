@@ -405,7 +405,10 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
             }
         } catch (Throwable e) {
             // Escaping, it ends the scheduled confirmation - see the class javadoc, "Errors". Recorded first, still under
-            // reentrantLock, so no acquire made from here on gets a lock that would never be confirmed
+            // reentrantLock, so every acquire from here on that would take reentrantLock - one that needs the DB - is refused:
+            // _tryAcquireLock checks the flag again once it holds the lock. Returning a lock this instance already holds takes
+            // no reentrantLock, so a caller racing this tick can still be handed one - releaseHeldLocksLocallyAsTheConfirmationEnds
+            // below releases it locally straight after
             confirmationEnded = true;
             // Cleared here as well as in start(): a refusal that read the flag of an earlier end just before start() can
             // record its name after start() cleared the sets, and would then be logged at DEBUG only for this end
