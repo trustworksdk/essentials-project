@@ -35,8 +35,9 @@
        other class, main or test helper, is still checked: in main code the loader decides which copy of
        an application type is loaded (under Spring Boot DevTools the application's classes live in a
        restart class loader, and the starters' EssentialsComponentsConfiguration sets the JSONSerializer's
-       class loader to the application context's), so a getClassLoader() there says in a suppression
-       why its loader is the right one. -->
+       class loader to the application context's), so a new getClassLoader() there needs a suppression
+       that says why its loader is the right one. Some older main-code calls have not been brought in
+       line yet and carry none. -->
   <rule ref="category/java/errorprone.xml/UseProperClassLoader">
     <properties>
       <property name="violationSuppressXPath"
