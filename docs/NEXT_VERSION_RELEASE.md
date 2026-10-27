@@ -1385,8 +1385,8 @@ Not published; listed because they are the reference for how to use the framewor
     or with `essentials.life-cycles.start-life-cycles=false`, the lifecycle manager starts no `Lifecycle` bean.
     Replacing the callback of a registration a lock manager `stop()` kept calls `lockReleased` on every callback
     registered with the lock, and any other caller in the JVM holding it loses it too; a failure of that release is
-    logged and the new callback registered all the same, while a critical error is rethrown. The section now says
-    both. (`4898c9a9e`)
+    logged and the new callback registered all the same, while a critical error is rethrown. The section now
+    describes the release and how a failure of it is handled. (`4898c9a9e`)
 - **`LLM-reactive.md`** listed a `SendCommandException(Object, Throwable)` constructor that does not exist; it now
   shows the real abstract `SendCommandException(Class<?>, String[, Exception])` hierarchy. (N-12, `302c1058`)
 - **Document DB** (`LLM-postgresql-document-db.md`):
