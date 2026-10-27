@@ -13,6 +13,8 @@ statements, serializations and connections per message, and two lock waits remov
   - CDC hands out event JSON as stored.
 - Aggregates: an update no longer re-queries the newest snapshot, policies on declared aggregates apply to
   repositories built at startup (§1.3), and the default snapshot interval is 1000 events (§1.4).
+- Handler dispatch (`shared`): every aggregate event applied and every handler call no longer builds log messages that
+  trace logging is off for (§2.5).
 
 There are no API removals. One schema change removes a redundant index on the event store's gap table (§1.5). The
 shard-owned adapter writes a new message format, and **0.60.x and 0.61.0 must not run side by side against the same
@@ -165,6 +167,19 @@ after `deadlock_timeout` (1 s by default), and a CDC subscription's delivery wai
 trading demo this happened 1-2 times per run as shipped, and 37 times in one run, stalling settlement for 40 s, once a
 different plan returned the rows in heap order. Permanent gaps are now inserted in ascending order on every path (range
 give-up, per-order give-up, promotion), so concurrent give-ups cannot form a cycle.
+
+### 2.5 Handler dispatch no longer builds log messages nobody reads (`shared`)
+
+`PatternMatchingMethodInvoker` dispatches every event an aggregate applies (including every event replayed while it is
+loaded), every annotated command handler and every `@MessageHandler`, event-handler and view-processor call. For each
+one it built two descriptions for trace and debug logging: `Method.toGenericString()`, the argument's `toString()` (the
+whole event or command), a regex replace and a `String.format`. It built them even with trace logging off. It now
+builds them only when trace or debug logging is enabled, or when a failure is logged. Nothing logged changes.
+
+Measured in the trading demo (one instance, market-open rushes of 300 orders/s, two runs each): the invoker's share of
+the JVM's CPU samples while trading fell by almost half, from ~19 % to ~11 %, and the JVM took ~9 % fewer samples in
+total. Aggregate rehydration fell from ~22 % to ~17 % of the samples. Latency was unchanged within the spread, because the
+demo is not CPU-bound at that load.
 
 ## 3. Documentation
 
