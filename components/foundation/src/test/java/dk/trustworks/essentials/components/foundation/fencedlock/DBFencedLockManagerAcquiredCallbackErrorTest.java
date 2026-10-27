@@ -884,9 +884,10 @@ class DBFencedLockManagerAcquiredCallbackErrorTest {
         var reacquiredLock = reacquired.get();
         assertThat(reacquiredLock.isLockedByThisLockManagerInstance()).isTrue();
 
-        // The newer acquisition is not dropped along with the failed one (DBFencedLock.equals compares the name only): it
-        // stays this lock manager's - the cached instance is returned - and its row keeps being confirmed, rather than
-        // expiring while its holder believes it holds it
+        // releaseLock removes the failed lock from this lock manager before its lockReleased callbacks run, so the newer
+        // acquisition the callback makes is recorded after that removal and is not dropped: it stays this lock manager's -
+        // the cached instance is returned - and its row keeps being confirmed, rather than expiring while its holder
+        // believes it holds it
         Awaitility.waitAtMost(Duration.ofSeconds(5))
                   .untilAsserted(() -> assertThat(storage.rows.get(LOCK_NAME).lockLastConfirmedTimestamp()).isAfter(reacquiredLock.getLockAcquiredTimestamp()));
         var confirmed = storage.rows.get(LOCK_NAME).lockLastConfirmedTimestamp();
