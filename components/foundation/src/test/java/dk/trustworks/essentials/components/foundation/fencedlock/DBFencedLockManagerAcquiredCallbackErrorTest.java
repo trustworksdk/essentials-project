@@ -26,7 +26,6 @@ import dk.trustworks.essentials.reactive.LocalEventBus;
 import dk.trustworks.essentials.shared.Exceptions;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.*;
-import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.time.*;
@@ -35,6 +34,7 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
 import java.util.function.Consumer;
 
+import static dk.trustworks.essentials.components.foundation.fencedlock.DBFencedLockManagerTestSupport.*;
 import static org.assertj.core.api.Assertions.*;
 
 /**
@@ -1237,16 +1237,6 @@ class DBFencedLockManagerAcquiredCallbackErrorTest {
         assertThat(node.isStarted()).isFalse();
     }
 
-    private static LockCallback lockReleasedFailingWith(Error error) {
-        return LockCallback.builder()
-                           .onLockAcquired(_lock -> {
-                           })
-                           .onLockReleased(_lock -> {
-                               throw error;
-                           })
-                           .build();
-    }
-
     /**
      * Counts the calls of each callback method, and keeps the last lock <code>lockAcquired</code> was called with; once
      * {@link #failReleaseWith} is set, <code>lockReleased</code> throws it after counting the call
@@ -1284,15 +1274,10 @@ class DBFencedLockManagerAcquiredCallbackErrorTest {
     }
 
     private static ListAppender<ILoggingEvent> captureLockManagerLog() {
-        var appender = new ListAppender<ILoggingEvent>();
-        // Appended to by the lock manager's threads while the test thread reads it
-        appender.list = new CopyOnWriteArrayList<>();
-        appender.start();
-        ((Logger) LoggerFactory.getLogger(TestDBFencedLockManager.class)).addAppender(appender);
-        return appender;
+        return captureLog(TestDBFencedLockManager.class);
     }
 
     private static void detachLockManagerLog(ListAppender<ILoggingEvent> appender) {
-        ((Logger) LoggerFactory.getLogger(TestDBFencedLockManager.class)).detachAppender(appender);
+        detachLog(TestDBFencedLockManager.class, appender);
     }
 }

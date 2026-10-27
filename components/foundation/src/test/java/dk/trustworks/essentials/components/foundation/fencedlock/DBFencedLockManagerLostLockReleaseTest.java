@@ -25,8 +25,8 @@ import dk.trustworks.essentials.components.foundation.transaction.*;
 import dk.trustworks.essentials.reactive.*;
 import dk.trustworks.essentials.shared.functional.CheckedFunction;
 import org.awaitility.Awaitility;
+import org.awaitility.core.ThrowingRunnable;
 import org.junit.jupiter.api.*;
-import org.slf4j.LoggerFactory;
 
 import java.io.*;
 import java.time.*;
@@ -35,6 +35,7 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
 import java.util.function.*;
 
+import static dk.trustworks.essentials.components.foundation.fencedlock.DBFencedLockManagerTestSupport.*;
 import static org.assertj.core.api.Assertions.*;
 
 /**
@@ -290,16 +291,12 @@ class DBFencedLockManagerLostLockReleaseTest {
         var lock                     = lockManager.tryAcquireLock(LOCK_NAME).orElseThrow();
         var otherLock                = lockManager.tryAcquireLock(OTHER_LOCK_NAME).orElseThrow();
         var unitOfWorksOfFailedTicks = new CopyOnWriteArrayList<UnitOfWork>();
-        var criticalError            = new ExceptionInInitializerError("LockAcquired subscriber fails critically");
+        var criticalError            = newCriticalError();
         var logEvents                = captureLockManagerLog();
         try {
             // When
-            eventSubscriberAction = event -> {
-                if (event instanceof LockAcquired lockAcquired && lockAcquired.lock.getName().equals(LOCK_NAME)) {
-                    unitOfWorksOfFailedTicks.add(unitOfWorkFactory.getRequiredUnitOfWork());
-                    throw criticalError;
-                }
-            };
+            eventSubscriberAction = lockAcquiredSubscriberThrowing(criticalError,
+                                                                   () -> unitOfWorksOfFailedTicks.add(unitOfWorkFactory.getRequiredUnitOfWork()));
 
             // Then the critical error escapes the confirmation loop: the confirmation UnitOfWork of that tick is rolled back
             Awaitility.waitAtMost(Duration.ofSeconds(5))
@@ -353,7 +350,7 @@ class DBFencedLockManagerLostLockReleaseTest {
             // And LockConfirmationEnded is published only for the end of the confirmation
             assertThat(lockConfirmationEndedEvents()).hasSize(1);
         } finally {
-            ((Logger) LoggerFactory.getLogger(TestDBFencedLockManager.class)).detachAppender(logEvents);
+            detachLockManagerLog(logEvents);
         }
     }
 
@@ -362,19 +359,16 @@ class DBFencedLockManagerLostLockReleaseTest {
     void a_lock_confirmation_ended_subscriber_failing_is_logged_and_added_to_the_failure_that_ended_the_confirmation() {
         // Given a held lock, and a LockConfirmationEnded subscriber that fails
         var lock              = lockManager.tryAcquireLock(LOCK_NAME).orElseThrow();
-        var criticalError     = new ExceptionInInitializerError("LockAcquired subscriber fails critically");
+        var criticalError     = newCriticalError();
         var subscriberFailure = new IllegalStateException("LockConfirmationEnded subscriber fails");
         var logEvents         = captureLockManagerLog();
         try {
             // When a critical error ends the confirmation
-            eventSubscriberAction = event -> {
-                if (event instanceof LockAcquired lockAcquired && lockAcquired.lock.getName().equals(LOCK_NAME)) {
-                    throw criticalError;
-                }
+            eventSubscriberAction = lockAcquiredSubscriberThrowing(criticalError).andThen(event -> {
                 if (event instanceof LockConfirmationEnded) {
                     throw subscriberFailure;
                 }
-            };
+            });
 
             // Then the subscriber's failure is logged at ERROR after the ERROR line for the end of the confirmation, and added
             // to the critical error as suppressed, which it does not replace
@@ -396,7 +390,7 @@ class DBFencedLockManagerLostLockReleaseTest {
         } finally {
             eventSubscriberAction = event -> {
             };
-            ((Logger) LoggerFactory.getLogger(TestDBFencedLockManager.class)).detachAppender(logEvents);
+            detachLockManagerLog(logEvents);
         }
     }
 
@@ -405,25 +399,8 @@ class DBFencedLockManagerLostLockReleaseTest {
     void once_a_critical_error_has_ended_the_confirmation_no_lock_is_acquired_until_the_lock_manager_is_stopped_and_started_again() {
         // Given a critical error that has ended the scheduled confirmation
         assertThat(lockManager.isLockConfirmationEnded()).isFalse();
-        var lock          = lockManager.tryAcquireLock(LOCK_NAME).orElseThrow();
-        var criticalError = new ExceptionInInitializerError("LockAcquired subscriber fails critically");
-        var logEvents     = captureLockManagerLog();
-        try {
-            eventSubscriberAction = event -> {
-                if (event instanceof LockAcquired lockAcquired && lockAcquired.lock.getName().equals(LOCK_NAME)) {
-                    throw criticalError;
-                }
-            };
-            Awaitility.waitAtMost(Duration.ofSeconds(5))
-                      .untilAsserted(() -> {
-                          assertThat(lock.isLocked()).isFalse();
-                          assertThat(logEvents.list.stream().filter(event -> event.getLevel() == Level.ERROR)).hasSize(1);
-                      });
-        } finally {
-            ((Logger) LoggerFactory.getLogger(TestDBFencedLockManager.class)).detachAppender(logEvents);
-        }
-        eventSubscriberAction = event -> {
-        };
+        var lock = lockManager.tryAcquireLock(LOCK_NAME).orElseThrow();
+        endTheConfirmationWithACriticalError(() -> assertThat(lock.isLocked()).isFalse());
         var lockAcquiredEventsAtTheEnd = lockAcquiredEvents().size();
 
         var refusalLogEvents = captureLockManagerLog();
@@ -449,12 +426,12 @@ class DBFencedLockManagerLostLockReleaseTest {
             var asyncAcquired = new CopyOnWriteArrayList<FencedLock>();
             lockManager.acquireLockAsync(OTHER_LOCK_NAME, new LockCallback() {
                 @Override
-                public void lockAcquired(FencedLock lock) {
-                    asyncAcquired.add(lock);
+                public void lockAcquired(FencedLock acquiredLock) {
+                    asyncAcquired.add(acquiredLock);
                 }
 
                 @Override
-                public void lockReleased(FencedLock lock) {
+                public void lockReleased(FencedLock releasedLock) {
                 }
             });
             Awaitility.await()
@@ -465,7 +442,7 @@ class DBFencedLockManagerLostLockReleaseTest {
             // ... and its refused ticks, one every 100 ms lock confirmation interval, are logged at WARN once
             assertThat(warnMessagesContaining(refusalLogEvents, "the async acquiring of lock '" + OTHER_LOCK_NAME + "' is not acquiring it")).hasSize(1);
         } finally {
-            ((Logger) LoggerFactory.getLogger(TestDBFencedLockManager.class)).detachAppender(refusalLogEvents);
+            detachLockManagerLog(refusalLogEvents);
         }
 
         // And once the lock manager is stopped and started again, it acquires locks and confirms them - a start on the still
@@ -482,23 +459,15 @@ class DBFencedLockManagerLostLockReleaseTest {
 
         // And when the confirmation ends again after that start, a refused acquire of the same lock is logged at WARN again:
         // the start cleared the locks already reported
-        eventSubscriberAction = event -> {
-            if (event instanceof LockAcquired lockAcquired && lockAcquired.lock.getName().equals(LOCK_NAME)) {
-                throw criticalError;
-            }
-        };
         // ... awaited by its LockConfirmationEnded event, published after the held locks are released locally
-        Awaitility.waitAtMost(Duration.ofSeconds(5))
-                  .untilAsserted(() -> assertThat(lockConfirmationEndedEvents()).hasSize(2));
+        endTheConfirmationWithACriticalError(() -> assertThat(lockConfirmationEndedEvents()).hasSize(2));
         assertThat(lockManager.isLockConfirmationEnded()).isTrue();
-        eventSubscriberAction = event -> {
-        };
         var refusalAfterTheNextEndLogEvents = captureLockManagerLog();
         try {
             assertThat(lockManager.tryAcquireLock(OTHER_LOCK_NAME)).isEmpty();
             assertThat(warnMessagesContaining(refusalAfterTheNextEndLogEvents, "not acquiring lock '" + OTHER_LOCK_NAME + "'")).hasSize(1);
         } finally {
-            ((Logger) LoggerFactory.getLogger(TestDBFencedLockManager.class)).detachAppender(refusalAfterTheNextEndLogEvents);
+            detachLockManagerLog(refusalAfterTheNextEndLogEvents);
         }
     }
 
@@ -510,13 +479,13 @@ class DBFencedLockManagerLostLockReleaseTest {
         var asyncReleased = new CopyOnWriteArrayList<FencedLock>();
         var lockCallback = new LockCallback() {
             @Override
-            public void lockAcquired(FencedLock lock) {
-                asyncAcquired.add(lock);
+            public void lockAcquired(FencedLock acquiredLock) {
+                asyncAcquired.add(acquiredLock);
             }
 
             @Override
-            public void lockReleased(FencedLock lock) {
-                asyncReleased.add(lock);
+            public void lockReleased(FencedLock releasedLock) {
+                asyncReleased.add(releasedLock);
             }
         };
         lockManager.acquireLockAsync(LOCK_NAME, lockCallback);
@@ -524,24 +493,7 @@ class DBFencedLockManagerLostLockReleaseTest {
                   .untilAsserted(() -> assertThat(asyncAcquired).hasSize(1));
 
         // And a critical error that has ended the scheduled confirmation, releasing that lock locally
-        var criticalError = new ExceptionInInitializerError("LockAcquired subscriber fails critically");
-        var logEvents     = captureLockManagerLog();
-        try {
-            eventSubscriberAction = event -> {
-                if (event instanceof LockAcquired lockAcquired && lockAcquired.lock.getName().equals(LOCK_NAME)) {
-                    throw criticalError;
-                }
-            };
-            Awaitility.waitAtMost(Duration.ofSeconds(5))
-                      .untilAsserted(() -> {
-                          assertThat(asyncReleased).hasSize(1);
-                          assertThat(logEvents.list.stream().filter(event -> event.getLevel() == Level.ERROR)).hasSize(1);
-                      });
-        } finally {
-            ((Logger) LoggerFactory.getLogger(TestDBFencedLockManager.class)).detachAppender(logEvents);
-        }
-        eventSubscriberAction = event -> {
-        };
+        endTheConfirmationWithACriticalError(() -> assertThat(asyncReleased).hasSize(1));
 
         // When the lock manager is stopped and started again
         lockManager.stop();
@@ -596,14 +548,9 @@ class DBFencedLockManagerLostLockReleaseTest {
         var acquiredLock = asyncAcquired.getFirst();
 
         // When a critical error ends the scheduled confirmation
-        var criticalError = new ExceptionInInitializerError("LockAcquired subscriber fails critically");
-        var logEvents     = captureLockManagerLog();
+        var logEvents = captureLockManagerLog();
         try {
-            eventSubscriberAction = event -> {
-                if (event instanceof LockAcquired lockAcquired && lockAcquired.lock.getName().equals(LOCK_NAME)) {
-                    throw criticalError;
-                }
-            };
+            eventSubscriberAction = lockAcquiredSubscriberThrowing(newCriticalError());
             // ... logged at ERROR once, naming the lock whose async acquiring now acquires nothing
             Awaitility.waitAtMost(Duration.ofSeconds(5))
                       .untilAsserted(() -> {
@@ -640,7 +587,7 @@ class DBFencedLockManagerLostLockReleaseTest {
         } finally {
             eventSubscriberAction = event -> {
             };
-            ((Logger) LoggerFactory.getLogger(TestDBFencedLockManager.class)).detachAppender(logEvents);
+            detachLockManagerLog(logEvents);
         }
     }
 
@@ -681,7 +628,7 @@ class DBFencedLockManagerLostLockReleaseTest {
             assertThat(lockManager.tryAcquireLock(LOCK_NAME)).isEmpty();
         } finally {
             lockManager.withUnitOfWorkFailureOnTheConfirmationThread = null;
-            ((Logger) LoggerFactory.getLogger(TestDBFencedLockManager.class)).detachAppender(logEvents);
+            detachLockManagerLog(logEvents);
         }
     }
 
@@ -724,15 +671,11 @@ class DBFencedLockManagerLostLockReleaseTest {
         var otherLockReleasedError = new ExceptionInInitializerError("lockReleased of other-lock fails critically");
         lock.registerCallback(lockReleasedFailingWith(lockReleasedError));
         otherLock.registerCallback(lockReleasedFailingWith(otherLockReleasedError));
-        var criticalError = new ExceptionInInitializerError("LockAcquired subscriber fails critically");
+        var criticalError = newCriticalError();
         var logEvents     = captureLockManagerLog();
         try {
             // When a critical error ends the confirmation
-            eventSubscriberAction = event -> {
-                if (event instanceof LockAcquired lockAcquired && lockAcquired.lock.getName().equals(LOCK_NAME)) {
-                    throw criticalError;
-                }
-            };
+            eventSubscriberAction = lockAcquiredSubscriberThrowing(criticalError);
 
             // Then the failing local release of one lock does not stop the other being released locally, and both
             // failures are added to the critical error, logged at ERROR once the last lock is done. No LockReleased is
@@ -750,7 +693,7 @@ class DBFencedLockManagerLostLockReleaseTest {
             assertThat(lock.isLockedByThisLockManagerInstance()).isFalse();
             assertThat(otherLock.isLockedByThisLockManagerInstance()).isFalse();
         } finally {
-            ((Logger) LoggerFactory.getLogger(TestDBFencedLockManager.class)).detachAppender(logEvents);
+            detachLockManagerLog(logEvents);
         }
     }
 
@@ -773,22 +716,11 @@ class DBFencedLockManagerLostLockReleaseTest {
         });
         // And a confirmation tick held inside its UnitOfWork - holding the lock manager's lock - until the test lets it end
         // with a critical error
-        var tickHeld      = new CountDownLatch(1);
-        var endTheTick    = new CountDownLatch(1);
-        var criticalError = new ExceptionInInitializerError("LockAcquired subscriber fails critically");
-        var logEvents     = captureLockManagerLog();
+        var tickHeld   = new CountDownLatch(1);
+        var endTheTick = new CountDownLatch(1);
+        var logEvents  = captureLockManagerLog();
         try {
-            eventSubscriberAction = event -> {
-                if (event instanceof LockAcquired lockAcquired && lockAcquired.lock.getName().equals(LOCK_NAME)) {
-                    tickHeld.countDown();
-                    try {
-                        endTheTick.await(10, TimeUnit.SECONDS);
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                    }
-                    throw criticalError;
-                }
-            };
+            eventSubscriberAction = lockAcquiredSubscriberThrowing(newCriticalError(), holdingTheTick(tickHeld, endTheTick));
             assertThat(tickHeld.await(5, TimeUnit.SECONDS)).isTrue();
 
             // When the lock is released on another thread, which waits for the lock manager's lock behind the tick ...
@@ -818,7 +750,7 @@ class DBFencedLockManagerLostLockReleaseTest {
             assertThat(lockManager.isLockConfirmationEnded()).isTrue();
         } finally {
             endTheTick.countDown();
-            ((Logger) LoggerFactory.getLogger(TestDBFencedLockManager.class)).detachAppender(logEvents);
+            detachLockManagerLog(logEvents);
         }
     }
 
@@ -828,21 +760,10 @@ class DBFencedLockManagerLostLockReleaseTest {
         // Given a held lock, and a confirmation tick held inside its UnitOfWork - holding the lock manager's lock - until the
         // test lets it end with a critical error
         lockManager.tryAcquireLock(LOCK_NAME).orElseThrow();
-        var tickHeld      = new CountDownLatch(1);
-        var endTheTick    = new CountDownLatch(1);
-        var criticalError = new ExceptionInInitializerError("LockAcquired subscriber fails critically");
+        var tickHeld   = new CountDownLatch(1);
+        var endTheTick = new CountDownLatch(1);
         try {
-            eventSubscriberAction = event -> {
-                if (event instanceof LockAcquired lockAcquired && lockAcquired.lock.getName().equals(LOCK_NAME)) {
-                    tickHeld.countDown();
-                    try {
-                        endTheTick.await(10, TimeUnit.SECONDS);
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                    }
-                    throw criticalError;
-                }
-            };
+            eventSubscriberAction = lockAcquiredSubscriberThrowing(newCriticalError(), holdingTheTick(tickHeld, endTheTick));
             assertThat(tickHeld.await(5, TimeUnit.SECONDS)).isTrue();
 
             // When another lock is acquired on another thread - before the confirmation has ended, so the acquire waits for
@@ -939,12 +860,83 @@ class DBFencedLockManagerLostLockReleaseTest {
     }
 
     private static ListAppender<ILoggingEvent> captureLockManagerLog() {
-        var appender = new ListAppender<ILoggingEvent>();
-        // Appended to by the lock manager's threads while the test thread reads it
-        appender.list = new CopyOnWriteArrayList<>();
-        appender.start();
-        ((Logger) LoggerFactory.getLogger(TestDBFencedLockManager.class)).addAppender(appender);
-        return appender;
+        return captureLog(TestDBFencedLockManager.class);
+    }
+
+    private static void detachLockManagerLog(ListAppender<ILoggingEvent> appender) {
+        detachLog(TestDBFencedLockManager.class, appender);
+    }
+
+    /**
+     * Ends the scheduled confirmation with a critical error: the lock manager's event subscriber throws one on the next
+     * {@link LockAcquired} of {@link #LOCK_NAME}. Awaits <code>awaitedCondition</code> together with
+     * exactly one ERROR line logged by the lock manager, then stops capturing the log and resets
+     * {@link #eventSubscriberAction}.
+     *
+     * @param awaitedCondition the assertions that hold once the confirmation has ended, awaited with the ERROR line
+     * @return the critical error the subscriber throws
+     */
+    private ExceptionInInitializerError endTheConfirmationWithACriticalError(ThrowingRunnable awaitedCondition) {
+        var criticalError = newCriticalError();
+        var logEvents     = captureLockManagerLog();
+        try {
+            eventSubscriberAction = lockAcquiredSubscriberThrowing(criticalError);
+            Awaitility.waitAtMost(Duration.ofSeconds(5))
+                      .untilAsserted(() -> {
+                          awaitedCondition.run();
+                          assertThat(logEvents.list.stream().filter(event -> event.getLevel() == Level.ERROR)).hasSize(1);
+                      });
+        } finally {
+            eventSubscriberAction = event -> {
+            };
+            detachLockManagerLog(logEvents);
+        }
+        return criticalError;
+    }
+
+    /**
+     * The critical error ({@link dk.trustworks.essentials.shared.Exceptions#isCriticalError(Throwable)}) a
+     * {@link #lockAcquiredSubscriberThrowing(Error) LockAcquired subscriber} ends the confirmation with
+     */
+    private static ExceptionInInitializerError newCriticalError() {
+        return new ExceptionInInitializerError("LockAcquired subscriber fails critically");
+    }
+
+    /**
+     * An {@link #eventSubscriberAction} that throws <code>error</code> on every {@link LockAcquired} of {@link #LOCK_NAME}
+     */
+    private static Consumer<FencedLockEvents> lockAcquiredSubscriberThrowing(Error error) {
+        return lockAcquiredSubscriberThrowing(error, () -> {
+        });
+    }
+
+    /**
+     * An {@link #eventSubscriberAction} that, on every {@link LockAcquired} of {@link #LOCK_NAME}, runs
+     * <code>beforeThrowing</code> on the publishing thread and then throws <code>error</code>
+     */
+    private static Consumer<FencedLockEvents> lockAcquiredSubscriberThrowing(Error error, Runnable beforeThrowing) {
+        return event -> {
+            if (event instanceof LockAcquired lockAcquired && lockAcquired.lock.getName().equals(LOCK_NAME)) {
+                beforeThrowing.run();
+                throw error;
+            }
+        };
+    }
+
+    /**
+     * Counts down <code>tickHeld</code>, then holds the thread it runs on until <code>endTheTick</code> is counted down (at
+     * most 10 s). Run before a {@link #lockAcquiredSubscriberThrowing(Error, Runnable) LockAcquired subscriber} throws, it
+     * holds the confirmation tick publishing that event inside its {@link UnitOfWork}, holding the lock manager's lock
+     */
+    private static Runnable holdingTheTick(CountDownLatch tickHeld, CountDownLatch endTheTick) {
+        return () -> {
+            tickHeld.countDown();
+            try {
+                endTheTick.await(10, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        };
     }
 
     private void verifyLostLockIsReleasedAndTheConfirmationOfTheTickIsKept(FencedLock lostLock, FencedLock confirmedLock) {
@@ -972,19 +964,6 @@ class DBFencedLockManagerLostLockReleaseTest {
                      .filter(event -> event instanceof LockReleased lockReleased && lockReleased.lock.getName().equals(lockName))
                      .map(LockReleased.class::cast)
                      .toList();
-    }
-
-    private static LockCallback lockReleasedFailingWith(Error error) {
-        return new LockCallback() {
-            @Override
-            public void lockAcquired(FencedLock lock) {
-            }
-
-            @Override
-            public void lockReleased(FencedLock lock) {
-                throw error;
-            }
-        };
     }
 
     @SuppressWarnings("PMD.CloseResource") // Releasing the lock is the job of the lock manager when it is reported lost, the behaviour under test
