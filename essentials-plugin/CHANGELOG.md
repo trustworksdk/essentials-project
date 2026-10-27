@@ -3,7 +3,7 @@
 Each entry is a release, headed by its `plugin.json` version: the Essentials release the plugin
 targets, with a `-N` suffix for plugin-only releases.
 
-## 0.60.0-7 — targets Essentials 0.60.0
+## 0.60.1 — targets Essentials 0.60.1
 - **`/essentials:slice-map-html` — the Slice Atlas.** A new command writes one self-contained page
   (no server, no CDN, opens from `file://`) that shows the whole slice architecture from the manifests,
   computed entirely by scripts — no model tokens go into the drawing. Five lenses:
@@ -288,8 +288,6 @@ targets, with a `-N` suffix for plugin-only releases.
   manages; the fix is to remove the override. The stack contract states the floors (S1, S11) and the Jackson 3
   rule (S3.1), and `stack-pins.md` gains a non-pin `Jackson 3` row naming the managed minor, which the check reads.
   Each floor fires only below its pin, and never beside `s1-boot-line` or `s1-kotlin-compiler-floor`.
-
-## 0.60.0-6 — targets Essentials 0.60.0
 - **`/essentials:upgrade` now moves a project to the plugin's Essentials release, code included.** A
   project on an older release (`essentials.version` below the pin) gets a new Group D: the move is
   planned by the new `scripts/migration-plan.py` from the release's migration notes
@@ -357,6 +355,15 @@ targets, with a `-N` suffix for plugin-only releases.
 - **Framework-knowledge block refresh** — `/essentials:upgrade` now compares the project
   `CLAUDE.md`'s framework-knowledge section with the plugin's and offers to replace that section alone
   when it differs, keeping the project's stamp; before, it only checked that the heading existed.
+
+- **Pins Essentials 0.60.1.** `essentials.version` is `0.60.1` in `stack-pins.md`, so `/essentials:init` generates
+  0.60.1 projects and `/essentials:upgrade` plans the move from 0.60.0 by the new
+  `references/stack/migrations/0.60-to-0.60.json`: a compile step for the three 0.60.1 compile breaks, a review
+  checklist of the behaviour changes that compile clean, and the `essentials.schema.mode=validate` re-`emit` before
+  the first start. Six new traps back it, `ESS-131`–`ESS-136`, under "0.60.1 changes that compile and still bite".
+- **S2.1's objenesis row** says what Essentials 0.60.1 does without objenesis — context startup fails, naming
+  `org.objenesis:objenesis` — and keeps the 0.60.0 behaviour (the first read fails) for a project still on 0.60.0;
+  the generated backend POM comment and `stack-lint`'s `s2.1-objenesis` message follow it.
 
 ## 0.60.0-5 — targets Essentials 0.60.0
 - **Framework docs: 0.50.1 was never released** — the event-store reference now says the polling

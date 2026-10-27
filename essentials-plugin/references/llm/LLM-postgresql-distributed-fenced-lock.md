@@ -1,6 +1,6 @@
 # PostgreSQL Distributed Fenced Lock - LLM Reference
 
-> Quick reference for LLMs. For detailed explanations, see [README](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/postgresql-distributed-fenced-lock/README.md).
+> Quick reference for LLMs. For detailed explanations, see [README](https://github.com/trustworksdk/essentials-project/blob/0.60.1/components/postgresql-distributed-fenced-lock/README.md).
 
 > For core FencedLock concepts (why, when, how), see [LLM-foundation.md](./LLM-foundation.md#fencedlock-distributed-locking).
 
@@ -332,7 +332,7 @@ PostgresqlUtil.checkIsValidTableOrColumnName(tableName);
 3. Validate at application startup with `PostgresqlUtil.checkIsValidTableOrColumnName(tableName)`
 4. Use default table name when possible
 
-See [README Security](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/postgresql-distributed-fenced-lock/README.md#security) for full details.
+See [README Security](https://github.com/trustworksdk/essentials-project/blob/0.60.1/components/postgresql-distributed-fenced-lock/README.md#security) for full details.
 
 ### What Validation Does NOT Protect Against
 
@@ -374,4 +374,4 @@ See [README Security](https://github.com/trustworksdk/essentials-project/blob/0.
 
 - [LLM-foundation.md#fencedlock-distributed-locking](./LLM-foundation.md#fencedlock-distributed-locking) - Core FencedLock concepts
 - [LLM-springdata-mongo-distributed-fenced-lock.md](./LLM-springdata-mongo-distributed-fenced-lock.md) - MongoDB implementation
-- [README](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/postgresql-distributed-fenced-lock/README.md) - Full documentation
+- [README](https://github.com/trustworksdk/essentials-project/blob/0.60.1/components/postgresql-distributed-fenced-lock/README.md) - Full documentation

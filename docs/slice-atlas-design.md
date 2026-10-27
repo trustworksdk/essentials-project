@@ -1,6 +1,6 @@
 # Slice Atlas — design
 
-Status: **shipped in plugin 0.60.0-7.** The contracts moved into the plugin as planned: the manifest fields
+Status: **shipped in plugin 0.60.1 (developed as 0.60.0-7, never released under that number).** The contracts moved into the plugin as planned: the manifest fields
 to `references/slice/manifest-guide.md` and the schema, the commands to `commands/slice-map-html.md` and
 `commands/slice-map.md` (§6 data contract, Step 4 checks). This document keeps the design rationale and the
 decisions; where it and the plugin disagree, the plugin is right.

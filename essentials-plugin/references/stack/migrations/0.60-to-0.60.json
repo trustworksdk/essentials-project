@@ -1,0 +1,173 @@
+{
+  "from": "0.60.0",
+  "to": "0.60.1",
+  "guide": {
+    "path": "docs/RELEASE-NOTES-0.60.1.md",
+    "line": 61,
+    "token": "Breaking — what you MUST apply"
+  },
+  "requiredPins": [
+    {
+      "pin": "essentials.version",
+      "tolerated": [],
+      "reason": "the release itself",
+      "cite": {
+        "path": "docs/RELEASE-NOTES-0.60.1.md",
+        "line": 1,
+        "token": "Essentials 0.60.1"
+      }
+    }
+  ],
+  "steps": [
+    {
+      "id": "pins",
+      "kind": "pins",
+      "title": "Move essentials.version to 0.60.1",
+      "cites": [
+        {
+          "path": "docs/RELEASE-NOTES-0.60.1.md",
+          "line": 1,
+          "token": "Essentials 0.60.1"
+        }
+      ]
+    },
+    {
+      "id": "compile",
+      "kind": "compile-and-fix",
+      "release": "to",
+      "title": "Compile against 0.60.1 and rename any method of yours that clashes with the new AbstractEventProcessor and CommandHandler methods; add the fifteenth ShardOwnerSettings component to a record pattern over it",
+      "cites": [
+        {
+          "path": "docs/RELEASE-NOTES-0.60.1.md",
+          "line": 64,
+          "token": "the additions can still stop your code compiling"
+        },
+        {
+          "path": "docs/RELEASE-NOTES-0.60.1.md",
+          "line": 69,
+          "token": "`ShardOwnerSettings`, a record, gains a fifteenth component"
+        }
+      ]
+    },
+    {
+      "id": "review",
+      "kind": "checklist",
+      "phase": "review",
+      "title": "Behaviour that changed without a compile error: decide per item",
+      "cites": [
+        {
+          "path": "docs/RELEASE-NOTES-0.60.1.md",
+          "line": 129,
+          "token": "Silent behaviour changes"
+        }
+      ]
+    },
+    {
+      "id": "deploy",
+      "kind": "checklist",
+      "phase": "deploy",
+      "title": "Before the first start on 0.60.1",
+      "cites": [
+        {
+          "path": "docs/RELEASE-NOTES-0.60.1.md",
+          "line": 115,
+          "token": "Only if you run `essentials.schema.mode=validate`"
+        }
+      ]
+    }
+  ],
+  "checklist": [
+    {
+      "id": "ESS-131",
+      "phase": "review",
+      "cite": {
+        "path": "docs/RELEASE-NOTES-0.60.1.md",
+        "line": 87,
+        "token": "`Subscription.close()`, on the shard-owned engine, now calls `unsubscribe()`"
+      }
+    },
+    {
+      "id": "ESS-132",
+      "phase": "review",
+      "cite": {
+        "path": "docs/RELEASE-NOTES-0.60.1.md",
+        "line": 74,
+        "token": "`ShardOwnedStorage`, the shard-owned engine's SQL layer"
+      }
+    },
+    {
+      "id": "ESS-133",
+      "phase": "review",
+      "cite": {
+        "path": "docs/RELEASE-NOTES-0.60.1.md",
+        "line": 94,
+        "token": "The shard-owned Spring starter"
+      }
+    },
+    {
+      "id": "ESS-134",
+      "phase": "review",
+      "cite": {
+        "path": "docs/RELEASE-NOTES-0.60.1.md",
+        "line": 101,
+        "token": "The admin API contract declares the `queueName`"
+      }
+    },
+    {
+      "id": "ESS-136",
+      "phase": "review",
+      "cite": {
+        "path": "docs/RELEASE-NOTES-0.60.1.md",
+        "line": 557,
+        "token": "A rollback-only Spring transaction is rolled back on commit"
+      }
+    },
+    {
+      "id": "ESS-023",
+      "phase": "review",
+      "cite": {
+        "path": "docs/RELEASE-NOTES-0.60.1.md",
+        "line": 201,
+        "token": "A public `is`-getter no longer adds a property to persisted JSON"
+      }
+    },
+    {
+      "id": "ESS-125",
+      "phase": "review",
+      "cite": {
+        "path": "docs/RELEASE-NOTES-0.60.1.md",
+        "line": 363,
+        "token": "A `ViewEventProcessor` warns about event types it has no handler for"
+      }
+    },
+    {
+      "id": "ESS-135",
+      "phase": "deploy",
+      "cite": {
+        "path": "docs/RELEASE-NOTES-0.60.1.md",
+        "line": 115,
+        "token": "re-run `emit` and apply the new script"
+      }
+    }
+  ],
+  "fixedIn": [
+    {
+      "id": "ESS-080",
+      "reason": "a Java entity's non-public @Id field is made accessible, so the field no longer has to be public",
+      "cite": {
+        "path": "docs/RELEASE-NOTES-0.60.1.md",
+        "line": 1137,
+        "token": "An entity with a non-public `@Id` field"
+      }
+    },
+    {
+      "id": "ESS-079",
+      "reason": "DocumentDbRepositoryFactory.createForCharSequenceTypeId(...) creates a repository for a Java CharSequenceType id, replacing the raw-typed create(...) workaround",
+      "cite": {
+        "path": "docs/RELEASE-NOTES-0.60.1.md",
+        "line": 804,
+        "token": "createForCharSequenceTypeId(Class|KClass)"
+      }
+    }
+  ]
+}

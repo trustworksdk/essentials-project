@@ -8,7 +8,7 @@
         <dependency>
             <groupId>dk.trustworks.essentials.components</groupId>
             <artifactId>spring-boot-starter-postgresql</artifactId>
-            <version>0.60.0</version>
+            <version>0.60.1</version>
         </dependency>
     </dependencies>
 </project>

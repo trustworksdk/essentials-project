@@ -785,9 +785,9 @@ public class ImmutableOrder extends ImmutableValueObject {
 
 | Essentials Version                                                       | Java | Spring Boot | Jackson                | Kotlin                    | Notes                    |
 |--------------------------------------------------------------------------|------|-------------|------------------------|---------------------------|--------------------------|
-| [0.60.0+](https://github.com/trustworksdk/essentials-project/tree/release/0.60) | 25+ | 4.1.x | 3 | 2.3+ | Under active development |
-| [0.50.0+](https://github.com/trustworksdk/essentials-project/tree/main)  | 21+ | 4.0.x | 3 (default) / 2        | 2.2+                      | Maintained               |
-| [0.40.24+](https://github.com/trustworksdk/essentials-project/tree/main) | 17+ | 3.3.x | 2 | 2.1+ | No longer maintained     |
+| [0.60.0+](https://github.com/trustworksdk/essentials-project/tree/main)  | 25+ | 4.1.x | 3 | 2.3+ | Under active development |
+| [0.50.0+](https://github.com/trustworksdk/essentials-project/tree/0.50.0) | 21+ | 4.0.x | 3 (default) / 2        | 2.2+                      | Maintained               |
+| [0.40.24+](https://github.com/trustworksdk/essentials-project/tree/0.40.28) | 17+ | 3.3.x | 2 | 2.1+ | No longer maintained     |
 
 **Java 25 is a hard floor, not a recommendation.** Artifacts are compiled with `--release 25`, so the class files
 carry major version 69 and a Java 21 runtime rejects them with `UnsupportedClassVersionError`. Building the project

@@ -11,7 +11,7 @@ target/
 
 ## Trustworks Essentials framework knowledge
 
-<!-- essentials-init: essentials 0.60.0 -->
+<!-- essentials-init: essentials 0.60.1 -->
 
 For ANY question about Trustworks Essentials APIs, modules, or patterns, **always consult the `essentials-docs` skill** from the `essentials` plugin. It auto-loads on Essentials-related questions and on code signals (imports of `dk.trustworks.essentials.*`, type names like `StatefulAggregate`, `DurableQueues`, `EventStore`, `FencedLock`, `Inbox`, `Outbox`, `UnitOfWork`, `Decider`, `EventProcessor`).
 
@@ -357,7 +357,7 @@ services:
             <artifactId>jackson-databind</artifactId>
         </dependency>
         <dependency>
-            <!-- Startup and every write succeed, then the first read of a persisted object (an event, a queue message, a document) fails with NoClassDefFoundError for an org/objenesis class. The starters bring immutable-jackson3, and Essentials registers its module in the persistence mapper whenever it is on the classpath. Tests hide it: Mockito brings objenesis in test scope. Spring Boot does not manage its version — set it from objenesis.version -->
+            <!-- Context startup fails: creating the persistence mapper throws IllegalStateException naming org.objenesis:objenesis (Essentials 0.60.1 and later). On 0.60.0, startup and every write succeed, then the first read of a persisted object (an event, a queue message, a document) fails with NoClassDefFoundError for an org/objenesis class. The starters bring immutable-jackson3, and Essentials registers its module in the persistence mapper whenever it is on the classpath. Tests hide it: Mockito brings objenesis in test scope. Spring Boot does not manage its version — set it from objenesis.version -->
             <groupId>org.objenesis</groupId>
             <artifactId>objenesis</artifactId>
             <version>${objenesis.version}</version>
@@ -778,7 +778,7 @@ esac
              project as well: postgresql-document-db is written in Kotlin (S2.1). -->
         <kotlin.version>2.4.21</kotlin.version>
         <!-- One property drives every Essentials artifact (S1). -->
-        <essentials.version>0.60.0</essentials.version>
+        <essentials.version>0.60.1</essentials.version>
         <springdoc.version>3.1.1</springdoc.version>
         <!-- Spring Boot's parent already manages Testcontainers, Mockito, AssertJ, Awaitility and the MongoDB
              driver. A BOM imported below would be inert for them (the parent's management wins), so their

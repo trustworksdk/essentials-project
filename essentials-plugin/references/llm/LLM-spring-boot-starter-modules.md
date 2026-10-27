@@ -65,7 +65,7 @@ A UnitOfWork opened in one operator and used in another (`flatMap`, `publishOn`,
 
 Package: `dk.trustworks.essentials.components.boot.autoconfigure.postgresql`
 
-See [spring-boot-starter-postgresql README](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/spring-boot-starter-postgresql/README.md#auto-configured-beans) for full list.
+See [spring-boot-starter-postgresql README](https://github.com/trustworksdk/essentials-project/blob/0.60.1/components/spring-boot-starter-postgresql/README.md#auto-configured-beans) for full list.
 
 **Core Infrastructure:**
 - `Jdbi` - JDBI with PostgresPlugin + TransactionAwareDataSourceProxy
@@ -111,7 +111,7 @@ See [spring-boot-starter-postgresql README](https://github.com/trustworksdk/esse
 
 Package: `dk.trustworks.essentials.components.boot.autoconfigure.mongodb`
 
-See [spring-boot-starter-mongodb README](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/spring-boot-starter-mongodb/README.md#auto-configured-beans) for full list.
+See [spring-boot-starter-mongodb README](https://github.com/trustworksdk/essentials-project/blob/0.60.1/components/spring-boot-starter-mongodb/README.md#auto-configured-beans) for full list.
 
 **Core Infrastructure:**
 - `MongoTransactionManager` - Transaction manager (ReadConcern.SNAPSHOT, WriteConcern.ACKNOWLEDGED)
@@ -131,7 +131,7 @@ See [spring-boot-starter-mongodb README](https://github.com/trustworksdk/essenti
 
 Package: `dk.trustworks.essentials.components.boot.autoconfigure.postgresql.eventstore`
 
-See [spring-boot-starter-postgresql-event-store README](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/spring-boot-starter-postgresql-event-store/README.md#auto-configured-beans) for full list.
+See [spring-boot-starter-postgresql-event-store README](https://github.com/trustworksdk/essentials-project/blob/0.60.1/components/spring-boot-starter-postgresql-event-store/README.md#auto-configured-beans) for full list.
 
 **Includes:** All PostgreSQL starter beans
 
@@ -194,7 +194,7 @@ public class EssentialsAdminApiAutoConfiguration
 
 ### PostgreSQL Starter
 
-See [spring-boot-starter-postgresql README](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/spring-boot-starter-postgresql/README.md#configuration-properties) for complete documentation.
+See [spring-boot-starter-postgresql README](https://github.com/trustworksdk/essentials-project/blob/0.60.1/components/spring-boot-starter-postgresql/README.md#configuration-properties) for complete documentation.
 
 #### FencedLock
 
@@ -392,7 +392,7 @@ Prefix: `essentials.schema` - what happens to the schema every Essentials compon
 
 ### MongoDB Starter
 
-See [spring-boot-starter-mongodb README](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/spring-boot-starter-mongodb/README.md#configuration-properties) for complete documentation.
+See [spring-boot-starter-mongodb README](https://github.com/trustworksdk/essentials-project/blob/0.60.1/components/spring-boot-starter-mongodb/README.md#configuration-properties) for complete documentation.
 
 #### FencedLock
 
@@ -425,7 +425,7 @@ Prefix: `essentials.durable-queues`
 
 ### Event Store Starter
 
-See [spring-boot-starter-postgresql-event-store README](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/spring-boot-starter-postgresql-event-store/README.md#configuration-properties) for complete documentation.
+See [spring-boot-starter-postgresql-event-store README](https://github.com/trustworksdk/essentials-project/blob/0.60.1/components/spring-boot-starter-postgresql-event-store/README.md#configuration-properties) for complete documentation.
 
 **Includes:** All PostgreSQL starter config
 
@@ -446,11 +446,11 @@ Prefix: `essentials.eventstore`
 - `false`: Events published at BeforeCommit/AfterCommit (batch)
 - `true`: Also published immediately after `appendToStream()` (individual)
 
-See [postgresql-event-store: Flush Publishing](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/postgresql-event-store/README.md#flush-publishing)
+See [postgresql-event-store: Flush Publishing](https://github.com/trustworksdk/essentials-project/blob/0.60.1/components/postgresql-event-store/README.md#flush-publishing)
 
 #### Gap Handling
 
-Full section: [starter README: Gap Handling](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/spring-boot-starter-postgresql-event-store/README.md#gap-handling). Mechanics, gap types: [postgresql-event-store README](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/postgresql-event-store/README.md#gap-handling), [LLM-postgresql-event-store.md](LLM-postgresql-event-store.md#gap-handling). `spring-postgresql-event-store` wires no gap handling.
+Full section: [starter README: Gap Handling](https://github.com/trustworksdk/essentials-project/blob/0.60.1/components/spring-boot-starter-postgresql-event-store/README.md#gap-handling). Mechanics, gap types: [postgresql-event-store README](https://github.com/trustworksdk/essentials-project/blob/0.60.1/components/postgresql-event-store/README.md#gap-handling), [LLM-postgresql-event-store.md](LLM-postgresql-event-store.md#gap-handling). `spring-postgresql-event-store` wires no gap handling.
 
 - `use-event-stream-gap-handler=true` (default): `PostgresqlEventStore` is built on the `EventStreamGapHandler` bean; `false`: on `NoEventStreamGapHandler` (bean still created, CDC beans take it)
 - Default bean `EventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration>` is `@ConditionalOnMissingBean`: `PostgresqlEventStreamGapHandler(unitOfWorkFactory, schemaOwnership)` = 60 s transient-gap cache refresh, 120 s permanent-gap threshold, default per-poll selection
@@ -482,7 +482,7 @@ EventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration> eventSt
 
 #### CDC
 
-Prefix: `essentials.eventstore.cdc`. **Disabled by default** (`enabled=false`; every CDC bean is gated on `enabled=true`, no `matchIfMissing`): no slot, no publication changes, no tailer, polling as before. Opt in with `essentials.eventstore.cdc.enabled=true`; then `mode=auto` (falls back to polling if CDC cannot start), `delivery-mode=inbox`, `plugin=pgoutput`. All properties carry descriptions and defaults in the starter's `spring-configuration-metadata.json`. Details: [starter README: CDC Configuration](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/spring-boot-starter-postgresql-event-store/README.md#cdc-configuration-hybrid-logical-replication), [LLM-postgresql-event-store.md](LLM-postgresql-event-store.md).
+Prefix: `essentials.eventstore.cdc`. **Disabled by default** (`enabled=false`; every CDC bean is gated on `enabled=true`, no `matchIfMissing`): no slot, no publication changes, no tailer, polling as before. Opt in with `essentials.eventstore.cdc.enabled=true`; then `mode=auto` (falls back to polling if CDC cannot start), `delivery-mode=inbox`, `plugin=pgoutput`. All properties carry descriptions and defaults in the starter's `spring-configuration-metadata.json`. Details: [starter README: CDC Configuration](https://github.com/trustworksdk/essentials-project/blob/0.60.1/components/spring-boot-starter-postgresql-event-store/README.md#cdc-configuration-hybrid-logical-replication), [LLM-postgresql-event-store.md](LLM-postgresql-event-store.md).
 
 #### Event Causation
 
@@ -645,7 +645,7 @@ Classes:
 1. Uses `ObjectId` values (e.g., `random()` uses `ObjectId.get().toString()`)
 2. Used as Map keys (MongoDB stores as `ObjectId` internally)
 
-See [types-springdata-mongo](https://github.com/trustworksdk/essentials-project/blob/0.60.0/types-springdata-mongo/README.md)
+See [types-springdata-mongo](https://github.com/trustworksdk/essentials-project/blob/0.60.1/types-springdata-mongo/README.md)
 
 ### Event Store PersistableEventMapper
 
@@ -850,7 +850,7 @@ Every third-party library above is `provided` upstream, by design - declare each
 - [reactive](./LLM-reactive.md) - LocalEventBus, CommandBus
 
 **README Links:**
-- [PostgreSQL Starter](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/spring-boot-starter-postgresql/README.md)
-- [MongoDB Starter](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/spring-boot-starter-mongodb/README.md)
-- [Event Store Starter](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/spring-boot-starter-postgresql-event-store/README.md)
+- [PostgreSQL Starter](https://github.com/trustworksdk/essentials-project/blob/0.60.1/components/spring-boot-starter-postgresql/README.md)
+- [MongoDB Starter](https://github.com/trustworksdk/essentials-project/blob/0.60.1/components/spring-boot-starter-mongodb/README.md)
+- [Event Store Starter](https://github.com/trustworksdk/essentials-project/blob/0.60.1/components/spring-boot-starter-postgresql-event-store/README.md)
 - [Admin API](LLM-admin-api.md)

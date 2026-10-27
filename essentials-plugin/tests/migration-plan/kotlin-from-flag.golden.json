@@ -3,9 +3,10 @@
   "project": "kotlin-from-flag",
   "from": "0.50.0",
   "fromSource": "--from",
-  "to": "0.60.0",
+  "to": "0.60.1",
   "notes": [
-    "references/stack/migrations/0.50-to-0.60.json"
+    "references/stack/migrations/0.50-to-0.60.json",
+    "references/stack/migrations/0.60-to-0.60.json"
   ],
   "upToDate": false,
   "pins": [
@@ -13,7 +14,7 @@
       "pin": "essentials.version",
       "current": "0.50.0",
       "at": "pom.xml:10",
-      "target": "0.60.0",
+      "target": "0.60.1",
       "status": "move",
       "fix": {
         "mechanical": false,
@@ -22,10 +23,10 @@
       "tolerated": [],
       "reason": "the release itself",
       "cite": {
-        "path": "docs/RELEASE-NOTES-0.60.0.md",
-        "line": 1054,
-        "token": "Bump Essentials to 0.60.0",
-        "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.0/docs/RELEASE-NOTES-0.60.0.md#L1054"
+        "path": "docs/RELEASE-NOTES-0.60.1.md",
+        "line": 1,
+        "token": "Essentials 0.60.1",
+        "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.1/docs/RELEASE-NOTES-0.60.1.md#L1"
       }
     },
     {
@@ -371,12 +372,100 @@
         "ESS-108",
         "ESS-109"
       ]
+    },
+    {
+      "id": "pins",
+      "kind": "pins",
+      "title": "Move essentials.version to 0.60.1",
+      "release": null,
+      "phase": null,
+      "ess": [],
+      "stackLint": [],
+      "cites": [
+        {
+          "path": "docs/RELEASE-NOTES-0.60.1.md",
+          "line": 1,
+          "token": "Essentials 0.60.1",
+          "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.1/docs/RELEASE-NOTES-0.60.1.md#L1"
+        }
+      ]
+    },
+    {
+      "id": "compile",
+      "kind": "compile-and-fix",
+      "title": "Compile against 0.60.1 and rename any method of yours that clashes with the new AbstractEventProcessor and CommandHandler methods; add the fifteenth ShardOwnerSettings component to a record pattern over it",
+      "release": "0.60.1",
+      "phase": null,
+      "ess": [],
+      "stackLint": [],
+      "cites": [
+        {
+          "path": "docs/RELEASE-NOTES-0.60.1.md",
+          "line": 64,
+          "token": "the additions can still stop your code compiling",
+          "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.1/docs/RELEASE-NOTES-0.60.1.md#L64"
+        },
+        {
+          "path": "docs/RELEASE-NOTES-0.60.1.md",
+          "line": 69,
+          "token": "`ShardOwnerSettings`, a record, gains a fifteenth component",
+          "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.1/docs/RELEASE-NOTES-0.60.1.md#L69"
+        }
+      ]
+    },
+    {
+      "id": "review",
+      "kind": "checklist",
+      "title": "Behaviour that changed without a compile error: decide per item",
+      "release": null,
+      "phase": "review",
+      "ess": [],
+      "stackLint": [],
+      "cites": [
+        {
+          "path": "docs/RELEASE-NOTES-0.60.1.md",
+          "line": 129,
+          "token": "Silent behaviour changes",
+          "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.1/docs/RELEASE-NOTES-0.60.1.md#L129"
+        }
+      ],
+      "items": [
+        "ESS-131",
+        "ESS-132",
+        "ESS-133",
+        "ESS-134",
+        "ESS-136",
+        "ESS-023",
+        "ESS-125"
+      ]
+    },
+    {
+      "id": "deploy",
+      "kind": "checklist",
+      "title": "Before the first start on 0.60.1",
+      "release": null,
+      "phase": "deploy",
+      "ess": [],
+      "stackLint": [],
+      "cites": [
+        {
+          "path": "docs/RELEASE-NOTES-0.60.1.md",
+          "line": 115,
+          "token": "Only if you run `essentials.schema.mode=validate`",
+          "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.1/docs/RELEASE-NOTES-0.60.1.md#L115"
+        }
+      ],
+      "items": [
+        "ESS-135"
+      ]
     }
   ],
   "fixedIn": [
     "ESS-098",
     "ESS-102",
-    "ESS-105"
+    "ESS-105",
+    "ESS-080",
+    "ESS-079"
   ],
   "scanned": false,
   "outside": null

@@ -1,6 +1,6 @@
 # /essentials:slice-enrich and per-application Atlas pages — design
 
-Status: design, agreed with the maintainer 2026-10-08; shipping in plugin 0.60.0-7 beside the Slice Atlas
+Status: design, agreed with the maintainer 2026-10-08; shipped in plugin 0.60.1 beside the Slice Atlas
 (`docs/slice-atlas-design.md`).
 
 ## 1. Why

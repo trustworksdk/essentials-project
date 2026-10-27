@@ -42,7 +42,7 @@ Added to 0.60.1 on 2026-10-08:
 
 ## 0. Planned for 0.60.0 but never shipped
 
-All shipped in 0.60.1; see `docs/NEXT_VERSION_RELEASE.md`. One planned fix was rejected rather than shipped:
+All shipped in 0.60.1; see `docs/RELEASE-NOTES-0.60.1.md`. One planned fix was rejected rather than shipped:
 making objenesis a compile dependency of `immutable-jackson3` (N-5, SB-1). Every third-party dependency of a module
 or starter stays `provided`, by design; the plugin's S2.1 table and its generated POM declare objenesis, and mapper
 creation fails naming it when it is missing (SB-2).
@@ -627,14 +627,10 @@ Everything planned here before 2026-10-13 shipped in 0.60.1.
 
 ## P4: `essentials` plugin
 
-- **S2.1's objenesis row when the pins move to 0.60.1.** `stack-contract.md` S2.1, the generated POM comment and the
-  init goldens say a missing objenesis fails "at the first read", which is true for 0.60.0. From 0.60.1, mapper
-  creation fails at startup naming the dependency (SB-2). Update the row with the `essentials.version` pin and
-  regenerate the goldens.
 - **Spring Boot's failsafe in generated projects (NW-6).** maven-failsafe-plugin 3.6.0 no longer binds `skipTests`, so
   `-DskipTests` runs every integration test (fixed in Essentials' own POM in 0.60.1 by defaulting `skipITs` to
-  `skipTests`). Generated projects take failsafe from Spring Boot, which manages 3.5.6 in 4.1.1, so they are safe
-  today. When the Boot pin moves, check the managed failsafe version; at 3.6+, add the same property to the backend
+  `skipTests`). Generated projects take failsafe from Spring Boot, which still manages 3.5.6 in 4.1.2 (the current pin), so they
+  are safe today. When the Boot pin moves, check the managed failsafe version; at 3.6+, add the same property to the backend
   POM template and a `stack-lint` rule.
 - **Eval failures older than the grader fix (NW-7).** One run each on 2026-10-12, all also failing in the earlier
   3-run results: `slice-check-aggregate-lane` (`gen-find-f3`; `gen-not-t5`/`t6`, the gate-6 row citing the handlers

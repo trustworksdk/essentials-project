@@ -1,6 +1,6 @@
 # PostgreSQL Event Store - LLM Reference
 
-> Full documentation: [README](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/postgresql-event-store/README.md)
+> Full documentation: [README](https://github.com/trustworksdk/essentials-project/blob/0.60.1/components/postgresql-event-store/README.md)
 
 ## Quick Facts
 
@@ -191,7 +191,7 @@ Enabling also requires, on the database side:
 - a role with `REPLICATION` — the tailer opens its own replication connection
 - for `pgoutput`, a publication covering the event-stream tables; let the framework own it with `cdc.pg-output.publication.auto-manage=true` (`mode: FOR_TABLE_LIST` needs table ownership, `FOR_ALL_TABLES` needs superuser)
 
-If a prerequisite is missing, `cdc.mode=auto` (the default once enabled) keeps the application up and subscribers on polling — so a broken CDC setup costs latency, not correctness, and is easy to miss. Verify via `/actuator/health/cdc` or the admin API's `event-store/cdc/status`. Full checklist: [docs/cdc.md §1.1](https://github.com/trustworksdk/essentials-project/blob/0.60.0/docs/cdc.md).
+If a prerequisite is missing, `cdc.mode=auto` (the default once enabled) keeps the application up and subscribers on polling — so a broken CDC setup costs latency, not correctness, and is easy to miss. Verify via `/actuator/health/cdc` or the admin API's `event-store/cdc/status`. Full checklist: [docs/cdc.md §1.1](https://github.com/trustworksdk/essentials-project/blob/0.60.1/docs/cdc.md).
 
 Key classes:
 - `cdc.WalReplicationTailer` - consumes logical replication stream into `eventstore_cdc_inbox` or publishes directly
@@ -217,7 +217,7 @@ Poison handling:
 - `CdcPoisonNotifier` (e.g. `SubscriptionResetOnPoisonNotifier`) can reset resume points backward
 
 Design reference:
-- [Hybrid CDC design](https://github.com/trustworksdk/essentials-project/blob/0.60.0/docs/cdc.md)
+- [Hybrid CDC design](https://github.com/trustworksdk/essentials-project/blob/0.60.1/docs/cdc.md)
 
 ## Event Operations
 
@@ -1272,7 +1272,7 @@ eventBus.addAsyncSubscriber(events ->
 ## Event Causation
 
 Every persisted event can record the id of the event that caused it: `PersistedEvent.causedByEventId()`, column
-`caused_by_event_id`. Design: [`docs/event-causation.md`](https://github.com/trustworksdk/essentials-project/blob/0.60.0/docs/event-causation.md).
+`caused_by_event_id`. Design: [`docs/event-causation.md`](https://github.com/trustworksdk/essentials-project/blob/0.60.1/docs/event-causation.md).
 
 **On by default with the Spring Boot starter.** `essentials.eventstore.causation.enabled=false` turns off everything
 that writes it. Correlation ids are not populated - use trace context (OpenTelemetry) for "what did this request do".
@@ -1494,7 +1494,7 @@ The Spring Boot starter wires exactly that by default (`essentials.eventstore.su
 
 **Gap statistics** (`SubscriptionStatistics.gaps()`, admin API `gaps`): `newTransientGaps`, `resolvedTransientGaps`, `promotedToPermanentGaps`, plus when the last new and last promoted gap happened. Counted on every path that reconciles gaps, CDC backfill included, from the rows the reconciliation actually changed, and only after its unit of work commits. Transient gaps appearing and resolving is normal under concurrent writers; a rising `promotedToPermanentGaps` means global orders this subscriber stopped waiting for. `polling.gapReconciliations` is not a gap count - it is one per poll that ran reconciliation, gap or no gap. A custom `SubscriptionGapHandler` reports its outcome by overriding `reconcileGapsAndReport`; the default reports nothing.
 
-See [README EventStoreSubscriptionObserver](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/postgresql-event-store/README.md#eventstoresubscriptionobserver) for metrics and custom implementations.
+See [README EventStoreSubscriptionObserver](https://github.com/trustworksdk/essentials-project/blob/0.60.1/components/postgresql-event-store/README.md#eventstoresubscriptionobserver) for metrics and custom implementations.
 
 ### Schema ownership and notify triggers
 
@@ -1802,7 +1802,7 @@ Essentials applies naming convention validation as initial defense layer - **NOT
 - Derive from controlled, trusted sources only
 - Validate at application startup
 
-See [README Security](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/postgresql-event-store/README.md#security) for details.
+See [README Security](https://github.com/trustworksdk/essentials-project/blob/0.60.1/components/postgresql-event-store/README.md#security) for details.
 
 ### What Validation Does NOT Protect Against
 

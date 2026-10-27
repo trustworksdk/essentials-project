@@ -217,7 +217,7 @@ RULES_LIST = [
          "Jackson 3 databind missing on an application with no Boot web or Jackson starter",
          "components/spring-boot-starter-postgresql/pom.xml:141-144 (provided)"),
     Rule("s2.1-objenesis", "S2.1", "Blocking", [("C", 126, "`org.objenesis:objenesis`")],
-         "objenesis missing: startup and writes succeed, the first read of a persisted object fails",
+         "objenesis missing: context startup fails (Essentials 0.60.0: the first read of a persisted object fails)",
          "immutable-jackson3/pom.xml:48-53 (provided)"),
     Rule("s2.1-reactor-core", "S2.1", "Blocking", [("C", 127, "`reactor-core`")],
          "reactor-core missing on a non-WebFlux application",
@@ -1647,7 +1647,7 @@ class Lint:
             if not found:
                 self.add(check, rel, anchor,
                          f"{g}:{a} is not declared — the starter declares it `provided`, so nothing brings it; "
-                         + ("compiles and starts, then fails at the first read of a persisted object"
+                         + ("compiles, then fails at context startup (on Essentials 0.60.0: at the first read of a persisted object)"
                             if check == "s2.1-objenesis" else "compiles, then fails at context startup"),
                          f"add {g}:{a} (compile scope) to {rel}",
                          [{"op": "add-dependency", "pom": rel, "groupId": g, "artifactId": a, "scope": None}])

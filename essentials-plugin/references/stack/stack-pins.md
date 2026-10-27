@@ -13,10 +13,10 @@ in every project generated afterwards — and in every golden under `tests/golde
 
 | What | Pin | Notes |
 |---|---|---|
-| `spring-boot-starter-parent` | **4.1.2** | Essentials 0.60.0 requires Boot 4.1.x (it was released against 4.1.1); 4.0.x and 3.x unsupported (S1). 4.1.2 is the patch the Essentials build has tested on since, and the floor worth being on: it manages Tomcat 11.0.27 and Netty 4.2.19.Final, which carry the CVE fixes (Tomcat CVE-2026-66299 among them) the Essentials root POM had to override 4.1.1's managed versions for. `/essentials:upgrade` suggests it to a project on an earlier 4.1.x patch (`s1-boot-patch`) |
+| `spring-boot-starter-parent` | **4.1.2** | Essentials 0.60.x requires Boot 4.1.x (0.60.0 was released against 4.1.1, 0.60.1 against 4.1.2); 4.0.x and 3.x unsupported (S1). 4.1.2 is the floor worth being on: it manages Tomcat 11.0.27 and Netty 4.2.19.Final, which carry the CVE fixes (Tomcat CVE-2026-66299 among them) the Essentials root POM had to override 4.1.1's managed versions for. `/essentials:upgrade` suggests it to a project on an earlier 4.1.x patch (`s1-boot-patch`) |
 | `java.version` | **25** | Baseline is **25** (S1) — Essentials class files are built at `--release 25` |
 | `kotlin.version` | **2.4.21** | The compiler Essentials itself builds with, and the one `/essentials:upgrade` suggests to a Kotlin project at or above the floor but below it (`s1-kotlin-patch`). Essentials artifacts carry Kotlin 2.3 `@Metadata` (language and API level 2.3); the floor is Kotlin **2.3**, because an older compiler cannot target JVM 25, and the application's `jvmTarget` must be 25 to inline Essentials' `inline`/`reified` functions. **Load-bearing on Java projects too** — `postgresql-document-db` is Kotlin, so `kotlin-stdlib-jdk8`/`kotlin-reflect` are runtime/compile requirements with no Kotlin sources present (S2.1) |
-| `essentials.version` | **0.60.0** | One property, every Essentials artifact (S1) |
+| `essentials.version` | **0.60.1** | One property, every Essentials artifact (S1) |
 | `springdoc.version` | 3.1.1 | `springdoc-openapi-starter-webflux-ui`; the WebMvc variant on a servlet stack. Essentials builds `types-spring-web`'s springdoc converter against the same release (root `pom.xml` `springdoc.version`) |
 | `spring-modulith.version` | 2.0.7 | BOM import |
 | `testcontainers-bom.version` | 2.0.5 | 2.x artifact names: `testcontainers-postgresql`, `testcontainers-mongodb`, `testcontainers-kafka` (S10) |
@@ -65,7 +65,7 @@ in every project generated afterwards — and in every golden under `tests/golde
 
 Most of the table is ordinary dependency hygiene. Four entries are **constraints**, not choices:
 
-1. **Spring Boot 4.1.x + Java 25+** — Essentials 0.60.0 does not run otherwise (S1).
+1. **Spring Boot 4.1.x + Java 25+** — Essentials 0.60.x does not run otherwise (S1).
 2. **Kotlin 2.3 or newer, `jvmTarget` 25** — an older compiler cannot target JVM 25, which inlining
    Essentials' `inline`/`reified` functions requires of the calling code, **and a Java
    project on a Postgres profile still needs `kotlin-stdlib` at runtime** (S2.1). This is not a
