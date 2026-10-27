@@ -586,6 +586,122 @@ class PostgresqlEventStreamGapHandlerIT {
     }
 
     /**
+     * A give-up costs what it gives up, not what the subscriber has outstanding: a few orders are looked up by primary
+     * key however many transient gaps are recorded, also with statistics taken while the table was small - the state
+     * after every drain. Matched by range, or by order beside an index on (subscriber_id, aggregate_type) alone, the
+     * planner read every outstanding gap of the subscriber and filtered them.
+     */
+    @Test
+    void giving_up_a_few_orders_reads_only_those_however_many_gaps_are_outstanding() {
+        var subscriber = SubscriberId.of("gap-given-up-few-sub");
+        var gapHandler = new PostgresqlEventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration>(unitOfWorkFactory,
+                                                                                                               Duration.ofSeconds(60),
+                                                                                                               ResolveTransientGapsToIncludeInQueryStrategy.defaultSelection(),
+                                                                                                               ResolveTransientGapsToPermanentGapsPromotionStrategy.thresholdBased(120))
+                .gapHandlerFor(subscriber);
+        // Statistics from a small table, then 20 000 outstanding gaps: the state at a market open
+        unitOfWorkFactory.usingUnitOfWork(unitOfWork -> unitOfWork.handle().execute("ANALYZE " + TRANSIENT_SUBSCRIBER_GAPS_TABLE_NAME));
+        unitOfWorkFactory.usingUnitOfWork(unitOfWork -> unitOfWork.handle()
+                                                                  .createUpdate("INSERT INTO " + TRANSIENT_SUBSCRIBER_GAPS_TABLE_NAME + " (subscriber_id, aggregate_type, gap_global_event_order, first_discovered) " +
+                                                                                        "SELECT :subscriber_id, :aggregate_type, order_, now() FROM generate_series(1, 20000) AS order_")
+                                                                  .bind("subscriber_id", subscriber)
+                                                                  .bind("aggregate_type", aggregateType)
+                                                                  .execute());
+        // As in a running subscription, the handler knows its gaps already: only the statement is measured
+        List<GlobalEventOrder> known = unitOfWorkFactory.withUnitOfWork(unitOfWork -> gapHandler.getTransientGapsFor(aggregateType));
+        assertThat(known).hasSize(20_000);
+
+        var outcome = unitOfWorkFactory.withUnitOfWork(unitOfWork -> {
+            var readBefore = transientGapRowsReadInThisTransaction(unitOfWork);
+            var reconciliation = gapHandler.giveUpTransientGapRanges(aggregateType,
+                                                                     List.of(LongRange.between(5, 5), LongRange.between(9_000, 9_000), LongRange.between(15_000, 15_002)));
+            assertThat(transientGapRowsReadInThisTransaction(unitOfWork) - readBefore).as("transient gap rows read to give up 5 of 20 000").isLessThan(100);
+            return reconciliation;
+        });
+
+        assertThat(outcome).isEqualTo(new GapReconciliation(0, 0, 5));
+        assertThat(currentTransientGaps(subscriber)).hasSize(19_995)
+                                                    .doesNotContain(GlobalEventOrder.of(5), GlobalEventOrder.of(9_000), GlobalEventOrder.of(15_001));
+        assertThat(permanentGaps(gapHandler)).contains(GlobalEventOrder.of(5), GlobalEventOrder.of(9_000), GlobalEventOrder.of(15_000),
+                                                       GlobalEventOrder.of(15_001), GlobalEventOrder.of(15_002));
+    }
+
+    /**
+     * Every subscriber of an aggregate type gives up the same orders at about the same time, and each records them as
+     * permanent gaps. Whatever order a subscriber's rows come back in, the permanent gaps are inserted ascending, so two
+     * concurrent give-ups never deadlock. Here the rows come back in heap order (index scans off), which is opposite for
+     * the two subscribers.
+     */
+    @Test
+    void concurrent_give_ups_of_the_same_orders_do_not_deadlock() throws Exception {
+        var eventStreamGapHandler = new PostgresqlEventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration>(unitOfWorkFactory,
+                                                                                                                          Duration.ofSeconds(60),
+                                                                                                                          ResolveTransientGapsToIncludeInQueryStrategy.defaultSelection(),
+                                                                                                                          ResolveTransientGapsToPermanentGapsPromotionStrategy.thresholdBased(120));
+        var ascending  = SubscriberId.of("gap-concurrent-ascending-sub");
+        var descending = SubscriberId.of("gap-concurrent-descending-sub");
+        var handlers   = List.of(eventStreamGapHandler.gapHandlerFor(ascending), eventStreamGapHandler.gapHandlerFor(descending));
+        var executor   = Executors.newFixedThreadPool(2);
+        try {
+            for (var round = 0; round < 20; round++) {
+                long from = 1_000_000L + round * 1_000L, to = from + 499;
+                insertTransientGaps(ascending, "generate_series(" + from + ", " + to + ")");
+                insertTransientGaps(descending, "generate_series(" + to + ", " + from + ", -1)");
+                var bothReady = new CyclicBarrier(2);
+                var giveUps = handlers.stream()
+                                      .map(handler -> executor.submit(() -> unitOfWorkFactory.withUnitOfWork(unitOfWork -> {
+                                          unitOfWork.handle().execute("SET LOCAL enable_indexscan = off");
+                                          unitOfWork.handle().execute("SET LOCAL enable_bitmapscan = off");
+                                          handler.getTransientGapsFor(aggregateType);
+                                          await(bothReady);
+                                          return handler.giveUpTransientGapRanges(aggregateType, List.of(LongRange.between(from, to)));
+                                      })))
+                                      .toList();
+                for (var giveUp : giveUps) {
+                    assertThat(giveUp.get(30, TimeUnit.SECONDS)).as("round " + round).isEqualTo(new GapReconciliation(0, 0, 500));
+                }
+            }
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    private void insertTransientGaps(SubscriberId subscriber, String orders) {
+        unitOfWorkFactory.usingUnitOfWork(unitOfWork -> unitOfWork.handle()
+                                                                  .createUpdate("INSERT INTO " + TRANSIENT_SUBSCRIBER_GAPS_TABLE_NAME + " (subscriber_id, aggregate_type, gap_global_event_order, first_discovered) " +
+                                                                                        "SELECT :subscriber_id, :aggregate_type, order_, now() FROM " + orders + " AS order_")
+                                                                  .bind("subscriber_id", subscriber)
+                                                                  .bind("aggregate_type", aggregateType)
+                                                                  .execute());
+    }
+
+    private static void await(CyclicBarrier barrier) {
+        try {
+            barrier.await(10, TimeUnit.SECONDS);
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /**
+     * Up to 0.60.0 the gap tables came with an index on (subscriber_id, aggregate_type), which made the planner filter
+     * gap orders instead of looking them up. A database that has it loses it when the gap handler starts
+     */
+    @Test
+    void the_index_that_duplicated_the_primary_keys_leading_columns_is_dropped_at_start_up() {
+        unitOfWorkFactory.usingUnitOfWork(unitOfWork -> unitOfWork.handle().execute("CREATE INDEX IF NOT EXISTS transient_subscriber_gaps_index ON " +
+                                                                                             TRANSIENT_SUBSCRIBER_GAPS_TABLE_NAME + "(subscriber_id, aggregate_type)"));
+        assertThat(transientGapIndexes()).contains("transient_subscriber_gaps_index");
+
+        new PostgresqlEventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration>(unitOfWorkFactory,
+                                                                                               Duration.ofSeconds(60),
+                                                                                               ResolveTransientGapsToIncludeInQueryStrategy.defaultSelection(),
+                                                                                               ResolveTransientGapsToPermanentGapsPromotionStrategy.thresholdBased(120));
+
+        assertThat(transientGapIndexes()).containsExactly(TRANSIENT_SUBSCRIBER_GAPS_TABLE_NAME + "_pkey");
+    }
+
+    /**
      * Recording a range of transient gaps records each order once, except those that are permanent gaps of the
      * aggregate type already, and changes no other gap
      */
@@ -779,6 +895,23 @@ class PostgresqlEventStreamGapHandlerIT {
     private List<GlobalEventOrder> permanentGaps(SubscriptionGapHandler gapHandler) {
         List<GlobalEventOrder> gaps = unitOfWorkFactory.withUnitOfWork(unitOfWork -> gapHandler.getPermanentGapsFor(aggregateType).toList());
         return gaps;
+    }
+
+    private List<String> transientGapIndexes() {
+        return unitOfWorkFactory.withUnitOfWork(unitOfWork -> unitOfWork.handle()
+                                                                        .createQuery("SELECT indexname FROM pg_indexes WHERE tablename = :table ORDER BY indexname")
+                                                                        .bind("table", TRANSIENT_SUBSCRIBER_GAPS_TABLE_NAME)
+                                                                        .mapTo(String.class)
+                                                                        .list());
+    }
+
+    private static long transientGapRowsReadInThisTransaction(EventStoreUnitOfWork unitOfWork) {
+        return unitOfWork.handle()
+                         .createQuery("SELECT coalesce(seq_tup_read, 0) + coalesce(idx_tup_fetch, 0) FROM pg_stat_xact_user_tables WHERE relname = :table")
+                         .bind("table", TRANSIENT_SUBSCRIBER_GAPS_TABLE_NAME)
+                         .mapTo(Long.class)
+                         .findOne()
+                         .orElse(0L);
     }
 
     private List<GlobalEventOrder> currentTransientGaps(SubscriberId subscriber) {

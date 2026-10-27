@@ -9,12 +9,14 @@
   - a delivery-mode bug is fixed;
   - stored delivery errors are readable.
 - Shard-owned engine: four failure-path bugs are fixed, and attempt counts survive a change of owner.
+- Event store: concurrent gap give-ups no longer deadlock, and a give-up costs what it gives up rather than every
+  gap outstanding (one redundant index dropped, §1.11).
 - Units of work: a long-standing bug is fixed where the JDBI and event-store units of work never ran `afterCommit`
   or `afterRollback` callbacks (see §1.0).
 
-There are no API removals and no schema changes. The shard-owned adapter writes a new, cheaper message format and
-still reads the old one (§1.8). A few behaviours change in ways a test or a dashboard can notice; they are listed
-first.
+There are no API removals. One schema change removes a redundant index on the event store's gap table (§1.11). The
+shard-owned adapter writes a new, cheaper message format and still reads the old one (§1.8). A few behaviours change in
+ways a test or a dashboard can notice; they are listed first.
 
 ## 1. Behaviour changes — read this first
 
@@ -187,6 +189,30 @@ closed its books at UTC end of day instead of New York's. Check your annotations
 serialization and an insert inside the command's transaction - every tenth event of every aggregate without an
 interval of its own. `@AggregateSnapshotPolicy` keeps its own default of 100. Set the property to keep the old interval.
 
+### 1.11 The gap table loses a redundant index (`postgresql-event-store`)
+
+`PostgresqlEventStreamGapHandler` now drops `transient_subscriber_gaps_index`, an index on
+`transient_subscriber_gaps (subscriber_id, aggregate_type)`, at start-up (`DROP INDEX IF EXISTS`, every boot). The
+table's primary key, `(subscriber_id, aggregate_type, gap_global_event_order)`, starts with the same columns and serves
+every statement on the table.
+
+The index did harm. With statistics taken while the table was small - as it is after every drain - the planner chose
+it as the smaller index and filtered the gap orders instead of looking them up. Giving up a few gaps then read every
+transient gap the subscriber had outstanding, and that cost grows with the number of concurrent appends that roll back
+(optimistic-concurrency conflicts), since every subscriber of the aggregate type records each one. The give-up now binds
+the orders as one array, which, with only the primary key available, is part of the index lookup. Measured with
+`auto_explain` in the trading demo before the change: a give-up read a median of 1 509 rows to give up 2, and the
+statement was 9.7 % of the database's statement time. With the change and §2.12, three alternating runs each: 0.47-0.53
+ms per give-up instead of 1.1-2.0 ms, 4.3-4.4 s of database time per run instead of 8.5-17.1 s; latency unchanged within
+the spread.
+
+- Briefly takes an exclusive lock on `transient_subscriber_gaps` the first time it runs; the table is normally small.
+- **With the schema harness in `validate` mode, startup fails until the change is applied** - as for any new schema
+  change: the new change `transient-gaps-index-dropped` has no ledger row yet ("not applied"). Apply the script `emit`
+  writes (it carries the `DROP INDEX IF EXISTS` and its ledger row), then start. In the default `create` mode nothing
+  needs doing.
+- A 0.60.0 instance restarting during a rolling upgrade creates the index again; the next 0.60.1 start drops it.
+
 ## 2. Fixes
 
 ### 2.0 A busy queue is no longer held to one poll per interval (`postgresql-queue`)
@@ -334,6 +360,16 @@ queues are quiet. `ShardOwnerMetrics.pumpConnectionsReleased` counts the release
 Measured (`docs/durable-queue-measurements.md` §3.15): with 4 pumps and 1 held, the trading demo holds 2 connections
 instead of 5 while quiet, between rushes as well as when idle, with latency unchanged within the spread. The default
 (every pump held) is unchanged, and benchmarks the same as before.
+
+### 2.12 Concurrent gap give-ups no longer deadlock (`postgresql-event-store`)
+
+Every subscriber of an aggregate type records the same rolled-back global orders as permanent gaps, at about the same
+time, as they share the give-up timeout. `PostgresqlEventStreamGapHandler` inserted them in whatever order its rows came
+back in, so two subscribers inserting overlapping orders in different orders could deadlock. PostgreSQL resolves that only
+after `deadlock_timeout` (1 s by default), and a CDC subscription's delivery waits on its give-up meanwhile. In the
+trading demo this happened 1-2 times per run as shipped, and 37 times in one run, stalling settlement for 40 s, once a
+different plan returned the rows in heap order. Permanent gaps are now inserted in ascending order on every path (range
+give-up, per-order give-up, promotion), so concurrent give-ups cannot form a cycle.
 
 ## 3. Documentation
 

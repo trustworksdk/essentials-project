@@ -98,6 +98,12 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
     static final int MAX_GLOBAL_ORDERS_PER_STATEMENT = 1_000;
 
     /**
+     * The most orders a range give-up ({@link SubscriptionGapHandler#giveUpTransientGapRanges}) binds as one array to look
+     * them up by primary key - a bound on the statement's size, not on any workload; wider give-ups match by range
+     */
+    static final int MAX_GIVEN_UP_ORDERS_LOOKED_UP_BY_KEY = 10_000;
+
+    /**
      * {@code ranges} - closed - keyed by where each starts, for {@link #covers}
      */
     private static NavigableMap<Long, Long> rangesByFromInclusive(List<LongRange> ranges) {
@@ -217,10 +223,16 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
                                                        "   first_discovered TIMESTAMP WITH TIME ZONE NOT NULL\n," +
                                                        "   PRIMARY KEY (subscriber_id, aggregate_type, gap_global_event_order)\n" +
                                                        ")"),
-                       SchemaChange.repeatable("transient-gaps-index",
+                       // Up to 0.60.0 an index on (subscriber_id, aggregate_type) was created here ("transient-gaps-index").
+                       // It duplicated the primary key's leading columns, and every statement on the table filters on all
+                       // of them; worse, with statistics taken while the table was small the planner preferred it, as the
+                       // smaller index, and applied the gap orders as a filter - reading every outstanding gap of the
+                       // subscriber to touch a few. Without it the orders are part of the primary-key lookup. Repeatable,
+                       // as an older instance restarting during a rolling upgrade creates it again; the change creating it
+                       // is no longer contributed, never edited, so its recorded checksum stays valid.
+                       SchemaChange.repeatable("transient-gaps-index-dropped",
                                                TRANSIENT_SUBSCRIBER_GAPS_TABLE_NAME,
-                                               "CREATE INDEX IF NOT EXISTS " + TRANSIENT_SUBSCRIBER_GAPS_INDEX_NAME + " ON \n" +
-                                                       TRANSIENT_SUBSCRIBER_GAPS_TABLE_NAME + "(subscriber_id, aggregate_type)"),
+                                               "DROP INDEX IF EXISTS " + TRANSIENT_SUBSCRIBER_GAPS_INDEX_NAME),
                        SchemaChange.repeatable("permanent-gaps-table",
                                                PERMANENT_GAPS_TABLE_NAME,
                                                "CREATE TABLE IF NOT EXISTS " + PERMANENT_GAPS_TABLE_NAME + " (\n" +
@@ -632,31 +644,74 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
                                  gaps.stream()
                                      .filter(gap -> !covers(rangesByFromInclusive, gap._1.longValue()))
                                      .collect(Collectors.toList()));
-            var promoted = unitOfWork.handle().createQuery("WITH given_up AS (\n" +
-                                                                   "    DELETE FROM " + TRANSIENT_SUBSCRIBER_GAPS_TABLE_NAME + " gaps\n" +
-                                                                   "    USING unnest(CAST(:from_inclusive AS bigint[]), CAST(:to_inclusive AS bigint[])) AS given_up_range(from_inclusive, to_inclusive)\n" +
-                                                                   "    WHERE gaps.aggregate_type = :aggregate_type AND gaps.subscriber_id = :subscriber_id\n" +
-                                                                   "      AND gaps.gap_global_event_order BETWEEN given_up_range.from_inclusive AND given_up_range.to_inclusive\n" +
-                                                                   "    RETURNING gaps.gap_global_event_order\n" +
-                                                                   "), recorded AS (\n" +
-                                                                   "    INSERT INTO " + PERMANENT_GAPS_TABLE_NAME + " (aggregate_type, gap_global_event_order, added_timestamp)\n" +
-                                                                   "    SELECT :aggregate_type, gap_global_event_order, :added_timestamp FROM given_up\n" +
-                                                                   "    ON CONFLICT DO NOTHING\n" +
-                                                                   ")\n" +
-                                                                   "SELECT count(*) FROM given_up")
-                                     .bind("aggregate_type", aggregateType)
-                                     .bind("subscriber_id", subscriberId)
-                                     .bind("added_timestamp", now())
-                                     .bindArray("from_inclusive", Long.class, ranges.stream().map(range -> range.fromInclusive).toList())
-                                     .bindArray("to_inclusive", Long.class, ranges.stream().map(LongRange::getToInclusive).toList())
-                                     .mapTo(Long.class)
-                                     .one();
+            // By the orders themselves, so a give-up costs what it gives up, not what the subscriber has outstanding: the
+            // orders are part of the primary-key lookup. Most given-up ranges are a single order (rolled-back appends).
+            // Matched by range, the planner read every outstanding transient gap of the subscriber and filtered them per
+            // range - measured in the trading demo at 1 500 rows read to give up 2, and 1.8 million for one wide give-up.
+            // A join to the unnested orders is no cure: with statistics taken while the table was small, the planner may
+            // put the gaps on the outside. The range form stays for a give-up wider than an order list is worth binding.
+            var orders  = ordersWithin(ranges, MAX_GIVEN_UP_ORDERS_LOOKED_UP_BY_KEY);
+            var givenUp = orders.isPresent()
+                          ? "    DELETE FROM " + TRANSIENT_SUBSCRIBER_GAPS_TABLE_NAME + " gaps\n" +
+                            "    WHERE gaps.aggregate_type = :aggregate_type AND gaps.subscriber_id = :subscriber_id\n" +
+                            "      AND gaps.gap_global_event_order = ANY(CAST(:orders AS bigint[]))\n"
+                          : "    DELETE FROM " + TRANSIENT_SUBSCRIBER_GAPS_TABLE_NAME + " gaps\n" +
+                            "    USING unnest(CAST(:from_inclusive AS bigint[]), CAST(:to_inclusive AS bigint[])) AS given_up_range(from_inclusive, to_inclusive)\n" +
+                            "    WHERE gaps.aggregate_type = :aggregate_type AND gaps.subscriber_id = :subscriber_id\n" +
+                            "      AND gaps.gap_global_event_order BETWEEN given_up_range.from_inclusive AND given_up_range.to_inclusive\n";
+            var query = unitOfWork.handle().createQuery("WITH given_up AS (\n" +
+                                                                givenUp +
+                                                                "    RETURNING gaps.gap_global_event_order\n" +
+                                                                "), recorded AS (\n" +
+                                                                "    INSERT INTO " + PERMANENT_GAPS_TABLE_NAME + " (aggregate_type, gap_global_event_order, added_timestamp)\n" +
+                                                                "    SELECT :aggregate_type, gap_global_event_order, :added_timestamp FROM given_up ORDER BY gap_global_event_order\n" +
+                                                                "    ON CONFLICT DO NOTHING\n" +
+                                                                ")\n" +
+                                                                "SELECT count(*) FROM given_up")
+                                  .bind("aggregate_type", aggregateType)
+                                  .bind("subscriber_id", subscriberId)
+                                  .bind("added_timestamp", now());
+            if (orders.isPresent()) {
+                query.bindArray("orders", Long.class, orders.get());
+            } else {
+                query.bindArray("from_inclusive", Long.class, ranges.stream().map(range -> range.fromInclusive).toList())
+                     .bindArray("to_inclusive", Long.class, ranges.stream().map(LongRange::getToInclusive).toList());
+            }
+            var promoted = query.mapTo(Long.class).one();
             log.debug("[{}] Promoted {} given up Transient '{}' Gaps within {} to be Permanent Gaps",
                       subscriberId,
                       promoted,
                       aggregateType,
                       ranges);
             return Math.toIntExact(promoted);
+        }
+
+        /**
+         * {@code permanentGaps} ascending - the order every statement inserts permanent gaps in. Every subscriber of an
+         * aggregate type records the same orders as permanent, at about the same time (they share the give-up timeout),
+         * and an insert that meets another transaction's uncommitted row for the same order waits for it to commit. Two
+         * inserting overlapping orders in different orders deadlock, which PostgreSQL resolves only after
+         * {@code deadlock_timeout} (1 s by default) - stalling both subscribers' delivery. Measured in the trading demo: 37
+         * deadlocks in one run when the rows came back in heap order, and a 40 s stall.
+         */
+        private static List<GlobalEventOrder> inInsertOrder(Collection<GlobalEventOrder> permanentGaps) {
+            return permanentGaps.stream().sorted(Comparator.comparingLong(GlobalEventOrder::longValue)).toList();
+        }
+
+        /**
+         * Every order within {@code ranges}, or empty if there are more than {@code max}
+         */
+        private static Optional<List<Long>> ordersWithin(List<LongRange> ranges, int max) {
+            var orders = new ArrayList<Long>();
+            for (var range : ranges) {
+                if (range.getToInclusive() - range.fromInclusive + 1 > max - orders.size()) {
+                    return Optional.empty();
+                }
+                for (var order = range.fromInclusive; order <= range.getToInclusive(); order++) {
+                    orders.add(order);
+                }
+            }
+            return Optional.of(orders);
         }
 
         /**
@@ -713,7 +768,7 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
                                                                          "(aggregate_type, gap_global_event_order, added_timestamp) " +
                                                                          "VALUES (:aggregate_type, :gap_global_event_order, :added_timestamp) " +
                                                                          "ON CONFLICT DO NOTHING");
-            for (var permanentGap : deleted) {
+            for (var permanentGap : inInsertOrder(deleted)) {
                 preparedBatch
                         .bind("aggregate_type", aggregateType)
                         .bind("gap_global_event_order", permanentGap)
@@ -764,7 +819,7 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
                                                                          "VALUES (:aggregate_type, :gap_global_event_order, :added_timestamp) " +
                                                                          "ON CONFLICT DO NOTHING");
 
-            for (var permanentGap : promotableTransientGaps) {
+            for (var permanentGap : inInsertOrder(promotableTransientGaps)) {
                 preparedBatch
                         .bind("aggregate_type", aggregateType)
                         .bind("gap_global_event_order", permanentGap)
