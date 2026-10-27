@@ -70,8 +70,9 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  * or a suppressed exception, of the throwable thrown) is not recovered from. What it ends depends on the thread it reaches:
  * <ul>
  *     <li><b>the lock confirmation</b>: the critical error ends the scheduled lock confirmation. First every lock this instance
- *     still holds is released locally (not in the DB - the rows expire after the lock timeout), and the error is logged at
- *     ERROR, because the task's {@link ScheduledFuture} it escapes into is never read. Thrown inside the confirmation's
+ *     still holds is released locally (not in the DB - the rows expire after the lock timeout), the error is logged at
+ *     ERROR, because the task's {@link ScheduledFuture} it escapes into is never read, and
+ *     {@link FencedLockEvents.LockConfirmationEnded} is published. Thrown inside the confirmation's
  *     {@link UnitOfWork}, it rolls back the confirmations made in that tick</li>
  *     <li><b>an async acquiring</b> ({@link #acquireLockAsync(LockName, LockCallback)}): the critical error ends the async
  *     acquiring of that lock, and is logged at ERROR first; when it came from <code>lockAcquired</code>, the lock is released
@@ -85,15 +86,22 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  * The state left behind:
  * <ul>
  *     <li>after the scheduled lock confirmation has ended, {@link #isStarted()} is still <code>true</code> and
- *     {@link #isLockConfirmationEnded()} returns <code>true</code>, so code (a liveness probe, say) can tell this state, but
+ *     {@link #isLockConfirmationEnded()} (also on {@link FencedLockManager}) returns <code>true</code>, and
+ *     {@link FencedLockEvents.LockConfirmationEnded} has been published, so code (a liveness probe or a subscriber, say) can
+ *     tell this state, but
  *     this lock manager acquires no lock, since it could not confirm it - its row would expire after the lock timeout while its holder
  *     believed it held it: {@link #tryAcquireLock(LockName)} and {@link #tryAcquireLock(LockName, Duration)} return empty,
  *     {@link #acquireLock(LockName)} throws {@link IllegalStateException}, and the ticks of an async acquiring, one still
  *     running or one {@link #acquireLockAsync(LockName, LockCallback)} starts afterwards, do nothing, so its
- *     <code>lockAcquired</code> is not called. This lock manager does not recover from it on its own: the way back is to
+ *     <code>lockAcquired</code> is not called. The first refused acquire of each lock, and the first refused tick of each
+ *     async acquiring, is logged at WARN, later ones at DEBUG. This lock manager does not recover from it on its own: the way back is to
  *     restart the application, or stop and start the lock manager ({@link #stop()}, then {@link #start()}), which starts
  *     the lock confirmation again and resumes every async acquiring not cancelled with
- *     {@link #cancelAsyncLockAcquiring(LockName)}</li>
+ *     {@link #cancelAsyncLockAcquiring(LockName)}. No Spring Boot starter registers a health indicator for this state:
+ *     reporting it <code>DOWN</code> would let a liveness probe carry out the restart, but a probe must not restart pods by
+ *     default, so such an indicator needs an opt-in property, like the opt-in dead-letter threshold of the
+ *     <code>DurableQueuesHealthIndicator</code>, and none exists for this state yet. An application that wants one calls
+ *     {@link FencedLockManager#isLockConfirmationEnded()} from its own indicator</li>
  *     <li>after {@link #stop()} has thrown a critical error, the lock manager is stopped ({@link #isStarted()} is
  *     <code>false</code>) and can be started again</li>
  *     <li>an async acquiring ended by a critical error keeps its entry - see {@link #acquireLockAsync(LockName, LockCallback)}
@@ -163,6 +171,18 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
      * cleared by {@link #start()}. While set, this lock manager acquires no lock: it could not confirm it
      */
     private volatile boolean         confirmationEnded;
+    /**
+     * The lock names an acquire ({@link #tryAcquireLock(LockName)}, {@link #tryAcquireLock(LockName, Duration)},
+     * {@link #acquireLock(LockName)}) has been refused for, and logged at WARN, since the scheduled lock confirmation ended -
+     * later refusals for the same name are logged at DEBUG. Cleared by {@link #start()} and when the confirmation ends
+     */
+    private final Set<LockName>      acquiresRefusedAsTheConfirmationHasEnded        = ConcurrentHashMap.newKeySet();
+    /**
+     * The lock names whose async acquiring ({@link #acquireLockAsync(LockName, LockCallback)}) has had a tick refused, and
+     * logged at WARN, since the scheduled lock confirmation ended - its later ticks are logged at DEBUG. Cleared by {@link #start()}
+     * and when the confirmation ends
+     */
+    private final Set<LockName>      asyncAcquiringsRefusedAsTheConfirmationHasEnded = ConcurrentHashMap.newKeySet();
 
     private   ScheduledExecutorService lockConfirmationExecutor;
     private   ScheduledExecutorService asyncLockAcquiringExecutor;
@@ -221,6 +241,8 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
             try {
                 stopping = false;
                 confirmationEnded = false;
+                acquiresRefusedAsTheConfirmationHasEnded.clear();
+                asyncAcquiringsRefusedAsTheConfirmationHasEnded.clear();
                 lockConfirmationExecutor = Executors.newScheduledThreadPool(1,
                                                                             new ThreadFactoryBuilder()
                                                                                     .nameFormat(lockManagerInstanceId + "-FencedLock-Confirmation-%d")
@@ -378,6 +400,10 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
             // Escaping, it ends the scheduled confirmation - see the class javadoc, "Errors". Recorded first, still under
             // reentrantLock, so no acquire made from here on gets a lock that would never be confirmed
             confirmationEnded = true;
+            // Cleared here as well as in start(): a refusal that read the flag of an earlier end just before start() can
+            // record its name after start() cleared the sets, and would then be logged at DEBUG only for this end
+            acquiresRefusedAsTheConfirmationHasEnded.clear();
+            asyncAcquiringsRefusedAsTheConfirmationHasEnded.clear();
             releaseHeldLocksLocallyAsTheConfirmationEnds(e);
             throw e;
         } finally {
@@ -393,18 +419,34 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
      * itself as held by this instance before its row can expire and another instance take it over. Not in the DB: the rows
      * expire after <code>lockTimeOut</code>. A failure of one local release, critical or not, is added to <code>failure</code>
      * as suppressed and the next lock released all the same. <code>failure</code> is logged at ERROR afterwards, because the
-     * task's {@link ScheduledFuture} it escapes into is never read.
+     * task's {@link ScheduledFuture} it escapes into is never read, naming the locks whose async acquiring now acquires nothing.
+     * Then {@link LockConfirmationEnded} is published; a failure of a subscriber is logged at ERROR and added to
+     * <code>failure</code> as suppressed, never thrown in its place.
      *
      * @param failure the failure that ends the scheduled confirmation
      */
     private void releaseHeldLocksLocallyAsTheConfirmationEnds(Throwable failure) {
-        var heldLocks = List.copyOf(locksAcquiredByThisLockManager.values());
-        heldLocks.forEach(lock -> releaseLocally(lock, localReleaseFailure -> addSuppressedOnce(failure, localReleaseFailure)));
+        var heldLocks     = List.copyOf(locksAcquiredByThisLockManager.values());
+        var releasedLocks = new ArrayList<LockName>(heldLocks.size());
+        heldLocks.forEach(lock -> {
+            if (releaseLocally(lock, localReleaseFailure -> addSuppressedOnce(failure, localReleaseFailure))) {
+                releasedLocks.add(lock.getName());
+            }
+        });
+        var stalledAsyncAcquirings = asyncLockAcquirings.keySet().stream().map(LockName::toString).sorted().toList();
         log.error(msg("[{}] The lock confirmation failed with {} - released the {} lock(s) this lock manager instance held locally only "
                       + "(their rows expire after the lock timeout) and the scheduled lock confirmation has ended: this lock manager "
                       + "acquires no lock from now on (tryAcquireLock returns empty, acquireLock throws, async acquiring acquires nothing), "
-                      + "until the application is restarted, or the lock manager is stopped and started",
-                      lockManagerInstanceId, isCriticalError(failure) ? "a critical error" : "an unexpected failure", heldLocks.size()), failure);
+                      + "until the application is restarted, or the lock manager is stopped and started. "
+                      + "The {} async lock acquiring(s) that acquire nothing until then are for lock(s): {}",
+                      lockManagerInstanceId, isCriticalError(failure) ? "a critical error" : "an unexpected failure", heldLocks.size(),
+                      stalledAsyncAcquirings.size(), stalledAsyncAcquirings), failure);
+        try {
+            notify(new LockConfirmationEnded(this, failure, releasedLocks));
+        } catch (Throwable e) {
+            log.error(msg("[{}] A subscriber failed handling the LockConfirmationEnded event", lockManagerInstanceId), e);
+            addSuppressedOnce(failure, e);
+        }
     }
 
 
@@ -813,6 +855,7 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
      * started again ({@link #start()} on a lock manager that is still started does nothing, and a {@link #stop()} alone does
      * not clear it), otherwise <code>false</code>
      */
+    @Override
     public boolean isLockConfirmationEnded() {
         return confirmationEnded;
     }
@@ -942,14 +985,32 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
 
     private static final long NO_WAIT_LIMIT = -1L;
 
+    /**
+     * Logs a refused acquire at WARN the first time for each lock name since the scheduled lock confirmation ended, and at
+     * DEBUG after that, so a caller that retries does not repeat the WARN
+     */
     private void logNotAcquiringAsTheConfirmationHasEnded(LockName lockName) {
-        log.debug("[{}] The scheduled lock confirmation has ended - not acquiring lock '{}', which this lock manager could not confirm, "
-                  + "until the application is restarted, or the lock manager is stopped and started", lockManagerInstanceId, lockName);
+        var message = "[{}] The scheduled lock confirmation has ended - not acquiring lock '{}', which this lock manager could not confirm, "
+                      + "until the application is restarted, or the lock manager is stopped and started";
+        if (acquiresRefusedAsTheConfirmationHasEnded.add(lockName)) {
+            log.warn(message + " (logged at WARN for the first refused acquire of this lock, at DEBUG after that)", lockManagerInstanceId, lockName);
+        } else {
+            log.debug(message, lockManagerInstanceId, lockName);
+        }
     }
 
+    /**
+     * Logs a refused tick of an async acquiring at WARN for its first tick since the scheduled lock confirmation ended, and at
+     * DEBUG for its later ticks, which come every lock confirmation interval
+     */
     private void logAsyncAcquiringNotAcquiringAsTheConfirmationHasEnded(LockName lockName) {
-        log.debug("[{}] The scheduled lock confirmation has ended - the async acquiring of lock '{}' is not acquiring it, as this lock manager "
-                  + "could not confirm it, until the application is restarted, or the lock manager is stopped and started", lockManagerInstanceId, lockName);
+        var message = "[{}] The scheduled lock confirmation has ended - the async acquiring of lock '{}' is not acquiring it, as this lock manager "
+                      + "could not confirm it, until the application is restarted, or the lock manager is stopped and started";
+        if (asyncAcquiringsRefusedAsTheConfirmationHasEnded.add(lockName)) {
+            log.warn(message + " (logged at WARN for the first refused tick of an async acquiring of this lock, at DEBUG for its later ticks)", lockManagerInstanceId, lockName);
+        } else {
+            log.debug(message, lockManagerInstanceId, lockName);
+        }
     }
 
     /**
@@ -1207,7 +1268,9 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
      * <code>lockAcquired</code> and the lock was released first looks like any other release), and none of
      * {@link #isLockAcquired(LockName)}, {@link #isLockedByThisLockManagerInstance(LockName)} and
      * {@link #isLockAcquiredByAnotherLockManagerInstance(LockName)} tells an ended acquiring apart from one still waiting
-     * for the lock.
+     * for the lock. That is about an acquiring a critical error of its own has ended; an acquiring that acquires nothing
+     * because the scheduled lock confirmation has ended is told by {@link FencedLockEvents.LockConfirmationEnded}, published
+     * when the confirmation ends, and by {@link #isLockConfirmationEnded()} - see the class javadoc, "The state left behind".
      * The ended acquiring keeps its entry, so calling this method again for the same lock name does not restart it. To
      * restart it, call {@link #cancelAsyncLockAcquiring(LockName)} and then this method, or stop and start the lock manager.
      * <p>

@@ -64,7 +64,9 @@ public interface FencedLockManager extends Lifecycle {
      * either caller releases it for both. See the class documentation.
      *
      * @param lockName the name of the lock
-     * @return An Optional with the {@link FencedLock} IF it was acquired by (or is already held by) the {@link FencedLockManager} on this JVM Node, otherwise it return an empty Optional
+     * @return An Optional with the {@link FencedLock} IF it was acquired by (or is already held by) the {@link FencedLockManager} on this JVM Node, otherwise it return an empty Optional.
+     * Empty, too, for a lock this lock manager instance does not hold, once its shutdown has started, or while it can no
+     * longer confirm locks ({@link #isLockConfirmationEnded()}) - until it is stopped and started again
      */
     Optional<FencedLock> tryAcquireLock(LockName lockName);
 
@@ -79,7 +81,10 @@ public interface FencedLockManager extends Lifecycle {
      *
      * @param lockName the name of the lock
      * @param timeout  timeout for the lock acquiring
-     * @return An Optional with the {@link FencedLock} IF it was acquired by the {@link FencedLockManager} on this JVM Node, otherwise it return an empty Optional
+     * @return An Optional with the {@link FencedLock} IF it was acquired by the {@link FencedLockManager} on this JVM Node, otherwise it return an empty Optional.
+     * Empty, too, for a lock this lock manager instance does not hold, once its shutdown has started, or while it can no
+     * longer confirm locks ({@link #isLockConfirmationEnded()}) - until it is stopped and started again - and then without
+     * waiting for the timeout
      */
     Optional<FencedLock> tryAcquireLock(LockName lockName, Duration timeout);
 
@@ -93,6 +98,9 @@ public interface FencedLockManager extends Lifecycle {
      *
      * @param lockName the name of the lock
      * @return The {@link FencedLock} when can be acquired by this JVM Node
+     * @throws IllegalStateException rather than wait, when this lock manager instance does not hold the lock and either its
+     *                               shutdown has started, or it can no longer confirm locks ({@link #isLockConfirmationEnded()})
+     *                               until it is stopped and started again - although {@link #isStarted()} is still <code>true</code>
      */
     FencedLock acquireLock(LockName lockName);
 
@@ -124,6 +132,24 @@ public interface FencedLockManager extends Lifecycle {
      * is not locked or is locked by this {@link FencedLockManager} instance
      */
     boolean isLockAcquiredByAnotherLockManagerInstance(LockName lockName);
+
+    /**
+     * Has this lock manager stopped confirming the locks it acquires? While it has, {@link #isStarted()} can still be
+     * <code>true</code>, but it acquires no lock - it could not confirm it: {@link #tryAcquireLock(LockName)} and
+     * {@link #tryAcquireLock(LockName, Duration)} return empty, {@link #acquireLock(LockName)} throws
+     * {@link IllegalStateException} and an {@link #acquireLockAsync(LockName, LockCallback)} acquires nothing, so the
+     * components taking their locks through it are not served by this instance. The way back is to restart the application,
+     * or to stop and start the lock manager.
+     * <p>
+     * The database-backed lock managers end their lock confirmation on a critical error, and publish
+     * {@link FencedLockEvents.LockConfirmationEnded} when they do - see {@link DBFencedLockManager#isLockConfirmationEnded()}.
+     *
+     * @return <code>true</code> while this lock manager's lock confirmation has ended, otherwise <code>false</code>. The default
+     * returns <code>false</code>, for an implementation whose lock confirmation never ends
+     */
+    default boolean isLockConfirmationEnded() {
+        return false;
+    }
 
     /**
      * Asynchronously try to acquire a lock by the given name and call the {@link LockCallback#lockAcquired(FencedLock)}
