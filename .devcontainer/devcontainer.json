@@ -52,13 +52,18 @@
             // MAVEN_SHA512 is managed in Dockerfile — only override here if you
             // change MAVEN_VERSION to a version different from the Dockerfile default.
             // JAVA_VERSION is the default JDK: it backs /usr/lib/jvm/temurin-jdk and
-            // JAVA_HOME. 25 is required by the Spring Boot 4 branches, which compile with
-            // maven.compiler.release=21 but enforce requireJavaVersion [21,26).
+            // JAVA_HOME. The build compiles with --release 25 and its enforcer requires
+            // a JDK in [25,28), so 25 is the floor.
             "JAVA_VERSION": "25",
+            // Exact Temurin apt package version for JAVA_VERSION, so a rebuild installs
+            // the JDK you chose instead of whatever patch the Adoptium repo has that
+            // day. 25.0.5+8 is the October 2026 CPU. List what exists with
+            // `apt-cache madison temurin-25-jdk`; "" installs the newest.
+            "JAVA_PACKAGE_VERSION": "25.0.5.0.0+8-0",
             // Kept installed alongside the default for the Java 17 branches. Build those
             // with JAVA_HOME=/usr/lib/jvm/temurin-17-jdk-$(dpkg --print-architecture).
             "ADDITIONAL_JAVA_VERSIONS": "17",
-            "MAVEN_VERSION": "3.9.16",
+            "MAVEN_VERSION": "3.10.0",
 
             // JetBrains IDE backend — for reference/scripts only.
             // To change the actual IDE, edit customizations.jetbrains.backend below.
@@ -83,7 +88,8 @@
         },
         // Node.js via DevContainer feature.
         "ghcr.io/devcontainers/features/node:1": {
-            "version": "26",
+            // Exact release, not the bare major: 26.12.1 is the 2026-10-21 security release.
+            "version": "26.12.1",
             "nodeGypDependencies": true
         },
         // Python via DevContainer feature
@@ -177,6 +183,12 @@
         // (HEADROOM_WORKSPACE_DIR). Harmless when the tools are not installed.
         "HEADROOM_BEACON": "off",
         "HEADROOM_OFFLINE": "1",
+        // The one switch HEADROOM_OFFLINE does NOT cover (binaries.py has its own):
+        // the GitHub release downloads headroom fetches for its tool interceptors.
+        // Reachable only from `headroom proxy --intercept-tool-results`, which this
+        // proxy-free [code,mcp] install never runs; pinned anyway so the posture is
+        // "no unexpected outbound connections". ensure_tools() skips on OfflineError.
+        "HEADROOM_BINARIES_OFFLINE": "1",
         "GRAPHIFY_QUERY_LOG_DISABLE": "1",
         // Make the local `graphify update` rebuild AUTHORITATIVE. `update` (run by
         // post-create and by graphify's own post-commit/post-checkout git hooks)
@@ -203,6 +215,15 @@
         // mcp_server.py:365). Upstream still flags it, so treat as experimental.
         "HEADROOM_MCP_READ": "on",
         "RTK_TELEMETRY_DISABLED": "1",
+        // rtk >= 1.0: `rtk init` offers a proxy on-ramp prompt in interactive mode.
+        // post-create.sh runs it non-interactively; this keeps a hand-run quiet too.
+        "RTK_ONRAMP_DISABLED": "1",
+        // @scarf/scarf install-time analytics, which many npm packages pull in:
+        // they honour DO_NOT_TRACK=1 only when it is exactly "1";
+        // SCARF_ANALYTICS=false is the dedicated switch.
+        "SCARF_ANALYTICS": "false",
+        // npm's own once-a-day "new npm available" registry check.
+        "NPM_CONFIG_UPDATE_NOTIFIER": "false",
         // semgrep (review tools) makes no outbound call with these two set:
         // usage metrics to metrics.semgrep.dev are never sent, and the per-scan
         // version check against semgrep.dev/api/check-version is skipped. Tracing
@@ -268,6 +289,10 @@
         // working. DISABLE_ERROR_REPORTING reads only "set or not".
         "DISABLE_ERROR_REPORTING": "1",
         "CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY": "1",
+        // No background self-update inside the container: the version changes only
+        // when post-create.sh reinstalls it (rebuild) or you run `claude update`.
+        // Delete the line to let Claude Code update itself.
+        "DISABLE_AUTOUPDATER": "1",
         // Kotlin LSP (intellij-server) polls www.jetbrains.com for updates about a
         // minute after start; data sharing already defaults to "none" and is pinned
         // so a changed default does not flip it on.

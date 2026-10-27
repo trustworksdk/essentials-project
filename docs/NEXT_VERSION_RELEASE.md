@@ -1520,3 +1520,6 @@ Not published; listed because they are the reference for how to use the framewor
   still runs the runner's own `mvn`, not the wrapper.
 - `project-suppression.xml` drops the 30 dependency-check suppressions that no longer matched anything; the 23
   findings the remaining rules suppress are unchanged.
+- The devcontainer pins the Temurin 25 package (25.0.5) and every tool `post-create.sh` installs from npm or pip,
+  moves to Maven 3.10.0 and base image `2.2.3-trixie` with newer language servers, and switches off the telemetry
+  and update checks of the bundled tools.

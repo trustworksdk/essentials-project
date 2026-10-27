@@ -101,10 +101,15 @@ fi
 echo "Setting up language servers..."
 
 # TypeScript LSP. --ignore-scripts matches the project's NPM security posture.
+# Versions come from the Dockerfile ENV; typescript stays on 6.x because 7.x ships
+# no lib/tsserver.js (see the Dockerfile's runtime tool pins). The tsserver.js
+# check also heals a container that already holds a broken 7.x.
 if command -v npm &> /dev/null; then
-    if ! command -v typescript-language-server &> /dev/null; then
-        echo "  Installing typescript-language-server (npm)..."
-        npm install -g --ignore-scripts typescript typescript-language-server \
+    if ! command -v typescript-language-server &> /dev/null \
+        || [ ! -f "$(npm root -g)/typescript/lib/tsserver.js" ]; then
+        echo "  Installing typescript-language-server ${TS_LANGUAGE_SERVER_VERSION} + typescript ${TYPESCRIPT_VERSION} (npm)..."
+        npm install -g --ignore-scripts "typescript@${TYPESCRIPT_VERSION:?TYPESCRIPT_VERSION not set — Dockerfile ENV}" \
+            "typescript-language-server@${TS_LANGUAGE_SERVER_VERSION:?TS_LANGUAGE_SERVER_VERSION not set — Dockerfile ENV}" \
             || echo "  WARNING: typescript-language-server install failed."
     fi
 fi
@@ -115,7 +120,7 @@ if command -v uv &> /dev/null; then
         echo "  Installing pyright (uv tool)..."
         UV_TOOL_BIN_DIR="$HOME/.local/bin" \
         UV_TOOL_DIR="$HOME/.local/share/uv/tools" \
-        uv tool install pyright \
+        uv tool install "pyright==${PYRIGHT_VERSION:?PYRIGHT_VERSION not set — Dockerfile ENV}" \
             || echo "  WARNING: pyright install failed."
     fi
 fi
@@ -233,12 +238,12 @@ if [ "${INSTALL_GRAPHIFY:-false}" = "true" ]; then
             echo "  Installing graphifyy (uv tool, with SQL grammar)..."
             # [sql] extra pulls tree-sitter-sql so .sql files are indexed too;
             # without it graphify warns and skips SQL sources (#1745).
-            uv tool install "graphifyy[sql]" 2>&1 || echo "  WARNING: graphify install failed. Retry later with: uv tool install \"graphifyy[sql]\""
+            uv tool install "graphifyy[sql]==${GRAPHIFY_VERSION:?GRAPHIFY_VERSION not set — Dockerfile ENV}" 2>&1 || echo "  WARNING: graphify install failed. Retry later with: uv tool install \"graphifyy[sql]==${GRAPHIFY_VERSION}\""
         else
             echo "  graphify already installed ($(command -v graphify))"
             # Reassert the SQL grammar in case this is a pre-[sql] install being
             # reprovisioned on a reused uv-tool volume (idempotent; #1745).
-            uv tool install "graphifyy[sql]" 2>&1 | grep -iv "already installed" || true
+            uv tool install "graphifyy[sql]==${GRAPHIFY_VERSION:?GRAPHIFY_VERSION not set — Dockerfile ENV}" 2>&1 | grep -iv "already installed" || true
         fi
 
         if command -v graphify &> /dev/null; then
@@ -480,6 +485,11 @@ if [ "${INSTALL_REVIEW_TOOLS:-false}" = "true" ]; then
     else
         setup_problem "PyYAML install failed (pip install pyyaml==${PYYAML_VERSION}) — YAML outside the plugin's built-in subset is read only partly"
     fi
+    if python3 -m pip install --quiet --disable-pip-version-check "jsonschema==${JSONSCHEMA_VERSION:?JSONSCHEMA_VERSION not set — Dockerfile ENV}" 2>&1; then
+        echo "  jsonschema $(python3 -c 'from importlib.metadata import version; print(version("jsonschema"))')"
+    else
+        setup_problem "jsonschema install failed (pip install jsonschema==${JSONSCHEMA_VERSION}) — plugin schema validation falls back to weaker checks"
+    fi
 fi
 
 # =============================================================================
@@ -582,8 +592,8 @@ if [ "${INSTALL_HEADROOM:-false}" = "true" ]; then
     if command -v uv &> /dev/null; then
         if ! command -v headroom &> /dev/null; then
             echo "  Installing headroom-ai[code,mcp] (uv tool — light extras, no proxy/ML deps)..."
-            uv tool install "headroom-ai[code,mcp]" --with fastapi --with "mcp<2" 2>&1 \
-                || echo "  WARNING: headroom install failed. Retry with: uv tool install \"headroom-ai[code,mcp]\" --with fastapi --with \"mcp<2\"."
+            uv tool install "headroom-ai[code,mcp]==${HEADROOM_VERSION:?HEADROOM_VERSION not set — Dockerfile ENV}" --with fastapi --with "mcp<2" 2>&1 \
+                || echo "  WARNING: headroom install failed. Retry with: uv tool install \"headroom-ai[code,mcp]==${HEADROOM_VERSION}\" --with fastapi --with \"mcp<2\"."
         else
             echo "  headroom already installed ($(command -v headroom))"
             # Self-heal an env that predates the mcp<2 pin (or was pushed onto
@@ -593,7 +603,7 @@ if [ "${INSTALL_HEADROOM:-false}" = "true" ]; then
             if [ -x "$headroom_py" ] && ! "$headroom_py" -c \
                  'import mcp.server, sys; sys.exit(0 if hasattr(mcp.server.Server, "list_tools") else 1)' &> /dev/null; then
                 echo "  Re-pinning MCP SDK to 1.x (upstream mcp>=1.0.0 is unbounded)..."
-                uv tool install "headroom-ai[code,mcp]" --force --with fastapi --with "mcp<2" 2>&1 \
+                uv tool install "headroom-ai[code,mcp]==${HEADROOM_VERSION:?HEADROOM_VERSION not set — Dockerfile ENV}" --force --with fastapi --with "mcp<2" 2>&1 \
                     || echo "  WARNING: could not re-pin mcp<2 — 'headroom mcp serve' may fail to start."
             fi
         fi

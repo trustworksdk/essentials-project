@@ -56,25 +56,29 @@ ARG JAVA_VERSION="17"
 # JAVA_HOME point at. The extras are installed so a branch that needs a different
 # JDK can be built with an explicit JAVA_HOME=/usr/lib/jvm/temurin-<v>-jdk-<arch>.
 ARG ADDITIONAL_JAVA_VERSIONS=""
+# Exact apt version of temurin-${JAVA_VERSION}-jdk (e.g. "25.0.5.0.0+8-0"); empty
+# installs the newest the Adoptium repo has. Applies to JAVA_VERSION only, never to
+# ADDITIONAL_JAVA_VERSIONS. List versions with `apt-cache madison temurin-25-jdk`.
+ARG JAVA_PACKAGE_VERSION=""
 # MAVEN_SHA512 must match MAVEN_VERSION — update both together.
 # Get the SHA512 from: https://archive.apache.org/dist/maven/maven-3/<version>/binaries/
-ARG MAVEN_VERSION="3.9.16"
-ARG MAVEN_SHA512="831a8591fe20c8243b1dbe7d71e3244f31d1665b0804b2e825e38cbbe5ce0cafb8338851f90780735568773e0a6cd07bbec107cda0b896b008b861075358b6f6"
+ARG MAVEN_VERSION="3.10.0"
+ARG MAVEN_SHA512="908b1501bfb420bf7c8affb855534a9c407fd6099367bfb9f2f2dcb8e9799102bffb84518cde74c679bd76870247c6528683abdd620581bffa90f95d92d175aa"
 # JDT-LS (Eclipse Java LSP). SHA-256 must match the pinned tarball — update both
 # together. The build-date suffix is part of the filename. Get the SHA from:
 # https://download.eclipse.org/jdtls/milestones/<version>/<tarball>.sha256
-ARG JDTLS_VERSION="1.61.0"
-ARG JDTLS_BUILD_DATE="202609031315"
-ARG JDTLS_SHA256="338e7e73d61836651ba2453919a0d34fa763eb4e7c03342092309bffb8934c64"
+ARG JDTLS_VERSION="1.63.0"
+ARG JDTLS_BUILD_DATE="202610191322"
+ARG JDTLS_SHA256="b1f2abe0b3cccb462cf64fb4a5587c7d09df60cf8be7748b152cbd89d018bdc4"
 # kotlin-language-server (official JetBrains Kotlin LSP). Tarballs are hosted on
 # JetBrains' CDN (the GitHub release page just links out). Each tarball ships a
 # sibling .sha256 file; values below were captured at the pinned version.
 # Refresh recipe:
 #   curl -fsSL https://download.jetbrains.com/language-server/kotlin-server/<ver>/kotlin-server-<ver>.tar.gz.sha256
 #   curl -fsSL https://download.jetbrains.com/language-server/kotlin-server/<ver>/kotlin-server-<ver>-aarch64.tar.gz.sha256
-ARG KOTLIN_LS_VERSION="263.4702.0"
-ARG KOTLIN_LS_SHA256_AMD64="1e11d2e5fefbf9ea215ad8dd6be95f2222897cd086e8cb7a661a52084a590405"
-ARG KOTLIN_LS_SHA256_ARM64="ec7cb254a6662a07fff9f10e4365226afab6c40008f8a974c10ac5e785d6510f"
+ARG KOTLIN_LS_VERSION="263.7084.0"
+ARG KOTLIN_LS_SHA256_AMD64="ae0c4b01e17ab73a4a5227a78ea99e6dcbe3e499600315b22759a4e4cddd11df"
+ARG KOTLIN_LS_SHA256_ARM64="450ab7c1d80e48106aa429b48cb4226d82ca12a8a2400447ae02386794780cac"
 # rtk (Rust Token Killer). Per-arch release tarball from GitHub (amd64 → musl,
 # arm64 → gnu). SHA-256 = GitHub's published per-asset digest for the pinned tag,
 # verified at build. Refresh recipe (after bumping RTK_VERSION):
@@ -88,12 +92,12 @@ ARG KOTLIN_LS_SHA256_ARM64="ec7cb254a6662a07fff9f10e4365226afab6c40008f8a974c10a
 # the hook core and every command filter, which is all this container uses; it
 # lacks only the pipeline engine and the llm-proxy setup that `rtk init -g`
 # would otherwise offer. Take the digests of the rtk-oss-* assets.
-ARG RTK_VERSION="1.0.1"
-ARG RTK_SHA256_AMD64="a44e8ffc43981100b4ddf1710399a1649a6c874591aa6d0c0727fe6cbd983c41"
+ARG RTK_VERSION="1.1.0"
+ARG RTK_SHA256_AMD64="4dec94a64035e08189ae82fd5408fe4ae9ae27a665fc07e3e3ec3c4c2d8e8a3e"
 # Playwright release whose chromium-headless-shell post-create.sh downloads. Run with
 # npx, never added to the project: the Essentials build stays JVM-only.
 ARG PLAYWRIGHT_VERSION="1.55.0"
-ARG RTK_SHA256_ARM64="ee24a43dac9162de55fea8460b5efcd56d401ec28b5117c921bffa8a57bc136e"
+ARG RTK_SHA256_ARM64="57a4fac13d18da77f0577ea8b68def7934b934bf76d0a6e161f0bfd06b1e1078"
 # Review tools (INSTALL_REVIEW_TOOLS). Every pin below was checked against
 # OSV and the project's GitHub security advisories before it was added; re-check
 # both when bumping one.
@@ -136,6 +140,24 @@ ARG PMD_SHA256="f974ba571f7bc01c73fffe11bade25fbc1f438698f9e9c00e416e8d65e9fbac2
 # versions once the Python feature is present (pins reach it through ENV below).
 ARG SEMGREP_VERSION="1.181.0"
 ARG PYYAML_VERSION="6.0.3"
+# jsonschema goes into python3 next to PyYAML (tw-code-review and refac validate
+# with it and fall back to weaker checks without it).
+ARG JSONSCHEMA_VERSION="4.26.0"
+
+# -----------------------------------------------------------------------------
+# Runtime tool pins
+# -----------------------------------------------------------------------------
+# post-create.sh installs these once the Node and Python features exist; the pins
+# reach it through ENV below. Pinned so a rebuild installs what was tested, not
+# whatever the registry calls "latest" that day.
+# typescript stays on 6.x: 7.0 (the native Go port) ships no lib/tsserver.js, which
+# typescript-language-server requires, so an unpinned install leaves the server
+# unable to start and the LSP tool silently never comes up.
+ARG TYPESCRIPT_VERSION="6.0.3"
+ARG TS_LANGUAGE_SERVER_VERSION="6.0.2"
+ARG PYRIGHT_VERSION="1.1.414"
+ARG GRAPHIFY_VERSION="0.9.96"
+ARG HEADROOM_VERSION="0.42.0"
 
 # -----------------------------------------------------------------------------
 # JetBrains Configuration
@@ -173,7 +195,9 @@ RUN mkdir -p /out && if [ "${INSTALL_REVIEW_TOOLS}" = "true" ]; then \
 # -----------------------------------------------------------------------------
 # Base Image
 # -----------------------------------------------------------------------------
-FROM mcr.microsoft.com/devcontainers/base:debian AS base
+# Pinned tag, not the floating :debian — a rebuild otherwise picks up whatever
+# base Microsoft published that day.
+FROM mcr.microsoft.com/devcontainers/base:2.2.3-trixie AS base
 
 # Re-declare ARGs after FROM (they don't persist across stages)
 ARG PROJECT_NAME
@@ -188,6 +212,7 @@ ARG INSTALL_PLAYWRIGHT
 ARG INSTALL_REVIEW_TOOLS
 ARG PLAYWRIGHT_VERSION
 ARG JAVA_VERSION
+ARG JAVA_PACKAGE_VERSION
 ARG ADDITIONAL_JAVA_VERSIONS
 ARG MAVEN_VERSION
 ARG MAVEN_SHA512
@@ -210,6 +235,12 @@ ARG PMD_VERSION
 ARG PMD_SHA256
 ARG SEMGREP_VERSION
 ARG PYYAML_VERSION
+ARG JSONSCHEMA_VERSION
+ARG TYPESCRIPT_VERSION
+ARG TS_LANGUAGE_SERVER_VERSION
+ARG PYRIGHT_VERSION
+ARG GRAPHIFY_VERSION
+ARG HEADROOM_VERSION
 ARG JETBRAINS_BACKEND
 
 # Store build args as environment variables for runtime scripts.
@@ -229,6 +260,12 @@ ENV PROJECT_NAME=${PROJECT_NAME} \
     PLAYWRIGHT_VERSION=${PLAYWRIGHT_VERSION} \
     SEMGREP_VERSION=${SEMGREP_VERSION} \
     PYYAML_VERSION=${PYYAML_VERSION} \
+    JSONSCHEMA_VERSION=${JSONSCHEMA_VERSION} \
+    TYPESCRIPT_VERSION=${TYPESCRIPT_VERSION} \
+    TS_LANGUAGE_SERVER_VERSION=${TS_LANGUAGE_SERVER_VERSION} \
+    PYRIGHT_VERSION=${PYRIGHT_VERSION} \
+    GRAPHIFY_VERSION=${GRAPHIFY_VERSION} \
+    HEADROOM_VERSION=${HEADROOM_VERSION} \
     JETBRAINS_BACKEND=${JETBRAINS_BACKEND}
 
 # -----------------------------------------------------------------------------
@@ -302,7 +339,7 @@ RUN if [ "${INSTALL_JAVA}" = "true" ]; then \
     echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/adoptium.gpg] https://packages.adoptium.net/artifactory/deb $(awk -F= '/^VERSION_CODENAME=/{print $2}' /etc/os-release) main" \
     > /etc/apt/sources.list.d/adoptium.list && \
     apt-get update && \
-    apt-get install -y --no-install-recommends temurin-${JAVA_VERSION}-jdk && \
+    apt-get install -y --no-install-recommends "temurin-${JAVA_VERSION}-jdk${JAVA_PACKAGE_VERSION:+=${JAVA_PACKAGE_VERSION}}" && \
     # Extra JDKs for branches that target a different release than JAVA_VERSION
     for v in ${ADDITIONAL_JAVA_VERSIONS}; do \
     apt-get install -y --no-install-recommends "temurin-${v}-jdk"; \
@@ -475,7 +512,9 @@ RUN if [ "${INSTALL_REVIEW_TOOLS}" = "true" ]; then \
 # -----------------------------------------------------------------------------
 # UV Package Manager Installation
 # -----------------------------------------------------------------------------
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /tmp/uv-binaries/
+# Pinned by tag AND multi-arch index digest: a floating :latest would put
+# whatever uv shipped that morning into every build, unverified.
+COPY --from=ghcr.io/astral-sh/uv:0.13.6@sha256:af22a52f5eafef3d78e551599d405c02df61919d18028f0cea8eda93bc9986d0 /uv /uvx /tmp/uv-binaries/
 RUN cp /tmp/uv-binaries/uv /usr/local/bin/uv && \
     cp /tmp/uv-binaries/uvx /usr/local/bin/uvx && \
     chmod +x /usr/local/bin/uv /usr/local/bin/uvx && \
