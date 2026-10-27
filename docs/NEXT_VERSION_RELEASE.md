@@ -1406,6 +1406,9 @@ Not published; listed because they are the reference for how to use the framewor
     `@AutoConfigureWebTestClient` with an injected `WebTestClient`. (SJ-5, `b760e170`)
 - **`LLM/LLM-traps.md`** gains `ESS-126` (inside a Spring `@Transactional`, catching a command handler's exception
   commits the handler's writes) and `ESS-127` (a processor handler that catches and logs loses the event).
+- **`LLM/LLM-traps.md`** gains `ESS-129` (an async lock acquiring not cancelled in the component's own stop is
+  resumed by the lock manager's next `start()`, with the old `LockCallback`) and `ESS-130` (`isStarted()` stays
+  `true` after the lock confirmation ended; check `isLockConfirmationEnded()`). (`<!-- fix:U-017 -->`)
 - **Corrections to the 0.60.0 release notes:**
   - §1.1.6 (`use-ordered-unordered-query`): "is now ignored" is true only for the Spring property
     `essentials.durable-queues.use-ordered-unordered-query`. `PostgresqlDurableQueuesBuilder.setUseOrderedUnorderedQuery`,
