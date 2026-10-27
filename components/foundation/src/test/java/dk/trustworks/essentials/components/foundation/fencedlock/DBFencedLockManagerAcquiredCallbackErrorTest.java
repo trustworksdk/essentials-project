@@ -33,7 +33,6 @@ import java.time.*;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
-import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.*;
@@ -332,7 +331,7 @@ class DBFencedLockManagerAcquiredCallbackErrorTest {
         node.stop();
         assertThat(callback.released.get()).isEqualTo(1);
 
-        var lockManagersLock = lockManagersReentrantLock(node);
+        var lockManagersLock = node.reentrantLockForTests();
         lockManagersLock.lock();
         try {
             node.start();
@@ -559,7 +558,7 @@ class DBFencedLockManagerAcquiredCallbackErrorTest {
      */
     @Test
     void a_failing_lock_released_callback_of_the_replaced_callback_is_logged_and_the_new_callback_registered_all_the_same() {
-        var first        = new FailingReleaseLockCallback();
+        var first        = new CountingLockCallback();
         var releaseError = new IllegalStateException("lockReleased of the replaced callback fails");
         var logEvents    = captureLockManagerLog();
         try {
@@ -605,7 +604,7 @@ class DBFencedLockManagerAcquiredCallbackErrorTest {
      */
     @Test
     void a_critical_error_from_the_lock_released_callback_of_the_replaced_callback_is_rethrown() {
-        var first         = new FailingReleaseLockCallback();
+        var first         = new CountingLockCallback();
         var criticalError = new NoClassDefFoundError("lockReleased of the replaced callback fails critically");
         node.acquireLockAsync(LOCK_NAME, first);
         Awaitility.waitAtMost(Duration.ofSeconds(5))
@@ -1020,7 +1019,7 @@ class DBFencedLockManagerAcquiredCallbackErrorTest {
             // The async acquiring tick called lockReleased, which failed
             Awaitility.waitAtMost(Duration.ofSeconds(5))
                       .untilAsserted(() -> assertThat(releasedCalls.get()).isEqualTo(1));
-            assertThat(releasedOnThread.get()).contains("-Lock-Acquiring-");
+            assertThat(releasedOnThread.get()).contains(DBFencedLockManager.ASYNC_LOCK_ACQUIRING_THREAD_NAME_INFIX);
 
             // The other instance releases the lock: the Error did not end the async acquiring, so a later tick acquires it again
             var releasedRow = storage.rows.get(LOCK_NAME);
@@ -1249,36 +1248,18 @@ class DBFencedLockManagerAcquiredCallbackErrorTest {
     }
 
     /**
-     * Counts the calls of each callback method, and keeps the last lock <code>lockAcquired</code> was called with
+     * Counts the calls of each callback method, and keeps the last lock <code>lockAcquired</code> was called with; once
+     * {@link #failReleaseWith} is set, <code>lockReleased</code> throws it after counting the call
      */
     private static final class CountingLockCallback implements LockCallback {
         final    AtomicInteger acquired = new AtomicInteger();
         final    AtomicInteger released = new AtomicInteger();
         volatile FencedLock    lastAcquired;
-
-        @Override
-        public void lockAcquired(FencedLock lock) {
-            lastAcquired = lock;
-            acquired.incrementAndGet();
-        }
-
-        @Override
-        public void lockReleased(FencedLock lock) {
-            released.incrementAndGet();
-        }
-    }
-
-    /**
-     * Counts the calls of each callback method; once {@link #failReleaseWith} is set, <code>lockReleased</code> throws it
-     * after counting the call
-     */
-    private static final class FailingReleaseLockCallback implements LockCallback {
-        final    AtomicInteger acquired = new AtomicInteger();
-        final    AtomicInteger released = new AtomicInteger();
         volatile Throwable     failReleaseWith;
 
         @Override
         public void lockAcquired(FencedLock lock) {
+            lastAcquired = lock;
             acquired.incrementAndGet();
         }
 
@@ -1293,19 +1274,10 @@ class DBFencedLockManagerAcquiredCallbackErrorTest {
     }
 
     /**
-     * The lock manager's own lock, which every tick, <code>start()</code> and <code>stop()</code> take
-     */
-    private static ReentrantLock lockManagersReentrantLock(DBFencedLockManager<?, ?> lockManager) throws ReflectiveOperationException {
-        var field = DBFencedLockManager.class.getDeclaredField("reentrantLock");
-        field.setAccessible(true);
-        return (ReentrantLock) field.get(lockManager);
-    }
-
-    /**
      * The threads of the lock manager's async acquiring executor, named after its instance id
      */
     private static List<Thread> asyncAcquiringThreadsOf(DBFencedLockManager<?, ?> lockManager) {
-        var prefix = lockManager.getLockManagerInstanceId() + "-Lock-Acquiring-";
+        var prefix = lockManager.getLockManagerInstanceId() + DBFencedLockManager.ASYNC_LOCK_ACQUIRING_THREAD_NAME_INFIX;
         return Thread.getAllStackTraces().keySet().stream()
                      .filter(thread -> thread.getName().startsWith(prefix))
                      .toList();

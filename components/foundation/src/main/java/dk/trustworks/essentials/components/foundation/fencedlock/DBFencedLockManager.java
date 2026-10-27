@@ -112,6 +112,13 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  * @param <LOCK> the concrete type of {@link DBFencedLock} used
  */
 public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends DBFencedLock> implements FencedLockManager, ShutdownAware {
+    /**
+     * What {@link #start()} puts between the lock manager instance id and the thread number in the name of each thread of the
+     * async acquiring executor (<code>&lt;lockManagerInstanceId&gt;-Lock-Acquiring-&lt;n&gt;</code>). Package-private so
+     * tests can find those threads by the same name
+     */
+    static final String ASYNC_LOCK_ACQUIRING_THREAD_NAME_INFIX = "-Lock-Acquiring-";
+
     protected final Logger log = LoggerFactory.getLogger(this.getClass());
 
     private final FencedLockStorage<UOW, LOCK>                lockStorage;
@@ -251,7 +258,7 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
 
                 asyncLockAcquiringExecutor = Executors.newScheduledThreadPool(2,
                                                                               ThreadFactoryBuilder.builder()
-                                                                                                  .nameFormat(lockManagerInstanceId + "-Lock-Acquiring-%d")
+                                                                                                  .nameFormat(lockManagerInstanceId + ASYNC_LOCK_ACQUIRING_THREAD_NAME_INFIX + "%d")
                                                                                                   .daemon(true)
                                                                                                   .build());
 
@@ -1681,6 +1688,16 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
         return this.getClass().getSimpleName() + "{" +
                 "lockManagerInstanceId='" + lockManagerInstanceId + '\'' +
                 '}';
+    }
+
+    /**
+     * For tests only: the {@link #reentrantLock} of this lock manager, so a test in this package can hold it to park a
+     * tick, <code>start()</code> or <code>stop()</code> behind it. Production code takes it only through this class's own methods
+     *
+     * @return this lock manager's {@link #reentrantLock}
+     */
+    ReentrantLock reentrantLockForTests() {
+        return reentrantLock;
     }
 
     /**

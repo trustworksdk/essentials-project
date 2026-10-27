@@ -33,7 +33,6 @@ import java.time.*;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
-import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.*;
 
 import static org.assertj.core.api.Assertions.*;
@@ -119,6 +118,7 @@ class DBFencedLockManagerLostLockReleaseTest {
     }
 
     @Test
+    @SuppressWarnings("PMD.CloseResource") // lostLock is released by the lock manager when it is reported lost, the behaviour under test; confirmedLock is released by stop() in cleanup()
     void a_failing_db_release_of_a_lost_lock_does_not_roll_back_the_confirmations_made_in_the_same_tick() {
         // Given
         storage.allowReleaseInDB.countDown();
@@ -142,6 +142,7 @@ class DBFencedLockManagerLostLockReleaseTest {
     }
 
     @Test
+    @SuppressWarnings("PMD.CloseResource") // Releasing the locks is the job of the lock manager when the confirmation fails on IO, the behaviour under test
     void no_db_release_is_attempted_when_the_confirmation_unit_of_work_fails_with_an_io_error() {
         // Given
         storage.allowReleaseInDB.countDown();
@@ -162,6 +163,7 @@ class DBFencedLockManagerLostLockReleaseTest {
     }
 
     @Test
+    @SuppressWarnings("PMD.CloseResource") // Releasing the locks is the job of the lock manager when their confirmation fails on IO, the behaviour under test
     void the_db_release_of_lost_locks_stops_at_the_first_io_failure() {
         // Given
         storage.allowReleaseInDB.countDown();
@@ -186,6 +188,7 @@ class DBFencedLockManagerLostLockReleaseTest {
     }
 
     @Test
+    @SuppressWarnings("PMD.CloseResource") // lostLock is released by the lock manager when it is reported lost, the behaviour under test; confirmedLock is released by stop() in cleanup()
     void a_lost_lock_whose_lock_released_callback_fails_with_an_error_is_still_released_and_the_confirmations_of_the_tick_are_kept() {
         // Given
         storage.allowReleaseInDB.countDown();
@@ -201,6 +204,7 @@ class DBFencedLockManagerLostLockReleaseTest {
     }
 
     @Test
+    @SuppressWarnings("PMD.CloseResource") // lostLock is released by the lock manager when it is reported lost, the behaviour under test; confirmedLock is released by stop() in cleanup()
     void a_lost_lock_whose_lock_released_event_subscriber_fails_with_an_error_is_still_released_and_the_confirmations_of_the_tick_are_kept() {
         // Given
         storage.allowReleaseInDB.countDown();
@@ -220,6 +224,7 @@ class DBFencedLockManagerLostLockReleaseTest {
     }
 
     @Test
+    @SuppressWarnings("PMD.CloseResource") // lock and otherLock are released by the lock manager when the confirmation fails on IO, the behaviour under test; reacquiredLock is released by stop() in cleanup()
     void a_lock_released_callback_failing_with_an_error_while_every_lock_is_released_after_an_io_failure_does_not_end_the_confirmation() {
         // Given
         storage.allowReleaseInDB.countDown();
@@ -248,6 +253,7 @@ class DBFencedLockManagerLostLockReleaseTest {
     }
 
     @Test
+    @SuppressWarnings("PMD.CloseResource") // Both locks stay held, the behaviour under test, and are released by stop() in cleanup()
     void a_lock_acquired_event_subscriber_failing_with_an_error_during_confirmation_does_not_roll_back_the_confirmations_of_the_tick() {
         // Given
         var lock                    = lockManager.tryAcquireLock(LOCK_NAME).orElseThrow();
@@ -795,7 +801,7 @@ class DBFencedLockManagerLostLockReleaseTest {
                 }
             }, "releasing-thread");
             releasing.start();
-            var managerLock = managerLockOf(lockManager);
+            var managerLock = lockManager.reentrantLockForTests();
             Awaitility.waitAtMost(Duration.ofSeconds(5))
                       .until(() -> managerLock.hasQueuedThread(releasing));
             // ... and the tick then ends the confirmation, releasing every held lock locally
@@ -851,7 +857,7 @@ class DBFencedLockManagerLostLockReleaseTest {
                 }
             }, "acquiring-thread");
             acquiring.start();
-            var managerLock = managerLockOf(lockManager);
+            var managerLock = lockManager.reentrantLockForTests();
             Awaitility.waitAtMost(Duration.ofSeconds(5))
                       .until(() -> managerLock.hasQueuedThread(acquiring));
             assertThat(lockManager.isLockConfirmationEnded()).isFalse();
@@ -932,12 +938,6 @@ class DBFencedLockManagerLostLockReleaseTest {
         assertThat(lockReleasedEventsFor(LOCK_NAME)).hasSize(1);
     }
 
-    private static ReentrantLock managerLockOf(DBFencedLockManager<?, ?> lockManager) throws ReflectiveOperationException {
-        var field = DBFencedLockManager.class.getDeclaredField("reentrantLock");
-        field.setAccessible(true);
-        return (ReentrantLock) field.get(lockManager);
-    }
-
     private static ListAppender<ILoggingEvent> captureLockManagerLog() {
         var appender = new ListAppender<ILoggingEvent>();
         // Appended to by the lock manager's threads while the test thread reads it
@@ -987,6 +987,7 @@ class DBFencedLockManagerLostLockReleaseTest {
         };
     }
 
+    @SuppressWarnings("PMD.CloseResource") // Releasing the lock is the job of the lock manager when it is reported lost, the behaviour under test
     private void verifyLostLockIsReleasedLocallyFirst(ConfirmOutcome lostOutcome) {
         // Given
         var lock = lockManager.tryAcquireLock(LOCK_NAME).orElseThrow();
