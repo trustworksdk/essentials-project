@@ -1,0 +1,378 @@
+{
+ "atlas": {
+  "bounds": {
+   "h": 1152,
+   "w": 1504,
+   "x": 0,
+   "y": 0
+  },
+  "bridges": [],
+  "cards": [
+   {
+    "ghost": false,
+    "h": 88,
+    "id": "~unattached:?@?|misc/oddly_placed|error|oddly_placed",
+    "lane": "action",
+    "name": "oddly_placed",
+    "portal": false,
+    "role": "error",
+    "segment": "~unattached:?@?",
+    "slice": "misc/oddly_placed",
+    "w": 168,
+    "x": 228,
+    "y": 272
+   },
+   {
+    "ghost": false,
+    "h": 88,
+    "id": "~orders.place_order@orders|orders.place_order|trigger|POST /api/orders",
+    "lane": "trigger",
+    "name": "POST /api/orders",
+    "portal": false,
+    "role": "trigger",
+    "segment": "~orders.place_order@orders",
+    "slice": "orders.place_order",
+    "w": 168,
+    "x": 836,
+    "y": 160
+   },
+   {
+    "ghost": false,
+    "h": 88,
+    "id": "~orders.place_order@orders|orders.place_order|command|PlaceOrder",
+    "lane": "action",
+    "name": "PlaceOrder",
+    "portal": false,
+    "role": "command",
+    "segment": "~orders.place_order@orders",
+    "slice": "orders.place_order",
+    "w": 168,
+    "x": 836,
+    "y": 272
+   },
+   {
+    "ghost": false,
+    "h": 88,
+    "id": "~orders.place_order@orders|orders.place_order|event|OrderPlaced",
+    "lane": "stream:Order",
+    "name": "OrderPlaced",
+    "portal": false,
+    "role": "event",
+    "segment": "~orders.place_order@orders",
+    "slice": "orders.place_order",
+    "w": 168,
+    "x": 836,
+    "y": 384
+   },
+   {
+    "ghost": false,
+    "h": 88,
+    "id": "~orders.place_order@orders|orders.order_list|view|OrderList",
+    "lane": "action",
+    "name": "OrderList",
+    "portal": false,
+    "role": "view",
+    "segment": "~orders.place_order@orders",
+    "slice": "orders.order_list",
+    "w": 168,
+    "x": 1044,
+    "y": 272
+   },
+   {
+    "ghost": false,
+    "h": 88,
+    "id": "~unattached:orders@orders|orders/use_cases/cancel_order|error|cancel_order",
+    "lane": "action",
+    "name": "cancel_order",
+    "portal": false,
+    "role": "error",
+    "segment": "~unattached:orders@orders",
+    "slice": "orders/use_cases/cancel_order",
+    "w": 168,
+    "x": 836,
+    "y": 760
+   }
+  ],
+  "contexts": [
+   {
+    "h": 512,
+    "id": "?",
+    "w": 512,
+    "x": 64,
+    "y": 64
+   },
+   {
+    "h": 1024,
+    "id": "orders",
+    "w": 768,
+    "x": 672,
+    "y": 64
+   }
+  ],
+  "edges": [
+   {
+    "cross": false,
+    "from": "~orders.place_order@orders|orders.place_order|command|PlaceOrder",
+    "kind": "publishes",
+    "to": "~orders.place_order@orders|orders.place_order|event|OrderPlaced"
+   },
+   {
+    "cross": false,
+    "from": "~orders.place_order@orders|orders.place_order|event|OrderPlaced",
+    "kind": "feeds",
+    "to": "~orders.place_order@orders|orders.order_list|view|OrderList"
+   },
+   {
+    "cross": false,
+    "from": "~orders.place_order@orders|orders.place_order|trigger|POST /api/orders",
+    "kind": "handles",
+    "to": "~orders.place_order@orders|orders.place_order|command|PlaceOrder"
+   }
+  ],
+  "links": [],
+  "scenarioBoxes": [
+   {
+    "h": 64,
+    "segment": "~unattached:?@?",
+    "slice": "misc/oddly_placed",
+    "w": 192,
+    "x": 216,
+    "y": 384
+   },
+   {
+    "h": 64,
+    "segment": "~orders.place_order@orders",
+    "slice": "orders.place_order",
+    "w": 192,
+    "x": 824,
+    "y": 496
+   },
+   {
+    "h": 64,
+    "segment": "~orders.place_order@orders",
+    "slice": "orders.order_list",
+    "w": 192,
+    "x": 1032,
+    "y": 496
+   },
+   {
+    "h": 64,
+    "segment": "~unattached:orders@orders",
+    "slice": "orders/use_cases/cancel_order",
+    "w": 192,
+    "x": 824,
+    "y": 872
+   }
+  ],
+  "segments": [
+   {
+    "bc": "?",
+    "columns": [
+     {
+      "portal": false,
+      "slice": "misc/oddly_placed",
+      "w": 192,
+      "x": 216
+     }
+    ],
+    "h": 352,
+    "id": "~unattached:?@?",
+    "lanes": [
+     {
+      "h": 112,
+      "id": "trigger",
+      "label": "Trigger",
+      "y": 148
+     },
+     {
+      "h": 112,
+      "id": "action",
+      "label": "Command · View",
+      "y": 260
+     }
+    ],
+    "process": "~unattached:?",
+    "w": 336,
+    "x": 88,
+    "y": 112
+   },
+   {
+    "bc": "orders",
+    "columns": [
+     {
+      "portal": false,
+      "slice": "orders.place_order",
+      "w": 192,
+      "x": 824
+     },
+     {
+      "portal": false,
+      "slice": "orders.order_list",
+      "w": 192,
+      "x": 1032
+     }
+    ],
+    "h": 464,
+    "id": "~orders.place_order@orders",
+    "lanes": [
+     {
+      "h": 112,
+      "id": "trigger",
+      "label": "Trigger",
+      "y": 148
+     },
+     {
+      "h": 112,
+      "id": "action",
+      "label": "Command · View",
+      "y": 260
+     },
+     {
+      "h": 112,
+      "id": "stream:Order",
+      "label": "Events · Order",
+      "y": 372
+     }
+    ],
+    "process": "~orders.place_order",
+    "w": 544,
+    "x": 696,
+    "y": 112
+   },
+   {
+    "bc": "orders",
+    "columns": [
+     {
+      "portal": false,
+      "slice": "orders/use_cases/cancel_order",
+      "w": 192,
+      "x": 824
+     }
+    ],
+    "h": 352,
+    "id": "~unattached:orders@orders",
+    "lanes": [
+     {
+      "h": 112,
+      "id": "trigger",
+      "label": "Trigger",
+      "y": 636
+     },
+     {
+      "h": 112,
+      "id": "action",
+      "label": "Command · View",
+      "y": 748
+     }
+    ],
+    "process": "~unattached:orders",
+    "w": 336,
+    "x": 696,
+    "y": 600
+   }
+  ]
+ },
+ "matrix": {
+  "bcMatrix": {
+   "bcs": [
+    "orders"
+   ],
+   "counts": [
+    [
+     1
+    ]
+   ],
+   "events": [
+    [
+     [
+      "OrderPlaced"
+     ]
+    ]
+   ]
+  },
+  "cells": [
+   {
+    "c": 0,
+    "cross": false,
+    "r": 0,
+    "v": "W"
+   },
+   {
+    "c": 1,
+    "cross": false,
+    "r": 1,
+    "v": "O"
+   }
+  ],
+  "cols": [
+   {
+    "bc": "orders",
+    "kind": "command",
+    "slice": "orders.place_order"
+   },
+   {
+    "bc": "orders",
+    "kind": "view",
+    "slice": "orders.order_list"
+   }
+  ],
+  "rows": [
+   {
+    "bc": "orders",
+    "id": "Order",
+    "kind": "aggregate"
+   },
+   {
+    "bc": "orders",
+    "id": "OrderList",
+    "kind": "read-model"
+   }
+  ]
+ },
+ "metro": {
+  "bounds": {
+   "h": 80,
+   "w": 160,
+   "x": 0,
+   "y": 0
+  },
+  "lines": [
+   {
+    "color": 0,
+    "derived": true,
+    "points": [
+     [
+      40,
+      40
+     ],
+     [
+      120,
+      40
+     ]
+    ],
+    "process": "~orders.place_order"
+   }
+  ],
+  "stations": [
+   {
+    "interchange": false,
+    "lines": [
+     "~orders.place_order"
+    ],
+    "slice": "orders.place_order",
+    "x": 40,
+    "y": 40
+   },
+   {
+    "interchange": false,
+    "lines": [
+     "~orders.place_order"
+    ],
+    "slice": "orders.order_list",
+    "x": 120,
+    "y": 40
+   }
+  ]
+ },
+ "version": 1
+}

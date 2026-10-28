@@ -7,6 +7,7 @@ status: live
 summary: Retune the trading-account closing-books policy in one atomic change.
 generator: essentials
 language: java
+lane: aggregate
 
 handles: [UpdateClosingBooksSettings]
 publishes: []
@@ -27,6 +28,7 @@ invariants:
     enforcedBy: UpdateClosingBooksSettings
 forbidden:
   - cross-slice-internal:brokerage
+tier: cqrs-es
 tests:
   unit: { present: false }
   integration: { present: false }

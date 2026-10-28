@@ -16,9 +16,10 @@
 
 package dk.trustworks.essentials.examples.trading._demo_harness;
 
+import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWork;
+import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWorkFactory;
 import dk.trustworks.essentials.examples.trading.market_data.types.InstrumentId;
 import dk.trustworks.essentials.types.Amount;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
 import java.util.Optional;
@@ -26,8 +27,9 @@ import java.util.Optional;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * A deliberately <b>non</b>-event-sourced latest-price store, written with raw JDBC, whose only purpose is to be
- * benchmarked against the {@code market_data} aggregate path.
+ * A deliberately <b>non</b>-event-sourced latest-price store, written with plain SQL through the {@code UnitOfWork}'s
+ * Jdbi handle, whose only purpose is to be benchmarked against the {@code market_data} aggregate path. Each call joins
+ * an active {@code UnitOfWork} or opens its own, so outside one every write commits on its own.
  * <p>
  * It lives in the harness rather than in {@code market_data} precisely because it is a second write path for a concept
  * that context already owns: keeping it here is what guarantees no domain path can read it by accident. The
@@ -35,10 +37,10 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  */
 @Service
 public class DirectInstrumentPriceService {
-    private final JdbcTemplate jdbcTemplate;
+    private final HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory;
 
-    public DirectInstrumentPriceService(JdbcTemplate jdbcTemplate) {
-        this.jdbcTemplate = requireNonNull(jdbcTemplate, "No jdbcTemplate provided");
+    public DirectInstrumentPriceService(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory) {
+        this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory provided");
         ensureTable();
     }
 
@@ -52,36 +54,38 @@ public class DirectInstrumentPriceService {
 
     public Optional<Amount> findLatestPrice(InstrumentId instrumentId) {
         requireNonNull(instrumentId, "No instrumentId provided");
-        return jdbcTemplate.query("""
-                                          SELECT latest_price
-                                          FROM direct_market_data_prices
-                                          WHERE instrument_id = ?
-                                          """,
-                                  rs -> rs.next() ? Optional.of(Amount.of(rs.getBigDecimal("latest_price"))) : Optional.empty(),
-                                  instrumentId.toString());
+        return unitOfWorkFactory.withUnitOfWork(uow -> uow.handle().createQuery("""
+                                                                                    SELECT latest_price
+                                                                                    FROM direct_market_data_prices
+                                                                                    WHERE instrument_id = :instrumentId
+                                                                                    """)
+                                                                   .bind("instrumentId", instrumentId.toString())
+                                                                   .map((rs, ctx) -> Amount.of(rs.getBigDecimal("latest_price")))
+                                                                   .findOne());
     }
 
     private void upsert(InstrumentId instrumentId, Amount price) {
         requireNonNull(instrumentId, "No instrumentId provided");
         requireNonNull(price, "No price provided");
-        jdbcTemplate.update("""
-                                    INSERT INTO direct_market_data_prices (instrument_id, latest_price, updated_at)
-                                    VALUES (?, ?, now())
-                                    ON CONFLICT (instrument_id)
-                                    DO UPDATE SET latest_price = excluded.latest_price,
-                                                  updated_at = excluded.updated_at
-                                    """,
-                            instrumentId.toString(),
-                            price.value());
+        unitOfWorkFactory.usingUnitOfWork(uow -> uow.handle().createUpdate("""
+                                                                               INSERT INTO direct_market_data_prices (instrument_id, latest_price, updated_at)
+                                                                               VALUES (:instrumentId, :latestPrice, now())
+                                                                               ON CONFLICT (instrument_id)
+                                                                               DO UPDATE SET latest_price = excluded.latest_price,
+                                                                                             updated_at = excluded.updated_at
+                                                                               """)
+                                                             .bind("instrumentId", instrumentId.toString())
+                                                             .bind("latestPrice", price.value())
+                                                             .execute());
     }
 
     private void ensureTable() {
-        jdbcTemplate.execute("""
-                                     CREATE TABLE IF NOT EXISTS direct_market_data_prices (
-                                         instrument_id text PRIMARY KEY,
-                                         latest_price numeric(19, 4) NOT NULL,
-                                         updated_at timestamptz NOT NULL
-                                     )
-                                     """);
+        unitOfWorkFactory.usingUnitOfWork(uow -> uow.handle().execute("""
+                                                                          CREATE TABLE IF NOT EXISTS direct_market_data_prices (
+                                                                              instrument_id text PRIMARY KEY,
+                                                                              latest_price numeric(19, 4) NOT NULL,
+                                                                              updated_at timestamptz NOT NULL
+                                                                          )
+                                                                          """));
     }
 }

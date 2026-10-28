@@ -1,0 +1,34 @@
+schemaVersion: "1.4"
+slice: billing.refund_payment
+kind: command
+bc: billing
+owner: billing-team
+status: live
+summary: Refund a charged payment.
+generator: essentials
+language: java
+tier: cqrs-es
+lane: decider
+flow: returns
+handles: [RefundPayment]
+publishes: [PaymentRefunded]
+writes:
+  - { name: Payment }
+endpoints:
+  - { method: POST, path: "/api/payments/{id}/refund", auth: user }
+scenarios:
+  - name: refunds a returned order
+    given:
+      - event: PaymentCharged
+        with: { paymentId: p-1, orderId: o-1, amount: 20 }
+      - event: OrderReturned
+        with: { orderId: o-1 }
+    when: { command: RefundPayment, with: { paymentId: p-1, amount: 20 } }
+    then:
+      - event: PaymentRefunded
+        with: { paymentId: p-1, amount: 20 }
+forbidden:
+  - cross-slice-internal:billing
+tests:
+  unit: { present: false }
+  integration: { present: false }

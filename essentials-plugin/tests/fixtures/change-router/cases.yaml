@@ -69,8 +69,7 @@ cases:
   must:
   - >-
     Plans a new command slice in the orders bounded context with its own command, event and decider
-    (§R1, change-procedure §5.1), entered through the command kind skill, and asks for confirmation before
-    creating files.
+    (§R1, change-procedure §5.1), and asks for confirmation before creating files.
   must_not:
   - Adding the new command to PlaceOrderDecider, CancelOrderDecider or any other existing slice.
 
@@ -98,9 +97,10 @@ cases:
   writes: none
   must:
   - >-
-    Decomposes the rename into per-slice changes in a stated order: the producer first (PlaceOrder and OrderPlaced
-    in place_order), then the reactors (the order_list read model and projection, the warehouse translator), then
-    the API surface (change-procedure §5.9).
+    Decomposes the rename into per-slice changes in a stated order: the event and the producing place_order slice
+    first (OrderPlaced and PlaceOrder, in either order), then the reactors (the order_list read model and
+    projection, the warehouse translator) (change-procedure §5.9). PlaceOrder is also the HTTP request body, so its API change belongs to the producer
+    step; it need not be a separate last step.
   - >-
     Flags that OrderPlaced is persisted: renaming a field of a stored event changes the JSON that existing events
     were written with, so old events need handling (for example keeping the old JSON name or migrating) rather
@@ -117,9 +117,13 @@ cases:
   writes: none
   must:
   - >-
-    Treats it as evolving the existing order_list view (change-procedure §5.3): extend its read model and its
-    OrderCancelled handler in place, with an in-place rebuild (reset the subscription and replay) as the rollout
-    default.
+    Evolves the existing order_list view in place (change-procedure §5.3): a cancellation-time field on its read
+    model, set by its existing OrderCancelled handler, with no new view slice and no versioned twin.
+  - >-
+    Notices that OrderCancelled carries no cancellation time, so the time must reach the view first: it is added
+    to the event by cancel_order before the view uses it (producer first, §5.9), in a way that keeps the events
+    already stored readable (old cancellations simply have no time). Inventing an Essentials API that hands the
+    event store's own timestamp to a view handler does not satisfy this.
   must_not:
   - Proposing a versioned twin (order_list_v2 with supersedes) or a new view slice as the default way to add the column.
 
@@ -133,7 +137,10 @@ cases:
   must:
   - >-
     Handles it as a plain configuration change: creates or edits the application configuration (for example
-    application.yml or application.properties) so the orders package logs at DEBUG.
+    application.yml or application.properties) so the orders package logs at DEBUG — or, finding no application
+    configuration in the project, gives the exact setting for the orders package
+    (logging.level.com.example.shop.orders: DEBUG) and asks where the configuration lives rather than guessing a
+    location.
   must_not:
   - Treating it as a slice change, or proposing any slice.yaml, slice CLAUDE.md or manifest edit.
   no_edits: ['slice\.yaml$', 'CLAUDE\.md$']
@@ -150,7 +157,9 @@ cases:
   must:
   - >-
     Fixes the comparison inside the screen_order automation and reports the change by slice id and file, without
-    a confirmation round (a one-line fix that changes no structure, SKILL.md Step 3).
+    asking for confirmation first (a fix that changes no structure, SKILL.md Step 3). Also updating text that
+    states the old exclusive rule (the cancel reason, a comment, the manifest summary, the slice CLAUDE.md) is
+    fine and does not make it more than that fix.
   no_creates: ['**/slice.yaml']
   file_regex:
   - path: orders/automations/screen_order/ScreenOrderProcessor.kt
@@ -175,14 +184,20 @@ cases:
   set: {packagePath: com.example.shop}
   request: When screening cancels an order, record it as its own OrderRejected event instead of OrderCancelled.
   class: [C, A]
-  slices: [orders.screen_order]
+  slices: []
   writes: none
   must:
   - Puts OrderRejected in its own file under orders/events/ (one variant per file, §R3).
   - >-
+    Recognises that screen_order is an automation, which dispatches commands and never emits events itself, so
+    OrderRejected needs a command slice as its producer (a new reject_order command slice, or cancel_order
+    extended), and screen_order changes to dispatch to that producer.
+  - >-
     Checks the event's consumers before finishing: orders.order_list projects cancellations, so reacting to
     OrderRejected is a declared change to that view (projections[].from), not something left to discover later.
-  - States an order for the pieces — the producer of the new event first, then the reactors (change-procedure §5.9).
+  - >-
+    States an order for the pieces: the new event and the command slice that emits it first, then the slices
+    that react to it or dispatch to it (change-procedure §5.9).
 
 - id: b-warehouse-cancel
   fixture: tests/fixtures/worked-example

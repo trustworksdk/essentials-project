@@ -15,8 +15,9 @@ that makes it loud.
 It is deterministic by design: parsing and schema validation are mechanical, and a
 language model has no business guessing at either. `/essentials:slice-check` runs this
 script for its gates 1, 3 and 4, and for the one manifest-only clause of gate 14 (a
-write style written into `tier`), rather than eyeballing the files. It reads manifests only;
-the syntactic source facts are `slice-source.py`'s.
+write style written into `tier`), rather than eyeballing the files. Gate 1(d) is the one
+cross-field rule inside a manifest: a scenario (`scenarios:`, schema 1.4) names the slice's own
+messages. It reads manifests only; the syntactic source facts are `slice-source.py`'s.
 
 Usage
 -----
@@ -27,24 +28,50 @@ Usage
                          to this script: ../references/slice/slice-yaml.schema.json in
                          the plugin, else slice-yaml.schema.json beside it, which is
                          where a project's installed copy keeps it)
-    --require-schema     fail if schema validation could not run (use this in CI)
+    --allow-skip-schema  exit 0, not 2, when schema validation could not run; the
+                         SKIPPED banner still prints. For a caller that has decided a
+                         parse-only pass is enough — never for CI
+    --require-schema     accepted for compatibility, does nothing: failing on a skipped
+                         validation is the default (hooks and CI written for older
+                         copies pass it)
+    --baseline JSON      a document a previous `--json` run printed; report only the
+                         findings it does not contain (see Baseline below)
     --json               emit findings as JSON on stdout; each finding carries its
                          `ESS-G<gate><clause>` id beside the gate label
     --quiet              print only findings, no summary
 
 Exit codes
 ----------
-    0   no findings
-    1   findings (Blocking or Should-fix)
-    2   could not run at all — bad arguments, unreadable schema, no YAML parser
+    0   no findings, and every parsed manifest was schema-validated
+    1   findings (Blocking or Should-fix — the script never emits Advisory). With
+        --baseline, only findings absent from the baseline count
+    2   could not run at all — bad arguments, unreadable schema or baseline, no YAML
+        parser — or ran without schema validation (`jsonschema` missing) and found
+        nothing; --allow-skip-schema turns that last case into 0
+
+Findings win over a skipped validation: a run that found something exits 1 even when the
+schema did not run, so read `schemaValidated` in the JSON rather than inferring it from the
+exit code. A tree with no slice.yaml exits 0 — there was nothing to validate.
+
+Baseline
+--------
+`--baseline previous.json` drops every finding the baseline already holds, matched on
+(id, file, message) with the file, and any path inside the message, taken relative to each
+run's own `root`, so a baseline taken in another checkout still matches. A baseline written
+by an older copy without `id` fields is matched on the id its `gate` label gives. Two uses:
+run a project's installed copy with `--json`, then this copy with `--baseline` over the same
+tree, and what remains is exactly what refreshing the installed copy would add; or commit a
+baseline and pass it in CI as a ratchet, so existing findings stop failing the build and new
+ones still do. A reworded message counts as a new finding. The JSON carries
+`baseline: {"path", "suppressed"}` when one was applied.
 
 Dependencies
 ------------
 `pyyaml` is required for parsing; `jsonschema` is required for schema validation. Both are
 pinned in the inline script metadata above, so `uv run --script slice-lint.py` brings them
 (this works from a project's installed copy too). When
-`jsonschema` is absent the parse gate still runs and the script says loudly that
-validation was skipped — silence is never allowed to read as a pass. When `pyyaml` is
+`jsonschema` is absent the parse gate still runs, the script says loudly that
+validation was skipped, and it exits 2 — silence is never allowed to read as a pass. When `pyyaml` is
 absent nothing can be parsed, so the script falls back to scanning for the known-lethal
 authoring mistakes it can find with a regex and exits 2.
 
@@ -68,8 +95,15 @@ UNQUOTED_BRACED_PATH = re.compile(r"""^\s*-?\s*.*?\bpath:\s*(?!["'])[^"'\n]*\{""
 SEVERITY_ORDER = {"Blocking": 0, "Should-fix": 1, "Advisory": 2}
 
 # The write styles of §R5. They belong in `lane`; in `tier` they are an unrecognised value, which
-# a reader must treat as `custom` — silently dropping the slice's tier-specific handling.
-LANE_ONLY_TIERS = {"aggregate": "cqrs-es", "decider": "cqrs-es"}
+# a reader must treat as `custom` — silently dropping the slice's tier-specific handling. Each maps
+# to its repair, which names `cqrs-es` only where the lane guarantees it: an aggregate-lane BC is
+# event-sourced by definition, a decider BC not necessarily, and a wrong tier is worse than an absent
+# one (the schema's `tier` description), so there the fallback is to drop the field.
+LANE_ONLY_TIERS = {
+    "aggregate": "lane: aggregate; tier: cqrs-es (an aggregate-lane BC is event-sourced)",
+    "decider": "lane: decider; tier: cqrs-es if the BC is event-sourced, else remove tier "
+    "(absent ⇒ project default)",
+}
 
 GATE_ID = re.compile(r"^(\d+)(?:\(([a-z])\))?")
 
@@ -190,8 +224,44 @@ def parse_manifests(manifests, findings):
     return parsed
 
 
-def validate_schema(parsed, schema, findings):
-    """Gate 1(b). Returns True if validation actually ran."""
+GATE_REF = "#/$defs/knownKeys"
+
+
+def version_gate(schema):
+    """Index of the `allOf` clause that applies `knownKeys` to a manifest stamped at or below the
+    schema copy's own version, or None for a copy older than the gate — there an unknown key is
+    an ordinary schema error and needs no special handling."""
+    for i, clause in enumerate(schema.get("allOf") or ()):
+        if isinstance(clause, dict) and (clause.get("else") or {}).get("$ref") == GATE_REF:
+            return i
+    return None
+
+
+def unknown_keys(error, schema):
+    """(location, key) for each key the `knownKeys` check rejected; key is None for a failure it
+    cannot pin on one key. A key outside a mapping's own list fails `propertyNames` with the key as
+    the instance; a `then` object fails one `anyOf` over its three forms, so the form is read from
+    the object and the keys outside it are reported."""
+    location = list(error.absolute_path)
+    if isinstance(error.instance, str) and "propertyNames" in error.relative_schema_path:
+        return [(location, error.instance)]
+    if isinstance(error.instance, dict) and location[-1:] == ["then"]:
+        for form in schema["$defs"]["scenario"]["properties"]["then"]["oneOf"][1:]:
+            if form["required"][0] in error.instance:
+                return [(location, k) for k in error.instance
+                        if k not in form["properties"] and not str(k).startswith("x-")]
+    return [(location, None)]
+
+
+def validate_schema(parsed, schema, findings, notes):
+    """Gate 1(b). Returns True if validation actually ran.
+
+    A key the schema does not define is rejected on a manifest stamped at or below the copy's
+    `x-manifestVersion`, and only noted on one stamped with a newer 1.x — that manifest was written
+    for a schema this copy has not seen. The gate's `then` keeps the keys it lists rejected on a newer
+    stamp too (the projection near-synonyms); a copy whose gate has no `then` tolerates them as well.
+    `x-` keys are extension keys and pass everywhere. The gate lives in the schema, so any validator
+    agrees; this function only words it."""
     try:
         from jsonschema import validators
     except ImportError:
@@ -200,9 +270,24 @@ def validate_schema(parsed, schema, findings):
     validator_cls = validators.validator_for(schema)
     validator_cls.check_schema(schema)
     validator = validator_cls(schema)
+    gate = version_gate(schema)
+    if gate is not None:
+        known = validator_cls({"$schema": schema.get("$schema"), "$defs": schema["$defs"], "$ref": GATE_REF})
+        newer = validator_cls({"$schema": schema.get("$schema"), **schema["allOf"][gate]["if"]})
+    copy_version = schema.get("x-manifestVersion")
+    defined_by = f"schema {copy_version}" if copy_version else "the project's schema copy"
 
     for path, doc in parsed.items():
+        rejected = set()  # (location, key) the gate's `then` rejected — never also a note
         for error in sorted(validator.iter_errors(doc), key=lambda e: list(e.absolute_path)):
+            branch = list(error.absolute_schema_path)[:3]
+            if gate is not None and branch == ["allOf", gate, "else"]:
+                continue  # worded below, once per key
+            if gate is not None and branch == ["allOf", gate, "then"]:
+                for location, key in unknown_keys(error, schema):
+                    rejected.add((tuple(location), key))
+                    findings.append(unknown_key_finding(path, location, key, error))
+                continue
             location = list(error.absolute_path)
             where = "/".join(str(p) for p in location) or "(root)"
             findings.append(
@@ -214,7 +299,53 @@ def validate_schema(parsed, schema, findings):
                     hint=schema_hint(location, error),
                 )
             )
+        if gate is None:
+            continue
+        tolerated = newer.is_valid(doc)
+        for error in known.iter_errors(doc):
+            for location, key in unknown_keys(error, schema):
+                if (tuple(location), key) in rejected:
+                    continue
+                if tolerated:
+                    where = "/".join(str(p) for p in location) or "(root)"
+                    what = f"unknown key '{key}'" if key is not None else error.message
+                    notes.append(
+                        f"{path}: {where}: {what} — not defined by {defined_by}; the manifest "
+                        f"is stamped {doc.get('schemaVersion')}, so it is accepted unchecked. "
+                        "/essentials:upgrade refreshes the schema copy"
+                    )
+                else:
+                    findings.append(unknown_key_finding(path, location, key, error))
     return True
+
+
+def unknown_key_finding(path, location, key, error):
+    where = "/".join(str(p) for p in location) or "(root)"
+    what = f"unknown key '{key}'" if key is not None else error.message
+    return Finding("Should-fix", "1(b) schema", path, f"{where}: {what}", hint=unknown_key_hint(location, key))
+
+
+def unknown_key_hint(location, key):
+    head = location[0] if location else None
+    if head == "projections":
+        if key == "subscribesTo":
+            return (
+                "`subscribesTo` is spelled `aggregateTypes` — the AggregateType stream(s) the "
+                "projector subscribes to (PascalCase plural, e.g. Orders). If the value is a "
+                "list of EVENT types it belongs in `from` instead; the two are different axes "
+                "and moving one into the other corrupts it (manifest-guide.md §3)"
+            )
+        return (
+            "only name, aggregateTypes, from, consistency and store are read; move the rest "
+            "into `notes`. `handles`, `table` and `kind` are the keys most often reached for "
+            "instead of `from`"
+        )
+    if head is None:
+        return (
+            "no reader consults an unknown root key. Use the field that fits, `notes:` for prose, "
+            "or an `x-` extension key if it really is project-specific"
+        )
+    return "not a key this schema defines here — fix the spelling, or prefix it `x-` to keep it as an extension key"
 
 
 def schema_hint(location, error):
@@ -244,7 +375,39 @@ def schema_hint(location, error):
                 "only name, aggregateTypes, from, consistency and store are read; move the rest "
                 "into `notes`"
             )
-    if head is None and "Additional properties" in error.message:
+    if head == "flow":
+        return (
+            "`flow` is one journey name or a non-empty list of distinct names, each lower-case "
+            "kebab- or snake_case: flow: checkout, or flow: [checkout, returns] (manifest-guide.md §3)"
+        )
+    if head == "scenarios":
+        # A `oneOf` reports at its own level; the cause sits in its context, so look there too.
+        def causes(e):
+            yield e
+            for sub in e.context or ():
+                yield from causes(sub)
+
+        if any(c.validator == "type" and ({"with", "rows"} & set(map(str, c.absolute_path)))
+               for c in causes(error)):
+            return (
+                "example values are scalars — string, number, boolean or null. Quote a date or a "
+                "time: unquoted, YAML reads 2026-10-08 as a date (manifest-guide.md §3)"
+            )
+        if len(location) >= 3 and location[2] == "then":
+            return (
+                "`then` is exactly one of: a non-empty list of steps; { error: Name, message: … }; "
+                "{ nothing: true }; { readModel: Name, rows: [...] }. An empty `then: []` is not "
+                "allowed — write { nothing: true } (manifest-guide.md §3)"
+            )
+        if len(location) >= 3 and location[2] in ("given", "when"):
+            return (
+                "a step is a mapping with exactly one of event, command, query, state, external or "
+                "schedule (schedule: true), plus an optional `with` (manifest-guide.md §3)"
+            )
+    # A copy older than the version gate rejects an unknown root key through `patternProperties`, whose
+    # message reads "does not match any of the regexes", not "Additional properties".
+    if head is None and ("Additional properties" in error.message
+                         or "does not match any of the regexes" in error.message):
         return (
             "no reader consults an unknown root key. Use the field that fits, `notes:` for prose, "
             "or an `x-` prefixed key if it really is project-specific"
@@ -400,7 +563,7 @@ def tier_checks(parsed, findings):
                 f"tier: {tier} is a write style (§R5 lane), not an architectureTier value; a reader "
                 f"treats it as `custom` and silently drops the slice's tier-specific handling",
                 line=line,
-                hint=f"tier: {LANE_ONLY_TIERS[tier]} + lane: {tier}",
+                hint=LANE_ONLY_TIERS[tier],
             )
         )
 
@@ -454,7 +617,248 @@ def stream_vs_event_checks(parsed, findings):
                     )
 
 
-def report(findings, manifests, parsed, schema_ran, quiet):
+# The message keys of a scenario step (schema `$defs/scenarioStep`). The schema guarantees exactly
+# one per step; a step with none or several is its finding, so the cross-field rule skips it.
+STEP_KEYS = ("event", "command", "query", "state", "external", "schedule")
+
+SCENARIO_HINT = (
+    "a scenario names the slice's own messages, per kind (manifest-guide.md §3 `scenarios`). "
+    "Fix the name, or declare it in the list named here if the slice really has it"
+)
+
+
+def _step(step):
+    """(key, name) of a scenario step, or None when its shape is the schema's finding.
+    `name` is None for `schedule: true`."""
+    if not isinstance(step, dict):
+        return None
+    keys = [k for k in STEP_KEYS if k in step]
+    if len(keys) != 1:
+        return None
+    key = keys[0]
+    value = step[key]
+    if key == "schedule":
+        return (key, None) if value is True else None
+    return (key, value) if isinstance(value, str) else None
+
+
+def _a(kind):
+    return ("an " if str(kind)[:1] in "aeiou" else "a ") + str(kind)
+
+
+def _listed(names):
+    return "[" + ", ".join(sorted(set(names))) + "]" if names else "nothing"
+
+
+def _scenario_line(lines, name):
+    """Line of `name: <name>` inside the root `scenarios:` block, or None."""
+    start = next((i for i, t in enumerate(lines) if re.match(r"^scenarios:", t)), None)
+    if start is None or not isinstance(name, str):
+        return None
+    pattern = re.compile(r"^\s*(?:-\s*)?(?:\{\s*)?name:\s*[\"']?" + re.escape(name)
+                         + r"[\"']?\s*(?:[,}#]|$)")
+    for i in range(start + 1, len(lines)):
+        line = lines[i]
+        if line and not line[0].isspace() and line[0] not in "-#":
+            break  # the next root key: the block ended
+        if pattern.match(line):
+            return i + 1
+    return None
+
+
+def _scenario_problems(doc, scenario):
+    """What one scenario names outside the slice's own lists (manifest-guide.md §3 `scenarios`).
+
+    Intra-manifest only. A `given` event that no slice publishes, a `with`/`rows` key that is no
+    payload field or column, and a `test:` that resolves to nothing need other files: they are the
+    Atlas's (`slice-index.py atlas`), never this script's, which ships into projects.
+    """
+    kind = doc.get("kind")
+    problems = []
+    handles, publishes = _names(doc.get("handles")), _names(doc.get("publishes"))
+    consumes, dispatches = _names(doc.get("consumes")), _names(doc.get("dispatches"))
+    serves, writes = _names(doc.get("serves")), _names(doc.get("writes"))
+    projected = [n for p in _projections(doc) for n in (p.get("from") or []) if isinstance(n, str)]
+    inbound = consumes + projected
+    # A view's own read model: `owns`, plus `reads` and `projections[].name`, because the plugin's
+    # own view template records the model there and writes no `owns`.
+    models = (_names(doc.get("owns")) + _names(doc.get("reads"))
+              + [p["name"] for p in _projections(doc) if isinstance(p.get("name"), str)])
+
+    given, when, then = scenario.get("given"), scenario.get("when"), scenario.get("then")
+
+    if isinstance(given, list):
+        # A view on the service-entity lane reads entity state and has no events to be given; any
+        # other view is fed by events only (manifest-guide.md §3, the kind table).
+        entity_view = kind == "view" and "service-entity" in (doc.get("lane"), doc.get("tier"))
+        allowed = ("event",) if kind == "view" and not entity_view else ("event", "state")
+        for step in given:
+            parsed = _step(step)
+            if parsed is None:
+                continue
+            key, name = parsed
+            if key not in allowed:
+                problems.append(f"`given` holds a `{key}` step; on {_a(kind)} slice `given` takes "
+                                + " and ".join(f"`{a}`" for a in allowed) + " steps only")
+            elif kind == "view" and key == "event" and name not in inbound:
+                problems.append(f"`given: {{ event: {name} }}` is not an event this view projects — "
+                                f"`projections[].from` and `consumes` give {_listed(inbound)}")
+            elif kind == "command" and key == "state" and name not in writes:
+                problems.append(f"`given: {{ state: {name} }}` is not in `writes` {_listed(writes)}")
+
+    # A translation's direction decides what may trigger it, and the trigger decides what it emits.
+    direction = doc.get("direction")
+    can_in = direction in (None, "inbound", "both")
+    can_out = direction in (None, "outbound", "both")
+    mode = None
+    if when is None:
+        if kind in ("command", "automation", "translation"):
+            problems.append(f"no `when` — {_a(kind)} slice's scenario needs its trigger")
+    elif (w := _step(when)) is not None:
+        key, name = w
+        if kind == "command":
+            if key != "command":
+                problems.append(f"`when` is a `{key}` step; a command slice is triggered by a `command`")
+            elif name not in handles:
+                problems.append(f"`when: {{ command: {name} }}` is not in `handles` {_listed(handles)}")
+        elif kind == "view":
+            if key != "query":
+                problems.append(f"`when` is a `{key}` step; a view's `when` is a `query` it serves")
+            elif name not in serves:
+                problems.append(f"`when: {{ query: {name} }}` is not in `serves` {_listed(serves)}")
+        elif kind == "automation":
+            if key == "schedule":
+                if "schedule" not in doc:
+                    problems.append("`when: { schedule: true }`, but the slice declares no `schedule`")
+            elif key != "event":
+                problems.append(f"`when` is a `{key}` step; an automation is triggered by an `event` "
+                                f"it consumes or by `schedule: true`")
+            elif name not in consumes:
+                problems.append(f"`when: {{ event: {name} }}` is not in `consumes` {_listed(consumes)}")
+        elif kind == "translation":
+            if key == "external" and can_in:
+                mode = "inbound"
+            elif key == "event" and can_out:
+                mode = "outbound"
+                if name not in consumes:
+                    problems.append(f"`when: {{ event: {name} }}` is not in `consumes` {_listed(consumes)}")
+            else:
+                expected = {(True, True): "an `external` message (inbound) or an `event` it consumes "
+                                          "(outbound)",
+                            (True, False): "an `external` message (`direction: inbound`)",
+                            (False, True): "an `event` it consumes (`direction: outbound`)"}
+                problems.append(f"`when` is a `{key}` step; this translation is triggered by "
+                                + expected.get((can_in, can_out), "nothing it declares"))
+
+    if isinstance(then, list):
+        if kind == "view":
+            problems.append("`then` lists steps; a view's `then` is `{ readModel, rows }`, or "
+                            "`{ error }` for a `when` query")
+            return problems
+        if kind == "translation":
+            emits = {"inbound": ("command", "event"), "outbound": ("external",)}.get(
+                mode or "", (("command", "event") if can_in else ()) + (("external",) if can_out else ()))
+        else:
+            emits = {"command": ("event",), "automation": ("command",)}.get(str(kind), ())
+        for step in then:
+            parsed = _step(step)
+            if parsed is None:
+                continue
+            key, name = parsed
+            if key not in emits:
+                who = f"an {mode} translation" if mode else f"{_a(kind)} slice"
+                problems.append(f"`then` holds a `{key}` step; {who} emits "
+                                + (" and ".join(f"`{a}`" for a in emits) or "no") + " steps")
+            elif key == "event" and name not in publishes:
+                problems.append(f"`then: {{ event: {name} }}` is not in `publishes` {_listed(publishes)}")
+            elif key == "command" and name not in dispatches:
+                problems.append(f"`then: {{ command: {name} }}` is not in `dispatches` "
+                                f"{_listed(dispatches)}")
+    elif isinstance(then, dict):
+        if "readModel" in then and kind != "view":
+            problems.append(f"`then: {{ readModel }}` is a view's outcome; {_a(kind)} slice ends in "
+                            f"steps, `error` or `nothing`")
+        elif "readModel" in then and isinstance(then["readModel"], str) and then["readModel"] not in models:
+            problems.append(f"`then: {{ readModel: {then['readModel']} }}` is not this view's read model "
+                            f"— `owns`, `reads` and `projections[].name` give {_listed(models)}")
+        elif "nothing" in then and kind == "view":
+            problems.append("`then: { nothing: true }` on a view; an empty read model is "
+                            "`{ readModel: <Name>, rows: [] }`")
+        elif "error" in then and kind == "view" and when is None:
+            problems.append("`then: { error }` on a view needs the `when` query that fails")
+    return problems
+
+
+def scenario_checks(parsed, findings):
+    """Gate 1(d) — a scenario that names a message outside the slice's own lists.
+
+    The schema checks a scenario's shape; it cannot see that `when: { command: CancelOrdr }` is not
+    the command the slice `handles`, which is the mistake a generator makes. Same manifest, no other
+    file, so it is precise, and a finding. Also the one shape rule the schema cannot state: a
+    scenario name is unique within its slice.
+    """
+    for path, doc in sorted(parsed.items(), key=lambda kv: str(kv[0])):
+        scenarios = doc.get("scenarios")
+        if not isinstance(scenarios, list):
+            continue
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            lines = []
+        counts = {}
+        for scenario in scenarios:
+            if isinstance(scenario, dict) and isinstance(scenario.get("name"), str):
+                counts[scenario["name"]] = counts.get(scenario["name"], 0) + 1
+        for i, scenario in enumerate(scenarios):
+            if not isinstance(scenario, dict):
+                continue
+            name = scenario.get("name")
+            where = f"scenarios/{i}" + (f" '{name}'" if isinstance(name, str) else "")
+            problems = []
+            if isinstance(name, str) and counts[name] > 1:
+                problems.append(f"{counts[name]} scenarios of this slice share the name; a scenario "
+                                f"name is unique within its slice")
+            problems.extend(_scenario_problems(doc, scenario))
+            line = _scenario_line(lines, name) if problems else None
+            for problem in problems:
+                findings.append(Finding("Should-fix", "1(d) scenario", path, f"{where}: {problem}",
+                                        line=line, hint=SCENARIO_HINT))
+
+
+def baseline_key(finding, root):
+    """(id, file, message) with `root` cut out of the file and the message, so a baseline taken in
+    another checkout of the same tree still matches. Accepts a Finding or a `--json` finding."""
+    if isinstance(finding, Finding):
+        fid, file, message = finding_id(finding.gate), str(finding.path), finding.message
+    else:
+        fid = finding.get("id") or finding_id(str(finding.get("gate", "")))
+        file, message = str(finding.get("file", "")), str(finding.get("message", ""))
+    if root:
+        prefix = str(root).rstrip("/\\") + os.sep
+        if file.startswith(prefix):
+            file = file[len(prefix):]
+        message = message.replace(prefix, "")
+    return fid, Path(file).as_posix(), message
+
+
+def load_baseline(path: Path):
+    """The (id, file, message) keys of a previous `--json` run. Raises ValueError when the file is
+    not one — a baseline that silently matched nothing would report every finding as new."""
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(doc, dict) or not isinstance(doc.get("findings"), list):
+        raise ValueError("not a slice-lint --json document (no `findings` list)")
+    root = doc.get("root") or ""
+    return {baseline_key(f, root) for f in doc["findings"] if isinstance(f, dict)}
+
+
+SKIPPED_BANNER = (
+    "SCHEMA VALIDATION SKIPPED — `jsonschema` is not installed, so only the parse "
+    "gate ran. This is NOT a clean bill of health, and exits 2 unless --allow-skip-schema.\n"
+    "  uv run --script slice-lint.py …   (or: pip install jsonschema)"
+)
+
+
+def report(findings, manifests, parsed, schema_ran, quiet, suppressed=None, notes=()):
     out = sys.stdout
     findings.sort(key=Finding.sort_key)
 
@@ -476,20 +880,22 @@ def report(findings, manifests, parsed, schema_ran, quiet):
                 print(f"            → {f.hint}", file=out)
         print("", file=out)
 
+    for note in notes:
+        print(f"Note        {note}", file=out)
+    if notes:
+        print("", file=out)
+
     if not quiet:
         print(
-            f"{len(manifests)} manifest(s) found, {len(parsed)} parsed, {len(findings)} finding(s).",
+            f"{len(manifests)} manifest(s) found, {len(parsed)} parsed, {len(findings)} finding(s)"
+            + (f" not in the baseline ({suppressed} in it, not shown)." if suppressed is not None
+               else "."),
             file=out,
         )
-        if not schema_ran:
-            print(
-                "SCHEMA VALIDATION SKIPPED — `jsonschema` is not installed, so only the parse "
-                "gate ran. This is NOT a clean bill of health.\n"
-                "  uv run --script slice-lint.py …   (or: pip install jsonschema)",
-                file=out,
-            )
-        if not findings and schema_ran:
+        if not findings and schema_ran and suppressed is None:
             print("Every manifest parses and validates.", file=out)
+    if not schema_ran:
+        print(SKIPPED_BANNER, file=sys.stderr if quiet else out)
 
 
 def main(argv=None):
@@ -499,10 +905,21 @@ def main(argv=None):
     )
     parser.add_argument("root", nargs="?", default=".", help="directory to scan (default: .)")
     parser.add_argument("--schema", help="path to slice-yaml.schema.json")
-    parser.add_argument(
+    skip = parser.add_mutually_exclusive_group()
+    skip.add_argument(
+        "--allow-skip-schema",
+        action="store_true",
+        help="exit 0, not 2, when schema validation could not run (the banner still prints)",
+    )
+    skip.add_argument(
         "--require-schema",
         action="store_true",
-        help="exit non-zero if schema validation could not run (use in CI)",
+        help="accepted for compatibility; failing on a skipped validation is the default",
+    )
+    parser.add_argument(
+        "--baseline",
+        metavar="JSON",
+        help="a previous --json output; report only findings it does not contain",
     )
     parser.add_argument("--json", action="store_true", help="emit findings as JSON")
     parser.add_argument("--quiet", action="store_true", help="print findings only")
@@ -526,11 +943,19 @@ def main(argv=None):
         print(f"slice-lint: cannot read schema {schema_path}: {exc}", file=sys.stderr)
         return 2
 
+    baseline = None
+    if args.baseline:
+        try:
+            baseline = load_baseline(Path(args.baseline))
+        except (OSError, ValueError) as exc:
+            print(f"slice-lint: cannot read baseline {args.baseline}: {exc}", file=sys.stderr)
+            return 2
+
     manifests = find_manifests(root)
     if not manifests:
         if args.json:
             json.dump({"root": str(root), "manifests": 0, "parsed": 0, "schemaValidated": False,
-                       "findings": []}, sys.stdout, indent=2)
+                       "findings": [], "notes": []}, sys.stdout, indent=2)
             sys.stdout.write("\n")
         elif not args.quiet:
             print(f"slice-lint: no slice.yaml found under {root}", file=sys.stderr)
@@ -560,31 +985,43 @@ def main(argv=None):
 
     findings = []
     parsed = parse_manifests(manifests, findings)
-    schema_ran = validate_schema(parsed, schema, findings)
+    notes = []
+    schema_ran = validate_schema(parsed, schema, findings, notes)
     stream_vs_event_checks(parsed, findings)
+    scenario_checks(parsed, findings)
     cross_manifest_checks(parsed, findings)
     tier_checks(parsed, findings)
 
-    if args.json:
-        json.dump(
-            {
-                "root": str(root),
-                "manifests": len(manifests),
-                "parsed": len(parsed),
-                "schemaValidated": schema_ran,
-                "findings": [f.as_dict() for f in sorted(findings, key=Finding.sort_key)],
-            },
-            sys.stdout,
-            indent=2,
-        )
-        sys.stdout.write("\n")
-    else:
-        report(findings, manifests, parsed, schema_ran, args.quiet)
+    suppressed = None
+    if baseline is not None:
+        kept = [f for f in findings if baseline_key(f, root) not in baseline]
+        suppressed = len(findings) - len(kept)
+        findings = kept
 
+    if args.json:
+        doc = {
+            "root": str(root),
+            "manifests": len(manifests),
+            "parsed": len(parsed),
+            "schemaValidated": schema_ran,
+            "findings": [f.as_dict() for f in sorted(findings, key=Finding.sort_key)],
+            "notes": notes,
+        }
+        if suppressed is not None:
+            doc["baseline"] = {"path": str(Path(args.baseline).resolve()), "suppressed": suppressed}
+        json.dump(doc, sys.stdout, indent=2)
+        sys.stdout.write("\n")
+        if not schema_ran:
+            print(SKIPPED_BANNER, file=sys.stderr)
+    else:
+        report(findings, manifests, parsed, schema_ran, args.quiet, suppressed, notes)
+
+    # Findings first: a skipped validation never hides one. Otherwise a run that could not validate
+    # is not a pass, and says so with 2 — the code a hook or CI already treats as "did not run".
     if findings:
         return 1
-    if args.require_schema and not schema_ran:
-        return 1
+    if not schema_ran and not args.allow_skip_schema:
+        return 2
     return 0
 
 

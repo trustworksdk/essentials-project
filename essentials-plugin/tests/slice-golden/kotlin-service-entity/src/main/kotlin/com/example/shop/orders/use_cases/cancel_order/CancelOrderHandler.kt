@@ -6,7 +6,6 @@ import dk.trustworks.essentials.reactive.EventBus
 import dk.trustworks.essentials.reactive.command.AnnotatedCommandHandler
 import dk.trustworks.essentials.reactive.command.CmdHandler
 import org.springframework.stereotype.Component
-import org.springframework.transaction.annotation.Transactional
 
 /**
  * The decision component for THIS slice (rules/slice-design.md §R1).
@@ -22,6 +21,13 @@ import org.springframework.transaction.annotation.Transactional
  * `CommandHandler` bean with the single `CommandBus` bean, so `@Component` in a scanned package is
  * the whole of it. The obligation is a *check*: confirm `reactive-bean-post-processor-enabled`
  * (default `true`) is not switched off, because disabling it silently unwires every handler.
+ *
+ * TRANSACTION — no `@Transactional` here. The `CommandBus` already hands the command to this handler
+ * inside a unit of work (the starter's `UnitOfWorkControllingCommandBusInterceptor`), and that unit of
+ * work is a Spring-managed transaction the repository joins, so the load, the mutation, the save and
+ * the publish run in one. `@Transactional` would make Spring proxy this class, and
+ * `AnnotatedCommandHandler.handle` is final: the bus would call it on the proxy, whose fields are
+ * never initialised, and every command would fail with a `NullPointerException`.
  */
 @Component
 class CancelOrderHandler(
@@ -30,7 +36,6 @@ class CancelOrderHandler(
 ) : AnnotatedCommandHandler() {
 
     @CmdHandler
-    @Transactional
     fun handle(cmd: CancelOrder) {
         val order = orders.findById(cmd.id.value)
             ?: throw IllegalArgumentException("No Order ${cmd.id.value}")

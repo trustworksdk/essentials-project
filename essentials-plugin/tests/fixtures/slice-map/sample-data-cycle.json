@@ -95,7 +95,11 @@
       "tests": [
         "unit"
       ],
-      "flags": []
+      "flags": [],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     },
     {
       "id": "payments.retry_payment",
@@ -133,7 +137,11 @@
       "tests": [
         "unit"
       ],
-      "flags": []
+      "flags": [],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     },
     {
       "id": "payments.start_payment",
@@ -171,7 +179,11 @@
       "tests": [
         "unit"
       ],
-      "flags": []
+      "flags": [],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     },
     {
       "id": "payments.charge_payment",
@@ -212,7 +224,11 @@
       "tests": [
         "unit"
       ],
-      "flags": []
+      "flags": [],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     },
     {
       "id": "payments.payment_list",
@@ -268,7 +284,11 @@
         "unit"
       ],
       "flags": [],
-      "readModels": []
+      "readModels": [],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     },
     {
       "id": "reminders.schedule_next",
@@ -306,7 +326,11 @@
       "tests": [
         "unit"
       ],
-      "flags": []
+      "flags": [],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     },
     {
       "id": "reminders.send_reminder",
@@ -346,7 +370,11 @@
       "tests": [
         "unit"
       ],
-      "flags": []
+      "flags": [],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     }
   ],
   "messages": [
@@ -528,5 +556,221 @@
   "crossReads": [],
   "notes": [
     "package, files, message payloads and read-model columns come from source and were not read (no --source-facts)"
-  ]
+  ],
+  "processes": [
+    {
+      "id": "~orders.place_order",
+      "name": "place order",
+      "declared": false,
+      "color": 0,
+      "bcs": [
+        "orders"
+      ],
+      "sliceIds": [
+        "orders.place_order"
+      ],
+      "entries": [
+        "orders.place_order"
+      ],
+      "links": [
+        {
+          "to": "~unattached:payments",
+          "via": [
+            "OrderPlaced"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "~unattached:payments",
+      "name": "unattached",
+      "declared": false,
+      "color": 1,
+      "bcs": [
+        "payments"
+      ],
+      "sliceIds": [
+        "payments.retry_payment",
+        "payments.start_payment",
+        "payments.charge_payment",
+        "payments.payment_list"
+      ],
+      "entries": [
+        "payments.start_payment"
+      ],
+      "links": []
+    },
+    {
+      "id": "~unattached:reminders",
+      "name": "unattached",
+      "declared": false,
+      "color": 3,
+      "bcs": [
+        "reminders"
+      ],
+      "sliceIds": [
+        "reminders.send_reminder",
+        "reminders.schedule_next"
+      ],
+      "entries": [
+        "reminders.send_reminder"
+      ],
+      "links": []
+    }
+  ],
+  "issues": [
+    {
+      "id": "flow-undeclared:orders.place_order",
+      "code": "flow-undeclared",
+      "level": "info",
+      "text": "declares no `flow:` — grouped into a process by cause and effect; /essentials:slice-enrich drafts its journey",
+      "target": {
+        "kind": "slice",
+        "id": "orders.place_order",
+        "part": null
+      },
+      "source": "atlas",
+      "fix": {
+        "route": "author",
+        "bc": "orders"
+      }
+    },
+    {
+      "id": "flow-undeclared:payments",
+      "code": "flow-undeclared",
+      "level": "info",
+      "text": "4 of 4 slices in `payments` declare no flow — grouped into processes by cause and effect; /essentials:slice-enrich drafts their journeys",
+      "target": {
+        "kind": "context",
+        "id": "payments",
+        "part": null
+      },
+      "source": "atlas",
+      "members": [
+        "payments.charge_payment",
+        "payments.payment_list",
+        "payments.retry_payment",
+        "payments.start_payment"
+      ],
+      "memberText": "declares no `flow:` — grouped into a process by cause and effect; /essentials:slice-enrich drafts its journey",
+      "fix": {
+        "route": "author",
+        "bc": "payments"
+      }
+    },
+    {
+      "id": "flow-undeclared:reminders.schedule_next",
+      "code": "flow-undeclared",
+      "level": "info",
+      "text": "declares no `flow:` — grouped into a process by cause and effect; /essentials:slice-enrich drafts its journey",
+      "target": {
+        "kind": "slice",
+        "id": "reminders.schedule_next",
+        "part": null
+      },
+      "source": "atlas",
+      "fix": {
+        "route": "author",
+        "bc": "reminders"
+      }
+    },
+    {
+      "id": "flow-undeclared:reminders.send_reminder",
+      "code": "flow-undeclared",
+      "level": "info",
+      "text": "declares no `flow:` — grouped into a process by cause and effect; /essentials:slice-enrich drafts its journey",
+      "target": {
+        "kind": "slice",
+        "id": "reminders.send_reminder",
+        "part": null
+      },
+      "source": "atlas",
+      "fix": {
+        "route": "author",
+        "bc": "reminders"
+      }
+    },
+    {
+      "id": "scenario-none:orders.place_order",
+      "code": "scenario-none",
+      "level": "info",
+      "text": "declares no scenarios — its board shows invariants and test kinds instead; /essentials:slice-enrich drafts them from its tests",
+      "target": {
+        "kind": "slice",
+        "id": "orders.place_order",
+        "part": null
+      },
+      "source": "atlas",
+      "fix": {
+        "route": "author",
+        "bc": "orders"
+      }
+    },
+    {
+      "id": "scenario-none:payments",
+      "code": "scenario-none",
+      "level": "info",
+      "text": "4 of 4 slices in `payments` declare no scenarios — their boards show invariants and test kinds instead; /essentials:slice-enrich drafts scenarios from their tests",
+      "target": {
+        "kind": "context",
+        "id": "payments",
+        "part": null
+      },
+      "source": "atlas",
+      "members": [
+        "payments.charge_payment",
+        "payments.payment_list",
+        "payments.retry_payment",
+        "payments.start_payment"
+      ],
+      "memberText": "declares no scenarios — its board shows invariants and test kinds instead; /essentials:slice-enrich drafts them from its tests",
+      "fix": {
+        "route": "author",
+        "bc": "payments"
+      }
+    },
+    {
+      "id": "scenario-none:reminders.schedule_next",
+      "code": "scenario-none",
+      "level": "info",
+      "text": "declares no scenarios — its board shows invariants and test kinds instead; /essentials:slice-enrich drafts them from its tests",
+      "target": {
+        "kind": "slice",
+        "id": "reminders.schedule_next",
+        "part": null
+      },
+      "source": "atlas",
+      "fix": {
+        "route": "author",
+        "bc": "reminders"
+      }
+    },
+    {
+      "id": "scenario-none:reminders.send_reminder",
+      "code": "scenario-none",
+      "level": "info",
+      "text": "declares no scenarios — its board shows invariants and test kinds instead; /essentials:slice-enrich drafts them from its tests",
+      "target": {
+        "kind": "slice",
+        "id": "reminders.send_reminder",
+        "part": null
+      },
+      "source": "atlas",
+      "fix": {
+        "route": "author",
+        "bc": "reminders"
+      }
+    }
+  ],
+  "lineage": {
+    "fields": {},
+    "technicalColumns": [
+      "id",
+      "version",
+      "createdAt",
+      "updatedAt",
+      "lastModified",
+      "etag"
+    ]
+  }
 }

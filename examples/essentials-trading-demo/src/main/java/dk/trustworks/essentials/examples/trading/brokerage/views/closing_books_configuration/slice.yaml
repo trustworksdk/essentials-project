@@ -7,6 +7,7 @@ status: live
 summary: Report the closing-books policy currently in force, rendered in the vocabulary the admin surface speaks.
 generator: essentials
 language: java
+lane: aggregate
 
 serves: [GetClosingBooksConfiguration]
 endpoints:
@@ -23,6 +24,7 @@ invariants:
     enforcedBy: ClosingBooksConfiguration
 forbidden:
   - cross-slice-internal:brokerage
+tier: cqrs-es
 tests:
   unit: { present: false }
   integration: { present: false }

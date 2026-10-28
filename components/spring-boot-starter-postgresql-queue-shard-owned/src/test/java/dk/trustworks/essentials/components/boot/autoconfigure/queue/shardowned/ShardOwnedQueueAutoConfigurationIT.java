@@ -27,7 +27,11 @@ import dk.trustworks.essentials.components.queue.shardowned.adapter.ShardOwnedDu
 import dk.trustworks.essentials.components.queue.shardowned.spi.*;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.*;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.boot.test.system.*;
 import org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
@@ -117,6 +121,117 @@ class ShardOwnedQueueAutoConfigurationIT {
                     assertThat(settings.holeExpiry()).isEqualTo(Duration.ofSeconds(7));
                     assertThat(context.getBean(ShardRuntime.class).pumpCount()).isEqualTo(3);
                 });
+    }
+
+    /**
+     * The stuck-handler bound is on by default, settable for every queue, and settable per queue by name - a
+     * {@code DurableQueues} name such as {@code Inbox:orders} in brackets - with every other setting shared.
+     */
+    @Test
+    void the_stuck_handler_timeout_defaults_to_fifteen_minutes_and_can_be_set_for_all_queues_and_per_queue() {
+        runner().withPropertyValues("essentials.shard-owned-queue.queues.orders=2",
+                                    "essentials.shard-owned-queue.queues.reports=2")
+                .run(context -> {
+                    assertThat(context.getBean(ShardOwnerSettings.class).stuckHandlerTimeout()).isEqualTo(Duration.ofMinutes(15));
+                    assertThat(context.getBean(ShardOwnedQueueFactory.class).settingsFor(QueueName.of("orders")).stuckHandlerTimeout())
+                            .isEqualTo(Duration.ofMinutes(15));
+                });
+        runner().withPropertyValues("essentials.shard-owned-queue.queues.orders=2",
+                                    "essentials.shard-owned-queue.queues.reports=2",
+                                    "essentials.shard-owned-queue.lease-ttl=12s",
+                                    "essentials.shard-owned-queue.stuck-handler-timeout=20m",
+                                    "essentials.shard-owned-queue.stuck-handler-timeouts.reports=3h")
+                // Not withPropertyValues, which splits a pair at its first ':'.
+                .withInitializer(context -> context.getEnvironment().getPropertySources().addFirst(
+                        new org.springframework.core.env.MapPropertySource("inbox-timeout", java.util.Map.of(
+                                "essentials.shard-owned-queue.stuck-handler-timeouts.[Inbox:orders]", "2h"))))
+                .run(context -> {
+                    var settings = context.getBean(ShardOwnerSettings.class);
+                    var factory  = context.getBean(ShardOwnedQueueFactory.class);
+                    assertThat(settings.stuckHandlerTimeout()).as("every queue's").isEqualTo(Duration.ofMinutes(20));
+                    assertThat(factory.settingsFor(QueueName.of("orders"))).as("a queue not named per queue takes every queue's")
+                                                                         .isEqualTo(settings);
+                    assertThat(factory.settingsFor(QueueName.of("reports")))
+                            .as("a queue named per queue takes its own, every other setting shared")
+                            .isEqualTo(settings.withStuckHandlerTimeout(Duration.ofHours(3)));
+                    assertThat(factory.settingsFor(QueueName.of("Inbox:orders")).stuckHandlerTimeout())
+                            .as("a name relaxed binding would mangle, in brackets").isEqualTo(Duration.ofHours(2));
+                    assertThat(factory.settingsFor(QueueName.of("reports")).leaseTtl()).isEqualTo(Duration.ofSeconds(12));
+                });
+    }
+
+    @Test
+    void a_stuck_handler_timeout_that_is_not_positive_fails_the_context() {
+        // Per queue: refused when the factory is given the map, not at the first queue() of that name.
+        runner().withPropertyValues("essentials.shard-owned-queue.stuck-handler-timeouts.reports=0s")
+                .run(context -> assertThat(context).getFailure()
+                                                   .hasMessageContaining("shardOwnedQueueFactory")
+                                                   .rootCause().hasMessageContaining("stuckHandlerTimeout must be positive"));
+        runner().withPropertyValues("essentials.shard-owned-queue.stuck-handler-timeout=0s")
+                .run(context -> assertThat(context).hasFailed());
+    }
+
+    /**
+     * A per-queue key that no queue is built under - a typo, other casing - leaves that queue on the shared bound. The
+     * factory logs the bound of each queue it builds with its own, and WARNs once, when the application is ready, naming
+     * every key no queue had been built under by then.
+     */
+    @Test
+    @ExtendWith(OutputCaptureExtension.class)
+    void a_per_queue_stuck_handler_timeout_no_queue_is_built_under_is_warned_about(CapturedOutput output) {
+        runner().withPropertyValues("essentials.shard-owned-queue.queues.reports=2",
+                                    "essentials.shard-owned-queue.stuck-handler-timeouts.reports=3h",
+                                    "essentials.shard-owned-queue.stuck-handler-timeouts.reprots=2h")
+                .withBean(ReportsQueueUser.class)
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(output).contains("Queue 'reports' built with its own stuckHandlerTimeout PT3H");
+                    assertThat(unmatchedWarnings(output)).as("nothing is reported before the application is ready").isEmpty();
+
+                    var ready = new ApplicationReadyEvent(new SpringApplication(), new String[0], context.getSourceApplicationContext(), Duration.ZERO);
+                    context.publishEvent(ready);
+                    context.publishEvent(ready);
+
+                    assertThat(unmatchedWarnings(output)).as("once").singleElement().asString()
+                                                         .contains("[reprots]")
+                                                         .doesNotContain("reports");
+                });
+    }
+
+    /**
+     * A queue() that fails - its name is not registered - has built nothing: no INFO line says it was, and the WARN at
+     * ready still names the key.
+     */
+    @Test
+    @ExtendWith(OutputCaptureExtension.class)
+    void a_per_queue_stuck_handler_timeout_whose_queue_fails_to_build_is_still_warned_about(CapturedOutput output) {
+        runner().withPropertyValues("essentials.shard-owned-queue.stuck-handler-timeouts.unlisted=2h")
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    var factory = context.getBean(ShardOwnedQueueFactory.class);
+
+                    org.assertj.core.api.Assertions.assertThatThrownBy(() -> factory.queue("unlisted"))
+                                                   .isInstanceOf(IllegalStateException.class)
+                                                   .hasMessageContaining("is not registered");
+                    assertThat(output).doesNotContain("Queue 'unlisted' built");
+
+                    context.publishEvent(new ApplicationReadyEvent(new SpringApplication(), new String[0], context.getSourceApplicationContext(), Duration.ZERO));
+
+                    assertThat(unmatchedWarnings(output)).singleElement().asString().contains("[unlisted]");
+                });
+    }
+
+    private static List<String> unmatchedWarnings(CapturedOutput output) {
+        return output.getAll().lines()
+                     .filter(line -> line.contains("WARN") && line.contains("stuck-handler-timeouts"))
+                     .toList();
+    }
+
+    /** Builds the {@code reports} queue while the context starts, as a component that consumes it would. */
+    static class ReportsQueueUser {
+        ReportsQueueUser(ShardOwnedQueueFactory factory) {
+            factory.queue("reports");
+        }
     }
 
     @Test
@@ -223,6 +338,10 @@ class ShardOwnedQueueAutoConfigurationIT {
                     assertThat(registry.find("essentials.queue.depth").gauges())
                             .describedAs("the gauges that cost queries stay off unless asked for")
                             .isEmpty();
+                    // Costs no query, so it is always there: the one way a starter user sees a shard whose takeover keeps
+                    // failing, which shards.unowned cannot (the engine's own metrics are private behind MessageQueue)
+                    assertThat(registry.get("essentials.queue.shards.awaiting.takeover").tag("queue", "orders").gauge().value()).isZero();
+                    assertThat(registry.get("essentials.queue.shards.awaiting.takeover").tag("queue", "shipments").gauge().value()).isZero();
                 });
     }
 
@@ -393,6 +512,23 @@ class ShardOwnedQueueAutoConfigurationIT {
                 });
     }
 
+    /**
+     * {@code essentials.durable-queues.require-active-unit-of-work-for-enqueue} is the base starter's property; this
+     * starter reads it by key, since it does not depend on that starter.
+     */
+    @Test
+    void requiring_a_unit_of_work_for_enqueue_is_off_by_default_and_read_from_the_shared_property() {
+        runner().withPropertyValues("essentials.shard-owned-queue.durable-queues-enabled=true")
+                .withUserConfiguration(DurableQueuesConfiguration.class)
+                .run(context -> assertThat(((ShardOwnedDurableQueues) context.getBean(DurableQueues.class)).isRequireActiveUnitOfWorkForEnqueue())
+                        .isFalse());
+        runner().withPropertyValues("essentials.shard-owned-queue.durable-queues-enabled=true",
+                                    "essentials.durable-queues.require-active-unit-of-work-for-enqueue=true")
+                .withUserConfiguration(DurableQueuesConfiguration.class)
+                .run(context -> assertThat(((ShardOwnedDurableQueues) context.getBean(DurableQueues.class)).isRequireActiveUnitOfWorkForEnqueue())
+                        .isTrue());
+    }
+
     /** Without the flag the adapter is not built at all, and the default engine stays in place. */
     @Test
     void durable_queues_stay_off_unless_asked() {
@@ -492,15 +628,16 @@ class ShardOwnedQueueAutoConfigurationIT {
     }
 
     /**
-     * The instance identity is the hostname, as everywhere else in Essentials — the fenced lock
-     * manager and the scheduler both use {@code Network.hostName()} bare. An operator correlating a
-     * shard hand-over with a lock hand-over should not have to translate between naming schemes, and
-     * a per-boot UUID means nothing in a log line or in the membership table.
+     * The instance identity is {@code <hostname>:<pid>}, the fenced lock manager's default
+     * ({@code FencedLockManagerSettings.defaultLockManagerInstanceId()}). The bare hostname it used to be
+     * made two processes on one host one instance to the fair-share rebalance, each allowed half the
+     * shards; the pid keeps them apart while the id stays readable in a log line and the membership table.
      */
     @Test
-    void the_instance_id_defaults_to_the_hostname() {
+    void the_instance_id_defaults_to_the_hostname_and_pid_like_the_fenced_lock_manager() {
         runner().run(context -> assertThat(context.getBean(ShardOwnedQueueFactory.class).instanceId())
-                .isEqualTo(dk.trustworks.essentials.shared.network.Network.hostName()));
+                .isEqualTo(dk.trustworks.essentials.components.foundation.fencedlock.FencedLockManagerSettings.defaultLockManagerInstanceId())
+                .isEqualTo(dk.trustworks.essentials.shared.network.Network.hostName() + ":" + ProcessHandle.current().pid()));
     }
 
     @Test

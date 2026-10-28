@@ -109,7 +109,7 @@ public final class DefaultQueuedMessage implements QueuedMessage {
 
     @Override
     public DeliveryMode getDeliveryMode() {
-        return DeliveryMode.NORMAL;
+        return message instanceof OrderedMessage ? DeliveryMode.IN_ORDER : DeliveryMode.NORMAL;
     }
 
     @Override

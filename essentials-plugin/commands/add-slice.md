@@ -127,6 +127,9 @@ The skill owns emission, wiring, and the closing report. This command writes no 
 - **`render-slice.py` exits 2** — nothing was written. Relay its message. An unknown or unfilled
   placeholder, or a leftover `{{`/`__`, means the templates drifted from the placeholder table: a plugin
   bug, not a user error.
+- **`render-slice.py` exits 4** — the shell may not write the project; nothing was written. The kind
+  skill takes the emit fallback (`slice-authoring.md` §4b): `--emit`, each file written verbatim with the
+  Write tool, then `verify`, and only its exit 0 counts as rendered. Never write a rendered file freehand.
 - **`render-slice.py requires` exits 1** — the build file lacks a module the slice imports. Name it
   and offer to add it; the slice does not compile without it.
 - **Mixed-language bounded context** — abort and report both file types found.

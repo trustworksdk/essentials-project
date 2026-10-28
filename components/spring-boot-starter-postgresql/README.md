@@ -122,7 +122,7 @@ All beans use `@ConditionalOnMissingBean` for easy overriding.
 | Bean | Condition | Description |
 |------|-----------|-------------|
 | `EssentialTypesJacksonModule` | Always | Jackson support for Essentials semantic types |
-| `EssentialsImmutableJacksonModule` | Objenesis on classpath + `essentials.immutable-jackson-module-enabled=true` | Jackson support for immutable objects without default constructor |
+| `EssentialsImmutableJacksonModule` | Objenesis on classpath + `essentials.immutable-jackson-module-enabled=true` set explicitly (puts it on Spring Boot's web `JsonMapper`; the persistence `JSONSerializer` has it by default) | Jackson support for immutable objects without default constructor |
 | `JSONSerializer` (`Jackson3JSONSerializer`) | `JSONEventSerializer` NOT on classpath | `EssentialsObjectMappers.createJSONSerializer()` — the canonical persistence mapper. Define your own `JSONSerializer` bean to add modules; the starter does not pick up `JacksonModule` beans for persistence |
 
 > **Note:** The `JSONSerializer` bean is only auto-registered if `JSONEventSerializer` is NOT on the classpath.  
@@ -200,38 +200,31 @@ essentials.durable-queues.verbose-tracing=false
 | Property | Default | Description                                                                 |
 |----------|---------|-----------------------------------------------------------------------------|
 | `shared-queue-table-name` | `durable_queues` | PostgreSQL table for messages. **See [Security](#security)** |
-| `message-handling-timeout` | `30s` | Timeout before unacknowledged message is redelivered (single-op mode only)  |
+| `message-handling-timeout` | `30s` | Timeout before an unacknowledged message is redelivered                     |
 | `use-centralized-message-fetcher` | `true` | Use optimized centralized message fetching                                  |
 | `centralized-message-fetcher-polling-interval` | `20ms` | Base polling interval for centralized fetcher                               |
 | `centralized-polling-delay-back-off-factor` | `1.5` | Backoff factor when no messages found                                       |
 | `polling-delay-interval-increment-factor` | `0.5` | Legacy backoff factor (when not using centralized fetcher)                  |
 | `max-polling-interval` | `2s` | Maximum polling delay                                                       |
 | `verbose-tracing` | `false` | Include all operations in traces (not just top-level)                       |
-| `enable-queue-statistics` | `false` | Enable queue statistics collection                                          |
-| `shared-queue-statistics-table-name` | `durable_queues_statistics` | Table for queue statistics. **See [Security](#security)**                                                 |
-| `enable-queue-statistics-ttl` | `false` | Enable TTL for statistics records                                           |
-| `queue-statistics-ttl-duration` | `90` | TTL duration in days                                                        |
 
-**Transactional Modes:**
-
-| Mode | Description | Recommended |
-|------|-------------|-------------|
-| `single-operation-transaction` | Queue operations execute without transactions; uses timeout-based message acknowledgment | **Yes** |
-| `fully-transactional` | Queue operations share the parent `UnitOfWork` transaction | No |
-
-> ⚠️ **Warning:** `fully-transactional` mode causes issues with retries and dead letter handling because when an exception occurs, the transaction is marked for rollback and retry counts are never increased. Use `single-operation-transaction` for reliable message processing.
+**Removed in 0.60.0:** `transactional-mode`, `use-ordered-unordered-query`, `enable-queue-statistics`, `shared-queue-statistics-table-name`, `enable-queue-statistics-ttl`, `queue-statistics-ttl-duration`. Every queue operation runs in its own transaction (what `single-operation-transaction` did); there is no mode to choose. Since 0.60.1 the starter logs an ERROR at startup for each removed `essentials.*` property still set, and the configuration metadata marks them as errors for the IDE. See [MIGRATION-0.60](../../docs/MIGRATION-0.60.md) (`TransactionalMode` is retired, `useOrderedUnorderedQuery` is removed, the queue statistics feature is removed).
 
 ### MultiTableChangeListener Configuration
 
 ```properties
 essentials.multi-table-change-listener.polling-interval=50ms
 essentials.multi-table-change-listener.filter-duplicate-notifications=true
+essentials.multi-table-change-listener.dedicated-connection=false
 ```
 
 | Property | Default | Description |
 |----------|---------|-------------|
 | `polling-interval` | `50ms` | Interval for polling PostgreSQL NOTIFY channel |
-| `filter-duplicate-notifications` | `true` | Filter duplicate notifications using registered filters |
+| `filter-duplicate-notifications` | `true` | Filter duplicate notifications (per channel) using registered filters |
+| `dedicated-connection` | `false` | A LISTEN lasts as long as its session, so the listener holds its connection for as long as it polls. By default it is borrowed from the application's pool; `true` opens it outside the pool, from the same `spring.datasource.*` URL, user name and password (since 0.60.1) |
+
+The listener probes its connection every 10 seconds with `Connection.isValid()`, logs a lost connection at WARN (at most once a minute) and re-establishes the LISTEN for every table on a new connection. Notifications sent while it reconnects are lost - they are wake-up hints, and the queues and the event store fall back to polling.
 
 ### EventBus Configuration
 
@@ -330,7 +323,7 @@ essentials.immutable-jackson-module-enabled=true
 | `life-cycles.start-life-cycles` | `true` | **true**: Automatically call `start()` on all `Lifecycle` beans (FencedLockManager, DurableQueues, etc.) when ApplicationContext starts, and `stop()` on shutdown.  <br/>**false**: You must manually start/stop Lifecycle beans. |
 | `life-cycles.shutdown-timeout` | `10s` | Time budget for stopping every `Lifecycle` bean on shutdown. Database cleanup during shutdown (releasing fenced locks, saving resume points, unscheduling jobs) gets one short attempt and is skipped once the database proves unreachable; a bean still stopping when the budget is spent is abandoned so the application can exit. Locks and leases left behind expire on their own. |
 | `reactive-bean-post-processor-enabled` | `true` | **true**: Auto-register `EventHandler` beans with `EventBus` and `CommandHandler` beans with `CommandBus`.  <br/>**false**: You must manually register handlers with their buses. |
-| `immutable-jackson-module-enabled` | `true` | **true**: Enable `EssentialsImmutableJacksonModule` for deserializing immutable objects (requires Objenesis).  <br/>**false**: Disable even if Objenesis is available. |
+| `immutable-jackson-module-enabled` | `true` | **true** (default): register `EssentialsImmutableJacksonModule` for deserializing immutable objects (requires Objenesis) in the persistence `JSONSerializer`. Spring Boot's web `JsonMapper` gets it only when the property is set to `true` explicitly, because there a request body Jackson cannot construct would bind with `null` fields instead of failing with a 400. <br/>**false**: leave it out of both, even if Objenesis is available; only reading changes, the JSON written is identical. Before 0.60.1 the persistence mapper ignored the property. |
 
 ### Database Schema Configuration
 
@@ -352,7 +345,10 @@ essentials.schema.emit.exit=true
 | `schema.emit.exit` | `true` | Whether `emit` stops the application once the script is written. |
 
 For a locked-down database: run once with `emit`, have the script run by a user with DDL rights, and deploy with
-`validate`. Outside `create`, a `ClosingBooksSetup` bean you build needs
+`validate`. The script covers what is registered by the time the application has started - its `-- Contents:` header
+and the emit log line list each module's objects, every event-stream table with its `AggregateType` - so register
+every `AggregateType` at startup: one registered from an `ApplicationRunner`, a `@Lazy` bean or on demand is missing
+from the script and is refused by `validate` with an error naming it. Outside `create`, a `ClosingBooksSetup` bean you build needs
 `.setSchemaOwnership(essentialsComponentsProperties.getSchema().getMode().schemaOwnership())`, and the shard-owned
 queue engine still needs the right to create sequences at runtime. Your own `EssentialsSchemaContributor` beans are
 applied together with the Essentials ones.

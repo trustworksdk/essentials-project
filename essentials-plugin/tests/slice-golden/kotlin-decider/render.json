@@ -1,8 +1,13 @@
 [
   {
+    "interface": 1,
+    "reportVersion": 1,
     "language": "kotlin",
     "kind": "command",
     "lane": "decider",
+    "tier": "cqrs-es",
+    "slice": "orders.place_order",
+    "tests": "stub",
     "families": [
       "app-wiring",
       "bc-scaffold",
@@ -25,6 +30,23 @@
       "sliceCamel": "placeOrder",
       "tier": "cqrs-es"
     },
+    "inputSources": {
+      "Aggregate": "set",
+      "AggregateType": "set",
+      "Bc": "derived",
+      "Command": "set",
+      "Event": "set",
+      "Slice": "derived",
+      "aggregate": "derived",
+      "apiPath": "derived",
+      "bc": "set",
+      "lane": "derived",
+      "owner": "derived",
+      "packagePath": "set",
+      "slice": "set",
+      "sliceCamel": "derived",
+      "tier": "derived"
+    },
     "written": [
       "src/main/kotlin/com/example/shop/DeciderWiring.kt",
       "src/main/kotlin/com/example/shop/orders/CLAUDE.md",
@@ -40,6 +62,65 @@
       "src/main/kotlin/com/example/shop/orders/use_cases/place_order/slice.yaml",
       "src/test/kotlin/com/example/shop/orders/use_cases/place_order/PlaceOrderTest.kt"
     ],
+    "files": [
+      {
+        "path": "src/main/kotlin/com/example/shop/DeciderWiring.kt",
+        "role": "main"
+      },
+      {
+        "path": "src/main/kotlin/com/example/shop/orders/CLAUDE.md",
+        "role": "doc"
+      },
+      {
+        "path": "src/main/kotlin/com/example/shop/orders/config/OrdersConfiguration.kt",
+        "role": "main"
+      },
+      {
+        "path": "src/main/kotlin/com/example/shop/orders/events/OrderEvent.kt",
+        "role": "main"
+      },
+      {
+        "path": "src/main/kotlin/com/example/shop/orders/events/OrderPlaced.kt",
+        "role": "main"
+      },
+      {
+        "path": "src/main/kotlin/com/example/shop/orders/routing/OrderCommand.kt",
+        "role": "main"
+      },
+      {
+        "path": "src/main/kotlin/com/example/shop/orders/types/OrderId.kt",
+        "role": "main"
+      },
+      {
+        "path": "src/main/kotlin/com/example/shop/orders/use_cases/place_order/CLAUDE.md",
+        "role": "doc"
+      },
+      {
+        "path": "src/main/kotlin/com/example/shop/orders/use_cases/place_order/PlaceOrder.kt",
+        "role": "main"
+      },
+      {
+        "path": "src/main/kotlin/com/example/shop/orders/use_cases/place_order/PlaceOrderAPI.kt",
+        "role": "main"
+      },
+      {
+        "path": "src/main/kotlin/com/example/shop/orders/use_cases/place_order/PlaceOrderDecider.kt",
+        "role": "main"
+      },
+      {
+        "path": "src/main/kotlin/com/example/shop/orders/use_cases/place_order/slice.yaml",
+        "role": "manifest"
+      },
+      {
+        "path": "src/test/kotlin/com/example/shop/orders/use_cases/place_order/PlaceOrderTest.kt",
+        "role": "test"
+      }
+    ],
+    "kept": [],
+    "manifest": {
+      "path": "src/main/kotlin/com/example/shop/orders/use_cases/place_order/slice.yaml",
+      "source": "rendered"
+    },
     "wiring": [
       {
         "path": "src/main/kotlin/com/example/shop/DeciderWiring.kt",
@@ -62,12 +143,76 @@
       "src/main/kotlin/com/example/shop/orders/use_cases/place_order/slice.yaml:9: summary: TODO one sentence, present tense.",
       "src/main/kotlin/com/example/shop/orders/use_cases/place_order/slice.yaml:28: - { id: INV-1, text: \"TODO the rule this slice enforces\", enforcedBy: PlaceOrderDecider }",
       "src/test/kotlin/com/example/shop/orders/use_cases/place_order/PlaceOrderTest.kt:39: // TODO: one test per invariant enforced by PlaceOrderDecider."
+    ],
+    "behaviours": [
+      {
+        "id": "app.decider-dispatch",
+        "status": "implemented",
+        "summary": "Registers the application's one configurator, which hands each command sent on the CommandBus to the Decider that can handle it, loads that aggregate's event stream and appends the event it returns.",
+        "where": "src/main/kotlin/com/example/shop/DeciderWiring.kt#deciderAndAggregateTypeConfigurator"
+      },
+      {
+        "id": "bc.command-routing",
+        "status": "implemented",
+        "summary": "Routes every command implementing the bounded context's command interface to its aggregate type, taking the stream id from the command and from each event.",
+        "where": "src/main/kotlin/com/example/shop/orders/config/OrdersConfiguration.kt"
+      },
+      {
+        "id": "bc.event-json-type",
+        "status": "implemented",
+        "summary": "Writes every event variant of the aggregate with an @type discriminator, so the stream's events round-trip through JSON.",
+        "where": "src/main/kotlin/com/example/shop/orders/events/OrderEvent.kt"
+      },
+      {
+        "id": "command.emits-event",
+        "status": "implemented",
+        "summary": "The Decider answers the command with the slice's event, carrying the command's id and payload.",
+        "where": "src/main/kotlin/com/example/shop/orders/use_cases/place_order/PlaceOrderDecider.kt#handle"
+      },
+      {
+        "id": "command.idempotent-replay",
+        "status": "implemented",
+        "summary": "The Decider returns no event when the stream already holds the slice's event, so a repeated command appends nothing.",
+        "where": "src/main/kotlin/com/example/shop/orders/use_cases/place_order/PlaceOrderDecider.kt#handle"
+      },
+      {
+        "id": "command.invariant",
+        "status": "placeholder",
+        "summary": "The Decider enforces no invariant and rejects no command; the slice's rules are left to the developer.",
+        "where": "src/main/kotlin/com/example/shop/orders/use_cases/place_order/PlaceOrderDecider.kt#handle"
+      },
+      {
+        "id": "command.payload",
+        "status": "placeholder",
+        "summary": "The command and the event carry one placeholder String; the real payload fields, and copying them into the event, are left to the developer.",
+        "where": "src/main/kotlin/com/example/shop/orders/use_cases/place_order/PlaceOrder.kt"
+      },
+      {
+        "id": "command.http-endpoint",
+        "status": "implemented",
+        "summary": "A POST to the slice's path takes the command as its body, sends it on the CommandBus and answers 202 Accepted.",
+        "where": "src/main/kotlin/com/example/shop/orders/use_cases/place_order/PlaceOrderAPI.kt"
+      }
+    ],
+    "stubTests": [
+      {
+        "path": "src/test/kotlin/com/example/shop/orders/use_cases/place_order/PlaceOrderTest.kt",
+        "covers": [
+          "command.emits-event",
+          "command.idempotent-replay"
+        ]
+      }
     ]
   },
   {
+    "interface": 1,
+    "reportVersion": 1,
     "language": "kotlin",
     "kind": "command",
     "lane": "decider",
+    "tier": "cqrs-es",
+    "slice": "orders.cancel_order",
+    "tests": "stub",
     "families": [
       "command"
     ],
@@ -88,6 +233,23 @@
       "sliceCamel": "cancelOrder",
       "tier": "cqrs-es"
     },
+    "inputSources": {
+      "Aggregate": "set",
+      "AggregateType": "set",
+      "Bc": "derived",
+      "Command": "set",
+      "Event": "set",
+      "Slice": "derived",
+      "aggregate": "derived",
+      "apiPath": "set",
+      "bc": "set",
+      "lane": "derived",
+      "owner": "derived",
+      "packagePath": "set",
+      "slice": "set",
+      "sliceCamel": "derived",
+      "tier": "derived"
+    },
     "written": [
       "src/main/kotlin/com/example/shop/orders/events/OrderCancelled.kt",
       "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/CLAUDE.md",
@@ -99,6 +261,49 @@
       "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/slice.yaml",
       "src/test/kotlin/com/example/shop/orders/use_cases/cancel_order/CancelOrderTest.kt"
     ],
+    "files": [
+      {
+        "path": "src/main/kotlin/com/example/shop/orders/events/OrderCancelled.kt",
+        "role": "main"
+      },
+      {
+        "path": "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/CLAUDE.md",
+        "role": "doc"
+      },
+      {
+        "path": "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/CancelOrder.kt",
+        "role": "main"
+      },
+      {
+        "path": "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/CancelOrderAPI.kt",
+        "role": "main"
+      },
+      {
+        "path": "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/CancelOrderDecider.kt",
+        "role": "main"
+      },
+      {
+        "path": "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/OrderState.kt",
+        "role": "main"
+      },
+      {
+        "path": "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/OrderStateEvolver.kt",
+        "role": "main"
+      },
+      {
+        "path": "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/slice.yaml",
+        "role": "manifest"
+      },
+      {
+        "path": "src/test/kotlin/com/example/shop/orders/use_cases/cancel_order/CancelOrderTest.kt",
+        "role": "test"
+      }
+    ],
+    "kept": [],
+    "manifest": {
+      "path": "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/slice.yaml",
+      "source": "rendered"
+    },
     "wiring": [
       {
         "path": "src/main/kotlin/com/example/shop/DeciderWiring.kt",
@@ -122,12 +327,64 @@
       "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/slice.yaml:9: summary: TODO one sentence, present tense.",
       "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/slice.yaml:28: - { id: INV-1, text: \"TODO the rule this slice enforces\", enforcedBy: CancelOrderDecider }",
       "src/test/kotlin/com/example/shop/orders/use_cases/cancel_order/CancelOrderTest.kt:39: // TODO: one test per invariant enforced by CancelOrderDecider."
+    ],
+    "behaviours": [
+      {
+        "id": "command.emits-event",
+        "status": "implemented",
+        "summary": "The Decider answers the command with the slice's event, carrying the command's id and payload.",
+        "where": "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/CancelOrderDecider.kt#handle"
+      },
+      {
+        "id": "command.idempotent-replay",
+        "status": "implemented",
+        "summary": "The Decider returns no event when the stream already holds the slice's event, so a repeated command appends nothing.",
+        "where": "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/CancelOrderDecider.kt#handle"
+      },
+      {
+        "id": "command.invariant",
+        "status": "placeholder",
+        "summary": "The Decider enforces no invariant and rejects no command; the slice's rules are left to the developer.",
+        "where": "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/CancelOrderDecider.kt#handle"
+      },
+      {
+        "id": "command.payload",
+        "status": "placeholder",
+        "summary": "The command and the event carry one placeholder String; the real payload fields, and copying them into the event, are left to the developer.",
+        "where": "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/CancelOrder.kt"
+      },
+      {
+        "id": "command.http-endpoint",
+        "status": "implemented",
+        "summary": "A POST to the slice's path takes the command as its body, sends it on the CommandBus and answers 202 Accepted.",
+        "where": "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/CancelOrderAPI.kt"
+      },
+      {
+        "id": "command.state-evolution",
+        "status": "placeholder",
+        "summary": "The state evolver returns the state unchanged for every event and the state holds a placeholder field; folding the events into the state the Decider needs is left to the developer.",
+        "where": "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/OrderStateEvolver.kt#applyEvent"
+      }
+    ],
+    "stubTests": [
+      {
+        "path": "src/test/kotlin/com/example/shop/orders/use_cases/cancel_order/CancelOrderTest.kt",
+        "covers": [
+          "command.emits-event",
+          "command.idempotent-replay"
+        ]
+      }
     ]
   },
   {
+    "interface": 1,
+    "reportVersion": 1,
     "language": "kotlin",
     "kind": "view",
     "lane": "decider",
+    "tier": "cqrs-es",
+    "slice": "orders.order_list",
+    "tests": "stub",
     "families": [
       "view"
     ],
@@ -147,6 +404,22 @@
       "view": "order_list",
       "viewCamel": "orderList"
     },
+    "inputSources": {
+      "Aggregate": "set",
+      "AggregateType": "set",
+      "Bc": "derived",
+      "Event": "set",
+      "View": "derived",
+      "aggregate": "derived",
+      "apiPath": "derived",
+      "bc": "set",
+      "lane": "derived",
+      "owner": "derived",
+      "packagePath": "set",
+      "tier": "derived",
+      "view": "set",
+      "viewCamel": "derived"
+    },
     "written": [
       "src/main/kotlin/com/example/shop/orders/views/order_list/CLAUDE.md",
       "src/main/kotlin/com/example/shop/orders/views/order_list/OrderListAPI.kt",
@@ -156,6 +429,41 @@
       "src/main/kotlin/com/example/shop/orders/views/order_list/slice.yaml",
       "src/test/kotlin/com/example/shop/orders/views/order_list/OrderListProjectionIT.kt"
     ],
+    "files": [
+      {
+        "path": "src/main/kotlin/com/example/shop/orders/views/order_list/CLAUDE.md",
+        "role": "doc"
+      },
+      {
+        "path": "src/main/kotlin/com/example/shop/orders/views/order_list/OrderListAPI.kt",
+        "role": "main"
+      },
+      {
+        "path": "src/main/kotlin/com/example/shop/orders/views/order_list/OrderListProjection.kt",
+        "role": "main"
+      },
+      {
+        "path": "src/main/kotlin/com/example/shop/orders/views/order_list/OrderListRepository.kt",
+        "role": "main"
+      },
+      {
+        "path": "src/main/kotlin/com/example/shop/orders/views/order_list/OrderListView.kt",
+        "role": "main"
+      },
+      {
+        "path": "src/main/kotlin/com/example/shop/orders/views/order_list/slice.yaml",
+        "role": "manifest"
+      },
+      {
+        "path": "src/test/kotlin/com/example/shop/orders/views/order_list/OrderListProjectionIT.kt",
+        "role": "test"
+      }
+    ],
+    "kept": [],
+    "manifest": {
+      "path": "src/main/kotlin/com/example/shop/orders/views/order_list/slice.yaml",
+      "source": "rendered"
+    },
     "wiring": [],
     "todos": [
       "src/main/kotlin/com/example/shop/orders/views/order_list/CLAUDE.md:6: **Purpose:** TODO one sentence, present tense.",
@@ -171,12 +479,67 @@
       "src/test/kotlin/com/example/shop/orders/views/order_list/OrderListProjectionIT.kt:24: // TODO: append OrderPlaced to the aggregate's stream, await the projection, assert the row.",
       "src/test/kotlin/com/example/shop/orders/views/order_list/OrderListProjectionIT.kt:29: // TODO: deliver the same event twice; assert the read model applied it once.",
       "src/test/kotlin/com/example/shop/orders/views/order_list/OrderListProjectionIT.kt:35: // TODO: reset the subscription and assert onSubscriptionsReset(aggregateType,"
+    ],
+    "behaviours": [
+      {
+        "id": "view.projects-event",
+        "status": "implemented",
+        "summary": "On the projected event the projection inserts the row keyed by the aggregate id, or updates the existing one, with the event's order as the row's version.",
+        "where": "src/main/kotlin/com/example/shop/orders/views/order_list/OrderListProjection.kt#on"
+      },
+      {
+        "id": "view.idempotent-redelivery",
+        "status": "implemented",
+        "summary": "An event whose order is not newer than the row's version is skipped, so a redelivered event changes nothing.",
+        "where": "src/main/kotlin/com/example/shop/orders/views/order_list/OrderListProjection.kt#on"
+      },
+      {
+        "id": "view.reset-rebuild",
+        "status": "implemented",
+        "summary": "A subscription reset deletes every row, so the replay that follows rebuilds the read model from the events.",
+        "where": "src/main/kotlin/com/example/shop/orders/views/order_list/OrderListProjection.kt#onSubscriptionsReset"
+      },
+      {
+        "id": "view.query-endpoint",
+        "status": "implemented",
+        "summary": "A GET on the view's path returns every row of the read model.",
+        "where": "src/main/kotlin/com/example/shop/orders/views/order_list/OrderListAPI.kt"
+      },
+      {
+        "id": "view.served-fields",
+        "status": "placeholder",
+        "summary": "The row's one field is a placeholder status written as the constant \"TODO\"; the fields this view serves, and mapping the event's facts onto them, are left to the developer.",
+        "where": "src/main/kotlin/com/example/shop/orders/views/order_list/OrderListView.kt"
+      },
+      {
+        "id": "view.projects-further-events",
+        "status": "placeholder",
+        "summary": "Only the one scaffolded event is projected; a handler for every other event this view needs is left to the developer.",
+        "where": "src/main/kotlin/com/example/shop/orders/views/order_list/OrderListProjection.kt"
+      },
+      {
+        "id": "view.filtered-queries",
+        "status": "placeholder",
+        "summary": "The repository declares no index and no finder; the indexes and finders this view's queries need are left to the developer.",
+        "where": "src/main/kotlin/com/example/shop/orders/views/order_list/OrderListRepository.kt"
+      }
+    ],
+    "stubTests": [
+      {
+        "path": "src/test/kotlin/com/example/shop/orders/views/order_list/OrderListProjectionIT.kt",
+        "covers": []
+      }
     ]
   },
   {
+    "interface": 1,
+    "reportVersion": 1,
     "language": "kotlin",
     "kind": "automation",
     "lane": "decider",
+    "tier": "cqrs-es",
+    "slice": "orders.fulfillment",
+    "tests": "stub",
     "families": [
       "automation"
     ],
@@ -196,6 +559,22 @@
       "sliceCamel": "fulfillment",
       "tier": "cqrs-es"
     },
+    "inputSources": {
+      "Aggregate": "set",
+      "AggregateType": "set",
+      "Bc": "derived",
+      "Event": "set",
+      "Slice": "derived",
+      "aggregate": "derived",
+      "apiPath": "derived",
+      "bc": "set",
+      "lane": "derived",
+      "owner": "derived",
+      "packagePath": "set",
+      "slice": "set",
+      "sliceCamel": "derived",
+      "tier": "derived"
+    },
     "written": [
       "src/main/kotlin/com/example/shop/orders/automations/fulfillment/CLAUDE.md",
       "src/main/kotlin/com/example/shop/orders/automations/fulfillment/FulfillmentProcessor.kt",
@@ -204,6 +583,37 @@
       "src/main/kotlin/com/example/shop/orders/automations/fulfillment/slice.yaml",
       "src/test/kotlin/com/example/shop/orders/automations/fulfillment/FulfillmentIT.kt"
     ],
+    "files": [
+      {
+        "path": "src/main/kotlin/com/example/shop/orders/automations/fulfillment/CLAUDE.md",
+        "role": "doc"
+      },
+      {
+        "path": "src/main/kotlin/com/example/shop/orders/automations/fulfillment/FulfillmentProcessor.kt",
+        "role": "main"
+      },
+      {
+        "path": "src/main/kotlin/com/example/shop/orders/automations/fulfillment/FulfillmentRepository.kt",
+        "role": "main"
+      },
+      {
+        "path": "src/main/kotlin/com/example/shop/orders/automations/fulfillment/FulfillmentTodoList.kt",
+        "role": "main"
+      },
+      {
+        "path": "src/main/kotlin/com/example/shop/orders/automations/fulfillment/slice.yaml",
+        "role": "manifest"
+      },
+      {
+        "path": "src/test/kotlin/com/example/shop/orders/automations/fulfillment/FulfillmentIT.kt",
+        "role": "test"
+      }
+    ],
+    "kept": [],
+    "manifest": {
+      "path": "src/main/kotlin/com/example/shop/orders/automations/fulfillment/slice.yaml",
+      "source": "rendered"
+    },
     "wiring": [],
     "todos": [
       "src/main/kotlin/com/example/shop/orders/automations/fulfillment/CLAUDE.md:6: **Purpose:** TODO one sentence, present tense.",
@@ -220,12 +630,55 @@
       "src/main/kotlin/com/example/shop/orders/automations/fulfillment/slice.yaml:27: - { id: INV-1, text: \"TODO the process rule, e.g. at most three payment attempts\", enforcedBy: FulfillmentProcessor }",
       "src/test/kotlin/com/example/shop/orders/automations/fulfillment/FulfillmentIT.kt:19: // TODO: append OrderPlaced; assert the TodoList advanced and the command was dispatched.",
       "src/test/kotlin/com/example/shop/orders/automations/fulfillment/FulfillmentIT.kt:29: // TODO: drive the failure path; assert attempts stop at the cap and the compensating"
+    ],
+    "behaviours": [
+      {
+        "id": "automation.records-progress",
+        "status": "placeholder",
+        "summary": "On the triggering event the processor loads or creates the process's TodoList keyed by the aggregate id and marks it started, but sends the placeholder Any() before saving it; no handler accepts that, so the send throws and the TodoList is never saved until the command to dispatch is written.",
+        "where": "src/main/kotlin/com/example/shop/orders/automations/fulfillment/FulfillmentProcessor.kt#on"
+      },
+      {
+        "id": "automation.idempotent-redelivery",
+        "status": "placeholder",
+        "summary": "A redelivered event that finds its TodoList already started returns before dispatching or saving again, but no TodoList is saved until the placeholder send is replaced (automation.records-progress), so a redelivery finds none and runs the handler again.",
+        "where": "src/main/kotlin/com/example/shop/orders/automations/fulfillment/FulfillmentProcessor.kt#on"
+      },
+      {
+        "id": "automation.dispatches-command",
+        "status": "placeholder",
+        "summary": "The processor sends a placeholder Any() rather than a real command, which no handler accepts; the command to dispatch is left to the developer.",
+        "where": "src/main/kotlin/com/example/shop/orders/automations/fulfillment/FulfillmentProcessor.kt#on"
+      },
+      {
+        "id": "automation.advances-process",
+        "status": "placeholder",
+        "summary": "No handler exists for the events that advance or complete the process, and the TodoList is never marked completed; they are left to the developer.",
+        "where": "src/main/kotlin/com/example/shop/orders/automations/fulfillment/FulfillmentProcessor.kt"
+      },
+      {
+        "id": "automation.compensation",
+        "status": "placeholder",
+        "summary": "Attempts are never counted and no compensating command is issued on terminal failure; bounded retries and compensation are left to the developer.",
+        "where": "src/main/kotlin/com/example/shop/orders/automations/fulfillment/FulfillmentProcessor.kt"
+      }
+    ],
+    "stubTests": [
+      {
+        "path": "src/test/kotlin/com/example/shop/orders/automations/fulfillment/FulfillmentIT.kt",
+        "covers": []
+      }
     ]
   },
   {
+    "interface": 1,
+    "reportVersion": 1,
     "language": "kotlin",
     "kind": "translation",
     "lane": "decider",
+    "tier": "cqrs-es",
+    "slice": "orders.billing",
+    "tests": "stub",
     "families": [
       "translation"
     ],
@@ -245,6 +698,22 @@
       "packagePath": "com.example.shop",
       "tier": "cqrs-es"
     },
+    "inputSources": {
+      "Aggregate": "set",
+      "AggregateType": "set",
+      "Bc": "derived",
+      "Event": "set",
+      "ExternalEvent": "set",
+      "ExternalSystem": "derived",
+      "aggregate": "derived",
+      "apiPath": "derived",
+      "bc": "set",
+      "externalSystem": "set",
+      "lane": "derived",
+      "owner": "derived",
+      "packagePath": "set",
+      "tier": "derived"
+    },
     "written": [
       "src/main/kotlin/com/example/shop/orders/external_systems/billing/BillingClient.kt",
       "src/main/kotlin/com/example/shop/orders/external_systems/billing/BillingClientAdapter.kt",
@@ -255,6 +724,45 @@
       "src/main/kotlin/com/example/shop/orders/external_systems/billing/slice.yaml",
       "src/test/kotlin/com/example/shop/orders/external_systems/billing/BillingTranslatorTest.kt"
     ],
+    "files": [
+      {
+        "path": "src/main/kotlin/com/example/shop/orders/external_systems/billing/BillingClient.kt",
+        "role": "main"
+      },
+      {
+        "path": "src/main/kotlin/com/example/shop/orders/external_systems/billing/BillingClientAdapter.kt",
+        "role": "main"
+      },
+      {
+        "path": "src/main/kotlin/com/example/shop/orders/external_systems/billing/BillingPublisher.kt",
+        "role": "main"
+      },
+      {
+        "path": "src/main/kotlin/com/example/shop/orders/external_systems/billing/BillingTranslator.kt",
+        "role": "main"
+      },
+      {
+        "path": "src/main/kotlin/com/example/shop/orders/external_systems/billing/CLAUDE.md",
+        "role": "doc"
+      },
+      {
+        "path": "src/main/kotlin/com/example/shop/orders/external_systems/billing/OnInvoiceIssued.kt",
+        "role": "main"
+      },
+      {
+        "path": "src/main/kotlin/com/example/shop/orders/external_systems/billing/slice.yaml",
+        "role": "manifest"
+      },
+      {
+        "path": "src/test/kotlin/com/example/shop/orders/external_systems/billing/BillingTranslatorTest.kt",
+        "role": "test"
+      }
+    ],
+    "kept": [],
+    "manifest": {
+      "path": "src/main/kotlin/com/example/shop/orders/external_systems/billing/slice.yaml",
+      "source": "rendered"
+    },
     "wiring": [],
     "todos": [
       "src/main/kotlin/com/example/shop/orders/external_systems/billing/BillingClientAdapter.kt:9: * TODO: implement [send] with the real transport. Until then the context starts, and every outbound",
@@ -267,6 +775,50 @@
       "src/test/kotlin/com/example/shop/orders/external_systems/billing/BillingTranslatorTest.kt:21: // TODO: assert every field, including the type conversions at the boundary.",
       "src/test/kotlin/com/example/shop/orders/external_systems/billing/BillingTranslatorTest.kt:23: //   assertThat(command).isEqualTo(TODOInternalCommand(...))",
       "src/test/kotlin/com/example/shop/orders/external_systems/billing/BillingTranslatorTest.kt:28: // TODO: assert the external contract shape, not our internal one."
+    ],
+    "behaviours": [
+      {
+        "id": "translation.inbound-mapping",
+        "status": "placeholder",
+        "summary": "Mapping the external payload onto an internal command throws NotImplementedError; the mapping and its type conversions are left to the developer.",
+        "where": "src/main/kotlin/com/example/shop/orders/external_systems/billing/BillingTranslator.kt#toCommand"
+      },
+      {
+        "id": "translation.rejects-malformed-input",
+        "status": "placeholder",
+        "summary": "No validation rejects a malformed external payload at the boundary; it is left to the developer.",
+        "where": "src/main/kotlin/com/example/shop/orders/external_systems/billing/BillingTranslator.kt#toCommand"
+      },
+      {
+        "id": "translation.outbound-mapping",
+        "status": "placeholder",
+        "summary": "Mapping an internal event onto the external request throws NotImplementedError; it is left to the developer.",
+        "where": "src/main/kotlin/com/example/shop/orders/external_systems/billing/BillingTranslator.kt#toExternal"
+      },
+      {
+        "id": "translation.external-client",
+        "status": "placeholder",
+        "summary": "The client adapter throws UnsupportedOperationException instead of calling the external system; the call is left to the developer.",
+        "where": "src/main/kotlin/com/example/shop/orders/external_systems/billing/BillingClientAdapter.kt#send"
+      },
+      {
+        "id": "translation.webhook-endpoint",
+        "status": "placeholder",
+        "summary": "The webhook POST hands the payload to the translator and sends the result on the CommandBus without waiting, but fails until the inbound mapping is written.",
+        "where": "src/main/kotlin/com/example/shop/orders/external_systems/billing/OnInvoiceIssued.kt"
+      },
+      {
+        "id": "translation.publishes-outbound",
+        "status": "placeholder",
+        "summary": "The publisher hands each subscribed event to the translator and the client, but fails until the outbound mapping and the client adapter are written.",
+        "where": "src/main/kotlin/com/example/shop/orders/external_systems/billing/BillingPublisher.kt#on"
+      }
+    ],
+    "stubTests": [
+      {
+        "path": "src/test/kotlin/com/example/shop/orders/external_systems/billing/BillingTranslatorTest.kt",
+        "covers": []
+      }
     ]
   }
 ]

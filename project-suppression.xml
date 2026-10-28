@@ -39,28 +39,6 @@
     </suppress>
     <suppress>
         <notes><![CDATA[
-   spring-boot-starter-postgresql-event-store
-   ]]></notes>
-        <packageUrl regex="true">^pkg:maven/dk\.trustworks\.essentials\.components/spring-boot-starter-postgresql-event-store*.*$</packageUrl>
-        <cpe>cpe:/a:postgresql:postgresql</cpe>
-    </suppress>
-    <suppress>
-        <notes><![CDATA[
-        Snakeyaml wrongly matched as go-yaml
-   file name: snakeyaml-1.33.jar
-   ]]></notes>
-        <packageUrl regex="true">^pkg:maven/org\.yaml/snakeyaml@.*$</packageUrl>
-        <cpe>cpe:/a:yaml_project:yaml</cpe>
-    </suppress>
-    <suppress>
-        <notes><![CDATA[
-   file name: jopt-simple-5.0.4.jar
-   ]]></notes>
-        <packageUrl regex="true">^pkg:maven/net\.sf\.jopt\-simple/jopt\-simple@.*$</packageUrl>
-        <cpe>cpe:/a:rice_project:rice</cpe>
-    </suppress>
-    <suppress>
-        <notes><![CDATA[
    file name: jackson-databind-2.13.3.jar
    ]]></notes>
         <packageUrl regex="true">^pkg:maven/com\.fasterxml\.jackson\.core/jackson\-databind@.*$</packageUrl>
@@ -89,135 +67,10 @@
     </suppress>
     <suppress>
         <notes><![CDATA[
-   file name: accessors-smart-2.4.7.jar
-   ]]></notes>
-        <packageUrl regex="true">^pkg:maven/net\.minidev/accessors\-smart@.*$</packageUrl>
-        <cpe>cpe:/a:json-smart_project:json-smart-v2</cpe>
-    </suppress>
-    <suppress>
-        <notes><![CDATA[
-   file name: json-smart-2.4.7.jar
-   ]]></notes>
-        <packageUrl regex="true">^pkg:maven/net\.minidev/json\-smart@.*$</packageUrl>
-        <cpe>cpe:/a:ini-parser_project:ini-parser</cpe>
-    </suppress>
-    <suppress>
-        <notes><![CDATA[
    file name: json-smart-2.4.7.jar
    ]]></notes>
         <packageUrl regex="true">^pkg:maven/net\.minidev/json\-smart@.*$</packageUrl>
         <cpe>cpe:/a:json-smart_project:json-smart-v2</cpe>
-    </suppress>
-    <suppress>
-        <notes><![CDATA[
-   file name: jakarta.annotation-api-1.3.5.jar
-   ]]></notes>
-        <packageUrl regex="true">^pkg:maven/jakarta\.annotation/jakarta\.annotation\-api@.*$</packageUrl>
-        <cpe>cpe:/a:oracle:java_se</cpe>
-    </suppress>
-    <suppress>
-        <notes><![CDATA[
-   file name: jakarta.annotation-api-1.3.5.jar
-   ]]></notes>
-        <packageUrl regex="true">^pkg:maven/jakarta\.annotation/jakarta\.annotation\-api@.*$</packageUrl>
-        <cpe>cpe:/a:oracle:projects</cpe>
-    </suppress>
-    <suppress>
-        <notes><![CDATA[
-   file name: mockito-junit-jupiter-4.5.1.jar
-   ]]></notes>
-        <packageUrl regex="true">^pkg:maven/org\.mockito/mockito\-junit\-jupiter@.*$</packageUrl>
-        <cpe>cpe:/a:junit:junit4</cpe>
-    </suppress>
-    <suppress>
-        <notes><![CDATA[
-   file name: tomcat-embed-el-9.0.63.jar
-   ]]></notes>
-        <packageUrl regex="true">^pkg:maven/org\.apache\.tomcat\.embed/tomcat\-embed\-el@.*$</packageUrl>
-        <cpe>cpe:/a:service_project:service</cpe>
-    </suppress>
-    <suppress>
-        <notes><![CDATA[
-   file name: FastInfoset-1.2.15.jar
-   ]]></notes>
-        <packageUrl regex="true">^pkg:maven/com\.sun\.xml\.fastinfoset/FastInfoset@.*$</packageUrl>
-        <cpe>cpe:/a:fast_ber_project:fast_ber</cpe>
-    </suppress>
-    <suppress>
-        <notes><![CDATA[
-   file name: istack-commons-runtime-3.0.7.jar
-   ]]></notes>
-        <packageUrl regex="true">^pkg:maven/com\.sun\.istack/istack\-commons\-runtime@.*$</packageUrl>
-        <cpe>cpe:/a:oracle:java_se</cpe>
-    </suppress>
-    <suppress>
-        <notes><![CDATA[
-   file name: jakarta.transaction-api-1.3.3.jar
-   ]]></notes>
-        <packageUrl regex="true">^pkg:maven/jakarta\.transaction/jakarta\.transaction\-api@.*$</packageUrl>
-        <cpe>cpe:/a:oracle:projects</cpe>
-    </suppress>
-    <suppress>
-        <notes><![CDATA[
-   file name: stax-ex-1.8.jar
-   ]]></notes>
-        <packageUrl regex="true">^pkg:maven/org\.jvnet\.staxex/stax\-ex@.*$</packageUrl>
-        <cpe>cpe:/a:oracle:java_se</cpe>
-    </suppress>
-    <suppress>
-        <notes><![CDATA[
-   file name: jna-5.8.0.jar
-   ]]></notes>
-        <packageUrl regex="true">^pkg:maven/net\.java\.dev\.jna/jna@.*$</packageUrl>
-        <cpe>cpe:/a:oracle:java_se</cpe>
-    </suppress>
-    <suppress>
-        <notes><![CDATA[
-    file name: h2-2.1.212.jar
-    This issue has resurfaced again, most likely due to OSSIndex changes - see https://github.com/jeremylong/DependencyCheck/issues/4542
-    The Essentials H2 dependency is defined with scope "test", meaning that all projects that depend on Essentials or Essential Components
-    have to explicitly import H2 if they want to use H2
-   ]]></notes>
-        <packageUrl regex="true">^pkg:maven/com\.h2database/h2@.*$</packageUrl>
-        <vulnerabilityName>CVE-2018-14335</vulnerabilityName>
-    </suppress>
-    <suppress>
-        <notes><![CDATA[
-   file name: jackson-core-2.14.2.jar
-   ]]></notes>
-        <packageUrl regex="true">^pkg:maven/com\.fasterxml\.jackson\.core/jackson\-core@.*$</packageUrl>
-        <cpe>cpe:/a:json-java_project:json-java</cpe>
-    </suppress>
-    <suppress>
-        <notes><![CDATA[
-   file name: accessors-smart-2.4.7.jar
-   ]]></notes>
-        <packageUrl regex="true">^pkg:maven/net\.minidev/accessors\-smart@.*$</packageUrl>
-        <cpe>cpe:/a:json-java_project:json-java</cpe>
-    </suppress>
-    <suppress>
-        <notes><![CDATA[
-   file name: android-json-0.0.20131108.vaadin1.jar
-   Despite the com.vaadin.external.google coordinates this is NOT Vaadin residue and must not be removed along with
-   the Vaadin modules: it is how org.skyscreamer:jsonassert ships, and jsonassert arrives transitively through
-   spring-boot-starter-test.
-   ]]></notes>
-        <packageUrl regex="true">^pkg:maven/com\.vaadin\.external\.google/android\-json@.*$</packageUrl>
-        <cpe>cpe:/a:json-java_project:json-java</cpe>
-    </suppress>
-    <suppress>
-        <notes><![CDATA[
-   file name: json-path-2.7.0.jar
-   ]]></notes>
-        <packageUrl regex="true">^pkg:maven/com\.jayway\.jsonpath/json\-path@.*$</packageUrl>
-        <cpe>cpe:/a:json-java_project:json-java</cpe>
-    </suppress>
-    <suppress>
-        <notes><![CDATA[
-   file name: json-smart-2.4.7.jar
-   ]]></notes>
-        <packageUrl regex="true">^pkg:maven/net\.minidev/json\-smart@.*$</packageUrl>
-        <cpe>cpe:/a:json-java_project:json-java</cpe>
     </suppress>
     <suppress>
         <notes><![CDATA[
@@ -233,82 +86,12 @@
         <packageUrl regex="true">^pkg:maven/org\.junit\.vintage/junit\-vintage\-engine@.*$</packageUrl>
         <cpe>cpe:/a:fan_platform_project:fan_platform</cpe>
     </suppress>
-    <suppress>
-        <notes><![CDATA[
-   file name: jackson-databind-2.15.2.jar
-   According to https://github.com/FasterXML/jackson-databind/issues/3972 this can lead to stackoverflow and
-   isn't a security vulnerability
-   ]]></notes>
-        <packageUrl regex="true">^pkg:maven/com\.fasterxml\.jackson\.core/jackson\-databind@.*$</packageUrl>
-        <cve>CVE-2023-35116</cve>
-    </suppress>
     <suppress base="true">
         <notes><![CDATA[
    See https://github.com/jeremylong/DependencyCheck/issues/5912
    ]]></notes>
         <packageUrl regex="true">^pkg:maven/io\.netty/*.*$</packageUrl>
         <cve>CVE-2023-4586</cve>
-    </suppress>
-    <suppress>
-        <notes><![CDATA[
-        TestContainers mongodb dependency isn't the same as mongodb:mongodb
-   file name: mongodb-1.19.3.jar
-   ]]></notes>
-        <packageUrl regex="true">^pkg:maven/org\.testcontainers/mongodb@.*$</packageUrl>
-        <cpe>cpe:/a:mongodb:mongodb</cpe>
-    </suppress>
-    <suppress>
-        <notes><![CDATA[
-        springdata-mongo-distributed-fenced-lock-?.?.?.jar dependency isn't the same as mongodb:mongodb
-   ]]></notes>
-        <packageUrl regex="true">^pkg:maven/dk\.trustworks\.essentials\.components/springdata-mongo-distributed-fenced-lock@.*$</packageUrl>
-        <cpe>cpe:/a:mongodb:mongodb</cpe>
-    </suppress>
-    <suppress>
-        <notes><![CDATA[
-        springdata-mongo-queue-?.?.?.jar dependency isn't the same as mongodb:mongodb
-   ]]></notes>
-        <packageUrl regex="true">^pkg:maven/dk\.trustworks\.essentials\.components/springdata-mongo-queue@.*$</packageUrl>
-        <cpe>cpe:/a:mongodb:mongodb</cpe>
-    </suppress>
-    <suppress>
-        <notes><![CDATA[
-   file name: json-path-2.8.0.jar
-   Under review - see https://github.com/json-path/JsonPath/issues/973 for details
-   Ignoring as json-path is included under test scope which means it won't be parsing user provided input
-   ]]></notes>
-        <packageUrl regex="true">^pkg:maven/com\.jayway\.jsonpath/json\-path@.*$</packageUrl>
-        <vulnerabilityName>CVE-2023-51074</vulnerabilityName>
-    </suppress>
-    <suppress>
-        <notes><![CDATA[
-   file name: xmlunit-core-2.10.3.jar is matched as ada
-   ]]></notes>
-        <packageUrl regex="true">^pkg:maven/org\.xmlunit/xmlunit-core@.*$</packageUrl>
-        <cpe>cpe:/a:ada:ada</cpe>
-    </suppress>
-    <suppress>
-        <notes><![CDATA[
-   file name: testcontainers-mongodb-2.0.3.jar
-   ]]></notes>
-        <packageUrl regex="true">^pkg:maven/org\.testcontainers/testcontainers-mongodb@.*$</packageUrl>
-        <cpe>cpe:/a:mongodb:mongodb</cpe>
-    </suppress>
-    <suppress>
-        <notes><![CDATA[
-   file name: testcontainers-postgresql-2.0.3.jar
-   ]]></notes>
-        <packageUrl regex="true">^pkg:maven/org\.testcontainers/testcontainers-postgresql@.*$</packageUrl>
-        <cpe>cpe:/a:postgresql:postgresql</cpe>
-    </suppress>
-    <suppress>
-        <notes><![CDATA[
-   file name: angus-activation-2.0.0.jar
-    CVE-2025-7962 is a false positive, as it only affects the Angus Jakarta Mail module
-    and is not an issue with the activation library itself.
-   ]]></notes>
-        <packageUrl regex="true">^pkg:maven/org\.eclipse\.angus/angus-activation@.*$</packageUrl>
-        <cpe>cpe:/a:eclipse:jakarta_mail</cpe>
     </suppress>
     <suppress>
         <notes><![CDATA[
@@ -349,24 +132,6 @@
    ]]></notes>
         <packageUrl regex="true">^pkg:maven/org\.springframework\.boot/spring-boot-data-mongodb(-test)?@.*$</packageUrl>
         <cve>CVE-2026-41717</cve>
-    </suppress>
-    <suppress>
-        <notes><![CDATA[
-   file name: tomcat-embed-*-11.0.??.jar
-   CVE-2026-66299 is uncontrolled resource consumption in Tomcat's WebSocket *chat example*, and the
-   advisory itself says users who removed the examples web application are not affected. tomcat-embed-core
-   is the embedded distribution and ships no examples webapp at all, so the vulnerable code is not present
-   - the scanner matches purely on the apache:tomcat CPE version range. Scoped to the whole
-   org.apache.tomcat.embed group, not just -core: the CPE matches every artifact in it, so naming one
-   only moves the finding to the next sibling (it surfaced on tomcat-embed-websocket).
-   The fix has since landed and been taken: the affected range is "from 11.0.1 up to (excluding) 11.0.25"
-   and ${tomcat.version} is now 11.0.25, so this no longer matches anything. Kept rather than deleted
-   because the reasoning above is about the artifact, not the version - tomcat-embed-core will never ship
-   the examples webapp - so it stands if the CPE range is ever widened or the pin is rolled back. Delete it
-   if you want the file to hold only live suppressions.
-   ]]></notes>
-        <packageUrl regex="true">^pkg:maven/org\.apache\.tomcat\.embed/.*$</packageUrl>
-        <vulnerabilityName>CVE-2026-66299</vulnerabilityName>
     </suppress>
     <suppress>
         <notes><![CDATA[

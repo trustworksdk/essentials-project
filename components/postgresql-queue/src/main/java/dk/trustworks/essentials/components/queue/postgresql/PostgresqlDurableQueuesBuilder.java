@@ -24,11 +24,14 @@ import dk.trustworks.essentials.components.foundation.postgresql.*;
 import dk.trustworks.essentials.components.foundation.transaction.*;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
 
+import dk.trustworks.essentials.reactive.LocalEventBus;
+import org.slf4j.*;
+
 import java.time.Duration;
-import java.util.function.Function;
+import java.util.function.*;
 
 import static dk.trustworks.essentials.components.queue.postgresql.PostgresqlDurableQueues.DEFAULT_DURABLE_QUEUES_TABLE_NAME;
-import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
+import static dk.trustworks.essentials.shared.FailFast.*;
 
 /**
  * <u>Security</u><br>
@@ -47,11 +50,19 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * vulnerabilities, compromising the security and integrity of the database.</b>
  */
 public final class PostgresqlDurableQueuesBuilder {
+    private static final Logger log = LoggerFactory.getLogger(PostgresqlDurableQueuesBuilder.class);
+    /**
+     * How often a {@link MultiTableChangeListener} created by {@link #build()} polls for notifications - the Spring
+     * Boot starter's default ({@code essentials.multi-table-change-listener.polling-interval})
+     */
+    public static final Duration DEFAULT_CHANGE_LISTENER_POLLING_INTERVAL = Duration.ofMillis(50);
+
     private SchemaOwnership schemaOwnership = SchemaOwnership.COMPONENT;
     private HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory;
     private JSONSerializer                                                jsonSerializer;
     private String                                                        sharedQueueTableName         = DEFAULT_DURABLE_QUEUES_TABLE_NAME;
     private MultiTableChangeListener<TableChangeNotification>             multiTableChangeListener     = null;
+    private boolean                                                       createMultiTableChangeListener = true;
     private Function<ConsumeFromQueue, QueuePollingOptimizer>             queuePollingOptimizerFactory = null;
     private Duration                                                      messageHandlingTimeout       = Duration.ofSeconds(30);
 
@@ -66,6 +77,8 @@ public final class PostgresqlDurableQueuesBuilder {
     private int                                        batchedFetchSwitchThreshold              = PostgresqlDurableQueues.DEFAULT_BATCHED_FETCH_SWITCH_THRESHOLD;
     private int                                        batchedFetchWarnRowsThreshold            = PostgresqlDurableQueues.DEFAULT_BATCHED_FETCH_WARN_ROWS_THRESHOLD;
     private DurableQueueMessageObserver                messageObserver                          = DurableQueueMessageObserver.none();
+    private boolean                                    requireActiveUnitOfWorkForEnqueue        = false;
+    private Duration                                   orderedClaimSlowThreshold                = PostgresqlDurableQueues.DEFAULT_ORDERED_CLAIM_SLOW_THRESHOLD;
 
     /**
      * @param unitOfWorkFactory the {@link UnitOfWorkFactory} needed to access the database
@@ -193,7 +206,8 @@ public final class PostgresqlDurableQueuesBuilder {
      * queue-fetch-strategy benchmark found this to pay off above roughly four active queues - see
      * {@code BENCHMARK-queue-fetch-strategy.md} and {@link #setBatchedFetchSwitchThreshold(int)}.<br>
      * <br>
-     * Note that the two strategies do not select identical messages: per-queue fetching is ordered-priority,
+     * Note that the two strategies do not select identical messages when there are fewer free slots than eligible
+     * messages: per-queue fetching gives ordered messages the slots first and fills the rest with unordered ones,
      * whereas batched fetching selects the oldest eligible messages regardless of delivery mode.
      *
      * @param useBatchedFetch whether the centralized fetcher may use batched fetching
@@ -257,11 +271,90 @@ public final class PostgresqlDurableQueuesBuilder {
         return this;
     }
 
+    /**
+     * Should {@code queueMessage}/{@code queueMessages} fail when called outside a {@code UnitOfWork} or Spring
+     * transaction? Default {@code false}: such an enqueue commits on its own, and each call site's first one is logged at WARN.
+     * See {@link EnqueueOutsideUnitOfWorkGuard}.
+     *
+     * @param requireActiveUnitOfWorkForEnqueue {@code true} to make such an enqueue throw {@code NoActiveUnitOfWorkException}
+     * @return this builder instance
+     */
+    public PostgresqlDurableQueuesBuilder setRequireActiveUnitOfWorkForEnqueue(boolean requireActiveUnitOfWorkForEnqueue) {
+        this.requireActiveUnitOfWorkForEnqueue = requireActiveUnitOfWorkForEnqueue;
+        return this;
+    }
+
+    /**
+     * How long an ordered claim must take before it counts as slow. A queue claims ordered messages with one of two
+     * statements that claim the same messages - one cheap when the backlog has many keys, the other when it has few
+     * keys with many messages each - and switches between them only after several slow claims in a row, and only to
+     * the statement that was faster when last measured (re-measuring it now and then). A claim faster than this never
+     * leads to a switch. The elapsed time includes the database round trip and mapping the claimed rows, so on a
+     * database far away a higher value keeps the statement from being reconsidered on every poll.<br>
+     * Default {@link PostgresqlDurableQueues#DEFAULT_ORDERED_CLAIM_SLOW_THRESHOLD}
+     *
+     * @param orderedClaimSlowThreshold the threshold - not negative
+     * @return this builder instance
+     */
+    public PostgresqlDurableQueuesBuilder setOrderedClaimSlowThreshold(Duration orderedClaimSlowThreshold) {
+        requireNonNull(orderedClaimSlowThreshold, "No orderedClaimSlowThreshold provided");
+        requireFalse(orderedClaimSlowThreshold.isNegative(), "orderedClaimSlowThreshold must not be negative");
+        this.orderedClaimSlowThreshold = orderedClaimSlowThreshold;
+        return this;
+    }
+
+    /**
+     * Whether {@link #build()} creates a {@link MultiTableChangeListener} when none was set with
+     * {@link #setMultiTableChangeListener(MultiTableChangeListener)}. Default {@code true}, so a builder-made instance
+     * is wired like the Spring Boot starter's: LISTEN/NOTIFY on the queue table (polled every 50 ms), and a polling
+     * backoff that a message added on any node interrupts. The created listener holds one database connection, is
+     * started and stopped with the {@link PostgresqlDurableQueues} (which can be stopped and started again), its event
+     * bus's threads are released by {@link PostgresqlDurableQueues#close()}, and its change-notification trigger is
+     * part of the queue's schema.
+     * <p>
+     * {@code false} keeps the instance without LISTEN/NOTIFY, as builder-made instances were before 0.60.1: every queue
+     * is then polled every polling interval, without a backoff, since nothing could wake a backed-off queue.
+     *
+     * @param createMultiTableChangeListener whether to create a listener when none was set
+     * @return this builder instance
+     */
+    public PostgresqlDurableQueuesBuilder setCreateMultiTableChangeListener(boolean createMultiTableChangeListener) {
+        this.createMultiTableChangeListener = createMultiTableChangeListener;
+        return this;
+    }
+
     public PostgresqlDurableQueues build() {
+        // Before anything touches the database, the listener included
+        PostgresqlUtil.checkIsValidTableOrColumnName(sharedQueueTableName);
+        var serializer = jsonSerializer != null ? jsonSerializer : DurableQueuesSerialization.createDefaultJSONSerializer();
+        var listener   = multiTableChangeListener;
+        LocalEventBus ownedListenerEventBus = null;
+        // A unit of work factory that yields no Jdbi - a test double - gets no listener
+        var jdbi = listener == null && createMultiTableChangeListener
+                   ? requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory provided").withUnitOfWork(unitOfWork -> unitOfWork.handle().getJdbi())
+                   : null;
+        if (jdbi != null) {
+            // The Spring Boot starter's defaults: a 50 ms notification poll, duplicate notifications filtered. Built once:
+            // the queue starts and stops it with itself, and a stopped listener resumes on start
+            ownedListenerEventBus = LocalEventBus.builder()
+                                                 .busName("DurableQueues-" + sharedQueueTableName + "-ChangeListener")
+                                                 .parallelThreads(1)
+                                                 .onErrorHandler((failingSubscriber, event, exception) ->
+                                                                         log.error("Failed to handle {} in {}", event, failingSubscriber, exception))
+                                                 .build();
+            listener = MultiTableChangeListener.builder()
+                                               .setJdbi(jdbi)
+                                               .setPollingInterval(DEFAULT_CHANGE_LISTENER_POLLING_INTERVAL)
+                                               .setJsonSerializer(serializer)
+                                               .setEventBus(ownedListenerEventBus)
+                                               .setFilterDuplicateNotifications(true)
+                                               .setPollThreadName("DurableQueues-" + sharedQueueTableName)
+                                               .build();
+        }
         var durableQueues = new PostgresqlDurableQueues(unitOfWorkFactory,
-                                                       jsonSerializer != null ? jsonSerializer : DurableQueuesSerialization.createDefaultJSONSerializer(),
+                                                       serializer,
                                                        sharedQueueTableName,
-                                                       multiTableChangeListener,
+                                                       listener,
                                                        queuePollingOptimizerFactory,
                                                        messageHandlingTimeout,
                                                        useCentralizedMessageFetcher,
@@ -272,6 +365,11 @@ public final class PostgresqlDurableQueuesBuilder {
                                                        batchedFetchWarnRowsThreshold,
                                                        schemaOwnership);
         durableQueues.setMessageObserver(messageObserver);
+        durableQueues.setRequireActiveUnitOfWorkForEnqueue(requireActiveUnitOfWorkForEnqueue);
+        durableQueues.setOrderedClaimSlowThreshold(orderedClaimSlowThreshold);
+        if (ownedListenerEventBus != null) {
+            durableQueues.ownMultiTableChangeListener(ownedListenerEventBus);
+        }
         return durableQueues;
     }
 }

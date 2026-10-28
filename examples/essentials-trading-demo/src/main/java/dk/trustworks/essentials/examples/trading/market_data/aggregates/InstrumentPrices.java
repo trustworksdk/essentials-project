@@ -74,6 +74,11 @@ public class InstrumentPrices {
         return repository.load(instrumentId);
     }
 
+    /**
+     * For the demo bootstrap's idempotency probe only, which asks whether a price stream exists and needs a
+     * strongly-consistent answer the eventually-consistent {@code latest_price} view cannot give. It reads existence,
+     * never a field.
+     */
     public Optional<InstrumentPrice> findPrice(InstrumentId instrumentId) {
         requireNonNull(instrumentId, "No instrumentId provided");
         return repository.tryLoad(instrumentId);

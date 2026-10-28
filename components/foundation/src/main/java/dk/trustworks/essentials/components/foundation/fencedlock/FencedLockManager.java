@@ -35,7 +35,17 @@ import java.util.Optional;
  * <br>
  * To coordinate this properly it's important that each {@link FencedLockManager#getLockManagerInstanceId()}
  * is unique across the cluster.<br>
- * Per default, it uses the local machine hostname as {@link FencedLockManager#getLockManagerInstanceId()} value.
+ * Per default, it uses {@code <hostname>:<pid>} as {@link FencedLockManager#getLockManagerInstanceId()} value (the bare hostname before 0.60.1) -
+ * see {@link FencedLockManagerSettings#defaultLockManagerInstanceId()}.<br>
+ * <br>
+ * <b>Ownership is per lock-manager instance, not per caller or thread.</b> While this {@link FencedLockManager} holds a lock,
+ * a second {@link #tryAcquireLock(LockName)}/{@link #acquireLock(LockName)} for the same {@link LockName} - from another
+ * component, another thread, or the same thread - succeeds and returns the <b>same</b> {@link FencedLock} instance; it is not
+ * refused as "busy". There is no acquire count either: a {@link FencedLock#release()} by <b>any</b> of those callers releases
+ * the lock for all of them, after which another node can acquire it while the other callers are still working.<br>
+ * So the lock gives mutual exclusion <b>between</b> lock-manager instances (JVMs), never <b>within</b> one. Two callers in one JVM
+ * that use the same lock name and must not overlap - e.g. a {@code @Scheduled} run and a manual trigger of the same job - need
+ * their own in-process guard (such as an {@code AtomicBoolean}) in front of the lock.
  */
 public interface FencedLockManager extends Lifecycle {
     /**
@@ -48,27 +58,49 @@ public interface FencedLockManager extends Lifecycle {
 
     /**
      * Try to acquire the lock using this Lock Manager instance
+     * <p>
+     * If this lock manager instance already holds the lock, this returns the <b>same</b> {@link FencedLock} that the earlier
+     * caller got - ownership is per lock-manager instance, not per caller or thread, and a {@link FencedLock#release()} by
+     * either caller releases it for both. See the class documentation.
      *
      * @param lockName the name of the lock
-     * @return An Optional with the {@link FencedLock} IF it was acquired by the {@link FencedLockManager} on this JVM Node, otherwise it return an empty Optional
+     * @return An Optional with the {@link FencedLock} IF it was acquired by (or is already held by) the {@link FencedLockManager} on this JVM Node, otherwise it return an empty Optional.
+     * Empty, too, for a lock this lock manager instance does not hold, once its shutdown has started, or while it can no
+     * longer confirm locks ({@link #isLockConfirmationEnded()}) - until it is stopped and started again
      */
     Optional<FencedLock> tryAcquireLock(LockName lockName);
 
     /**
      * Try to acquire the lock on this JVM Node
+     * <p>
+     * Like {@link #tryAcquireLock(LockName)}, this returns the already-held {@link FencedLock} at once if this lock manager
+     * instance holds the lock - it never waits for another caller in the same JVM to release it.
+     * <p>
+     * The timeout bounds how long acquire attempts are retried; it does not cut short a round trip to the lock store
+     * that is already in flight, so the call can return somewhat after the timeout.
      *
      * @param lockName the name of the lock
      * @param timeout  timeout for the lock acquiring
-     * @return An Optional with the {@link FencedLock} IF it was acquired by the {@link FencedLockManager} on this JVM Node, otherwise it return an empty Optional
+     * @return An Optional with the {@link FencedLock} IF it was acquired by the {@link FencedLockManager} on this JVM Node, otherwise it return an empty Optional.
+     * Empty, too, for a lock this lock manager instance does not hold, once its shutdown has started, or while it can no
+     * longer confirm locks ({@link #isLockConfirmationEnded()}) - until it is stopped and started again - and then without
+     * waiting for the timeout
      */
     Optional<FencedLock> tryAcquireLock(LockName lockName, Duration timeout);
 
     /**
      * Acquire the lock on this JVM Node. If the lock already is acquired by another JVM Node,
      * then this method will wait until the lock can be acquired by this JVM node
+     * <p>
+     * If <b>this</b> lock manager instance already holds the lock, it returns that same {@link FencedLock} immediately instead of
+     * waiting for the other caller to release it - ownership is per lock-manager instance, not per caller or thread. See the
+     * class documentation.
      *
      * @param lockName the name of the lock
      * @return The {@link FencedLock} when can be acquired by this JVM Node
+     * @throws IllegalStateException rather than wait, when this lock manager instance does not hold the lock and either its
+     *                               shutdown has started, or it can no longer confirm locks ({@link #isLockConfirmationEnded()})
+     *                               until it is stopped and started again - although {@link #isStarted()} is still <code>true</code>
      */
     FencedLock acquireLock(LockName lockName);
 
@@ -81,9 +113,14 @@ public interface FencedLockManager extends Lifecycle {
 
     /**
      * Is the lock already acquired by this JVM node
+     * <p>
+     * Looks the lock up in the database and compares the stored owner id with {@link #getLockManagerInstanceId()}. The fence
+     * token and the last-confirmed timestamp are ignored, so a lock row left by a crashed process that used the same instance id
+     * reads as held by this instance. {@link FencedLock#isLockedByThisLockManagerInstance()} instead reads the {@link FencedLock}
+     * object, which only changes when this lock manager confirms or releases the lock.
      *
      * @param lockName the lock name
-     * @return true of the lock is acquired by this JVM node
+     * @return true if the lock is acquired by this JVM node
      */
     boolean isLockedByThisLockManagerInstance(LockName lockName);
 
@@ -91,15 +128,42 @@ public interface FencedLockManager extends Lifecycle {
      * Is the lock already acquired by another JVM node
      *
      * @param lockName the name of the lock
-     * @return true of the lock is acquired by this JVM node
+     * @return true if the lock is acquired by another {@link FencedLockManager} instance (another JVM node), false if it
+     * is not locked or is locked by this {@link FencedLockManager} instance
      */
     boolean isLockAcquiredByAnotherLockManagerInstance(LockName lockName);
+
+    /**
+     * Has this lock manager stopped confirming the locks it acquires? While it has, {@link #isStarted()} can still be
+     * <code>true</code>, but it acquires no lock - it could not confirm it: {@link #tryAcquireLock(LockName)} and
+     * {@link #tryAcquireLock(LockName, Duration)} return empty, {@link #acquireLock(LockName)} throws
+     * {@link IllegalStateException} and an {@link #acquireLockAsync(LockName, LockCallback)} acquires nothing, so the
+     * components taking their locks through it are not served by this instance. The way back is to restart the application,
+     * or to stop and start the lock manager.
+     * <p>
+     * The database-backed lock managers end their lock confirmation on a critical error, and publish
+     * {@link FencedLockEvents.LockConfirmationEnded} when they do - see {@link DBFencedLockManager#isLockConfirmationEnded()}.
+     *
+     * @return <code>true</code> while this lock manager's lock confirmation has ended, otherwise <code>false</code>. The default
+     * returns <code>false</code>, for an implementation whose lock confirmation never ends
+     */
+    default boolean isLockConfirmationEnded() {
+        return false;
+    }
 
     /**
      * Asynchronously try to acquire a lock by the given name and call the {@link LockCallback#lockAcquired(FencedLock)}
      * when the lock is acquired<br>
      * To stop the background acquiring process, you need to call {@link #cancelAsyncLockAcquiring(LockName)} with the same
-     * lockName
+     * lockName<br>
+     * What becomes of the background acquiring when the lock manager is stopped and started again, and of a repeated call
+     * for the same lockName, is up to the implementation: the database-backed lock managers keep it across a stop and resume
+     * it on the start, and a repeated call with another callback replaces a kept one - see
+     * {@link DBFencedLockManager#acquireLockAsync(LockName, LockCallback)}<br>
+     * <b>A component must call {@link #cancelAsyncLockAcquiring(LockName)} in its own stop</b>, or the database-backed lock
+     * managers' {@link #start()} resumes its registration with its <code>lockCallback</code>, which is given the lock again
+     * even when the component is gone. {@link DBFencedLockManager#start()} logs each registration it resumes at WARN, naming
+     * the lock and the callback's class
      *
      * @param lockName     the name of the lock
      * @param lockCallback the callback that's notified when a lock is acquired
@@ -120,7 +184,8 @@ public interface FencedLockManager extends Lifecycle {
     /**
      * Get the instance id that distinguishes different {@link FencedLockManager} instances from each other<br>
      * For local JVM testing you can assign a unique instance id to allow multiple {@link FencedLockManager}'s to compete for Locks.<br>
-     * In production the hostname should be returned
+     * It must be unique per running lock manager: it is what the lock table, the admin API and the ownership predicates report as
+     * the lock holder. The default is {@code <hostname>:<pid>} ({@link FencedLockManagerSettings#defaultLockManagerInstanceId()})
      *
      * @return the instance id
      */

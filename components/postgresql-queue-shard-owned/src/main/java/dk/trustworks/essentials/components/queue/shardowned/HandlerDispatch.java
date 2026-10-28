@@ -43,11 +43,19 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * and advancing the cursor past it would leave it to the head sweep. Getting this backwards is what
  * turned nearly every message into a phantom hole the first time asynchronous delivery was attempted.
  */
-record HandlerDispatch(Executor executor, Semaphore consumerPermits) {
+/**
+ * @param capacity how many handlers {@code consumerPermits} lets run at once - what a successor charges for when it
+ *                 takes over a shard this dispatch fed (see {@code ShardOwnedStorage.bumpAttemptsOnTakeover})
+ */
+record HandlerDispatch(Executor executor, Semaphore consumerPermits, int capacity) {
 
     public HandlerDispatch {
         requireNonNull(executor, "No executor provided");
         requireNonNull(consumerPermits, "No consumerPermits provided");
+    }
+
+    HandlerDispatch(Executor executor, int capacity) {
+        this(executor, new Semaphore(capacity), capacity);
     }
 
     /**
@@ -58,14 +66,14 @@ record HandlerDispatch(Executor executor, Semaphore consumerPermits) {
      * ceiling underneath — see the class javadoc for why it went.
      */
     public HandlerDispatch forConsumer(int parallelConsumers) {
-        return new HandlerDispatch(executor, new Semaphore(Math.max(1, parallelConsumers)));
+        return new HandlerDispatch(executor, Math.max(1, parallelConsumers));
     }
 
     /**
      * Inline and unbounded — for tests that want no concurrency at all.
      */
     public static HandlerDispatch inline() {
-        return new HandlerDispatch(Runnable::run, new Semaphore(Integer.MAX_VALUE));
+        return new HandlerDispatch(Runnable::run, Integer.MAX_VALUE);
     }
 
     /**
@@ -79,6 +87,13 @@ record HandlerDispatch(Executor executor, Semaphore consumerPermits) {
 
     public void release() {
         consumerPermits.release();
+    }
+
+    /**
+     * How many more handlers could start now - an upper bound on what one read can dispatch
+     */
+    public int availablePermits() {
+        return consumerPermits.availablePermits();
     }
 
     public boolean saturated() {

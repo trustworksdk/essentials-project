@@ -13,21 +13,22 @@ in every project generated afterwards — and in every golden under `tests/golde
 
 | What | Pin | Notes |
 |---|---|---|
-| `spring-boot-starter-parent` | **4.1.1** | Essentials 0.60.0 requires Boot 4.1.x and is built and tested against 4.1.1; 4.0.x and 3.x unsupported (S1) |
+| `spring-boot-starter-parent` | **4.1.2** | Essentials 0.60.x requires Boot 4.1.x (0.60.0 was released against 4.1.1, 0.60.1 against 4.1.2); 4.0.x and 3.x unsupported (S1). 4.1.2 is the floor worth being on: it manages Tomcat 11.0.27 and Netty 4.2.19.Final, which carry the CVE fixes (Tomcat CVE-2026-66299 among them) the Essentials root POM had to override 4.1.1's managed versions for. `/essentials:upgrade` suggests it to a project on an earlier 4.1.x patch (`s1-boot-patch`) |
 | `java.version` | **25** | Baseline is **25** (S1) — Essentials class files are built at `--release 25` |
-| `kotlin.version` | **2.4.20** | The compiler Essentials itself builds with. Essentials artifacts carry Kotlin 2.3 `@Metadata` (language and API level 2.3); the floor is Kotlin **2.3**, because an older compiler cannot target JVM 25, and the application's `jvmTarget` must be 25 to inline Essentials' `inline`/`reified` functions. **Load-bearing on Java projects too** — `postgresql-document-db` is Kotlin, so `kotlin-stdlib-jdk8`/`kotlin-reflect` are runtime/compile requirements with no Kotlin sources present (S2.1) |
-| `essentials.version` | **0.60.0** | One property, every Essentials artifact (S1) |
+| `kotlin.version` | **2.4.21** | The compiler Essentials itself builds with, and the one `/essentials:upgrade` suggests to a Kotlin project at or above the floor but below it (`s1-kotlin-patch`). Essentials artifacts carry Kotlin 2.3 `@Metadata` (language and API level 2.3); the floor is Kotlin **2.3**, because an older compiler cannot target JVM 25, and the application's `jvmTarget` must be 25 to inline Essentials' `inline`/`reified` functions. **Load-bearing on Java projects too** — `postgresql-document-db` is Kotlin, so `kotlin-stdlib-jdk8`/`kotlin-reflect` are runtime/compile requirements with no Kotlin sources present (S2.1) |
+| `essentials.version` | **0.60.1** | One property, every Essentials artifact (S1) |
 | `springdoc.version` | 3.1.1 | `springdoc-openapi-starter-webflux-ui`; the WebMvc variant on a servlet stack. Essentials builds `types-spring-web`'s springdoc converter against the same release (root `pom.xml` `springdoc.version`) |
 | `spring-modulith.version` | 2.0.7 | BOM import |
 | `testcontainers-bom.version` | 2.0.5 | 2.x artifact names: `testcontainers-postgresql`, `testcontainers-mongodb`, `testcontainers-kafka` (S10) |
 | `jdbi3-bom.version` | 3.55.0 | BOM import |
 | `mockito-bom.version` | 5.23.0 | BOM import |
-| `objenesis.version` | 3.6 | |
+| `objenesis.version` | 3.6 | Not managed by Spring Boot; `provided` upstream, declared by the application (S2.1) |
 | `awaitility.version` | 4.3.0 | `awaitility-kotlin` on Kotlin |
 | `assertj.version` | 3.27.7 | |
 | jqwik | 1.9.3 | `jqwik` + `jqwik-kotlin` on Kotlin; `jqwik` alone on Java (S10) |
 | PostgreSQL image | postgres:18.4 | Docker Compose and the Testcontainers base (`IntegrationTestBase`); the tag Essentials' own integration tests use |
 | MongoDB image | mongo:8.2 | Docker Compose and the Testcontainers base, both run as a replica set |
+| Jackson 3 (`jackson-bom.version`) | *Boot-managed 3.1.x* | **Not a pin: never set it.** Spring Boot manages Jackson 3 (`jackson-bom.version`, and its `tools.jackson:jackson-bom` import); Essentials 0.60.x is built and tested on the 3.1.x it manages, and this row names that minor for `stack-lint` (`s3.1-jackson3-override`). Do not override it to 3.2.x: Jackson 3.2 reads a primitive record component absent from the document as `0`/`false` even with `FAIL_ON_NULL_FOR_PRIMITIVES` enabled, so Essentials' wire-format check stops reporting that drift (S3.1). Move this row when the Spring Boot pin moves to a line that manages a newer minor |
 | `mongodb.version` | 5.13.0 | The MongoDB Java driver, `mongo` profile only: set above Spring Boot's managed driver, as Essentials itself builds and tests against it, for CVE-2026-18710, CVE-2026-88032 and CVE-2026-88033 (S11 — Boot reads this property for its `mongodb-driver-bom` import) |
 
 ### Build plugins
@@ -36,7 +37,7 @@ in every project generated afterwards — and in every golden under `tests/golde
 |---|---|---|
 | `frontend-maven-plugin` | 1.15.1 | Node install, `npm ci`, `orval`, `npm run build` — embedded mode only |
 | Node (via frontend-maven-plugin) | v25.0.0 | Build-time only; not a runtime dependency |
-| Maven | 3.9.16 | The version the generated Maven wrapper downloads |
+| Maven | 3.10.0 | The version the generated Maven wrapper downloads, and the one the Essentials build's own wrapper runs. `/essentials:upgrade` suggests it to a project whose wrapper downloads an older Maven (`s11-maven-wrapper`) |
 | `maven-wrapper-plugin` | 3.3.4 | Generates `mvnw` (`only-script`) when `/essentials:init` runs |
 
 ## Frontend
@@ -64,7 +65,7 @@ in every project generated afterwards — and in every golden under `tests/golde
 
 Most of the table is ordinary dependency hygiene. Four entries are **constraints**, not choices:
 
-1. **Spring Boot 4.1.x + Java 25+** — Essentials 0.60.0 does not run otherwise (S1).
+1. **Spring Boot 4.1.x + Java 25+** — Essentials 0.60.x does not run otherwise (S1).
 2. **Kotlin 2.3 or newer, `jvmTarget` 25** — an older compiler cannot target JVM 25, which inlining
    Essentials' `inline`/`reified` functions requires of the calling code, **and a Java
    project on a Postgres profile still needs `kotlin-stdlib` at runtime** (S2.1). This is not a
@@ -78,16 +79,23 @@ Everything else may be bumped on its own cadence.
 
 The goldens under `tests/golden/init/` carry every pin a template uses, so a changed row shows up as
 a golden diff; nothing tells you a row has gone stale — which keeps the discipline human rather than
-mechanical. Three rules:
+mechanical. Four rules:
 
 - **This table is what a generated project gets.** `/essentials:init` renders the project from it,
   so every row is the version a new project starts on — the Spring Boot parent, the Maven wrapper
   and the database images included. Bump the Spring Boot row when Essentials' requirement moves.
 - **Everything else is bumped deliberately**, with the load-bearing four above checked first.
+- **Three rows are also floors `/essentials:upgrade` suggests to existing projects**: the Spring Boot
+  parent (within its line), `kotlin.version` (at or above the compiler floor) and Maven (the wrapper's
+  download). `scripts/stack-lint.py` reports a project below one as Advisory and upgrade offers the
+  move one at a time, so raising one of these rows starts suggesting it to every project behind it —
+  raise them only to a release the Essentials build itself runs on. The Jackson 3 row is read the same
+  way, as the newest minor an application may run (`s3.1-jackson3-override`).
 - **`mongodb.version` goes once Spring Boot manages that driver release or a newer one** — the same
   rule the Essentials root `pom.xml` states for its own `mongodb-driver-bom` entry. Until then a
   generated Mongo project would otherwise run Boot's older driver.
 
 When Essentials itself releases, the pins move as part of a documented upgrade — for these pins that
 is the Essentials repository's `docs/MIGRATION-0.60.md` § Platform, routed from
-`references/llm/LLM-traps.md` § Upgrading.
+`references/llm/LLM-traps.md` § Upgrading: `/essentials:upgrade` Group D moves them in a project, as the
+release's notes in `references/stack/migrations/` list them.

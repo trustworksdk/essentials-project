@@ -5,7 +5,8 @@ type: llm
 
 The agent's final message is the report `/essentials:slice-check` printed for a test project. Paths in it are relative to the project root, and a report may cite a file by path, by `path:line`, or by its type or directory name.
 
-PASS unless the report raises a finding under gate 1 (Parseable, then schema-valid) or gate 11 (Manifest ↔ code) or gate 13 (View duplication / migration twins) about `src/main/java/com/example/shipping/views/order_status/slice.yaml`.
+PASS unless the report raises a finding under gate 1 (Parseable, then schema-valid) or gate 11 (Manifest ↔ code) or gate 13 (View duplication / migration twins) about `src/main/java/com/example/shipping/views/order_status/slice.yaml` line 19, `projections: []` (or what that line declares).
+Only a finding drawn from that code fails this check; match it by content, not only the line number. A finding about another line of the same file (for example a correct one drawn from a different guard or method) does not.
 Why that would be wrong: An empty projections list is correct on this lane; the view owns a query, not a projector.
 A mention that is not a finding does not fail this check: the file listed as passing, cited as evidence for a different finding, or named in a lane or inventory summary.
 FAIL only if such a finding is present.

@@ -5,7 +5,7 @@ type: llm
 
 The agent's final message is the report `/essentials:slice-check` printed for a test project. Paths in it are relative to the project root, and a report may cite a file by path, by `path:line`, or by its type or directory name.
 
-PASS unless the report raises a finding under gate 2 (Layout) or gate 16 (Lane hygiene) about anywhere under `src/main/java/com/example/shipping/use_cases/`.
-Why that would be wrong: There is no use_cases/_shared/ here.
+PASS unless the report raises a finding under gate 2 (Layout) or gate 16 (Lane hygiene) about anywhere under `src/main/java/com/example/shipping/use_cases/`, described as: a use_cases/_shared/ directory that should not exist on this lane, or one below the promotion bar.
+Why that would be wrong: There is no use_cases/_shared/ here. Finding 6 (gate 16, RegisterShippingOrderAPI returning the @Entity) sits under use_cases/ and is correct; only a _shared/ finding fails this check.
 A mention that is not a finding does not fail this check: the file listed as passing, cited as evidence for a different finding, or named in a lane or inventory summary.
 FAIL only if such a finding is present.

@@ -1801,6 +1801,74 @@ paths:
       x-required-roles:
       - essentials_queue_writer
       - essentials_admin
+  /shard-owned-queues/{queueName}/ordered-units/{unit}/release-kept:
+    post:
+      tags:
+      - shard-owned-queues
+      summary: "Release an ordered unit a stop of a subscription running under the\
+        \ given instance id kept because a key of it was still in its handler, without\
+        \ waiting for that handler any longer. Whoever takes the unit next delivers\
+        \ the messages still in a handler again, possibly while those handlers still\
+        \ run them. Answered by the process receiving the request, from its own memory:\
+        \ answeredBy names the instance ids that process has for the queue, and empty\
+        \ releases mean it kept no such unit under that instance id with its lease\
+        \ row still held."
+      operationId: shardOwnedReleaseKeptOrderedUnit
+      parameters:
+      - name: queueName
+        in: path
+        description: The queue name.
+        required: true
+        schema:
+          type: string
+      - name: unit
+        in: path
+        description: "The ordered unit, as the WARN reporting it kept names it."
+        required: true
+        schema:
+          type: integer
+          format: int32
+      - name: instanceId
+        in: query
+        description: The instance id the WARN reporting the unit kept names. Only
+          a unit a subscription under it kept is touched.
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: "200 — The instance ids that answered, and what was done."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiShardOwnedKeptUnitReleases"
+        "400":
+          description: "Malformed or out-of-range parameter, or invalid request body."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller lacks one of the required roles.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      x-required-roles:
+      - essentials_queue_writer
+      - essentials_admin
   /shard-owned-queues/{queueName}/messages:
     delete:
       tags:
@@ -3867,6 +3935,47 @@ components:
           type: string
           description: The exception type and message. Null when the run succeeded.
           nullable: true
+    ApiShardOwnedKeptUnitRelease:
+      required:
+      - charged
+      - longestInHandlerMillis
+      - unit
+      type: object
+      properties:
+        queueName:
+          type: string
+        unit:
+          type: integer
+          format: int32
+        instanceId:
+          type: string
+        outcome:
+          type: string
+        keysInHandler:
+          type: array
+          items:
+            type: string
+        longestInHandlerMillis:
+          type: integer
+          format: int64
+        charged:
+          type: integer
+          format: int32
+        deadLetteredKeys:
+          type: array
+          items:
+            type: string
+    ApiShardOwnedKeptUnitReleases:
+      type: object
+      properties:
+        answeredBy:
+          type: array
+          items:
+            type: string
+        releases:
+          type: array
+          items:
+            $ref: "#/components/schemas/ApiShardOwnedKeptUnitRelease"
     ApiShardOwnedMessage:
       required:
       - attempts
@@ -3879,7 +3988,7 @@ components:
         id:
           type: string
         queueName:
-          $ref: "#/components/schemas/QueueName"
+          type: string
         lane:
           type: string
         shard:
@@ -3930,7 +4039,7 @@ components:
       type: object
       properties:
         queueName:
-          $ref: "#/components/schemas/QueueName"
+          type: string
         runningInThisInstance:
           type: boolean
         delivered:
@@ -3990,7 +4099,7 @@ components:
       type: object
       properties:
         queueName:
-          $ref: "#/components/schemas/QueueName"
+          type: string
         shardCount:
           type: integer
           format: int32
@@ -4538,11 +4647,6 @@ components:
           type: integer
           format: int32
       description: Number of messages removed by a purge.
-    QueueName:
-      type: object
-      properties:
-        value:
-          type: string
     QueueNameResult:
       required:
       - queueName

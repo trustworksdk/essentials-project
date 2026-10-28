@@ -1,4 +1,4 @@
-schemaVersion: "1.1"
+schemaVersion: "1.4"
 slice: brokerage.confirm_clearing
 kind: command
 bc: brokerage
@@ -7,6 +7,7 @@ status: live
 summary: Record that clearing came back confirmed.
 generator: essentials
 language: java
+lane: aggregate
 
 handles: [ConfirmClearing]
 publishes: [ClearingConfirmed]
@@ -24,6 +25,8 @@ invariants:
     enforcedBy: Settlement
 forbidden:
   - cross-slice-internal:brokerage
+tier: cqrs-es
+flow: trade-lifecycle
 tests:
   unit: { present: false }
   integration: { present: false }

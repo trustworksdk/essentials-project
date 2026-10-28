@@ -1,4 +1,4 @@
-schemaVersion: "1.1"
+schemaVersion: "1.4"
 slice: market_data.initialize_price
 kind: command
 bc: market_data
@@ -7,6 +7,7 @@ status: live
 summary: Open the price stream for an instrument at its first known market price.
 generator: essentials
 language: java
+lane: aggregate
 
 handles: [InitializePrice]
 publishes: [PriceInitialized]
@@ -23,6 +24,8 @@ invariants:
     enforcedBy: InstrumentPrices
 forbidden:
   - cross-slice-internal:market_data
+tier: cqrs-es
+flow: market-prices
 tests:
   unit: { present: false }
   integration: { present: false }

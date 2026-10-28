@@ -1,4 +1,4 @@
-schemaVersion: "1.1"
+schemaVersion: "1.4"
 slice: brokerage.open_trading_account
 kind: command
 bc: brokerage
@@ -7,6 +7,7 @@ status: live
 summary: Open the first books generation of a trading account, at a zero cash balance and zero realized P&L.
 generator: essentials
 language: java
+lane: aggregate
 
 handles: [OpenTradingAccount]
 publishes: [TradingAccountOpened]
@@ -23,6 +24,8 @@ invariants:
     enforcedBy: TradingAccounts
 forbidden:
   - cross-slice-internal:brokerage
+tier: cqrs-es
+flow: trading-account
 tests:
   unit: { present: false }
   integration: { present: false }

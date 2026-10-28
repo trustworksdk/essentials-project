@@ -21,7 +21,6 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ev
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.EventStoreUnitOfWork;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
-import dk.trustworks.essentials.components.foundation.Lifecycle;
 import dk.trustworks.essentials.components.foundation.causation.CausationContext;
 import dk.trustworks.essentials.components.foundation.fencedlock.*;
 import dk.trustworks.essentials.components.foundation.messaging.*;
@@ -60,6 +59,12 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  *  <li>The event's {@link PersistedEvent#eventOrder()} becomes the {@link OrderedMessage#getOrder()}</li>
  * </ul>
  * <p>
+ * <h3>Event types the view has no {@code @MessageHandler} for are WARNed about</h3>
+ * A view that skips an event type does not see every {@code EventOrder} of the aggregate, so an ignored event type is
+ * logged at WARN (at most once an hour per type) and counted. At start the view also WARNs about the types a sealed
+ * event type it handles part of permits that it has no handler for. List the types it ignores on purpose in
+ * {@link IgnoresEventTypes} on the view class: they are still counted, but not warned about.
+ * <p>
  * <h3>Validation failures inside a {@code @MessageHandler} dead-letter the message immediately</h3>
  * Once an event has been queued, the {@link DurableQueueConsumer} classifies a set of exception types as permanent
  * errors and marks the message as a Poison-Message/Dead-Letter-Message on the <em>first</em> delivery attempt,
@@ -86,7 +91,17 @@ public abstract class ViewEventProcessor extends AbstractEventProcessor {
     private final DurableQueues                 durableQueues;
     private final Consumer<Message>             queuedMessageConsumer;
     private       DurableQueueConsumer          durableQueueConsumer;
+    /**
+     * Makes the lock-acquired and lock-released callbacks mutually exclusive. The acquired callback starts the
+     * exclusive {@link DurableQueueConsumer} first and the event store subscriptions after it; a release delivered from
+     * another thread in between - a lock manager being stopped while the acquired callback still ran - saw the consumer,
+     * failed on the not yet assigned subscriptions, and so neither cancelled the consumer nor stopped the subscriptions
+     * created right after: a processor that had lost its lock kept consuming. Neither callback calls into the
+     * {@link FencedLockManager} while holding it.
+     */
+    private final Object                        lockCallbackMonitor = new Object();
     private       LockName                      lockName;
+    private       UnhandledEventTypes           unhandledEventTypes;
 
     /**
      * Constructs a {@code ViewEventProcessor} using the provided dependencies.
@@ -132,41 +147,81 @@ public abstract class ViewEventProcessor extends AbstractEventProcessor {
     @Override
     public void start() {
         if (started) return;
-        started = true;
         var processorName              = requireNonNull(getProcessorName(), "getProcessorName() returned null");
         var subscribeToEventsRelatedTo = requireNonNull(reactsToEventsRelatedToAggregateTypes(), "reactsToEventsRelatedToAggregateTypes() returned null");
         // A ViewEventProcessor deliberately handles each queued message inside a single UnitOfWork, so that the view
         // update and the message acknowledgement commit together. There is therefore no UnitOfWork-free window to
         // offer a UnitOfWorkMode.NONE handler - reject it instead of silently running the blocking call in a transaction.
+        // Checked before 'started' is set, so a rejected processor still reports isStarted() == false and a second
+        // start() attempt throws again instead of silently doing nothing
         if (patternMatchingMessageHandlerDelegate.hasNonTransactionalMessageHandlers()) {
             throw new IllegalStateException(msg("ViewEventProcessor '{}' declares one or more @MessageHandler methods with UnitOfWorkMode.NONE, which a ViewEventProcessor doesn't support - " +
                                                 "it handles every message inside a single UnitOfWork. Use an EventProcessor for handlers that need to perform blocking I/O",
                                                 processorName));
         }
-        logger.info("🎑⚙️  [{}] Starting ViewEventProcessor - will subscribe to events related to these AggregatesType's: {}",
-                    processorName,
-                    subscribeToEventsRelatedTo);
-        this.durableQueueName = QueueName.of(processorName + ":queue");
-        this.lockName = LockName.of(processorName + ":lock");
-        fencedLockManager.acquireLockAsync(lockName,
-                                           LockCallback.builder()
-                                                       .onLockAcquired(lock -> {
-                                                           logger.info("FencedLock '{}' for ViewProcessor '{}' with DurableQueue '{}' was ACQUIRED - will start Exclusive DurableQueueConsumer", lockName, processorName, durableQueueName);
-                                                           startSubscribersAndDurableConsumer(processorName, subscribeToEventsRelatedTo, lock);
-                                                           logger.info("Exclusive DurableQueueConsumer for Queue '{}': {}", durableQueueName, durableQueueConsumer);
-                                                       })
-                                                       .onLockReleased(lock -> {
-                                                           if (durableQueueConsumer != null) {
-                                                               logger.info("FencedLock '{}' for ViewProcessor '{}' was RELEASED - will stop {} subscriber(s)", lockName, processorName, eventStoreSubscriptions.size());
-                                                               eventStoreSubscriptions.forEach(Lifecycle::stop);
-                                                               logger.info("FencedLock '{}' for ViewProcessor '{}' and DurableQueue '{}' was RELEASED - will stop Exclusive DurableQueueConsumer: {}", lockName, processorName, durableQueueName, durableQueueConsumer);
-                                                               durableQueueConsumer.cancel();
-                                                               logger.info("Stopped Exclusive DurableQueueConsumer for Queue '{}': {}", durableQueueName, durableQueueConsumer);
-                                                           } else {
-                                                               logger.warn("FencedLock '{}' for ViewProcessor '{}' was RELEASED - didn't find an Exclusive DurableQueueConsumer for Queue '{}'!", lockName, processorName, durableQueueName);
-                                                           }
-                                                       })
-                                                       .build());
+        started = true;
+        // Nothing is left to undo but the flag: left not started, so start() may be called again - see startOrRollBack
+        startOrRollBack(() -> {
+            logger.info("🎑⚙️  [{}] Starting ViewEventProcessor - will subscribe to events related to these AggregatesType's: {}",
+                        processorName,
+                        subscribeToEventsRelatedTo);
+            this.durableQueueName = QueueName.of(processorName + ":queue");
+            this.lockName = LockName.of(processorName + ":lock");
+            UnhandledEventTypes.logViewSummary(processorName, this, patternMatchingMessageHandlerDelegate);
+            warnOnceIfEventStoreIsNoAwaitedGapInspector();
+            this.unhandledEventTypes = new UnhandledEventTypes(processorName, eventStore, this, patternMatchingMessageHandlerDelegate, UnhandledEventTypes.Reporting.WARN);
+            fencedLockManager.acquireLockAsync(lockName,
+                                               LockCallback.builder()
+                                                           .onLockAcquired(lock -> onLockAcquired(processorName, subscribeToEventsRelatedTo, lock))
+                                                           .onLockReleased(lock -> onLockReleased(processorName))
+                                                           .build());
+        }, () -> { }, () -> started = false);
+    }
+
+    private void onLockAcquired(String processorName, List<AggregateType> subscribeToEventsRelatedTo, FencedLock lock) {
+        // Under the monitor, so a release delivered meanwhile waits and then finds the consumer and every subscription - see lockCallbackMonitor
+        synchronized (lockCallbackMonitor) {
+            logger.info("FencedLock '{}' for ViewProcessor '{}' with DurableQueue '{}' was ACQUIRED - will start Exclusive DurableQueueConsumer", lockName, processorName, durableQueueName);
+            startSubscribersAndDurableConsumer(processorName, subscribeToEventsRelatedTo, lock);
+            logger.info("Exclusive DurableQueueConsumer for Queue '{}': {}", durableQueueName, durableQueueConsumer);
+        }
+    }
+
+    private void onLockReleased(String processorName) {
+        // Under the monitor, so a release cannot run between the acquired callback starting the consumer and the subscriptions - see lockCallbackMonitor
+        synchronized (lockCallbackMonitor) {
+            var consumer      = durableQueueConsumer;
+            var subscriptions = eventStoreSubscriptions;
+            // Cleared, so a release that follows (without a re-acquire in between) does not cancel this consumer again.
+            // The (unsubscribed) subscriptions are kept: resetting a processor that does not hold the lock still resets their resume points
+            durableQueueConsumer = null;
+            if (consumer == null) {
+                logger.warn("FencedLock '{}' for ViewProcessor '{}' was RELEASED - didn't find an Exclusive DurableQueueConsumer for Queue '{}'!", lockName, processorName, durableQueueName);
+                return;
+            }
+            try {
+                if (subscriptions != null) {
+                    logger.info("FencedLock '{}' for ViewProcessor '{}' was RELEASED - will unsubscribe {} subscriber(s)", lockName, processorName, subscriptions.size());
+                    // Unsubscribed, not just stopped: the manager hands a subscription it still holds back to the next
+                    // subscribe without starting it, so a re-acquired lock would leave the processor handling no events.
+                    // Each one on its own: a failing unsubscribe must not leave the ones after it polling on an instance that lost the lock.
+                    // Collected by the shared rule (Exceptions.forEachThenThrowFirst), each failure logged with its subscription
+                    Exceptions.forEachThenThrowFirst(subscriptions, (EventStoreSubscription subscription) -> {
+                        try {
+                            subscription.unsubscribe();
+                        } catch (Throwable failure) {
+                            // Throwable, so a checked exception thrown sneakily is logged too - the shared rule collects it as well
+                            logger.error("FencedLock '{}' for ViewProcessor '{}' was RELEASED - failed to unsubscribe subscriber {}", lockName, processorName, subscription, failure);
+                            throw failure;
+                        }
+                    });
+                }
+            } finally {
+                logger.info("FencedLock '{}' for ViewProcessor '{}' and DurableQueue '{}' was RELEASED - will stop Exclusive DurableQueueConsumer: {}", lockName, processorName, durableQueueName, consumer);
+                consumer.cancel();
+                logger.info("Stopped Exclusive DurableQueueConsumer for Queue '{}': {}", durableQueueName, consumer);
+            }
+        }
     }
 
     private void startSubscribersAndDurableConsumer(String processorName, List<AggregateType> subscribeToEventsRelatedTo, FencedLock lock) {
@@ -181,42 +236,46 @@ public abstract class ViewEventProcessor extends AbstractEventProcessor {
                                                                   });
                                                               }
                                                              );
-        eventStoreSubscriptions = subscribeToEventsRelatedTo.stream()
-                                                            .map(aggregateType -> {
-                                                                var subscriberId = AbstractEventProcessor.resolveSubscriberId(aggregateType, processorName);
-                                                                var subscription = eventStoreSubscriptionManager.subscribeToAggregateEventsAsynchronously(
-                                                                        subscriberId,
-                                                                        aggregateType,
-                                                                        resolveStartSubscriptionFromGlobalEventOrder(),
-                                                                        new PersistedEventHandler() {
-                                                                            @Override
-                                                                            public void handle(PersistedEvent event) {
-                                                                                handlePersistedEvent(event);
-                                                                            }
+        // The subscriptions created before one that fails to subscribe are unsubscribed again - see subscribeEachOrUnsubscribe.
+        // Nothing else is undone here: the consumer started above is left to onLockReleased, which cancels it - DBFencedLockManager
+        // releases the lock when this callback throws a RuntimeException, a non-critical Error or a checked exception thrown
+        // sneakily, so the lock is acquired again - by this instance's next tick or by another instance - and the subscribe is
+        // retried there; a critical error (Exceptions.isCriticalError) releases the lock too (locally even when the release in the DB fails - see acquireLockAsync),
+        // then escapes the lock manager and ends its async acquiring of the lock, so this instance does not retry
+        eventStoreSubscriptions = subscribeEachOrUnsubscribe(subscribeToEventsRelatedTo, aggregateType -> {
+            var subscriberId = AbstractEventProcessor.resolveSubscriberId(aggregateType, processorName);
+            var subscription = eventStoreSubscriptionManager.subscribeToAggregateEventsAsynchronously(
+                    subscriberId,
+                    aggregateType,
+                    resolveStartSubscriptionFromGlobalEventOrder(),
+                    new PersistedEventHandler() {
+                        @Override
+                        public void handle(PersistedEvent event) {
+                            handlePersistedEvent(event);
+                        }
 
-                                                                            @Override
-                                                                            public boolean handOffFailedEvent(PersistedEvent event, Throwable failure) {
-                                                                                queueAfterRollback(event, failure);
-                                                                                return true;
-                                                                            }
+                        @Override
+                        public boolean handOffFailedEvent(PersistedEvent event, Throwable failure) {
+                            queueAfterRollback(event, failure);
+                            return true;
+                        }
 
-                                                                            @Override
-                                                                            public Optional<SubscriptionErrorPolicy> subscriptionErrorPolicy() {
-                                                                                return getSubscriptionErrorPolicy();
-                                                                            }
+                        @Override
+                        public Optional<SubscriptionErrorPolicy> subscriptionErrorPolicy() {
+                            return getSubscriptionErrorPolicy();
+                        }
 
-                                                                            @Override
-                                                                            public String toString() {
-                                                                                return processorName;
-                                                                            }
-                                                                        });
-                                                                logger.info("🎑⚙️ [{}] Created non-exclusive async '{}' subscription: {}",
-                                                                            processorName,
-                                                                            aggregateType,
-                                                                            subscription);
-                                                                return subscription;
-                                                            })
-                                                            .toList();
+                        @Override
+                        public String toString() {
+                            return processorName;
+                        }
+                    });
+            logger.info("🎑⚙️ [{}] Created non-exclusive async '{}' subscription: {}",
+                        processorName,
+                        aggregateType,
+                        subscription);
+            return subscription;
+        });
 
         logger.info("🎑⚙️  [{}] Started. There are #{} undelivered queue messages",
                     processorName,
@@ -266,6 +325,10 @@ public abstract class ViewEventProcessor extends AbstractEventProcessor {
         var             order         = event.eventOrder().longValue();
         MessageMetaData meta          = null;
 
+        if (unhandledEventTypes != null) {
+            // Reported only: an ignored event is still handed to the delegate, which ignores it, exactly as before
+            unhandledEventTypes.reportIfUnhandled(event);
+        }
         try {
             meta = new MessageMetaData(event.metaData().deserialize());
             if (durableQueues.hasOrderedMessageQueuedForKey(durableQueueName, key)) {
@@ -439,6 +502,28 @@ public abstract class ViewEventProcessor extends AbstractEventProcessor {
         }
         var msg = queuedMessage.getMessage();
         queuedMessageConsumer.accept(msg);
+    }
+
+    /**
+     * The durable queue that failed events are queued on - see {@link #awaitProcessed(AggregateType, GlobalEventOrder, java.time.Duration)}
+     */
+    @Override
+    protected boolean hasQueuedMessagesForAggregate(AggregateType aggregateType, String serializedAggregateId) {
+        var queueName = durableQueueName;
+        if (queueName == null) {
+            // Not started: no subscription exists to be past the event
+            return true;
+        }
+        return durableQueues.hasOrderedMessageQueuedForKey(queueName, serializedAggregateId);
+    }
+
+    @Override
+    protected Optional<QueuedMessageCounts> getQueuedMessageCountsForAwaitProcessed() {
+        var queueName = durableQueueName;
+        if (queueName == null) {
+            return Optional.empty();
+        }
+        return Optional.of(durableQueues.getQueuedMessageCountsFor(queueName));
     }
 
     /**

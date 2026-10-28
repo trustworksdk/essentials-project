@@ -46,6 +46,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.stream.*;
 
+import static dk.trustworks.essentials.components.foundation.postgresql.PostgresqlSchemaStatements.createIndexUnlessPresent;
 import static dk.trustworks.essentials.shared.FailFast.*;
 import static dk.trustworks.essentials.shared.MessageFormatter.NamedArgumentBinding.arg;
 import static dk.trustworks.essentials.shared.MessageFormatter.*;
@@ -368,15 +369,39 @@ public final class SeparateTablePerAggregateTypePersistenceStrategy implements A
              schemaOwnership);
     }
 
+    /**
+     * Register an {@link AggregateType} and initialise its event-stream table - created, validated or emitted, depending
+     * on who owns this strategy's schema. A second registration of the same {@link AggregateType} is ignored.
+     * <p>
+     * The registration only stands if the initialisation succeeds: when it throws (a schema mismatch in validate mode,
+     * a DDL error) the {@link AggregateType} is unregistered again and the exception propagates, so a retry initialises
+     * the table again rather than silently doing nothing. Of several concurrent registrations of one
+     * {@link AggregateType}, exactly one initialises its table.
+     * <p>
+     * The entry is added before the initialisation - and removed again if it fails - rather than after it, so the sweeps
+     * of {@link #enableNotifyTriggers(Consumer)} and {@link #enableCausationIndex()} cannot miss a table that is being
+     * registered while they run.
+     *
+     * @param aggregateTypeConfiguration the configuration of the {@link AggregateType}'s event stream
+     * @return this strategy
+     * @throws RuntimeException whatever initialising the event-stream table threw - the {@link AggregateType} is not registered
+     */
     @Override
     public final SeparateTablePerAggregateTypePersistenceStrategy addAggregateEventStreamConfiguration(SeparateTablePerAggregateEventStreamConfiguration aggregateTypeConfiguration) {
         requireNonNull(aggregateTypeConfiguration, "No aggregateTypeConfiguration provided");
         PostgresqlUtil.checkIsValidTableOrColumnName(aggregateTypeConfiguration.eventStreamTableName);
         aggregateTypeConfiguration.eventStreamTableColumnNames.validate();
 
-        if (!aggregateTypeConfigurations.containsKey(aggregateTypeConfiguration.aggregateType)) {
-            aggregateTypeConfigurations.put(aggregateTypeConfiguration.aggregateType, aggregateTypeConfiguration);
-            initializeEventStorageFor(aggregateTypeConfiguration);
+        // putIfAbsent, not containsKey-then-put: only the registration that wins initialises the table
+        if (aggregateTypeConfigurations.putIfAbsent(aggregateTypeConfiguration.aggregateType, aggregateTypeConfiguration) == null) {
+            try {
+                initializeEventStorageFor(aggregateTypeConfiguration);
+            } catch (RuntimeException | Error e) {
+                // Left registered, the type would have no table: a retry would do nothing, and appends would fail
+                // with a bare "relation does not exist"
+                aggregateTypeConfigurations.remove(aggregateTypeConfiguration.aggregateType, aggregateTypeConfiguration);
+                throw e;
+            }
             var listener = notifyTriggerListener.get();
             if (listener != null) {
                 listener.accept(aggregateTypeConfiguration.eventStreamTableName);
@@ -508,9 +533,25 @@ public final class SeparateTablePerAggregateTypePersistenceStrategy implements A
      */
     public static String causationIndexStatement(SeparateTablePerAggregateEventStreamConfiguration eventStreamConfiguration) {
         requireNonNull(eventStreamConfiguration, "No eventStreamConfiguration provided");
-        return bind("CREATE INDEX IF NOT EXISTS {:tableName}_{:causedByColumn} ON {:tableName} ({:causedByColumn}) WHERE {:causedByColumn} IS NOT NULL",
+        return bind("CREATE INDEX IF NOT EXISTS {:indexName} ON {:tableName} ({:causedByColumn}) WHERE {:causedByColumn} IS NOT NULL",
+                    arg("indexName", causationIndexName(eventStreamConfiguration)),
                     arg("tableName", eventStreamConfiguration.eventStreamTableName),
                     arg("causedByColumn", eventStreamConfiguration.eventStreamTableColumnNames.causedByEventIdColumn));
+    }
+
+    /**
+     * The one source for the caused-by-event-id index's name, used both in {@link #causationIndexStatement(SeparateTablePerAggregateEventStreamConfiguration)}
+     * and by the check that skips that statement when the index is in place - so the two cannot drift apart
+     */
+    static String causationIndexName(SeparateTablePerAggregateEventStreamConfiguration eventStreamConfiguration) {
+        return eventStreamConfiguration.eventStreamTableName + "_" + eventStreamConfiguration.eventStreamTableColumnNames.causedByEventIdColumn;
+    }
+
+    /**
+     * The one source for the tenant index's name, used both in {@code createTenantIndexStatement} and by the check that skips that statement when the index is in place - so the two cannot drift apart
+     */
+    static String tenantIndexName(SeparateTablePerAggregateEventStreamConfiguration eventStreamConfiguration) {
+        return eventStreamConfiguration.eventStreamTableName + "_" + eventStreamConfiguration.eventStreamTableColumnNames.tenantColumn;
     }
 
     @Override
@@ -541,6 +582,10 @@ public final class SeparateTablePerAggregateTypePersistenceStrategy implements A
         schemaSink.set(requireNonNull(sink, "No sink provided"));
     }
 
+    private static String describe(SeparateTablePerAggregateEventStreamConfiguration eventStreamConfiguration) {
+        return "AggregateType '" + eventStreamConfiguration.aggregateType + "'";
+    }
+
     private List<SchemaChange> schemaChangesFor(SeparateTablePerAggregateEventStreamConfiguration eventStreamConfiguration) {
         PostgresqlUtil.checkIsValidTableOrColumnName(eventStreamConfiguration.eventStreamTableName);
         eventStreamConfiguration.eventStreamTableColumnNames.validate();
@@ -548,9 +593,20 @@ public final class SeparateTablePerAggregateTypePersistenceStrategy implements A
         var eventStreamTableName = eventStreamConfiguration.eventStreamTableName;
         var changes = new ArrayList<SchemaChange>(3);
         changes.add(SchemaChange.repeatable("event-stream-table", eventStreamTableName, createEventStreamTableStatement(eventStreamConfiguration)));
-        changes.add(SchemaChange.repeatable("event-stream-tenant-index", eventStreamTableName, createTenantIndexStatement(eventStreamConfiguration)));
+        // Each index is only created when it is missing: CREATE INDEX IF NOT EXISTS alone locks the table on every start,
+        // and the tables of every aggregate type are one transaction, so a running unit of work appending to two of them
+        // in the other order could deadlock with it - see PostgresqlSchemaStatements
+        changes.add(SchemaChange.repeatable("event-stream-tenant-index",
+                                            eventStreamTableName,
+                                            createIndexUnlessPresent(eventStreamTableName,
+                                                                     tenantIndexName(eventStreamConfiguration),
+                                                                     createTenantIndexStatement(eventStreamConfiguration))));
         if (causationIndexEnabled.get()) {
-            changes.add(SchemaChange.repeatable("event-stream-caused-by-index", eventStreamTableName, causationIndexStatement(eventStreamConfiguration)));
+            changes.add(SchemaChange.repeatable("event-stream-caused-by-index",
+                                                eventStreamTableName,
+                                                createIndexUnlessPresent(eventStreamTableName,
+                                                                         causationIndexName(eventStreamConfiguration),
+                                                                         causationIndexStatement(eventStreamConfiguration))));
         }
         if (notifyTriggerListener.get() != null) {
             changes.add(SchemaChange.repeatable("change-notification-trigger",
@@ -558,7 +614,9 @@ public final class SeparateTablePerAggregateTypePersistenceStrategy implements A
                                                 ListenNotify.changeNotificationTriggerStatements(eventStreamTableName, List.of(ListenNotify.SqlOperation.INSERT))
                                                             .toArray(String[]::new)));
         }
-        return changes;
+        // Names the AggregateType in the emitted script, the emit log line and validation errors
+        var description = describe(eventStreamConfiguration);
+        return changes.stream().map(change -> change.describedAs(description)).toList();
     }
 
     @Override
@@ -594,7 +652,23 @@ public final class SeparateTablePerAggregateTypePersistenceStrategy implements A
         log.info("Checking and Initializing EventStream storage for aggregate-type '{}' using event-stream table name '{}'", eventStreamConfiguration.aggregateType, eventStreamConfiguration.eventStreamTableName);
         var sink = schemaSink.get();
         if (sink != null) {
-            sink.apply(schemaChangesFor(eventStreamConfiguration));
+            try {
+                sink.apply(schemaChangesFor(eventStreamConfiguration));
+            } catch (SchemaValidationException e) {
+                // The validate mode knows only tables: say which AggregateType, and that registering it late is the usual cause
+                var namingTheAggregateType = new SchemaValidationException(msg("The event-stream table '{}' of AggregateType '{}' is not in the database as described. " +
+                                                                                       "An AggregateType registered after start-up - from an ApplicationRunner, a @Lazy bean " +
+                                                                                       "or on demand - is missing from the script the emit mode wrote: register '{}' at " +
+                                                                                       "start-up (in the event store's or persistence strategy's configuration, or from a " +
+                                                                                       "singleton bean), re-run the emit mode and have the new script run. {}",
+                                                                               eventStreamConfiguration.eventStreamTableName,
+                                                                               eventStreamConfiguration.aggregateType,
+                                                                               eventStreamConfiguration.aggregateType,
+                                                                               e.getMessage()),
+                                                                           e.problems());
+                namingTheAggregateType.initCause(e);
+                throw namingTheAggregateType;
+            }
         } else {
             log.info("[{}] Leaving event-stream table '{}' to the schema harness", eventStreamConfiguration.aggregateType, eventStreamConfiguration.eventStreamTableName);
         }
@@ -622,7 +696,8 @@ public final class SeparateTablePerAggregateTypePersistenceStrategy implements A
     }
 
     private static String createTenantIndexStatement(SeparateTablePerAggregateEventStreamConfiguration eventStreamConfiguration) {
-        return bind("CREATE INDEX IF NOT EXISTS {:tableName}_{:tenantColumn} ON {:tableName} ({:tenantColumn})",
+        return bind("CREATE INDEX IF NOT EXISTS {:indexName} ON {:tableName} ({:tenantColumn})",
+                    arg("indexName", tenantIndexName(eventStreamConfiguration)),
                     arg("tableName", eventStreamConfiguration.eventStreamTableName),
                     arg("tenantColumn", eventStreamConfiguration.eventStreamTableColumnNames.tenantColumn));
     }

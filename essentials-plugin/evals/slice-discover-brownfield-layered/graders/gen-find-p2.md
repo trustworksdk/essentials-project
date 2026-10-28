@@ -9,5 +9,5 @@ PASS if the report contains a finding that matches all of:
 - it concerns `src/main/java/com/example/shop/controller/OrderController.java`
 - it is a cohesion finding
 - it is ranked #2 among the report's structural findings
-- its substance: OrderController → 4 slices; OrderService → 4 slices. Reported as slice counts, not line counts.
+- its substance: OrderController → 4 slices; OrderService → 4 slices. Reported as slice counts, not line counts. "Ranked #2" means the cohesion tier, after the sole-writer finding(s): a report that numbers a second sole-writer finding separately and so lists cohesion third still ranks it correctly.
 FAIL if no finding matches. Ignore formatting, ordering and other findings.

@@ -1,4 +1,4 @@
-schemaVersion: "1.1"
+schemaVersion: "1.4"
 slice: brokerage.mark_trade_settled
 kind: command
 bc: brokerage
@@ -7,6 +7,7 @@ status: live
 summary: Mark a trade as settled, once its settlement has completed.
 generator: essentials
 language: java
+lane: aggregate
 
 handles: [MarkTradeSettled]
 publishes: [TradeSettled]
@@ -24,6 +25,8 @@ invariants:
     enforcedBy: Trade
 forbidden:
   - cross-slice-internal:brokerage
+tier: cqrs-es
+flow: trade-lifecycle
 tests:
   unit: { present: false }
   integration: { present: false }

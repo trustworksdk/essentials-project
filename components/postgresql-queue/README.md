@@ -122,10 +122,26 @@ public DurableQueues durableQueues(
 
 ### Transactions
 
-Every queue operation runs in its own transaction: queueing, fetching, acknowledging, retrying and dead-lettering are
-separate, so a failing handler can never roll back its own retry count. (0.60 removed `TransactionalMode`; its
-`FullyTransactional` mode broke exactly that.) A `queueMessage` called inside a caller's `UnitOfWork` joins it, so the
-enqueue commits or rolls back with the caller's writes - which is what an Outbox relies on.
+Queue operations run in their own transactions: queueing, fetching, retrying and dead-lettering are separate, so a
+failing handler can never roll back its own retry count. (0.60 removed `TransactionalMode`; its `FullyTransactional`
+mode broke exactly that.) A `queueMessage` called inside a caller's `UnitOfWork` joins it, so the enqueue commits or
+rolls back with the caller's writes - which is what an Outbox relies on.
+
+The one exception, since 0.60.1: a successfully handled message is acknowledged inside the handler's own transaction,
+as its last statement. The handler's writes and the acknowledgement commit together or not at all, and a message
+costs one connection checkout and one commit instead of two (measured on its own: about +10% drain throughput
+through a 10-connection pool, without LISTEN/NOTIFY). If the acknowledgement fails, the handler's writes roll back and the message is retried; before, they
+stayed committed and the message was delivered again after `messageHandlingTimeout`. A `DurableQueuesInterceptor`
+on `AcknowledgeMessageAsHandled` therefore runs inside the handler's transaction. The acknowledgement stays separate,
+as before, for a handler that requests redelivery, one that marks its unit of work rollback-only (its message is
+still consumed), and a handler that owns its unit-of-work boundary (every `EventProcessor` handler, whatever its
+`UnitOfWorkMode`, and an `Inbox` with a `UnitOfWorkBoundaryOwningMessageConsumer`, which between them cover every
+`UnitOfWorkMode.NONE` handler). A handler that returns with the interrupt flag set while its consumer is stopping may
+have given up part-way: its unit of work is marked rollback-only, discarding its writes, and the consumer hands the
+message back for redelivery - a plain hand-back, not a handler failure, so it is never dead-lettered. That rollback
+reaches only a handler run in the queue's own unit of work: a boundary-owning handler keeps whatever it committed
+before returning and is still handed back, so it must be idempotent across a partial run. A crash before the commit
+still redelivers, so handlers should stay idempotent.
 
 ## Polling Mechanisms
 
@@ -144,6 +160,19 @@ var durableQueues = PostgresqlDurableQueues.builder()
 ```
 
 **Benefits:** Reduced database load, batch fetching, built-in ordering coordination
+
+**Saturated queues are refilled at once:** a poll claims at most a queue's free worker slots. When it fills all of
+them, the queue is polled again as soon as half its workers are free, instead of at the next interval - so throughput
+is bounded by the handler and the database, not by `parallelConsumers / pollingInterval`.
+
+**The builder is wired like the Spring Boot starter:** it creates a `MultiTableChangeListener` (LISTEN/NOTIFY, one
+held connection) when none is set, and idle queues back off up to 2 s, woken when a message is added on any node.
+`setCreateMultiTableChangeListener(false)` keeps the pre-0.60.1 wiring: no listener, no backoff.
+
+**Draining tables and stale statistics:** a queue table that drains to empty and is then analyzed tells the planner
+it has no rows. The claim statements are written to stay fast regardless, except for the ordered claim's per-key
+ordering check. If ordered queues regularly drain and refill, keep the table's statistics fresh, for example with
+`ALTER TABLE durable_queues SET (autovacuum_analyze_scale_factor = 0, autovacuum_analyze_threshold = 1000)`.
 
 ### DefaultDurableQueueConsumer (Traditional)
 
@@ -267,11 +296,12 @@ var durableQueues = PostgresqlDurableQueues.builder()
 For instant response when messages arrive (instead of waiting for next poll cycle), configure a `MultiTableChangeListener`:
 
 ```java
-var multiTableChangeListener = new MultiTableChangeListener<>(
-    jdbi,
-    Duration.ofMillis(100),
-    jsonSerializer
-);
+var multiTableChangeListener = MultiTableChangeListener.builder()
+    .setJdbi(jdbi)
+    .setJsonSerializer(jsonSerializer)
+    .setEventBus(eventBus)
+    .setPollingInterval(Duration.ofMillis(100))
+    .build();
 
 var durableQueues = PostgresqlDurableQueues.builder()
     .setUnitOfWorkFactory(unitOfWorkFactory)

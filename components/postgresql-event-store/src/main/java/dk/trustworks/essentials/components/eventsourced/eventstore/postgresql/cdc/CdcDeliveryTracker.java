@@ -569,6 +569,31 @@ final class CdcDeliveryTracker {
     }
 
     /**
+     * Whether the subscriber still awaits the event with this order from this subscription - for
+     * {@code CdcEventStore#isAwaitedAsGap}, asked from a thread that awaits the subscriber's progress, never the bus's.
+     * Gives up first on the gaps whose {@code gapTimeout} has passed, as the delivering calls do.
+     *
+     * @return true when {@code order} is a gap this subscription still waits for - below the highest order delivered, an
+     * earlier gap or in an earlier middle, not delivered yet - or was delivered as a fill from the middle of a wide gap,
+     * awaited in memory only, that the subscriber is not done with yet: nothing but this tracker knows about either of
+     * those for a middle the subscription found itself
+     */
+    synchronized boolean isAwaited(long order) {
+        giveUpExpiredGaps();
+        if (inMemoryOnlyFillsNotDoneWith.containsKey(order)) {
+            return true;
+        }
+        if (order <= watermark) {
+            return earlierGaps.contains(order) || earlierMiddles.isAwaited(order);
+        }
+        if (order > highestDelivered) {
+            return false;
+        }
+        var below = runsAboveWatermark.floorEntry(order);
+        return below == null || below.getValue().end < order;
+    }
+
+    /**
      * Lock-free, so the shared bus thread never waits for a subscription: true only for an order that can never be
      * delivered again. False for an order above the watermark that was delivered - that is the delivery thread's call
      */

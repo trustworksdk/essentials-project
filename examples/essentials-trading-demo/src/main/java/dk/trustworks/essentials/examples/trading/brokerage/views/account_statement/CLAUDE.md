@@ -14,6 +14,10 @@ account's overview together with the closing-books generations behind it.
 - A replay must go through `onSubscriptionsReset`, which truncates. The opening event upserts, but every
   other handler is a `+= delta` — re-applying one on a live row doubles it. There is no `OrderedMessage`
   version check to fall back on.
+- Handlers write through `unitOfWorkFactory.usingUnitOfWork(uow -> uow.handle()…)`, which joins the
+  `UnitOfWork` the `ViewEventProcessor` handles the event in, so a delta commits together with the
+  processor's progress. Never open a separate transaction (or a hand-opened `jdbi.useHandle`) there: a delta
+  committed apart from the event's acknowledgement is applied again on redelivery.
 - Balances are read from the projection row, never from a rehydrated `TradingAccount`
   (enforced by `AccountStatementQuery`).
 
@@ -66,5 +70,5 @@ time.
 - `AccountOverview.java` — one account's row plus its generations
 - `AccountGeneration.java` — one generation, nested in the overview
 - `AccountStatementProjection.java` — the `ViewEventProcessor`; owns the DDL and the truncate
-- `AccountStatementQuery.java` — the `JdbcTemplate` queries and the lifecycle lookup
+- `AccountStatementQuery.java` — the Jdbi queries (through the `UnitOfWork` handle) and the lifecycle lookup
 - `AccountStatementAPI.java` — the slice's two endpoints

@@ -104,6 +104,16 @@ public class AnnotatedCommandHandler implements CommandHandler {
         return getHandlerMethod(commandType) != null;
     }
 
+    /**
+     * @return the parameter types of the {@link CmdHandler}/{@link Handler} annotated methods, in method resolution order
+     */
+    @Override
+    public Set<Class<?>> handledCommandTypes() {
+        var commandTypes = new LinkedHashSet<Class<?>>();
+        invokableMethods.forEach(method -> commandTypes.add(method.getParameterTypes()[0]));
+        return Collections.unmodifiableSet(commandTypes);
+    }
+
     @Override
     public final Object handle(Object command) {
         Class<?> commandType   = command.getClass();

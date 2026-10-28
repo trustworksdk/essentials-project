@@ -84,6 +84,22 @@ class ProcessorNonTransactionalMessageHandlerGuardTest {
                 .hasMessageContaining("EventProcessor");
     }
 
+    @Test
+    void a_rejected_ViewEventProcessor_is_not_left_looking_started() {
+        var processor = new NonTransactionalViewProcessor(subscriptionManager(),
+                                                          mock(FencedLockManager.class),
+                                                          mock(DurableQueues.class),
+                                                          commandBus());
+
+        assertThatThrownBy(processor::start).isInstanceOf(IllegalStateException.class);
+
+        assertThat(processor.isStarted())
+                .describedAs("A processor that refused to start must not report itself as started")
+                .isFalse();
+        // ... and the second attempt must fail the same way instead of being swallowed by the already-started check
+        assertThatThrownBy(processor::start).isInstanceOf(IllegalStateException.class);
+    }
+
     private static EventStoreSubscriptionManager subscriptionManager() {
         var subscriptionManager = mock(EventStoreSubscriptionManager.class);
         when(subscriptionManager.getEventStore()).thenReturn(mock(EventStore.class));

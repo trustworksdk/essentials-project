@@ -128,7 +128,8 @@ public final class ShutdownContext {
      * <p>
      * Never throws. A step that times out, or fails with an IO/connection error, marks the database unreachable, so the
      * remaining steps are skipped. The timeout interrupts the calling thread: the step should block interruptibly (a pooled
-     * connection checkout does).
+     * connection checkout does). An interrupt already pending on the calling thread is set aside for the attempt and
+     * restored after it, so the step still gets its one bounded try.
      *
      * @param description what the step does, for the log
      * @param cleanup     the step
@@ -146,6 +147,22 @@ public final class ShutdownContext {
             return false;
         }
 
+        // A pending interrupt is the shutdown cancelling what this thread was doing before - DBFencedLockManager's
+        // shutdownStarting cancels its async-acquiring tick with cancel(true) - not a verdict on this step. Left set, the
+        // step's first interruptible wait (the lock manager's lockInterruptibly, a pool checkout) failed at once: a lock the
+        // tick had just acquired was never released, and its row stayed locked until the lock timeout. The attempt is
+        // bounded by the watchdog below either way.
+        var wasInterrupted = Thread.interrupted();
+        try {
+            return attemptBounded(description, cleanup);
+        } finally {
+            if (wasInterrupted) {
+                Thread.currentThread().interrupt();
+            }
+        }
+    }
+
+    private boolean attemptBounded(String description, CheckedRunnable cleanup) {
         var timeout = CLEANUP_ATTEMPT_TIMEOUT.compareTo(remaining()) < 0 ? CLEANUP_ATTEMPT_TIMEOUT : remaining();
         var thread  = Thread.currentThread();
         // 0 = running, 1 = completed, 2 = interrupted by the watchdog. Whoever moves it off 0 first decides, so the

@@ -89,7 +89,7 @@ public final class PostgresqlFencedLockManagerBuilder {
     }
 
     /**
-     * @param lockManagerInstanceId The unique name for this lock manager instance. If left {@link Optional#empty()} then the machines hostname is used
+     * @param lockManagerInstanceId The unique name for this lock manager instance. If left {@link Optional#empty()} then {@code <hostname>:<pid>} is used
      * @return this builder instance
      */
     public PostgresqlFencedLockManagerBuilder setLockManagerInstanceId(Optional<String> lockManagerInstanceId) {
@@ -125,7 +125,7 @@ public final class PostgresqlFencedLockManagerBuilder {
     }
 
     /**
-     * @param lockManagerInstanceId The unique name for this lock manager instance. If null then the machines hostname is used
+     * @param lockManagerInstanceId The unique name for this lock manager instance. If null then {@code <hostname>:<pid>} is used
      * @return this builder instance
      */
     public PostgresqlFencedLockManagerBuilder setLockManagerInstanceId(String lockManagerInstanceId) {

@@ -9,5 +9,5 @@ PASS if the report contains a finding that matches all of:
 - it concerns `src/main/java/com/example/shipping/views/order_status/OrderStatusQueries.java` (symbol `OrderStatusQueries.findById`)
 - it is filed under gate 18c (Spring Data repository surface), id ESS-G18c, or plainly describes that check
 - its severity is Blocking
-- its substance: A projection return type on a method named after a CRUD base method: the base captures it and the caller gets a ClassCastException. It has no caller, so it must be found from the declaration. Fix: rename to findOrderStatusById.
+- its substance: A projection return type on a method named after a CRUD base method: the base captures it and the caller gets a ClassCastException. It has no caller, so it must be found from the declaration. Fix: rename to findOrderStatusById, or delete it, since findByOrderId already serves the lookup; either fix counts.
 FAIL if no finding matches, or the matching one has a different severity. Ignore formatting, ordering and other findings.

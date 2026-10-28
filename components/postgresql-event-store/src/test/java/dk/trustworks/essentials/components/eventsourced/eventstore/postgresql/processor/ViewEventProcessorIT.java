@@ -16,6 +16,8 @@
 
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor;
 
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.zaxxer.hikari.*;
 import dk.trustworks.essentials.components.distributed.fencedlock.postgresql.PostgresqlFencedLockManager;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
@@ -30,6 +32,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.se
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
+import dk.trustworks.essentials.components.foundation.fencedlock.LockName;
 import dk.trustworks.essentials.components.foundation.messaging.*;
 import dk.trustworks.essentials.components.foundation.messaging.eip.store_and_forward.MessageHandlerInterceptor;
 import dk.trustworks.essentials.components.foundation.messaging.eip.store_and_forward.operation.InvokeMessageHandlerMethod;
@@ -47,10 +50,12 @@ import org.awaitility.Awaitility;
 import org.jdbi.v3.core.Jdbi;
 import org.jdbi.v3.postgres.PostgresPlugin;
 import org.junit.jupiter.api.*;
+import org.slf4j.LoggerFactory;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import java.lang.annotation.*;
+import java.lang.reflect.*;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
@@ -61,7 +66,7 @@ import java.util.stream.IntStream;
 import static dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.SeparateTablePerAggregateTypeEventStreamConfigurationFactory.standardSingleTenantConfiguration;
 import static dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.EventProcessorIT.createObjectMapper;
 import static dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.ViewEventProcessorIT.TestOrderViewEventProcessor.TEST_ORDERS;
-import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.*;
 
 @Testcontainers
 public class ViewEventProcessorIT {
@@ -125,6 +130,10 @@ public class ViewEventProcessorIT {
      * {@link EventStoreSubscriptionObserver}
      */
     private final List<PersistedEvent>    handleEventFailedEvents = new CopyOnWriteArrayList<>();
+    /**
+     * What {@link TestOrderViewEventProcessor} logs, from before it is started
+     */
+    private ListAppender<ILoggingEvent>   processorLogAppender;
 
     /**
      * Runs the annotated test with {@link SubscriptionErrorPolicy#stop()} (without auto-resume) instead of {@link SubscriptionErrorPolicy#skip()}
@@ -132,6 +141,19 @@ public class ViewEventProcessorIT {
     @Retention(RetentionPolicy.RUNTIME)
     @Target(ElementType.METHOD)
     private @interface WithSubscriptionErrorPolicyStop {
+    }
+
+    /**
+     * Runs the annotated test with the {@link EventStoreSubscriptionManager} - and so the processor - given an application
+     * decorator around the {@link PostgresqlEventStore} instead of the store itself (see {@link #decorate(PostgresqlEventStore, boolean)})
+     */
+    @Retention(RetentionPolicy.RUNTIME)
+    @Target(ElementType.METHOD)
+    private @interface WithDecoratedEventStore {
+        /**
+         * @return whether the decorator implements {@link AwaitedGapInspector} and forwards it to the {@link PostgresqlEventStore}
+         */
+        boolean forwardsAwaitedGapInspector();
     }
 
     @BeforeEach
@@ -186,8 +208,12 @@ public class ViewEventProcessorIT {
 
         durableSubscriptionRepository = new PostgresqlDurableSubscriptionRepository(jdbi, eventStore);
 
+        var subscribedEventStore = testInfo.getTestMethod()
+                                           .map(method -> method.getAnnotation(WithDecoratedEventStore.class))
+                                           .<EventStore>map(decorator -> decorate(eventStore, decorator.forwardsAwaitedGapInspector()))
+                                           .orElse(eventStore);
         eventStoreSubscriptionManager = EventStoreSubscriptionManager.builder()
-                                                                     .setEventStore(eventStore)
+                                                                     .setEventStore(subscribedEventStore)
                                                                      .setFencedLockManager(fencedLockManager)
                                                                      .setDurableSubscriptionRepository(durableSubscriptionRepository)
                                                                      .setSnapshotResumePointsEvery(Duration.ofSeconds(1))
@@ -209,6 +235,10 @@ public class ViewEventProcessorIT {
                                            .build();
         commandBus.start();
 
+        processorLogAppender = new ListAppender<>();
+        processorLogAppender.start();
+        ((ch.qos.logback.classic.Logger) LoggerFactory.getLogger(TestOrderViewEventProcessor.class)).addAppender(processorLogAppender);
+
         testProcessor = new TestOrderViewEventProcessor(new ViewEventProcessorDependencies(eventStoreSubscriptionManager,
                                                                                            fencedLockManager,
                                                                                            durableQueues,
@@ -223,6 +253,9 @@ public class ViewEventProcessorIT {
     public void tearDown() {
         if (testProcessor != null) {
             testProcessor.stop();
+        }
+        if (processorLogAppender != null) {
+            ((ch.qos.logback.classic.Logger) LoggerFactory.getLogger(TestOrderViewEventProcessor.class)).detachAppender(processorLogAppender);
         }
         if (durableQueues != null) {
             durableQueues.stop();
@@ -379,6 +412,289 @@ public class ViewEventProcessorIT {
         assertThat(testProcessor.getSqlFailureAttempts(orderId)).isEqualTo(2);
         assertThat(durableQueues.getTotalMessagesQueuedFor(queueName)).isZero();
         assertThat(durableQueues.getTotalDeadLetterMessagesQueuedFor(queueName)).isZero();
+    }
+
+    /**
+     * ES-4: the subscription moves its resume point past an event whose direct handling failed as soon as the event is
+     * queued, so the resume point alone would release the barrier before the redelivery has updated the view. The
+     * barrier also waits for the queued message to be handled
+     */
+    @Test
+    public void awaitProcessed_waits_for_the_redelivery_of_an_event_whose_direct_handling_failed() {
+        var orderId = EventProcessorIT.OrderId.random();
+        var appended = unitOfWorkFactory.withUnitOfWork(() -> eventStore.appendToStream(TEST_ORDERS, orderId, List.of(new EventProcessorIT.OrderPlacedEvent(orderId, SQL_FAILS_ON_FIRST_ATTEMPT)))
+                                                                       .firstEvent());
+
+        testProcessor.awaitProcessed(TEST_ORDERS, appended.globalEventOrder(), Duration.ofSeconds(10));
+
+        // No polling: the barrier only returns once the queued redelivery has written the view row
+        assertThat(testProcessor.getSqlFailureAttempts(orderId)).isEqualTo(2);
+        assertThat(orderViewStatuses(orderId)).containsExactly("done");
+        assertThat(durableQueues.hasOrderedMessageQueuedForKey(testProcessor.getDurableQueueName(), orderId.toString())).isFalse();
+    }
+
+    /**
+     * Losing the fenced lock stops the processor's subscriptions; acquiring it again subscribes once more. The
+     * subscription manager still held the stopped subscriptions and handed them back without starting them, so a
+     * processor that had lost and re-acquired its lock - a missed lock confirmation is enough - kept the lock while
+     * handling no further events, and no other instance could take over
+     */
+    @Test
+    public void verify_events_appended_after_the_processor_lost_and_reacquired_its_lock_are_handled() {
+        var lockName = LockName.of(testProcessor.getProcessorName() + ":lock");
+        appendOrderPlaced("Load order placed before the lock was released");
+        Awaitility.waitAtMost(Duration.ofSeconds(15))
+                  .untilAsserted(() -> assertThat(testProcessor.getOrderPlacedEventCounter()).hasValue(1));
+
+        // The lock manager returns the lock it holds, and releasing it releases it for the processor too
+        fencedLockManager.tryAcquireLock(lockName).orElseThrow().release();
+        // It keeps trying to acquire the lock, and acquires it again on its next attempt
+        Awaitility.waitAtMost(Duration.ofSeconds(15))
+                  .until(() -> fencedLockManager.isLockedByThisLockManagerInstance(lockName));
+        appendOrderPlaced("Load order placed after the lock was acquired again");
+
+        Awaitility.waitAtMost(Duration.ofSeconds(15))
+                  .untilAsserted(() -> assertThat(testProcessor.getOrderPlacedEventCounter()).hasValue(2));
+        assertThat(eventStoreSubscriptionManager.getSubscription(AbstractEventProcessor.resolveSubscriberId(TEST_ORDERS, testProcessor.getProcessorName()), TEST_ORDERS)
+                                                .map(EventStoreSubscription::isStarted))
+                .hasValue(true);
+    }
+
+    private void appendOrderPlaced(String orderDetails) {
+        var orderId = EventProcessorIT.OrderId.random();
+        unitOfWorkFactory.usingUnitOfWork(uow -> eventStore.appendToStream(TEST_ORDERS, orderId, List.of(new EventProcessorIT.OrderPlacedEvent(orderId, orderDetails))));
+    }
+
+    @Test
+    public void awaitProcessedAsync_completes_once_the_event_has_been_handled_directly() {
+        var orderId = EventProcessorIT.OrderId.random();
+        var appended = unitOfWorkFactory.withUnitOfWork(() -> eventStore.appendToStream(TEST_ORDERS, orderId, List.of(new EventProcessorIT.OrderPlacedEvent(orderId, "Load order details")))
+                                                                       .firstEvent());
+
+        testProcessor.awaitProcessedAsync(TEST_ORDERS, appended.globalEventOrder(), Duration.ofSeconds(10))
+                     .block(Duration.ofSeconds(15));
+
+        assertThat(testProcessor.getOrderPlacedEventCounter().get()).isEqualTo(1);
+    }
+
+    /**
+     * ES-4: an event that was dead-lettered never counts as processed, and the timeout says why - naming the processor,
+     * the event, the resume point and the queue
+     */
+    @Test
+    public void awaitProcessed_times_out_with_a_description_of_how_far_the_processor_got_when_the_event_was_dead_lettered() {
+        var orderId = EventProcessorIT.OrderId.random();
+        var appended = unitOfWorkFactory.withUnitOfWork(() -> eventStore.appendToStream(TEST_ORDERS, orderId, List.of(new EventProcessorIT.OrderPlacedEvent(orderId, "Fail order details")))
+                                                                       .firstEvent());
+        var queueName = testProcessor.getDurableQueueName();
+        Awaitility.waitAtMost(Duration.ofSeconds(10))
+                  .untilAsserted(() -> assertThat(durableQueues.getTotalDeadLetterMessagesQueuedFor(queueName)).isEqualTo(1));
+
+        assertThatThrownBy(() -> testProcessor.awaitProcessed(TEST_ORDERS, appended.globalEventOrder(), Duration.ofMillis(500)))
+                .isInstanceOfSatisfying(AwaitProcessedTimeoutException.class, e -> {
+                    assertThat(e.getProcessorName()).isEqualTo("TestOrderViewEventProcessor");
+                    assertThat((Object) e.getAggregateType()).isEqualTo(TEST_ORDERS);
+                    assertThat((Object) e.getGlobalEventOrder()).isEqualTo(appended.globalEventOrder());
+                    assertThat(e.getResumeFromAndIncluding()).hasValueSatisfying(resumePoint -> assertThat(resumePoint.longValue()).isGreaterThan(appended.globalEventOrder().longValue()));
+                    assertThat(e.getQueuedMessageCounts()).hasValueSatisfying(counts -> assertThat(counts.numberOfQueuedDeadLetterMessages()).isEqualTo(1));
+                    assertThat(e.getMessage()).contains("TestOrderViewEventProcessor")
+                                              .contains("'TestOrders'")
+                                              .contains("global-event-order " + appended.globalEventOrder())
+                                              .contains("a message for aggregate '" + orderId + "' is still queued")
+                                              .contains("1 dead-letter message(s)");
+                });
+    }
+
+    @Test
+    public void awaitProcessed_rejects_an_aggregate_type_the_processor_does_not_react_to() {
+        assertThatThrownBy(() -> testProcessor.awaitProcessed(AggregateType.of("Unknown"), GlobalEventOrder.of(1), Duration.ofSeconds(1)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("'Unknown'");
+    }
+
+    /**
+     * ES-4: two writers whose global-event-orders commit out of order. The subscription moves its resume point past the
+     * earlier event while it is still uncommitted, so the resume point alone would release the barrier before the event
+     * was handled - the barrier also waits for the subscription's transient gap at that global-event-order to be filled
+     */
+    @Test
+    public void awaitProcessed_waits_for_an_event_that_committed_after_a_later_one() throws Exception {
+        withAnEventThatCommitsAfterALaterOne(this::assertAwaitProcessedWaitsForTheLateEvent);
+    }
+
+    /**
+     * ES-4 behind an application decorator around the event store, as {@link AwaitedGapInspector} asks of one: a decorator
+     * that implements it and forwards to its delegate keeps the barrier waiting for the transient gap to be filled
+     */
+    @Test
+    @WithDecoratedEventStore(forwardsAwaitedGapInspector = true)
+    public void awaitProcessed_behind_a_decorator_forwarding_AwaitedGapInspector_waits_for_an_event_that_committed_after_a_later_one() throws Exception {
+        withAnEventThatCommitsAfterALaterOne(this::assertAwaitProcessedWaitsForTheLateEvent);
+        assertThat(awaitedGapInspectorWarnings()).isEmpty();
+    }
+
+    /**
+     * ES-4 behind an application decorator that is no {@link AwaitedGapInspector}: the barrier cannot ask whether the
+     * event is still awaited as a gap, so that check is off - it no longer reports the transient gap, only what it can see
+     * - and the processor WARNs about it exactly once, however often it is awaited. That the WARN is logged at start is
+     * pinned by {@link #a_processor_behind_a_decorator_that_is_no_AwaitedGapInspector_WARNs_once_at_start_before_any_awaitProcessed()}
+     */
+    @Test
+    @WithDecoratedEventStore(forwardsAwaitedGapInspector = false)
+    public void awaitProcessed_behind_a_decorator_that_is_no_AwaitedGapInspector_turns_the_transient_gap_check_off_with_one_WARN() throws Exception {
+        withAnEventThatCommitsAfterALaterOne(lateCommit -> {
+            assertThatThrownBy(() -> testProcessor.awaitProcessed(TEST_ORDERS, lateCommit.lateGlobalEventOrder(), Duration.ofMillis(300)))
+                    .isInstanceOfSatisfying(AwaitProcessedTimeoutException.class, e -> {
+                        assertThat(e.getResumeFromAndIncluding()).hasValueSatisfying(resumePoint -> assertThat(resumePoint.longValue()).isGreaterThan(lateCommit.laterGlobalEventOrder().longValue()));
+                        assertThat(e.getReason()).doesNotContain("awaited as a gap")
+                                                 .contains("no event with that global-event-order exists");
+                    });
+
+            lateCommit.commit();
+            testProcessor.awaitProcessed(TEST_ORDERS, lateCommit.lateGlobalEventOrder(), Duration.ofSeconds(10));
+            testProcessor.awaitProcessed(TEST_ORDERS, lateCommit.laterGlobalEventOrder(), Duration.ofSeconds(10));
+        });
+
+        assertThat(awaitedGapInspectorWarnings()).hasSize(1);
+    }
+
+    /**
+     * The WARN about an event store that is no {@link AwaitedGapInspector} comes when the processor starts - before an
+     * {@code awaitProcessed} could have returned early - and is worded so that an application that never calls
+     * {@code awaitProcessed} can see it does not apply
+     */
+    @Test
+    @WithDecoratedEventStore(forwardsAwaitedGapInspector = false)
+    public void a_processor_behind_a_decorator_that_is_no_AwaitedGapInspector_WARNs_once_at_start_before_any_awaitProcessed() {
+        // setup() has started the processor; nothing has called awaitProcessed
+        assertThat(awaitedGapInspectorWarnings()).singleElement()
+                                                 .satisfies(warning -> assertThat(warning.getFormattedMessage()).contains("If you call awaitProcessed on this processor")
+                                                                                                                .contains("ignore this"));
+    }
+
+    /**
+     * The barrier times out on the late event while it is uncommitted, saying it is awaited as a gap, and returns only once the
+     * subscription has handled it after it committed
+     */
+    private void assertAwaitProcessedWaitsForTheLateEvent(LateCommit lateCommit) throws Exception {
+        assertThatThrownBy(() -> testProcessor.awaitProcessed(TEST_ORDERS, lateCommit.lateGlobalEventOrder(), Duration.ofMillis(300)))
+                .isInstanceOfSatisfying(AwaitProcessedTimeoutException.class, e -> {
+                    assertThat((Object) e.getGlobalEventOrder()).isEqualTo(lateCommit.lateGlobalEventOrder());
+                    assertThat(e.getResumeFromAndIncluding()).hasValueSatisfying(resumePoint -> assertThat(resumePoint.longValue()).isGreaterThan(lateCommit.laterGlobalEventOrder().longValue()));
+                    assertThat(e.getReason()).contains("awaited as a gap");
+                });
+
+        // Commit UnitOfWork A: the barrier returns only once the subscription has handled the late event
+        lateCommit.commit();
+        testProcessor.awaitProcessed(TEST_ORDERS, lateCommit.lateGlobalEventOrder(), Duration.ofSeconds(10));
+
+        // No polling: the barrier only returns once the gap fill has been handled
+        assertThat(testProcessor.hasHandledLoadOrder(lateCommit.lateOrderId())).isTrue();
+    }
+
+    /**
+     * Two writers whose global-event-orders commit out of order: the {@link LateCommit} handed to the scenario has the
+     * subscription moved past the later event while the late one is still uncommitted - a transient gap
+     */
+    private void withAnEventThatCommitsAfterALaterOne(LateCommitScenario scenario) throws Exception {
+        var lateOrderId       = EventProcessorIT.OrderId.random();
+        var laterOrderId      = EventProcessorIT.OrderId.random();
+        var lateEventAppended = new CompletableFuture<GlobalEventOrder>();
+        var commitLateEvent   = new CountDownLatch(1);
+        var lateWriter        = Executors.newSingleThreadExecutor();
+        var subscriberId      = AbstractEventProcessor.resolveSubscriberId(TEST_ORDERS, testProcessor.getProcessorName());
+        // The processor subscribes once it has acquired its fenced lock, on another thread. A subscription that starts
+        // after both appends starts from the lowest persisted global-event-order - past the uncommitted event, never awaiting it
+        Awaitility.waitAtMost(Duration.ofSeconds(10))
+                  .untilAsserted(() -> assertThat(eventStoreSubscriptionManager.getCurrentEventOrder(subscriberId, TEST_ORDERS)).isPresent());
+        try {
+            // UnitOfWork A: appends the first event and stays open - on its own thread, as a UnitOfWork is bound to its thread
+            var lateWriterDone = lateWriter.submit(() -> unitOfWorkFactory.usingUnitOfWork(uow -> {
+                try {
+                    var appended = eventStore.appendToStream(TEST_ORDERS, lateOrderId, List.of(new EventProcessorIT.OrderPlacedEvent(lateOrderId, "Load late order details")));
+                    lateEventAppended.complete(appended.firstEvent().globalEventOrder());
+                } catch (RuntimeException e) {
+                    lateEventAppended.completeExceptionally(e);
+                    throw e;
+                }
+                assertThat(commitLateEvent.await(30, TimeUnit.SECONDS)).isTrue();
+            }));
+            var lateGlobalEventOrder = lateEventAppended.get(10, TimeUnit.SECONDS);
+
+            // UnitOfWork B: appends and commits the second event
+            var laterGlobalEventOrder = unitOfWorkFactory.withUnitOfWork(() -> eventStore.appendToStream(TEST_ORDERS, laterOrderId, List.of(new EventProcessorIT.OrderPlacedEvent(laterOrderId, "Load later order details")))
+                                                                                        .firstEvent()
+                                                                                        .globalEventOrder());
+            assertThat(laterGlobalEventOrder.longValue()).isGreaterThan(lateGlobalEventOrder.longValue());
+
+            // The subscription moves past the second event, leaving the uncommitted first one as a transient gap
+            Awaitility.waitAtMost(Duration.ofSeconds(10))
+                      .untilAsserted(() -> {
+                          assertThat(testProcessor.hasHandledLoadOrder(laterOrderId)).isTrue();
+                          assertThat(eventStoreSubscriptionManager.getCurrentEventOrder(subscriberId, TEST_ORDERS))
+                                  .hasValueSatisfying(order -> assertThat(order.longValue()).isGreaterThan(laterGlobalEventOrder.longValue()));
+                      });
+            assertThat(testProcessor.hasHandledLoadOrder(lateOrderId)).isFalse();
+
+            scenario.run(new LateCommit(lateOrderId, lateGlobalEventOrder, laterGlobalEventOrder, () -> {
+                commitLateEvent.countDown();
+                lateWriterDone.get(10, TimeUnit.SECONDS);
+            }));
+        } finally {
+            commitLateEvent.countDown();
+            lateWriter.shutdownNow();
+        }
+    }
+
+    @FunctionalInterface
+    private interface LateCommitScenario {
+        void run(LateCommit lateCommit) throws Exception;
+    }
+
+    /**
+     * @param lateOrderId           the order whose event is appended first and committed last
+     * @param lateGlobalEventOrder  that event's global-event-order
+     * @param laterGlobalEventOrder the global-event-order of the event appended and committed in between
+     * @param commitAction          commits the late event's UnitOfWork and waits for it to have committed
+     */
+    private record LateCommit(EventProcessorIT.OrderId lateOrderId, GlobalEventOrder lateGlobalEventOrder, GlobalEventOrder laterGlobalEventOrder, Committer commitAction) {
+        void commit() throws Exception {
+            commitAction.commit();
+        }
+    }
+
+    @FunctionalInterface
+    private interface Committer {
+        void commit() throws Exception;
+    }
+
+    /**
+     * @return the WARNs {@link TestOrderViewEventProcessor} logged about the event store being no {@link AwaitedGapInspector}
+     */
+    private List<ILoggingEvent> awaitedGapInspectorWarnings() {
+        return processorLogAppender.list.stream()
+                                        .filter(event -> event.getLevel() == ch.qos.logback.classic.Level.WARN)
+                                        .filter(event -> event.getFormattedMessage().contains(AwaitedGapInspector.class.getSimpleName()))
+                                        .toList();
+    }
+
+    /**
+     * An application decorator around the {@link PostgresqlEventStore}, built as a JDK dynamic proxy that forwards every
+     * call to it - so the test needn't hand-write a forwarder for every {@link ConfigurableEventStore} method. It is a
+     * {@link ConfigurableEventStore}, as a processor needs to resolve one from its event store, and an
+     * {@link AwaitedGapInspector} only when asked to be - as a decorator written before that role interface existed is not
+     */
+    private static ConfigurableEventStore<?> decorate(PostgresqlEventStore<?> delegate, boolean forwardsAwaitedGapInspector) {
+        var interfaces = forwardsAwaitedGapInspector ?
+                         new Class<?>[]{ConfigurableEventStore.class, AwaitedGapInspector.class} :
+                         new Class<?>[]{ConfigurableEventStore.class};
+        return (ConfigurableEventStore<?>) Proxy.newProxyInstance(ViewEventProcessorIT.class.getClassLoader(), interfaces, (proxy, method, args) -> {
+            try {
+                return method.invoke(delegate, args);
+            } catch (InvocationTargetException e) {
+                throw e.getCause();
+            }
+        });
     }
 
     /**
@@ -659,6 +975,10 @@ public class ViewEventProcessorIT {
         private final ConcurrentMap<AggregateType, GlobalEventOrder> resetPoints = new ConcurrentHashMap<>();
         private Consumer<ConcurrentMap<AggregateType, GlobalEventOrder>> resetCallback;
         private final AtomicInteger orderPlacedEventCounter = new AtomicInteger(0);
+        /**
+         * The orders whose "Load" {@link EventProcessorIT.OrderPlacedEvent} was handled
+         */
+        private final Set<String> handledLoadOrders = ConcurrentHashMap.newKeySet();
         private final ConcurrentMap<String, AtomicInteger> sqlFailureAttempts = new ConcurrentHashMap<>();
         private final ConcurrentMap<String, AtomicInteger> interceptorFailureAttempts = new ConcurrentHashMap<>();
         /**
@@ -801,6 +1121,7 @@ public class ViewEventProcessorIT {
             var unitOfWork = eventStore.getUnitOfWorkFactory().getRequiredUnitOfWork();
             if (event.orderDetails.startsWith("Load")) {
                 orderPlacedEventCounter.incrementAndGet();
+                handledLoadOrders.add(event.orderId.toString());
             } else if (event.orderDetails.startsWith("Fail")) {
                 throw new RuntimeException(event.orderDetails);
             } else if (event.orderDetails.equals(APPENDS_EVENT_THEN_FAILS)) {
@@ -844,6 +1165,10 @@ public class ViewEventProcessorIT {
 
         public AtomicInteger getOrderPlacedEventCounter() {
             return orderPlacedEventCounter;
+        }
+
+        public boolean hasHandledLoadOrder(EventProcessorIT.OrderId orderId) {
+            return handledLoadOrders.contains(orderId.toString());
         }
 
         public int getAppendedEventsBeforeFailing() {

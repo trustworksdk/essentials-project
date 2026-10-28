@@ -1,4 +1,4 @@
-schemaVersion: "1.1"
+schemaVersion: "1.4"
 slice: market_data.register_instrument
 kind: command
 bc: market_data
@@ -7,6 +7,7 @@ status: live
 summary: Register a new instrument's reference data (symbol and display name).
 generator: essentials
 language: java
+lane: aggregate
 
 handles: [RegisterInstrument]
 publishes: [InstrumentRegistered]
@@ -23,6 +24,8 @@ invariants:
     enforcedBy: RegisterInstrument
 forbidden:
   - cross-slice-internal:market_data
+tier: cqrs-es
+flow: instrument-lifecycle
 tests:
   unit: { present: false }
   integration: { present: false }

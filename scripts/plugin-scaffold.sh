@@ -22,10 +22,19 @@
 # Nothing is written inside the repository: projects go to a work directory outside it.
 #
 # Prerequisite: the reactor is installed in the Maven repository the builds use (the artifacts are not on Central):
-#   mvn -B install -DskipTests -DskipDependencyCheck=true [-Dmaven.repo.local=DIR]
-# A subset is enough (see essentials-plugin/tests/slice-compile/README.md).
+# `scripts/plugin-scaffold.sh install` below, which CI's scaffold jobs and `plugin-check.sh scaffold` both run.
 #
 # Usage:
+#   scripts/plugin-scaffold.sh modules
+#       The reactor modules the generated projects depend on, as a Maven -pl list (':a,:b,...'): every
+#       dk.trustworks.essentials artifactId a <dependency> of the init pom templates names
+#       (references/init-assets/project/pom.xml.template, backend/pom.xml.template). The one copy of that list, so a
+#       template that starts using another module installs it without a workflow or script edit.
+#   scripts/plugin-scaffold.sh install [--full] [--maven-repo DIR]
+#       From the repository root: mvn -B -ntp -T 1C clean install -DskipTests -DskipDependencyCheck=true
+#       -Dversions.skip=true -am -pl <modules>; --full installs the whole reactor instead. The install had spent most of
+#       its time on the versions:display-* reports (they query remote metadata for every module) and a serial reactor,
+#       and no scaffold build reads either.
 #   scripts/plugin-scaffold.sh matrix [--cell ID]... [--list]
 #       Each cell of essentials-plugin/tests/golden/init/cells.json (default: all nine): render, add the CI-only
 #       overlay tests/init-overlay/<language>/, stack-lint the result, build with --goal (default verify), and after
@@ -38,23 +47,27 @@
 #       and fixture-aggregate-lane, whose packages no host context would load.
 #       After every `verify` (matrix and slices): no operationId in contracts/openapi.json may carry Kotlin's value-class
 #       mangling ('-') or be the bare `on`.
+#   scripts/plugin-scaffold.sh all [--cell ID | --case NAME]... [--list]
+#       matrix and slices in one run: every cell, then every case, from one queue of --jobs builds.
 #   scripts/plugin-scaffold.sh build-host --host DIR [--overlay DIR]... [--log FILE]
 #       Build one rendered project: copy each overlay's src/ tree into DIR/backend/src/, refusing to overwrite any file
 #       (an overlay never replaces generated wiring), then run Maven in DIR (default goal verify).
 #
-# Options (every subcommand):
+# Options (matrix, slices, all, build-host):
 #   --goal test-compile|verify   override every case's default goal (matrix and build-host: verify; slices: per case, above)
 #   --compile-only               test-compile everything; no Docker needed (no context start, no spec check)
 #   --work DIR                   work directory, outside the repository (default: $SCAFFOLD_WORK, else
 #                                ${TMPDIR:-/tmp}/essentials-scaffold); each case gets DIR/<case>/, wiped first
-#   --jobs N                     matrix/slices: run N cases at once (default 1; each verify starts a database container)
+#   --jobs N                     matrix/slices/all: run N cases at once (default 1). Each verify starts a database
+#                                container and a Spring context, and the builds share one Maven repository
 #   --essentials-version V       default: <revision> of the root pom.xml
 #   --maven-repo DIR             passed as -Dmaven.repo.local=DIR (CI: the job-local repository the reactor went into)
 # Environment: MVN (default mvn), SCAFFOLD_MAVEN_ARGS (extra Maven arguments, word-split).
 #
 # Exit codes: 0 every build green; 1 a render, stack-lint, build or spec check failed; 2 harness error (bad arguments,
 # missing tool, work directory inside the repository, an overlay that would overwrite a host file).
-# matrix/slices print one line per case (result, goal, wall-clock seconds, log path) and exit with the worst result.
+# matrix/slices/all print one line per case (result, goal, wall-clock seconds, log path) and exit with the worst
+# result; install exits with Maven's status.
 
 # Run as `sh scripts/plugin-scaffold.sh …` the arrays and process substitution below are syntax errors; hand over to bash.
 if [ -z "${BASH_VERSION:-}" ]; then
@@ -90,7 +103,7 @@ die() {
 }
 
 usage() {
-    sed -n '/^# Usage:/,/^# matrix\/slices print/p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '/^# Usage:/,/^# result; install exits/p' "$0" | sed 's/^# \{0,1\}//'
     exit 2
 }
 
@@ -98,10 +111,53 @@ usage() {
 command=$1
 shift
 case $command in
-    matrix | slices | build-host) ;;
+    matrix | slices | all | build-host | modules | install) ;;
     -h | --help | help) usage ;;
-    *) die "unknown subcommand '$command' (matrix | slices | build-host)" ;;
+    *) die "unknown subcommand '$command' (matrix | slices | all | build-host | modules | install)" ;;
 esac
+
+# The -pl list `modules` prints and `install` builds.
+reactor_modules() {
+    python3 - "$plugin/references/init-assets/project" <<'PY'
+import re, sys
+ids = set()
+for f in ("pom.xml.template", "backend/pom.xml.template"):
+    text = open(f"{sys.argv[1]}/{f}", encoding="utf-8").read()
+    for block in re.findall(r"<dependency>(.*?)</dependency>", text, re.S):
+        if "<groupId>dk.trustworks.essentials" in block:
+            ids.update(re.findall(r"<artifactId>([\w.-]+)</artifactId>", block))
+if not ids:
+    sys.exit("plugin-scaffold: no dk.trustworks.essentials dependency in the init pom templates")
+print(",".join(":" + a for a in sorted(ids)))
+PY
+}
+
+if [ "$command" = modules ]; then
+    [ $# -eq 0 ] || die "modules takes no arguments"
+    reactor_modules
+    exit $?
+fi
+
+if [ "$command" = install ]; then
+    full=false
+    while [ $# -gt 0 ]; do
+        case $1 in
+            --full) full=true; shift ;;
+            --maven-repo) [ $# -ge 2 ] || die "--maven-repo needs a directory"; maven_repo=$2; shift 2 ;;
+            -h | --help) usage ;;
+            *) die "install: unknown option '$1' (--full, --maven-repo DIR)" ;;
+        esac
+    done
+    command -v python3 >/dev/null 2>&1 || die "python3 is not on PATH"
+    install=("$mvn_cmd" -B -ntp -T 1C clean install -DskipTests -DskipDependencyCheck=true -Dversions.skip=true)
+    [ -z "$maven_repo" ] || install+=("-Dmaven.repo.local=$maven_repo")
+    if ! $full; then
+        modules=$(reactor_modules) || exit 2
+        install+=(-am -pl "$modules")
+    fi
+    echo "+ (.) ${install[*]}"
+    cd "$repo" && exec "${install[@]}"
+fi
 
 while [ $# -gt 0 ]; do
     case $1 in
@@ -217,35 +273,46 @@ case "$work/" in
 esac
 mkdir -p "$work" || die "cannot create work directory $work"
 
+# all_cases -> lines "KIND NAME", KIND matrix or slices; `all` lists the cells first. Cell and case names are disjoint,
+# so both kinds share the work directory.
 all_cases() {
-    if [ "$command" = matrix ]; then
-        python3 -c 'import json, sys; print("\n".join(json.load(open(sys.argv[1]))["cells"]))' "$cells_json"
-    else
-        python3 "$overlay_py" list 2>/dev/null | cut -d' ' -f1
+    local names
+    if [ "$command" != slices ]; then
+        names=$(python3 -c 'import json, sys; print("\n".join(json.load(open(sys.argv[1]))["cells"]))' "$cells_json") || return 1
+        printf '%s\n' "$names" | sed 's/^/matrix /'
+    fi
+    if [ "$command" != matrix ]; then
+        names=$(python3 "$overlay_py" list 2>/dev/null) || return 1
+        printf '%s\n' "$names" | cut -d' ' -f1 | sed 's/^/slices /'
     fi
 }
 
 known=$(all_cases) || die "cannot list the ${command} cases"
+declare -A kind_of=()
+while read -r kind name; do
+    [ -z "${kind_of[$name]+set}" ] || die "case name '$name' is both a matrix cell and a slices case"
+    kind_of[$name]=$kind
+done <<<"$known"
 if $list; then
-    echo "$known"
+    printf '%s\n' "$known" | cut -d' ' -f2
     exit 0
 fi
 if [ ${#selected[@]} -eq 0 ]; then
-    mapfile -t selected <<<"$known"
+    mapfile -t selected < <(printf '%s\n' "$known" | cut -d' ' -f2)
 fi
 for name in "${selected[@]}"; do
-    printf '%s\n' "$known" | grep -qx -- "$name" || die "unknown ${command} case '$name'; --list shows them"
+    [ -n "${kind_of[$name]+set}" ] || die "unknown ${command} case '$name'; --list shows them"
 done
 
 # run_case NAME -> writes "<status> <result> <goal> <seconds>" to $work/NAME/result.
 run_case() {
-    local name=$1 dir=$work/$1 started case_goal status=0 result=green
+    local name=$1 dir=$work/$1 kind=${kind_of[$1]} started case_goal status=0 result=green
     rm -rf "$dir" && mkdir -p "$dir" || return 2
     started=$(date +%s)
     local project=$dir/project log_file=$dir/build.log
     local case_overlays=()
 
-    if [ "$command" = matrix ]; then
+    if [ "$kind" = matrix ]; then
         case_goal=${goal:-verify}
         python3 - "$cells_json" "$name" "$dir/answers.json" <<'PY' || { echo "2 harness-error $case_goal 0" >"$dir/result"; return; }
 import json, sys
@@ -283,7 +350,7 @@ PY
             *) status=2 result=harness-error ;;
         esac
     fi
-    if [ $status -eq 0 ] && [ "$command" = matrix ] && [ "$case_goal" = verify ]; then
+    if [ $status -eq 0 ] && [ "$kind" = matrix ] && [ "$case_goal" = verify ]; then
         if ! grep -q '"/api/wiring/{id}"' "$project/contracts/openapi.json" 2>/dev/null; then
             status=1 result=spec-not-regenerated
         # The overlay's semantic id must document as a plain string (types-spring-web's SingleValueTypeModelConverter,

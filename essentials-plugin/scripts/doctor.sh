@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # doctor.sh — which of the tools the essentials plugin's commands run are on this machine, and what
 # each missing one costs. Backs /essentials:doctor and the preflights of /essentials:init,
-# /essentials:review, /essentials:slice-check and /essentials:slice-map.
+# /essentials:review, /essentials:slice-check, /essentials:slice-map, /essentials:slice-map-html and
+# /essentials:slice-enrich.
 #
 # Usage:
 #   doctor.sh [--for init|review|slice|docs|all] [--json]
@@ -16,10 +17,13 @@
 #           its post-render hooks and smoke build (Steps 12 and 13.7)
 #   review  /essentials:review: python3 (review-scan.py, stack-lint.py); uv for slice-lint.py and
 #           slice-source.py; git for its base-ref and --pr modes
-#   slice   /essentials:add-slice, the slice skills, /essentials:slice-check, /essentials:slice-map:
-#           python3 (render-slice.py, slice-law.py); uv for slice-lint.py, slice-source.py, slice-index.py
+#   slice   /essentials:add-slice, the slice skills, /essentials:slice-check, /essentials:slice-map,
+#           /essentials:slice-map-html, /essentials:slice-enrich:
+#           python3 (render-slice.py, slice-law.py); uv for slice-lint.py, slice-source.py, slice-index.py,
+#           slice-enrich.py
 #   docs    the essentials-docs and essentials-change skills: search.sh (rg optional) and slice-law.py
-#   all     every profile above, plus /essentials:upgrade's re-check (stack-lint.py, ./mvnw or mvn, Docker)
+#   all     every profile above, plus /essentials:upgrade (stack-lint.py, migration-plan.py; ./mvnw or mvn, Docker
+#           and git for its re-check and its Essentials upgrade)
 #           — the default
 #
 # Requirements, from README.md § Requirements and the commands:
@@ -27,13 +31,16 @@
 #   python3   >= 3.11, hard for every profile: each runs a script
 #   uv        runs the scripts that pin pyyaml / jsonschema (PEP 723). Without it python3 runs them where
 #             those packages are installed, so the status is ok, fallback (both importable), partial
-#             (pyyaml only: slice-lint.py cannot run) or missing (neither runs)
+#             (pyyaml only: slice-lint.py cannot run) or missing (neither runs). A uv whose cache directory
+#             (`uv cache dir`) this shell cannot write — a read-only mount, a sandbox whose Bash may not write —
+#             fails every `uv run`, so it counts as no uv: found reads "cache read-only → python3 fallback"
 #   java      the major of the `java.version` row of references/stack/stack-pins.md, or newer; read from
 #             that file on every run, never written here. $JAVA_HOME/bin/java first, as Maven uses it
 #   maven     mvn; a ./mvnw in the working directory serves /essentials:upgrade, not init's wrapper hook
 #   docker    the binary and a running daemon (`docker info`)
 #   npm       only for a frontend
-#   git       /essentials:review's base-ref and --pr modes; without it only <path> mode works
+#   git       /essentials:review's base-ref and --pr modes, where without it only <path> mode works; the branch
+#             /essentials:upgrade's Essentials upgrade works on
 #   rg        search.sh falls back to grep -R
 #
 # Status values: ok, missing, too-old, not-running (docker: binary, no daemon), fallback, partial,
@@ -55,7 +62,8 @@
 #   "impacts" is empty for a requirement whose status is ok.
 #
 # Exit: 0 nothing blocking for the profile; 1 a blocking requirement (the verdict names it); 2 usage.
-# Read-only: it probes, it never installs or changes anything.
+# Read-only: it probes, it never installs or changes anything. The one write is the uv cache probe: an empty file
+# created in that directory (or its nearest existing ancestor) and removed at once.
 
 set -o pipefail
 
@@ -146,19 +154,44 @@ if have python3; then
     fi
 fi
 
-uv_found="<null>"
+# writable DIR: can this shell create a file in DIR, or in its nearest existing ancestor? Tried, not asked of
+# `test -w`, which a sandbox can answer yes to and then refuse the write.
+writable() {
+    local d=$1 probe
+    while [ ! -e "$d" ] && [ -n "$d" ]; do d=${d%/*}; done
+    [ -n "$d" ] || d=/
+    [ -d "$d" ] || return 1
+    probe="$d/.essentials-doctor-probe.$$"
+    { : >"$probe"; } 2>/dev/null || return 1
+    rm -f "$probe" 2>/dev/null
+    return 0
+}
+
+uv_status=missing uv_found="<null>" uv_cache=""
 if have uv; then
     v=$(uv --version 2>/dev/null)
     re='^uv ([^[:space:]]+)'
     if [[ $v =~ $re ]]; then uv_found=${BASH_REMATCH[1]}; else uv_found="uv"; fi
     uv_status=ok
-elif $py_yaml && $py_jsonschema; then
-    uv_status=fallback uv_found="no uv; python3 has pyyaml and jsonschema"
-elif $py_yaml; then
-    uv_status=partial uv_found="no uv; python3 has pyyaml, not jsonschema"
-else
-    uv_status=missing
-    [ "$py_status" = ok ] && uv_found="no uv; python3 has neither pyyaml nor jsonschema"
+    d=$(uv cache dir 2>/dev/null)
+    case $d in /*) writable "$d" || uv_cache=$d ;; esac
+fi
+if [ "$uv_status" != ok ] || [ -n "$uv_cache" ]; then
+    # no uv, or one whose every `uv run` fails: what python3 alone can run decides the status
+    no_uv="no uv"
+    [ -z "$uv_cache" ] || no_uv="uv $uv_found, but its cache $uv_cache is read-only"
+    if $py_yaml && $py_jsonschema; then
+        if [ -n "$uv_cache" ]; then
+            uv_status=fallback uv_found="cache read-only → python3 fallback (uv $uv_found, $uv_cache)"
+        else
+            uv_status=fallback uv_found="$no_uv; python3 has pyyaml and jsonschema"
+        fi
+    elif $py_yaml; then
+        uv_status=partial uv_found="$no_uv; python3 has pyyaml, not jsonschema"
+    else
+        uv_status=missing uv_found="<null>"
+        [ "$py_status" = ok ] && uv_found="$no_uv; python3 has neither pyyaml nor jsonschema"
+    fi
 fi
 
 java_pin=""
@@ -264,34 +297,39 @@ impacts() {
             echo "review|stop|/essentials:review stops at Step 0: no deterministic check can run, and it does not review by eye"
             echo "slice|stop|/essentials:add-slice and the slice skills cannot render a slice (render-slice.py) or load the slice law (slice-law.py)"
             echo "docs|stop|the essentials-docs and essentials-change skills cannot load the slice law (slice-law.py) before a slice change"
-            echo "upgrade|not-run|/essentials:upgrade cannot run stack-lint.py: Group C is reported not run" ;;
+            echo "upgrade|not-run|/essentials:upgrade cannot run stack-lint.py or migration-plan.py: Group C and the Essentials upgrade (Group D) are reported not run" ;;
         uv)
             case $status in
                 fallback)
                     echo "review|fallback|slice-lint.py and slice-source.py run with python3 and the pyyaml and jsonschema already installed, not the pinned versions"
-                    echo "slice|fallback|slice-lint.py, slice-source.py and slice-index.py run with python3 and the pyyaml and jsonschema already installed, not the pinned versions" ;;
+                    echo "slice|fallback|slice-lint.py, slice-source.py, slice-index.py and slice-enrich.py run with python3 and the pyyaml and jsonschema already installed, not the pinned versions" ;;
                 partial)
                     echo "review|not-run|slice-lint.py cannot run (no jsonschema): /essentials:review lists its slice-law gates under Not run; slice-source.py runs with python3"
-                    echo "slice|not-run|slice-lint.py cannot run (no jsonschema): /essentials:slice-check reports gates 1, 3, 4 and 14 tier not run; slice-source.py and slice-index.py run with python3" ;;
+                    echo "slice|not-run|slice-lint.py cannot run (no jsonschema): /essentials:slice-check reports gates 1, 3, 4 and 14 tier not run; slice-source.py and slice-index.py run with python3"
+                    echo "slice|not-run|/essentials:slice-enrich drafts but writes nothing: slice-enrich.py apply validates every result against the schema and needs jsonschema" ;;
                 *)
                     echo "review|not-run|slice-lint.py and slice-source.py cannot run (no pyyaml): /essentials:review lists the slice-law gates they cover under Not run"
                     echo "slice|not-run|/essentials:slice-check: slice-lint.py and slice-source.py cannot run, so gates 1, 3, 4 and 14 tier and the script halves of 6, 11(b) and 14 are not run"
-                    echo "slice|stop|/essentials:slice-map stops: slice-index.py cannot run without pyyaml, and the map is never built by hand" ;;
+                    echo "slice|stop|/essentials:slice-map stops: slice-index.py cannot run without pyyaml, and the map is never built by hand"
+                    echo "slice|stop|/essentials:slice-map-html stops: slice-index.py cannot run without pyyaml, and the page is never built by hand"
+                    echo "slice|stop|/essentials:slice-enrich stops: slice-enrich.py cannot run without pyyaml, and no manifest is enriched by hand" ;;
             esac ;;
         java)
             echo "init|not-run|/essentials:init's smoke build (Step 13.7) cannot build the rendered project, which targets the pinned Java release: its result is failed"
-            echo "upgrade|not-run|/essentials:upgrade's context-start re-check after a dependency or config fix cannot build the project" ;;
+            echo "upgrade|not-run|/essentials:upgrade cannot build the project: neither the context-start re-check after a fix nor the Essentials upgrade (Group D), whose gate is that build, runs" ;;
         maven)
             echo "init|skipped|/essentials:init skips the maven-wrapper hook (no mvnw in the new project) and its smoke build cannot run"
             [ "$status" = partial ] ||
-                echo "upgrade|not-run|/essentials:upgrade's context-start re-check needs ./mvnw or mvn" ;;
+                echo "upgrade|not-run|/essentials:upgrade's context-start re-check and its Essentials upgrade (Group D) need ./mvnw or mvn" ;;
         docker)
             echo "init|compile-only|/essentials:init's smoke build is compile-only (compiled-only): the Spring context is never started"
-            echo "upgrade|compile-only|/essentials:upgrade's re-check runs test-compile only: the context start is unverified" ;;
+            echo "upgrade|compile-only|/essentials:upgrade's re-check runs test-compile only: the context start is unverified"
+            echo "upgrade|not-run|/essentials:upgrade does not start the Essentials upgrade (Group D): a release move has no compile-only result; --check still prints its plan" ;;
         npm)
             echo "init|skipped|with a frontend, /essentials:init skips the frontend-lockfile hook and leaves the frontend unchecked; an embedded build needs -Pskip-frontend until a package-lock.json exists" ;;
         git)
-            echo "review|not-run|/essentials:review: only <path> mode works outside git; a base ref and --pr cannot be resolved" ;;
+            echo "review|not-run|/essentials:review: only <path> mode works outside git; a base ref and --pr cannot be resolved"
+            echo "upgrade|not-run|/essentials:upgrade does not start the Essentials upgrade (Group D) outside git: it works on its own branch" ;;
         rg)
             echo "docs|fallback|search.sh falls back to grep -R: the same matches, slower" ;;
     esac
@@ -367,7 +405,7 @@ row java "$java_status" "$java_found" "$java_required" init upgrade
 row maven "$maven_status" "$maven_found" "<null>" init upgrade
 row docker "$docker_status" "$docker_found" "running daemon" init upgrade
 row npm "$npm_status" "$npm_found" "<null>" init
-row git "$git_status" "$git_found" "<null>" review
+row git "$git_status" "$git_found" "<null>" review upgrade
 row rg "$rg_status" "$rg_found" "<null>" docs
 
 blocking_names=${blocking_names# }

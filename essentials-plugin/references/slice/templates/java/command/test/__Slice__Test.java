@@ -37,5 +37,5 @@ class {{Slice}}Test {
     }
 
     // TODO: one test per invariant enforced by {{Slice}}Decider.
-    // Rejections use .thenThrows(SomeException.class).
+    // Rejections use .thenFailsWithExceptionType(SomeException.class).
 }

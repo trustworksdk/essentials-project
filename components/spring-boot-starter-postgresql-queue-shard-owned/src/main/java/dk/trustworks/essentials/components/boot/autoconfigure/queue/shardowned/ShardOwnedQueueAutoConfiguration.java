@@ -17,6 +17,7 @@
 package dk.trustworks.essentials.components.boot.autoconfigure.queue.shardowned;
 
 import dk.trustworks.essentials.components.adminapi.rest.AdminApiPrincipalResolver;
+import dk.trustworks.essentials.components.foundation.fencedlock.FencedLockManagerSettings;
 import dk.trustworks.essentials.components.foundation.json.JSONSerializer;
 import dk.trustworks.essentials.components.foundation.lifecycle.ShutdownAware;
 import dk.trustworks.essentials.components.foundation.postgresql.stats.*;
@@ -24,8 +25,10 @@ import dk.trustworks.essentials.components.foundation.postgresql.stats.*;
 // and this class imports the spi package wholesale.
 import dk.trustworks.essentials.components.foundation.messaging.queue.DurableQueues;
 import dk.trustworks.essentials.components.foundation.messaging.queue.DurableQueuesInterceptor;
+import dk.trustworks.essentials.components.foundation.messaging.queue.EnqueueOutsideUnitOfWorkGuard;
 import dk.trustworks.essentials.components.foundation.transaction.*;
 import dk.trustworks.essentials.components.foundation.schema.*;
+import dk.trustworks.essentials.components.queue.shardowned.ShardOwnedSchemaContributor;
 import dk.trustworks.essentials.components.queue.shardowned.adapter.*;
 import dk.trustworks.essentials.components.boot.autoconfigure.queue.shardowned.rest.*;
 import dk.trustworks.essentials.components.queue.shardowned.*;
@@ -47,7 +50,6 @@ import org.springframework.web.bind.annotation.RestController;
 import javax.sql.DataSource;
 import java.sql.SQLException;
 import java.util.List;
-import dk.trustworks.essentials.shared.network.Network;
 
 /**
  * Auto-configuration for the shard-owned PostgreSQL queue engine.
@@ -197,7 +199,9 @@ public class ShardOwnedQueueAutoConfiguration {
         return new ShardOwnedQueueFactory(dataSource, runtime, settings, instanceId, initializer,
                                           interceptors.orderedStream().toList(),
                                           observers.orderedStream().toList(),
-                                          metrics.orderedStream().toList());
+                                          metrics.orderedStream().toList())
+                // Per queue, on top of the shared settings' essentials.shard-owned-queue.stuck-handler-timeout.
+                .setStuckHandlerTimeouts(properties.getStuckHandlerTimeouts());
     }
 
     /**
@@ -223,21 +227,24 @@ public class ShardOwnedQueueAutoConfiguration {
 
 
     /**
-     * The hostname, which is what the rest of Essentials uses to identify an instance — the fenced
-     * lock manager and {@code DefaultEssentialsScheduler} both take {@code Network.hostName()} bare.
+     * {@code <hostname>:<pid>} — the fenced lock manager's default,
+     * {@link FencedLockManagerSettings#defaultLockManagerInstanceId()}, so an operator correlating a
+     * shard hand-over with a lock hand-over reads one naming scheme.
      * <p>
-     * This was a random UUID per boot, on the reasoning that two instances sharing a host would
-     * collide. They would, and a collision halves the fair share because two processes look like one
-     * — but a UUID buys that at the cost of an id that means nothing in a log line, nothing in the
-     * membership table, and changes on every restart. In the deployment that matters the hostname is
-     * the pod name and is already unique, and where it is not, the fix is to set
-     * {@code essentials.shard-owned-queue.instance-id} rather than to make every id unreadable.
+     * It was the bare hostname until 0.60.1, which made two processes on one host one instance: the
+     * fair-share rebalance then allowed each of them half the shards. A random UUID per boot (what it
+     * was before that) avoided the collision at the cost of an id that means nothing in a log line or
+     * the membership table. The pid keeps processes on one host apart and the id readable.
      * <p>
-     * Consistency with the rest of the framework also matters here: an operator correlating a shard
-     * hand-over with a lock hand-over should not have to translate between two naming schemes.
+     * A new pid on every restart is harmless here. The id names a membership row and the owner of a
+     * lease; a restarted process does not need its predecessor's id to take that predecessor's units.
+     * A graceful stop releases them and deregisters, and after a crash they become takeable once the
+     * old membership row is older than {@code leaseTtl} — the same path as a takeover by another host.
+     * Where one host still cannot tell its processes apart (containers that share a hostname and all
+     * run as pid 1), set {@code essentials.shard-owned-queue.instance-id}.
      */
     private static String defaultInstanceId() {
-        return Network.hostName();
+        return FencedLockManagerSettings.defaultLockManagerInstanceId();
     }
 
     /**
@@ -370,7 +377,8 @@ public class ShardOwnedQueueAutoConfiguration {
                                                  UnitOfWorkFactory<? extends UnitOfWork> unitOfWorkFactory,
                                                  DataSource dataSource,
                                                  ShardOwnedQueueProperties properties,
-                                                 List<DurableQueuesInterceptor> durableQueuesInterceptors) {
+                                                 List<DurableQueuesInterceptor> durableQueuesInterceptors,
+                                                 Environment environment) {
         log.info("Durable queues are running on the SHARD-OWNED engine — Inbox, Outbox and every "
                  + "EventProcessor's projections are delivered by it. Queues invented at runtime get "
                  + "{} unordered shards.", properties.getAutoRegisterShardCount());
@@ -380,6 +388,11 @@ public class ShardOwnedQueueAutoConfiguration {
                                                    .setUnitOfWorkFactory(unitOfWorkFactory)
                                                    .setDataSource(dataSource)
                                                    .setAutoRegisterShardCount(properties.getAutoRegisterShardCount())
+                                                   // Read by key: the property is spring-boot-starter-postgresql's
+                                                   // (essentials.durable-queues.*), which this starter does not depend on.
+                                                   .setRequireActiveUnitOfWorkForEnqueue(Binder.get(environment)
+                                                                                               .bind(EnqueueOutsideUnitOfWorkGuard.REQUIRE_ACTIVE_UNIT_OF_WORK_FOR_ENQUEUE_PROPERTY, Boolean.class)
+                                                                                               .orElse(false))
                                                    .build();
         durableQueues.addInterceptors(durableQueuesInterceptors);
         return durableQueues;

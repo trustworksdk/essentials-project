@@ -27,9 +27,9 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  * to put one: each process kept its own name-to-id mapping, which is a shared contract living in
  * several places at once.
  * <p>
- * <b>Not a {@code CharSequenceType}</b>, which is the project's usual base for a type like this. That
- * class lives in the {@code types} module, which carries kotlin-reflect and kotlin-stdlib at compile
- * scope; this module depends on {@code shared} alone and the trade is not worth it for one wrapper.
+ * <b>Not a {@code CharSequenceType}</b>, which is the project's usual base for a type like this. It
+ * shipped as a record, and changing its supertype now would break the published SPI for nothing a
+ * record does not already give.
  * The behaviour that matters here — value equality, validation at construction, a {@code toString}
  * that is just the name — is what a record gives for free.
  * <p>

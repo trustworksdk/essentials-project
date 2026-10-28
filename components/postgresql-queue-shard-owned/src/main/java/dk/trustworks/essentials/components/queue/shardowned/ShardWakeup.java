@@ -49,6 +49,13 @@ final class ShardWakeup {
     }
 
     /**
+     * Whether signalling this one also signals {@code other}: whether it is a shard's wake-up pointing at that pump's.
+     */
+    boolean cascadesTo(ShardWakeup other) {
+        return parent == other;
+    }
+
+    /**
      * Record that this shard has work. Idempotent: many signals between two waits mean the same
      * thing, because the owner drains everything it can see on each pass.
      */

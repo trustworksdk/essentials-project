@@ -25,7 +25,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * Builder for {@link FencedLockManagerSettings}, obtained from {@link FencedLockManagerSettings#builder()}.
  * <p>
  * {@code lockManagerInstanceId} is held as a plain nullable field and resolved in {@link #build()} — the neutral
- * default being the machine's hostname. That is why no setter here takes an {@code Optional}, except as an explicit
+ * default being {@link FencedLockManagerSettings#defaultLockManagerInstanceId() hostname:pid}. That is why no setter here takes an {@code Optional}, except as an explicit
  * convenience overload for callers coming from a Spring {@code @Bean} method.
  */
 public final class FencedLockManagerSettingsBuilder {
@@ -35,8 +35,8 @@ public final class FencedLockManagerSettingsBuilder {
     private boolean  releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation;
 
     /**
-     * @param lockManagerInstanceId the unique name for this lock manager instance, or {@code null} to use the machine's hostname.
-     *                              Containers without a stable hostname should set this explicitly
+     * @param lockManagerInstanceId the unique name for this lock manager instance, or {@code null} to use {@code <hostname>:<pid>}.
+     *                              Set it explicitly where a stable, readable id matters
      * @return this builder instance for fluent chaining
      */
     public FencedLockManagerSettingsBuilder setLockManagerInstanceId(String lockManagerInstanceId) {
@@ -45,8 +45,8 @@ public final class FencedLockManagerSettingsBuilder {
     }
 
     /**
-     * {@code Optional} overload of {@link #setLockManagerInstanceId(String)}. An empty {@code Optional} means "use the
-     * machine's hostname".
+     * {@code Optional} overload of {@link #setLockManagerInstanceId(String)}. An empty {@code Optional} means "use
+     * {@code <hostname>:<pid>}".
      *
      * @param lockManagerInstanceId the instance id, or empty to derive one
      * @return this builder instance for fluent chaining
@@ -86,7 +86,7 @@ public final class FencedLockManagerSettingsBuilder {
     }
 
     /**
-     * Builds the settings, resolving {@code lockManagerInstanceId} to the machine's hostname if it was not set, and
+     * Builds the settings, resolving {@code lockManagerInstanceId} to {@code <hostname>:<pid>} if it was not set, and
      * validating that {@code lockConfirmationInterval} is shorter than {@code lockTimeOut}.
      *
      * @return the settings

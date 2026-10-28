@@ -143,4 +143,4 @@ See [Foundation - FencedLock](../foundation/README.md#fencedlock-distributed-loc
 | **Module** | `springdata-mongo-distributed-fenced-lock` | [`postgresql-distributed-fenced-lock`](../postgresql-distributed-fenced-lock/README.md) |
 | **Storage** | MongoDB collection | SQL table |
 | **Transactions** | Spring Data MongoDB | JDBI/JDBC |
-| **Requirements** | MongoDB 4.0+ (replica set) | PostgreSQL 9.5+ |
+| **Requirements** | MongoDB 4.0+ (replica set) | PostgreSQL 15+ |

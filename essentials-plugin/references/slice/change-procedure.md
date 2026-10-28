@@ -47,6 +47,13 @@ change"* — it is §R1 for commands (is this a second command type?) and §R2 t
 serve a different purpose needing a different read-model shape?). Put that question to the user in the
 law's terms; do not resolve it silently.
 
+*Arguable* means the request and the code leave that question open — *"let support cancel an order"*
+does not say whether support's cancellation is the same intent as the customer's. It does not mean the
+code could be written either way: almost any view could absorb one more query. When the test answers
+it — a screen whose rows are keyed by something other than the existing view's rows is a different
+read-model shape, so it is a new view — name the class and the reason, and do not offer the other class
+as an option. A clear class still waits for the user's yes before any file is written (§9).
+
 ## 3. Locate the owning slice from manifests, not from source search
 
 The manifests are an index. Use them before grepping source — they are smaller, they carry intent, and
@@ -268,9 +275,12 @@ of done, and an unrun test is not evidence.
 
 ## 9. Guard rails
 
-- **Confirm before scaffolding.** The user described a change in prose; they did not ask for six files.
-  State the classification, name the slice(s), and get a yes. This is the whole difference between a
-  helpful default and an unwanted one.
+- **Confirm before scaffolding — and before growing a slice.** The user described a change in prose;
+  they did not ask for six files. State the classification, name the slice(s), and get a yes. That
+  holds when the request names exactly what to add (an endpoint, a query, a field, a handler): it
+  still grows a slice's surface and its manifest. Only a class-E change, or a one-line fix that
+  changes no structure, goes ahead unasked. This is the whole difference between a helpful default
+  and an unwanted one.
 - **Never merge a new capability into an existing slice directory.** Class A goes through the kind
   skill, which aborts on an existing directory by design.
 - **Never re-elicit inside a kind skill.** Resolve and pass its inputs, per `slice-authoring.md` §2–§4.

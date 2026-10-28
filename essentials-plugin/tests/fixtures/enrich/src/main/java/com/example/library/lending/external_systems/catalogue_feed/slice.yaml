@@ -1,0 +1,16 @@
+schemaVersion: "1.3"
+slice: lending.catalogue_feed
+kind: translation
+bc: lending
+owner: circulation
+status: live
+summary: Anti-corruption boundary to the CatalogueFeed system.
+generator: essentials
+language: java
+lane: decider
+externalSystem: catalogue_feed
+direction: inbound
+consumes: [CatalogueEntryReceived]
+dispatches: [RegisterCopy]
+tests:
+  contract: { present: false }

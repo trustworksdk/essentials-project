@@ -3,17 +3,29 @@
 === FILE .githooks/pre-commit (755) ===
 #!/usr/bin/env bash
 # Slice manifest gate: see the essentials plugin, /essentials:slice-check.
-# Fails open when the tooling is missing, so a contributor without it can still commit.
-git diff --cached --name-only --diff-filter=ACM | grep -q 'slice\.yaml$' || exit 0
-if command -v uv >/dev/null; then
+# Self-locating: it lints the project it sits in (the directory above .githooks/), which need not
+# be the repository's top level, and only when a slice.yaml inside that project is staged.
+# Not active until each clone runs the activation command in the project README.
+# Blocks the commit when the linter cannot run (exit 2: install uv, or pyyaml and jsonschema), and
+# when its own script is missing. It lets the commit through only when neither uv nor python3 exists.
+proj="$(cd "$(dirname "$0")/.." && pwd)" || exit 1
+cd "$proj" || exit 1
+git diff --cached --name-only --relative --diff-filter=ACM -- . | grep -q 'slice\.yaml$' || exit 0
+if [ ! -f scripts/slice-lint.py ] || [ ! -f scripts/slice-yaml.schema.json ]; then
+    echo "slice-lint: scripts/slice-lint.py or scripts/slice-yaml.schema.json is missing in $proj." >&2
+    echo "  Restore them (/essentials:upgrade reinstalls both), or remove .githooks/pre-commit." >&2
+    exit 1
+fi
+if command -v uv >/dev/null 2>&1; then
     uv run --script scripts/slice-lint.py . --schema scripts/slice-yaml.schema.json
-elif command -v python3 >/dev/null; then
+elif command -v python3 >/dev/null 2>&1; then
     python3 scripts/slice-lint.py . --schema scripts/slice-yaml.schema.json
 else
+    echo "slice-lint: neither uv nor python3 is installed; slice.yaml not checked, not blocking." >&2
     exit 0
 fi
 status=$?
-[ $status -eq 2 ] && { echo "slice-lint could not run (install uv, or: pip install pyyaml jsonschema); not blocking"; exit 0; }
+[ $status -eq 2 ] && echo "slice-lint could not validate the manifests (install uv, or: pip install pyyaml jsonschema). To commit anyway: git commit --no-verify" >&2
 exit $status
 === FILE .gitignore (644) ===
 target/
@@ -26,7 +38,7 @@ target/
 
 ## Trustworks Essentials framework knowledge
 
-<!-- essentials-init: essentials 0.60.0 -->
+<!-- essentials-init: essentials 0.60.1 -->
 
 For ANY question about Trustworks Essentials APIs, modules, or patterns, **always consult the `essentials-docs` skill** from the `essentials` plugin. It auto-loads on Essentials-related questions and on code signals (imports of `dk.trustworks.essentials.*`, type names like `StatefulAggregate`, `DurableQueues`, `EventStore`, `FencedLock`, `Inbox`, `Outbox`, `UnitOfWork`, `Decider`, `EventProcessor`).
 
@@ -34,7 +46,7 @@ Do **not** search the web or guess — Essentials has its own opinionated patter
 
 If the `essentials` plugin is not installed in this Claude Code session, add its marketplace with `/plugin marketplace add trustworksdk/essentials-project`, then run `/plugin install essentials@essentials-marketplace`.
 
-The comment above records the Essentials version this project was scaffolded against. Run **`/essentials:upgrade`** to bring the project up to what the installed plugin ships — a refreshed slice-rules pointer, the slice-manifest lint gate, and a conformance check against the current stack contract (S1–S11). It reports before it writes, and it never touches source or version pins.
+The comment above records the Essentials version this project was scaffolded against. Run **`/essentials:upgrade`** to bring the project up to what the installed plugin ships — a refreshed slice-rules pointer, the slice-manifest lint gate, and a conformance check against the current stack contract (S1–S11). It reports before it writes, and on an older Essentials release it also offers the move to the plugin's: `essentials.version` and only the pins that release requires, under a decision note you approve, on its own branch.
 
 ## Project pins (do not invent — these are fixed by `/essentials:init`)
 
@@ -232,6 +244,28 @@ golden/
 
 For a fast inner loop, see `CLAUDE.md` → "Inner-loop integration tests".
 
+### Slice-manifest lint gate
+
+Nothing in the Maven build reads `slice.yaml`, so a broken manifest compiles and ships while the slice drops out of every tool that reads manifests. `scripts/slice-lint.py` (with its schema beside it) is the gate; run it in CI from this directory:
+
+```bash
+uv run --script scripts/slice-lint.py . --schema scripts/slice-yaml.schema.json   # or python3 with pyyaml and jsonschema installed
+```
+
+Exit 0 is clean, 1 is findings, 2 is that it could not validate (a missing `jsonschema` included) — fail the build on anything but 0.
+
+`.githooks/pre-commit` runs the same check on every commit that stages a `slice.yaml` in this project. Git never activates a hook from a clone, so **every clone runs this once**, from this directory:
+
+```bash
+git config core.hooksPath "$(git rev-parse --show-prefix).githooks"
+```
+
+If the repository already sets `core.hooksPath` (a hook manager such as husky) or has a `.git/hooks/pre-commit`, do not run that: `core.hooksPath` replaces every hook in `.git/hooks`. Call this project's hook from the existing pre-commit hook instead, where `<prefix>` is what `git rev-parse --show-prefix` prints in this directory (empty at the repository root):
+
+```bash
+"$(git rev-parse --show-toplevel)/<prefix>.githooks/pre-commit" || exit 1
+```
+
 ## Working with Claude Code
 
 `CLAUDE.md` in this repo tells Claude Code to use the **`essentials` plugin's `essentials-docs` skill** for any framework questions. The skill auto-loads on Essentials-related queries and on code signals (imports, type names) and proactively consults the plugin's design guide before editing code.
@@ -349,6 +383,12 @@ If the plugin isn't installed yet:
             <!-- Context startup fails with NoClassDefFoundError for a tools.jackson class. A Boot 4 web starter brings it through spring-boot-starter-jackson, so this bites a headless application -->
             <groupId>tools.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
+        </dependency>
+        <dependency>
+            <!-- Context startup fails: creating the persistence mapper throws IllegalStateException naming org.objenesis:objenesis (Essentials 0.60.1 and later). On 0.60.0, startup and every write succeed, then the first read of a persisted object (an event, a queue message, a document) fails with NoClassDefFoundError for an org/objenesis class. The starters bring immutable-jackson3, and Essentials registers its module in the persistence mapper whenever it is on the classpath. Tests hide it: Mockito brings objenesis in test scope. Spring Boot does not manage its version — set it from objenesis.version -->
+            <groupId>org.objenesis</groupId>
+            <artifactId>objenesis</artifactId>
+            <version>${objenesis.version}</version>
         </dependency>
         <dependency>
             <!-- NoClassDefFoundError: org/reactivestreams/Publisher while creating the Essentials EventBus (essentialsEventBus). Satisfied transitively by WebFlux; not on a WebMvc stack -->
@@ -795,7 +835,7 @@ esac
     <parent>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
-        <version>4.1.1</version>
+        <version>4.1.2</version>
         <relativePath/>
     </parent>
 
@@ -813,9 +853,9 @@ esac
         <java.version>25</java.version>
         <!-- Spring Boot manages Kotlin too; this property is what overrides it. Load-bearing on a Java
              project as well: postgresql-document-db is written in Kotlin (S2.1). -->
-        <kotlin.version>2.4.20</kotlin.version>
+        <kotlin.version>2.4.21</kotlin.version>
         <!-- One property drives every Essentials artifact (S1). -->
-        <essentials.version>0.60.0</essentials.version>
+        <essentials.version>0.60.1</essentials.version>
         <springdoc.version>3.1.1</springdoc.version>
         <!-- Spring Boot's parent already manages Testcontainers, Mockito, AssertJ, Awaitility and the MongoDB
              driver. A BOM imported below would be inert for them (the parent's management wins), so their
@@ -828,6 +868,8 @@ esac
         <jdbi3-bom.version>3.55.0</jdbi3-bom.version>
         <spring-modulith.version>2.0.7</spring-modulith.version>
         <jqwik.version>1.9.3</jqwik.version>
+        <!-- Not managed by Spring Boot either: a plain dependency of the backend (S2.1). -->
+        <objenesis.version>3.6</objenesis.version>
     </properties>
 
     <dependencyManagement>
@@ -875,4 +917,4 @@ When using any planner/implementer tooling at this workspace level: either `cd g
 
 For full project context, framework-knowledge auto-loading (the `essentials-docs` skill), conventions, and commands, see **`golden/CLAUDE.md`** — that file is the project-level source of truth.
 === HOOK maven-wrapper (cwd .) ===
-mvn -N -B -q org.apache.maven.plugins:maven-wrapper-plugin:3.3.4:wrapper -Dmaven=3.9.16 -Dtype=only-script
+mvn -N -B -q org.apache.maven.plugins:maven-wrapper-plugin:3.3.4:wrapper -Dmaven=3.10.0 -Dtype=only-script

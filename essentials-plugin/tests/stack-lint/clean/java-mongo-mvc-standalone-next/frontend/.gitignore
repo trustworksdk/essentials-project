@@ -1,0 +1,5 @@
+/node_modules
+/.next/
+# Orval output
+/lib/api/generated
+lib/api/model/

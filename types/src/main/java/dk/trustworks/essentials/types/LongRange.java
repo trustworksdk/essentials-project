@@ -24,9 +24,12 @@ import java.util.stream.LongStream;
  */
 public final class LongRange {
     /**
-     * An empty range (that only covers from 0 to 0)
+     * An empty range: it covers no value at all, see {@link #isEmpty()}.<br>
+     * Represented as the closed range <code>(0, -1)</code>, whose {@link #toInclusive} is below its {@link #fromInclusive}.
+     * Before 0.60.1 it was <code>(0, 0)</code>, which covers <code>0</code> - the first event's order - and equals
+     * <code>LongRange.only(0)</code>.
      */
-    public static final LongRange EMPTY_RANGE = new LongRange(0, 0);
+    public static final LongRange EMPTY_RANGE = new LongRange(0, -1);
 
     public final        long      fromInclusive;
     public final        Long      toInclusive;
@@ -72,7 +75,7 @@ public final class LongRange {
     }
 
     /**
-     * Create an empty range (that only covers from 0 to 0)
+     * The empty range, {@link #EMPTY_RANGE}: it covers no value at all, see {@link #isEmpty()}
      *
      * @return an empty range
      */
@@ -85,7 +88,8 @@ public final class LongRange {
      * larger than <code>fromInclusive</code> and until and inclusive <code>fromInclusive+rangeLength</code>
      *
      * @param fromInclusive the first value included in the range
-     * @param rangeLength   the length of the range (will result in a range from (and inclusive) <code>fromInclusive</code> and until and inclusive <code>fromInclusive+rangeLength-1</code>)
+     * @param rangeLength   the length of the range (will result in a range from (and inclusive) <code>fromInclusive</code> and until and inclusive <code>fromInclusive+rangeLength-1</code>).
+     *                      A <code>rangeLength</code> of 0 gives an empty range (see {@link #isEmpty()})
      * @return
      */
     public static LongRange from(long fromInclusive, long rangeLength) {
@@ -119,6 +123,18 @@ public final class LongRange {
      */
     public boolean isOpenRange() {
         return toInclusive == null;
+    }
+
+    /**
+     * Does the Range cover no value at all - a closed range whose {@link #toInclusive} is below its
+     * {@link #fromInclusive}, such as {@link #EMPTY_RANGE}, <code>between(5, 4)</code> or <code>from(5, 0)</code>.<br>
+     * Several empty ranges exist and they are not {@link #equals(Object)} to each other, so test for emptiness with this
+     * method rather than by comparing with {@link #EMPTY_RANGE}.
+     *
+     * @return true if the range covers no value, otherwise false
+     */
+    public boolean isEmpty() {
+        return toInclusive != null && toInclusive < fromInclusive;
     }
 
     public long getFromInclusive() {

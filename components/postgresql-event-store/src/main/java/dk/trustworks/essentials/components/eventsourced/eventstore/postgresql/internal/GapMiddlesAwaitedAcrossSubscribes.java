@@ -150,6 +150,15 @@ public final class GapMiddlesAwaitedAcrossSubscribes {
     }
 
     /**
+     * @return whether {@code order} lies in a middle awaited for {@code subscriberId} and {@code aggregateType} - by the
+     * subscribe that holds them, or kept for the next one
+     */
+    public boolean isAwaited(SubscriberId subscriberId, AggregateType aggregateType, long order) {
+        var ranges = bySubscriber.get(new Key(requireNonNull(subscriberId, "No subscriberId provided"), requireNonNull(aggregateType, "No aggregateType provided")));
+        return ranges != null && ranges.isAwaited(order);
+    }
+
+    /**
      * @return how many subscriber and aggregate type pairs anything is kept for
      */
     public int size() {

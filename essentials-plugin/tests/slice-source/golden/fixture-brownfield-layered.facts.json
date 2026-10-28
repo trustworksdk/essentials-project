@@ -9,5 +9,9 @@
   "slices": [],
   "messages": [],
   "unparsed": [],
-  "unresolved": []
+  "unresolved": [],
+  "tests": {
+    "roots": [],
+    "classes": []
+  }
 }

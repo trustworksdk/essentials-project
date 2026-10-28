@@ -7,6 +7,7 @@ status: live
 summary: Move one sealed books generation of a trading account out of the event store and into the archive.
 generator: essentials
 language: java
+lane: aggregate
 
 handles: [ArchiveGeneration]
 publishes: []
@@ -24,6 +25,7 @@ invariants:
     enforcedBy: ArchiveGenerationHandler
 forbidden:
   - cross-slice-internal:brokerage
+tier: cqrs-es
 tests:
   unit: { present: false }
   integration: { present: false }

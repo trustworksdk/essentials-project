@@ -31,6 +31,7 @@ import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicLong;
 
+import static dk.trustworks.essentials.components.queue.shardowned.SingleRowQueries.queryForRow;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -190,10 +191,6 @@ class ShardOwnedStalledKeyCostIT {
     }
 
     private static long scalar(Connection connection, String sql) throws Exception {
-        try (var statement = connection.prepareStatement(sql);
-             var resultSet = statement.executeQuery()) {
-            resultSet.next();
-            return resultSet.getLong(1);
-        }
+        return queryForRow(connection, "Reading the scalar \"" + sql + "\"", sql, row -> row.getLong(1));
     }
 }

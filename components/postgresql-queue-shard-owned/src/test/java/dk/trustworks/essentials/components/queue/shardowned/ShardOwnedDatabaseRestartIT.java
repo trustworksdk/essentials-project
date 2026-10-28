@@ -35,6 +35,7 @@ import java.time.*;
 import java.util.*;
 import java.util.concurrent.*;
 
+import static dk.trustworks.essentials.components.queue.shardowned.SingleRowQueries.queryForRow;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -214,11 +215,9 @@ class ShardOwnedDatabaseRestartIT {
      * one that did not, and it survives nothing — which is the point.
      */
     private OffsetDateTime postmasterStartTime() throws Exception {
-        try (var connection = DriverManager.getConnection(jdbcUrl(), postgres.getUsername(), postgres.getPassword());
-             var statement = connection.createStatement();
-             var resultSet = statement.executeQuery("SELECT pg_postmaster_start_time()")) {
-            resultSet.next();
-            return resultSet.getObject(1, OffsetDateTime.class);
+        try (var connection = DriverManager.getConnection(jdbcUrl(), postgres.getUsername(), postgres.getPassword())) {
+            return queryForRow(connection, "Reading pg_postmaster_start_time()", "SELECT pg_postmaster_start_time()",
+                               row -> row.getObject(1, OffsetDateTime.class));
         }
     }
 
@@ -248,14 +247,7 @@ class ShardOwnedDatabaseRestartIT {
      * at the default bound.
      */
     private static ShardOwnerSettings shortLease() {
-        var defaults = ShardOwnerSettings.defaults();
-        return new ShardOwnerSettings(defaults.readBatchSize(), defaults.ackBatchSize(),
-                                      defaults.ackFlushInterval(), defaults.chaseDelay(),
-                                      defaults.holeExpiry(), defaults.sweepInterval(),
-                                      defaults.maxHolesPerChase(), defaults.keyConcurrency(),
-                                      defaults.pollBackstop(), defaults.maxSweepInterval(),
-                                      defaults.pumpThreads(), defaults.shedGrace(),
-                                      Duration.ofSeconds(3), defaults.watermarkCap());
+        return ShardOwnerSettings.builder().setLeaseTtl(Duration.ofSeconds(3)).build();
     }
 
     private static int freePort() {

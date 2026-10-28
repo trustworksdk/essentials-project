@@ -46,11 +46,19 @@ absence.
 
 | # | Where | What |
 |---|---|---|
-| **F1** | `use_cases/pay_invoice/PayInvoiceHandler.java` | The domain rule is **in the handler**: it decides whether the invoice may be paid. `Invoice.pay()` already guards this, so the aggregate is no longer the sole enforcer and any other caller bypasses the handler's check. Expected against `rules/slice-design.md` § The aggregate's own bar |
-| **F2** | `use_cases/pay_invoice/slice.yaml` | `invariants[].enforcedBy: "PayInvoiceHandler"` — the manifest **records** the leak. On this lane the enforcer must be the aggregate method. A reader that checks `enforcedBy` against the lane catches F1 from the manifest alone, without reading a method body |
-| **F3** | `use_cases/pay_invoice/` | No test of any kind (`tests.unit.present: false`), on the one slice that carries a rule |
+| **F1** | `use_cases/pay_invoice/PayInvoiceHandler.java` | The domain rule is **in the handler**: it decides whether the invoice may be paid. `Invoice.pay()` already guards this, so the aggregate is no longer the sole enforcer and any other caller bypasses the handler's check. **Blocking**: the two checks disagree on a repeat payment (the handler throws, `Invoice.pay()` returns `false`), so the code cannot be correct (`commands/slice-check.md` gate 5 table). Expected against `rules/slice-design.md` § The aggregate's own bar |
+| **F2** | `use_cases/pay_invoice/slice.yaml` | `invariants[].enforcedBy: "PayInvoiceHandler"` — the manifest **records** the leak. On this lane the enforcer must be the aggregate method. A reader that checks `enforcedBy` against the lane catches F1 from the manifest alone, without reading a method body. Same defect as F1, so **Blocking**; reporting it inside F1's finding counts |
 | **F4** | `views/invoice_list/slice.yaml` — `"/api/billing/invoices?paid=true&minAmount="` | Gate 6, **Should-fix**. No handler serves this endpoint: `paid=true` is bound only by `paidInvoices()` and `minAmount` only by `byAmount()`. A check that unions the bound parameters across the slice passes it; the rule is **per handler** (`commands/slice-check.md` gate 6, `manifest-guide.md` §3) |
 | **F5** | `views/invoice_list/slice.yaml` | A view slice with no test — Should-fix per `rules/slice-design.md` § Reporting severities |
+
+There is no F3. It asked for a Should-fix on `use_cases/pay_invoice/` for having no test, as the one slice
+that carries a rule; `rules/slice-design.md` § Reporting severities rates only a **view** slice with no test,
+so the expectation had no law behind it and no run reported it per slice. A no-test finding on any slice
+is tolerated (F5 aside), and the id stays retired.
+
+F4 cites `paidInvoices()` and `byAmount()` as its evidence. That citation is F4, not a gate 6 finding
+against T5, T6 or T8. Likewise F1's remedy may name `Invoice.isPaid()`, whose only caller is the handler's
+check, as removable once the rule moves into `Invoice.pay()`; that is not T1.
 
 ## Traps (must NOT be reported)
 

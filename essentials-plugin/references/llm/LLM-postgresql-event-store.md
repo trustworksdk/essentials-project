@@ -1,6 +1,6 @@
 # PostgreSQL Event Store - LLM Reference
 
-> Full documentation: [README](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/postgresql-event-store/README.md)
+> Full documentation: [README](https://github.com/trustworksdk/essentials-project/blob/0.60.1/components/postgresql-event-store/README.md)
 
 ## Quick Facts
 
@@ -191,7 +191,7 @@ Enabling also requires, on the database side:
 - a role with `REPLICATION` — the tailer opens its own replication connection
 - for `pgoutput`, a publication covering the event-stream tables; let the framework own it with `cdc.pg-output.publication.auto-manage=true` (`mode: FOR_TABLE_LIST` needs table ownership, `FOR_ALL_TABLES` needs superuser)
 
-If a prerequisite is missing, `cdc.mode=auto` (the default once enabled) keeps the application up and subscribers on polling — so a broken CDC setup costs latency, not correctness, and is easy to miss. Verify via `/actuator/health/cdc` or the admin API's `event-store/cdc/status`. Full checklist: [docs/cdc.md §1.1](https://github.com/trustworksdk/essentials-project/blob/0.60.0/docs/cdc.md).
+If a prerequisite is missing, `cdc.mode=auto` (the default once enabled) keeps the application up and subscribers on polling — so a broken CDC setup costs latency, not correctness, and is easy to miss. Verify via `/actuator/health/cdc` or the admin API's `event-store/cdc/status`. Full checklist: [docs/cdc.md §1.1](https://github.com/trustworksdk/essentials-project/blob/0.60.1/docs/cdc.md).
 
 Key classes:
 - `cdc.WalReplicationTailer` - consumes logical replication stream into `eventstore_cdc_inbox` or publishes directly
@@ -217,7 +217,7 @@ Poison handling:
 - `CdcPoisonNotifier` (e.g. `SubscriptionResetOnPoisonNotifier`) can reset resume points backward
 
 Design reference:
-- [Hybrid CDC design](https://github.com/trustworksdk/essentials-project/blob/0.60.0/docs/cdc.md)
+- [Hybrid CDC design](https://github.com/trustworksdk/essentials-project/blob/0.60.1/docs/cdc.md)
 
 ## Event Operations
 
@@ -527,6 +527,8 @@ public class ShippingKafkaPublisher extends EventProcessor {
 
 **Features**: Exclusive (`FencedLock`), ordered per-aggregate (`OrderedMessage` via `Inbox`), redelivery (`RedeliveryPolicy`), command handling (`@CmdHandler` via `DurableLocalCommandBus`).
 
+A handler that fails throws; see [Handler failures](#handler-failures) for redelivery, dead letters and what to alert on.
+
 #### Blocking I/O in a handler: `UnitOfWorkMode.NONE`
 
 A `@MessageHandler` method runs inside a `UnitOfWork` by default — i.e. holding a pooled connection with an open transaction. For a handler that blocks on an external system (HTTP, SOAP, SFTP, a slow gRPC call) that connection sits in `idle in transaction` for the whole round trip, one per parallel consumer, writing nothing. Declare such a handler `UnitOfWorkMode.NONE` and wrap only the database work that follows it:
@@ -565,8 +567,11 @@ public class InstrumentRiskApprovalProcessor extends EventProcessor {
 |--------|-----------|-----|
 | `usingUnitOfWork(...)` | `void usingUnitOfWork(CheckedRunnable)` | Transactional tail with no result |
 | `withUnitOfWork(...)` | `<R> R withUnitOfWork(CheckedSupplier<R>)` | Transactional tail returning a value |
+| `getCurrentUnitOfWork()` | `Optional<EventStoreUnitOfWork> getCurrentUnitOfWork()` | The active `UnitOfWork`; empty in a `NONE` handler outside the wrappers, a constructor, `onSubscriptionsReset` |
+| `getRequiredUnitOfWork()` | `EventStoreUnitOfWork getRequiredUnitOfWork()` | The active `UnitOfWork`, or `NoActiveUnitOfWorkException` where `getCurrentUnitOfWork()` is empty. Never opens one |
+| `getUnitOfWorkFactory()` | `EventStoreUnitOfWorkFactory<EventStoreUnitOfWork> getUnitOfWorkFactory()` | The event store's factory - the one the processor handles with. For `usingUnitOfWork(uow -> ...)` or to hand to a collaborator |
 
-Both join an already active `UnitOfWork` if there is one. Between the blocking call and the wrapper there is no ambient `UnitOfWork`, so touching a transactional resource there fails fast rather than quietly opening a transaction — loading the aggregate *before* the call is the mistake to watch for.
+`usingUnitOfWork`/`withUnitOfWork` join an already active `UnitOfWork` if there is one. A processor never needs a `UnitOfWorkFactory` injected next to its dependencies: inside a handler use `getRequiredUnitOfWork()`, outside one `getUnitOfWorkFactory()`. There is deliberately no processor `usingUnitOfWork(uow -> ...)` overload: beside the no-argument one, Kotlin's `usingUnitOfWork { ... }` would no longer compile (overload ambiguity). Between the blocking call and the wrapper there is no ambient `UnitOfWork`, so touching a transactional resource there fails fast rather than quietly opening a transaction — loading the aggregate *before* the call is the mistake to watch for.
 
 **Processor support**:
 
@@ -634,7 +639,7 @@ public class OrderViewProcessor extends InTransactionEventProcessor {
 
 For asynchronous view projections where low latency is critical but occasional failures acceptable. Events handled asynchronously directly (no queue) for minimal latency. On failure, queued to `DurableQueue` for retry. 
 If the queue has pending messages for a given aggregate id, new events related to the same aggregate-id are queued to maintain ordering.
-Only supports exclusive processing.
+Only supports exclusive processing. A handler that fails throws; see [Handler failures](#handler-failures).
 
 Rejects `@MessageHandler(unitOfWork = UnitOfWorkMode.NONE)` handlers at start-up: the view update and the acknowledgement commit in one `UnitOfWork` here, which a `NONE` handler would break. Blocking I/O belongs in an `EventProcessor`.
 
@@ -668,6 +673,27 @@ public class OrderDashboard extends ViewEventProcessor {
 }
 ```
 
+**JDBI view writes - use the handler's own `UnitOfWork`, not an injected factory.** Every `ViewEventProcessor` handler runs inside the `UnitOfWork` that also records the processor's progress, so a write through `getRequiredUnitOfWork().handle()` commits or rolls back together with it. A constructor and `onSubscriptionsReset` have no active `UnitOfWork`; open one through `getUnitOfWorkFactory()`:
+```java
+public OrderDashboard(ViewEventProcessorDependencies dependencies) {
+    super(dependencies);                                                   // no UnitOfWorkFactory parameter
+    getUnitOfWorkFactory().usingUnitOfWork(uow -> uow.handle().execute("CREATE TABLE IF NOT EXISTS order_dashboard (...)"));
+}
+
+@MessageHandler
+void handle(OrderCreated event) {
+    getRequiredUnitOfWork().handle()
+                           .createUpdate("INSERT INTO order_dashboard (order_id) VALUES (:orderId) ON CONFLICT DO NOTHING")
+                           .bind("orderId", event.orderId().toString())
+                           .execute();
+}
+
+@Override
+protected void onSubscriptionsReset(AggregateType aggregateType, GlobalEventOrder resubscribeFromAndIncluding) {
+    getUnitOfWorkFactory().usingUnitOfWork(uow -> uow.handle().execute("TRUNCATE TABLE order_dashboard"));
+}
+```
+
 **Version = EventOrder Pattern** (for JDBI/JPA view entities):
 ```java
 @MessageHandler
@@ -681,6 +707,33 @@ void on(OrderConfirmed event, OrderedMessage message) {
 }
 ```
 
+### Handler failures
+
+Applies to `EventProcessor` and `ViewEventProcessor`. **A `@MessageHandler` throws on a failure it cannot handle.**
+Never catch and log it: a swallowed exception acknowledges the event, so the view or the side effect is silently
+missing for good.
+
+What a throw does:
+
+1. The event is redelivered through the processor's queue - the `Inbox` (`getInboxRedeliveryPolicy()`) for an
+   `EventProcessor`, the durable queue (`getDurableQueueRedeliveryPolicy()`) for a `ViewEventProcessor` once its direct
+   handling failed. The queue's built-in permanent-error list applies, so an `IllegalArgumentException` dead-letters on
+   the first attempt (see [LLM-foundation.md § The built-in permanent-error list](LLM-foundation.md#the-built-in-permanent-error-list)).
+2. When the redeliveries are used up, the message becomes a dead letter.
+3. The subscription's resume point **keeps advancing**: the event is in the queue, so the processor goes on with the
+   next events. Only that aggregate is held: messages are ordered by aggregate id (`OrderedMessage` key), and later
+   events of the same aggregate wait behind its dead letter (a `ViewEventProcessor` queues them behind it), while every
+   other aggregate keeps flowing.
+
+Operating it:
+
+- **Alert** on the `essentials.messaging.durable_queues.dead_lettered` counter (tag `queue_name` =
+  `processor.getDurableQueueName()`: `Inbox:<processorName>` or `<processorName>:queue`), or on
+  `DurableQueuesHealthIndicator` (see [LLM-foundation.md § Delivery observability](LLM-foundation.md#delivery-observability)).
+- **Fix the cause**, then **resurrect** the dead letter: `durableQueues.resurrectDeadLetterMessage(queueEntryId,
+  deliveryDelay)`, or the admin API's `durable-queues` resurrect operation. The held events of that aggregate follow
+  it in order.
+
 ### @MessageHandler Signatures
 
 | Parameters | Description |
@@ -690,7 +743,8 @@ void on(OrderConfirmed event, OrderedMessage message) {
 
 > ⚠️ **Two different requirements, often conflated.**
 > - `@MessageHandler` is **mandatory**: an un-annotated method is not a handler. A `ViewEventProcessor` allows unmatched
->   messages, so the event is skipped silently — no exception, the handler just never runs.
+>   messages, so the event is skipped — no exception, the handler just never runs. Since 0.60.1 the skip is a WARN
+>   (opt out per type with `@IgnoresEventTypes`): see [Unhandled event types](#unhandled-event-types).
 > - `OrderedMessage` is **optional to the dispatcher** (single-argument handlers are invoked normally) but **required for a
 >   versioned projection**: `message.getOrder()` is the `EventOrder` your update compares against the stored version (see
 >   *Version = EventOrder Pattern* above). Without it, a redelivered event is applied twice. A handler with no versioned
@@ -701,6 +755,198 @@ Attributes:
 | Attribute | Values | Description |
 |-----------|--------|-------------|
 | `unitOfWork` | `REQUIRED` (default), `NONE` | `REQUIRED` invokes the method inside a `UnitOfWork`. `NONE` invokes it with none active, for blocking I/O — `EventProcessor` only, and the handler wraps its own transactional tail. See [Blocking I/O in a handler](#blocking-io-in-a-handler-unitofworkmodenone) |
+
+### Start position
+
+An `EventProcessor` or `ViewEventProcessor` keeps one durable resume point per aggregate type, under the subscriber id
+`<processorName>:<aggregateType>` (`AbstractEventProcessor.resolveSubscriberId`). Two hooks on `AbstractEventProcessor`
+choose where it starts. They apply **only while no resume point exists** for that id, i.e. on its first start. After
+that the subscription resumes where it left off, and changing a hook has no effect.
+
+| Hook | Default | Effect |
+|---|---|---|
+| `protected boolean isStartSubscriptionFromLatestEvent()` | `false` | `false`: start at `GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER` (global order 1), so the whole history is replayed. `true`: start after the highest global order persisted for the aggregate type when the subscription first subscribes |
+| `protected Function<AggregateType, GlobalEventOrder> resolveStartSubscriptionFromGlobalEventOrder()` | applies the flag above | Override it for any other start, per aggregate type |
+
+⚠️ A projection that starts from the latest event **never backfills its history**: aggregates whose events were
+appended before its first start never get a row. Use the latest-event start for processors that only react to new
+events (notifications, integrations), not for views. To fill a view after the fact, clear it in `onSubscriptionsReset`
+and call `resetAllSubscriptions()` or `resetSubscriptions(Map<AggregateType, GlobalEventOrder>, boolean)` on the
+instance that holds the processor's lock (see
+[LLM-foundation-test.md § What makes this safe with Essentials](LLM-foundation-test.md#what-makes-this-safe-with-essentials)).
+
+`InTransactionEventProcessor` has no resume point and no start position: it handles events inside the `UnitOfWork`
+that appends them, never history.
+
+### Subscriber ids and several instances
+
+The processor name is the identity of everything durable a processor owns: the subscriber ids
+`<processorName>:<aggregateType>` (a `durable_subscriptions` row each, keyed by subscriber id and aggregate type), the
+queue (`EventProcessor`: the `Inbox` named `<processorName>`; `ViewEventProcessor`: `<processorName>:queue`) and the
+locks (`ViewEventProcessor`: `<processorName>:lock`; `EventProcessor`: one per subscription,
+`[<processorName>:<aggregateType>-<aggregateType>]`, plus `Inbox:<processorName>` for its default
+`SingleGlobalConsumer` inbox, which is where the `@MessageHandler`s run).
+
+- **Keep `getProcessorName()` stable across restarts and identical on every instance.** Never derive it from a host
+  name, pod name or random id. A per-instance name does not give each instance every event: each new identity starts
+  over at its [start position](#start-position) (replaying the whole history from global order 1, or, with
+  `isStartSubscriptionFromLatestEvent()`, missing everything appended before it), and the old identity's resume-point
+  rows stay behind. Nothing deletes them (`DurableSubscriptionRepository.deleteResumePoint(subscriberId, aggregateType)`
+  does, by hand).
+- **Two instances on one database split a processor's events.** Both processors are exclusive: only the instance
+  holding the processor's `FencedLock` handles events (for an `EventProcessor`, the holder of `Inbox:<processorName>`),
+  and the lock moves when that instance stops or loses it. So each event is handled once between them, never once per
+  instance. An in-process cache above a projection is evicted only
+  in the instance that handled the event.
+- **The lock holder's code decides the behaviour.** When the instances run different code (your branch and a
+  colleague's build against a shared development database, or two versions during a rolling deploy), the code of the
+  instance holding the lock is what runs. A handler added on your branch never fires while the other instance holds the
+  lock, which looks exactly like a broken handler.
+- **Finding the holder.** `GET /fenced-locks` lists each lock with `lockedByLockManagerInstanceId` (the
+  `essentials.fenced-lock-manager.instance-id`, `<hostname>:<pid>` by default). `GET /event-store/subscriptions` lists
+  every subscriber id with its durable resume point (`currentGlobalOrder`, shared by all instances) and, for the
+  instance that answers, `runningInThisInstance`, `active` (holds the lock) and `inMemoryGlobalOrder` (see
+  [LLM-admin-api.md](LLM-admin-api.md)). A `ViewEventProcessor` also logs `FencedLock '<processorName>:lock' for
+  ViewProcessor '…' … was ACQUIRED` at INFO in the instance that won it.
+
+Container reuse in tests turns every build on a host into one shared database, with the same effect - see
+[LLM-foundation-test.md § What makes this safe with Essentials](LLM-foundation-test.md#what-makes-this-safe-with-essentials).
+
+### Awaiting a processor (`awaitProcessed`)
+
+Since 0.60.1. A barrier that returns once a processor has processed a given event — for read-your-writes flows and
+integration tests, in place of polling a read model under a guessed timeout.
+
+```java
+// Blocking - EventProcessor, ViewEventProcessor (AbstractEventProcessor) and InTransactionEventProcessor
+processor.awaitProcessed(AggregateType aggregateType, GlobalEventOrder globalEventOrder, Duration timeout);
+processor.awaitProcessed(PersistedEvent event, Duration timeout);
+// Non-blocking: completes empty, or signals AwaitProcessedTimeoutException
+Mono<Void> processor.awaitProcessedAsync(AggregateType aggregateType, GlobalEventOrder globalEventOrder, Duration timeout);
+```
+
+What "processed" means per processor type:
+
+| Processor | Released when |
+|-----------|---------------|
+| `EventProcessor` | its subscription's resume point is past the event **and** no message for the event's aggregate id is queued in its `Inbox` (the subscription only forwards the event there) |
+| `ViewEventProcessor` | its subscription's resume point is past the event **and** no message for the event's aggregate id is queued in its durable queue (a failed direct handling queues the event, and later events of that aggregate behind it) |
+| `InTransactionEventProcessor` | at once — it handles the event inside the appending `UnitOfWork`, so a committed event has been handled |
+
+- A transient gap counts as not processed: a subscription that moved past the event while it was still uncommitted
+  handles it later as a gap fill, and the barrier waits for that.
+- The gap check asks the event store through the role interface `AwaitedGapInspector`
+  (`isAwaitedAsGap(subscriberId, aggregateType, globalEventOrder)`), which `PostgresqlEventStore` and `CdcEventStore`
+  implement: transient-gap rows and the middles of wide gaps awaited in memory only - under CDC also one the running
+  subscription found itself. An `EventStore` you write that decorates one of them must implement it and forward to
+  its delegate, like `forgetGapMiddlesAwaitedInMemory` - `transientGapsReadFrom()` included, or a `CdcEventStore`
+  over it reads the transient gaps a second time (same answer, one extra lookup). Otherwise the check is off (one WARN per processor, logged
+  when it starts and worded "If you call awaitProcessed…"; a `CdcEventStore` over such a store WARNs once too and
+  answers fully only while CDC is active), and an event that committed after a later one can be reported processed before its gap fill was
+  handled.
+- Dead letters count as queued, so a dead-lettered event is **never** reported processed — the call times out.
+- Conservative: a later event of the same aggregate still queued holds the barrier too.
+- On timeout it throws `AwaitProcessedTimeoutException` naming the processor, aggregate type, global event order, the
+  current resume point, why the event does not count yet and the queue's queued/dead-letter counts (also as accessors).
+- It reads this JVM's processor. An exclusive subscription held by another instance is read from its last saved resume
+  point (lags by the snapshot interval); a `ViewEventProcessor` whose lock another instance holds times out.
+- Call it **after** the appending `UnitOfWork` committed; inside it the subscription cannot see the event.
+- `IllegalArgumentException` for an aggregate type the processor does not react to.
+
+Where N comes from: `eventStore.appendToStream(...)` returns the `PersistedEvent`s. When the append happens further
+down - a `commandBus.send(...)`, a repository - wrap the call in `AppendedEvents.recordDuring(...)`
+(`dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.AppendedEvents`, since 0.60.1):
+
+```java
+var recorded = AppendedEvents.recordDuring(() -> commandBus.send(new PlaceOrder(orderId)));
+Object returned = recorded.result();                                       // what send returned
+orderViewProcessor.awaitProcessed(recorded.lastAppendedEvent().orElseThrow(), Duration.ofSeconds(10));
+```
+
+- Records every event `PostgresqlEventStore.appendToStream` persists during the action, once each, whoever appends:
+  `EventStreamDecider` adapters, decider `CommandHandler`s, Kotlin deciders, `StatefulAggregateRepository`, direct
+  `appendToStream`. A decorator such as `CdcEventStore` delegates to it, so its appends are recorded once too.
+- Calling thread only (a `ScopedValue`): `send`, not `sendAsync`/`sendAndDontWait`, whose handler runs on another
+  thread. Synchronous subscribers that append on that thread during the action (event-bus subscribers, in-transaction
+  handlers) are recorded too. Recordings nest.
+- A repository that appends at `UnitOfWork` commit (`StatefulAggregateRepository`, `FlexAggregateRepository`, decider
+  `CommandHandler`) is recorded only if that commit happens during the action - true when the
+  `UnitOfWorkControllingCommandBusInterceptor` created the `UnitOfWork`, false inside an outer one.
+- The `GlobalEventOrder` is assigned at append, before commit; a rolled-back event stays recorded. Await only after the
+  appending `UnitOfWork` committed.
+- Several aggregate types: `recorded.highestGlobalEventOrder(aggregateType)` per type.
+
+**Integration-test example:**
+
+```java
+@Test
+void placing_an_order_shows_it_in_the_order_view() {
+    var placed = unitOfWorkFactory.withUnitOfWork(() ->
+            eventStore.startStream(ORDERS, orderId, List.of(new OrderPlaced(orderId))).firstEvent());
+
+    orderViewProcessor.awaitProcessed(placed, Duration.ofSeconds(10));   // no Awaitility, no guessed timeout
+
+    assertThat(orderView.find(orderId)).isPresent();                    // read once
+}
+```
+
+Await the **last** event the assertion depends on, on the processor that writes the read model you assert on.
+
+### Testing asynchronous projections
+
+An `EventProcessor` or `ViewEventProcessor` handles events after the appending `UnitOfWork` commits, so a test that
+appends and then reads its read model at once races it. Rules:
+
+- **Await the last event you appended**, not an earlier one: a processor past the first event may not have reached
+  the third. Use `eventStore.appendToStream(...).lastEvent()`, or `AppendedEvents.recordDuring(...)` around a
+  `commandBus.send(...)` and its `lastAppendedEvent()`. When the command appended to several aggregate types, await
+  per type with `recorded.highestGlobalEventOrder(aggregateType)` and `awaitProcessed(aggregateType, order, timeout)`.
+- **Await the seam the code under test actually reads.** If the assertion reads a view, await the processor that
+  writes that view, with [`awaitProcessed`](#awaiting-a-processor-awaitprocessed). If it reads something a processor
+  only starts - an aggregate a policy updates through `sendAndDontWait`, a cache refreshed by a listener - the
+  processor being done does not mean that seam is; await the seam itself.
+- **An existence check that must not lag asks the write side.** An idempotency probe ("does this order already
+  exist?") reads the aggregate - a repository's `findX`, `tryLoad(id)` or `eventStore.fetchStream(...)` - never an
+  eventually consistent view.
+- **`awaitProcessed` sees only the processor in this JVM.** When another instance holds the processor's lock (a
+  second application on the same test database, a reused container), a `ViewEventProcessor` times out and an
+  `EventProcessor` reads a resume point that lags by the snapshot interval.
+
+For the seams `awaitProcessed` cannot cover - an aggregate fold or a cache downstream of a processor, or a processor
+whose lock another instance holds - poll with an assertion and a deadline (e.g. Awaitility's
+`await().atMost(Duration.ofSeconds(10)).untilAsserted(...)`, test scope).
+
+### Unhandled event types
+
+Since 0.60.1 (CB-4). Every processor allows unmatched messages, so an event type without a `@MessageHandler` was dropped
+without a trace. How loudly it is reported now depends on the processor, because only a view is harmed by a skip:
+
+| Processor | Ignored event | At `start()` |
+|---|---|---|
+| `ViewEventProcessor` | Counted + **WARN** per event type, at most once an hour, with the number ignored since the last one | INFO: handled types and the `@IgnoresEventTypes` list; **WARN** for the types a sealed event type permits that the view neither handles nor ignores |
+| `EventProcessor`, `InTransactionEventProcessor` | Counted + DEBUG - skipping events is normal there | INFO: handled types |
+
+Why the view WARNs: a view that silently skips an event type does not see every `EventOrder` of that aggregate, so a
+projection checking that the order is contiguous breaks, and the view is incomplete with no one noticing.
+
+- **Opt out per type** with `@IgnoresEventTypes` on the view class. Listed types (a supertype covers its subtypes) are
+  still counted, but neither WARN mentions them. `eventNames` matches events persisted by event name only (no Java type).
+  ```java
+  @IgnoresEventTypes(value = {OrderShipped.class, OrderLineEvent.class}, eventNames = "LegacyOrderArchived")
+  public class OrderSummaryView extends ViewEventProcessor { ... }
+  ```
+- **The start-up check only sees sealed hierarchies.** For each sealed supertype of a handled type it walks
+  `getPermittedSubclasses()` recursively; an event type that shares no sealed supertype with a handled one is found
+  only when it is delivered (the per-event WARN). A permitted `non-sealed` branch the view handles part of is not
+  reported. The event tables are never read. Every handled type's sealed supertypes count, so a sealed type spanning
+  several aggregates WARNs about the other aggregates' events too - list it (or its branches) in `@IgnoresEventTypes`.
+- **Counter:** each ignored event is reported to `EventStoreSubscriptionObserver.eventTypeNotHandledByProcessor(processorName, event)`
+  (default no-op). `MeasurementEventStoreSubscriptionObserver` counts it as
+  `essentials.eventstore.processor.unhandled_event_type` (tags `processor`, `aggregate_type`, `event_type`, optional
+  `Module`) whenever it has a `MeterRegistry` - the starter wires that when one is present.
+- Logger: `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.UnhandledEventTypes`. With
+  a Spring Boot starter the start-up WARN is repeated in the startup report block
+  ([LLM-spring-boot-starter-modules.md § Run Report](LLM-spring-boot-starter-modules.md#run-report)).
 
 ## In-Memory Projections
 
@@ -1026,7 +1272,7 @@ eventBus.addAsyncSubscriber(events ->
 ## Event Causation
 
 Every persisted event can record the id of the event that caused it: `PersistedEvent.causedByEventId()`, column
-`caused_by_event_id`. Design: [`docs/event-causation.md`](https://github.com/trustworksdk/essentials-project/blob/0.60.0/docs/event-causation.md).
+`caused_by_event_id`. Design: [`docs/event-causation.md`](https://github.com/trustworksdk/essentials-project/blob/0.60.1/docs/event-causation.md).
 
 **On by default with the Spring Boot starter.** `essentials.eventstore.causation.enabled=false` turns off everything
 that writes it. Correlation ids are not populated - use trace context (OpenTelemetry) for "what did this request do".
@@ -1226,6 +1472,12 @@ monitorManager.start();
 The Spring Boot starter wires it whenever a `MeterRegistry` is present (not gated by `management.tracing.enabled`);
 `essentials.eventstore.subscription-monitor.enabled=false` turns it off together with every other monitor.
 
+The lag gauge `DurableSubscriptions_EventOrder_Diff` (`SubscriberGlobalOrderMicrometerMonitor`, same constructor shape plus
+the `EventStoreUnitOfWorkFactory`) is wired the same way since 0.60.1. It reads `highest global order persisted - resume
+point + 1` (the resume point is the next order to read), so `0` = caught up, `1` = one event unread; holes count as
+events. A resume point ahead of the head - a reset or restored database, where the subscriber silently skips events -
+reads `0` and logs one WARN per episode.
+
 The SPI has a single slot, so collecting statistics **composes** with the metrics observer rather than replacing it:
 
 ```java
@@ -1242,7 +1494,7 @@ The Spring Boot starter wires exactly that by default (`essentials.eventstore.su
 
 **Gap statistics** (`SubscriptionStatistics.gaps()`, admin API `gaps`): `newTransientGaps`, `resolvedTransientGaps`, `promotedToPermanentGaps`, plus when the last new and last promoted gap happened. Counted on every path that reconciles gaps, CDC backfill included, from the rows the reconciliation actually changed, and only after its unit of work commits. Transient gaps appearing and resolving is normal under concurrent writers; a rising `promotedToPermanentGaps` means global orders this subscriber stopped waiting for. `polling.gapReconciliations` is not a gap count - it is one per poll that ran reconciliation, gap or no gap. A custom `SubscriptionGapHandler` reports its outcome by overriding `reconcileGapsAndReport`; the default reports nothing.
 
-See [README EventStoreSubscriptionObserver](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/postgresql-event-store/README.md#eventstoresubscriptionobserver) for metrics and custom implementations.
+See [README EventStoreSubscriptionObserver](https://github.com/trustworksdk/essentials-project/blob/0.60.1/components/postgresql-event-store/README.md#eventstoresubscriptionobserver) for metrics and custom implementations.
 
 ### Schema ownership and notify triggers
 
@@ -1519,11 +1771,12 @@ notices depends on the dispatcher:
 
 | Dispatcher | Unmatched message/event |
 |---|---|
-| `EventProcessor`, `InTransactionEventProcessor`, `ViewEventProcessor` | Ignored — they call `allowUnmatchedMessages()` |
+| `ViewEventProcessor` | Ignored — it calls `allowUnmatchedMessages()`; since 0.60.1 counted and WARNed about (see [Unhandled event types](#unhandled-event-types)) |
+| `EventProcessor`, `InTransactionEventProcessor` | Ignored — they call `allowUnmatchedMessages()`; since 0.60.1 counted and logged at DEBUG |
 | Aggregates (`AggregateRoot`, `FlexAggregate`, `AggregateState`), `AnnotationBasedInMemoryProjector` | Ignored — an aggregate need not handle every event |
 | `PatternMatchingMessageHandler`, `PatternMatchingQueuedMessageHandler`, `PatternMatchingPersistedEventHandler` | `IllegalArgumentException`, unless `allowUnmatchedMessages()` / `allowUnmatchedEvents()` was called |
 
-In the first two rows a forgotten annotation drops the event with no error: a projection simply never updates, an
+In the first three rows a forgotten annotation drops the event with no error: a projection simply never updates, an
 aggregate's state never changes. In the last row, on a durable queue, the `IllegalArgumentException` is a permanent
 error and dead-letters the message on its first delivery (see
 [LLM-foundation.md § The built-in permanent-error list](LLM-foundation.md#the-built-in-permanent-error-list)).
@@ -1549,7 +1802,7 @@ Essentials applies naming convention validation as initial defense layer - **NOT
 - Derive from controlled, trusted sources only
 - Validate at application startup
 
-See [README Security](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/postgresql-event-store/README.md#security) for details.
+See [README Security](https://github.com/trustworksdk/essentials-project/blob/0.60.1/components/postgresql-event-store/README.md#security) for details.
 
 ### What Validation Does NOT Protect Against
 

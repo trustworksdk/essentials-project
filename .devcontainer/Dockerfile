@@ -31,6 +31,18 @@ ARG INSTALL_HEADROOM="false"
 # rtk integration is proxy-based; this is the lean, proxy-free path).
 ARG INSTALL_RTK="false"
 ARG INSTALL_JETBRAINS="false"
+# Headless Chromium for the essentials plugin's render-check (the slice-map and Slice
+# Atlas pages, tests/fixtures/slice-map/render-check.py) and any browser check. The
+# system libraries are baked in here; post-create.sh downloads the browser binary.
+ARG INSTALL_PLAYWRIGHT="false"
+# Static analysers the tw-code-review plugin runs when they are on PATH:
+# gitleaks (secret scan), spotbugs + FindSecBugs, detekt and PMD (JVM). Built
+# or fetched here. markdownlint, semgrep and PyYAML need Node or Python, which
+# arrive with the devcontainer features after this build, so post-create.sh
+# installs those. PyYAML is the plugin's YAML fallback reader and makes yq, its
+# other one, redundant, so yq is not installed. detekt, spotbugs and PMD run on
+# the JVM and need INSTALL_JAVA=true.
+ARG INSTALL_REVIEW_TOOLS="false"
 
 # Git identity is passed via containerEnv in devcontainer.json (not build args)
 # to avoid leaking PII into image layers. post-create.sh reads it at runtime.
@@ -44,34 +56,108 @@ ARG JAVA_VERSION="17"
 # JAVA_HOME point at. The extras are installed so a branch that needs a different
 # JDK can be built with an explicit JAVA_HOME=/usr/lib/jvm/temurin-<v>-jdk-<arch>.
 ARG ADDITIONAL_JAVA_VERSIONS=""
+# Exact apt version of temurin-${JAVA_VERSION}-jdk (e.g. "25.0.5.0.0+8-0"); empty
+# installs the newest the Adoptium repo has. Applies to JAVA_VERSION only, never to
+# ADDITIONAL_JAVA_VERSIONS. List versions with `apt-cache madison temurin-25-jdk`.
+ARG JAVA_PACKAGE_VERSION=""
 # MAVEN_SHA512 must match MAVEN_VERSION — update both together.
 # Get the SHA512 from: https://archive.apache.org/dist/maven/maven-3/<version>/binaries/
-ARG MAVEN_VERSION="3.9.16"
-ARG MAVEN_SHA512="831a8591fe20c8243b1dbe7d71e3244f31d1665b0804b2e825e38cbbe5ce0cafb8338851f90780735568773e0a6cd07bbec107cda0b896b008b861075358b6f6"
+ARG MAVEN_VERSION="3.10.0"
+ARG MAVEN_SHA512="908b1501bfb420bf7c8affb855534a9c407fd6099367bfb9f2f2dcb8e9799102bffb84518cde74c679bd76870247c6528683abdd620581bffa90f95d92d175aa"
 # JDT-LS (Eclipse Java LSP). SHA-256 must match the pinned tarball — update both
 # together. The build-date suffix is part of the filename. Get the SHA from:
 # https://download.eclipse.org/jdtls/milestones/<version>/<tarball>.sha256
-ARG JDTLS_VERSION="1.61.0"
-ARG JDTLS_BUILD_DATE="202609031315"
-ARG JDTLS_SHA256="338e7e73d61836651ba2453919a0d34fa763eb4e7c03342092309bffb8934c64"
+ARG JDTLS_VERSION="1.63.0"
+ARG JDTLS_BUILD_DATE="202610191322"
+ARG JDTLS_SHA256="b1f2abe0b3cccb462cf64fb4a5587c7d09df60cf8be7748b152cbd89d018bdc4"
 # kotlin-language-server (official JetBrains Kotlin LSP). Tarballs are hosted on
 # JetBrains' CDN (the GitHub release page just links out). Each tarball ships a
 # sibling .sha256 file; values below were captured at the pinned version.
 # Refresh recipe:
-#   curl -fsSL https://download-cdn.jetbrains.com/language-server/kotlin-server/<ver>/kotlin-server-<ver>.tar.gz.sha256
-#   curl -fsSL https://download-cdn.jetbrains.com/language-server/kotlin-server/<ver>/kotlin-server-<ver>-aarch64.tar.gz.sha256
-ARG KOTLIN_LS_VERSION="263.4702.0"
-ARG KOTLIN_LS_SHA256_AMD64="1e11d2e5fefbf9ea215ad8dd6be95f2222897cd086e8cb7a661a52084a590405"
-ARG KOTLIN_LS_SHA256_ARM64="ec7cb254a6662a07fff9f10e4365226afab6c40008f8a974c10ac5e785d6510f"
+#   curl -fsSL https://download.jetbrains.com/language-server/kotlin-server/<ver>/kotlin-server-<ver>.tar.gz.sha256
+#   curl -fsSL https://download.jetbrains.com/language-server/kotlin-server/<ver>/kotlin-server-<ver>-aarch64.tar.gz.sha256
+ARG KOTLIN_LS_VERSION="263.7084.0"
+ARG KOTLIN_LS_SHA256_AMD64="ae0c4b01e17ab73a4a5227a78ea99e6dcbe3e499600315b22759a4e4cddd11df"
+ARG KOTLIN_LS_SHA256_ARM64="450ab7c1d80e48106aa429b48cb4226d82ca12a8a2400447ae02386794780cac"
 # rtk (Rust Token Killer). Per-arch release tarball from GitHub (amd64 → musl,
 # arm64 → gnu). SHA-256 = GitHub's published per-asset digest for the pinned tag,
 # verified at build. Refresh recipe (after bumping RTK_VERSION):
 #   curl -fsSL -H "Accept: application/vnd.github+json" \
 #     https://api.github.com/repos/rtk-ai/rtk/releases/tags/v<ver> \
 #     | python3 -c "import sys,json;[print(a['name'],a.get('digest')) for a in json.load(sys.stdin)['assets']]"
-ARG RTK_VERSION="0.50.0"
-ARG RTK_SHA256_AMD64="bc2b8902b0d9c796c82ef45f16ae2307e17757afeca5ee156235a3dc7bda5f89"
-ARG RTK_SHA256_ARM64="d1cc49dfa2cd443fc32625444b59fe616b6c80478cca210985118347174dd758"
+# The `rtk-oss-*` assets, not `rtk-*`: since 1.0.0 the default `rtk` binary links
+# rtk-engine, which is BUSL-1.1 (engine/LICENSE: production use only inside RTK's
+# own binary, never offered to third parties as a paid or hosted product). The
+# oss edition is Apache-2.0 only, installs the same `rtk` binary name, and keeps
+# the hook core and every command filter, which is all this container uses; it
+# lacks only the pipeline engine and the llm-proxy setup that `rtk init -g`
+# would otherwise offer. Take the digests of the rtk-oss-* assets.
+ARG RTK_VERSION="1.1.0"
+ARG RTK_SHA256_AMD64="4dec94a64035e08189ae82fd5408fe4ae9ae27a665fc07e3e3ec3c4c2d8e8a3e"
+# Playwright release whose chromium-headless-shell post-create.sh downloads. Run with
+# npx, never added to the project: the Essentials build stays JVM-only.
+ARG PLAYWRIGHT_VERSION="1.55.0"
+ARG RTK_SHA256_ARM64="57a4fac13d18da77f0577ea8b68def7934b934bf76d0a6e161f0bfd06b1e1078"
+# Review tools (INSTALL_REVIEW_TOOLS). Every pin below was checked against
+# OSV and the project's GitHub security advisories before it was added; re-check
+# both when bumping one.
+#
+# gitleaks is built from source, not taken as the release binary: the v8.30.1
+# binary is built with Go 1.24.11 and stale golang.org/x modules, and govulncheck
+# finds 69 reachable vulnerabilities in it. Built with the Go below and the
+# dependency pins in GITLEAKS_DEP_PINS, govulncheck reports none reachable and
+# gitleaks' own test suite passes. GITLEAKS_COMMIT is the commit the v<ver> tag
+# points at; the build fails, naming both shas, if the tag has moved. Refresh
+# recipe (the commits endpoint peels an annotated tag to its commit; the
+# git/ref/tags endpoint would return the tag object's sha, which never matches):
+#   curl -fsSL https://api.github.com/repos/gitleaks/gitleaks/commits/v<ver> | jq -r .sha
+#   docker buildx imagetools inspect golang:<go-ver>-trixie   # index digest
+#   in a checkout: go get <pins> && go mod tidy && go test ./... && govulncheck ./...
+ARG GITLEAKS_VERSION="8.30.1"
+ARG GITLEAKS_COMMIT="83d9cd684c87d95d656c1458ef04895a7f1cbd8e"
+ARG GITLEAKS_GO_IMAGE="golang:1.27.2-trixie@sha256:47667934874913a449b96faa7ef4777fa285d9ec29126ee80ed61c45b7cccf0e"
+ARG GITLEAKS_DEP_PINS="github.com/mholt/archives@v0.1.5 github.com/nwaples/rardecode/v2@v2.2.0 github.com/ulikunitz/xz@v0.5.15 github.com/klauspost/compress@v1.18.7 golang.org/x/crypto@v0.58.0 golang.org/x/text@v0.43.0 golang.org/x/sys@v0.49.0"
+# spotbugs: release tarball from GitHub; SHA-256 = GitHub's published asset digest.
+#   curl -fsSL https://api.github.com/repos/spotbugs/spotbugs/releases/tags/<ver> | jq -r '.assets[]|.name+" "+.digest'
+ARG SPOTBUGS_VERSION="4.10.4"
+ARG SPOTBUGS_SHA256="72bc0d4edd686e462c0f71f42a049b27bf4da6708797ff7b2b56dd202714b4e5"
+# FindSecBugs plugin and detekt CLI: jars from Maven Central. The SHA-256 was
+# computed from the downloaded jar after it matched Central's published .sha1.
+# detekt's GitHub release jar is a different build from Central's; pin Central's.
+#   https://repo1.maven.org/maven2/com/h3xstream/findsecbugs/findsecbugs-plugin/<ver>/
+#   https://repo1.maven.org/maven2/io/gitlab/arturbosch/detekt/detekt-cli/<ver>/   (the -all.jar)
+ARG FINDSECBUGS_VERSION="1.14.0"
+ARG FINDSECBUGS_SHA256="6fa340344fa433ff46c2985dab1010e8bc739f9395c983594a5240095e92abc8"
+ARG DETEKT_VERSION="1.23.8"
+ARG DETEKT_SHA256="3afe89a11120303c73c9bdda3d8fe558dd9070a6937d27819ddc04b275381245"
+# PMD: the binary distribution zip from GitHub; SHA-256 = GitHub's published
+# asset digest. The tag name carries a slash, URL-encoded in the download path.
+#   curl -fsSL https://api.github.com/repos/pmd/pmd/releases/tags/pmd_releases/<ver> | jq -r '.assets[]|.name+" "+.digest'
+# The rules it applies: pmd-ruleset.xml at the repository root.
+ARG PMD_VERSION="7.28.0"
+ARG PMD_SHA256="f974ba571f7bc01c73fffe11bade25fbc1f438698f9e9c00e416e8d65e9fbac2"
+# semgrep and PyYAML are Python packages; post-create.sh installs them at these
+# versions once the Python feature is present (pins reach it through ENV below).
+ARG SEMGREP_VERSION="1.181.0"
+ARG PYYAML_VERSION="6.0.3"
+# jsonschema goes into python3 next to PyYAML (tw-code-review and refac validate
+# with it and fall back to weaker checks without it).
+ARG JSONSCHEMA_VERSION="4.26.0"
+
+# -----------------------------------------------------------------------------
+# Runtime tool pins
+# -----------------------------------------------------------------------------
+# post-create.sh installs these once the Node and Python features exist; the pins
+# reach it through ENV below. Pinned so a rebuild installs what was tested, not
+# whatever the registry calls "latest" that day.
+# typescript stays on 6.x: 7.0 (the native Go port) ships no lib/tsserver.js, which
+# typescript-language-server requires, so an unpinned install leaves the server
+# unable to start and the LSP tool silently never comes up.
+ARG TYPESCRIPT_VERSION="6.0.3"
+ARG TS_LANGUAGE_SERVER_VERSION="6.0.2"
+ARG PYRIGHT_VERSION="1.1.414"
+ARG GRAPHIFY_VERSION="0.9.96"
+ARG HEADROOM_VERSION="0.42.0"
 
 # -----------------------------------------------------------------------------
 # JetBrains Configuration
@@ -79,9 +165,39 @@ ARG RTK_SHA256_ARM64="d1cc49dfa2cd443fc32625444b59fe616b6c80478cca21098511834717
 ARG JETBRAINS_BACKEND="IntelliJ"
 
 # -----------------------------------------------------------------------------
+# gitleaks build stage (used only when INSTALL_REVIEW_TOOLS=true)
+# Leaves the binary in /out, or /out empty when the toggle is off, so the
+# COPY --from in the main stage works either way. The Go image is pulled even
+# when the toggle is off (a COPY --from cannot be conditional); only the build
+# is skipped. Nothing from this stage but /out reaches the image.
+# -----------------------------------------------------------------------------
+FROM ${GITLEAKS_GO_IMAGE} AS gitleaks-build
+ARG INSTALL_REVIEW_TOOLS
+ARG GITLEAKS_VERSION
+ARG GITLEAKS_COMMIT
+ARG GITLEAKS_DEP_PINS
+RUN mkdir -p /out && if [ "${INSTALL_REVIEW_TOOLS}" = "true" ]; then \
+    set -eux && \
+    export CGO_ENABLED=0 GOTOOLCHAIN=local GOFLAGS=-mod=mod && \
+    git clone --quiet --depth 1 --branch "v${GITLEAKS_VERSION}" https://github.com/gitleaks/gitleaks.git /src && \
+    cd /src && \
+    actual_commit="$(git rev-parse HEAD)" && \
+    if [ "${actual_commit}" != "${GITLEAKS_COMMIT}" ]; then \
+        echo "gitleaks v${GITLEAKS_VERSION}: tag resolves to commit ${actual_commit}, GITLEAKS_COMMIT is ${GITLEAKS_COMMIT}; the tag moved or the pin is not a commit sha (see the refresh recipe)" >&2; \
+        exit 1; \
+    fi && \
+    go get ${GITLEAKS_DEP_PINS} && \
+    go mod tidy && \
+    go build -trimpath -ldflags "-s -w -X github.com/zricethezav/gitleaks/v8/version.Version=${GITLEAKS_VERSION}" -o /out/gitleaks . && \
+    /out/gitleaks version; \
+    fi
+
+# -----------------------------------------------------------------------------
 # Base Image
 # -----------------------------------------------------------------------------
-FROM mcr.microsoft.com/devcontainers/base:debian AS base
+# Pinned tag, not the floating :debian — a rebuild otherwise picks up whatever
+# base Microsoft published that day.
+FROM mcr.microsoft.com/devcontainers/base:2.2.3-trixie AS base
 
 # Re-declare ARGs after FROM (they don't persist across stages)
 ARG PROJECT_NAME
@@ -92,7 +208,11 @@ ARG INSTALL_GRAPHIFY
 ARG INSTALL_HEADROOM
 ARG INSTALL_RTK
 ARG INSTALL_JETBRAINS
+ARG INSTALL_PLAYWRIGHT
+ARG INSTALL_REVIEW_TOOLS
+ARG PLAYWRIGHT_VERSION
 ARG JAVA_VERSION
+ARG JAVA_PACKAGE_VERSION
 ARG ADDITIONAL_JAVA_VERSIONS
 ARG MAVEN_VERSION
 ARG MAVEN_SHA512
@@ -105,6 +225,22 @@ ARG KOTLIN_LS_SHA256_ARM64
 ARG RTK_VERSION
 ARG RTK_SHA256_AMD64
 ARG RTK_SHA256_ARM64
+ARG SPOTBUGS_VERSION
+ARG SPOTBUGS_SHA256
+ARG FINDSECBUGS_VERSION
+ARG FINDSECBUGS_SHA256
+ARG DETEKT_VERSION
+ARG DETEKT_SHA256
+ARG PMD_VERSION
+ARG PMD_SHA256
+ARG SEMGREP_VERSION
+ARG PYYAML_VERSION
+ARG JSONSCHEMA_VERSION
+ARG TYPESCRIPT_VERSION
+ARG TS_LANGUAGE_SERVER_VERSION
+ARG PYRIGHT_VERSION
+ARG GRAPHIFY_VERSION
+ARG HEADROOM_VERSION
 ARG JETBRAINS_BACKEND
 
 # Store build args as environment variables for runtime scripts.
@@ -119,6 +255,17 @@ ENV PROJECT_NAME=${PROJECT_NAME} \
     INSTALL_HEADROOM=${INSTALL_HEADROOM} \
     INSTALL_RTK=${INSTALL_RTK} \
     INSTALL_JETBRAINS=${INSTALL_JETBRAINS} \
+    INSTALL_PLAYWRIGHT=${INSTALL_PLAYWRIGHT} \
+    INSTALL_REVIEW_TOOLS=${INSTALL_REVIEW_TOOLS} \
+    PLAYWRIGHT_VERSION=${PLAYWRIGHT_VERSION} \
+    SEMGREP_VERSION=${SEMGREP_VERSION} \
+    PYYAML_VERSION=${PYYAML_VERSION} \
+    JSONSCHEMA_VERSION=${JSONSCHEMA_VERSION} \
+    TYPESCRIPT_VERSION=${TYPESCRIPT_VERSION} \
+    TS_LANGUAGE_SERVER_VERSION=${TS_LANGUAGE_SERVER_VERSION} \
+    PYRIGHT_VERSION=${PYRIGHT_VERSION} \
+    GRAPHIFY_VERSION=${GRAPHIFY_VERSION} \
+    HEADROOM_VERSION=${HEADROOM_VERSION} \
     JETBRAINS_BACKEND=${JETBRAINS_BACKEND}
 
 # -----------------------------------------------------------------------------
@@ -192,7 +339,7 @@ RUN if [ "${INSTALL_JAVA}" = "true" ]; then \
     echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/adoptium.gpg] https://packages.adoptium.net/artifactory/deb $(awk -F= '/^VERSION_CODENAME=/{print $2}' /etc/os-release) main" \
     > /etc/apt/sources.list.d/adoptium.list && \
     apt-get update && \
-    apt-get install -y --no-install-recommends temurin-${JAVA_VERSION}-jdk && \
+    apt-get install -y --no-install-recommends "temurin-${JAVA_VERSION}-jdk${JAVA_PACKAGE_VERSION:+=${JAVA_PACKAGE_VERSION}}" && \
     # Extra JDKs for branches that target a different release than JAVA_VERSION
     for v in ${ADDITIONAL_JAVA_VERSIONS}; do \
     apt-get install -y --no-install-recommends "temurin-${v}-jdk"; \
@@ -272,7 +419,7 @@ RUN if [ "${INSTALL_KOTLIN_LSP}" = "true" ]; then \
     *) echo "ERROR: unsupported architecture for Kotlin LSP: $ARCH" >&2; exit 1 ;; \
     esac && \
     echo "Installing official Kotlin LSP ${KOTLIN_LS_VERSION} (${ARCH})..." && \
-    curl -fsSL "https://download-cdn.jetbrains.com/language-server/kotlin-server/${KOTLIN_LS_VERSION}/kotlin-server-${KOTLIN_LS_VERSION}${ARCH_SUFFIX}.tar.gz" -o /tmp/kotlin-lsp.tar.gz && \
+    curl -fsSL "https://download.jetbrains.com/language-server/kotlin-server/${KOTLIN_LS_VERSION}/kotlin-server-${KOTLIN_LS_VERSION}${ARCH_SUFFIX}.tar.gz" -o /tmp/kotlin-lsp.tar.gz && \
     echo "${KOTLIN_LS_SHA256}  /tmp/kotlin-lsp.tar.gz" | sha256sum -c - && \
     mkdir -p /opt/kotlin-lsp && \
     tar -xzf /tmp/kotlin-lsp.tar.gz -C /opt/kotlin-lsp --strip-components=1 && \
@@ -290,11 +437,13 @@ RUN if [ "${INSTALL_KOTLIN_LSP}" = "true" ]; then \
 # -----------------------------------------------------------------------------
 # rtk — Rust Token Killer (Conditional, part of the local-first stack)
 # Transparent CLI-output compression. Per-arch release tarball from GitHub
-# (amd64 → x86_64-unknown-linux-musl, arm64 → aarch64-unknown-linux-gnu). The
-# `rtk` binary lands in /usr/local/bin; post-create.sh installs its Claude Code
+# (amd64 → x86_64-unknown-linux-musl, arm64 → aarch64-unknown-linux-gnu), the
+# Apache-2.0 rtk-oss edition (see RTK_VERSION for why not the default binary).
+# The `rtk` binary lands in /usr/local/bin; post-create.sh installs its Claude Code
 # PreToolUse hook (`rtk init -g`). SHA-256 verified against GitHub's published
 # per-asset digest. The tarball layout isn't contractually fixed, so we locate
-# the `rtk` binary after extraction rather than assuming a path.
+# the `rtk` binary and its LICENSE after extraction rather than assuming a path;
+# a tarball without a LICENSE only warns.
 # -----------------------------------------------------------------------------
 RUN if [ "${INSTALL_RTK}" = "true" ]; then \
     set -eux && \
@@ -304,8 +453,8 @@ RUN if [ "${INSTALL_RTK}" = "true" ]; then \
     arm64) RTK_TRIPLE="aarch64-unknown-linux-gnu"; RTK_SHA256="${RTK_SHA256_ARM64}" ;; \
     *) echo "ERROR: unsupported architecture for rtk: $ARCH" >&2; exit 1 ;; \
     esac && \
-    echo "Installing rtk ${RTK_VERSION} (${ARCH})..." && \
-    curl -fsSL "https://github.com/rtk-ai/rtk/releases/download/v${RTK_VERSION}/rtk-${RTK_TRIPLE}.tar.gz" -o /tmp/rtk.tar.gz && \
+    echo "Installing rtk-oss ${RTK_VERSION} (${ARCH})..." && \
+    curl -fsSL "https://github.com/rtk-ai/rtk/releases/download/v${RTK_VERSION}/rtk-oss-${RTK_TRIPLE}.tar.gz" -o /tmp/rtk.tar.gz && \
     if [ -n "${RTK_SHA256}" ]; then \
     echo "${RTK_SHA256}  /tmp/rtk.tar.gz" | sha256sum -c - ; \
     else \
@@ -314,7 +463,46 @@ RUN if [ "${INSTALL_RTK}" = "true" ]; then \
     mkdir -p /tmp/rtk-extract && tar -xzf /tmp/rtk.tar.gz -C /tmp/rtk-extract && \
     RTK_BIN=$(find /tmp/rtk-extract -type f -name rtk | head -n1) && \
     [ -n "$RTK_BIN" ] && install -m 0755 "$RTK_BIN" /usr/local/bin/rtk && \
+    RTK_LICENSE=$(find /tmp/rtk-extract -type f -name 'LICENSE*' | sort | head -n1) && \
+    if [ -n "$RTK_LICENSE" ]; then \
+    install -D -m 0644 "$RTK_LICENSE" /usr/local/share/doc/rtk/LICENSE ; \
+    else \
+    echo "WARNING: no LICENSE file in the rtk-oss ${RTK_VERSION} tarball — not installing /usr/local/share/doc/rtk/LICENSE." >&2 ; \
+    fi && \
     rm -rf /tmp/rtk.tar.gz /tmp/rtk-extract; \
+    fi
+
+# -----------------------------------------------------------------------------
+# Review tools (Conditional) — the tw-code-review plugin's static analysers
+# gitleaks comes from the build stage above. spotbugs is unpacked to
+# /opt/spotbugs; the FindSecBugs jar goes into its plugin/ directory, which
+# spotbugs loads on its own, so no -pluginList or review config is needed.
+# detekt is the self-contained CLI jar behind a small wrapper. PMD is unpacked
+# to /opt/pmd. Pins and the reasons for them: the ARG block at the top.
+# -----------------------------------------------------------------------------
+COPY --from=gitleaks-build /out/ /usr/local/bin/
+RUN if [ "${INSTALL_REVIEW_TOOLS}" = "true" ]; then \
+    set -eux && \
+    command -v java >/dev/null || { echo "ERROR: INSTALL_REVIEW_TOOLS needs INSTALL_JAVA=true (spotbugs, detekt, pmd)" >&2; exit 1; } && \
+    curl -fsSL "https://github.com/spotbugs/spotbugs/releases/download/${SPOTBUGS_VERSION}/spotbugs-${SPOTBUGS_VERSION}.tgz" -o /tmp/spotbugs.tgz && \
+    echo "${SPOTBUGS_SHA256}  /tmp/spotbugs.tgz" | sha256sum -c - && \
+    tar -xzf /tmp/spotbugs.tgz -C /opt && \
+    ln -sfn "/opt/spotbugs-${SPOTBUGS_VERSION}" /opt/spotbugs && \
+    curl -fsSL "https://repo1.maven.org/maven2/com/h3xstream/findsecbugs/findsecbugs-plugin/${FINDSECBUGS_VERSION}/findsecbugs-plugin-${FINDSECBUGS_VERSION}.jar" -o /opt/spotbugs/plugin/findsecbugs-plugin.jar && \
+    echo "${FINDSECBUGS_SHA256}  /opt/spotbugs/plugin/findsecbugs-plugin.jar" | sha256sum -c - && \
+    chmod 0755 /opt/spotbugs/bin/spotbugs && \
+    ln -sf /opt/spotbugs/bin/spotbugs /usr/local/bin/spotbugs && \
+    mkdir -p /opt/detekt && \
+    curl -fsSL "https://repo1.maven.org/maven2/io/gitlab/arturbosch/detekt/detekt-cli/${DETEKT_VERSION}/detekt-cli-${DETEKT_VERSION}-all.jar" -o /opt/detekt/detekt-cli-all.jar && \
+    echo "${DETEKT_SHA256}  /opt/detekt/detekt-cli-all.jar" | sha256sum -c - && \
+    printf '#!/bin/sh\nexec java -jar /opt/detekt/detekt-cli-all.jar "$@"\n' > /usr/local/bin/detekt && \
+    chmod 0755 /usr/local/bin/detekt && \
+    curl -fsSL "https://github.com/pmd/pmd/releases/download/pmd_releases%2F${PMD_VERSION}/pmd-dist-${PMD_VERSION}-bin.zip" -o /tmp/pmd.zip && \
+    echo "${PMD_SHA256}  /tmp/pmd.zip" | sha256sum -c - && \
+    unzip -q /tmp/pmd.zip -d /opt && \
+    ln -sfn "/opt/pmd-bin-${PMD_VERSION}" /opt/pmd && \
+    ln -sf /opt/pmd/bin/pmd /usr/local/bin/pmd && \
+    rm -f /tmp/spotbugs.tgz /tmp/pmd.zip; \
     fi
 
 # -----------------------------------------------------------------------------
@@ -324,7 +512,9 @@ RUN if [ "${INSTALL_RTK}" = "true" ]; then \
 # -----------------------------------------------------------------------------
 # UV Package Manager Installation
 # -----------------------------------------------------------------------------
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /tmp/uv-binaries/
+# Pinned by tag AND multi-arch index digest: a floating :latest would put
+# whatever uv shipped that morning into every build, unverified.
+COPY --from=ghcr.io/astral-sh/uv:0.13.6@sha256:af22a52f5eafef3d78e551599d405c02df61919d18028f0cea8eda93bc9986d0 /uv /uvx /tmp/uv-binaries/
 RUN cp /tmp/uv-binaries/uv /usr/local/bin/uv && \
     cp /tmp/uv-binaries/uvx /usr/local/bin/uvx && \
     chmod +x /usr/local/bin/uv /usr/local/bin/uvx && \
@@ -351,16 +541,26 @@ RUN if [ "${INSTALL_CLAUDE}" = "true" ]; then \
     fi
 
 # -----------------------------------------------------------------------------
-# Plugin Marketplace Seed Directory
-# Private Marketplaces can be cloned on the host by local-init.sh (initializeCommand)
-# and LIVE bind-mounted into the container at /opt/claude-seed/marketplaces at
-# runtime (see devcontainer.json "mounts"). They are intentionally NOT COPYed
-# into the image: a baked COPY only refreshes on rebuild, so a plain container
-# start would keep serving stale plugin versions. The bind-mount means every
-# START picks up whatever initializeCommand just pulled. No git credentials
-# enter the image. We create the mount point so the bind target exists.
+# Playwright / Headless Chromium System Libraries (Conditional)
+# Headless Chromium needs shared libraries the base image does not ship. Baked in
+# here (root, cached) so the browser binary post-create.sh downloads as vscode runs.
+# Chromium only: it bundles ICU, libvpx and libavif, so libicu*/libvpx*/libavif* are
+# deliberately absent. Package names are Debian 13 "trixie" (t64 suffixes); a base
+# without them fails the build loudly — refresh against
+# `npx playwright install-deps --dry-run chromium`.
 # -----------------------------------------------------------------------------
-RUN mkdir -p /opt/claude-seed/marketplaces
+RUN if [ "${INSTALL_PLAYWRIGHT}" = "true" ]; then \
+    set -eux && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
+    libnss3 libnspr4 libdbus-1-3 \
+    libatk1.0-0t64 libatk-bridge2.0-0t64 libatspi2.0-0t64 libcups2t64 \
+    libdrm2 libgbm1 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 \
+    libxrandr2 libxshmfence1 libasound2t64 fonts-liberation && \
+    apt-get clean -y && rm -rf /var/lib/apt/lists/* && \
+    echo 'export PLAYWRIGHT_BROWSERS_PATH=/home/vscode/.cache/ms-playwright' > /etc/profile.d/playwright.sh && \
+    chmod +x /etc/profile.d/playwright.sh; \
+    fi
 
 # -----------------------------------------------------------------------------
 # Directory Structure & Permissions
@@ -392,6 +592,11 @@ RUN mkdir -p \
     # savings ledger, logs) inherits vscode ownership instead of root:root.
     if [ "${INSTALL_HEADROOM}" = "true" ]; then \
     mkdir -p /home/vscode/.headroom; \
+    fi && \
+    # Playwright browser cache (conditional) — pre-created so the named volume
+    # mounted at ~/.cache/ms-playwright inherits vscode ownership, not root:root.
+    if [ "${INSTALL_PLAYWRIGHT}" = "true" ]; then \
+    mkdir -p /home/vscode/.cache/ms-playwright; \
     fi && \
     chown -R vscode:vscode /home/vscode /workspace
 

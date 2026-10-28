@@ -1,0 +1,13 @@
+{
+  "name": "devcontainer-markdownlint",
+  "private": true,
+  "description": "markdownlint for the tw-code-review plugin, installed by .devcontainer/scripts/post-create.sh with npm ci. The overrides lift transitive dependencies past known advisories; keep npm audit at zero.",
+  "dependencies": {
+    "markdownlint-cli": "0.49.1"
+  },
+  "overrides": {
+    "js-yaml": "5.4.2",
+    "smol-toml": "1.9.0",
+    "katex": "0.18.9"
+  }
+}

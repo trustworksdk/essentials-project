@@ -1,0 +1,218 @@
+{
+  "$comment": "What each slice template family already does, and what it leaves to the developer. scripts/render-slice.py reads this file and reports, for the families it rendered, behaviours[] {id, status, summary, where} and stubTests[] {path, covers[]} in its --json output; the sdd plugin reads that report so its test author writes failing tests only for the placeholder behaviours, and deletes exactly the stub tests listed (so every file under a family's test/ directory must appear in its stubTests). It sits beside the java/ and kotlin/ directories so it is never rendered as a template. Keys are <language>/<family directory>; `where` is a template path relative to that family directory, path placeholders unsubstituted, with an optional #member; a behaviour whose file was not rendered (the __Aggregate__State* pair without --with-state) is dropped by the renderer. Ids are a public contract: never rename or reuse one, and give the same behaviour the same id in every language and lane. The one hard rule is honesty: `implemented` means the rendered skeleton, once it compiles, really does it, so a reasonable test of it passes untouched; anything left as a TODO, a throw, an empty body or a placeholder constant is `placeholder`. When a template changes, change its entries here in the same commit. Honesty is tested: every `implemented` entry is named by a `// behaviour: <language>/<family> <id>` line above a test under tests/slice-compile/behaviours/, which the CI slices build (scripts/plugin-scaffold.sh slices) runs against the rendered, untouched skeleton of each composition that renders the family; tests/scripts/test_behaviours_catalog.py checks the structure and fails an `implemented` entry no such test names.",
+  "catalogVersion": 1,
+  "families": {
+    "java/app-wiring": {
+      "behaviours": [
+        { "id": "app.decider-dispatch", "status": "implemented", "summary": "Registers the application's one configurator, which hands each command sent on the CommandBus to the Decider that can handle it, loads that aggregate's event stream and appends the event it returns.", "where": "DeciderWiring.java#eventStreamDeciderAndAggregateTypeConfigurator" }
+      ],
+      "stubTests": []
+    },
+    "kotlin/app-wiring": {
+      "behaviours": [
+        { "id": "app.decider-dispatch", "status": "implemented", "summary": "Registers the application's one configurator, which hands each command sent on the CommandBus to the Decider that can handle it, loads that aggregate's event stream and appends the event it returns.", "where": "DeciderWiring.kt#deciderAndAggregateTypeConfigurator" }
+      ],
+      "stubTests": []
+    },
+    "java/bc-scaffold": {
+      "behaviours": [
+        { "id": "bc.command-routing", "status": "implemented", "summary": "Routes every command implementing the bounded context's command interface to its aggregate type, taking the stream id from the command and from each event.", "where": "config/__Bc__Configuration.java" },
+        { "id": "bc.event-json-type", "status": "implemented", "summary": "Writes every event variant of the aggregate with an @type discriminator, so the stream's events round-trip through JSON.", "where": "events/__Aggregate__Event.java" }
+      ],
+      "stubTests": []
+    },
+    "kotlin/bc-scaffold": {
+      "behaviours": [
+        { "id": "bc.command-routing", "status": "implemented", "summary": "Routes every command implementing the bounded context's command interface to its aggregate type, taking the stream id from the command and from each event.", "where": "config/__Bc__Configuration.kt" },
+        { "id": "bc.event-json-type", "status": "implemented", "summary": "Writes every event variant of the aggregate with an @type discriminator, so the stream's events round-trip through JSON.", "where": "events/__Aggregate__Event.kt" }
+      ],
+      "stubTests": []
+    },
+    "java/bc-scaffold-aggregate": {
+      "behaviours": [
+        { "id": "bc.aggregate-creation", "status": "implemented", "summary": "The creating constructor rejects a null value and applies the slice's event, so a new aggregate starts with one event.", "where": "aggregates/__Aggregate__.java" },
+        { "id": "bc.aggregate-decision", "status": "implemented", "summary": "applyPlaceholder applies the slice's event and returns true when the value changes, and returns false without applying anything when the aggregate already holds that value.", "where": "aggregates/__Aggregate__.java#applyPlaceholder" },
+        { "id": "bc.aggregate-invariant", "status": "placeholder", "summary": "No business invariant is guarded before apply(); only a null value is rejected, and the real guard is left to the developer.", "where": "aggregates/__Aggregate__.java#applyPlaceholder" },
+        { "id": "bc.aggregate-state", "status": "placeholder", "summary": "The aggregate holds a single placeholder String; its real state, and the event handlers that write it, are left to the developer.", "where": "aggregates/__Aggregate__.java" },
+        { "id": "bc.aggregate-repository", "status": "implemented", "summary": "Loads an aggregate by id rebuilt from its events (failing, or returning empty, when it does not exist), reports whether one exists, and persists a new one.", "where": "aggregates/__Aggregates__.java" },
+        { "id": "bc.event-json-type", "status": "implemented", "summary": "Writes every event variant of the aggregate with an @type discriminator, so the stream's events round-trip through JSON.", "where": "events/__Aggregate__Event.java" }
+      ],
+      "stubTests": []
+    },
+    "java/bc-scaffold-service-entity": {
+      "behaviours": [],
+      "stubTests": []
+    },
+    "kotlin/bc-scaffold-service-entity": {
+      "behaviours": [],
+      "stubTests": []
+    },
+    "java/command": {
+      "behaviours": [
+        { "id": "command.emits-event", "status": "implemented", "summary": "The Decider answers the command with the slice's event, carrying the command's id and payload.", "where": "__Slice__Decider.java#handle" },
+        { "id": "command.idempotent-replay", "status": "implemented", "summary": "The Decider returns no event when the stream already holds the slice's event, so a repeated command appends nothing.", "where": "__Slice__Decider.java#handle" },
+        { "id": "command.invariant", "status": "placeholder", "summary": "The Decider enforces no invariant and rejects no command; the slice's rules are left to the developer.", "where": "__Slice__Decider.java#handle" },
+        { "id": "command.payload", "status": "placeholder", "summary": "The command and the event carry one placeholder String; the real payload fields, and copying them into the event, are left to the developer.", "where": "__Slice__.java" },
+        { "id": "command.http-endpoint", "status": "implemented", "summary": "A POST to the slice's path takes the command as its body, sends it on the CommandBus and answers 202 Accepted.", "where": "__Slice__API.java" },
+        { "id": "command.state-evolution", "status": "placeholder", "summary": "The state evolver returns the state unchanged for every event and the state holds a placeholder field; folding the events into the state the Decider needs is left to the developer.", "where": "__Aggregate__StateEvolver.java#applyEvent" }
+      ],
+      "stubTests": [
+        { "template": "test/__Slice__Test.java", "covers": ["command.emits-event", "command.idempotent-replay"] }
+      ]
+    },
+    "kotlin/command": {
+      "behaviours": [
+        { "id": "command.emits-event", "status": "implemented", "summary": "The Decider answers the command with the slice's event, carrying the command's id and payload.", "where": "__Slice__Decider.kt#handle" },
+        { "id": "command.idempotent-replay", "status": "implemented", "summary": "The Decider returns no event when the stream already holds the slice's event, so a repeated command appends nothing.", "where": "__Slice__Decider.kt#handle" },
+        { "id": "command.invariant", "status": "placeholder", "summary": "The Decider enforces no invariant and rejects no command; the slice's rules are left to the developer.", "where": "__Slice__Decider.kt#handle" },
+        { "id": "command.payload", "status": "placeholder", "summary": "The command and the event carry one placeholder String; the real payload fields, and copying them into the event, are left to the developer.", "where": "__Slice__.kt" },
+        { "id": "command.http-endpoint", "status": "implemented", "summary": "A POST to the slice's path takes the command as its body, sends it on the CommandBus and answers 202 Accepted.", "where": "__Slice__API.kt" },
+        { "id": "command.state-evolution", "status": "placeholder", "summary": "The state evolver returns the state unchanged for every event and the state holds a placeholder field; folding the events into the state the Decider needs is left to the developer.", "where": "__Aggregate__StateEvolver.kt#applyEvent" }
+      ],
+      "stubTests": [
+        { "template": "test/__Slice__Test.kt", "covers": ["command.emits-event", "command.idempotent-replay"] }
+      ]
+    },
+    "java/command_aggregate": {
+      "behaviours": [
+        { "id": "command.emits-event", "status": "implemented", "summary": "The handler loads the aggregate by the command's id and calls its decision method, which applies the slice's event when the value changes.", "where": "__Slice__Handler.java#handle" },
+        { "id": "command.idempotent-replay", "status": "implemented", "summary": "A repeated command finds the aggregate already holding the value, so its decision method applies no second event.", "where": "__Slice__Handler.java#handle" },
+        { "id": "command.invariant", "status": "placeholder", "summary": "The handler calls the scaffold's placeholder decision method; calling the one invariant method this slice's intent maps to is left to the developer.", "where": "__Slice__Handler.java#handle" },
+        { "id": "command.payload", "status": "placeholder", "summary": "The command, the request body and the event carry one placeholder String; the real payload fields are left to the developer.", "where": "__Slice__.java" },
+        { "id": "command.http-endpoint", "status": "implemented", "summary": "A POST to the slice's path with the aggregate id in the path builds the command from the id and the request body and sends it on the CommandBus.", "where": "__Slice__API.java" }
+      ],
+      "stubTests": [
+        { "template": "test/__Slice__IT.java", "covers": [] },
+        { "template": "test/__Slice__Test.java", "covers": ["bc.aggregate-decision"] }
+      ]
+    },
+    "java/command_service_entity": {
+      "behaviours": [
+        { "id": "command.emits-event", "status": "implemented", "summary": "The handler loads the entity, and when its guard method reports a change, saves it and publishes the slice's event on the EventBus in the same transaction.", "where": "__Slice__Handler.java#handle" },
+        { "id": "command.idempotent-replay", "status": "implemented", "summary": "When the entity's guard method reports the state was already reached, the handler neither saves nor publishes, so a repeated command changes nothing.", "where": "__Slice__Handler.java#handle" },
+        { "id": "command.invariant", "status": "placeholder", "summary": "The handler calls a placeholder guard method on the hand-written entity; calling the one invariant method this slice's intent maps to is left to the developer.", "where": "__Slice__Handler.java#handle" },
+        { "id": "command.payload", "status": "placeholder", "summary": "The command, the request body and the event carry one placeholder String; the real payload fields are left to the developer.", "where": "__Slice__.java" },
+        { "id": "command.http-endpoint", "status": "implemented", "summary": "The POST endpoint takes the id of the entity to change from the request body, sends the command and answers with that id.", "where": "__Slice__API.java" }
+      ],
+      "stubTests": [
+        { "template": "test/__Slice__IT.java", "covers": [] },
+        { "template": "test/__Slice__Test.java", "covers": ["command.idempotent-replay"] }
+      ]
+    },
+    "kotlin/command_service_entity": {
+      "behaviours": [
+        { "id": "command.emits-event", "status": "implemented", "summary": "The handler loads the entity, and when its guard method reports a change, saves it and publishes the slice's event on the EventBus in the same transaction.", "where": "__Slice__Handler.kt#handle" },
+        { "id": "command.idempotent-replay", "status": "implemented", "summary": "When the entity's guard method reports the state was already reached, the handler neither saves nor publishes, so a repeated command changes nothing.", "where": "__Slice__Handler.kt#handle" },
+        { "id": "command.invariant", "status": "placeholder", "summary": "The handler calls a placeholder guard method on the hand-written entity; calling the one invariant method this slice's intent maps to is left to the developer.", "where": "__Slice__Handler.kt#handle" },
+        { "id": "command.payload", "status": "placeholder", "summary": "The command, the request body and the event carry one placeholder String; the real payload fields are left to the developer.", "where": "__Slice__.kt" },
+        { "id": "command.http-endpoint", "status": "implemented", "summary": "The POST endpoint takes the id of the entity to change from the request body, sends the command and answers with that id.", "where": "__Slice__API.kt" }
+      ],
+      "stubTests": [
+        { "template": "test/__Slice__IT.kt", "covers": [] },
+        { "template": "test/__Slice__Test.kt", "covers": ["command.idempotent-replay"] }
+      ]
+    },
+    "java/view": {
+      "behaviours": [
+        { "id": "view.projects-event", "status": "implemented", "summary": "On the projected event the projection inserts the row keyed by the aggregate id, or updates the existing one, with the event's order as the row's version.", "where": "__View__Projection.java#on" },
+        { "id": "view.idempotent-redelivery", "status": "implemented", "summary": "An event whose order is not newer than the row's version is skipped, so a redelivered event changes nothing.", "where": "__View__Projection.java#on" },
+        { "id": "view.reset-rebuild", "status": "implemented", "summary": "A subscription reset deletes every row, so the replay that follows rebuilds the read model from the events.", "where": "__View__Projection.java#onSubscriptionsReset" },
+        { "id": "view.query-endpoint", "status": "implemented", "summary": "A GET on the view's path returns every row of the read model.", "where": "__View__API.java" },
+        { "id": "view.served-fields", "status": "placeholder", "summary": "The row's one field is a placeholder status written as the constant \"TODO\"; the fields this view serves, and mapping the event's facts onto them, are left to the developer.", "where": "__View__View.java" },
+        { "id": "view.projects-further-events", "status": "placeholder", "summary": "Only the one scaffolded event is projected; a handler for every other event this view needs is left to the developer.", "where": "__View__Projection.java" },
+        { "id": "view.filtered-queries", "status": "placeholder", "summary": "The status index and findByStatus helper are examples over the placeholder field and no endpoint uses them; the indexes and finders this view's queries need are left to the developer.", "where": "__View__RepositoryConfiguration.java" }
+      ],
+      "stubTests": [
+        { "template": "test/__View__ProjectionIT.java", "covers": [] }
+      ]
+    },
+    "kotlin/view": {
+      "behaviours": [
+        { "id": "view.projects-event", "status": "implemented", "summary": "On the projected event the projection inserts the row keyed by the aggregate id, or updates the existing one, with the event's order as the row's version.", "where": "__View__Projection.kt#on" },
+        { "id": "view.idempotent-redelivery", "status": "implemented", "summary": "An event whose order is not newer than the row's version is skipped, so a redelivered event changes nothing.", "where": "__View__Projection.kt#on" },
+        { "id": "view.reset-rebuild", "status": "implemented", "summary": "A subscription reset deletes every row, so the replay that follows rebuilds the read model from the events.", "where": "__View__Projection.kt#onSubscriptionsReset" },
+        { "id": "view.query-endpoint", "status": "implemented", "summary": "A GET on the view's path returns every row of the read model.", "where": "__View__API.kt" },
+        { "id": "view.served-fields", "status": "placeholder", "summary": "The row's one field is a placeholder status written as the constant \"TODO\"; the fields this view serves, and mapping the event's facts onto them, are left to the developer.", "where": "__View__View.kt" },
+        { "id": "view.projects-further-events", "status": "placeholder", "summary": "Only the one scaffolded event is projected; a handler for every other event this view needs is left to the developer.", "where": "__View__Projection.kt" },
+        { "id": "view.filtered-queries", "status": "placeholder", "summary": "The repository declares no index and no finder; the indexes and finders this view's queries need are left to the developer.", "where": "__View__Repository.kt" }
+      ],
+      "stubTests": [
+        { "template": "test/__View__ProjectionIT.kt", "covers": [] }
+      ]
+    },
+    "java/view_service_entity": {
+      "behaviours": [
+        { "id": "view.query-endpoint", "status": "implemented", "summary": "A GET on the view's path returns every entity row, projected onto the view interface.", "where": "__View__API.java" },
+        { "id": "view.query-by-id", "status": "implemented", "summary": "A GET on the view's path with an id returns that row projected onto the view interface; an unknown id throws NoSuchElementException, which no handler maps to 404.", "where": "__View__API.java" },
+        { "id": "view.strongly-consistent-read", "status": "implemented", "summary": "The queries read the entity's own table, so a committed write is visible to the next query with no projection lag.", "where": "__View__Queries.java" },
+        { "id": "view.served-fields", "status": "placeholder", "summary": "The view interface exposes only the id; the fields this view serves are left to the developer.", "where": "__View__View.java" },
+        { "id": "view.filtered-queries", "status": "placeholder", "summary": "Only the find-all and find-by-id queries exist; the filtering queries this view serves are left to the developer.", "where": "__View__Queries.java" }
+      ],
+      "stubTests": [
+        { "template": "test/__View__IT.java", "covers": [] }
+      ]
+    },
+    "kotlin/view_service_entity": {
+      "behaviours": [
+        { "id": "view.query-endpoint", "status": "placeholder", "summary": "A GET on the view's path is mapped to findAllBy, but projecting onto the closed view interface makes Spring Data Mongo build the entity through its constructor from the selected id alone, so the GET fails with a server error for an entity whose constructor takes a non-null property the view does not expose, the scaffold's own entity included; widening the view or letting the entity be built from its id is left to the developer.", "where": "__View__API.kt" },
+        { "id": "view.query-by-id", "status": "placeholder", "summary": "A GET on the view's path with an id is mapped to the find-by-id query, which fails as the find-all one does (view.query-endpoint) until the view can be built from what it selects; an unknown id throws NoSuchElementException, which no handler maps to 404.", "where": "__View__API.kt" },
+        { "id": "view.strongly-consistent-read", "status": "placeholder", "summary": "The queries read the entity's own collection, so they would see a committed write with no projection lag, but they fail as view.query-endpoint does until the view can be built from what it selects.", "where": "__View__Queries.kt" },
+        { "id": "view.served-fields", "status": "placeholder", "summary": "The view interface exposes only the id; the fields this view serves are left to the developer.", "where": "__View__View.kt" },
+        { "id": "view.filtered-queries", "status": "placeholder", "summary": "Only the find-all and find-by-id queries exist; the filtering queries this view serves are left to the developer.", "where": "__View__Queries.kt" }
+      ],
+      "stubTests": [
+        { "template": "test/__View__IT.kt", "covers": [] }
+      ]
+    },
+    "java/automation": {
+      "behaviours": [
+        { "id": "automation.records-progress", "status": "implemented", "summary": "On the triggering event the processor loads or creates the process's TodoList keyed by the aggregate id, marks it started and saves it.", "where": "__Slice__Processor.java#on" },
+        { "id": "automation.idempotent-redelivery", "status": "implemented", "summary": "A redelivered event finds its TodoList already started and returns before dispatching or saving again.", "where": "__Slice__Processor.java#on" },
+        { "id": "automation.dispatches-command", "status": "placeholder", "summary": "The send of the next command is commented out, so the TodoList is marked dispatched but nothing is sent; the command to dispatch is left to the developer.", "where": "__Slice__Processor.java#on" },
+        { "id": "automation.advances-process", "status": "placeholder", "summary": "No handler exists for the events that advance or complete the process, and the TodoList is never marked completed; they are left to the developer.", "where": "__Slice__Processor.java" },
+        { "id": "automation.compensation", "status": "placeholder", "summary": "Attempts are never counted and no compensating command is issued on terminal failure; bounded retries and compensation are left to the developer.", "where": "__Slice__Processor.java" }
+      ],
+      "stubTests": [
+        { "template": "test/__Slice__IT.java", "covers": [] }
+      ]
+    },
+    "kotlin/automation": {
+      "behaviours": [
+        { "id": "automation.records-progress", "status": "placeholder", "summary": "On the triggering event the processor loads or creates the process's TodoList keyed by the aggregate id and marks it started, but sends the placeholder Any() before saving it; no handler accepts that, so the send throws and the TodoList is never saved until the command to dispatch is written.", "where": "__Slice__Processor.kt#on" },
+        { "id": "automation.idempotent-redelivery", "status": "placeholder", "summary": "A redelivered event that finds its TodoList already started returns before dispatching or saving again, but no TodoList is saved until the placeholder send is replaced (automation.records-progress), so a redelivery finds none and runs the handler again.", "where": "__Slice__Processor.kt#on" },
+        { "id": "automation.dispatches-command", "status": "placeholder", "summary": "The processor sends a placeholder Any() rather than a real command, which no handler accepts; the command to dispatch is left to the developer.", "where": "__Slice__Processor.kt#on" },
+        { "id": "automation.advances-process", "status": "placeholder", "summary": "No handler exists for the events that advance or complete the process, and the TodoList is never marked completed; they are left to the developer.", "where": "__Slice__Processor.kt" },
+        { "id": "automation.compensation", "status": "placeholder", "summary": "Attempts are never counted and no compensating command is issued on terminal failure; bounded retries and compensation are left to the developer.", "where": "__Slice__Processor.kt" }
+      ],
+      "stubTests": [
+        { "template": "test/__Slice__IT.kt", "covers": [] }
+      ]
+    },
+    "java/translation": {
+      "behaviours": [
+        { "id": "translation.inbound-mapping", "status": "placeholder", "summary": "Mapping the external payload onto an internal command throws UnsupportedOperationException; the mapping and its type conversions are left to the developer.", "where": "__ExternalSystem__Translator.java#toCommand" },
+        { "id": "translation.rejects-malformed-input", "status": "placeholder", "summary": "No validation rejects a malformed external payload at the boundary; it is left to the developer.", "where": "__ExternalSystem__Translator.java#toCommand" },
+        { "id": "translation.outbound-mapping", "status": "placeholder", "summary": "Mapping an internal event onto the external request throws UnsupportedOperationException; it is left to the developer.", "where": "__ExternalSystem__Translator.java#toExternal" },
+        { "id": "translation.external-client", "status": "placeholder", "summary": "The client adapter throws UnsupportedOperationException instead of calling the external system; the call is left to the developer.", "where": "__ExternalSystem__ClientAdapter.java#send" },
+        { "id": "translation.webhook-endpoint", "status": "placeholder", "summary": "The webhook POST hands the payload to the translator and sends the result on the CommandBus without waiting, but fails until the inbound mapping is written.", "where": "On__ExternalEvent__.java" },
+        { "id": "translation.publishes-outbound", "status": "placeholder", "summary": "The publisher hands each subscribed event to the translator and the client, but fails until the outbound mapping and the client adapter are written.", "where": "__ExternalSystem__Publisher.java#on" }
+      ],
+      "stubTests": [
+        { "template": "test/__ExternalSystem__TranslatorTest.java", "covers": [] }
+      ]
+    },
+    "kotlin/translation": {
+      "behaviours": [
+        { "id": "translation.inbound-mapping", "status": "placeholder", "summary": "Mapping the external payload onto an internal command throws NotImplementedError; the mapping and its type conversions are left to the developer.", "where": "__ExternalSystem__Translator.kt#toCommand" },
+        { "id": "translation.rejects-malformed-input", "status": "placeholder", "summary": "No validation rejects a malformed external payload at the boundary; it is left to the developer.", "where": "__ExternalSystem__Translator.kt#toCommand" },
+        { "id": "translation.outbound-mapping", "status": "placeholder", "summary": "Mapping an internal event onto the external request throws NotImplementedError; it is left to the developer.", "where": "__ExternalSystem__Translator.kt#toExternal" },
+        { "id": "translation.external-client", "status": "placeholder", "summary": "The client adapter throws UnsupportedOperationException instead of calling the external system; the call is left to the developer.", "where": "__ExternalSystem__ClientAdapter.kt#send" },
+        { "id": "translation.webhook-endpoint", "status": "placeholder", "summary": "The webhook POST hands the payload to the translator and sends the result on the CommandBus without waiting, but fails until the inbound mapping is written.", "where": "On__ExternalEvent__.kt" },
+        { "id": "translation.publishes-outbound", "status": "placeholder", "summary": "The publisher hands each subscribed event to the translator and the client, but fails until the outbound mapping and the client adapter are written.", "where": "__ExternalSystem__Publisher.kt#on" }
+      ],
+      "stubTests": [
+        { "template": "test/__ExternalSystem__TranslatorTest.kt", "covers": [] }
+      ]
+    }
+  }
+}

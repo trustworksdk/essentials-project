@@ -19,8 +19,10 @@ import org.springframework.web.bind.annotation.RestController;
  * back, that is a *query*, and it belongs to a view slice (§ The read side on this lane).
  *
  * The command IS the contract (§R2) — no adapter layer, no mapper. {@code CancelOrderRequest} carries
- * only the fields the client actually sends, because the id is generated here; that is *assembly*,
- * not translation.
+ * only the fields the client actually sends: the id of the Order to change, and the change.
+ * This slice changes an existing Order — the handler loads it — so the id comes from the
+ * client, never from {@code OrderId.random()}, which would name a row that does not exist.
+ * Turning the request into the command is *assembly*, not translation.
  */
 @RestController
 @RequestMapping("/api/orders/cancel")
@@ -32,12 +34,12 @@ public class CancelOrderAPI {
         this.commandBus = commandBus;
     }
 
-    public record CancelOrderRequest(String placeholder) {}
+    public record CancelOrderRequest(String orderId, String placeholder) {}
     public record CancelOrderResponse(String orderId) {}
 
     @PostMapping
     public CancelOrderResponse cancelOrder(@RequestBody CancelOrderRequest body) {
-        var id = OrderId.random();
+        var id = OrderId.of(body.orderId());
         commandBus.send(new CancelOrder(id, body.placeholder()));
         return new CancelOrderResponse(id.toString());
     }

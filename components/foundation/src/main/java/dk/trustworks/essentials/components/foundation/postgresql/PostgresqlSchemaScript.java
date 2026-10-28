@@ -62,7 +62,9 @@ public final class PostgresqlSchemaScript {
               .append("-- Generated ").append(OffsetDateTime.now()).append(" by ").append(singleLine(generatedBy)).append('\n')
               .append("-- Run as a whole, as a user allowed to create these objects. Every statement is safe against objects\n")
               .append("-- that already exist, so the script may be re-run. Each change is recorded in ").append(schemaHistoryTableName).append(",\n")
-              .append("-- which is what the validate mode checks.\n\n");
+              .append("-- which is what the validate mode checks.\n");
+        appendContents(script, changeSets);
+        script.append('\n');
         appendTransaction(script, changeSets, true);
         return script.toString();
     }
@@ -74,9 +76,25 @@ public final class PostgresqlSchemaScript {
     public String renderAddition(List<SchemaChangeSet> changeSets) {
         requireNonNull(changeSets, "No changeSets provided");
         var script = new StringBuilder();
-        script.append("\n-- Registered after start-up, ").append(OffsetDateTime.now()).append("\n\n");
+        script.append("\n-- Registered after start-up, ").append(OffsetDateTime.now()).append('\n');
+        appendContents(script, changeSets);
+        script.append('\n');
         appendTransaction(script, changeSets, false);
         return script.toString();
+    }
+
+    /**
+     * What the script covers, one line per module - so whoever runs it, or finds an object missing later, can see which
+     * objects (an event-stream table names its {@code AggregateType}) were registered when it was written
+     */
+    private static void appendContents(StringBuilder script, List<SchemaChangeSet> changeSets) {
+        script.append("-- Contents:\n");
+        if (changeSets.isEmpty()) {
+            script.append("--   (nothing)\n");
+        }
+        for (var changeSet : changeSets) {
+            script.append("--   ").append(singleLine(changeSet.describe())).append('\n');
+        }
     }
 
     private void appendTransaction(StringBuilder script, List<SchemaChangeSet> changeSets, boolean withLedgerTable) {
@@ -92,7 +110,11 @@ public final class PostgresqlSchemaScript {
             for (var change : changeSet.changes()) {
                 PostgresqlUtil.checkIsValidTableOrColumnName(change.objectName());
                 script.append("\n-- ").append(singleLine(change.changeId())).append(" on ").append(change.objectName())
-                      .append(change.repeatable() ? " (repeatable)" : " (one-shot)").append('\n');
+                      .append(change.repeatable() ? " (repeatable)" : " (one-shot)");
+                if (!change.description().isEmpty()) {
+                    script.append(" - ").append(singleLine(change.description()));
+                }
+                script.append('\n');
                 if (change.repeatable()) {
                     for (var statement : change.statements()) {
                         script.append(statement.strip()).append(";\n");

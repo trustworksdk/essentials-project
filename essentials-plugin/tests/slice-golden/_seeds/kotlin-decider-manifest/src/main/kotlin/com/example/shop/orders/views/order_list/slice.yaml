@@ -1,0 +1,24 @@
+schemaVersion: "1.4"
+slice: orders.order_list
+kind: view
+bc: orders
+owner: checkout-team
+status: planned
+summary: Lists a customer's orders.
+generator: sdd
+language: kotlin
+lane: decider
+flow: [checkout, returns]
+requirements: [REQ-ORDERS-7]
+serves: [OrderList]
+endpoints:
+  - { method: GET, path: "/api/orders", auth: user }
+projections:
+  - name: OrderListProjection
+    aggregateTypes: [Orders]
+    from: [OrderPlaced]
+    consistency: eventual
+    store: document-db
+scenarios:
+  - name: an empty list before any order
+    then: { readModel: OrderListView, rows: [] }

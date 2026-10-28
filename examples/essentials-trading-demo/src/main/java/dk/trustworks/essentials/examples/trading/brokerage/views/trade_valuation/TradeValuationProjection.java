@@ -31,12 +31,9 @@ import dk.trustworks.essentials.examples.trading.market_data.events.PriceUpdated
 import dk.trustworks.essentials.examples.trading.market_data.types.InstrumentId;
 import dk.trustworks.essentials.examples.trading.market_data.types.MarketDataAggregateTypes;
 import dk.trustworks.essentials.types.Amount;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
-
-import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
  * The projector of the {@code brokerage.trade_valuation} view slice — events in, read model out. A view slice never
@@ -56,44 +53,46 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * A price event fans out across every trade on that instrument — one {@code UPDATE … WHERE instrument_id = ?} — which
  * is why the table carries an index on {@code instrument_id}. That fan-out is the cost of owning the price locally,
  * and it is paid on the write path of a projection rather than on every read.
+ * <p>
+ * Every handler write goes through {@code getRequiredUnitOfWork().handle()…}, the {@code UnitOfWork} the
+ * {@code @MessageHandler} already runs in, instead of opening a transaction of its own, so a handler's statements commit
+ * or roll back as one — for {@link #applyMarketPrice} that means both tables or neither. The constructor's DDL and the
+ * reset run where none is active, so they go through {@code getUnitOfWorkFactory().usingUnitOfWork(uow -> …)}, which
+ * opens one.
  */
 @Service
 public class TradeValuationProjection extends EventProcessor {
-    private final JdbcTemplate jdbcTemplate;
-
-    public TradeValuationProjection(EventProcessorDependencies dependencies,
-                                    JdbcTemplate jdbcTemplate) {
+    public TradeValuationProjection(EventProcessorDependencies dependencies) {
         super(dependencies);
-        this.jdbcTemplate = requireNonNull(jdbcTemplate, "No jdbcTemplate provided");
-        this.jdbcTemplate.execute("""
-                                          CREATE TABLE IF NOT EXISTS projection_trade_valuation (
-                                              trade_id VARCHAR PRIMARY KEY,
-                                              account_id VARCHAR NOT NULL,
-                                              instrument_id VARCHAR NOT NULL,
-                                              side VARCHAR NOT NULL,
-                                              quantity NUMERIC(19, 4) NOT NULL,
-                                              price NUMERIC(19, 4) NOT NULL,
-                                              gross_amount NUMERIC(19, 4) NOT NULL,
-                                              executed BOOLEAN NOT NULL DEFAULT FALSE,
-                                              settlement_requested BOOLEAN NOT NULL DEFAULT FALSE,
-                                              settled BOOLEAN NOT NULL DEFAULT FALSE,
-                                              settlement_id VARCHAR NULL,
-                                              latest_market_price NUMERIC(19, 4) NULL,
-                                              updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-                                          )
-                                          """);
-        this.jdbcTemplate.execute("""
-                                          CREATE INDEX IF NOT EXISTS projection_trade_valuation_instrument_id_idx
-                                          ON projection_trade_valuation (instrument_id)
-                                          """);
+        getUnitOfWorkFactory().usingUnitOfWork(uow -> uow.handle().execute("""
+                                                                               CREATE TABLE IF NOT EXISTS projection_trade_valuation (
+                                                                                   trade_id VARCHAR PRIMARY KEY,
+                                                                                   account_id VARCHAR NOT NULL,
+                                                                                   instrument_id VARCHAR NOT NULL,
+                                                                                   side VARCHAR NOT NULL,
+                                                                                   quantity NUMERIC(19, 4) NOT NULL,
+                                                                                   price NUMERIC(19, 4) NOT NULL,
+                                                                                   gross_amount NUMERIC(19, 4) NOT NULL,
+                                                                                   executed BOOLEAN NOT NULL DEFAULT FALSE,
+                                                                                   settlement_requested BOOLEAN NOT NULL DEFAULT FALSE,
+                                                                                   settled BOOLEAN NOT NULL DEFAULT FALSE,
+                                                                                   settlement_id VARCHAR NULL,
+                                                                                   latest_market_price NUMERIC(19, 4) NULL,
+                                                                                   updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+                                                                               )
+                                                                               """));
+        getUnitOfWorkFactory().usingUnitOfWork(uow -> uow.handle().execute("""
+                                                                               CREATE INDEX IF NOT EXISTS projection_trade_valuation_instrument_id_idx
+                                                                               ON projection_trade_valuation (instrument_id)
+                                                                               """));
         // The slice's second table, and the reason this projection is order-independent -- see applyMarketPrice.
-        this.jdbcTemplate.execute("""
-                                          CREATE TABLE IF NOT EXISTS projection_trade_valuation_price (
-                                              instrument_id VARCHAR PRIMARY KEY,
-                                              latest_price NUMERIC(19, 4) NOT NULL,
-                                              updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-                                          )
-                                          """);
+        getUnitOfWorkFactory().usingUnitOfWork(uow -> uow.handle().execute("""
+                                                                               CREATE TABLE IF NOT EXISTS projection_trade_valuation_price (
+                                                                                   instrument_id VARCHAR PRIMARY KEY,
+                                                                                   latest_price NUMERIC(19, 4) NOT NULL,
+                                                                                   updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+                                                                               )
+                                                                               """));
     }
 
     @Override
@@ -118,78 +117,81 @@ public class TradeValuationProjection extends EventProcessor {
      */
     @MessageHandler
     void handle(TradePlaced event) {
-        jdbcTemplate.update("""
-                                    INSERT INTO projection_trade_valuation (
-                                        trade_id,
-                                        account_id,
-                                        instrument_id,
-                                        side,
-                                        quantity,
-                                        price,
-                                        gross_amount,
-                                        executed,
-                                        settlement_requested,
-                                        settled,
-                                        latest_market_price,
-                                        updated_at
-                                    )
-                                    SELECT ?, ?, ?, ?, ?, ?, ?, false, false, false,
-                                           (SELECT latest_price
-                                            FROM projection_trade_valuation_price
-                                            WHERE instrument_id = ?),
-                                           CURRENT_TIMESTAMP
-                                    ON CONFLICT (trade_id) DO UPDATE
-                                    SET account_id = EXCLUDED.account_id,
-                                        instrument_id = EXCLUDED.instrument_id,
-                                        side = EXCLUDED.side,
-                                        quantity = EXCLUDED.quantity,
-                                        price = EXCLUDED.price,
-                                        gross_amount = EXCLUDED.gross_amount,
-                                        updated_at = CURRENT_TIMESTAMP
-                                    """,
-                            event.tradeId().toString(),
-                            event.accountId().toString(),
-                            event.instrumentId().toString(),
-                            event.side().name(),
-                            event.quantity().value(),
-                            event.price().value(),
-                            event.grossAmount().value(),
-                            event.instrumentId().toString());
+        getRequiredUnitOfWork().handle().createUpdate("""
+                                                          INSERT INTO projection_trade_valuation (
+                                                              trade_id,
+                                                              account_id,
+                                                              instrument_id,
+                                                              side,
+                                                              quantity,
+                                                              price,
+                                                              gross_amount,
+                                                              executed,
+                                                              settlement_requested,
+                                                              settled,
+                                                              latest_market_price,
+                                                              updated_at
+                                                          )
+                                                          SELECT :tradeId, :accountId, :instrumentId, :side, :quantity, :price, :grossAmount, false, false, false,
+                                                                 (SELECT latest_price
+                                                                  FROM projection_trade_valuation_price
+                                                                  WHERE instrument_id = :instrumentId),
+                                                                 CURRENT_TIMESTAMP
+                                                          ON CONFLICT (trade_id) DO UPDATE
+                                                          SET account_id = EXCLUDED.account_id,
+                                                              instrument_id = EXCLUDED.instrument_id,
+                                                              side = EXCLUDED.side,
+                                                              quantity = EXCLUDED.quantity,
+                                                              price = EXCLUDED.price,
+                                                              gross_amount = EXCLUDED.gross_amount,
+                                                              updated_at = CURRENT_TIMESTAMP
+                                                          """)
+                                        .bind("tradeId", event.tradeId().toString())
+                                        .bind("accountId", event.accountId().toString())
+                                        .bind("instrumentId", event.instrumentId().toString())
+                                        .bind("side", event.side().name())
+                                        .bind("quantity", event.quantity().value())
+                                        .bind("price", event.price().value())
+                                        .bind("grossAmount", event.grossAmount().value())
+                                        .execute();
     }
 
     @MessageHandler
     void handle(TradeExecuted event) {
-        jdbcTemplate.update("""
-                                    UPDATE projection_trade_valuation
-                                    SET executed = true,
-                                        updated_at = CURRENT_TIMESTAMP
-                                    WHERE trade_id = ?
-                                    """,
-                            event.tradeId().toString());
+        getRequiredUnitOfWork().handle().createUpdate("""
+                                                          UPDATE projection_trade_valuation
+                                                          SET executed = true,
+                                                              updated_at = CURRENT_TIMESTAMP
+                                                          WHERE trade_id = :tradeId
+                                                          """)
+                                        .bind("tradeId", event.tradeId().toString())
+                                        .execute();
     }
 
     @MessageHandler
     void handle(SettlementRequested event) {
-        jdbcTemplate.update("""
-                                    UPDATE projection_trade_valuation
-                                    SET settlement_requested = true,
-                                        settlement_id = ?,
-                                        updated_at = CURRENT_TIMESTAMP
-                                    WHERE trade_id = ?
-                                    """,
-                            event.settlementId().toString(),
-                            event.tradeId().toString());
+        getRequiredUnitOfWork().handle().createUpdate("""
+                                                          UPDATE projection_trade_valuation
+                                                          SET settlement_requested = true,
+                                                              settlement_id = :settlementId,
+                                                              updated_at = CURRENT_TIMESTAMP
+                                                          WHERE trade_id = :tradeId
+                                                          """)
+                                        .bind("settlementId", event.settlementId().toString())
+                                        .bind("tradeId", event.tradeId().toString())
+                                        .execute();
     }
 
     @MessageHandler
     void handle(TradeSettled event) {
-        jdbcTemplate.update("""
-                                    UPDATE projection_trade_valuation
-                                    SET settled = true,
-                                        updated_at = CURRENT_TIMESTAMP
-                                    WHERE trade_id = ?
-                                    """,
-                            event.tradeId().toString());
+        getRequiredUnitOfWork().handle().createUpdate("""
+                                                          UPDATE projection_trade_valuation
+                                                          SET settled = true,
+                                                              updated_at = CURRENT_TIMESTAMP
+                                                          WHERE trade_id = :tradeId
+                                                          """)
+                                        .bind("tradeId", event.tradeId().toString())
+                                        .execute();
     }
 
     @MessageHandler
@@ -210,8 +212,8 @@ public class TradeValuationProjection extends EventProcessor {
     @Override
     protected void onSubscriptionsReset(AggregateType aggregateType,
                                         GlobalEventOrder resubscribeFromAndIncluding) {
-        jdbcTemplate.execute("TRUNCATE TABLE projection_trade_valuation");
-        jdbcTemplate.execute("TRUNCATE TABLE projection_trade_valuation_price");
+        getUnitOfWorkFactory().usingUnitOfWork(uow -> uow.handle().execute("TRUNCATE TABLE projection_trade_valuation"));
+        getUnitOfWorkFactory().usingUnitOfWork(uow -> uow.handle().execute("TRUNCATE TABLE projection_trade_valuation_price"));
     }
 
     /**
@@ -230,22 +232,24 @@ public class TradeValuationProjection extends EventProcessor {
      * <p>Both price events carry the full price rather than a delta, so both writes are idempotent under redelivery.
      */
     private void applyMarketPrice(InstrumentId instrumentId, Amount price) {
-        jdbcTemplate.update("""
-                                    INSERT INTO projection_trade_valuation_price (instrument_id, latest_price, updated_at)
-                                    VALUES (?, ?, CURRENT_TIMESTAMP)
-                                    ON CONFLICT (instrument_id) DO UPDATE
-                                    SET latest_price = EXCLUDED.latest_price,
-                                        updated_at = CURRENT_TIMESTAMP
-                                    """,
-                            instrumentId.toString(),
-                            price.value());
-        jdbcTemplate.update("""
-                                    UPDATE projection_trade_valuation
-                                    SET latest_market_price = ?,
-                                        updated_at = CURRENT_TIMESTAMP
-                                    WHERE instrument_id = ?
-                                    """,
-                            price.value(),
-                            instrumentId.toString());
+        getRequiredUnitOfWork().handle().createUpdate("""
+                                                          INSERT INTO projection_trade_valuation_price (instrument_id, latest_price, updated_at)
+                                                          VALUES (:instrumentId, :latestPrice, CURRENT_TIMESTAMP)
+                                                          ON CONFLICT (instrument_id) DO UPDATE
+                                                          SET latest_price = EXCLUDED.latest_price,
+                                                              updated_at = CURRENT_TIMESTAMP
+                                                          """)
+                                        .bind("instrumentId", instrumentId.toString())
+                                        .bind("latestPrice", price.value())
+                                        .execute();
+        getRequiredUnitOfWork().handle().createUpdate("""
+                                                          UPDATE projection_trade_valuation
+                                                          SET latest_market_price = :latestPrice,
+                                                              updated_at = CURRENT_TIMESTAMP
+                                                          WHERE instrument_id = :instrumentId
+                                                          """)
+                                        .bind("latestPrice", price.value())
+                                        .bind("instrumentId", instrumentId.toString())
+                                        .execute();
     }
 }

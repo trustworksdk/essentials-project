@@ -84,7 +84,7 @@ public final class PostgresqlFencedLockManager extends DBFencedLockManager<Handl
     /**
      * @param jdbi                                                           the jdbi instance
      * @param unitOfWorkFactory                                              The unit of work factory
-     * @param lockManagerInstanceId                                          The unique name for this lock manager instance. If left {@link Optional#empty()} then the machines hostname is used
+     * @param lockManagerInstanceId                                          The unique name for this lock manager instance. If left {@link Optional#empty()} then {@code <hostname>:<pid>} is used
      * @param fencedLocksTableName                                           the name of the table where the fenced locks will be stored<br>
      *                                                                       <strong>Note:</strong><br>
      *                                                                       To support customization of storage table name, the {@code fencedLocksTableName} will be directly used in constructing SQL statements
@@ -126,7 +126,7 @@ public final class PostgresqlFencedLockManager extends DBFencedLockManager<Handl
     /**
      * @param jdbi                                                           the jdbi instance
      * @param unitOfWorkFactory                                              The unit of work factory
-     * @param lockManagerInstanceId                                          The unique name for this lock manager instance. If left {@link Optional#empty()} then the machines hostname is used
+     * @param lockManagerInstanceId                                          The unique name for this lock manager instance. If left {@link Optional#empty()} then {@code <hostname>:<pid>} is used
      * @param fencedLocksTableName                                           the name of the table where the fenced locks will be stored<br>
      *                                                                       <strong>Note:</strong><br>
      *                                                                       To support customization of storage table name, the {@code fencedLocksTableName} will be directly used in constructing SQL statements
@@ -228,7 +228,7 @@ public final class PostgresqlFencedLockManager extends DBFencedLockManager<Handl
     }
 
     /**
-     * Create a {@link PostgresqlFencedLockManager} with the machines hostname as lock manager instance name and the default fenced lock table name ({@link PostgresqlFencedLockStorage#DEFAULT_FENCED_LOCKS_TABLE_NAME})
+     * Create a {@link PostgresqlFencedLockManager} with {@code <hostname>:<pid>} as lock manager instance name and the default fenced lock table name ({@link PostgresqlFencedLockStorage#DEFAULT_FENCED_LOCKS_TABLE_NAME})
      *
      * @param jdbi                                                           the jdbi instance
      * @param unitOfWorkFactory                                              The unit of work factory
@@ -258,11 +258,11 @@ public final class PostgresqlFencedLockManager extends DBFencedLockManager<Handl
     }
 
     /**
-     * Create a {@link PostgresqlFencedLockManager} with the machines hostname as lock manager instance name and the default fenced lock table name ({@link PostgresqlFencedLockStorage#DEFAULT_FENCED_LOCKS_TABLE_NAME})
+     * Create a {@link PostgresqlFencedLockManager} with {@code <hostname>:<pid>} as lock manager instance name and the default fenced lock table name ({@link PostgresqlFencedLockStorage#DEFAULT_FENCED_LOCKS_TABLE_NAME})
      *
      * @param jdbi                                                           the jdbi instance
      * @param unitOfWorkFactory                                              The unit of work factory
-     * @param lockManagerInstanceId                                          The unique name for this lock manager instance. If left {@link Optional#empty()} then the machines hostname is used
+     * @param lockManagerInstanceId                                          The unique name for this lock manager instance. If left {@link Optional#empty()} then {@code <hostname>:<pid>} is used
      * @param lockTimeOut                                                    the period between {@link FencedLock#getLockLastConfirmedTimestamp()} and the current time before the lock is marked as timed out
      * @param lockConfirmationInterval                                       how often should the locks be confirmed. MUST is less than the <code>lockTimeOut</code>
      * @param releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation Should {@link FencedLock}'s acquired by this {@link FencedLockManager} be released in case calls to {@link FencedLockStorage#confirmLockInDB(DBFencedLockManager, UnitOfWork, DBFencedLock, OffsetDateTime)} fails

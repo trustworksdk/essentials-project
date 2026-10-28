@@ -92,16 +92,23 @@ public final class ShardRuntime implements Lifecycle, AutoCloseable {
     static synchronized ShardRuntime acquireShared(DataSource dataSource, ShardOwnerSettings settings) {
         var existing = SHARED.get(dataSource);
         if (existing != null) {
-            // The first borrower's settings are the ones in force, because the pumps, the listener
-            // and the handler budget were sized from them and are already running. Saying so is the
-            // point: a second queue asking for four pump threads and silently getting two is the
-            // kind of thing that is only discovered while reading a heap dump.
-            if (!existing.runtime().settings.equals(settings)) {
-                log.warn("A shared ShardRuntime for this DataSource already exists and was built with "
-                                 + "different settings; the settings passed here are ignored. Construct the "
-                                 + "ShardRuntime yourself and pass it to every ShardOwnedQueue if the process "
-                                 + "needs a specific configuration. In force: {}. Ignored: {}",
-                         existing.runtime().settings, settings);
+            // The first borrower's runtime-scoped values are the ones in force, because the pumps were
+            // started from them and are already running. Saying so is the point: a second queue asking
+            // for four pump threads and silently getting two is the kind of thing that is only
+            // discovered while reading a heap dump. Only those values are compared: the rest of a
+            // borrower's settings (stuckHandlerTimeout, the documented way to bound one queue's
+            // handlers, among them) are its own queue's, and warning that they were ignored would be
+            // false.
+            var inForce   = existing.runtime().settings;
+            var requested = settings.runtimeScoped();
+            if (!inForce.equals(requested)) {
+                log.warn("A shared ShardRuntime for this DataSource already exists and was built with a different "
+                                 + "pumpThreads, readBatchSize, pollBackstop or maxSweepInterval; its pumps keep the values "
+                                 + "they were built with, so the values passed here do not apply to them. The queue's other "
+                                 + "settings are its own and apply as passed. Construct the ShardRuntime yourself and pass it "
+                                 + "to every ShardOwnedQueue if the process needs a specific runtime configuration. "
+                                 + "In force: {}. Passed here: {}",
+                         inForce, requested);
             }
             SHARED.put(dataSource, new Shared(existing.runtime(), existing.borrowers() + 1));
             return existing.runtime();
@@ -127,24 +134,35 @@ public final class ShardRuntime implements Lifecycle, AutoCloseable {
         existing.runtime().stop();
     }
 
-    private final DataSource               dataSource;
-    private final ShardOwnerSettings       settings;
-    private final ShardOwnerMetrics        metrics;
-    private final ConnectionPoolMetadata   pool;
-    private final AtomicBoolean            running     = new AtomicBoolean();
-    private final AtomicBoolean            flushOnExit = new AtomicBoolean(true);
-    private final List<ShardPump>          pumps       = new ArrayList<>();
-    private final Map<String, ShardWakeup> wakeups     = new ConcurrentHashMap<>();
+    private final DataSource                       dataSource;
+    /**
+     * Only the values of the settings this runtime was built with that it and its pumps read: what
+     * {@link #acquireShared} compares a later borrower's settings against. Every other value of a borrowing queue's
+     * settings is read only by that borrowing queue.
+     */
+    private final ShardOwnerSettings.RuntimeScoped settings;
+    private final ShardOwnerMetrics                metrics;
+    private final ConnectionPoolMetadata           pool;
+    private final AtomicBoolean                    running     = new AtomicBoolean();
+    /**
+     * The {@code running} flag handed to this run's pumps: a new one per {@link #start()}, cleared by {@link #stop()}. Not
+     * {@link #running} itself, which a restart sets again: a pump that outlived the previous stop's wait would then read it
+     * as set when it finally left its loop, and take its orderly exit for a death.
+     */
+    private       AtomicBoolean                    pumpsRunning;
+    private final AtomicBoolean                    flushOnExit = new AtomicBoolean(true);
+    private final List<ShardPump>                  pumps       = new ArrayList<>();
+    private final Map<String, ShardWakeup>         wakeups     = new ConcurrentHashMap<>();
     /**
      * Recreated by every {@link #start()}, because an {@code ExecutorService} cannot be restarted
      * once shut down. This is what makes the runtime genuinely restartable rather than merely
      * stoppable — the same distinction {@code ShardOwnedQueue.stop()} had to make.
      */
-    private       ExecutorService          pumpExecutor;
-    private       ExecutorService          handlerExecutor;
-    private       ScheduledExecutorService heartbeat;
-    private       ShardWakeupListener      listener;
-    private       PoolBudget.Reservation   poolReservation;
+    private       ExecutorService                  pumpExecutor;
+    private       ExecutorService                  handlerExecutor;
+    private       ScheduledExecutorService         heartbeat;
+    private       ShardWakeupListener              listener;
+    private       PoolBudget.Reservation           poolReservation;
 
     public ShardRuntime(DataSource dataSource, ShardOwnerSettings settings) {
         this(dataSource, settings, new ShardOwnerMetrics());
@@ -171,7 +189,7 @@ public final class ShardRuntime implements Lifecycle, AutoCloseable {
     public ShardRuntime(DataSource dataSource, ShardOwnerSettings settings, ShardOwnerMetrics metrics,
                         ConnectionPoolMetadata pool) {
         this.dataSource = requireNonNull(dataSource, "No dataSource provided");
-        this.settings = requireNonNull(settings, "No settings provided");
+        this.settings = requireNonNull(settings, "No settings provided").runtimeScoped();
         this.metrics = requireNonNull(metrics, "No metrics provided");
         this.pool = requireNonNull(pool, "No pool metadata provided");
         start();
@@ -208,8 +226,9 @@ public final class ShardRuntime implements Lifecycle, AutoCloseable {
         // A storage handle bound to no queue in particular: the pumps only use it to open connections,
         // and every statement an owner issues carries its own queue id.
         var connections = new ShardOwnedStorage(dataSource, NO_QUEUE_ID);
+        this.pumpsRunning = new AtomicBoolean(true);
         for (var index = 0; index < pumpCount; index++) {
-            var pump = new ShardPump(connections, settings, metrics, running, flushOnExit, "pump-" + index,
+            var pump = new ShardPump(connections, settings, metrics, pumpsRunning, flushOnExit, "pump-" + index,
                                      () -> PoolBudget.exhaustion(dataSource, pool));
             pumps.add(pump);
             pumpExecutor.submit(pump);
@@ -233,27 +252,123 @@ public final class ShardRuntime implements Lifecycle, AutoCloseable {
     }
 
     /**
-     * The wake-up for one shard of one lane of one queue, cascading to the pump that will serve it.
-     * Keyed the same way the notification payload is, so the listener can route without knowing
-     * anything about queues.
+     * Where one shard of one lane of one queue is served: the pump chosen for it, and the shard's wake-up, which cascades
+     * to that same pump. An owner is built with {@link #wakeup()} and handed to {@link #register(LeasedOwner)}, both from
+     * one placement.
+     * <p>
+     * <b>One placement, not two lookups.</b> Choosing the pump once for the wake-up and again for the registration let the
+     * two disagree: a pump that died between the lookups left the owner on a live pump while its wake-up still cascaded to
+     * the dead one, so notifications for the shard woke nobody and it was served only when its new pump's park deadline
+     * or backstop fired, until the shard was acquired again. Placed once, the owner and its wake-up always share a pump.
+     * Should that pump die between {@link ShardRuntime#place} and {@link #register(LeasedOwner)}, the owner is ended on
+     * the dead pump like the owners it held when it died, counted in {@link ShardOwnerMetrics#shardsOnDeadPumps}, and its
+     * queue hands the lease back ({@link ShardPump#add(LeasedOwner)}).
+     *
+     * @param key           the shard's key in the runtime's wake-ups, as the notification payload names it
+     * @param createdWakeup whether this placement put {@link #wakeup()} there, rather than reusing the one it found
+     *                      ({@link ShardRuntime#withdraw})
      */
-    ShardWakeup wakeupFor(short queueId, String lane, int shard) {
-        var pump = pumpFor(queueId, lane, shard);
-        return wakeups.computeIfAbsent(ShardWakeupListener.key(queueId, lane, shard),
-                                       ignored -> new ShardWakeup(pump.wakeup()));
+    record Placement(ShardPump pump, ShardWakeup wakeup, String key, boolean createdWakeup) {
+        void register(LeasedOwner owner) {
+            pump.add(owner);
+        }
+    }
+
+    /**
+     * Choose the pump that will serve one shard of one lane of one queue ({@link #pumpFor}) and the shard's wake-up,
+     * cascading to that pump. The wake-up is keyed the same way the notification payload is, so the listener can route
+     * without knowing anything about queues.
+     * <p>
+     * The wake-up is kept per shard across ownerships, and replaced when it no longer cascades to the chosen pump: once a
+     * pump has died ({@link ShardPump#run()}) its shards are routed elsewhere, and a wake-up still pointing at it would
+     * leave a re-acquired shard served only when its new pump's backstop fires.
+     */
+    Placement place(short queueId, String lane, int shard) {
+        var pump    = pumpFor(queueId, lane, shard);
+        var key     = ShardWakeupListener.key(queueId, lane, shard);
+        var created = new AtomicBoolean();
+        var wakeup = wakeups.compute(key, (ignored, existing) -> {
+            if (existing != null && existing.cascadesTo(pump.wakeup())) {
+                return existing;
+            }
+            created.set(true);
+            return new ShardWakeup(pump.wakeup());
+        });
+        return new Placement(pump, wakeup, key, created.get());
+    }
+
+    /**
+     * Undo a {@link #place placement} whose owner was never registered, because building it failed: forget the
+     * wake-up the placement put in this runtime, so the shard leaves no entry behind that nothing forgets until the runtime
+     * stops. A wake-up the placement reused is left: it was there before, kept per shard across ownerships, and the
+     * placement added nothing. Removed only while it is still the placement's own, so a wake-up a later placement put
+     * there in its stead is left too.
+     */
+    void withdraw(Placement placement) {
+        if (placement.createdWakeup()) {
+            wakeups.remove(placement.key(), placement.wakeup());
+        }
     }
 
     /**
      * Which pump serves a shard. Spread over the queue and lane as well as the shard, so a process
      * with many queues of few shards still uses every pump.
+     * <p>
+     * <b>Never a dead pump while a live one is left.</b> A pump that died on a critical error ({@link ShardPump#run()})
+     * serves nothing, and routing over every pump kept handing it newly acquired shards after every rebalance. A shard
+     * whose pump is alive keeps it; one whose pump is dead is spread over the live ones. With none alive it goes to its
+     * dead pump, which ends it and counts it in {@link ShardOwnerMetrics#shardsOnDeadPumps} until its queue hands the lease
+     * back; a queue acquires nothing while {@link #hasLivePump()} is false.
      */
     ShardPump pumpFor(short queueId, String lane, int shard) {
         var spread = Objects.hash(queueId, lane, shard);
-        return pumps.get(Math.floorMod(spread, pumps.size()));
+        var pump   = pumps.get(Math.floorMod(spread, pumps.size()));
+        if (!pump.isDead()) {
+            return pump;
+        }
+        var live = pumps.stream().filter(candidate -> !candidate.isDead()).toList();
+        return live.isEmpty() ? pump : live.get(Math.floorMod(spread, live.size()));
     }
 
-    void register(short queueId, String lane, int shard, LeasedOwner owner) {
-        pumpFor(queueId, lane, shard).add(owner);
+    /**
+     * Whether any pump is alive. With none, a queue acquires nothing: whatever it took would land on a dead pump, be ended
+     * there and be handed back on the next heartbeat, every heartbeat ({@link ShardPump#run()}).
+     */
+    boolean hasLivePump() {
+        return pumps.stream().anyMatch(pump -> !pump.isDead());
+    }
+
+    /**
+     * Whether {@code owner} sits on a pump that has died, and its queue has not handed its lease back yet
+     * ({@link #handedBack}). The pump ended it when it died ({@link ShardPump#run()}); what is left is the queue's: release
+     * the lease, an ordered one once no key is in a handler, or one has been there longer than {@code stuckHandlerTimeout}.
+     * <p>
+     * Which pump, not what state: whether the owner's lease row still names this instance is the owner's own
+     * {@link LeasedOwner#leaseRow()}, which the death moved to {@code ENDED_ROW_HELD}. The queue asks this for two things:
+     * to pick the owners its hand-back is for, and to keep a dead pump's owners out of {@code stop()}'s acknowledgement
+     * flush, since their state is not trusted after the critical error. Both ask which pump, never the lease row.
+     * Asks each pump's {@link ShardPump#awaitsHandBack} alone, not gated on {@link ShardPump#isDead()}, which a dying pump
+     * sets only after it has ended every owner on it.
+     */
+    boolean onDeadPump(LeasedOwner owner) {
+        for (var pump : pumps) {
+            if (pump.awaitsHandBack(owner)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * {@code owner}'s queue is done with a unit whose pump had died ({@link #onDeadPump}) - it released the lease row, found
+     * the unit taken, or stopped: it is no longer counted in {@link ShardOwnerMetrics#shardsOnDeadPumps}, nor, if its
+     * takeover was failing, in {@link ShardOwnerMetrics#shardsAwaitingTakeover}. A no-op for an owner no dead pump counts,
+     * so the queue may call it for every owner it drops.
+     */
+    void handedBack(LeasedOwner owner) {
+        for (var pump : pumps) {
+            pump.handedBack(owner);
+        }
     }
 
     void forget(short queueId, String lane, int shard) {
@@ -261,7 +376,7 @@ public final class ShardRuntime implements Lifecycle, AutoCloseable {
     }
 
     HandlerDispatch dispatch(int parallelConsumers) {
-        return new HandlerDispatch(handlerExecutor, new Semaphore(Math.max(1, parallelConsumers)));
+        return new HandlerDispatch(handlerExecutor, Math.max(1, parallelConsumers));
     }
 
     /**
@@ -292,6 +407,23 @@ public final class ShardRuntime implements Lifecycle, AutoCloseable {
     }
 
     /**
+     * How many shards this runtime holds a wake-up for ({@link #place}), across every queue and lane. Package-private: it
+     * is for asserting that a queue left no wake-up behind for a unit it did not keep, not a figure to operate on.
+     */
+    int wakeupsHeld() {
+        return wakeups.size();
+    }
+
+    /**
+     * The pumps whose owner list holds {@code owner} ({@link ShardPump#serves}): the pumps serving it now, not the one
+     * {@link #pumpFor} would route its unit to. Package-private: it is for asserting where an owner landed, and that a
+     * stopped queue's owners have left the pumps.
+     */
+    List<ShardPump> pumpsServing(LeasedOwner owner) {
+        return List.copyOf(pumps).stream().filter(pump -> pump.serves(owner)).toList();
+    }
+
+    /**
      * Equivalent to {@link #stop()}, so try-with-resources and a container both work.
      */
     @Override
@@ -304,8 +436,8 @@ public final class ShardRuntime implements Lifecycle, AutoCloseable {
      * left of it, instead of up to thirty seconds. Against an unreachable database a pump sits in a pooled connection
      * checkout for the pool's whole timeout, and waiting for it then only delays every component stopped after this one.
      * <p>
-     * Takes a plain supplier so the engine keeps depending on {@code shared} alone; the Spring starter bridges it from the
-     * application's shutdown signal.
+     * Takes a plain supplier so the engine does not depend on Spring; the Spring starter bridges it from the application's
+     * shutdown signal.
      *
      * @param remainingShutdownTime what is left of the shutdown's time budget, asked for when {@link #stop()} runs
      */
@@ -318,6 +450,7 @@ public final class ShardRuntime implements Lifecycle, AutoCloseable {
         if (!running.compareAndSet(true, false)) {
             return;
         }
+        pumpsRunning.set(false);
         // Signal the PUMPS, not only the shards.
         //
         // A shard's wake-up cascades to its pump, so signalling shards happens to release any pump
@@ -344,6 +477,14 @@ public final class ShardRuntime implements Lifecycle, AutoCloseable {
             Thread.currentThread().interrupt();
             pumpExecutor.shutdownNow();
         }
+        // A pump that died while the runtime ran kept the shards its queues had not handed back yet counted, in
+        // shardsOnDeadPumps and, where the takeover was failing, in shardsAwaitingTakeover (ShardPump.run); none of them is
+        // served here once this stop ends, so forget them.
+        // Asked of every pump whether or not the wait above timed out or was interrupted: each acts only once its own
+        // thread has ended, which is what makes its state safe to read from here, and a dead pump's thread has. Doing this
+        // only when every pump ended in time left a dead pump's counts standing for the rest of the process whenever another
+        // pump was slow to stop. A pump still in its loop forgets its own stalls when it leaves, its running flag cleared.
+        pumps.forEach(ShardPump::forgetAfterExit);
         handlerExecutor.shutdown();
         // Cleared so a restart does not signal wake-ups belonging to owners that no longer exist.
         wakeups.clear();

@@ -13,7 +13,7 @@ Every slice directory carries a `slice.yaml` and a `CLAUDE.md`. They are generat
 
 | Field | Notes |
 |---|---|
-| `schemaVersion` | `"1.3"` — readers accept any `1.x`, so an older stamp stays valid and needs no restamp |
+| `schemaVersion` | `"1.4"` — readers accept any `1.x`, so an older stamp stays valid and needs no restamp. A manifest carrying `flow`, `scenarios` or `requirements` is stamped `"1.4"` (§3). A newer `1.x` than the project's schema copy is accepted, its unknown keys reported as notes (§3) |
 | `slice` | `<bc>.<slice-id>` — **snake_case on the JVM** (`orders.place_order`); hyphens are illegal in package dirs |
 | `kind` | `command` \| `view` \| `automation` \| `translation` |
 | `bc` | owning bounded context |
@@ -38,6 +38,7 @@ Schema-required is the floor; Essentials writes the stricter set so the manifest
 | view | `serves` | `projections` (**with `from`** — see §3), `reads`, `endpoints` |
 | automation | `consumes` **or** `schedule` | `dispatches`, `invariants` |
 | translation | `externalSystem`; plus `consumes` + `maps` unless `direction: outbound` | `direction`, `tests.contract` |
+| any kind | — | optional, never required: `flow` (the journey, §3); `scenarios` (given / when / then, §3 — written by a generator or a person; the plugin's slice skills do not write it, and `/essentials:slice-enrich` drafts it from existing tests for a person to accept); `requirements` (the requirement ids the slice implements, §3 — written by a person or a spec-driven generator, never by the plugin) |
 
 **Every kind declares what triggers it, but not all in the same field.** A view uses
 `projections[].from`; automations use `consumes` or `schedule`; translations use `consumes`. §3 has
@@ -187,7 +188,7 @@ a command slice always writes `publishes` and a view slice always writes `projec
 
   | `lane` | `tier` |
   |---|---|
-  | `decider` | `cqrs-es` |
+  | `decider` | `cqrs-es` if the BC is event-sourced; otherwise leave `tier` absent (the project default) |
   | `aggregate` | `cqrs-es` |
   | `service-entity` | `service-entity` |
 
@@ -260,6 +261,12 @@ a command slice always writes `publishes` and a view slice always writes `projec
   projector at all, and manifests authored before schema 1.3 never had the field to fill in.
 - **`dispatches` is what an automation sends**, i.e. command types.
 - **`maps` is the translation table**: `[{ from: BillingInvoiceIssued, to: RecordPayment }]`.
+- **`featureFlag` names the property a slice is switched on by.** The schema accepts any object; the
+  plugin writes `{ property: returns.self-service.enabled, havingValue: "true" }` — the attributes of
+  the `@ConditionalOnProperty` on a type in the slice's directory, which is the evidence
+  `/essentials:slice-enrich` drafts it from; `havingValue` is left out when the annotation has none, and
+  `matchIfMissing: true` is added when the annotation has it, because then the slice is on unless the
+  property says otherwise. Absent means the slice declares no flag.
 - **`invariants` carry an id, text, and the component that enforces it** —
   `{ id: INV-PO-1, text: "Quantity must be positive", enforcedBy: PlaceOrderDecider }`. An invariant
   with no `enforcedBy` is a wish, not an invariant.
@@ -267,27 +274,180 @@ a command slice always writes `publishes` and a view slice always writes `projec
   `direct-decider:<other_slice>` are the two Essentials uses.
 - **`supersedes` declares a migration twin**, and is the only sanctioned way for two slices to
   project the same events into the same shape. See §4 below.
-- **An unknown root key is rejected, and `x-` is the escape hatch.** The schema is strict at the root
-  so that drift is visible rather than silent. Where a project genuinely needs to carry something no
-  field fits, prefix the key with `x-` (`x-team-oncall: payments`) and it validates. Reach for a real
-  field first and `notes:` second — no toolchain reads an `x-` key, so one is
-  documentation, not a contract.
+- **`flow` names the journey a slice serves** (schema 1.4, optional, any kind):
+
+  ```yaml
+  flow: checkout              # one journey
+  flow: [checkout, returns]   # a slice that genuinely serves several — typically a shared view
+  ```
+
+  A name matches `^[a-z0-9][a-z0-9_-]*$`; a list is non-empty and holds no duplicates. **A flow name
+  is global, not per bounded context**: a journey that crosses contexts (checkout spanning `orders`,
+  `billing` and `shipping`) is one journey, and two contexts that pick the same name *mean* the same
+  journey. **No order is declared** — the order inside a journey is derived from cause and effect
+  (command → event → reacting slice), because an ordinal would have to be renumbered by every slice
+  inserted into the journey. Give every slice created for a journey that journey's name, and add a
+  second name only to a slice that serves both. A slice without `flow` is grouped by derivation —
+  the forward closure of cause and effect from an entry slice (an endpoint-triggered command, an
+  inbound translation, a scheduled automation) inside its context — and the map says so. A project
+  whose manifests predate the field catches up with `/essentials:slice-enrich`: it proposes journeys
+  from the same cause and effect, across contexts, and a person accepts, renames, splits or skips each
+  one before anything is written.
+- **`scenarios` is the slice's specification by example** (schema 1.4, optional, any kind), in
+  Event Modeling's given / when / then form. It is **data that is rendered and checked, not a test**:
+  the test that runs a scenario lives in the source tree and is named in `test`.
+
+  ```yaml
+  scenarios:
+    - name: cancels a placed order               # required, unique within the slice
+      given:                                     # optional; prior history
+        - event: OrderPlaced
+          with: { orderId: o-1, customerId: c-7 }
+      when:                                      # required except on a view
+        command: CancelOrder
+        with: { orderId: o-1 }
+      then:                                      # required
+        - event: OrderCancelled
+          with: { orderId: o-1 }
+      test: CancelOrderDeciderTest#cancelsPlacedOrder   # optional
+
+    - name: rejects an unknown order
+      when: { command: CancelOrder, with: { orderId: o-404 } }
+      then: { error: OrderNotFound, message: "Order o-404 not found" }
+
+    - name: cancelling twice is a no-op
+      given: [{ event: OrderPlaced }, { event: OrderCancelled }]
+      when: { command: CancelOrder }
+      then: { nothing: true }
+  ```
+
+  **A step** is a mapping with exactly one message key and an optional `with`:
+
+  | Key | Names | Allowed in |
+  |---|---|---|
+  | `event` | an event type | given, when (reactors), then |
+  | `command` | a command type | when (command slices), then (automations, inbound translations) |
+  | `query` | a query type the slice `serves` | when (views) |
+  | `state` | the current state of an entity, for a lane without an event stream (service-entity): a write target, or the entity a service-entity view reads | given |
+  | `external` | a message of the slice's `externalSystem` | when (inbound translation), then (outbound translation) |
+  | `schedule` | `true` — the time trigger of a schedule-driven automation | when |
+
+  `with` is a flat mapping of **example values**: payload field names to scalars (string, number,
+  boolean, null), rendered verbatim and never interpreted. **Quote a date or a time** — unquoted,
+  YAML reads `2026-10-08` as a date, which the schema rejects as not a scalar.
+
+  **`then`** is exactly one of:
+
+  | Form | Meaning |
+  |---|---|
+  | a non-empty list of steps | what the slice emits: events published, commands dispatched, external calls made |
+  | `{ error: <Name>, message?: <text> }` | the slice rejects. `<Name>` is the exception or domain-error type's simple name as thrown (`OrderNotFound`, `IllegalArgumentException`); `message` an example message. Nothing is emitted |
+  | `{ nothing: true }` | accepted, nothing emitted — the idempotent retry, the event a policy ignores |
+  | `{ readModel: <Name>, rows: [ {col: value, …}, … ] }` | a view's state after `given` (and the result of a `when` query). `rows: []` is a valid "empty" outcome |
+
+  An empty `then: []` is invalid: it is indistinguishable from a scenario left unfinished. Write
+  `{ nothing: true }`.
+
+  **What each kind may say** — a scenario names the slice's *own* messages:
+
+  | Kind | `given` | `when` | `then` |
+  |---|---|---|---|
+  | command | `event` (any event published in scope), `state` (∈ `writes`) | `command` ∈ `handles` — required | events ⊆ `publishes`; `error`; `nothing` |
+  | view | `event` ∈ `projections[].from` ∪ `consumes`; on the service-entity lane (`lane` or `tier: service-entity`) also `state`, the entity it reads | optional; `query` ∈ `serves` | `readModel` — the view's own model (`owns`, or the `reads` / `projections[].name` the plugin's view template writes) — with row keys from its columns; `error` (for a `when` query) |
+  | automation | `event`, `state` (its own to-do read model, if any) | `event` ∈ `consumes`, or `schedule: true` when the slice declares `schedule` — required | commands ⊆ `dispatches`; `nothing`; `error` |
+  | translation, inbound | `event`, `state` | `external` — required | commands ⊆ `dispatches`, events ⊆ `publishes`; `nothing`; `error` |
+  | translation, outbound | `event`, `state` | `event` ∈ `consumes` — required | `external` steps; `nothing`; `error` |
+
+  A `direction: both` translation (or one with no `direction`) takes either row, chosen by its
+  `when`: an `external` trigger is the inbound half, an `event` the outbound one.
+
+  **`test`** names the test that executes the scenario, resolved under the module's test roots:
+  `ClassName#method` (everything after `#` is taken verbatim, so a Kotlin backtick name works:
+  ``CancelOrderTest#cancels a placed order``); `ClassName` when the whole class is the scenario; or
+  `path/from/test/root/File.kt#method` when the simple class name is ambiguous.
+
+  **Where each check runs.** The shape — one message key per step, the `then` forms, a unique
+  `name` — is the schema's, and the table above is `slice-lint.py` gate 1(d): both are precise from
+  the one manifest, so both fail the commit gate. What needs other files is the map's, as
+  annotations rather than findings: a `given` event no slice publishes, a `with` or `rows` key that
+  is no payload field or column, a `test` that resolves to no test, and a slice with no scenarios.
+
+  **Who writes it.** The plugin's slice skills do not write `scenarios`; a spec-driven generator or a
+  person does. For slices that already exist, `/essentials:slice-enrich` drafts them from the slice's
+  existing tests — each scenario names the test it came from in `test` — and writes only those a person
+  accepts; a slice with no mapped test gets a suggestion, not a draft. A slice without scenarios is not
+  a defect — the map shows its invariants and test kinds in their place.
+- **`requirements` names the requirements a slice implements** (schema 1.4, optional, any kind):
+
+  ```yaml
+  requirements: [REQ-ORDERS-12, NFR-ORDERS-3]
+  ```
+
+  Each id is written as the project's requirement source names it — a sphinx-needs id, an issue key,
+  whatever the project traces against. The schema checks only the shape: a non-empty list of
+  non-empty strings with no duplicates. The id grammar belongs to the requirement source, so a
+  toolchain that keeps a requirement trace (sdd's, for one) checks the ids against it; Essentials does
+  not. **Who writes it.** A person or a spec-driven generator. The plugin's slice skills never derive
+  it, `/essentials:slice-enrich` never proposes it — no source the plugin reads names a requirement —
+  and every rewriter carries it through verbatim (`manifest-reconciliation.md` §1).
+- **A key starting with `x-` is an extension key.** It is valid on the root and on every mapping a
+  manifest holds — an endpoint, a projection, a scenario, a step — at any `schemaVersion`
+  (`x-team-oncall: payments`, `x-ticket: PAY-112`). No toolchain reads one, so it is documentation, not
+  a contract: reach for a real field first and `notes:` second.
+- **Any other unknown key is checked against the manifest's stamp.** Each schema copy declares the
+  version it implements (`x-manifestVersion`). A manifest stamped at or below it is held to that schema
+  exactly, so an unknown key is a typo and fails gate 1(b) — that is what catches `subscribesTo` for
+  `aggregateTypes`. A manifest stamped with a newer `1.x` was written for a schema the copy has not
+  seen: an unknown key passes, `slice-lint` prints it as a note, and every key the copy does know is
+  still checked. The exception is the projection near-synonyms — `subscribesTo`, `handles`, `table`
+  and `kind` on a projection — which fail gate 1(b) at every stamp, so a stamp written ahead of the
+  copy cannot switch that guard off; no `1.x` will ever define them. A stamp that is not `1.x` gets no
+  tolerance. Values are not keys: a known key with a value its enum does not list fails at any stamp.
+- **Stamp what you wrote for.** A generator stamps the schema version whose fields it wrote, and writes
+  `flow`, `scenarios` and `requirements` only with a stamp of `"1.4"` or later. A project copy older than 1.4 has no
+  version gate and rejects any unknown key whatever the stamp, and every project with the lint gate
+  carries its **own copy** (`scripts/slice-yaml.schema.json`, installed by `/essentials:init` Step 9 or
+  `/essentials:upgrade` Group A2). So, before writing any of them:
+
+  1. Check the project's `scripts/slice-yaml.schema.json` — or, in a project without a lint gate,
+     the plugin's `references/slice/slice-yaml.schema.json` — for a root `x-manifestVersion` of
+     `"1.4"` or later. A copy without one predates the version gate and knows none of the three.
+  2. If it is absent, write none of the fields and tell the user why: the project's schema copy
+     predates 1.4, and `/essentials:upgrade` refreshes it (Group A2). Do not add the fields and leave
+     the gate red.
+  3. Stamp `schemaVersion: "1.4"` on a manifest that carries any of them. Readers accept any `1.x`,
+     so a manifest without them needs no restamp.
+
+  `/essentials:slice-enrich` follows these steps: it checks the schema copy before proposing and its
+  script stamps 1.4 when it writes `flow` or `scenarios`.
 
 ### Validating a manifest
 
 ```bash
-uv run --script <plugin>/scripts/slice-lint.py .                    # every slice.yaml under the current directory
-uv run --script <plugin>/scripts/slice-lint.py . --require-schema   # what CI should run
+uv run --script <plugin>/scripts/slice-lint.py .                              # every slice.yaml under the current directory; what CI should run
+uv run --script <plugin>/scripts/slice-lint.py . --json --baseline old.json   # only the findings a previous --json run did not report
 ```
 
 The script pins `pyyaml` and `jsonschema` in inline script metadata, so `uv run --script` needs nothing
 installed first; `python3 <plugin>/scripts/slice-lint.py` works where both are installed. It parses,
 validates against the schema, checks the three sole-ownership properties across manifests (a declared
-`supersedes` twin is not an ownership clash), and reports a write style written into `tier`. Exit 0
-clean, 1 findings, 2 could not run. With `--json`, each finding carries its gate label and its
-`ESS-G<gate><clause>` id. `/essentials:init` offers to install a project copy (the script plus the
-schema beside it, in `scripts/`) and a pre-commit hook. Wire one of them up, because nothing in a Maven
-or Gradle build reads `slice.yaml` and an unparseable manifest is otherwise invisible rather than loud.
+`supersedes` twin is not an ownership clash), reports a write style written into `tier`, and checks
+that every scenario names the slice's own messages (gate 1(d), the kind table in §3). Exit 0
+clean, 1 findings, 2 could not run — including a run without `jsonschema` that found nothing, because
+a parse-only pass is not a pass (`--allow-skip-schema` accepts one, with its banner; never in CI).
+Findings win the exit code over a skipped validation, so read `schemaValidated` in the JSON. The
+script emits Blocking and Should-fix only, and both exit 1. An unknown key on a manifest stamped newer
+than the schema copy is a **note** (§3): printed as `Note`, listed under `notes` in the JSON, and never
+counted in the exit code or a baseline. The projection near-synonyms are the exception: they fail at
+every stamp. `--require-schema` is accepted and does nothing: failing on a skipped validation is the
+default. With `--json`, each finding carries its gate label and its `ESS-G<gate><clause>` id.
+`--baseline` takes a previous `--json` output and drops every finding it holds (matched on id, file and
+message, relative to each run's root), which is how `/essentials:slice-check` measures what refreshing
+a project's installed copy would add, and how a project can ratchet: commit a baseline, pass it in CI,
+and only new findings fail the build. `/essentials:init` offers to install a project copy (the script
+plus the schema beside it, in `scripts/`) and a pre-commit hook, which every clone activates once with
+the command in the project README. Wire one of them up, because nothing in a Maven or Gradle build
+reads `slice.yaml` and an unparseable manifest is otherwise invisible rather than loud.
 
 Whether the manifests still describe the *code* is a separate check, over the Java and Kotlin sources:
 `uv run --script <plugin>/scripts/slice-source.py . --check` (gates 6, 11(b) and 14's signal rows,
@@ -322,10 +482,15 @@ they serve different purposes and are two ordinary slices with no link between t
 
 ## 5. Worked examples
 
+Each example carries a `flow` and a few `scenarios` (§3) to show their shape per kind — a rejected
+command (`error`), an ignored event (`nothing`), a view's rows (`readModel`) and both halves of a
+translation. Both fields are optional; drop them and the manifest stays valid. Every block here
+validates and passes `slice-lint.py` (its test extracts them).
+
 ### command
 
 ```yaml
-schemaVersion: "1.3"
+schemaVersion: "1.4"
 slice: orders.place_order
 kind: command
 bc: orders
@@ -334,6 +499,8 @@ status: live
 summary: Place a new order for a SKU and quantity.
 generator: essentials
 language: kotlin
+
+flow: checkout
 
 handles: [PlaceOrder]
 publishes: [OrderPlaced]
@@ -344,6 +511,16 @@ endpoints:
   - { method: POST, path: "/api/orders", auth: user }
 invariants:
   - { id: INV-PO-1, text: "Quantity must be positive", enforcedBy: PlaceOrderDecider }
+scenarios:
+  - name: places an order
+    when: { command: PlaceOrder, with: { orderId: o-1, sku: A-100, quantity: 2 } }
+    then:
+      - { event: OrderPlaced, with: { orderId: o-1, sku: A-100, quantity: 2 } }
+    test: PlaceOrderDeciderTest#placesAnOrder
+  - name: rejects a zero quantity
+    when: { command: PlaceOrder, with: { orderId: o-2, sku: A-100, quantity: 0 } }
+    then: { error: IllegalArgumentException, message: "Quantity must be positive" }
+    test: PlaceOrderDeciderTest#rejectsZeroQuantity
 forbidden:
   - cross-slice-internal:orders
 tests:
@@ -355,7 +532,7 @@ tests:
 ### view
 
 ```yaml
-schemaVersion: "1.3"
+schemaVersion: "1.4"
 slice: orders.order_list
 kind: view
 bc: orders
@@ -364,6 +541,8 @@ status: live
 summary: List orders for the current customer.
 generator: essentials
 language: kotlin
+
+flow: checkout
 
 serves: [ListOrders]
 endpoints:
@@ -376,6 +555,21 @@ projections:
     from: [OrderPlaced, OrderCancelled]
     consistency: eventual
     store: document-db
+scenarios:
+  - name: lists placed and cancelled orders
+    given:
+      - { event: OrderPlaced, with: { orderId: o-1, sku: A-100, quantity: 2 } }
+      - { event: OrderPlaced, with: { orderId: o-2, sku: B-200, quantity: 1 } }
+      - { event: OrderCancelled, with: { orderId: o-2 } }
+    when: { query: ListOrders }
+    then:
+      readModel: OrderListView
+      rows:
+        - { orderId: o-1, sku: A-100, quantity: 2, status: PLACED }
+        - { orderId: o-2, sku: B-200, quantity: 1, status: CANCELLED }
+  - name: no orders yet
+    when: { query: ListOrders }
+    then: { readModel: OrderListView, rows: [] }
 forbidden:
   - cross-slice-internal:orders
 tests:
@@ -387,7 +581,7 @@ tests:
 ### automation
 
 ```yaml
-schemaVersion: "1.3"
+schemaVersion: "1.4"
 slice: orders.fulfillment
 kind: automation
 bc: orders
@@ -397,10 +591,24 @@ summary: Drive an order from confirmed through payment to shipment.
 generator: essentials
 language: kotlin
 
+flow: checkout
+
 consumes: [OrderPlaced, PaymentReceived, PaymentFailed]
 dispatches: [InitiatePayment, ReserveInventory, CancelOrder]
 invariants:
   - { id: INV-FF-1, text: "Payment is attempted at most three times", enforcedBy: FulfillmentProcessor }
+scenarios:
+  - name: starts payment for a placed order
+    when: { event: OrderPlaced, with: { orderId: o-1 } }
+    then: [{ command: InitiatePayment, with: { orderId: o-1, attempt: 1 } }]
+  - name: cancels after the third failed payment
+    given: [{ event: OrderPlaced }, { event: PaymentFailed }, { event: PaymentFailed }]
+    when: { event: PaymentFailed, with: { orderId: o-1, attempt: 3 } }
+    then: [{ command: CancelOrder, with: { orderId: o-1 } }]
+  - name: ignores a payment it already handled
+    given: [{ event: OrderPlaced }, { event: PaymentReceived }]
+    when: { event: PaymentReceived, with: { orderId: o-1 } }
+    then: { nothing: true }
 forbidden:
   - cross-slice-internal:orders
 tests:
@@ -412,7 +620,7 @@ tests:
 ### translation
 
 ```yaml
-schemaVersion: "1.3"
+schemaVersion: "1.4"
 slice: orders.billing
 kind: translation
 bc: orders
@@ -422,12 +630,22 @@ summary: Anti-corruption boundary to the Billing system.
 generator: essentials
 language: kotlin
 
+flow: checkout
+
 externalSystem: billing
 direction: both
-consumes: [BillingInvoiceIssued]
+consumes: [BillingInvoiceIssued, OrderPlaced]
+dispatches: [RecordPayment]
 maps:
   - { from: BillingInvoiceIssued, to: RecordPayment }
   - { from: OrderPlaced, to: BillingCreateInvoice }
+scenarios:
+  - name: records the payment for an issued invoice
+    when: { external: BillingInvoiceIssued, with: { invoiceId: inv-9, orderId: o-1, amount: 120.00 } }
+    then: [{ command: RecordPayment, with: { orderId: o-1, amount: 120.00 } }]
+  - name: asks Billing for an invoice when an order is placed
+    when: { event: OrderPlaced, with: { orderId: o-1 } }
+    then: [{ external: BillingCreateInvoice, with: { reference: o-1 } }]
 forbidden:
   - cross-slice-internal:orders
 tests:

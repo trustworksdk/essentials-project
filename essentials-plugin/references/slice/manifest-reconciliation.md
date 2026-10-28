@@ -18,7 +18,7 @@ The single most important distinction. Getting it wrong destroys work.
 | Class | Fields | Rule |
 |---|---|---|
 | **Machine-derived** | `handles`, `publishes`, `consumes`, `dispatches`, `serves`, `endpoints`, `writes`, `owns`, `reads`, `projections` (including `from` **and `aggregateTypes`**), `schedule`, `language`, `lane`, `tests.*.present` | Read from the code. On a conflict the **code wins** — it is what actually runs |
-| **Human-owned** | `summary`, `owner`, `status`, `stability`, `invariants[].text`, `notes`, `forbidden`, `supersedes`, `tier`, `profile`, `sla`, `statutory`, `observability`, `x-*` | Never overwritten. Preserved byte-for-byte, including comments and ordering where the writer can manage it |
+| **Human-owned** | `summary`, `owner`, `status`, `stability`, `invariants[].text`, `notes`, `forbidden`, `supersedes`, `flow`, `scenarios`, `requirements`, `tier`, `profile`, `sla`, `statutory`, `observability`, `x-*` | Never overwritten. Preserved byte-for-byte, including comments and ordering where the writer can manage it |
 | **Derived, but a judgement** | `invariants[].enforcedBy`, `reads[].via`, `projections[].consistency`, `provides`, `endpoints[].capability` | Proposable from code, but confirm rather than assume: `consistency` follows the processor type, `enforcedBy` follows the class that throws |
 
 A field that is machine-derived is safe to regenerate on every run. A human-owned field that disagrees
@@ -26,18 +26,43 @@ with the code is a **finding**, not a repair: `status: live` on a slice with no 
 report, not to quietly rewrite.
 
 **Never-overwritten is not the same as never-written.** A human-owned field that is **absent** has no
-human value to protect, so a one-time backfill is not a rewrite. `tier` is the case this matters for:
-it is human-owned, so a project that adopted manifests before the field existed would never gain it
-and would sit at the project default forever with no record of why. `/essentials:slice-check
---adopt-tier` stamps it **only where absent**, from the value resolved for the owning BC, and reports
-every slice it touched. A `tier` that is present and disagrees with the resolved default stays a
-finding.
+human value to protect, so filling it once is not a rewrite. `tier` is the simplest case: it is
+human-owned, so a project that adopted manifests before the field existed would never gain it and would
+sit at the project default forever with no record of why. `/essentials:slice-check --adopt-tier` stamps
+it **only where absent**, from the value resolved for the owning BC, and reports every slice it touched.
+A `tier` that is present and disagrees with the resolved default stays a finding.
+
+The other absent human-owned fields — `flow`, `scenarios`, `summary`, `invariants[].text` — and the
+absent fields the code evidences but a person should confirm — `invariants[].enforcedBy`,
+`projections[].consistency`, `featureFlag`, a translation's `maps` — are filled the same way by
+`/essentials:slice-enrich`, under three rules that keep a draft from being invented content:
+
+- **Evidence or nothing.** A model may draft an absent field only from evidence in the code or the tests,
+  and every draft cites it: a test method, a Javadoc line, a guard clause, an annotation, an edge of the
+  cause-and-effect graph. No evidence, no draft. A scenario is drafted only from an existing test, never
+  from production code alone.
+- **A person writes it, by accepting.** Nothing is written without a yes, per journey and per slice; a
+  skipped field stays absent. The script writes what was accepted — the model never edits a `slice.yaml`
+  by hand.
+- **Never over a value.** A field that is present, even an empty-looking one, is the human's and gets no
+  proposal. The one exception is a `summary` that is exactly a slice template's placeholder.
+
+The fields with no evidence in code — `notes`, `forbidden`, `sla`, `statutory`, `observability`,
+`profile`, `stability`, `supersedes`, `owner`, `status`, and `characterization`, which its external tool
+owns — are never drafted; slice-enrich names them once as not inferable. `tier` is on both commands:
+`--adopt-tier` stays, and slice-enrich applies the same rule so one run catches a manifest up.
 
 **A manifest another generator owns is not drift to reconcile.** When `generator` is not `essentials`,
 the tool that wrote the manifest may derive `tier` from its own project data and overwrite it on every
 refresh — it has a source to derive from, and this plugin does not. That manifest is its generator's
-to maintain; leave its `tier` alone. Nothing else on the human-owned row is backfillable — `summary`, `notes` and
-`invariants[].text` are prose that a tool inventing content would only corrupt.
+to maintain; leave its `tier` alone, and leave its `flow`, `scenarios` and `requirements` alone too —
+a spec-driven generator writes those itself (`manifest-guide.md` §3), so `/essentials:slice-enrich`
+skips such a manifest with a note.
+
+**`--fix-manifests` still writes none of this.** It regenerates the machine-derived row and nothing on the
+human-owned row: it never invents a journey name, a scenario, a summary or an invariant, because prose a
+tool makes up with no one confirming it would only corrupt the field. Drafting from evidence for a person
+to accept is `/essentials:slice-enrich`'s job, and only for a field that is absent.
 
 **Two of the judgement fields are seam metadata and need the pairing checked, not just the value.**
 `provides` on the owning slice and `reads[].via` on the consumer are two halves of one declaration
@@ -101,8 +126,8 @@ The judgement fields (§1, third row) stay yours.
 |---|---|
 | `handles` | The decider's / handler's command parameter type |
 | `publishes` | Event types returned by the decider, or published on the `EventBus` |
-| `consumes` | Handler parameter types on an `EventProcessor` (automation) or inbound translator (translation) |
-| `dispatches` | Command types passed to `commandBus.send` / `sendAsync` / `sendAndDontWait` |
+| `consumes` | Handler parameter types on an `EventProcessor` (automation) or inbound translator (translation): a `@KafkaListener` / `@RabbitListener` / `@JmsListener` payload type, or each concrete subtype of it declared in the project |
+| `dispatches` | Command types passed to `commandBus.send` / `sendAsync` / `sendAndDontWait`, or to `addMessageReceived` on an `Inbox` the same file creates with `getOrCreateInbox(config, commandBus)`, the overload that sends every message the inbox receives to that bus |
 | `schedule` | The automation's `@Scheduled` (or equivalent) — `cron` verbatim, `fixedDelay`/`initialDelay` as ISO-8601 durations. Carry the `note` over from a comment if one explains the cadence; never invent one |
 | `provides` | Interfaces declared in the BC's `types/` that this slice implements **and** registers as a bean. `consumedBy` is derived by finding the slices that inject the interface — advisory, so a stale entry is reported rather than trusted |
 | `projections[].from` | Handler parameter types on the view's projector, resolved to the declared type through imports, Kotlin `import … as` aliases, typealiases and fully-qualified names |
@@ -159,7 +184,8 @@ with a feature change makes both unreviewable.
 - **Never edit source to match a manifest.** The code is the truth; the manifest is the description. A
   disagreement is repaired in the description, or reported.
 - **Never invent a field to make a gate pass.** An absent `invariants` list means nobody wrote one, and
-  a fabricated one is worse than none.
+  a fabricated one is worse than none. A draft that cites its evidence and that a person accepted
+  (`/essentials:slice-enrich`, §1) is not invented; one without either is.
 - **Never delete a human-owned field** because the code has no counterpart. `forbidden`,
   `supersedes` and `statutory` are declarations of intent, and intent does not have to be inferable.
 - **Never regenerate a `CLAUDE.md` wholesale.** See §4.

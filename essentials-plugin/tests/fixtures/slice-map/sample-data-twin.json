@@ -89,7 +89,11 @@
           "level": "warn",
           "text": "consumes PaymentSettled, which no slice in scope publishes (dangling edge)"
         }
-      ]
+      ],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     },
     {
       "id": "billing.refund_order",
@@ -135,7 +139,11 @@
       "tests": [
         "unit"
       ],
-      "flags": []
+      "flags": [],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     },
     {
       "id": "orders.cancel_order",
@@ -181,7 +189,11 @@
       "tests": [
         "unit"
       ],
-      "flags": []
+      "flags": [],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     },
     {
       "id": "orders.place_order",
@@ -227,7 +239,11 @@
       "tests": [
         "unit"
       ],
-      "flags": []
+      "flags": [],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     },
     {
       "id": "orders.customer_summary",
@@ -278,7 +294,11 @@
           "text": "superseded by orders.customer_summary_v2 but status is live — a migration twin moves the old slice to status: deprecated"
         }
       ],
-      "readModels": []
+      "readModels": [],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     },
     {
       "id": "orders.customer_summary_v2",
@@ -325,7 +345,11 @@
         "unit"
       ],
       "flags": [],
-      "readModels": []
+      "readModels": [],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     },
     {
       "id": "orders.order_list",
@@ -385,7 +409,11 @@
           "text": "superseded by orders.order_list_v2 — retirement outstanding: delete this slice once consumers have swapped over"
         }
       ],
-      "readModels": []
+      "readModels": [],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     },
     {
       "id": "orders.order_list_v2",
@@ -441,7 +469,11 @@
         "unit"
       ],
       "flags": [],
-      "readModels": []
+      "readModels": [],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     },
     {
       "id": "orders.order_stats",
@@ -487,7 +519,11 @@
         "unit"
       ],
       "flags": [],
-      "readModels": []
+      "readModels": [],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     },
     {
       "id": "orders.order_totals",
@@ -533,7 +569,11 @@
         "unit"
       ],
       "flags": [],
-      "readModels": []
+      "readModels": [],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     },
     {
       "id": "orders.shipment_board_v2",
@@ -584,7 +624,11 @@
           "text": "supersedes 'orders.shipment_board', which is not a slice in scope"
         }
       ],
-      "readModels": []
+      "readModels": [],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     }
   ],
   "messages": [
@@ -800,5 +844,263 @@
   ],
   "notes": [
     "package, files, message payloads and read-model columns come from source and were not read (no --source-facts)"
-  ]
+  ],
+  "processes": [
+    {
+      "id": "~orders.cancel_order",
+      "name": "cancel order",
+      "declared": false,
+      "color": 2,
+      "bcs": [
+        "orders"
+      ],
+      "sliceIds": [
+        "orders.cancel_order",
+        "orders.customer_summary_v2",
+        "orders.order_list_v2"
+      ],
+      "entries": [
+        "orders.cancel_order"
+      ],
+      "links": []
+    },
+    {
+      "id": "~orders.place_order",
+      "name": "place order",
+      "declared": false,
+      "color": 0,
+      "bcs": [
+        "orders"
+      ],
+      "sliceIds": [
+        "orders.place_order",
+        "orders.customer_summary",
+        "orders.customer_summary_v2",
+        "orders.order_list",
+        "orders.order_list_v2",
+        "orders.order_stats",
+        "orders.order_totals",
+        "orders.shipment_board_v2"
+      ],
+      "entries": [
+        "orders.place_order"
+      ],
+      "links": []
+    },
+    {
+      "id": "~unattached:billing",
+      "name": "unattached",
+      "declared": false,
+      "color": 8,
+      "bcs": [
+        "billing"
+      ],
+      "sliceIds": [
+        "billing.refund_order",
+        "billing.settle_refund"
+      ],
+      "entries": [
+        "billing.refund_order",
+        "billing.settle_refund"
+      ],
+      "links": []
+    }
+  ],
+  "issues": [
+    {
+      "id": "map-dangling-consume:billing.settle_refund:event:PaymentSettled",
+      "code": "map-dangling-consume",
+      "level": "warn",
+      "text": "consumes PaymentSettled, which no slice in scope publishes (dangling edge)",
+      "target": {
+        "kind": "slice",
+        "id": "billing.settle_refund",
+        "part": "event:PaymentSettled"
+      },
+      "source": "map",
+      "fix": {
+        "route": "audit",
+        "bc": "billing"
+      }
+    },
+    {
+      "id": "map-twin-broken:orders.customer_summary:supersededBy:orders.customer_summary_v2",
+      "code": "map-twin-broken",
+      "level": "warn",
+      "text": "superseded by orders.customer_summary_v2 but status is live — a migration twin moves the old slice to status: deprecated",
+      "target": {
+        "kind": "slice",
+        "id": "orders.customer_summary",
+        "part": "supersededBy:orders.customer_summary_v2"
+      },
+      "source": "map",
+      "fix": {
+        "route": "audit",
+        "bc": "orders"
+      }
+    },
+    {
+      "id": "map-twin-broken:orders.shipment_board_v2:supersedes:orders.shipment_board",
+      "code": "map-twin-broken",
+      "level": "warn",
+      "text": "supersedes 'orders.shipment_board', which is not a slice in scope",
+      "target": {
+        "kind": "slice",
+        "id": "orders.shipment_board_v2",
+        "part": "supersedes:orders.shipment_board"
+      },
+      "source": "map",
+      "fix": {
+        "route": "audit",
+        "bc": "orders"
+      }
+    },
+    {
+      "id": "flow-undeclared:billing.refund_order",
+      "code": "flow-undeclared",
+      "level": "info",
+      "text": "declares no `flow:` — grouped into a process by cause and effect; /essentials:slice-enrich drafts its journey",
+      "target": {
+        "kind": "slice",
+        "id": "billing.refund_order",
+        "part": null
+      },
+      "source": "atlas",
+      "fix": {
+        "route": "author",
+        "bc": "billing"
+      }
+    },
+    {
+      "id": "flow-undeclared:billing.settle_refund",
+      "code": "flow-undeclared",
+      "level": "info",
+      "text": "declares no `flow:` — grouped into a process by cause and effect; /essentials:slice-enrich drafts its journey",
+      "target": {
+        "kind": "slice",
+        "id": "billing.settle_refund",
+        "part": null
+      },
+      "source": "atlas",
+      "fix": {
+        "route": "author",
+        "bc": "billing"
+      }
+    },
+    {
+      "id": "flow-undeclared:orders",
+      "code": "flow-undeclared",
+      "level": "info",
+      "text": "9 of 9 slices in `orders` declare no flow — grouped into processes by cause and effect; /essentials:slice-enrich drafts their journeys",
+      "target": {
+        "kind": "context",
+        "id": "orders",
+        "part": null
+      },
+      "source": "atlas",
+      "members": [
+        "orders.cancel_order",
+        "orders.customer_summary",
+        "orders.customer_summary_v2",
+        "orders.order_list",
+        "orders.order_list_v2",
+        "orders.order_stats",
+        "orders.order_totals",
+        "orders.place_order",
+        "orders.shipment_board_v2"
+      ],
+      "memberText": "declares no `flow:` — grouped into a process by cause and effect; /essentials:slice-enrich drafts its journey",
+      "fix": {
+        "route": "author",
+        "bc": "orders"
+      }
+    },
+    {
+      "id": "map-twin-broken:orders.order_list:supersededBy:orders.order_list_v2",
+      "code": "map-twin-broken",
+      "level": "info",
+      "text": "superseded by orders.order_list_v2 — retirement outstanding: delete this slice once consumers have swapped over",
+      "target": {
+        "kind": "slice",
+        "id": "orders.order_list",
+        "part": "supersededBy:orders.order_list_v2"
+      },
+      "source": "map",
+      "fix": {
+        "route": "audit",
+        "bc": "orders"
+      }
+    },
+    {
+      "id": "scenario-none:billing.refund_order",
+      "code": "scenario-none",
+      "level": "info",
+      "text": "declares no scenarios — its board shows invariants and test kinds instead; /essentials:slice-enrich drafts them from its tests",
+      "target": {
+        "kind": "slice",
+        "id": "billing.refund_order",
+        "part": null
+      },
+      "source": "atlas",
+      "fix": {
+        "route": "author",
+        "bc": "billing"
+      }
+    },
+    {
+      "id": "scenario-none:billing.settle_refund",
+      "code": "scenario-none",
+      "level": "info",
+      "text": "declares no scenarios — its board shows invariants and test kinds instead; /essentials:slice-enrich drafts them from its tests",
+      "target": {
+        "kind": "slice",
+        "id": "billing.settle_refund",
+        "part": null
+      },
+      "source": "atlas",
+      "fix": {
+        "route": "author",
+        "bc": "billing"
+      }
+    },
+    {
+      "id": "scenario-none:orders",
+      "code": "scenario-none",
+      "level": "info",
+      "text": "9 of 9 slices in `orders` declare no scenarios — their boards show invariants and test kinds instead; /essentials:slice-enrich drafts scenarios from their tests",
+      "target": {
+        "kind": "context",
+        "id": "orders",
+        "part": null
+      },
+      "source": "atlas",
+      "members": [
+        "orders.cancel_order",
+        "orders.customer_summary",
+        "orders.customer_summary_v2",
+        "orders.order_list",
+        "orders.order_list_v2",
+        "orders.order_stats",
+        "orders.order_totals",
+        "orders.place_order",
+        "orders.shipment_board_v2"
+      ],
+      "memberText": "declares no scenarios — its board shows invariants and test kinds instead; /essentials:slice-enrich drafts them from its tests",
+      "fix": {
+        "route": "author",
+        "bc": "orders"
+      }
+    }
+  ],
+  "lineage": {
+    "fields": {},
+    "technicalColumns": [
+      "id",
+      "version",
+      "createdAt",
+      "updatedAt",
+      "lastModified",
+      "etag"
+    ]
+  }
 }

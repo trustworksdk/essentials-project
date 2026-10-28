@@ -64,7 +64,7 @@ import static dk.trustworks.essentials.shared.interceptor.DefaultInterceptorChai
  * @param <CONFIG> The concrete {@link AggregateEventStreamConfiguration}
  */
 @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
-public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfiguration> implements ConfigurableEventStore<CONFIG> {
+public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfiguration> implements ConfigurableEventStore<CONFIG>, AwaitedGapInspector {
     private static final Logger       log              = LoggerFactory.getLogger(PostgresqlEventStore.class);
     private static final SubscriberId NO_SUBSCRIBER_ID = SubscriberId.of("NoSubscriberId");
 
@@ -227,6 +227,31 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
         gapMiddlesAwaitedAcrossSubscribes.forget(subscriberId, aggregateType);
     }
 
+    /**
+     * True when {@code globalEventOrder} is one of the subscriber's transient gaps recorded by the
+     * {@link #getEventStreamGapHandler() gap handler}, or lies in the middle of a wide gap the subscriber's polls await in
+     * memory only ({@link GapMiddlesAwaitedAcrossSubscribes}) - such a middle has no transient-gap row
+     */
+    @Override
+    public boolean isAwaitedAsGap(SubscriberId subscriberId, AggregateType aggregateType, GlobalEventOrder globalEventOrder) {
+        requireNonNull(subscriberId, "No subscriberId provided");
+        requireNonNull(aggregateType, "No aggregateType provided");
+        requireNonNull(globalEventOrder, "No globalEventOrder provided");
+        return gapMiddlesAwaitedAcrossSubscribes.isAwaited(subscriberId, aggregateType, globalEventOrder.longValue()) ||
+                eventStreamGapHandler.gapHandlerFor(subscriberId)
+                                     .getTransientGapsFor(aggregateType)
+                                     .contains(globalEventOrder);
+    }
+
+    /**
+     * @return the {@link #getEventStreamGapHandler() gap handler}: {@link #isAwaitedAsGap} reads the subscriber's
+     * transient gaps from it
+     */
+    @Override
+    public Optional<EventStreamGapHandler<?>> transientGapsReadFrom() {
+        return Optional.of(eventStreamGapHandler);
+    }
+
     @Override
     public EventBus localEventBus() {
         return eventStoreEventBus;
@@ -298,6 +323,8 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
                                                                                                                 operation.getAppendEventsAfterEventOrder(),
                                                                                                                 operation.getEventsToAppend());
                                                                        unitOfWork.registerEventsPersisted(stream.eventList());
+                                                                       // Every append passes here once, whichever decorator or appender started it (ES-4)
+                                                                       AppendedEvents.appended(stream.eventList());
                                                                        return stream;
                                                                    })
                 .proceed();
@@ -393,11 +420,17 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
                                                this,
                                                eventStoreInterceptors,
                                                (eventStoreInterceptor, eventStoreInterceptorChain) -> eventStoreInterceptor.intercept(operation, eventStoreInterceptorChain),
-                                               () -> persistenceStrategy.loadAggregateEvents(unitOfWorkFactory.getRequiredUnitOfWork(),
-                                                                                             operation.aggregateType,
-                                                                                             operation.aggregateId,
-                                                                                             operation.getEventOrderRange(),
-                                                                                             operation.getTenant()))
+                                               () -> {
+                                                   // Decided here, after the interceptors ran: an interceptor can replace the range
+                                                   if (operation.getEventOrderRange().isEmpty()) {
+                                                       return Optional.<AggregateEventStream<ID>>empty();
+                                                   }
+                                                   return persistenceStrategy.loadAggregateEvents(unitOfWorkFactory.getRequiredUnitOfWork(),
+                                                                                                  operation.aggregateType,
+                                                                                                  operation.aggregateId,
+                                                                                                  operation.getEventOrderRange(),
+                                                                                                  operation.getTenant());
+                                               })
                 .proceed();
     }
 
@@ -453,6 +486,11 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
     }
 
     private Stream<PersistedEvent> loadEventsByGlobalOrderFromPersistence(LoadEventsByGlobalOrder operation) {
+        // Decided here, after the interceptors ran: an interceptor can replace the range or the additional orders
+        var includeAdditionalGlobalOrders = operation.getIncludeAdditionalGlobalOrders();
+        if (operation.getGlobalEventOrderRange().isEmpty() && (includeAdditionalGlobalOrders == null || includeAdditionalGlobalOrders.isEmpty())) {
+            return Stream.empty();
+        }
         var onlyLoadPayloadIfEventBelongsToTenant = operation.getOnlyLoadPayloadIfEventBelongsToTenant();
         if (onlyLoadPayloadIfEventBelongsToTenant.isPresent() && operation.getOnlyIncludeEventIfItBelongsToTenant().isEmpty()) {
             return persistenceStrategy.loadEventsByGlobalOrderOmittingOtherTenantsPayloads(unitOfWorkFactory.getRequiredUnitOfWork(),

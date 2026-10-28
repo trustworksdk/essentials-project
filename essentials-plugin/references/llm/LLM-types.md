@@ -1,6 +1,6 @@
 # Types - LLM Reference
 
-> Quick reference for LLMs. For detailed explanations, see [README.md](https://github.com/trustworksdk/essentials-project/blob/0.60.0/types/README.md).
+> Quick reference for LLMs. For detailed explanations, see [README.md](https://github.com/trustworksdk/essentials-project/blob/0.60.1/types/README.md).
 
 ## Quick Facts
 - Package: `dk.trustworks.essentials.types`
@@ -288,11 +288,12 @@ static class NotTheSameCurrenciesException extends RuntimeException
 static LongRange between(long from, long to)  // Closed [from, to]
 static LongRange from(long from)              // Open [from, infinity)
 static LongRange only(long value)             // [n, n]
-static LongRange empty()                      // [0, 0]
+static LongRange empty()                      // EMPTY_RANGE = (0, -1): covers nothing (was [0, 0] before 0.60.1)
 
 // Query
 boolean isClosedRange()
 boolean isOpenRange()
+boolean isEmpty()                             // closed and toInclusive < fromInclusive, e.g. between(5, 4), from(5, 0)
 boolean covers(long value)
 long getFromInclusive()
 Long getToInclusive()
@@ -435,6 +436,6 @@ assertThat(CustomerId.of("Test").value()).isEqualTo("Test");
 
 ## See Also
 
-- [README.md](https://github.com/trustworksdk/essentials-project/blob/0.60.0/types/README.md) - Full documentation with motivation
+- [README.md](https://github.com/trustworksdk/essentials-project/blob/0.60.1/types/README.md) - Full documentation with motivation
 - [LLM-types-integrations.md](LLM-types-integrations.md) - Integration overview
 - Tests: `types/src/test/java/dk/trustworks/essentials/types/`

@@ -18,10 +18,13 @@ package dk.trustworks.essentials.components.queue.shardowned;
 
 import dk.trustworks.essentials.components.queue.shardowned.spi.QueueName;
 
+import dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil;
+
 import javax.sql.DataSource;
 import java.sql.SQLException;
 import java.util.*;
 
+import static dk.trustworks.essentials.components.foundation.postgresql.PostgresqlSchemaStatements.*;
 import static dk.trustworks.essentials.shared.FailFast.*;
 
 /**
@@ -86,18 +89,13 @@ public final class ShardOwnedSchema {
     public static final String DLQ_VIEW               = "shard_queue_dead_letter_readable";
 
     /**
-     * The framework's bootstrap advisory-lock key, so this engine's DDL serialises behind the same
-     * lock as every other Essentials component's.
-     * <p>
-     * <b>Deliberately duplicated rather than imported.</b> The canonical definition is
-     * {@code PostgresqlUtil.ESSENTIALS_BOOTSTRAP_LOCK_KEY} in {@code components/foundation}, whose
-     * helper takes a JDBI {@code Handle}; this module depends on {@code shared} alone and speaks
-     * plain JDBC. What matters is that the <em>value</em> matches — a component locking on a
-     * different key is not protected from the components that use this one, and an application
-     * bootstrapping the event store and this queue at the same time is exactly when that bites. If
-     * the constant there ever changes, it has to change here.
+     * The framework's bootstrap advisory-lock key, which this engine's DDL serialises behind like
+     * every other Essentials component's.
+     *
+     * @deprecated use {@link PostgresqlUtil#ESSENTIALS_BOOTSTRAP_LOCK_KEY}, which this is
      */
-    public static final long ESSENTIALS_BOOTSTRAP_LOCK_KEY = 0xE55E_4711_B007_DD15L;
+    @Deprecated(since = "0.60.1")
+    public static final long ESSENTIALS_BOOTSTRAP_LOCK_KEY = PostgresqlUtil.ESSENTIALS_BOOTSTRAP_LOCK_KEY;
 
     private ShardOwnedSchema() {
     }
@@ -121,7 +119,7 @@ public final class ShardOwnedSchema {
             connection.setAutoCommit(false);
             try {
                 try (var lock = connection.prepareStatement("SELECT pg_advisory_xact_lock(?)")) {
-                    lock.setLong(1, ESSENTIALS_BOOTSTRAP_LOCK_KEY);
+                    lock.setLong(1, PostgresqlUtil.ESSENTIALS_BOOTSTRAP_LOCK_KEY);
                     lock.execute();
                 }
                 try (var statement = connection.createStatement()) {
@@ -194,8 +192,9 @@ public final class ShardOwnedSchema {
                           """.formatted(UNORDERED_TABLE));
 
         // Supports the head sweep and delayed messages. The fast path does not use it.
-        statements.add("CREATE INDEX IF NOT EXISTS %s_visible ON %s (queue_id, shard, visible_at)"
-                                  .formatted(UNORDERED_TABLE, UNORDERED_TABLE));
+        statements.add(createIndexUnlessPresent(UNORDERED_TABLE, UNORDERED_TABLE + "_visible",
+                                                "CREATE INDEX IF NOT EXISTS %s_visible ON %s (queue_id, shard, visible_at)"
+                                                        .formatted(UNORDERED_TABLE, UNORDERED_TABLE)));
 
         // The ordered lane. Its primary key is (queue_id, shard, msg_key, key_order), NOT
         // (queue_id, shard, seq) — which is the whole reason §4.1 splits the lanes into separate
@@ -223,10 +222,12 @@ public final class ShardOwnedSchema {
                           """.formatted(ORDERED_TABLE));
         // Discovery: the owner still needs to find newly arrived work in commit order. This is
         // the index the ordered lane pays for and the unordered lane does not.
-        statements.add("CREATE INDEX IF NOT EXISTS %s_seq ON %s (queue_id, shard, seq)"
-                                  .formatted(ORDERED_TABLE, ORDERED_TABLE));
-        statements.add("CREATE INDEX IF NOT EXISTS %s_visible ON %s (queue_id, shard, visible_at)"
-                                  .formatted(ORDERED_TABLE, ORDERED_TABLE));
+        statements.add(createIndexUnlessPresent(ORDERED_TABLE, ORDERED_TABLE + "_seq",
+                                                "CREATE INDEX IF NOT EXISTS %s_seq ON %s (queue_id, shard, seq)"
+                                                        .formatted(ORDERED_TABLE, ORDERED_TABLE)));
+        statements.add(createIndexUnlessPresent(ORDERED_TABLE, ORDERED_TABLE + "_visible",
+                                                "CREATE INDEX IF NOT EXISTS %s_visible ON %s (queue_id, shard, visible_at)"
+                                                        .formatted(ORDERED_TABLE, ORDERED_TABLE)));
 
         // The cold lane. Dead letters are rare, read by humans, and allowed to be expensive —
         // which is why they live outside the live lanes rather than as a flag on them. Keeping
@@ -252,11 +253,13 @@ public final class ShardOwnedSchema {
                               blocked_by_key_order bigint
                           )
                           """.formatted(DLQ_TABLE));
-        statements.add("CREATE INDEX IF NOT EXISTS %s_queue ON %s (queue_id, shard)".formatted(DLQ_TABLE, DLQ_TABLE));
-        // Added after the table shipped, so an existing installation needs it too. IF NOT EXISTS
+        statements.add(createIndexUnlessPresent(DLQ_TABLE, DLQ_TABLE + "_queue",
+                                                "CREATE INDEX IF NOT EXISTS %s_queue ON %s (queue_id, shard)".formatted(DLQ_TABLE, DLQ_TABLE)));
+        // Added after the table shipped, so an existing installation needs it too. A catalog check
         // rather than a version check: this runs on every boot, behind the bootstrap lock, and a
         // column that is already there is not an error.
-        statements.add("ALTER TABLE %s ADD COLUMN IF NOT EXISTS blocked_by_key_order bigint".formatted(DLQ_TABLE));
+        statements.add(addColumnUnlessPresent(DLQ_TABLE, "blocked_by_key_order",
+                                              "ALTER TABLE %s ADD COLUMN IF NOT EXISTS blocked_by_key_order bigint".formatted(DLQ_TABLE)));
 
         statements.add("""
                           CREATE TABLE IF NOT EXISTS %s (
@@ -296,9 +299,16 @@ public final class ShardOwnedSchema {
                               queue_id    smallint    NOT NULL,
                               instance_id text        NOT NULL,
                               last_seen   timestamptz NOT NULL DEFAULT now(),
+                              -- Which process last refreshed the row: a token per JVM. Two processes running
+                              -- under one instance id keep overwriting each other's, which is how the shared id
+                              -- is detected - see ShardOwnedStorage.heartbeat
+                              incarnation text,
                               PRIMARY KEY (queue_id, instance_id)
                           )
                           """.formatted(INSTANCE_TABLE));
+        // The membership table already shipped without it
+        statements.add(addColumnUnlessPresent(INSTANCE_TABLE, "incarnation",
+                                              "ALTER TABLE %s ADD COLUMN IF NOT EXISTS incarnation text".formatted(INSTANCE_TABLE)));
 
         // The name-to-id registry. The engine addresses a queue by an interned smallint because
         // a two-byte column in every row's primary key is what keeps the hot index dense; the

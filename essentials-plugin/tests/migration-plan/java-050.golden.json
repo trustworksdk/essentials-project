@@ -1,0 +1,513 @@
+{
+  "tool": "migration-plan",
+  "project": "java-050",
+  "from": "0.50.0",
+  "fromSource": "pom.xml:15",
+  "to": "0.60.1",
+  "notes": [
+    "references/stack/migrations/0.50-to-0.60.json",
+    "references/stack/migrations/0.60-to-0.60.json"
+  ],
+  "upToDate": false,
+  "pins": [
+    {
+      "pin": "essentials.version",
+      "current": "0.50.0",
+      "at": "pom.xml:15",
+      "target": "0.60.1",
+      "status": "move",
+      "fix": {
+        "mechanical": true,
+        "ops": [
+          {
+            "op": "set-property",
+            "pom": "pom.xml",
+            "name": "essentials.version",
+            "from": "0.50.0",
+            "to": "0.60.1"
+          }
+        ]
+      },
+      "tolerated": [],
+      "reason": "the release itself",
+      "cite": {
+        "path": "docs/RELEASE-NOTES-0.60.1.md",
+        "line": 1,
+        "token": "Essentials 0.60.1",
+        "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.1/docs/RELEASE-NOTES-0.60.1.md#L1"
+      }
+    },
+    {
+      "pin": "spring-boot-starter-parent",
+      "current": "4.0.8",
+      "at": "pom.xml:4",
+      "target": "4.1.2",
+      "status": "move",
+      "fix": {
+        "mechanical": true,
+        "ops": [
+          {
+            "op": "set-parent-version",
+            "pom": "pom.xml",
+            "line": 4,
+            "groupId": "org.springframework.boot",
+            "artifactId": "spring-boot-starter-parent",
+            "from": "4.0.8",
+            "to": "4.1.2"
+          }
+        ]
+      },
+      "tolerated": [],
+      "reason": "the starters are built and tested against Spring Boot 4.1; 4.0.x is no longer supported",
+      "cite": {
+        "path": "docs/MIGRATION-0.60.md",
+        "line": 15,
+        "token": "Spring Boot 4.1.x is required",
+        "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.0/docs/MIGRATION-0.60.md#L15"
+      }
+    },
+    {
+      "pin": "java.version",
+      "current": "21",
+      "at": "pom.xml:14",
+      "target": "25",
+      "status": "move",
+      "fix": {
+        "mechanical": true,
+        "ops": [
+          {
+            "op": "set-property",
+            "pom": "pom.xml",
+            "name": "java.version",
+            "from": "21",
+            "to": "25"
+          }
+        ]
+      },
+      "tolerated": [],
+      "reason": "artifacts are compiled with --release 25; an older runtime rejects them",
+      "cite": {
+        "path": "docs/MIGRATION-0.60.md",
+        "line": 13,
+        "token": "Java 25 is the minimum",
+        "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.0/docs/MIGRATION-0.60.md#L13"
+      }
+    },
+    {
+      "pin": "kotlin.version",
+      "current": null,
+      "at": null,
+      "target": "2.4.21",
+      "status": "not set",
+      "fix": {
+        "mechanical": false,
+        "ops": []
+      },
+      "tolerated": [],
+      "reason": "a Kotlin compiler older than 2.3 cannot target JVM 25 or inline the Essentials inline/reified functions",
+      "cite": {
+        "path": "docs/MIGRATION-0.60.md",
+        "line": 17,
+        "token": "Kotlin consumers need Kotlin 2.3 or later",
+        "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.0/docs/MIGRATION-0.60.md#L17"
+      }
+    }
+  ],
+  "steps": [
+    {
+      "id": "deprecations",
+      "kind": "compile-and-fix",
+      "title": "On the current release, clear every deprecation warning: each removed member's replacement already exists there",
+      "release": "0.50.0",
+      "phase": null,
+      "ess": [
+        "ESS-123"
+      ],
+      "stackLint": [],
+      "cites": [
+        {
+          "path": "docs/RELEASE-NOTES-0.60.0.md",
+          "line": 1046,
+          "token": "Start from 0.50.0 and clear every deprecation warning",
+          "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.0/docs/RELEASE-NOTES-0.60.0.md#L1046"
+        },
+        {
+          "path": "docs/MIGRATION-0.60.md",
+          "line": 570,
+          "token": "Each had a replacement named in its own",
+          "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.0/docs/MIGRATION-0.60.md#L570"
+        }
+      ],
+      "findings": []
+    },
+    {
+      "id": "before-move",
+      "kind": "checklist",
+      "title": "Before the move, while the old mapper and queue modes are still there to compare with",
+      "release": null,
+      "phase": "before-move",
+      "ess": [],
+      "stackLint": [],
+      "cites": [
+        {
+          "path": "docs/RELEASE-NOTES-0.60.0.md",
+          "line": 1048,
+          "token": "Move to the Jackson 3 flavour on 0.50",
+          "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.0/docs/RELEASE-NOTES-0.60.0.md#L1048"
+        },
+        {
+          "path": "docs/RELEASE-NOTES-0.60.0.md",
+          "line": 1052,
+          "token": "handler that relied on `FullyTransactional`",
+          "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.0/docs/RELEASE-NOTES-0.60.0.md#L1052"
+        }
+      ],
+      "items": [
+        "ESS-051",
+        "ESS-103"
+      ],
+      "findings": []
+    },
+    {
+      "id": "pins",
+      "kind": "pins",
+      "title": "Move essentials.version and the platform pins the release requires",
+      "release": null,
+      "phase": null,
+      "ess": [
+        "ESS-093"
+      ],
+      "stackLint": [
+        "s1-boot-line",
+        "s1-java-baseline",
+        "s1-kotlin-jvm-target",
+        "s1-kotlin-compiler-floor"
+      ],
+      "cites": [
+        {
+          "path": "docs/RELEASE-NOTES-0.60.0.md",
+          "line": 1053,
+          "token": "Raise the platform",
+          "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.0/docs/RELEASE-NOTES-0.60.0.md#L1053"
+        },
+        {
+          "path": "docs/RELEASE-NOTES-0.60.0.md",
+          "line": 1054,
+          "token": "Bump Essentials to 0.60.0",
+          "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.0/docs/RELEASE-NOTES-0.60.0.md#L1054"
+        }
+      ],
+      "findings": [
+        "stack-lint ESS-S1 s1-boot-line pom.xml:4",
+        "stack-lint ESS-S1 s1-java-baseline pom.xml:14"
+      ]
+    },
+    {
+      "id": "applies-with-upgrade",
+      "kind": "stack-lint",
+      "title": "Apply the stack-lint findings that hold only on the target release",
+      "release": null,
+      "phase": null,
+      "ess": [],
+      "stackLint": [
+        "s3.1-jackson2-essentials-module",
+        "s3.1-jackson2-databind",
+        "s5-transactional-mode",
+        "s7-model-converter"
+      ],
+      "cites": [
+        {
+          "path": "docs/RELEASE-NOTES-0.60.0.md",
+          "line": 1054,
+          "token": "swap `types-jackson`/`immutable-jackson`",
+          "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.0/docs/RELEASE-NOTES-0.60.0.md#L1054"
+        },
+        {
+          "path": "docs/MIGRATION-0.60.md",
+          "line": 43,
+          "token": "drop that workaround if you added it",
+          "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.0/docs/MIGRATION-0.60.md#L43"
+        },
+        {
+          "path": "docs/RELEASE-NOTES-0.60.0.md",
+          "line": 1051,
+          "token": "Remove `transactional-mode` and `use-ordered-unordered-query`",
+          "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.0/docs/RELEASE-NOTES-0.60.0.md#L1051"
+        },
+        {
+          "path": "docs/MIGRATION-0.60.md",
+          "line": 672,
+          "token": "springdoc describes semantic types as their JSON",
+          "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.0/docs/MIGRATION-0.60.md#L672"
+        }
+      ],
+      "findings": [
+        "stack-lint ESS-S3.1 s3.1-jackson2-databind pom.xml:35"
+      ]
+    },
+    {
+      "id": "signatures",
+      "kind": "review-scan",
+      "title": "Fix what review-scan --tree finds: removed configuration, renamed API, the Jackson 2 leftovers",
+      "release": null,
+      "phase": null,
+      "ess": [
+        "ESS-021",
+        "ESS-094",
+        "ESS-095",
+        "ESS-097",
+        "ESS-103",
+        "ESS-104",
+        "ESS-110",
+        "ESS-119",
+        "ESS-120",
+        "ESS-121",
+        "ESS-122",
+        "ESS-123"
+      ],
+      "stackLint": [],
+      "cites": [
+        {
+          "path": "docs/MIGRATION-0.60.md",
+          "line": 45,
+          "token": "### Removed and renamed API",
+          "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.0/docs/MIGRATION-0.60.md#L45"
+        },
+        {
+          "path": "docs/MIGRATION-0.60.md",
+          "line": 64,
+          "token": "### Your own types under Jackson 3",
+          "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.0/docs/MIGRATION-0.60.md#L64"
+        },
+        {
+          "path": "docs/RELEASE-NOTES-0.60.0.md",
+          "line": 1051,
+          "token": "Remove `transactional-mode` and `use-ordered-unordered-query`",
+          "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.0/docs/RELEASE-NOTES-0.60.0.md#L1051"
+        }
+      ],
+      "findings": [
+        "review-scan ESS-094 ess-094-jackson2-module pom.xml:25 also s3.1-jackson2-essentials-module:23",
+        "review-scan ESS-121 ess-121-jackson-api-removed src/main/java/com/example/orders/QueueConfiguration.java:8",
+        "review-scan ESS-122 ess-122-ordered-unordered-query src/main/java/com/example/orders/QueueConfiguration.java:12",
+        "review-scan ESS-103 ess-103-transactional-mode src/main/resources/application.yml:6 also s5-transactional-mode:6",
+        "review-scan ESS-122 ess-122-ordered-unordered-query src/main/resources/application.yml:7"
+      ]
+    },
+    {
+      "id": "compile",
+      "kind": "compile-and-fix",
+      "title": "Compile against the target release and fix each error by the migration guide's tables",
+      "release": "0.60.0",
+      "phase": null,
+      "ess": [
+        "ESS-092",
+        "ESS-119",
+        "ESS-121",
+        "ESS-122",
+        "ESS-123"
+      ],
+      "stackLint": [],
+      "cites": [
+        {
+          "path": "docs/MIGRATION-0.60.md",
+          "line": 574,
+          "token": "Code that still calls a removed member no longer compiles",
+          "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.0/docs/MIGRATION-0.60.md#L574"
+        },
+        {
+          "path": "docs/MIGRATION-0.60.md",
+          "line": 45,
+          "token": "### Removed and renamed API",
+          "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.0/docs/MIGRATION-0.60.md#L45"
+        }
+      ],
+      "findings": []
+    },
+    {
+      "id": "review",
+      "kind": "checklist",
+      "title": "Behaviour that changed without a compile error: decide per item",
+      "release": null,
+      "phase": "review",
+      "ess": [],
+      "stackLint": [],
+      "cites": [
+        {
+          "path": "docs/RELEASE-NOTES-0.60.0.md",
+          "line": 1055,
+          "token": "Review dead-letter behaviour",
+          "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.0/docs/RELEASE-NOTES-0.60.0.md#L1055"
+        }
+      ],
+      "items": [
+        "ESS-095",
+        "ESS-098",
+        "ESS-099",
+        "ESS-100",
+        "ESS-058",
+        "ESS-117",
+        "ESS-118",
+        "ESS-104",
+        "ESS-116",
+        "ESS-102",
+        "ESS-101"
+      ],
+      "findings": []
+    },
+    {
+      "id": "deploy",
+      "kind": "checklist",
+      "title": "Before the first start on the target release",
+      "release": null,
+      "phase": "deploy",
+      "ess": [],
+      "stackLint": [],
+      "cites": [
+        {
+          "path": "docs/RELEASE-NOTES-0.60.0.md",
+          "line": 1059,
+          "token": "Back up, then deploy.",
+          "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.0/docs/RELEASE-NOTES-0.60.0.md#L1059"
+        }
+      ],
+      "items": [
+        "ESS-096",
+        "ESS-097",
+        "ESS-105"
+      ],
+      "findings": []
+    },
+    {
+      "id": "after",
+      "kind": "checklist",
+      "title": "Afterwards, and optionally",
+      "release": null,
+      "phase": "after",
+      "ess": [],
+      "stackLint": [],
+      "cites": [
+        {
+          "path": "docs/RELEASE-NOTES-0.60.0.md",
+          "line": 1060,
+          "token": "Afterwards, and optionally:",
+          "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.0/docs/RELEASE-NOTES-0.60.0.md#L1060"
+        }
+      ],
+      "items": [
+        "ESS-107",
+        "ESS-108",
+        "ESS-109"
+      ],
+      "findings": []
+    },
+    {
+      "id": "pins",
+      "kind": "pins",
+      "title": "Move essentials.version to 0.60.1",
+      "release": null,
+      "phase": null,
+      "ess": [],
+      "stackLint": [],
+      "cites": [
+        {
+          "path": "docs/RELEASE-NOTES-0.60.1.md",
+          "line": 1,
+          "token": "Essentials 0.60.1",
+          "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.1/docs/RELEASE-NOTES-0.60.1.md#L1"
+        }
+      ],
+      "findings": []
+    },
+    {
+      "id": "compile",
+      "kind": "compile-and-fix",
+      "title": "Compile against 0.60.1 and rename any method of yours that clashes with the new AbstractEventProcessor and CommandHandler methods; add the new component to a record pattern over ShardOwnerSettings or SchemaChange",
+      "release": "0.60.1",
+      "phase": null,
+      "ess": [],
+      "stackLint": [],
+      "cites": [
+        {
+          "path": "docs/RELEASE-NOTES-0.60.1.md",
+          "line": 65,
+          "token": "the additions can still stop your code compiling",
+          "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.1/docs/RELEASE-NOTES-0.60.1.md#L65"
+        },
+        {
+          "path": "docs/RELEASE-NOTES-0.60.1.md",
+          "line": 70,
+          "token": "`ShardOwnerSettings`, a record, gains a fifteenth component",
+          "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.1/docs/RELEASE-NOTES-0.60.1.md#L70"
+        },
+        {
+          "path": "docs/RELEASE-NOTES-0.60.1.md",
+          "line": 75,
+          "token": "`SchemaChange`, a record, gains a fifth component",
+          "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.1/docs/RELEASE-NOTES-0.60.1.md#L75"
+        }
+      ],
+      "findings": []
+    },
+    {
+      "id": "review",
+      "kind": "checklist",
+      "title": "Behaviour that changed without a compile error: decide per item",
+      "release": null,
+      "phase": "review",
+      "ess": [],
+      "stackLint": [],
+      "cites": [
+        {
+          "path": "docs/RELEASE-NOTES-0.60.1.md",
+          "line": 135,
+          "token": "Silent behaviour changes",
+          "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.1/docs/RELEASE-NOTES-0.60.1.md#L135"
+        }
+      ],
+      "items": [
+        "ESS-131",
+        "ESS-132",
+        "ESS-133",
+        "ESS-134",
+        "ESS-136",
+        "ESS-023",
+        "ESS-125"
+      ],
+      "findings": []
+    },
+    {
+      "id": "deploy",
+      "kind": "checklist",
+      "title": "Before the first start on 0.60.1",
+      "release": null,
+      "phase": "deploy",
+      "ess": [],
+      "stackLint": [],
+      "cites": [
+        {
+          "path": "docs/RELEASE-NOTES-0.60.1.md",
+          "line": 121,
+          "token": "Only if you run `essentials.schema.mode=validate`",
+          "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.1/docs/RELEASE-NOTES-0.60.1.md#L121"
+        }
+      ],
+      "items": [
+        "ESS-135"
+      ],
+      "findings": []
+    }
+  ],
+  "fixedIn": [
+    "ESS-098",
+    "ESS-102",
+    "ESS-105",
+    "ESS-080",
+    "ESS-079"
+  ],
+  "scanned": true,
+  "outside": {
+    "review-scan": 1,
+    "stack-lint": 2
+  }
+}

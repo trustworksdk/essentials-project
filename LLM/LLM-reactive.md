@@ -201,6 +201,11 @@ public interface CommandBus {
     boolean hasCommandHandler(CommandHandler handler);
     CommandHandler findCommandHandlerCapableOfHandling(Object command);
 
+    // Handler inspection - for infrastructure (diagnostics, startup checks), not routing. Since 0.60.1, default methods
+    default List<CommandHandler> getCommandHandlers();                                  // Snapshot, registration order; default List.of()
+    default List<CommandHandler> findCommandHandlersCapableOfHandling(Class<?> commandType); // No throw, no cache
+    default Map<Class<?>, List<CommandHandler>> findCommandTypesHandledByMoreThanOneCommandHandler(CommandHandler handler);
+
     // Command sending
     <R, C> R send(C command);                            // Sync, blocks until complete
     <R, C> Mono<R> sendAsync(C command);                 // Async with reactor.core.publisher.Mono<result>
@@ -208,6 +213,23 @@ public interface CommandBus {
     <C> void sendAndDontWait(C command, Duration delay); // Delayed fire-and-forget (java.time.Duration)
 }
 ```
+
+**Handler inspection (since 0.60.1):** `getCommandHandlers()` lists the registered handlers. Its `default` returns an
+empty list for a third-party `CommandBus` that does not track them - read that as "unknown", not "none".
+`AbstractCommandBus` (`LocalCommandBus`, `DurableLocalCommandBus`) returns them all. A `CommandHandler` can declare its
+command types through `default Set<Class<?>> handledCommandTypes()` (empty by default; used only for diagnostics, never
+routing). `AnnotatedCommandHandler` returns its `@CmdHandler`/`@Handler` parameter types, and
+`EventStreamDeciderCommandHandlerAdapter` its deciders' `COMMAND` type arguments.
+`findCommandTypesHandledByMoreThanOneCommandHandler(handler)` checks those declared types: which of them `handler` and
+another registered handler can both `canHandle`. An overlap on a type nobody declares is not found.
+
+**Duplicate handlers WARN at registration (since 0.60.1):** when `addCommandHandler` makes a command type handled by more
+than one handler, `AbstractCommandBus` logs a WARN naming the type and handlers. Every send of that type fails with
+`MultipleCommandHandlersFoundException`. The registration still succeeds, because an overlap that is never sent keeps
+working. If the check itself fails, that is logged at ERROR and never fails the registration.
+
+**Thread safety:** `addCommandHandler`/`removeCommandHandler` are safe from any number of threads, also while commands are
+being sent. A command type resolved during a registration is never cached past it.
 
 ### LocalCommandBus Implementation
 
@@ -232,8 +254,8 @@ LocalCommandBus(SendAndDontWaitErrorHandler errorHandler, CommandBusInterceptor.
 
 | Method | Blocking | Returns | Error Behavior | Durability |
 |--------|----------|---------|----------------|------------|
-| `send(cmd)` | Yes | `<R>` Result | Exception to caller | N/A |
-| `sendAsync(cmd)` | No | `Mono<R>` | Exception in Mono error channel | N/A |
+| `send(cmd)` | Yes | `<R>` Result | Exception to caller (wrapped - see [Exceptions arrive wrapped](#exceptions-arrive-wrapped-in-unitofworkexception)) | N/A |
+| `sendAsync(cmd)` | No | `Mono<R>` | Exception in Mono error channel (wrapped likewise) | N/A |
 | `sendAndDontWait(cmd)` | No | void | `SendAndDontWaitErrorHandler` callback | ❌ Lost on restart |
 | `sendAndDontWait(cmd, delay)` | No | void | `SendAndDontWaitErrorHandler` callback | ❌ Lost on restart |
 
@@ -253,6 +275,70 @@ commandBus.addContextPropagator(myPropagator);   // AbstractCommandBus; first ad
 The propagator captures at *send*, so a `sendAsync` `Mono` subscribed later still carries the sender's context.
 [foundation](./LLM-foundation.md#event-causation) supplies `CausationCommandContextPropagator`.
 
+### When a handler throws (rejections)
+
+With foundation's `UnitOfWorkControllingCommandBusInterceptor` (both Spring Boot starters add it to their
+`DurableLocalCommandBus`), `send`, `sendAsync` and `sendAndDontWait` each run the handler inside
+`unitOfWorkFactory.withUnitOfWork(...)`. A throw from the handler therefore:
+
+- **rolls back the handler's own writes** when the interceptor opened the `UnitOfWork` (none was active).
+- **marks an outer `UnitOfWork` rollback-only** when `send` joined one the caller opened with
+  `withUnitOfWork`/`usingUnitOfWork` - even if the caller catches the exception. That `UnitOfWork` then rolls back
+  instead of committing, with no error. Not so under a Spring `@Transactional`: `SpringTransactionAwareUnitOfWork`
+  ignores the mark for a transaction Spring manages, so a caller that catches the exception commits whatever the
+  handler wrote before it threw.
+- under `sendAsync` never touches the caller's `UnitOfWork`: the handler runs on another thread in its own, and the
+  `Mono` signals the error.
+- under `sendAndDontWait` **rolls back the handler's writes on every bus and with every `SendAndDontWaitErrorHandler`**
+  (since 0.60.1). The exception unwinds through the interceptor chain first - so the `UnitOfWork` rolls back, or an
+  outer one the delivery runs in is marked rollback-only - and only then reaches the `SendAndDontWaitErrorHandler`,
+  as the exception the handler threw (not the `UnitOfWorkException` wrapper), exactly once. What the error handler does
+  next decides only whether the command is tried again:
+  - on a `DurableLocalCommandBus` with the default `RethrowingSendAndDontWaitErrorHandler`, the rethrow reaches the
+    durable queue, which **redelivers** the command per its `RedeliveryPolicy` (default `DEFAULT_REDELIVERY_POLICY`:
+    linear backoff 150 ms, capped at 1 s, 20 redeliveries), then dead-letters it. The queue's built-in permanent-error
+    list applies, so an `IllegalArgumentException` dead-letters at once (see
+    [LLM-foundation.md § The built-in permanent-error list](./LLM-foundation.md#the-built-in-permanent-error-list)).
+  - an error handler that does not rethrow (the plain `LocalCommandBus` default `FallbackSendAndDontWaitErrorHandler`,
+    or one you set on a `DurableLocalCommandBus`) logs and drops the failure: nothing is retried, nothing is committed.
+
+  Before 0.60.1 the bus called the error handler *inside* the chain, so a non-rethrowing one made the handler look
+  successful and the `UnitOfWork` committed whatever it wrote before throwing - by default on a plain
+  `LocalCommandBus`. An interceptor that throws on its own (not the handler) still bypasses the error handler; on a
+  `DurableLocalCommandBus` the queue's `RedeliveryPolicy` handles that failure. An interceptor's
+  `interceptSendAndDontWait` now sees the handler's exception come out of `chain.proceed()`, as it already did for
+  `send`/`sendAsync` - `RecordExecutionTimeCommandBusInterceptor` times failed deliveries the same way.
+
+So a throw is for a failure, not for a business rejection that must persist (an audit row, a "rejected" status): the
+rollback discards it, and `sendAndDontWait` retries it. Return an outcome instead - an `EventStreamDecider` emits a
+rejection event (e.g. `OrderRejected`), which is appended and which `send()` returns (see
+[LLM-eventsourced-aggregates.md § Command Sending](./LLM-eventsourced-aggregates.md#command-sending)).
+
+### Exceptions arrive wrapped in `UnitOfWorkException`
+
+Under the UnitOfWork interceptor, the handler's exception does not reach the caller as itself:
+`withUnitOfWork` wraps whatever it catches in `UnitOfWorkException` (foundation, `...foundation.transaction`), one level
+per enclosing `withUnitOfWork`/`usingUnitOfWork` - the interceptor's, plus every outer one the exception passes
+through. `send` called inside your own `withUnitOfWork` arrives as `UnitOfWorkException → UnitOfWorkException →
+DomainException`. So `catch (DomainException e)` around `send` never matches (`AnnotatedCommandHandler` already
+unwraps the reflective `InvocationTargetException`, so that is not the extra level).
+
+```java
+try {
+    commandBus.send(new ConfirmOrder(orderId));
+} catch (RuntimeException e) {
+    if (Exceptions.doesStackTraceContainExceptionOfType(e, OrderNotConfirmable.class)) {   // dk.trustworks.essentials.shared
+        return ResponseEntity.unprocessableEntity().build();
+    }
+    throw e;
+}
+```
+
+`doesStackTraceContainExceptionOfType` walks the whole cause chain and answers `boolean`; walk `getCause()` yourself to
+get the instance. For a queue consumer, classify by type with
+`MessageDeliveryErrorHandler.builder().stopRedeliveryOn(OrderNotConfirmable.class).build()`, which also matches anywhere
+in the cause chain (see [LLM-foundation.md § MessageDeliveryErrorHandler](./LLM-foundation.md#messagedeliveryerrorhandler)).
+
 ### CommandHandler Types
 
 **Package:** `dk.trustworks.essentials.reactive.command`
@@ -262,12 +348,14 @@ The propagator captures at *send*, so a `sendAsync` `Mono` subscribed later stil
 public interface CommandHandler {
     boolean canHandle(Class<?> commandType);
     Object handle(Object command);
+    default Set<Class<?>> handledCommandTypes();  // Diagnostics only (duplicate-handler WARN); default empty. Since 0.60.1
 }
 
 // Annotation-based (multiple commands)
 public abstract class AnnotatedCommandHandler implements CommandHandler {
     boolean canHandle(Class<?> commandType);  // Checks @Handler/@CmdHandler methods
     Object handle(Object command);            // Dispatches to matching method
+    Set<Class<?>> handledCommandTypes();      // The @Handler/@CmdHandler parameter types
 }
 ```
 
@@ -314,29 +402,36 @@ public interface SendAndDontWaitErrorHandler {
 - `FallbackSendAndDontWaitErrorHandler` - Logs error, swallows exception (no retry)
 - `RethrowingSendAndDontWaitErrorHandler` - Logs error, rethrows exception (enables retry with DurableQueues)
 
+Since 0.60.1 `handleError` runs after the handler's exception has unwound through the interceptor chain, so any
+`UnitOfWork` an interceptor opened is already rolled back whichever implementation you use; it receives the handler's
+own exception, never a wrapper (see [When a handler throws](#when-a-handler-throws-rejections)).
+
 ### Exceptions
 
 **Package:** `dk.trustworks.essentials.reactive.command`
 
 ```java
+// Base of the two routing failures below - abstract, never thrown itself
+public abstract class SendCommandException extends RuntimeException {
+    public final Class<?> commandType;
+    public SendCommandException(Class<?> commandType, String message)
+    public SendCommandException(Class<?> commandType, String message, Exception e)
+}
+
 // No handler found for command type
-public class NoCommandHandlerFoundException extends RuntimeException {
-    NoCommandHandlerFoundException(Class<?> commandType, String message)
-    Class<?> getCommandType()
+public final class NoCommandHandlerFoundException extends SendCommandException {
+    public NoCommandHandlerFoundException(Class<?> commandType, String message)
 }
 
 // Multiple handlers found (violates single-handler rule)
-public class MultipleCommandHandlersFoundException extends RuntimeException {
-    MultipleCommandHandlersFoundException(Class<?> commandType, String message)
-    Class<?> getCommandType()
-}
-
-// Command execution failed
-public class SendCommandException extends RuntimeException {
-    SendCommandException(Object command, Throwable cause)
-    Object getCommand()
+public final class MultipleCommandHandlersFoundException extends SendCommandException {
+    public MultipleCommandHandlersFoundException(Class<?> commandType, String message)
 }
 ```
+
+Both are thrown by `findCommandHandlerCapableOfHandling`, before any interceptor runs, so they reach the caller
+unwrapped. A failing handler's own exception is **not** wrapped in a `SendCommandException` - see
+[Exceptions arrive wrapped](#exceptions-arrive-wrapped-in-unitofworkexception).
 
 ---
 

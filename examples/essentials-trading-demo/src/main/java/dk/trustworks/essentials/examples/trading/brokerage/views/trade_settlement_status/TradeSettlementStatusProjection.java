@@ -34,12 +34,9 @@ import dk.trustworks.essentials.examples.trading.brokerage.events.TradeExecuted;
 import dk.trustworks.essentials.examples.trading.brokerage.events.TradePlaced;
 import dk.trustworks.essentials.examples.trading.brokerage.events.TradeSettled;
 import dk.trustworks.essentials.examples.trading.brokerage.types.SettlementStatus;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
-
-import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
  * The projector of the {@code brokerage.trade_settlement_status} view slice — events in, read model out. A view slice
@@ -57,37 +54,38 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * Idempotency is carried by the SQL: every statement is an upsert or an idempotent flag/status assignment, so a
  * redelivery restates the row rather than compounding. Nothing here is a delta, unlike the account-statement
  * projection.
+ * <p>
+ * Every handler write goes through {@code getRequiredUnitOfWork().handle()…}, the {@code UnitOfWork} the
+ * {@code @MessageHandler} already runs in, instead of opening a transaction of its own. The constructor's DDL and the
+ * reset run where none is active, so they go through {@code getUnitOfWorkFactory().usingUnitOfWork(uow -> …)}, which
+ * opens one.
  */
 @Service
 public class TradeSettlementStatusProjection extends EventProcessor {
-    private final JdbcTemplate jdbcTemplate;
-
-    public TradeSettlementStatusProjection(EventProcessorDependencies dependencies,
-                                           JdbcTemplate jdbcTemplate) {
+    public TradeSettlementStatusProjection(EventProcessorDependencies dependencies) {
         super(dependencies);
-        this.jdbcTemplate = requireNonNull(jdbcTemplate, "No jdbcTemplate provided");
-        this.jdbcTemplate.execute("""
-                                          CREATE TABLE IF NOT EXISTS projection_trade_settlement (
-                                              trade_id VARCHAR PRIMARY KEY,
-                                              account_id VARCHAR NULL,
-                                              instrument_id VARCHAR NULL,
-                                              side VARCHAR NULL,
-                                              quantity NUMERIC(19, 4) NULL,
-                                              price NUMERIC(19, 4) NULL,
-                                              gross_amount NUMERIC(19, 4) NULL,
-                                              executed BOOLEAN NOT NULL DEFAULT FALSE,
-                                              settlement_requested BOOLEAN NOT NULL DEFAULT FALSE,
-                                              settled BOOLEAN NOT NULL DEFAULT FALSE,
-                                              settlement_id VARCHAR NULL,
-                                              settlement_status VARCHAR NOT NULL DEFAULT 'NONE',
-                                              updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-                                          )
-                                          """);
-        this.jdbcTemplate.execute("""
-                                          CREATE UNIQUE INDEX IF NOT EXISTS projection_trade_settlement_settlement_id_uq
-                                          ON projection_trade_settlement (settlement_id)
-                                          WHERE settlement_id IS NOT NULL
-                                          """);
+        getUnitOfWorkFactory().usingUnitOfWork(uow -> uow.handle().execute("""
+                                                                               CREATE TABLE IF NOT EXISTS projection_trade_settlement (
+                                                                                   trade_id VARCHAR PRIMARY KEY,
+                                                                                   account_id VARCHAR NULL,
+                                                                                   instrument_id VARCHAR NULL,
+                                                                                   side VARCHAR NULL,
+                                                                                   quantity NUMERIC(19, 4) NULL,
+                                                                                   price NUMERIC(19, 4) NULL,
+                                                                                   gross_amount NUMERIC(19, 4) NULL,
+                                                                                   executed BOOLEAN NOT NULL DEFAULT FALSE,
+                                                                                   settlement_requested BOOLEAN NOT NULL DEFAULT FALSE,
+                                                                                   settled BOOLEAN NOT NULL DEFAULT FALSE,
+                                                                                   settlement_id VARCHAR NULL,
+                                                                                   settlement_status VARCHAR NOT NULL DEFAULT 'NONE',
+                                                                                   updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+                                                                               )
+                                                                               """));
+        getUnitOfWorkFactory().usingUnitOfWork(uow -> uow.handle().execute("""
+                                                                               CREATE UNIQUE INDEX IF NOT EXISTS projection_trade_settlement_settlement_id_uq
+                                                                               ON projection_trade_settlement (settlement_id)
+                                                                               WHERE settlement_id IS NOT NULL
+                                                                               """));
     }
 
     /**
@@ -107,77 +105,81 @@ public class TradeSettlementStatusProjection extends EventProcessor {
 
     @MessageHandler
     void handle(TradePlaced event) {
-        jdbcTemplate.update("""
-                                    INSERT INTO projection_trade_settlement (
-                                        trade_id,
-                                        account_id,
-                                        instrument_id,
-                                        side,
-                                        quantity,
-                                        price,
-                                        gross_amount,
-                                        executed,
-                                        settlement_requested,
-                                        settled,
-                                        settlement_status,
-                                        updated_at
-                                    )
-                                    VALUES (?, ?, ?, ?, ?, ?, ?, false, false, false, 'NONE', CURRENT_TIMESTAMP)
-                                    ON CONFLICT (trade_id) DO UPDATE
-                                    SET account_id = EXCLUDED.account_id,
-                                        instrument_id = EXCLUDED.instrument_id,
-                                        side = EXCLUDED.side,
-                                        quantity = EXCLUDED.quantity,
-                                        price = EXCLUDED.price,
-                                        gross_amount = EXCLUDED.gross_amount,
-                                        updated_at = CURRENT_TIMESTAMP
-                                    """,
-                            event.tradeId().toString(),
-                            event.accountId().toString(),
-                            event.instrumentId().toString(),
-                            event.side().name(),
-                            event.quantity().value(),
-                            event.price().value(),
-                            event.grossAmount().value());
+        getRequiredUnitOfWork().handle().createUpdate("""
+                                                          INSERT INTO projection_trade_settlement (
+                                                              trade_id,
+                                                              account_id,
+                                                              instrument_id,
+                                                              side,
+                                                              quantity,
+                                                              price,
+                                                              gross_amount,
+                                                              executed,
+                                                              settlement_requested,
+                                                              settled,
+                                                              settlement_status,
+                                                              updated_at
+                                                          )
+                                                          VALUES (:tradeId, :accountId, :instrumentId, :side, :quantity, :price, :grossAmount, false, false, false, 'NONE', CURRENT_TIMESTAMP)
+                                                          ON CONFLICT (trade_id) DO UPDATE
+                                                          SET account_id = EXCLUDED.account_id,
+                                                              instrument_id = EXCLUDED.instrument_id,
+                                                              side = EXCLUDED.side,
+                                                              quantity = EXCLUDED.quantity,
+                                                              price = EXCLUDED.price,
+                                                              gross_amount = EXCLUDED.gross_amount,
+                                                              updated_at = CURRENT_TIMESTAMP
+                                                          """)
+                                        .bind("tradeId", event.tradeId().toString())
+                                        .bind("accountId", event.accountId().toString())
+                                        .bind("instrumentId", event.instrumentId().toString())
+                                        .bind("side", event.side().name())
+                                        .bind("quantity", event.quantity().value())
+                                        .bind("price", event.price().value())
+                                        .bind("grossAmount", event.grossAmount().value())
+                                        .execute();
     }
 
     @MessageHandler
     void handle(TradeExecuted event) {
-        jdbcTemplate.update("""
-                                    UPDATE projection_trade_settlement
-                                    SET executed = true,
-                                        updated_at = CURRENT_TIMESTAMP
-                                    WHERE trade_id = ?
-                                    """,
-                            event.tradeId().toString());
+        getRequiredUnitOfWork().handle().createUpdate("""
+                                                          UPDATE projection_trade_settlement
+                                                          SET executed = true,
+                                                              updated_at = CURRENT_TIMESTAMP
+                                                          WHERE trade_id = :tradeId
+                                                          """)
+                                        .bind("tradeId", event.tradeId().toString())
+                                        .execute();
     }
 
     @MessageHandler
     void handle(SettlementRequested event) {
-        jdbcTemplate.update("""
-                                    UPDATE projection_trade_settlement
-                                    SET settlement_requested = true,
-                                        settlement_id = ?,
-                                        settlement_status = CASE
-                                            WHEN settlement_status = 'NONE' THEN 'REQUESTED'
-                                            ELSE settlement_status
-                                        END,
-                                        updated_at = CURRENT_TIMESTAMP
-                                    WHERE trade_id = ?
-                                    """,
-                            event.settlementId().toString(),
-                            event.tradeId().toString());
+        getRequiredUnitOfWork().handle().createUpdate("""
+                                                          UPDATE projection_trade_settlement
+                                                          SET settlement_requested = true,
+                                                              settlement_id = :settlementId,
+                                                              settlement_status = CASE
+                                                                  WHEN settlement_status = 'NONE' THEN 'REQUESTED'
+                                                                  ELSE settlement_status
+                                                              END,
+                                                              updated_at = CURRENT_TIMESTAMP
+                                                          WHERE trade_id = :tradeId
+                                                          """)
+                                        .bind("settlementId", event.settlementId().toString())
+                                        .bind("tradeId", event.tradeId().toString())
+                                        .execute();
     }
 
     @MessageHandler
     void handle(TradeSettled event) {
-        jdbcTemplate.update("""
-                                    UPDATE projection_trade_settlement
-                                    SET settled = true,
-                                        updated_at = CURRENT_TIMESTAMP
-                                    WHERE trade_id = ?
-                                    """,
-                            event.tradeId().toString());
+        getRequiredUnitOfWork().handle().createUpdate("""
+                                                          UPDATE projection_trade_settlement
+                                                          SET settled = true,
+                                                              updated_at = CURRENT_TIMESTAMP
+                                                          WHERE trade_id = :tradeId
+                                                          """)
+                                        .bind("tradeId", event.tradeId().toString())
+                                        .execute();
     }
 
     /**
@@ -186,29 +188,30 @@ public class TradeSettlementStatusProjection extends EventProcessor {
      */
     @MessageHandler
     void handle(SettlementCreated event) {
-        jdbcTemplate.update("""
-                                    INSERT INTO projection_trade_settlement (
-                                        trade_id,
-                                        account_id,
-                                        gross_amount,
-                                        settlement_requested,
-                                        settlement_id,
-                                        settlement_status,
-                                        updated_at
-                                    )
-                                    VALUES (?, ?, ?, true, ?, 'CREATED', CURRENT_TIMESTAMP)
-                                    ON CONFLICT (trade_id) DO UPDATE
-                                    SET account_id = EXCLUDED.account_id,
-                                        gross_amount = EXCLUDED.gross_amount,
-                                        settlement_requested = true,
-                                        settlement_id = EXCLUDED.settlement_id,
-                                        settlement_status = 'CREATED',
-                                        updated_at = CURRENT_TIMESTAMP
-                                    """,
-                            event.tradeId().toString(),
-                            event.accountId().toString(),
-                            event.grossAmount().value(),
-                            event.settlementId().toString());
+        getRequiredUnitOfWork().handle().createUpdate("""
+                                                          INSERT INTO projection_trade_settlement (
+                                                              trade_id,
+                                                              account_id,
+                                                              gross_amount,
+                                                              settlement_requested,
+                                                              settlement_id,
+                                                              settlement_status,
+                                                              updated_at
+                                                          )
+                                                          VALUES (:tradeId, :accountId, :grossAmount, true, :settlementId, 'CREATED', CURRENT_TIMESTAMP)
+                                                          ON CONFLICT (trade_id) DO UPDATE
+                                                          SET account_id = EXCLUDED.account_id,
+                                                              gross_amount = EXCLUDED.gross_amount,
+                                                              settlement_requested = true,
+                                                              settlement_id = EXCLUDED.settlement_id,
+                                                              settlement_status = 'CREATED',
+                                                              updated_at = CURRENT_TIMESTAMP
+                                                          """)
+                                        .bind("tradeId", event.tradeId().toString())
+                                        .bind("accountId", event.accountId().toString())
+                                        .bind("grossAmount", event.grossAmount().value())
+                                        .bind("settlementId", event.settlementId().toString())
+                                        .execute();
     }
 
     @MessageHandler
@@ -245,7 +248,7 @@ public class TradeSettlementStatusProjection extends EventProcessor {
     @Override
     protected void onSubscriptionsReset(AggregateType aggregateType,
                                         GlobalEventOrder resubscribeFromAndIncluding) {
-        jdbcTemplate.execute("TRUNCATE TABLE projection_trade_settlement");
+        getUnitOfWorkFactory().usingUnitOfWork(uow -> uow.handle().execute("TRUNCATE TABLE projection_trade_settlement"));
     }
 
     /**
@@ -253,13 +256,14 @@ public class TradeSettlementStatusProjection extends EventProcessor {
      * contract rather than a set of string literals scattered across handlers.
      */
     private void updateSettlementStatus(String settlementId, SettlementStatus status) {
-        jdbcTemplate.update("""
-                                    UPDATE projection_trade_settlement
-                                    SET settlement_status = ?,
-                                        updated_at = CURRENT_TIMESTAMP
-                                    WHERE settlement_id = ?
-                                    """,
-                            status.name(),
-                            settlementId);
+        getRequiredUnitOfWork().handle().createUpdate("""
+                                                          UPDATE projection_trade_settlement
+                                                          SET settlement_status = :settlementStatus,
+                                                              updated_at = CURRENT_TIMESTAMP
+                                                          WHERE settlement_id = :settlementId
+                                                          """)
+                                        .bind("settlementStatus", status.name())
+                                        .bind("settlementId", settlementId)
+                                        .execute();
     }
 }

@@ -16,6 +16,7 @@
 
 package dk.trustworks.essentials.components.adminapi.rest;
 
+import dk.trustworks.essentials.components.queue.shardowned.spi.QueueName;
 import dk.trustworks.essentials.types.*;
 import tools.jackson.core.JsonGenerator;
 import tools.jackson.databind.*;
@@ -29,7 +30,8 @@ import tools.jackson.databind.ser.std.ToStringSerializerBase;
  * <p>
  * The mapping mirrors {@code EssentialsValueTypeModelConverter} in {@code admin-api-spec} — the converter decides what
  * the contract's schemas say, this module decides what goes on the wire, and they have to agree:
- * {@link CharSequenceType} to string, {@link NumberType} to number.
+ * {@link CharSequenceType} to string, {@link NumberType} to number, and the shard-owned engine's {@link QueueName} - a
+ * record rather than a {@code CharSequenceType} - to string.
  * <p>
  * This module deliberately does not reuse {@code EssentialTypesJacksonModule} from {@code types-jackson3}. That module
  * defines the <em>persisted</em> format, and whether an application puts it on the web mapper is the application's
@@ -42,6 +44,12 @@ public class AdminApiJacksonModule extends SimpleModule {
     public AdminApiJacksonModule() {
         super("essentials-admin-api");
         addSerializer(CharSequenceType.class, new CharSequenceTypeSerializer());
+        addSerializer(QueueName.class, new ToStringSerializerBase(QueueName.class) {
+            @Override
+            public String valueToString(Object value) {
+                return ((QueueName) value).value();
+            }
+        });
         // The raw NumberType token has to be re-cast to its parameterized form to match addSerializer's signature.
         addSerializer((Class<NumberType<?, ?>>) (Class<?>) NumberType.class, new NumberTypeSerializer());
     }

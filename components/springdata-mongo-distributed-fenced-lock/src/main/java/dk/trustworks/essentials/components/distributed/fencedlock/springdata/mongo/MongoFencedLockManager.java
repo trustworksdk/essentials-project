@@ -83,7 +83,7 @@ public final class MongoFencedLockManager extends DBFencedLockManager<ClientSess
     /**
      * @param mongoTemplate                                                  the mongoTemplate instance
      * @param unitOfWorkFactory                                              The unit of work factory
-     * @param lockManagerInstanceId                                          The unique name for this lock manager instance. If left {@link Optional#empty()} then the machines hostname is used
+     * @param lockManagerInstanceId                                          The unique name for this lock manager instance. If left {@link Optional#empty()} then {@code <hostname>:<pid>} is used
      * @param fencedLocksCollectionName                                      The name of the collection where the locks will be stored.
      *                                                                       <strong>Note:</strong><br>
      *                                                                       To support customization of storage collection name, the {@code fencedLocksCollectionName} will be directly used as Collection name,
@@ -132,7 +132,7 @@ public final class MongoFencedLockManager extends DBFencedLockManager<ClientSess
     /**
      * @param mongoTemplate                                                  the mongoTemplate instance
      * @param unitOfWorkFactory                                              The unit of work factory
-     * @param lockManagerInstanceId                                          The unique name for this lock manager instance. If left {@link Optional#empty()} then the machines hostname is used
+     * @param lockManagerInstanceId                                          The unique name for this lock manager instance. If left {@link Optional#empty()} then {@code <hostname>:<pid>} is used
      * @param fencedLocksCollectionName                                      The name of the collection where the locks will be stored.
      *                                                                       <strong>Note:</strong><br>
      *                                                                       To support customization of storage collection name, the {@code fencedLocksCollectionName} will be directly used as Collection name,
@@ -181,7 +181,7 @@ public final class MongoFencedLockManager extends DBFencedLockManager<ClientSess
     }
 
     /**
-     * Create a {@link MongoFencedLockManager} with the machines hostname as lock manager instance name and
+     * Create a {@link MongoFencedLockManager} with {@code <hostname>:<pid>} as lock manager instance name and
      * the default fenced lock collection name {@link MongoFencedLockStorage#DEFAULT_FENCED_LOCKS_COLLECTION_NAME}
      *
      * @param mongoTemplate                                                  the mongoTemplate instance

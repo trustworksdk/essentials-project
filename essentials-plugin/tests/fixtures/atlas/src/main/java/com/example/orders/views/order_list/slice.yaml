@@ -1,0 +1,33 @@
+schemaVersion: "1.4"
+slice: orders.order_list
+kind: view
+bc: orders
+owner: orders-team
+status: live
+summary: List orders with what was ordered and why one was cancelled.
+generator: essentials
+language: java
+tier: cqrs-es
+lane: decider
+flow: checkout
+serves: [ListOrders]
+owns: [OrderListView]
+endpoints:
+  - { method: GET, path: "/api/orders", auth: user }
+projections:
+  - { name: OrderListProjection, from: [OrderPlaced, OrderCancelled] }
+scenarios:
+  - name: lists a placed order
+    given:
+      - event: OrderPlaced
+        with: { orderId: o-1, customerId: c-7, quantity: 2 }
+    when: { query: ListOrders }
+    then:
+      readModel: OrderListView
+      rows:
+        - { orderId: o-1, customerId: c-7, quantity: 2, reason: null }
+forbidden:
+  - cross-slice-internal:orders
+tests:
+  unit: { present: false }
+  integration: { present: false }

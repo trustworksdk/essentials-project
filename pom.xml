@@ -69,7 +69,7 @@
         <java.release.version>25</java.release.version>
         <java.version>${java.release.version}</java.version>
         <maven.compiler.release>${java.release.version}</maven.compiler.release>
-        <kotlin.version>2.4.20</kotlin.version>
+        <kotlin.version>2.4.21</kotlin.version>
         <!-- The language/API level artifacts are compiled against, kept independent of the compiler
              (kotlin.version) so a newer compiler still emits binaries/metadata an older consumer can read.
              These two properties are the single source for that level — the kotlin-maven-plugin blocks in
@@ -97,14 +97,14 @@
         <revision>DEV-SNAPSHOT</revision>
         <skipDependencyCheck>false</skipDependencyCheck>
 
-        <spring-boot.version>4.1.1</spring-boot.version>
+        <spring-boot.version>4.1.2</spring-boot.version>
         <!-- The springdoc that types-spring-web's SingleValueTypeModelConverter compiles and tests against. Provided
              scope, so a consumer's own springdoc decides at runtime; the Spring Boot BOM does not manage springdoc.
              Keep it on the springdoc.version row of essentials-plugin/references/stack/stack-pins.md, which is the
              release a generated project starts on. -->
         <springdoc.version>3.1.1</springdoc.version>
         <objenesis.version>3.6</objenesis.version>
-        <postgresql.version>42.7.13</postgresql.version>
+        <postgresql.version>42.7.14</postgresql.version>
         <slf4j.version>2.0.20</slf4j.version>
         <awaitility.version>4.3.0</awaitility.version>
         <assertj.version>3.27.7</assertj.version>
@@ -117,21 +117,18 @@
         <junit-bom.version>6.0.3</junit-bom.version>
         <testcontainers-bom.version>2.0.5</testcontainers-bom.version>
         <jdbi3-bom.version>3.55.0</jdbi3-bom.version>
-        <jackson3-bom.version>3.1.5</jackson3-bom.version>
+        <jackson3-bom.version>3.1.7</jackson3-bom.version>
         <!-- Jackson 2, for the third-party code that still runs on it (swagger, avro, the generated admin client);
              no Essentials persistence path uses it. See the import in dependencyManagement. -->
-        <jackson2-bom.version>2.22.3</jackson2-bom.version>
-        <!-- Held ahead of the Spring Boot BOM (5.8.1 at spring-boot 4.1.1) for CVE-2026-18710 / -88032 / -88033;
+        <jackson2-bom.version>2.22.4</jackson2-bom.version>
+        <!-- Held ahead of the Spring Boot BOM (5.8.1 at spring-boot 4.1.2) for CVE-2026-18710 / -88032 / -88033;
              5.11.1 is the lowest release outside all three ranges; 5.13.0 is taken as the newest 5.x. See the import
              in dependencyManagement. -->
         <mongodb-driver-bom.version>5.13.0</mongodb-driver-bom.version>
-        <!-- Held ahead of the Spring Boot BOM (4.2.17 at spring-boot 4.1.1) for CVE-2026-89044; 4.2.18 is the
-             first release outside the range. See the import in dependencyManagement. -->
-        <netty-bom.version>4.2.18.Final</netty-bom.version>
         <!-- Newest release; the floor is assertj-core's own 1.18.3, which is what Spring Boot's management
              was pulling back down. Take the plain version, never the `-jdk5` line Central reports as
              <latest> — that is the legacy Java 5 build, not a newer release. -->
-        <byte-buddy.version>1.18.14</byte-buddy.version>
+        <byte-buddy.version>1.18.16</byte-buddy.version>
         <!-- Deliberately held one patch back. 1.12.2 adds org.apache.avro.util.ClassSecurityValidator, which
              refuses to reflect any class not named in org.apache.avro.SERIALIZABLE_CLASSES /
              SERIALIZABLE_PACKAGES - a behaviour change, not a patch, and one that lands on consumers of
@@ -142,16 +139,12 @@
         <commons-compress.version>1.28.0</commons-compress.version>
         <commons-lang3.version>3.21.0</commons-lang3.version>
         <commons-configuration2.version>2.15.1</commons-configuration2.version>
-        <kafka-clients.version>4.3.1</kafka-clients.version>
+        <kafka-clients.version>4.4.0</kafka-clients.version>
         <xmlunit-core.version>2.14.0</xmlunit-core.version>
         <archunit-junit5.version>1.5.1</archunit-junit5.version>
         <java-uuid-generator.version>5.1.1</java-uuid-generator.version>
         <jmh.version>1.37</jmh.version>
         <reactive-streams.version>1.0.4</reactive-streams.version>
-        <!-- Held ahead of the version the Spring Boot BOM manages, purely to clear CVEs Spring Boot has not
-             yet picked up; drop the override once its BOM catches up. It is a patch-level move within the
-             line Spring Boot already targets, so no API change is implied. -->
-        <tomcat.version>11.0.26</tomcat.version>
 
         <dokka.version>2.2.0</dokka.version>
         <maven-dependency-plugin.version>3.11.0</maven-dependency-plugin.version>
@@ -164,20 +157,27 @@
         <maven-jar-plugin.version>3.5.1</maven-jar-plugin.version>
         <maven-source-plugin.version>3.4.0</maven-source-plugin.version>
         <maven-javadoc-plugin.version>3.12.0</maven-javadoc-plugin.version>
-        <maven-failsafe-plugin.version>3.6.0</maven-failsafe-plugin.version>
-        <maven-surefire-plugin.version>3.6.0</maven-surefire-plugin.version>
+        <maven-failsafe-plugin.version>3.6.1</maven-failsafe-plugin.version>
+        <maven-surefire-plugin.version>3.6.1</maven-surefire-plugin.version>
         <!-- Test execution knobs; safe to override on the command line, e.g. -Dfailsafe.forkCount=1. -->
         <surefire.forkCount>2</surefire.forkCount>
         <failsafe.forkCount>2</failsafe.forkCount>
+        <!-- Test-skip switches: -DskipTests skips both suites, -DskipITs only failsafe, -DskipUTs only surefire.
+             Failsafe 3.6.0 no longer binds its skipTests parameter to the skipTests property (only to skipITs), so without
+             skipITs defaulting to skipTests here, -DskipTests skipped the unit tests and still ran every IT. -->
+        <skipTests>false</skipTests>
+        <skipITs>${skipTests}</skipITs>
+        <!-- Surefire-only skip (wired as surefire's skipTests below) for a run of just the ITs, e.g. a two-phase CI build. -->
+        <skipUTs>${skipTests}</skipUTs>
         <maven-compiler-plugin.version>3.16.0</maven-compiler-plugin.version>
-        <versions-maven-plugin.version>2.22.0</versions-maven-plugin.version>
+        <versions-maven-plugin.version>2.23.0</versions-maven-plugin.version>
         <maven-enforcer-plugin.version>3.6.3</maven-enforcer-plugin.version>
         <minimum-maven-version>3.8.8</minimum-maven-version>
         <dependency-check-maven.version>12.2.2</dependency-check-maven.version>
         <flatten-maven-plugin.version>1.8.0</flatten-maven-plugin.version>
         <maven-gpg-plugin.version>3.2.8</maven-gpg-plugin.version>
         <maven.docker.plugin.version>0.49.0</maven.docker.plugin.version>
-        <central-publishing-maven-plugin.version>0.11.0</central-publishing-maven-plugin.version>
+        <central-publishing-maven-plugin.version>0.12.0</central-publishing-maven-plugin.version>
         <essentials.postgres.base-image>postgres:17.5-bookworm</essentials.postgres.base-image>
         <essentials.postgres.image>essentials-postgres:17.5</essentials.postgres.image>
     </properties>
@@ -240,11 +240,11 @@
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
-            <!-- Jackson 2, held ahead of the Spring Boot BOM (2.21.5 at spring-boot 4.1.1) because swagger-core
-                 2.2.53 asks for a coherent 2.22.x set. Used only where ban-jackson-2 is lifted (types-avro,
+            <!-- Jackson 2, held ahead of the Spring Boot BOM (2.21.7 at spring-boot 4.1.2) because swagger-core
+                 asks for a coherent 2.22.x set. Used only where ban-jackson-2 is lifted (types-avro,
                  admin-api-spec, admin-api-client-java) and at test scope by the admin starters.
                  Must sit BELOW the tools.jackson import: jackson-annotations is shared by both majors, and the
-                 first import wins, so Jackson 3 keeps owning it (2.21 at 3.1.5). See the matching
+                 first import wins, so Jackson 3 keeps owning it (2.21 at 3.1.7). See the matching
                  requireUpperBoundDeps exclude. -->
             <dependency>
                 <groupId>com.fasterxml.jackson</groupId>
@@ -310,42 +310,11 @@
                 <scope>import</scope>
             </dependency>
             <dependency>
-                <groupId>io.netty</groupId>
-                <artifactId>netty-bom</artifactId>
-                <version>${netty-bom.version}</version>
-                <type>pom</type>
-                <scope>import</scope>
-            </dependency>
-            <dependency>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-dependencies</artifactId>
                 <version>${spring-boot.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
-            </dependency>
-            <!-- Tomcat, held ahead of the Spring Boot BOM for CVE-2026-53434 / -55276 / -59083 / -59084 and
-                 five others. Only ever reaches a consumer through their own Spring Boot; here it is provided
-                 in the admin starters and compile in the examples. All four artifacts move together — Tomcat
-                 releases them as a set and mixing them is not supported. -->
-            <dependency>
-                <groupId>org.apache.tomcat.embed</groupId>
-                <artifactId>tomcat-embed-core</artifactId>
-                <version>${tomcat.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>org.apache.tomcat.embed</groupId>
-                <artifactId>tomcat-embed-el</artifactId>
-                <version>${tomcat.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>org.apache.tomcat.embed</groupId>
-                <artifactId>tomcat-embed-websocket</artifactId>
-                <version>${tomcat.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>org.apache.tomcat</groupId>
-                <artifactId>tomcat-annotations-api</artifactId>
-                <version>${tomcat.version}</version>
             </dependency>
             <!-- Held one patch ahead of the version the Spring Boot BOM manages (2.25.4). Both artifacts are
                  pinned together: log4j-to-slf4j depends on the matching log4j-api, and managing only the bridge
@@ -409,15 +378,15 @@
                 <version>${commons-configuration2.version}</version>
                 <scope>test</scope>
             </dependency>
-            <!-- Held ahead of the version the Spring Boot BOM manages (4.1.2 at spring-boot 4.0.8), because
-                 CVE-2026-41115 covers "4.0.0 through 4.3.0" inclusive - the version below is the first release
-                 outside that range, so no smaller bump clears the scanner. The CVE itself is a broker-side ACL
-                 discrepancy on CONSUMER_GROUP_DESCRIBE, and its own text concludes the implementation is correct
-                 and the *docs* are what gets fixed; kafka-clients enforces no ACLs, so this is a scanner-driven
-                 bump, not a patched exposure. Used only by the postgresql-cqrs example, not part of the release.
-                 spring-kafka 4.0.7 is compiled against the 4.1 line - Kafka keeps its client API compatible
-                 within a major, and the ITs run against `apache/kafka-native:latest`, so the broker is never
-                 the older half. Drop the override once the Spring Boot BOM reaches 4.3.1. -->
+            <!-- Held ahead of the version the Spring Boot BOM manages (4.2.2 at spring-boot 4.1.2), because
+                 CVE-2026-41115 covers "4.0.0 through 4.3.0" inclusive, so nothing below 4.3.1 clears the scanner.
+                 The CVE itself is a broker-side ACL discrepancy on CONSUMER_GROUP_DESCRIBE, and its own text
+                 concludes the implementation is correct and the *docs* are what gets fixed; kafka-clients
+                 enforces no ACLs, so this is a scanner-driven bump, not a patched exposure. Used only by the
+                 examples, not part of the release. spring-kafka 4.1.2 is compiled against the 4.2 line - Kafka
+                 keeps its client API compatible within a major, and the ITs run against
+                 `apache/kafka-native:latest`, so the broker is never the older half. Drop the override once the
+                 Spring Boot BOM reaches 4.3.1. -->
             <dependency>
                 <groupId>org.apache.kafka</groupId>
                 <artifactId>kafka-clients</artifactId>
@@ -644,6 +613,8 @@
                           Integration tests dominate this build's wall clock, and each fork runs its own Testcontainers
                           containers - so forkCount trades Docker memory for wall clock. Override per machine with
                           -Dfailsafe.forkCount=1 (constrained/CI) or a higher value; over-forking Docker regresses wall clock.
+                          postgresql-queue, postgresql-event-store and eventsourced-aggregates override it to 0.5C (the
+                          reactor's longest chain); why and the numbers: components/postgresql-event-store/pom.xml.
                           Do NOT combine forkCount > 1 with -Dessentials.test.containers.reuse=true: reused containers are
                           shared across forks, and most suites reset their storage in @BeforeEach.
                         -->
@@ -672,6 +643,8 @@
                         -->
                         <forkCount>${surefire.forkCount}</forkCount>
                         <reuseForks>true</reuseForks>
+                        <!-- skipUTs defaults to skipTests (see <properties>), so -DskipTests still skips these. -->
+                        <skipTests>${skipUTs}</skipTests>
                     </configuration>
                 </plugin>
                 <plugin>
@@ -788,11 +761,11 @@
 
                                       jackson-annotations is excluded because both Jackson majors share it and
                                       Jackson 3 owns it (see the com.fasterxml.jackson:jackson-bom import):
-                                      tools.jackson 3.1.5 pins 2.21, while swagger-core-jakarta 2.2.53 asks for
-                                      the 2.22 that pairs with its Jackson 2.22.x. Raising it would move every
-                                      module's Jackson 3 runtime onto an annotations release Jackson 3.1 does not
-                                      ship with. Drop this exclude when jackson3-bom.version moves to 3.2.x, which
-                                      pairs with annotations 2.22.
+                                      tools.jackson 3.1.7 pins 2.21, while swagger-core-jakarta asks for the 2.22
+                                      that pairs with its Jackson 2.22.x. Raising it would move every module's
+                                      Jackson 3 runtime onto an annotations release Jackson 3.1 does not ship
+                                      with. Drop this exclude when jackson3-bom.version moves to 3.2.x, which
+                                      pairs with annotations 2.22 (docs/ROADMAP-0.6x.md, DU-1).
                                     -->
                                     <excludes>
                                         <exclude>com.fasterxml.jackson.core:jackson-annotations</exclude>

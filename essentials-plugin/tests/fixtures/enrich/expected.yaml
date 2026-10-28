@@ -1,0 +1,267 @@
+# expected.yaml — the machine-readable expectations for this fixture (format 1). TEST-GUIDE.md is the
+# human description of the same expectations; when they disagree, fix both.
+#
+# Paths are relative to this fixture's directory. `line` is 1-based and `anchor` is text that must
+# appear on that line, so a stale line number is detectable. Severities are null throughout:
+# /essentials:slice-enrich drafts and asks, it does not grade.
+#
+#   runs          the command run against this fixture, with its arguments, and what the run must do
+#   must_find     every entry must appear in the command's final report (journeys, drafts, skips, refusals)
+#   must_not_find a draft, attribution or write the report must not contain
+#
+# The deterministic half (the proposal JSON, apply's diff) is byte-diffed by
+# tests/scripts/test_slice_enrich.py against tests/slice-enrich/golden/. These entries cover what the
+# model does with that output: commands/slice-enrich.md Steps 4-7. The eval runs non-interactively and
+# under --dry-run, with the prompt answering Yes to every journey and every slice
+# (evals/slice-enrich-library/case.yaml); expectations below assume those answers.
+#
+# `tests/fixtures/check-expected.py` checks this file against the tree (paths, line anchors) and that no
+# fixture source carries an answer hint.
+
+fixture: enrich
+language: java (one Kotlin context, accounts)
+runs:
+- command: /essentials:slice-enrich
+  args: ". --dry-run"
+  expect: >-
+    It ran slice-source.py and `slice-enrich.py propose` before drafting anything, then
+    `slice-enrich.py apply` with --dry-run on an accepted set built from the all-Yes answers. The report
+    quotes apply's per-manifest lines (`would write …` and the one `refused …` line) as the script printed
+    them, says plainly that nothing was written, and never claims a manifest was changed.
+
+must_find:
+- id: E1
+  severity: null
+  file: src/main/java/com/example/library/lending/use_cases/schedule_reminder/slice.yaml
+  line: 11
+  anchor: 'flow: reminders'
+  what: >-
+    Journeys are proposed and named. One journey is `reminders`, extending the flow that
+    lending.schedule_reminder already declares (it keeps that name, it is not given a new one); its
+    members are lending.borrow_book (the entry), lending.loan_reminders, lending.loans_on_shelf and
+    lending.schedule_reminder, linked by BookBorrowed and the ScheduleReminder command.
+- id: E2
+  severity: null
+  file: src/main/java/com/example/library/lending/views/loans_on_shelf/slice.yaml
+  line: 2
+  anchor: 'slice: lending.loans_on_shelf'
+  what: >-
+    Two further journeys are proposed under their suggested names: `catalogue-feed` (lending.catalogue_feed
+    and lending.register_copy, via the RegisterCopy command) and `return-book` (lending.return_book and
+    lending.loans_on_shelf, via BookReturned). The view lending.loans_on_shelf sits in both `reminders`
+    and `return-book`, so its drafted flow is a list of the two names.
+- id: E3
+  severity: null
+  file: src/main/java/com/example/library/lending/use_cases/borrow_book/BorrowBookDecider.java
+  line: 24
+  anchor: 'A copy that is out on loan cannot be borrowed again'
+  also_names:
+  - src/main/java/com/example/library/lending/use_cases/borrow_book/BorrowBook.java
+  what: >-
+    lending.borrow_book gets exactly two drafted invariants, each worded from a guard's message:
+    "A loan lasts at least one day" (enforcedBy BorrowBook, the requireTrue at BorrowBook.java:16) and
+    "A copy that is out on loan cannot be borrowed again" (enforcedBy BorrowBookDecider#handle).
+- id: E4
+  severity: null
+  file: src/main/kotlin/com/example/library/accounts/use_cases/open_account/OpenAccountHandler.kt
+  line: 12
+  anchor: 'A member is at least 16 years old'
+  what: >-
+    accounts.open_account gets exactly three drafted invariants, from the require, check and throw
+    messages: "A member is at least 16 years old", "A member opens one account only" and "Staff accounts
+    are opened by the administration", each enforcedBy OpenAccountHandler#handle.
+- id: E5
+  severity: null
+  file: src/main/java/com/example/library/lending/use_cases/return_book/ReturnBookDecider.java
+  line: 16
+  anchor: 'Only a copy on loan can be returned'
+  also_names:
+  - src/main/java/com/example/library/lending/use_cases/schedule_reminder/ScheduleReminderDecider.java
+  what: >-
+    lending.return_book gets the one invariant "Only a copy on loan can be returned" (enforcedBy
+    ReturnBookDecider#handle), and lending.schedule_reminder the one invariant "A reminder is never
+    planned more than 30 days ahead" (enforcedBy ScheduleReminderDecider#handle). The two are drafts for
+    two slices, so the report may give them in separate places, one under each slice.
+- id: E6
+  severity: null
+  file: src/main/java/com/example/library/lending/use_cases/renew_loan/slice.yaml
+  line: 8
+  anchor: 'generator: sdd'
+  also_names:
+  - src/main/java/com/example/library/lending/views/waitlist/slice.yaml
+  what: >-
+    Two manifests are reported as skipped, with their reasons: lending.renew_loan because its generator
+    is sdd (that tool owns its flow and scenarios), and lending.waitlist because its slice.yaml is not
+    valid YAML, with /essentials:slice-check --fix-manifests named as the repair. Nothing is drafted for
+    either.
+- id: E7
+  severity: null
+  file: src/test/java/com/example/library/lending/use_cases/borrow_book/BorrowBookDeciderTest.java
+  line: 22
+  anchor: 'void refusesASecondLoan()'
+  also_names:
+  - src/test/java/com/example/library/lending/use_cases/borrow_book/ReturnBookAfterLoanTest.java
+  what: >-
+    lending.borrow_book's drafted scenarios come from its mapped test methods, each linked to its test:
+    BorrowBookDeciderTest#lendsAnAvailableCopy, BorrowBookDeciderTest#refusesASecondLoan (named "a copy out
+    on loan is not lent twice", its then an IllegalStateException error) and
+    ReturnBookAfterLoanTest#lendsACopyThatCameBack, whose then may be completed from that same method's
+    assertion. BorrowBookDeciderTest#zeroDayLoan (then the IllegalArgumentException "A loan lasts at least
+    one day") may be drafted or left out, and either matches: its when is built by a call to a fixture
+    helper, so a draft names that when without values, and a report that leaves the scenario out says it
+    could not name the when from the method. A part the method does not show is never filled from
+    elsewhere.
+- id: E8
+  severity: null
+  file: src/test/java/com/example/library/lending/ScheduleReminderTest.java
+  line: 24
+  anchor: 'A reminder is never planned more than 30 days ahead'
+  what: >-
+    lending.schedule_reminder gets two drafted scenarios from ScheduleReminderTest: "plans a reminder"
+    (when ScheduleReminder with copyId c-1 and dayOffset 3, then a ReminderScheduled event) and "never
+    plans far ahead" (when ScheduleReminder with dayOffset 45, then an IllegalArgumentException with the
+    message "A reminder is never planned more than 30 days ahead").
+- id: E9
+  severity: null
+  file: src/main/java/com/example/library/lending/use_cases/register_copy/slice.yaml
+  line: 2
+  anchor: 'slice: lending.register_copy'
+  what: >-
+    The slices no test maps to — lending.register_copy, lending.catalogue_feed, lending.loan_reminders,
+    lending.loans_on_shelf and accounts.open_account — get no drafted scenario. The report counts them and
+    names, per slice, the test it lacks, as a suggestion only.
+- id: E10
+  severity: null
+  file: src/main/java/com/example/library/lending/views/loans_on_shelf/slice.yaml
+  line: 20
+  anchor: '{ name: ShelfCountProjection'
+  what: >-
+    The consistency drafted for ShelfCountProjection (strong, from its InTransactionEventProcessor) is
+    reported as refused by apply, because that projection is written as a flow mapping; the report gives
+    apply's refusal as the script worded it, while LoansOnShelfProjection's eventual consistency is among
+    the fields apply would write.
+- id: E11
+  severity: null
+  what: >-
+    The confirmations are grouped by bounded context: the journeys and the slices of `lending` are asked
+    separately from those of `accounts`, and no batch (one AskUserQuestion call) holds more than four
+    questions. The report shows these batches, as the prompt asked, before acting on the answers.
+
+must_not_find:
+- id: E-T1
+  file: src/main/java/com/example/library/lending/use_cases/borrow_book/BorrowBook.java
+  line: 15
+  anchor: 'requireNonNull(memberId, "memberId is required");'
+  what: a drafted invariant worded from this guard, such as "memberId is required"
+  why: >-
+    A requireNonNull is a null guard on an argument, not a business rule. Invariants are drafted from
+    guard messages that state a rule, which is why propose reports none here.
+- id: E-T2
+  file: src/main/java/com/example/library/lending/use_cases/borrow_book/BorrowBookDecider.java
+  line: 15
+  anchor: 'throw new IllegalArgumentException("copyId is required");'
+  what: a drafted invariant worded from this guard, such as "copyId is required"
+  why: An `if (x == null) throw` is a null check written out by hand; it states no rule.
+- id: E-T3
+  file: src/main/java/com/example/library/lending/use_cases/borrow_book/BorrowBookDecider.java
+  line: 23
+  anchor: '// throw new IllegalStateException("A reserved copy cannot be lent");'
+  what: a drafted invariant worded from this commented-out throw, such as "A reserved copy cannot be lent"
+  why: The throw is commented out; the code enforces nothing there, so there is no evidence.
+- id: E-T4
+  file: src/main/java/com/example/library/lending/use_cases/borrow_book/BorrowBook.java
+  line: 11
+  anchor: 'The member must be known to the accounts context.'
+  what: a drafted invariant worded from this Javadoc sentence, such as "The member must be known to the accounts context"
+  why: That sentence is Javadoc prose, not a guard; no code enforces it, and an invariant needs an enforcedBy.
+- id: E-T5
+  file: src/main/kotlin/com/example/library/accounts/use_cases/open_account/OpenAccountHandler.kt
+  line: 10
+  anchor: '?: throw IllegalArgumentException("memberId is required")'
+  what: a drafted invariant worded from this guard, such as "memberId is required"
+  why: 'A Kotlin `?: throw` is a null guard, the Kotlin form of requireNonNull.'
+- id: E-T6
+  file: src/main/kotlin/com/example/library/accounts/use_cases/open_account/OpenAccountHandler.kt
+  line: 11
+  anchor: 'requireNotNull(cmd.tier) { "tier is required" }'
+  what: a drafted invariant worded from this guard, such as "tier is required"
+  why: requireNotNull is a null guard, not a rule.
+- id: E-T7
+  file: src/main/java/com/example/library/lending/use_cases/renew_loan/
+  what: any drafted field (flow, scenarios, summary, invariants or another) for lending.renew_loan
+  why: Its generator is sdd, which owns its flow and scenarios; propose skips it and so must the drafts.
+- id: E-T8
+  file: src/main/java/com/example/library/lending/views/waitlist/
+  what: any drafted field for lending.waitlist
+  why: Its manifest does not parse; propose skips it. The repair is /essentials:slice-check --fix-manifests, not a draft.
+- id: E-T9
+  file: src/main/java/com/example/library/lending/use_cases/return_book/slice.yaml
+  line: 17
+  anchor: 'scenarios: []'
+  what: >-
+    drafted scenarios for lending.return_book, a proposal to fill this present field whatever test it
+    cites, for instance ReturnBookDeciderTest#takesBackALoanedCopy
+  why: >-
+    `scenarios: []` is present. A field present in any form is the human's; only absent fields are
+    proposed, and an empty list is not absent.
+- id: E-T10
+  file: src/main/java/com/example/library/lending/use_cases/register_copy/slice.yaml
+  line: 14
+  anchor: 'invariants: []'
+  what: drafted invariants for lending.register_copy, a proposal to fill this present field whatever code it cites
+  why: '`invariants: []` is present, so the field is not proposed.'
+- id: E-T11
+  file: src/test/java/com/example/library/lending/use_cases/borrow_book/ReturnBookAfterLoanTest.java
+  line: 8
+  anchor: 'class ReturnBookAfterLoanTest {'
+  what: >-
+    ReturnBookAfterLoanTest, the class or any of its methods such as lendsACopyThatCameBack, attributed to
+    lending.return_book
+  why: >-
+    The class name mentions another slice's command, but it sits in the borrow_book test package and
+    sends BorrowBook to the BorrowBookDecider; propose maps it to lending.borrow_book, and the command
+    never re-derives a mapping.
+- id: E-T12
+  file: src/test/java/com/example/library/lending/LendingSmokeTest.java
+  line: 8
+  anchor: 'void contextStarts() {'
+  what: a scenario drafted from LendingSmokeTest, or from production code, for a slice no test maps to
+  why: >-
+    Scenarios come from mapped tests only. An unmapped slice gets a one-line suggested test, never a
+    scenario read off its handler or processor.
+- id: E-T13
+  file: src/test/java/com/example/library/lending/use_cases/borrow_book/BorrowBookFixtures.java
+  line: 5
+  anchor: 'return new BorrowBook("c-2", "m-1", 0);'
+  what: >-
+    a `with` on the when of the zeroDayLoan scenario (for example copyId c-2, memberId m-1, loanDays 0),
+    taken from BorrowBookFixtures.zeroDays()
+  why: >-
+    The test method passes BorrowBookFixtures.zeroDays(), a call, not a literal. The values are not in
+    the method, which is the only thing the command may read to complete a null part; the `with` stays out.
+- id: E-T14
+  file: src/test/java/com/example/library/lending/ScheduleReminderTest.java
+  line: 16
+  anchor: 'channelFor("c-1")'
+  what: >-
+    a `with` on the ReminderScheduled then of "plans a reminder" (for example a channel of email), or any
+    field values for that event
+  why: >-
+    The event is built with channelFor("c-1"), a call; the script extracted the event without a `with`,
+    that part is not null, and nothing may be added to it.
+- id: E-T15
+  file: src/main/java/com/example/library/lending/views/loans_on_shelf/slice.yaml
+  line: 20
+  anchor: '{ name: ShelfCountProjection'
+  what: >-
+    ShelfCountProjection's consistency reported as written, or a hand edit of the manifest (or an offer
+    to rewrite the projection as a block mapping) to get it in
+  why: >-
+    apply refuses a consistency on a projection written as a flow mapping and rewrites nothing; the
+    command reports the refusal as worded and never writes the refused value by hand.
+- id: E-T16
+  what: >-
+    a drafted notes, forbidden, sla, statutory, observability, profile or stability value for any slice
+  why: >-
+    No code evidences these (propose lists them under notInferable); the report names them once as not
+    inferable and never drafts one.

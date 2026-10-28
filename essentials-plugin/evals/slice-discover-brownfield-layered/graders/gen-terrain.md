@@ -10,5 +10,5 @@ PASS if the report's terrain pass says all of:
 - frameworks: spring-boot-web, spring-data-jpa
 - it does not claim the project uses Trustworks Essentials
 - its write-style lane is reported as `none (nearest: service-entity)` — reporting the nearest lane as the actual lane fails
-- it does not redirect to /essentials:slice-check
+- it does not redirect to /essentials:slice-check instead of running discovery (naming slice-check as the later hand-off, once manifests exist, is not a redirect)
 FAIL otherwise.

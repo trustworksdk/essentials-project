@@ -15,8 +15,8 @@ read it.
   unchanged (enforced by `InstrumentPrice`). At this write rate that matters: an unchanged market must not
   lengthen the stream. It also makes a redelivered command harmless.
 - A price must be **greater than zero** — `InstrumentPriceEvent.requirePositive`, enforced on replay too.
-- Ticking an instrument whose price stream was never initialized fails: the handler uses `getPrice`, not
-  `findPrice`.
+- Ticking an instrument whose price stream was never initialized fails: the handler uses `getPrice`, which
+  loads and fails on a missing stream.
 
 ## Boundaries
 **Reacts to / reads:** the `UpdatePrice` command; loads the `InstrumentPrice` aggregate.

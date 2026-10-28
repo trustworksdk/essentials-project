@@ -1,0 +1,14 @@
+schemaVersion: "1.3"
+slice: lending.renew_loan
+kind: command
+bc: lending
+owner: circulation
+status: planned
+summary: Extends a running loan.
+generator: sdd
+lastSyncedAt: "2026-09-30T08:00:00Z"
+handles: [RenewLoan]
+publishes: [LoanRenewed]
+writes: [Copy]
+tests:
+  unit: { present: false }

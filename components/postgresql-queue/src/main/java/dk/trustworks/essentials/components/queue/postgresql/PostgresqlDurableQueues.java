@@ -26,7 +26,6 @@ import dk.trustworks.essentials.components.foundation.transaction.*;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
 import dk.trustworks.essentials.components.queue.postgresql.jdbi.*;
 import dk.trustworks.essentials.reactive.*;
-import dk.trustworks.essentials.shared.Exceptions;
 import dk.trustworks.essentials.shared.collections.Lists;
 import org.jdbi.v3.core.Handle;
 import org.jdbi.v3.core.mapper.RowMapper;
@@ -41,6 +40,7 @@ import java.util.function.*;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
+import static dk.trustworks.essentials.components.foundation.postgresql.PostgresqlSchemaStatements.createIndexUnlessPresent;
 import static dk.trustworks.essentials.shared.FailFast.*;
 import static dk.trustworks.essentials.shared.MessageFormatter.NamedArgumentBinding.arg;
 import static dk.trustworks.essentials.shared.MessageFormatter.*;
@@ -76,7 +76,7 @@ import static dk.trustworks.essentials.shared.interceptor.InterceptorChain.newIn
  * It is highly recommended that the {@code sharedQueueTableName} value is only derived from a controlled and trusted source.<br>
  * To mitigate the risk of SQL injection attacks, external or untrusted inputs should never directly provide the {@code sharedQueueTableName} value.<br>
  */
-public final class PostgresqlDurableQueues implements BatchMessageFetchingCapableDurableQueues, EssentialsSchemaContributor {
+public final class PostgresqlDurableQueues implements BatchMessageFetchingCapableDurableQueues, EssentialsSchemaContributor, AutoCloseable {
     private static final Logger  log                                       = LoggerFactory.getLogger(PostgresqlDurableQueues.class);
     public static final  String  DEFAULT_DURABLE_QUEUES_TABLE_NAME         = "durable_queues";
     /**
@@ -103,6 +103,19 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
     private final       QueuedMessageRowMapper                                                  queuedMessageMapper;
     private final       List<DurableQueuesInterceptor>                                          interceptors                     = new CopyOnWriteArrayList<>();
     private final       Optional<MultiTableChangeListener<TableChangeNotification>>             multiTableChangeListener;
+    /**
+     * Set when the {@link PostgresqlDurableQueuesBuilder} created the {@link #multiTableChangeListener}: this instance
+     * then starts and stops it, and stops this, its {@link LocalEventBus}, on {@link #close()} - see
+     * {@link #ownMultiTableChangeListener(LocalEventBus)}
+     */
+    private             LocalEventBus                                                           ownedMultiTableChangeListenerEventBus;
+    /**
+     * Subscribed to the {@link #multiTableChangeListener}'s {@link EventBus} on every {@link #start()}: always the same
+     * instance, so {@link EventBus#addAsyncSubscriber(EventHandler)} - which ignores a subscriber already subscribed -
+     * does not subscribe it again on a start after a stop
+     */
+    private final       QueueTableNotificationHandler                                           queueTableNotificationHandler    = new QueueTableNotificationHandler();
+    private volatile    boolean                                                                 closed;
     private final       SchemaOwnership                                                         schemaOwnership;
     private final       Function<ConsumeFromQueue, QueuePollingOptimizer>                       queuePollingOptimizerFactory;
     /**
@@ -131,9 +144,24 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
      * grows a parameter. Always wrapped in {@link DurableQueueMessageObserver#safe(DurableQueueMessageObserver)}.
      */
     private volatile DurableQueueMessageObserver messageObserver = DurableQueueMessageObserver.none();
+    private final    EnqueueOutsideUnitOfWorkGuard enqueueOutsideUnitOfWorkGuard = new EnqueueOutsideUnitOfWorkGuard(PostgresqlDurableQueues.class);
 
     private   Function<QueueName, QueuePollingOptimizer> centralizedQueuePollingOptimizerFactory;
     private   int                                        messageHandlingTimeoutMs;
+    private final LocalEnqueueSignal                     localEnqueueSignal = new LocalEnqueueSignal();
+    /**
+     * Per queue: whether the ordered claim currently uses {@link DurableQueuesSql#buildOrderedHeadScanSqlStatement}
+     * rather than {@link DurableQueuesSql#buildOrderedSqlStatement} - see {@link OrderedClaimStatementChooser}
+     */
+    private final ConcurrentMap<QueueName, OrderedClaimStatementChooser> orderedClaimStatementChoosers = new ConcurrentHashMap<>();
+    /**
+     * An ordered claim faster than this never switches statement - see {@link OrderedClaimStatementChooser}
+     */
+    private volatile long                                orderedClaimSlowThresholdNanos = DEFAULT_ORDERED_CLAIM_SLOW_THRESHOLD.toNanos();
+    /**
+     * For tests only: forces one ordered-claim statement for every queue. {@code null} picks adaptively
+     */
+    private volatile Boolean                             orderedClaimByHeadScanOverride;
     /**
      * Contains the timestamp of the last performed {@link #resetMessagesStuckBeingDelivered(QueueName)} check<br>
      */
@@ -405,11 +433,19 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                                             // 20 000-row ANALYZEd table where the planner chose each of the other three. The ordered claim's
                                             // NOT EXISTS barrier is served by idx_<table>_ordered_msg instead.
                                             bindTable("DROP INDEX IF EXISTS idx_{:tableName}_ordered_ready")));
+        // Each index is only created when it is missing: CREATE INDEX IF NOT EXISTS alone locks the table on every start,
+        // against the other instances' queue operations - see PostgresqlSchemaStatements
         changes.add(SchemaChange.repeatable("queue-indexes",
                                             sharedQueueTableName,
-                                            bindTable(durableQueuesSql.getCreateOrderedMessageIndexSql()),
-                                            bindTable(durableQueuesSql.getCreateUnorderedMessageReadyIndexSql()),
-                                            bindTable(durableQueuesSql.getCreateOrderedMessageHeadIndexSql())));
+                                            createIndexUnlessPresent(sharedQueueTableName,
+                                                                     bindTable("idx_{:tableName}_ordered_msg"),
+                                                                     durableQueuesSql.getCreateOrderedMessageIndexSql()),
+                                            createIndexUnlessPresent(sharedQueueTableName,
+                                                                     bindTable("idx_{:tableName}_unordered_ready"),
+                                                                     durableQueuesSql.getCreateUnorderedMessageReadyIndexSql()),
+                                            createIndexUnlessPresent(sharedQueueTableName,
+                                                                     bindTable("idx_{:tableName}_ordered_head"),
+                                                                     durableQueuesSql.getCreateOrderedMessageHeadIndexSql())));
         changes.add(SchemaChange.repeatable("legacy-queue-statistics-removal", sharedQueueTableName, legacyQueueStatisticsRemovalSql()));
         multiTableChangeListener.ifPresent(listener -> changes.add(new SchemaChange("change-notification-trigger",
                                                                                    sharedQueueTableName,
@@ -495,6 +531,25 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
     }
 
     /**
+     * Should {@code queueMessage}/{@code queueMessages} fail when called outside a {@link UnitOfWork} or Spring transaction?
+     * Default {@code false}: such an enqueue commits on its own, and each call site's first one is logged at WARN. In Spring Boot:
+     * {@value EnqueueOutsideUnitOfWorkGuard#REQUIRE_ACTIVE_UNIT_OF_WORK_FOR_ENQUEUE_PROPERTY}. See {@link EnqueueOutsideUnitOfWorkGuard}.
+     *
+     * @param requireActiveUnitOfWorkForEnqueue {@code true} to throw {@link NoActiveUnitOfWorkException} instead
+     */
+    public void setRequireActiveUnitOfWorkForEnqueue(boolean requireActiveUnitOfWorkForEnqueue) {
+        enqueueOutsideUnitOfWorkGuard.setRequireActiveUnitOfWork(requireActiveUnitOfWorkForEnqueue);
+    }
+
+    /**
+     * @return whether an enqueue outside a {@link UnitOfWork} or Spring transaction fails - see
+     * {@link #setRequireActiveUnitOfWorkForEnqueue(boolean)}
+     */
+    public boolean isRequireActiveUnitOfWorkForEnqueue() {
+        return enqueueOutsideUnitOfWorkGuard.isRequireActiveUnitOfWork();
+    }
+
+    /**
      * The name of the shared table where all queue messages are stored
      *
      * @return the name of the shared table where all queue messages are stored
@@ -523,6 +578,9 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
 
     @Override
     public void start() {
+        if (closed) {
+            throw new IllegalStateException("This PostgresqlDurableQueues has been closed and cannot be started again");
+        }
         if (!started) {
             started = true;
             log.info("Starting PostgresqlDurableQueues");
@@ -541,49 +599,59 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                 traditionalDurableQueueConsumers.values().forEach(PostgresqlDurableQueueConsumer::start);
             }
 
+            if (ownedMultiTableChangeListenerEventBus != null) {
+                // Before the table is registered: a listener that is not started through Lifecycle starts polling on
+                // the first registration
+                multiTableChangeListener.get().start();
+            }
             multiTableChangeListener.ifPresent(listener -> {
                 listener.listenToNotificationsFor(sharedQueueTableName,
                                                   QueueTableNotification.class);
-                listener.getEventBus().addAsyncSubscriber(new AnnotatedEventHandler() {
-                    @Handler
-                    void handle(QueueTableNotification e) {
-                        try {
-                            log.trace("[{}] Received Message-Added {} with id '{}'",
-                                      e.queueName,
-                                      e.getClass().getSimpleName(),
-                                      e.id);
-                            var queueName = QueueName.of(e.queueName);
-
-                            if (useCentralizedMessageFetcher) {
-                                durableQueueConsumers.values()
-                                                     .stream()
-                                                     .filter(durableQueueConsumer -> durableQueueConsumer.queueName().equals(queueName))
-                                                     .forEach(durableQueueConsumer -> {
-                                                         // Create a stub QueuedMessage just for notification purposes
-                                                         var queuedMessage = createDefaultQueuedMessage(e, queueName);
-                                                         // Use the notification interface to optimize polling
-                                                         durableQueueConsumer.messageAdded(queuedMessage);
-                                                     });
-                            } else {
-                                // For traditional consumers, pass the notification to the consumer to optimize polling
-                                traditionalDurableQueueConsumers.values()
-                                                                .stream()
-                                                                .filter(durableQueueConsumer -> durableQueueConsumer.queueName().equals(queueName))
-                                                                .forEach(durableQueueConsumer -> {
-                                                                    // Create a stub QueuedMessage just for notification purposes
-                                                                    var queuedMessage = createDefaultQueuedMessage(e, queueName);
-                                                                    // Use the notification interface to optimize polling
-                                                                    durableQueueConsumer.messageAdded(queuedMessage);
-                                                                });
-                            }
-                        } catch (Exception ex) {
-                            log.error("Error occurred while handling notification", ex);
-                        }
-                    }
-                });
+                listener.getEventBus().addAsyncSubscriber(queueTableNotificationHandler);
             });
 
             log.info("Started PostgresqlDurableQueues");
+        }
+    }
+
+    /**
+     * Wakes this node's consumer of the queue a {@link QueueTableNotification} is about
+     */
+    private final class QueueTableNotificationHandler extends AnnotatedEventHandler {
+        @Handler
+        void handle(QueueTableNotification e) {
+            try {
+                log.trace("[{}] Received Message-Added {} with id '{}'",
+                          e.queueName,
+                          e.getClass().getSimpleName(),
+                          e.id);
+                var queueName = QueueName.of(e.queueName);
+
+                if (useCentralizedMessageFetcher) {
+                    durableQueueConsumers.values()
+                                         .stream()
+                                         .filter(durableQueueConsumer -> durableQueueConsumer.queueName().equals(queueName))
+                                         .forEach(durableQueueConsumer -> {
+                                             // Create a stub QueuedMessage just for notification purposes
+                                             var queuedMessage = createDefaultQueuedMessage(e, queueName);
+                                             // Use the notification interface to optimize polling
+                                             durableQueueConsumer.messageAdded(queuedMessage);
+                                         });
+                } else {
+                    // For traditional consumers, pass the notification to the consumer to optimize polling
+                    traditionalDurableQueueConsumers.values()
+                                                    .stream()
+                                                    .filter(durableQueueConsumer -> durableQueueConsumer.queueName().equals(queueName))
+                                                    .forEach(durableQueueConsumer -> {
+                                                        // Create a stub QueuedMessage just for notification purposes
+                                                        var queuedMessage = createDefaultQueuedMessage(e, queueName);
+                                                        // Use the notification interface to optimize polling
+                                                        durableQueueConsumer.messageAdded(queuedMessage);
+                                                    });
+                }
+            } catch (Exception ex) {
+                log.error("Error occurred while handling notification", ex);
+            }
         }
     }
 
@@ -658,8 +726,34 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                     }
                 }
             });
+            if (ownedMultiTableChangeListenerEventBus != null) {
+                // Releases the listener's connection and poll thread; it keeps the queue table registered, and start()
+                // resumes it
+                multiTableChangeListener.get().stop();
+            }
             started = false;
             log.info("Stopped");
+        }
+    }
+
+    /**
+     * Stops this instance for good: {@link #stop()}s it and, when the {@link PostgresqlDurableQueuesBuilder} created its
+     * {@link MultiTableChangeListener}, releases the {@link LocalEventBus} that listener publishes on, whose threads
+     * would otherwise outlive it. Afterwards it cannot be started again.<br>
+     * Without a listener created by the builder it does nothing {@link #stop()} does not.
+     */
+    @Override
+    public void close() {
+        stop();
+        synchronized (this) {
+            if (closed) {
+                return;
+            }
+            closed = true;
+        }
+        if (ownedMultiTableChangeListenerEventBus != null) {
+            multiTableChangeListener.get().close();
+            ownedMultiTableChangeListenerEventBus.stop();
         }
     }
 
@@ -716,6 +810,9 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
 
         if (useCentralizedMessageFetcher) {
             // Create and register a CentralizedMessageFetcherDurableQueueConsumer
+            // Back off only where something can wake the queue: without LISTEN/NOTIFY a message enqueued by another
+            // node would wait out the backoff. The builder creates a listener by default, so this is the explicit
+            // opt-out, and it polls every interval - as it always has
             var queuePollingOptimizer = multiTableChangeListener.map(_ignore -> centralizedQueuePollingOptimizerFactory.apply(operation.getQueueName()))
                                                                 .orElseGet(QueuePollingOptimizer::None);
             return durableQueueConsumers.computeIfAbsent(operation.queueName, _queueName -> {
@@ -803,11 +900,14 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
      * @param queueName the queue name for which to create the polling optimizer
      * @return a new {@link CentralizedQueuePollingOptimizer} configured with:
      * <ul>
-     *   <li>Minimum polling interval: 50% of the centralized fetcher's polling interval</li>
-     *   <li>Maximum polling interval: 20x the centralized fetcher's polling interval</li>
-     *   <li>Polling interval increase factor: 1.5 (50% increase per empty poll)</li>
-     *   <li>Polling interval decrease factor: 0.1 (90% decrease when messages found)</li>
+     *   <li>Initial delay: the centralized fetcher's polling interval</li>
+     *   <li>Maximum delay: 2 seconds</li>
+     *   <li>Backoff factor: 1.5 (50% increase per empty poll)</li>
+     *   <li>Jitter: ±10% of each delay</li>
      * </ul>
+     * The same values the Spring Boot starter configures by default, so a builder-made instance behaves like the
+     * Spring one. Only used with a {@link MultiTableChangeListener}, which wakes a backed-off queue when a message
+     * is added.
      * @throws IllegalStateException if called and the centralized message fetcher is not enabled
      */
     private QueuePollingOptimizer createCentralizedQueuePollingOptimizerFor(QueueName queueName) {
@@ -816,8 +916,8 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
         }
         var pollingIntervalMs = centralizedMessageFetcher.getPollingIntervalMs();
         return new CentralizedQueuePollingOptimizer(queueName,
-                                                    (long) (pollingIntervalMs * 0.5d),
-                                                    pollingIntervalMs * 20,
+                                                    pollingIntervalMs,
+                                                    Math.max(pollingIntervalMs, DEFAULT_MAX_POLLING_INTERVAL.toMillis()),
                                                     1.5,
                                                     0.1
         );
@@ -854,6 +954,8 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
     @Override
     public QueueEntryId queueMessage(QueueMessage operation) {
         requireNonNull(operation, "You must provide a QueueMessage instance");
+        // Before the chain: SingleOperationTransactionDurableQueuesInterceptor opens a UnitOfWork of its own inside it.
+        enqueueOutsideUnitOfWorkGuard.checkEnqueue(operation.getQueueName(), unitOfWorkFactory);
         return newInterceptorChainForOperation(operation,
                                                interceptors,
                                                (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
@@ -940,7 +1042,7 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
             }
 
             if (causeOfEnqueuing.isPresent()) {
-                update.bind("lastDeliveryError", causeOfEnqueuing.map(Exceptions::getStackTrace).get());
+                update.bind("lastDeliveryError", causeOfEnqueuing.map(DeliveryErrorDescription::describe).get());
             } else {
                 update.bindNull("lastDeliveryError", Types.VARCHAR);
             }
@@ -948,6 +1050,9 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
             var numberOfRowsUpdated = update.execute();
             if (numberOfRowsUpdated == 0) {
                 throw new DurableQueueException("Failed to insert message", queueName);
+            }
+            if (!isDeadLetterMessage) {
+                unitOfWork.registerLifecycleCallbackForResource(new LocallyQueuedMessage(queueName, queueEntryId, message, nextDeliveryTimestamp), localEnqueueSignal);
             }
         });
         log.debug("[{}:{}] Queued {}{}message{} with nextDeliveryTimestamp {}",
@@ -964,6 +1069,7 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
     public List<QueueEntryId> queueMessages(QueueMessages operation) {
         requireNonNull(operation, "You must provide a QueueMessages instance");
         operation.validate();
+        enqueueOutsideUnitOfWorkGuard.checkEnqueue(operation.getQueueName(), unitOfWorkFactory);
 
         return newInterceptorChainForOperation(operation,
                                                interceptors,
@@ -1026,6 +1132,11 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                                                        throw new DurableQueueException(msg("Attempted to queue {} messages but only inserted {} messages", messages.size(), numberOfRowsUpdated),
                                                                                        queueName);
                                                    }
+                                                   if (!messages.isEmpty()) {
+                                                       unitOfWorkFactory.getRequiredUnitOfWork()
+                                                                        .registerLifecycleCallbackForResource(new LocallyQueuedMessage(queueName, queueEntryIds.getFirst(), messages.getFirst(), nextDeliveryTimestamp),
+                                                                                                              localEnqueueSignal);
+                                                   }
 
                                                    log.debug("[{}] Queued {} Messages with nextDeliveryTimestamp {} and entry-id's: {}",
                                                              queueName,
@@ -1047,15 +1158,42 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                                                    var nextDeliveryTimestamp = Instant.now().plus(operation.getDeliveryDelay());
                                                    var result = unitOfWorkFactory.getRequiredUnitOfWork().handle().createQuery(durableQueuesSql.getRetryMessageSql())
                                                                                  .bind("nextDeliveryTimestamp", nextDeliveryTimestamp)
-                                                                                 .bind("lastDeliveryError", operation.getCauseForRetry() != null ? Exceptions.getStackTrace(operation.getCauseForRetry()) : RetryMessage.MANUALLY_REQUESTED_REDELIVERY)
+                                                                                 .bind("lastDeliveryError", operation.getCauseForRetry() != null ? DeliveryErrorDescription.describe(operation.getCauseForRetry()) : RetryMessage.MANUALLY_REQUESTED_REDELIVERY)
                                                                                  .bind("id", operation.queueEntryId)
                                                                                  .map(queuedMessageMapper)
                                                                                  .findOne();
                                                    if (result.isPresent()) {
                                                        log.debug("Marked Message with id '{}' for Retry at {}. Message entry after update: {}", operation.queueEntryId, nextDeliveryTimestamp, result.get());
+                                                       signalLocalConsumerAfterCommit(result.get(), nextDeliveryTimestamp);
                                                        return result;
                                                    } else {
                                                        log.error("Failed to Mark Message with id '{}' for Retry", operation.queueEntryId);
+                                                       return Optional.<QueuedMessage>empty();
+                                                   }
+                                               }).proceed();
+    }
+
+    @Override
+    public Optional<QueuedMessage> releaseUndeliveredMessage(ReleaseUndeliveredMessage operation) {
+        requireNonNull(operation, "You must provide a ReleaseUndeliveredMessage instance");
+        operation.validate();
+        return newInterceptorChainForOperation(operation,
+                                               interceptors,
+                                               (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
+                                               () -> {
+                                                   var nextDeliveryTimestamp = Instant.now().plus(operation.getDeliveryDelay());
+                                                   var result = unitOfWorkFactory.getRequiredUnitOfWork().handle().createQuery(durableQueuesSql.getReleaseUndeliveredMessageSql())
+                                                                                 .bind("nextDeliveryTimestamp", nextDeliveryTimestamp)
+                                                                                 .bind("id", operation.queueEntryId)
+                                                                                 .map(queuedMessageMapper)
+                                                                                 .findOne();
+                                                   if (result.isPresent()) {
+                                                       log.debug("Released undelivered Message with id '{}' for delivery at {}. Message entry after update: {}", operation.queueEntryId, nextDeliveryTimestamp, result.get());
+                                                       signalLocalConsumerAfterCommit(result.get(), nextDeliveryTimestamp);
+                                                       return result;
+                                                   } else {
+                                                       // Already acknowledged, deleted or reset by the stuck-message reset - nothing to release
+                                                       log.debug("Didn't release Message with id '{}' as it is no longer being delivered", operation.queueEntryId);
                                                        return Optional.<QueuedMessage>empty();
                                                    }
                                                }).proceed();
@@ -1124,13 +1262,14 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                                                                                  .findOne();
                                                    if (result.isPresent()) {
                                                        var updateResult = result.get();
+                                                       signalLocalConsumerAfterCommit(updateResult, nextDeliveryTimestamp);
 
                                                        var isOrderedMessage = updateResult.getDeliveryMode() == QueuedMessage.DeliveryMode.IN_ORDER;
                                                        log.debug("[{}] Resurrected Dead Letter {}Message with id '{}' {} and nextDeliveryTimestamp: {}. Message entry after update: {}",
                                                                  updateResult.getQueueName(),
                                                                  isOrderedMessage ? "Ordered " : "",
                                                                  operation.getQueueEntryId(),
-                                                                 isOrderedMessage ? "(key: " + ((OrderedMessage) updateResult).getKey() + ", order: " + ((OrderedMessage) updateResult).getOrder() + ")" : "",
+                                                                 isOrderedMessage ? "(key: " + ((OrderedMessage) updateResult.getMessage()).getKey() + ", order: " + ((OrderedMessage) updateResult.getMessage()).getOrder() + ")" : "",
                                                                  nextDeliveryTimestamp,
                                                                  updateResult);
                                                        return result;
@@ -1221,7 +1360,8 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
 
     private Optional<QueuedMessage> fetchNextMessageReadyForDeliveryOrderedUnordered(QueueName queueName, Collection<String> excludes, Instant now) {
         boolean hasExcludes = !excludes.isEmpty();
-        var     orderedSql  = durableQueuesSql.buildOrderedSqlStatement(hasExcludes);
+        var     byHeadScan  = orderedClaimByHeadScan(queueName);
+        var     orderedSql  = byHeadScan ? durableQueuesSql.buildOrderedHeadScanSqlStatement(hasExcludes) : durableQueuesSql.buildOrderedSqlStatement(hasExcludes);
         log.trace("[{}] Executing fetchNextMessageReadyForDeliveryOrderedUnordered sql", queueName);
 
         var handle = unitOfWorkFactory.getRequiredUnitOfWork().handle();
@@ -1232,9 +1372,10 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                                  .bind("limit", 1);
         if (hasExcludes) orderedQuery.bindList("excludeKeys", excludes);
 
-        Optional<QueuedMessage> queuedMessage = orderedQuery
-                .map(queuedMessageMapper)
-                .findOne();
+        Optional<QueuedMessage> queuedMessage = claimOrdered(handle, queueName, byHeadScan, 1,
+                                                             () -> orderedQuery.map(queuedMessageMapper).findOne(),
+                                                             claimed -> claimed.isPresent() ? 1 : 0)
+                .flatMap(claimed -> claimed);
         if (queuedMessage.isPresent()) {
             return queuedMessage;
         }
@@ -1496,6 +1637,8 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
             return unitOfWorkFactory.withUnitOfWork(uow -> {
                 resetMessagesStuckBeingDeliveredAcrossMultipleQueues(queueNames);
 
+                // One claim time for every queue in this poll - the optimizers are told it, so they only treat
+                // due times up to it as looked for, however long the poll takes to reach their queue
                 var now         = Instant.now();
                 var allMessages = new ArrayList<QueuedMessage>();
 
@@ -1520,35 +1663,54 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                     List<QueuedMessage>  messagesForQueue;
                     MessageMappingResult mappingResult;
 
-                    var orderedSql = durableQueuesSql.buildOrderedSqlStatement(!excluded.isEmpty());
+                    var byHeadScan = orderedClaimByHeadScan(queueName);
+                    var orderedSql = byHeadScan
+                                     ? durableQueuesSql.buildOrderedHeadScanSqlStatement(!excluded.isEmpty())
+                                     : durableQueuesSql.buildOrderedSqlStatement(!excluded.isEmpty());
                     var orderedQ = uow.handle().createQuery(orderedSql)
                                       .bind("queueName", queueName)
                                       .bind("now", now)
                                       .bind("limit", availableWorkerSlotsForThisQueue);
                     if (!excluded.isEmpty()) orderedQ.bindList("excludeKeys", excluded);
 
-                    mappingResult = mapQueryResultsWithExceptionHandling(orderedQ);
-                    messagesForQueue = mappingResult.successfulMessages();
-                    handleFailedMappings(queueName, mappingResult);
+                    var orderedClaim = claimOrdered(uow.handle(), queueName, byHeadScan, availableWorkerSlotsForThisQueue,
+                                                    () -> mapQueryResultsWithExceptionHandling(orderedQ),
+                                                    claimed -> claimed.successfulMessages().size() + claimed.failedMappings().size());
+                    if (orderedClaim.isPresent()) {
+                        mappingResult = orderedClaim.get();
+                        messagesForQueue = mappingResult.successfulMessages();
+                        handleFailedMappings(queueName, mappingResult);
+                    } else {
+                        messagesForQueue = List.of();
+                    }
 
-                    if (messagesForQueue.isEmpty()) {
+                    // Fill whatever the ordered claim left free. Running the unordered claim only when the ordered
+                    // one found nothing left unordered messages on a queue that also carries ordered ones waiting a
+                    // whole polling interval whenever a single ordered message was claimed
+                    var slotsLeft = availableWorkerSlotsForThisQueue - messagesForQueue.size();
+                    if (slotsLeft > 0) {
                         var unorderedSql = durableQueuesSql.buildUnorderedSqlStatement();
                         var unorderedQ = uow.handle().createQuery(unorderedSql)
                                             .bind("queueName", queueName)
                                             .bind("now", now)
-                                            .bind("limit", availableWorkerSlotsForThisQueue);
+                                            .bind("limit", slotsLeft);
                         mappingResult = mapQueryResultsWithExceptionHandling(unorderedQ);
-                        messagesForQueue = mappingResult.successfulMessages();
+                        if (messagesForQueue.isEmpty()) {
+                            messagesForQueue = mappingResult.successfulMessages();
+                        } else {
+                            messagesForQueue = new ArrayList<>(messagesForQueue);
+                            messagesForQueue.addAll(mappingResult.successfulMessages());
+                        }
                         handleFailedMappings(queueName, mappingResult);
                     }
 
                     log.debug("[{}] Batch fetched {} messages with {} slots available",
                               queueName, messagesForQueue.size(), availableWorkerSlotsForThisQueue);
                     if (messagesForQueue.isEmpty()) {
-                        optimizer.queuePollingReturnedNoMessages();
+                        optimizer.queuePollingReturnedNoMessages(now);
                         log.trace("[{}] No messages fetched for this queue", queueName);
                     } else {
-                        optimizer.queuePollingReturnedMessages(messagesForQueue);
+                        optimizer.queuePollingReturnedMessages(messagesForQueue, now);
                         log.trace("[{}] Fetched {} messages for this queue", queueName, messagesForQueue.size());
                     }
                     allMessages.addAll(messagesForQueue);
@@ -1619,8 +1781,8 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                 }
 
                 var mappingResult = mapQueryResultsWithExceptionHandling(query);
-                // No de-duplication is applied here: the batched statement numbers all candidates for a queue in
-                // a single window and updates each row at most once, so a QueueEntryId cannot appear twice.
+                // No de-duplication is applied here: the batched statement selects the rows it updates by primary-key
+                // array and updates each row at most once, so a QueueEntryId cannot appear twice.
                 var messages = mappingResult.successfulMessages();
 
                 if (messages.size() > batchedFetchWarnRowsThreshold) {
@@ -1659,9 +1821,9 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                     var                 queuePollingOptimizer = durableQueueConsumer.getQueuePollingOptimizer();
                     List<QueuedMessage> messagesForQueue      = byQueue.getOrDefault(queueName, Collections.emptyList());
                     if (messagesForQueue.isEmpty()) {
-                        queuePollingOptimizer.queuePollingReturnedNoMessages();
+                        queuePollingOptimizer.queuePollingReturnedNoMessages(now);
                     } else {
-                        queuePollingOptimizer.queuePollingReturnedMessages(messagesForQueue);
+                        queuePollingOptimizer.queuePollingReturnedMessages(messagesForQueue, now);
                     }
                 }
 
@@ -1821,4 +1983,262 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                                                                                               .findOne());
     }
 
+
+    /**
+     * The default maximum delay of the polling backoff - the Spring Boot starter's default
+     * ({@code essentials.durable-queues.max-polling-interval})
+     */
+    public static final Duration DEFAULT_MAX_POLLING_INTERVAL = Duration.ofSeconds(2);
+
+    /**
+     * Called by the {@link PostgresqlDurableQueuesBuilder} when it created the {@link MultiTableChangeListener} this
+     * instance was given: this instance then starts and stops it with itself - a stopped listener resumes on
+     * {@link MultiTableChangeListener#start()} - and stops {@code eventBus}, the bus it publishes on, on {@link #close()}
+     */
+    void ownMultiTableChangeListener(LocalEventBus eventBus) {
+        requireTrue(multiTableChangeListener.isPresent(), "No multiTableChangeListener to own");
+        this.ownedMultiTableChangeListenerEventBus = requireNonNull(eventBus, "No eventBus provided");
+    }
+
+    /**
+     * For tests: the {@link MultiTableChangeListener} given to, or created for, this instance
+     */
+    Optional<MultiTableChangeListener<TableChangeNotification>> getMultiTableChangeListener() {
+        return multiTableChangeListener;
+    }
+
+    /**
+     * For tests: whether the {@link MultiTableChangeListener}'s bus has this instance's notification subscriber
+     */
+    boolean isSubscribedToQueueTableNotifications() {
+        return multiTableChangeListener.map(listener -> listener.getEventBus().hasAsyncSubscriber(queueTableNotificationHandler))
+                                       .orElse(false);
+    }
+
+    /**
+     * The default of {@link PostgresqlDurableQueuesBuilder#setOrderedClaimSlowThreshold(Duration)}: an ordered claim
+     * faster than this never makes a queue switch ordered-claim statement
+     */
+    public static final Duration DEFAULT_ORDERED_CLAIM_SLOW_THRESHOLD = Duration.ofMillis(10);
+
+    private static final String ORDERED_CLAIM_PROBE_SAVEPOINT = "essentials_ordered_claim_probe";
+    /**
+     * PostgreSQL's SQL state for a statement cancelled by {@code statement_timeout}
+     */
+    private static final String QUERY_CANCELED_SQL_STATE      = "57014";
+
+    /**
+     * Set by the {@link PostgresqlDurableQueuesBuilder} - see {@link PostgresqlDurableQueuesBuilder#setOrderedClaimSlowThreshold(Duration)}
+     */
+    void setOrderedClaimSlowThreshold(Duration orderedClaimSlowThreshold) {
+        requireNonNull(orderedClaimSlowThreshold, "No orderedClaimSlowThreshold provided");
+        requireFalse(orderedClaimSlowThreshold.isNegative(), "orderedClaimSlowThreshold must not be negative");
+        this.orderedClaimSlowThresholdNanos = orderedClaimSlowThreshold.toNanos();
+    }
+
+    boolean orderedClaimByHeadScan(QueueName queueName) {
+        var override = orderedClaimByHeadScanOverride;
+        if (override != null) {
+            return override;
+        }
+        var chooser = orderedClaimStatementChoosers.get(queueName);
+        return chooser != null && chooser.byHeadScan();
+    }
+
+    /**
+     * Run the queue's ordered claim and record how it went with its {@link OrderedClaimStatementChooser}.
+     * <p>
+     * When the poll probes the other statement, the claim runs under a savepoint with a transaction-local
+     * {@code statement_timeout} - see {@link OrderedClaimStatementChooser#probeTimeoutNanos(long)}. A cancelled probe is
+     * rolled back to the savepoint, which undoes the timeout too, so the rest of the transaction carries on: the
+     * unordered claim, and in a centralized poll the other queues' claims.
+     *
+     * @param handle       the poll's handle - inside a transaction
+     * @param byHeadScan   the statement {@code claim} runs
+     * @param limit        how many messages the claim asks for
+     * @param claim        runs the ordered claim statement
+     * @param claimedCount how many messages a claim result holds
+     * @return the claim's result, or empty when a probe was cancelled
+     */
+    <T> Optional<T> claimOrdered(Handle handle, QueueName queueName, boolean byHeadScan, int limit, Supplier<T> claim, ToIntFunction<T> claimedCount) {
+        var probeTimeoutNanos = orderedClaimProbeTimeoutNanos(queueName);
+        if (probeTimeoutNanos <= 0) {
+            var claimStartedNanos = System.nanoTime();
+            var claimed           = claim.get();
+            recordOrderedClaim(queueName, byHeadScan, System.nanoTime() - claimStartedNanos, claimedCount.applyAsInt(claimed), limit);
+            return Optional.of(claimed);
+        }
+
+        var previousStatementTimeout = handle.createQuery("SELECT current_setting('statement_timeout')").mapTo(String.class).one();
+        handle.savepoint(ORDERED_CLAIM_PROBE_SAVEPOINT);
+        setLocalStatementTimeout(handle, ((probeTimeoutNanos + 999_999) / 1_000_000) + "ms");
+        var claimStartedNanos = System.nanoTime();
+        T   claimed;
+        try {
+            claimed = claim.get();
+        } catch (RuntimeException e) {
+            if (!isQueryCanceled(e)) {
+                // E.g. a DurableQueueDeserializationException, which the caller handles in this transaction - so
+                // without the probe's timeout. After a failed SQL statement the transaction is aborted and this fails too
+                try {
+                    endOrderedClaimProbe(handle, previousStatementTimeout);
+                } catch (RuntimeException endFailure) {
+                    e.addSuppressed(endFailure);
+                }
+                throw e;
+            }
+            var elapsedNanos = System.nanoTime() - claimStartedNanos;
+            // Jdbi forgets the savepoint on rollback, so there is nothing to release afterwards
+            handle.rollbackToSavepoint(ORDERED_CLAIM_PROBE_SAVEPOINT);
+            log.debug("[{}] Ordered claim probe by the {} was cancelled after {} ms",
+                      queueName, byHeadScan ? "head scan" : "default statement", Duration.ofNanos(elapsedNanos).toMillis());
+            recordOrderedClaim(queueName, byHeadScan, Math.max(elapsedNanos, probeTimeoutNanos), 0, limit);
+            return Optional.empty();
+        }
+        var elapsedNanos = System.nanoTime() - claimStartedNanos;
+        endOrderedClaimProbe(handle, previousStatementTimeout);
+        recordOrderedClaim(queueName, byHeadScan, elapsedNanos, claimedCount.applyAsInt(claimed), limit);
+        return Optional.of(claimed);
+    }
+
+    private static void endOrderedClaimProbe(Handle handle, String previousStatementTimeout) {
+        setLocalStatementTimeout(handle, previousStatementTimeout);
+        handle.release(ORDERED_CLAIM_PROBE_SAVEPOINT);
+    }
+
+    private static void setLocalStatementTimeout(Handle handle, String statementTimeout) {
+        handle.createQuery("SELECT set_config('statement_timeout', :statementTimeout, true)")
+              .bind("statementTimeout", statementTimeout)
+              .mapTo(String.class)
+              .one();
+    }
+
+    /**
+     * Whether a statement failed because it was cancelled - SQL state {@value #QUERY_CANCELED_SQL_STATE}, which
+     * {@code statement_timeout} raises
+     */
+    private static boolean isQueryCanceled(Throwable e) {
+        for (var cause = e; cause != null; cause = cause.getCause()) {
+            if (cause instanceof SQLException sqlException && QUERY_CANCELED_SQL_STATE.equals(sqlException.getSQLState())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private long orderedClaimProbeTimeoutNanos(QueueName queueName) {
+        if (orderedClaimByHeadScanOverride != null) {
+            return 0;
+        }
+        var chooser = orderedClaimStatementChoosers.get(queueName);
+        return chooser != null ? chooser.probeTimeoutNanos(orderedClaimSlowThresholdNanos) : 0;
+    }
+
+    /**
+     * Let the queue's {@link OrderedClaimStatementChooser} pick the ordered-claim statement for its next poll from
+     * how this one went
+     */
+    void recordOrderedClaim(QueueName queueName, boolean byHeadScan, long elapsedNanos, int claimed, int limit) {
+        if (orderedClaimByHeadScanOverride != null) {
+            return;
+        }
+        orderedClaimStatementChoosers.computeIfAbsent(queueName, OrderedClaimStatementChooser::new)
+                                     .record(byHeadScan, elapsedNanos, claimed, limit, orderedClaimSlowThresholdNanos);
+    }
+
+    /**
+     * For tests: force the ordered claim to always use the head scan ({@code true}) or the default statement
+     * ({@code false}), or pick adaptively again ({@code null})
+     */
+    void setOrderedClaimByHeadScanOverride(Boolean headScan) {
+        this.orderedClaimByHeadScanOverride = headScan;
+    }
+
+    /**
+     * A message this node queued, registered with the enqueuing {@link UnitOfWork} so the queue's local consumer can be
+     * told once it commits - see {@link LocalEnqueueSignal}
+     */
+    private record LocallyQueuedMessage(QueueName queueName, QueueEntryId queueEntryId, Message message, Instant dueAt) {
+    }
+
+    /**
+     * Tell this node's consumer of the message's queue when the message becomes deliverable, once the transaction
+     * that scheduled it commits - see {@link LocalEnqueueSignal}
+     */
+    private void signalLocalConsumerAfterCommit(QueuedMessage scheduled, Instant dueAt) {
+        unitOfWorkFactory.getRequiredUnitOfWork()
+                         .registerLifecycleCallbackForResource(new LocallyQueuedMessage(scheduled.getQueueName(), scheduled.getId(), scheduled.getMessage(), dueAt),
+                                                               localEnqueueSignal);
+    }
+
+    /**
+     * Resets the polling backoff of this node's consumer of a queue once a transaction that queued to it commits, or,
+     * for a message that becomes deliverable later - a delayed enqueue, a retry, a delayed resurrection - tells it when.
+     * <p>
+     * Without a {@link MultiTableChangeListener} nothing else does: a queue that had backed off while idle kept a
+     * message this very node had just queued waiting out the backoff. After the commit, not before: a poll between
+     * the insert and the commit finds nothing and backs off again.
+     */
+    private final class LocalEnqueueSignal implements UnitOfWorkLifecycleCallback<LocallyQueuedMessage> {
+        @Override
+        public BeforeCommitProcessingStatus beforeCommit(UnitOfWork unitOfWork, List<LocallyQueuedMessage> associatedResources) {
+            return BeforeCommitProcessingStatus.COMPLETED;
+        }
+
+        @Override
+        public boolean hasPendingChanges(LocallyQueuedMessage resource) {
+            return false;
+        }
+
+        @Override
+        public void afterCommit(UnitOfWork unitOfWork, List<LocallyQueuedMessage> associatedResources) {
+            var now = Instant.now();
+            associatedResources.stream()
+                               .collect(Collectors.groupingBy(LocallyQueuedMessage::queueName, LinkedHashMap::new, Collectors.toList()))
+                               .forEach((queueName, scheduled) -> {
+                                   // The queue's consumer polls either through the centralized message fetcher or
+                                   // on its own (useCentralizedMessageFetcher(false)) - both back off while idle
+                                   DurableQueueConsumerNotifications consumer;
+                                   QueuePollingOptimizer             optimizer;
+                                   var                               centralizedConsumer = durableQueueConsumers.get(queueName);
+                                   var                               traditionalConsumer = traditionalDurableQueueConsumers.get(queueName);
+                                   if (centralizedConsumer != null) {
+                                       consumer = centralizedConsumer;
+                                       optimizer = centralizedConsumer.getQueuePollingOptimizer();
+                                   } else if (traditionalConsumer != null) {
+                                       consumer = traditionalConsumer;
+                                       optimizer = traditionalConsumer.getQueuePollingOptimizer();
+                                   } else {
+                                       return;
+                                   }
+                                   try {
+                                       // Deliverable now: poll at once. Deliverable later: poll when it is due
+                                       scheduled.stream()
+                                                .filter(queued -> queued.dueAt() == null || !queued.dueAt().isAfter(now))
+                                                .reduce((first, second) -> second)
+                                                .ifPresent(queued -> consumer.messageAdded(DefaultQueuedMessage.builder()
+                                                                                                               .setId(queued.queueEntryId())
+                                                                                                               .setQueueName(queueName)
+                                                                                                               .setMessage(queued.message())
+                                                                                                               .setAddedTimestamp(OffsetDateTime.now())
+                                                                                                               .build()));
+                                       scheduled.stream()
+                                                .map(LocallyQueuedMessage::dueAt)
+                                                .filter(dueAt -> dueAt != null && dueAt.isAfter(now))
+                                                .distinct()
+                                                .forEach(optimizer::messageScheduledFor);
+                                   } catch (Exception e) {
+                                       log.debug("[{}] Could not signal the local consumer after a commit", queueName, e);
+                                   }
+                               });
+        }
+
+        @Override
+        public void beforeRollback(UnitOfWork unitOfWork, List<LocallyQueuedMessage> associatedResources, Throwable causeOfTheRollback) {
+        }
+
+        @Override
+        public void afterRollback(UnitOfWork unitOfWork, List<LocallyQueuedMessage> associatedResources, Throwable causeOfTheRollback) {
+        }
+    }
 }

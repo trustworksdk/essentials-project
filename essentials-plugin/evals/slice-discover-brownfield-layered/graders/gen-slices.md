@@ -5,7 +5,7 @@ type: llm
 
 The agent's final message is the report `/essentials:slice-discover` printed for a test project. Paths in it are relative to the project root, and a report may cite a file by path, by `path:line`, or by its type or directory name.
 
-PASS if the report proposes exactly 7 candidate slices (names may differ slightly), namely:
+PASS if the report's candidate slices include each of these 7, each as a slice of its own. Match each by the code and entry point it comes from, not by its name: the slice name, the context prefix and the wording may differ freely.
 - command `orders.place_order` (from `src/main/java/com/example/shop/controller/OrderController.java`)
 - command `orders.cancel_order` (from `src/main/java/com/example/shop/controller/OrderController.java`)
 - command `orders.ship_order` (from `src/main/java/com/example/shop/controller/OrderController.java`)
@@ -13,8 +13,10 @@ PASS if the report proposes exactly 7 candidate slices (names may differ slightl
 - command `billing.pay_invoice` (from `src/main/java/com/example/shop/controller/InvoiceController.java`)
 - view `billing.unpaid_invoices` (from `src/main/java/com/example/shop/controller/InvoiceController.java`)
 - view `orders.order_status_report` (from `src/main/java/com/example/shop/controller/ReportController.java`)
-It may additionally list these outside the count, or not at all:
+These further slices may also appear, under any name or kind, or not at all; they are not counted among the 7 and never fail this check:
 - automation `billing.payment_reminders` (from `src/main/java/com/example/shop/service/PaymentReminderJob.java`)
 - translation `payment_gateway` (from `src/main/java/com/example/shop/integration/PaymentGatewayClient.java`)
+- command or unclassified, with no entry point `billing.issue_invoice` (from `src/main/java/com/example/shop/service/BillingService.java`)
+- command proposed as the remedy for the sole-writer finding, split out of payInvoice's Order write `orders.mark_order_paid` (from `src/main/java/com/example/shop/service/BillingService.java`)
 OrderController must be shown splitting into 4 slices.
-FAIL if the count differs or a listed slice is missing or merged into another.
+FAIL only if one of the 7 has no slice of its own, or shares one with another of the 7, or the report proposes a slice from code that no line above covers.

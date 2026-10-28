@@ -1,0 +1,22 @@
+{
+  "$comment": "What this plugin offers another plugin's agent, read statically (jq) by the sdd plugin before it calls an entry point. A capability listed here is implemented as references/sdd-contract.md describes it; one absent is not. Change this file in the same commit as any entry point it names. contractVersion moves only for a breaking change. The plugin's version is plugin.json's, deliberately not repeated here. tests/scripts/test_capabilities.py checks every value against the code.",
+  "contract": "sdd-essentials",
+  "contractVersion": 1,
+  "plugin": "essentials",
+  "python": "3.11",
+  "capabilities": {
+    "init.preset": {
+      "since": "0.60.1",
+      "command": "essentials:init",
+      "args": "--preset <file> --report <file>",
+      "presetKeys": ["language", "db", "web", "frontend", "compose", "lintGate", "projectName", "groupId", "artifactId", "packagePath", "targetMode", "targetDir"]
+    },
+    "slice.render.agent": { "since": "0.60.1", "entry": "scripts/render-slice.py", "interface": 1 },
+    "slice.render.tests-none": { "since": "0.60.1" },
+    "slice.render.manifest": { "since": "0.60.1" },
+    "slice.render.emit": { "since": "0.60.1" },
+    "slice.render.report": { "since": "0.60.1", "reportVersion": 1 },
+    "schema.sdd-keys": { "since": "0.60.1", "schemaVersion": "1.4" }
+  },
+  "declined": {}
+}

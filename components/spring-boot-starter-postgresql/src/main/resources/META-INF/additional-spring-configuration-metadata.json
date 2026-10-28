@@ -1,0 +1,70 @@
+{
+  "properties": [
+    {
+      "name": "essentials.json.wire-format-check",
+      "type": "dk.trustworks.essentials.components.foundation.boot.WireFormatCheckMode",
+      "description": "What to do at startup with a JSONSerializer or JSONEventSerializer bean, backed by a Jackson3JSONSerializer, whose mapper does not write and read the JSON format Essentials persists (typically a replacement bean built on a hand-configured JsonMapper). WARN logs one ERROR banner per deviating bean, FAIL stops the application, OFF skips the check. Spring Boot's web JsonMapper is not checked.",
+      "defaultValue": "warn"
+    },
+    {
+      "name": "essentials.run-report.new-findings-interval",
+      "type": "java.time.Duration",
+      "description": "How often the Essentials run report logs the findings raised after start-up (an enqueue outside a UnitOfWork, a processor started later) that were not logged before, as one block at the highest severity among them; nothing is logged when there is nothing new. 0 or negative turns the periodic log off. The complete report of the run is logged when the application context closes either way, but a shutdown log can be lost, which is what this is for. A finding raised after start-up reaches the report only while it is the only one in the JVM.",
+      "defaultValue": "5m"
+    },
+    {
+      "name": "essentials.durable-queues.transactional-mode",
+      "type": "java.lang.String",
+      "description": "Removed in 0.60.0. Selected the durable queues' TransactionalMode (FullyTransactional or SingleOperationTransaction).",
+      "deprecation": {
+        "level": "error",
+        "reason": "Removed in 0.60.0 and ignored: every queue operation now runs in its own transaction, as SingleOperationTransaction did. If it was set to fully-transactional, delivery semantics changed - see docs/MIGRATION-0.60.md 'TransactionalMode is retired'."
+      }
+    },
+    {
+      "name": "essentials.durable-queues.use-ordered-unordered-query",
+      "type": "java.lang.Boolean",
+      "description": "Removed in 0.60.0. Selected between the unified claim query and the ordered/unordered query pair.",
+      "deprecation": {
+        "level": "error",
+        "reason": "Removed in 0.60.0 and ignored: the ordered/unordered query pair is the only claim path - see docs/MIGRATION-0.60.md 'useOrderedUnorderedQuery is removed'."
+      }
+    },
+    {
+      "name": "essentials.durable-queues.enable-queue-statistics",
+      "type": "java.lang.Boolean",
+      "description": "Removed in 0.60.0. Enabled the trigger-based durable-queue statistics.",
+      "deprecation": {
+        "level": "error",
+        "reason": "Removed in 0.60.0 and ignored, with the trigger-based queue statistics. Per-instance statistics (QueueStatisticsRegistry) replace them and need no property - see docs/MIGRATION-0.60.md 'The queue statistics feature is removed'."
+      }
+    },
+    {
+      "name": "essentials.durable-queues.shared-queue-statistics-table-name",
+      "type": "java.lang.String",
+      "description": "Removed in 0.60.0. Table of the trigger-based durable-queue statistics.",
+      "deprecation": {
+        "level": "error",
+        "reason": "Removed in 0.60.0 and ignored, with the trigger-based queue statistics. Per-instance statistics (QueueStatisticsRegistry) replace them and need no property - see docs/MIGRATION-0.60.md 'The queue statistics feature is removed'."
+      }
+    },
+    {
+      "name": "essentials.durable-queues.enable-queue-statistics-ttl",
+      "type": "java.lang.Boolean",
+      "description": "Removed in 0.60.0. Enabled the TTL job of the trigger-based durable-queue statistics.",
+      "deprecation": {
+        "level": "error",
+        "reason": "Removed in 0.60.0 and ignored, with the trigger-based queue statistics. Per-instance statistics (QueueStatisticsRegistry) replace them and need no property - see docs/MIGRATION-0.60.md 'The queue statistics feature is removed'."
+      }
+    },
+    {
+      "name": "essentials.durable-queues.queue-statistics-ttl-duration",
+      "type": "java.lang.Integer",
+      "description": "Removed in 0.60.0. Days the trigger-based durable-queue statistics were kept.",
+      "deprecation": {
+        "level": "error",
+        "reason": "Removed in 0.60.0 and ignored, with the trigger-based queue statistics. Per-instance statistics (QueueStatisticsRegistry) replace them and need no property - see docs/MIGRATION-0.60.md 'The queue statistics feature is removed'."
+      }
+    }
+  ]
+}

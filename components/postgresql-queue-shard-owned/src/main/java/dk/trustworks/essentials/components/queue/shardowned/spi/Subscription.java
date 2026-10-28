@@ -19,8 +19,13 @@ package dk.trustworks.essentials.components.queue.shardowned.spi;
 import dk.trustworks.essentials.shared.Lifecycle;
 
 /**
- * A running consumer. Closing it releases the shards it holds, so that another instance can pick them
+ * A running consumer. Stopping or closing it releases the shards it holds, so that another instance can pick them
  * up without waiting out a lease.
+ * <p>
+ * {@link #stop() Stopping} it leaves it registered with its queue, so the queue's {@code start()} starts it again, and so
+ * does its own {@link #start()}. A caller letting go of it for good - one that may {@code consume()} again in its place -
+ * ends it with {@link #unsubscribe()}, or with {@link #close()}, which is the same: try-with-resources, and Spring's
+ * inferred destroy method for an {@link AutoCloseable} bean, call {@code close()} when the subscription is let go of.
  */
 public interface Subscription extends Lifecycle, AutoCloseable {
 
@@ -47,10 +52,36 @@ public interface Subscription extends Lifecycle, AutoCloseable {
     int orderedUnitsHeld();
 
     /**
-     * Equivalent to {@link #stop()}.
+     * Calls {@link #unsubscribe()}, so it ends the subscription as that does: on a queue that keeps a registry of its
+     * subscriptions ({@code PostgresqlMessageQueue}'s), for good, and nothing starts it again; the default
+     * {@code unsubscribe()} only stops it. To stop it and keep it registered with its queue, for the queue's
+     * {@code start()} or its own {@link #start()} to start again, call {@link #stop()}.
+     * <p>
+     * It used to be {@link #stop()}, which left a subscription closed by try-with-resources or by Spring at shutdown
+     * registered with its queue: the queue's {@code start()} after its {@code stop()} started the closed subscription
+     * again, delivering to a handler its caller had let go of, and the next {@code consume()} was counted as competing
+     * with it, under a new instance id.
      */
     @Override
     default void close() {
+        unsubscribe();
+    }
+
+    /**
+     * End the subscription for good: stop both lanes, as {@link #stop()} does, and remove them from the queue that
+     * returned it. From then on nothing starts them again - neither the queue's {@code start()}, one already under way
+     * when this is called included, nor this subscription's {@link #start()}, which throws once this has been called -
+     * and they no longer count as one of the queue's subscriptions, so the next
+     * {@code consume()} in this process is not reported as a competing consumer of one nobody holds.
+     * <p>
+     * {@link #stop()} leaves the subscription registered, which is right for a caller that will {@link #start()} it again,
+     * and wrong for one that lets go of it and consumes anew: every such stop and {@code consume()} left one more stopped
+     * pair of lanes registered with the queue, which the queue's {@code start()} then started again, running a handler its
+     * caller had let go of. Calling it again does nothing. {@link #close()} calls it.
+     * <p>
+     * The default only stops, for an implementation that keeps no registry of its subscriptions.
+     */
+    default void unsubscribe() {
         stop();
     }
 }

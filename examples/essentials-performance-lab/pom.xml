@@ -82,6 +82,14 @@
             <artifactId>reactor-core</artifactId>
         </dependency>
         <dependency>
+            <!-- provided by immutable-jackson3, which the starter registers in the persistence mapper: without it the
+                 first event read fails with NoClassDefFoundError. The tests get it through Mockito; the packaged app
+                 does not. -->
+            <groupId>org.objenesis</groupId>
+            <artifactId>objenesis</artifactId>
+            <version>${objenesis.version}</version>
+        </dependency>
+        <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-actuator</artifactId>
             <version>${spring-boot.version}</version>

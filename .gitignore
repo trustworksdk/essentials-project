@@ -17,10 +17,15 @@ node_modules/
 **/frontend/generated/
 **/frontend/index.html
 package-lock.json
+# Except the devcontainer's markdownlint lockfile: post-create.sh runs `npm ci` from it.
+!.devcontainer/tools/markdownlint/package-lock.json
 webpack.generated.js
 tsconfig.json
 types.d.ts
 vite.generated.ts
+
+# Python bytecode, written next to any script that gets imported (scripts/, essentials-plugin/scripts/)
+__pycache__/
 
 /.m2/
 
@@ -53,3 +58,6 @@ graphify-out
 .tw-code-review/reviews/
 .tw-code-review/logs/
 .tw-code-review/bridge-exports/
+
+# tw-code-review lock file left behind by its event-log writer (outside the managed block above)
+.tw-code-review/learnings/events.jsonl.lock

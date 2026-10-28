@@ -48,6 +48,11 @@ public class DurableQueuesSql {
      * in an unordered manner based on the specified conditions.
      */
     public String buildUnorderedSqlStatement() {
+        // The UPDATE selects its rows by primary-key array, never by joining the CTE. When the table was analyzed
+        // while drained (reltuples = 0, relpages > 0) the planner expects no rows and joins with a nested loop over
+        // the whole queue, so a claim cost time proportional to the backlog (185 ms vs 4 ms for 20 000 queued
+        // messages and a limit of 128). ARRAY(...) is evaluated once, so the locked id set is fixed before the
+        // UPDATE runs. Guarded by PostgresqlDurableQueuesClaimPlanIT.
         return bind("""
                       WITH cte_unordered AS (
                         SELECT id
@@ -68,9 +73,7 @@ public class DurableQueuesSql {
                         next_delivery_ts     = NULL,
                         is_being_delivered   = TRUE,
                         delivery_ts          = :now
-                      FROM cte_unordered u
-                      WHERE q.id = u.id
-                        AND q.queue_name = :queueName
+                      WHERE q.id = ANY(ARRAY(SELECT id FROM cte_unordered))
                       RETURNING q.*;
                     """, arg("tableName", sharedQueueTableName));
     }
@@ -88,6 +91,7 @@ public class DurableQueuesSql {
      * logic for selecting, ordering, and updating messages in a queue table.
      */
     public String buildOrderedSqlStatement(boolean hasExclusiveKeys) {
+        // UPDATE by primary-key array, not by joining the CTE - see buildUnorderedSqlStatement()
         return bind("""
                     WITH cte_ordered AS (
                                SELECT id
@@ -119,13 +123,71 @@ public class DurableQueuesSql {
                                         next_delivery_ts     = NULL,
                                         is_being_delivered   = TRUE,
                                         delivery_ts          = :now
-                                      FROM cte_ordered o
-                                      WHERE q.id = o.id
-                                        AND q.queue_name = :queueName
+                                      WHERE q.id = ANY(ARRAY(SELECT id FROM cte_ordered))
                                       RETURNING q.*;
                     """,
                     arg("tableName", sharedQueueTableName),
                     arg("excludeKeys", hasExclusiveKeys ? "AND key NOT IN (<excludeKeys>)" : ""));
+    }
+
+    /**
+     * The ordered claim for a queue whose backlog sits on few keys: claims the same messages as
+     * {@link #buildOrderedSqlStatement(boolean)}, found a different way.
+     * <p>
+     * That statement walks the eligible candidates in {@code key_order} and probes each for an earlier message of its
+     * key, stopping once it has {@code limit} heads. When the queue has fewer heads than the limit - a few keys with
+     * many messages each, the typical event-processor shape - it never stops early and probes every candidate on
+     * every poll: 180 ms at 20 keys x 1 000 messages. This statement first finds each key's head with one index
+     * probe per key (a recursive "loose index scan" over {@code idx_<table>_ordered_msg}), so its cost follows the
+     * number of keys instead: 0.4 ms for the same backlog, but 114 ms at 20 000 keys of one message each, where the
+     * other statement takes 1.6 ms. {@code PostgresqlDurableQueues} picks between the two per queue.
+     * <p>
+     * A key's head is its lowest {@code key_order} across every message of the key, dead letters and messages being
+     * delivered included - the same full per-key barrier as the {@code NOT EXISTS} in the other statement.
+     *
+     * @param hasExclusiveKeys whether to exclude the keys bound as {@code excludeKeys}
+     * @return the SQL statement
+     */
+    public String buildOrderedHeadScanSqlStatement(boolean hasExclusiveKeys) {
+        return bind("""
+                    WITH RECURSIVE heads AS (
+                        (SELECT key, key_order
+                         FROM {:tableName}
+                         WHERE queue_name = :queueName AND key IS NOT NULL
+                         ORDER BY key, key_order
+                         LIMIT 1)
+                        UNION ALL
+                        SELECT next_head.key, next_head.key_order
+                        FROM heads h
+                        CROSS JOIN LATERAL (SELECT key, key_order
+                                            FROM {:tableName}
+                                            WHERE queue_name = :queueName AND key > h.key
+                                            ORDER BY key, key_order
+                                            LIMIT 1) next_head
+                    ),
+                    cte_ordered AS (
+                        SELECT q.id
+                        FROM heads h
+                        JOIN {:tableName} q ON q.queue_name = :queueName AND q.key = h.key AND q.key_order = h.key_order
+                        WHERE q.is_dead_letter_message = FALSE
+                          AND q.is_being_delivered     = FALSE
+                          AND q.next_delivery_ts      <= :now
+                          {:excludeKeys}
+                        ORDER BY q.key_order, q.next_delivery_ts
+                        LIMIT :limit
+                        FOR UPDATE OF q SKIP LOCKED
+                    )
+                    UPDATE {:tableName} q
+                    SET
+                      total_attempts       = q.total_attempts + 1,
+                      next_delivery_ts     = NULL,
+                      is_being_delivered   = TRUE,
+                      delivery_ts          = :now
+                    WHERE q.id = ANY(ARRAY(SELECT id FROM cte_ordered))
+                    RETURNING q.*;
+                    """,
+                    arg("tableName", sharedQueueTableName),
+                    arg("excludeKeys", hasExclusiveKeys ? "AND q.key NOT IN (<excludeKeys>)" : ""));
     }
 
     /**
@@ -158,6 +220,12 @@ public class DurableQueuesSql {
     /**
      * Builds a batched SQL statement for retrieving messages from multiple queues - work in progress (doesn't handle competing consumers yet due to )
      * <p>
+     * Each queue is handed at most its available worker slots: its oldest eligible messages by
+     * {@code (next_delivery_ts, id)}, unordered messages and the heads of its ordered keys alike, leaving out the heads
+     * of excluded keys. A poll reads at most that many unordered messages per queue, plus one pass over the queue's
+     * ordered messages to find each key's head - the per-queue ordered claims order heads by {@code key_order}, which an
+     * index serves, whereas no index orders them by {@code next_delivery_ts}.
+     * <p>
      * This method now uses parameterized queries to avoid SQL injection vulnerabilities
      * that could arise from string concatenation of user-provided keys.
      *
@@ -175,7 +243,9 @@ public class DurableQueuesSql {
 
         for (int i = 0; i < activeQueues.size(); i++) {
             var queueName                        = activeQueues.get(i);
-            var availableWorkerSlotsForThisQueue = availableWorkerSlotsPerQueue.get(queueName);
+            // LIMIT NULL means no limit, so a queue without a slot count gets no messages rather than every eligible one
+            var availableWorkerSlots             = availableWorkerSlotsPerQueue.get(queueName);
+            var availableWorkerSlotsForThisQueue = availableWorkerSlots == null ? 0 : Math.max(0, availableWorkerSlots);
             var excludedKeysForThisQueue         = excludeKeysPerQueue.getOrDefault(queueName, Collections.emptySet());
 
             // Add queue name parameter binding as single value
@@ -198,81 +268,108 @@ public class DurableQueuesSql {
                        WITH queue_config(queue_name, slots, exclude_keys) AS (
                            VALUES {:values}
                        ),
-                       -- 2) Number every eligible candidate, ordered and unordered alike, oldest first.
+                       -- 2) Per queue, take its cfg.slots oldest eligible messages *without locking*, ordered and
+                       --    unordered alike, ordered by (next_delivery_ts, id).
                        --
-                       --    Ordered and unordered candidates are numbered together in a single window so that
-                       --    the per-queue slot limit in step 3 caps the TOTAL number of messages handed to a
-                       --    queue. Numbering them separately would apply the limit twice and allow a queue to
-                       --    be handed up to 2x its available worker slots.
-                           candidates_rn AS (
-                             SELECT
-                               q.id,
-                               q.queue_name,
-                               ROW_NUMBER() OVER (
-                                 PARTITION BY q.queue_name
-                                 ORDER BY q.next_delivery_ts, q.id
-                               ) AS rn
-                             FROM {:tableName} q
-                             JOIN queue_config cfg USING(queue_name)
-                             WHERE
-                                  q.is_dead_letter_message = FALSE
-                              AND q.is_being_delivered     = FALSE
-                              AND q.next_delivery_ts      <= :now
-                              AND (
-                                    -- Unordered candidate. Note there is deliberately no exclude_keys predicate
-                                    -- here: the key is NULL, so it can never match an excluded key, and
-                                    -- "NOT (q.key = ANY(cfg.exclude_keys))" would evaluate to NULL rather than
-                                    -- TRUE for every row whenever exclude_keys is non-empty, silently starving
-                                    -- all unordered messages on that queue.
-                                    q.key IS NULL
-                                 OR (
-                                      -- Ordered candidate: not currently in process, and first in line for its key
-                                      NOT (q.key = ANY(cfg.exclude_keys))
-                                      AND NOT EXISTS (
-                                        SELECT 1
-                                        FROM {:tableName} q2
-                                        WHERE q2.queue_name = q.queue_name
-                                          AND q2.key        = q.key
-                                          AND q2.key_order  < q.key_order
-                                      )
-                                    )
-                              )
-                           ),
-
-                           -- 3) Take at most cfg.slots per queue *without locking*
+                       --    Ordered and unordered candidates share one LIMIT so that the slot limit caps the TOTAL
+                       --    number of messages handed to a queue; limiting them separately would allow a queue to be
+                       --    handed up to 2x its available worker slots. Each part is limited on its own first, which
+                       --    changes nothing - the cfg.slots oldest of the union are among the cfg.slots oldest of each
+                       --    part - but lets the unordered part stop after cfg.slots rows of its index.
+                       --
+                       --    The statement used to number every eligible message of every queue in one ROW_NUMBER()
+                       --    window and keep the first cfg.slots of each, so a poll sorted the whole backlog and probed
+                       --    the per-key barrier for every eligible ordered message: 90 to 110 ms per poll at two queues
+                       --    of 20 000 messages, 26 to 39 ms now (BatchedClaimCostBenchmarkIT).
                            candidates AS (
                              SELECT c.id
-                             FROM candidates_rn c
-                             JOIN queue_config cfg
-                               ON c.queue_name = cfg.queue_name
-                             WHERE c.rn <= cfg.slots
+                             FROM queue_config cfg
+                             CROSS JOIN LATERAL (
+                               SELECT u.id
+                               FROM (
+                                 -- Unordered candidates. Note there is deliberately no exclude_keys predicate here:
+                                 -- the key is NULL, so it can never match an excluded key, and
+                                 -- "NOT (q.key = ANY(cfg.exclude_keys))" would evaluate to NULL rather than TRUE for
+                                 -- every row whenever exclude_keys is non-empty, silently starving all unordered
+                                 -- messages on that queue.
+                                 (SELECT q.id, q.next_delivery_ts
+                                  FROM {:tableName} q
+                                  WHERE q.queue_name             = cfg.queue_name
+                                    AND q.key IS NULL
+                                    AND q.is_dead_letter_message = FALSE
+                                    AND q.is_being_delivered     = FALSE
+                                    AND q.next_delivery_ts      <= :now
+                                  ORDER BY q.next_delivery_ts, q.id
+                                  LIMIT cfg.slots)
+                                 UNION ALL
+                                 -- Ordered candidates: the head of each key that is not currently in process. A
+                                 -- key's head is its lowest key_order over every message of the key, dead letters
+                                 -- and messages being delivered included - the same full per-key barrier as the
+                                 -- per-queue claims - and is only a candidate when it is itself eligible.
+                                 --
+                                 -- The heads are found in one pass over the queue's ordered messages, rather than by
+                                 -- walking the eligible messages oldest first and probing each for an earlier message
+                                 -- of its key: no index orders ordered messages by next_delivery_ts, so that walk
+                                 -- cannot stop early and probes every eligible message. The recursive per-key head scan
+                                 -- of buildOrderedHeadScanSqlStatement would be cheaper for a few long keys, but its
+                                 -- plan depends on the table statistics: analyzed while drained, it reads the whole
+                                 -- queue once per key.
+                                 --
+                                 -- The pass has no join on purpose. Finding each key's lowest key_order first and
+                                 -- joining the heads back to the table on (queue_name, key, key_order) is cheaper with
+                                 -- fresh statistics, but a table analyzed while drained had that join planned as a
+                                 -- nested loop comparing every head with every message of the queue: 5 to 15 s per poll
+                                 -- at 2 000 keys x 10 messages, also with the eligibility checks fenced off the join.
+                                 (SELECT o.id, o.next_delivery_ts
+                                  FROM (SELECT q.id, q.next_delivery_ts, q.key_order, q.is_dead_letter_message, q.is_being_delivered,
+                                               min(q.key_order) OVER (PARTITION BY q.key) AS head_key_order
+                                        FROM {:tableName} q
+                                        WHERE q.queue_name = cfg.queue_name
+                                          AND q.key IS NOT NULL
+                                          AND NOT (q.key = ANY(cfg.exclude_keys))) o
+                                  WHERE o.key_order              = o.head_key_order
+                                    AND o.is_dead_letter_message = FALSE
+                                    AND o.is_being_delivered     = FALSE
+                                    AND o.next_delivery_ts      <= :now
+                                  ORDER BY o.next_delivery_ts, o.id
+                                  LIMIT cfg.slots)
+                               ) u
+                               ORDER BY u.next_delivery_ts, u.id
+                               LIMIT cfg.slots
+                             ) c
                            ),
 
-                           -- 4) Now lock exactly those durable_queues rows
+                           -- 3) Now lock exactly those durable_queues rows
                            --
-                           --    is_being_delivered is re-checked here on purpose. Under READ COMMITTED the
+                           --    The rows are selected by primary-key array, never by joining the candidates - see
+                           --    buildUnorderedSqlStatement(). Joined, a table analyzed while drained is planned as a
+                           --    nested loop comparing every candidate with every row of the queue. ARRAY(...) is
+                           --    evaluated once, so the candidate set is fixed before any row is locked.
+                           --
+                           --    The eligibility predicates are re-checked here on purpose. Under READ COMMITTED the
                            --    candidate CTE above runs against the statement snapshot, so a competing consumer
-                           --    may have claimed a row in between. Repeating the predicate on the locking scan
-                           --    makes Postgres re-evaluate it against the freshly locked row version and drop
-                           --    rows that were claimed in the meantime.
+                           --    may have claimed a row in between - and may even have released it again as a retry
+                           --    or a dead letter. Repeating the predicates on the locking scan makes Postgres
+                           --    re-evaluate them against the freshly locked row version and drop rows that are no
+                           --    longer eligible.
                            locked AS (
                              SELECT q.id
                              FROM {:tableName} q
-                             JOIN candidates c
-                               ON q.id = c.id
-                             WHERE q.is_being_delivered = FALSE
+                             WHERE q.id = ANY(ARRAY(SELECT id FROM candidates))
+                               AND q.is_dead_letter_message = FALSE
+                               AND q.is_being_delivered     = FALSE
+                               AND q.next_delivery_ts      <= :now
                              FOR UPDATE SKIP LOCKED
                            )
 
-                         -- 5) Finally, update & return the locked rows
+                         -- 4) Finally, update & return the locked rows, again by primary-key array
                          UPDATE {:tableName} dq
                          SET
                            total_attempts     = dq.total_attempts + 1,
                            next_delivery_ts   = NULL,
                            is_being_delivered = TRUE,
                            delivery_ts        = :now
-                         FROM locked l
-                         WHERE dq.id = l.id
+                         WHERE dq.id = ANY(ARRAY(SELECT id FROM locked))
                          RETURNING dq.*;
                        """,
                        arg("tableName", sharedQueueTableName),
@@ -595,6 +692,24 @@ public class DurableQueuesSql {
                     is_being_delivered = FALSE,
                     delivery_ts = NULL
                     WHERE id = :id
+                    RETURNING *
+                    """,
+                    arg("tableName", sharedQueueTableName));
+    }
+
+    /**
+     * SQL statement for releasing a message that is being delivered but never reached a message handler.
+     * Unlike {@link #getRetryMessageSql()} it leaves {@code redelivery_attempts} and {@code last_delivery_error} untouched.
+     *
+     * @return SQL statement for releasing an undelivered message
+     */
+    public String getReleaseUndeliveredMessageSql() {
+        return bind("""
+                    UPDATE {:tableName} SET
+                    next_delivery_ts = :nextDeliveryTimestamp,
+                    is_being_delivered = FALSE,
+                    delivery_ts = NULL
+                    WHERE id = :id AND is_being_delivered
                     RETURNING *
                     """,
                     arg("tableName", sharedQueueTableName));

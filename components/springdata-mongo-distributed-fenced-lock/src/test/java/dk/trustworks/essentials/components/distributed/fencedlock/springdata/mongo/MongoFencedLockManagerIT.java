@@ -20,7 +20,7 @@ import dk.trustworks.essentials.components.foundation.test.fencedlock.DBFencedLo
 import dk.trustworks.essentials.components.foundation.transaction.spring.mongo.SpringMongoTransactionAwareUnitOfWorkFactory;
 import dk.trustworks.essentials.components.foundation.test.EssentialsTestContainers;
 import org.bson.Document;
-import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.data.mongodb.test.autoconfigure.DataMongoTest;
 import org.springframework.data.mongodb.*;
@@ -44,6 +44,22 @@ class MongoFencedLockManagerIT extends DBFencedLockManagerIT<MongoFencedLockMana
     @DynamicPropertySource
     static void setProperties(DynamicPropertyRegistry registry) {
         registry.add("spring.mongodb.uri", mongoDBContainer::getReplicaSetUrl);
+    }
+
+    /**
+     * {@code verify_loosing_db_connection_no_locks_are_released} pauses the database while a lock confirmation is in flight.
+     * A commit that fails during the pause can leave its write in a transaction the server holds open - with the lock
+     * document write-locked, so node 2's acquire and the next test's {@code deleteAllLocksInDB} get a WriteConflict -
+     * until transactionLifetimeLimitSeconds (60 s by default) aborts it. Shortened here, as in
+     * {@link MongoFencedLockManager_MultiNode_ReleaseLockIT}, so the test does not wait out a minute.
+     */
+    @BeforeAll
+    static void shortenAbandonedTransactionLifetime() throws Exception {
+        var result = mongoDBContainer.execInContainer("mongosh", "--quiet", "--eval",
+                                                      "db.adminCommand({setParameter: 1, transactionLifetimeLimitSeconds: 2}).ok");
+        if (result.getExitCode() != 0 || !result.getStdout().trim().equals("1")) {
+            throw new IllegalStateException("Failed to set transactionLifetimeLimitSeconds: " + result.getStdout() + result.getStderr());
+        }
     }
 
     @Autowired

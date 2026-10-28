@@ -17,25 +17,22 @@
 package dk.trustworks.essentials.components.foundation.postgresql;
 
 import tools.jackson.databind.json.JsonMapper;
-import dk.trustworks.essentials.components.foundation.IOExceptionUtil;
 import dk.trustworks.essentials.components.foundation.json.*;
 import dk.trustworks.essentials.components.foundation.lifecycle.*;
 import dk.trustworks.essentials.components.foundation.postgresql.ListenNotify.SqlOperation;
 import dk.trustworks.essentials.reactive.EventBus;
 import dk.trustworks.essentials.shared.Lifecycle;
-import dk.trustworks.essentials.shared.concurrent.ThreadFactoryBuilder;
 import org.jdbi.v3.core.*;
 import org.postgresql.*;
 import org.postgresql.core.Notification;
 import org.slf4j.*;
+import org.slf4j.event.Level;
 
 import java.io.Closeable;
 import java.sql.*;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
-import java.util.concurrent.atomic.*;
-import java.util.function.Consumer;
 import java.util.stream.*;
 
 import static dk.trustworks.essentials.components.foundation.postgresql.ListenNotify.resolveTableChangeChannelName;
@@ -49,13 +46,13 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  * {@link MultiTableChangeListener} should typically be started/stopped using the {@link Lifecycle} methods, BUT it can also be used with try/using:<br>
  * Example:
  * <pre>{@code
- * try (var listener = new MultiTableChangeListener<SomeNotification>(
- *                 jdbi,
- *                 pollInterval,
- *                 jsonSerializer,
- *                 eventBus,
- *                 false
- *         )) {
+ * try (MultiTableChangeListener<SomeNotification> listener = MultiTableChangeListener.builder()
+ *                 .setJdbi(jdbi)
+ *                 .setPollingInterval(pollInterval)
+ *                 .setJsonSerializer(jsonSerializer)
+ *                 .setEventBus(eventBus)
+ *                 .setFilterDuplicateNotifications(false)
+ *                 .build()) {
  *             listener.listenToNotificationsFor("SomeTable", SomeNotification.class));
  *             ....
  *         }
@@ -73,42 +70,161 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  * To mitigate the risk of SQL injection attacks, external or untrusted inputs should never directly provide the table/column name values.<br>
  * <b>Failure to adequately sanitize and validate this value could expose the application to SQL injection
  * vulnerabilities, compromising the security and integrity of the database.</b>
+ * <p>
+ * <u>The LISTEN connection</u><br>
+ * A LISTEN lasts as long as its database session, so the listener holds one connection open for as long as it polls.
+ * It is opened from the {@link Jdbi} given to the listener, i.e. normally borrowed from the application's pool - or
+ * from a connection source of its own, see {@link MultiTableChangeListenerBuilder#setListenerDataSource(javax.sql.DataSource)}.
+ * <ul>
+ *     <li>Every {@link MultiTableChangeListenerBuilder#setLivenessCheckInterval(Duration) liveness-check interval}
+ *     (default {@link #DEFAULT_LIVENESS_CHECK_INTERVAL}) the connection is probed with {@link Connection#isValid(int)}:
+ *     a non-blocking read for notifications never fails on a half-open connection, so without the probe a listener whose
+ *     peer has silently gone would receive nothing, for ever, with no error.</li>
+ *     <li>A lost connection is reported at WARN, at most once per {@link #DEFAULT_CONNECTION_LOSS_LOG_INTERVAL} - both
+ *     adjustable on the {@link MultiTableChangeListenerBuilder} - (the
+ *     failures in between are counted, and logged at DEBUG), and a new connection is opened on the next poll. A new
+ *     connection LISTENs to <b>every</b> registered table again. Notifications sent while no connection was listening are
+ *     lost: delivery is at most once, so a consumer must not depend on receiving every notification.</li>
+ *     <li>{@link #stop()} closes the connection after an {@code UNLISTEN *}, so a pooled connection goes back to its pool
+ *     without LISTENs; {@link #start()} opens a new one and LISTENs to every registered table again.</li>
+ * </ul>
+ * <u>Lifecycle</u><br>
+ * Polling starts in {@link #start()}. A listener that is never started through {@link Lifecycle} (the try-with-resources
+ * example above) starts polling the first time a table is registered, and stops on {@link #close()}.
  */
 public final class MultiTableChangeListener<T extends TableChangeNotification> implements Lifecycle, ShutdownAware, Closeable {
     private static final Logger log = LoggerFactory.getLogger(MultiTableChangeListener.class);
 
     /**
+     * Default interval between two {@link Connection#isValid(int)} probes of the LISTEN connection
+     */
+    public static final Duration DEFAULT_LIVENESS_CHECK_INTERVAL      = Duration.ofSeconds(10);
+    /**
+     * Default minimum interval between two connection-loss reports at the connection-loss log level; failures in between
+     * are counted and logged at DEBUG
+     */
+    public static final Duration DEFAULT_CONNECTION_LOSS_LOG_INTERVAL = Duration.ofMinutes(1);
+    /**
+     * Default name of the poll thread
+     */
+    public static final String   DEFAULT_POLL_THREAD_NAME             = "MultiTableChangeListener";
+
+    /**
+     * Upper bound, in seconds, of how long one {@link Connection#isValid(int)} probe may wait for the database
+     */
+    private static final int      MAX_LIVENESS_CHECK_TIMEOUT_SECONDS = 5;
+    /**
+     * Network timeout set on the LISTEN connection, so a {@code LISTEN}/{@code UNLISTEN} on a half-open connection fails
+     * instead of blocking the caller - and every other user of the connection - for ever (pgjdbc's default is no timeout)
+     */
+    private static final Duration LISTEN_CONNECTION_NETWORK_TIMEOUT = Duration.ofSeconds(10);
+    private static final Duration POLL_THREAD_TERMINATION_TIMEOUT   = Duration.ofSeconds(5);
+
+    private final Jdbi                       listenerJdbi;
+    private final Duration                   pollingInterval;
+    private final JSONSerializer             jsonSerializer;
+    private final EventBus                   eventBus;
+    private final boolean                    filterDuplicateNotifications;
+    private final ChannelDeduplicationPolicy channelDeduplicationPolicy;
+    private final Duration                   livenessCheckInterval;
+    private final Level                      connectionLossLogLevel;
+    private final Duration                   connectionLossLogInterval;
+    private final String                     pollThreadName;
+    private final NotificationFilterChain    notificationFilterChain;
+    /**
+     * Key: The channel name, i.e. the table name normalised by {@link ListenNotify#resolveTableChangeChannelName(String)} (lower case)<br>
+     * Value: The {@link TableChangeNotification} subclass that the notification string payload should be mapped to using the {@link #jsonSerializer}
+     */
+    private final ConcurrentMap<String, Class<? extends T>> listenForNotificationsRelatedToTables = new ConcurrentHashMap<>();
+
+    // -- Lifecycle and polling state - guarded by this -------------------------------------------------------------------
+    private volatile boolean                  started;
+    /**
+     * Set by {@link #start()}. A listener that is never started through {@link Lifecycle} starts polling on its first
+     * {@link #listenToNotificationsFor(String, Class)}, as it always did - see {@link #startPollingIfNotLifecycleManaged()}
+     */
+    private          boolean                  lifecycleManaged;
+    private          boolean                  closed;
+    /**
+     * True while the poll loop runs. The LISTEN connection is only ever opened while it is true, so a poll that was already
+     * running when {@link #stop()} closed the connection cannot open a new one behind its back
+     */
+    private volatile boolean                  pollingActive;
+    private          ScheduledExecutorService executorService;
+    private          ScheduledFuture<?>       pollTask;
+    /**
+     * Bumped by every {@link #detachPolling()}, under {@code this}; volatile, because the connection code reads it under
+     * {@code connectionLock} alone. Each poll task carries the value it was scheduled with, and each LISTEN connection the
+     * value it was opened in ({@link #handleGeneration}): a poll of a stopped generation that is still in flight must not
+     * use - or, failing, close - the connection a later {@link #start()} opened, and a stop closes only connections of the
+     * generations it ended
+     */
+    private volatile long                     pollGeneration;
+    /**
      * Set once the application is shutting down: polling has been cancelled and {@code UNLISTEN} is skipped - see
      * {@link #shutdownStarting(ShutdownContext)}
      */
-    private volatile ShutdownContext shutdown;
+    private volatile ShutdownContext          shutdown;
 
-    private final Jdbi                                      jdbi;
-    private final Duration                                  pollingInterval;
-    private final JSONSerializer                            jsonSerializer;
-    private final EventBus                                  eventBus;
+    // -- Connection state - guarded by connectionLock --------------------------------------------------------------------
+    private final Object       connectionLock   = new Object();
+    private       Handle       handle;
     /**
-     * Key: The table name<br>
-     * Value: The {@link TableChangeNotification} subclass that the notification string payload should be mapped to using the {@link #jsonSerializer}
+     * The {@link #pollGeneration} {@link #handle} was opened in. A handle of an older generation belongs to a stopped run:
+     * the {@link #stop()} that ended it closes it, and nothing of a later generation uses it
      */
-    private final ConcurrentMap<String, Class<? extends T>> listenForNotificationsRelatedToTables;
-    private final AtomicReference<Handle>                   handleReference;
-    private       ScheduledExecutorService                  executorService;
-    private volatile ScheduledFuture<?>                     scheduledFuture;
-    private final boolean                                   filterDuplicateNotifications;
-    private final NotificationFilterChain                   notificationFilterChain;
-    private volatile boolean started;
+    private       long         handleGeneration;
+    /**
+     * Connections of a stopped run that a later generation found still set and took out of {@link #handle} before the
+     * {@link #stop()} that ended the run got to them; that stop - or any later one - closes them
+     */
+    private final List<Handle> retiredHandles   = new ArrayList<>();
+    private       long         lastLivenessCheckNanos;
+    private       boolean      connectionLossReported;
+    private       boolean      anyConnectionLossLogged;
+    private       long         lastConnectionLossLoggedNanos;
+    private       long         connectionLossesSinceLastReport;
 
+    /**
+     * Create a {@link MultiTableChangeListener} that takes its LISTEN connection from {@code jdbi}, probes it every
+     * {@link #DEFAULT_LIVENESS_CHECK_INTERVAL} and reports a lost connection at WARN at most once per
+     * {@link #DEFAULT_CONNECTION_LOSS_LOG_INTERVAL}.<br>
+     * {@link #builder()} offers every other option - a connection source of its own, the liveness-check interval, the
+     * connection-loss logging, the per-channel de-duplication policy and the poll thread name.
+     *
+     * @param jdbi                         the {@link Jdbi} the LISTEN connection is opened from
+     * @param pollingInterval              how often the LISTEN connection is polled for notifications
+     * @param jsonSerializer               the serializer that maps each notification payload to its {@link TableChangeNotification} type
+     * @param eventBus                     the {@link EventBus} the notifications are published on
+     * @param filterDuplicateNotifications whether duplicate notifications within one poll are filtered - see {@link #addDuplicationFilterAsFirst(NotificationDuplicationFilter)}
+     */
     public MultiTableChangeListener(Jdbi jdbi,
                                     Duration pollingInterval,
                                     JSONSerializer jsonSerializer,
                                     EventBus eventBus,
                                     boolean filterDuplicateNotifications) {
-        this.jdbi = requireNonNull(jdbi, "No jdbi provided");
-        this.pollingInterval = requireNonNull(pollingInterval, "No pollingInterval provided");
-        this.jsonSerializer = requireNonNull(jsonSerializer, "No jsonSerializer provided");
-        this.eventBus = requireNonNull(eventBus, "No localEventBus instance provided");
-        this.filterDuplicateNotifications = filterDuplicateNotifications;
+        this(builder().setJdbi(requireNonNull(jdbi, "No jdbi provided"))
+                      .setPollingInterval(requireNonNull(pollingInterval, "No pollingInterval provided"))
+                      .setJsonSerializer(requireNonNull(jsonSerializer, "No jsonSerializer provided"))
+                      .setEventBus(requireNonNull(eventBus, "No localEventBus instance provided"))
+                      .setFilterDuplicateNotifications(filterDuplicateNotifications));
+    }
+
+    /**
+     * Use {@link MultiTableChangeListenerBuilder#build()}
+     */
+    MultiTableChangeListener(MultiTableChangeListenerBuilder builder) {
+        requireNonNull(builder, "No builder provided");
+        this.listenerJdbi = builder.listenConnectionJdbi();
+        this.pollingInterval = builder.pollingInterval();
+        this.jsonSerializer = builder.jsonSerializer();
+        this.eventBus = builder.eventBus();
+        this.filterDuplicateNotifications = builder.filterDuplicateNotifications();
+        this.channelDeduplicationPolicy = builder.channelDeduplicationPolicy();
+        this.livenessCheckInterval = builder.livenessCheckInterval();
+        this.connectionLossLogLevel = builder.connectionLossLogLevel();
+        this.connectionLossLogInterval = builder.connectionLossLogInterval();
+        this.pollThreadName = builder.pollThreadName();
         if (jsonSerializer instanceof Jackson3JSONSerializer jackson3JSONSerializer) {
             this.notificationFilterChain = new NotificationFilterChain(jackson3JSONSerializer.getObjectMapper());
         } else {
@@ -116,16 +232,26 @@ public final class MultiTableChangeListener<T extends TableChangeNotification> i
             // mapper configuration: a plain mapper is enough for any other JSONSerializer implementation.
             this.notificationFilterChain = new NotificationFilterChain(JsonMapper.builder().build());
         }
-        listenForNotificationsRelatedToTables = new ConcurrentHashMap<>();
-        handleReference = new AtomicReference<>();
-        executorService = Executors.newSingleThreadScheduledExecutor(ThreadFactoryBuilder.builder()
-                                                                                         .nameFormat("MultiTableChangeListener")
-                                                                                         .daemon(true)
-                                                                                         .build());
-        scheduledFuture = executorService.scheduleAtFixedRate(this::pollForNotifications,
-                                                              pollingInterval.toMillis(),
-                                                              pollingInterval.toMillis(),
-                                                              TimeUnit.MILLISECONDS);
+    }
+
+    /**
+     * Create a {@link MultiTableChangeListenerBuilder}. Required: {@link MultiTableChangeListenerBuilder#setJdbi(Jdbi)},
+     * {@link MultiTableChangeListenerBuilder#setJsonSerializer(JSONSerializer)} and
+     * {@link MultiTableChangeListenerBuilder#setEventBus(EventBus)}:
+     * <pre>{@code
+     * MultiTableChangeListener<TableChangeNotification> listener = MultiTableChangeListener.builder()
+     *     .setJdbi(jdbi)
+     *     .setPollingInterval(Duration.ofMillis(100))
+     *     .setJsonSerializer(jsonSerializer)
+     *     .setEventBus(eventBus)
+     *     .setFilterDuplicateNotifications(true)
+     *     .build();
+     * }</pre>
+     *
+     * @return a new {@link MultiTableChangeListenerBuilder}
+     */
+    public static MultiTableChangeListenerBuilder builder() {
+        return new MultiTableChangeListenerBuilder();
     }
 
     public boolean isFilterDuplicateNotifications() {
@@ -150,10 +276,10 @@ public final class MultiTableChangeListener<T extends TableChangeNotification> i
      * The {@link NotificationDuplicationFilter}'s are used to extract unique keys from the {@link Notification#getParameter()}
      * JSON content.<br>
      * The key extracted from {@link NotificationDuplicationFilter#extractDuplicationKey(JsonNode)}
-     * will be used inside {@link MultiTableChangeListener} for duplication checks across all {@link Notification}'s
-     * returned in one poll.<br>
+     * will be used inside {@link MultiTableChangeListener} for duplication checks among the {@link Notification}'s that arrive on the same channel
+     * in one poll (since 0.60.1 duplicates are detected per channel, never across channels).<br>
      * If an empty {@link Optional} is returned then the given notification won't be deduplicated.<br>
-     * If two or more {@link Notification}'s in a given poll batch share the same duplication key, <b>AND {@link #isFilterDuplicateNotifications()} is true</b>,
+     * If two or more {@link Notification}'s on the same channel in a given poll batch share the same duplication key, <b>AND {@link #isFilterDuplicateNotifications()} is true</b>,
      * then only one of them will be published to the listeners registered with the {@link MultiTableChangeListener}<br>
      * <br>
      * Note: Only a single instance of a particular {@link NotificationDuplicationFilter},
@@ -171,10 +297,10 @@ public final class MultiTableChangeListener<T extends TableChangeNotification> i
      * The {@link NotificationDuplicationFilter}'s are used to extract unique keys from the {@link Notification#getParameter()}
      * JSON content.<br>
      * The key extracted from {@link NotificationDuplicationFilter#extractDuplicationKey(JsonNode)}
-     * will be used inside {@link MultiTableChangeListener} for duplication checks across all {@link Notification}'s
-     * returned in one poll.<br>
+     * will be used inside {@link MultiTableChangeListener} for duplication checks among the {@link Notification}'s that arrive on the same channel
+     * in one poll (since 0.60.1 duplicates are detected per channel, never across channels).<br>
      * If an empty {@link Optional} is returned then the given notification won't be deduplicated.<br>
-     * If two or more {@link Notification}'s in a given poll batch share the same duplication key, <b>AND {@link #isFilterDuplicateNotifications()} is true</b>,
+     * If two or more {@link Notification}'s on the same channel in a given poll batch share the same duplication key, <b>AND {@link #isFilterDuplicateNotifications()} is true</b>,
      * then only one of them will be published to the listeners registered with the {@link MultiTableChangeListener}<br>
      * <br>
      * Note: Only a single instance of a particular {@link NotificationDuplicationFilter},
@@ -218,9 +344,25 @@ public final class MultiTableChangeListener<T extends TableChangeNotification> i
     public MultiTableChangeListener listenToNotificationsFor(String tableName, Class<? extends T> tableNotificationType) {
         requireNonBlank(tableName, "No tableName was provided");
         requireNonNull(tableNotificationType, "No tableNotificationType was provided");
-        PostgresqlUtil.checkIsValidTableOrColumnName(tableName);
-        if (listenForNotificationsRelatedToTables.put(tableName, tableNotificationType) == null) {
-            listen(tableName);
+        var channel = resolveTableChangeChannelName(tableName);
+        if (listenForNotificationsRelatedToTables.put(channel, tableNotificationType) == null) {
+            log.info("Setting up Table change LISTENER for '{}'", tableName);
+            startPollingIfNotLifecycleManaged();
+            synchronized (connectionLock) {
+                var generation = pollGeneration;
+                try {
+                    var connection = currentConnection(generation);
+                    if (connection == null) {
+                        // A new connection LISTENs to every registered channel, this one included
+                        openConnectionIfNeeded(generation);
+                    } else {
+                        connection.execute("LISTEN " + channel);
+                    }
+                } catch (Throwable e) {
+                    rethrowIfCriticalError(e);
+                    connectionFailed(msg("adding the LISTEN for '{}'", channel), e);
+                }
+            }
         }
         return this;
     }
@@ -252,236 +394,113 @@ public final class MultiTableChangeListener<T extends TableChangeNotification> i
      */
     public MultiTableChangeListener unlistenToNotificationsFor(String tableName) {
         requireNonBlank(tableName, "No tableName was provided");
-        PostgresqlUtil.checkIsValidTableOrColumnName(tableName);
-        if (listenForNotificationsRelatedToTables.remove(tableName) != null) {
-            unlisten(tableName);
+        var channel = resolveTableChangeChannelName(tableName);
+        if (listenForNotificationsRelatedToTables.remove(channel) != null) {
+            if (shutdown != null) {
+                log.debug("Shutting down - not issuing UNLISTEN for '{}', the LISTEN ends with the session", tableName);
+                return this;
+            }
+            log.info("Removing table change LISTENER for '{}'", tableName);
+            synchronized (connectionLock) {
+                // Never open a connection just to UNLISTEN: a new session listens to nothing
+                if (handle != null) {
+                    try {
+                        handle.execute("UNLISTEN " + channel);
+                    } catch (Throwable e) {
+                        rethrowIfCriticalError(e);
+                        connectionFailed(msg("removing the LISTEN for '{}'", channel), e);
+                    }
+                }
+            }
         }
         return this;
     }
 
-    private void listen(String tableName) {
-        requireNonBlank(tableName, "No tableName provided");
-        log.info("Setting up Table change LISTENER for '{}'", tableName);
-        PostgresqlUtil.checkIsValidTableOrColumnName(tableName);
-        try {
-            getHandle(null).execute("LISTEN " + resolveTableChangeChannelName(tableName));
-        } catch (Exception e) {
-            if (IOExceptionUtil.isIOException(e)) {
-                log.debug("Failed to add change listener for table '{}'", tableName, e);
-            } else {
-                throw new RuntimeException(msg("Failed to add change listener for table '{}'", tableName), e);
+    /**
+     * Stops the poll loop and makes {@code UNLISTEN} a no-op from here on. A {@code LISTEN} lasts only as long as its
+     * database session, so it ends with the connection anyway, and the database may already be unreachable.
+     */
+    @Override
+    public void shutdownStarting(ShutdownContext shutdown) {
+        this.shutdown = requireNonNull(shutdown, "No shutdown provided");
+        synchronized (this) {
+            pollingActive = false;
+            if (pollTask != null) {
+                pollTask.cancel(true);
+            }
+        }
+    }
+
+    // -- Lifecycle -------------------------------------------------------------------------------------------------------
+
+    /**
+     * Starts polling for notifications. When it returns, every table registered with
+     * {@link #listenToNotificationsFor(String, Class)} is LISTENed to, provided the database can be reached; if it cannot,
+     * the poll loop keeps trying.<br>
+     * Idempotent, and {@link #stop()} followed by {@link #start()} resumes.
+     */
+    @Override
+    public void start() {
+        long generation;
+        synchronized (this) {
+            lifecycleManaged = true;
+            if (started) {
+                return;
+            }
+            log.info("Starting MultiTableChangeListener");
+            started = true;
+            startPolling();
+            generation = pollGeneration;
+        }
+        openListenConnectionOutsideMonitor(generation);
+    }
+
+    /**
+     * Opens the LISTEN connection of a just started run, under {@code connectionLock} alone: borrowing a pooled connection
+     * can take as long as the pool's connection timeout, and a {@link #listenToNotificationsFor(String, Class)} that is
+     * already borrowing holds the lock, so waiting for it inside the monitor would block
+     * {@link #shutdownStarting(ShutdownContext)}. {@code generation} was read under the monitor; if a stop has ended the run
+     * since, {@link #openConnectionIfNeeded(long)} finds polling inactive and opens nothing.
+     */
+    private void openListenConnectionOutsideMonitor(long generation) {
+        if (listenForNotificationsRelatedToTables.isEmpty()) {
+            return;
+        }
+        synchronized (connectionLock) {
+            if (generation != pollGeneration) {
+                // A stop ended the run this start belongs to: opening a connection stamped with the stale generation would leak it
+                return;
+            }
+            try {
+                openConnectionIfNeeded(generation);
+            } catch (Throwable e) {
+                rethrowIfCriticalError(e);
+                connectionFailed("opening the LISTEN connection", e);
             }
         }
     }
 
     /**
-     * Stops the poll loop, which otherwise reconnects and re-issues {@code LISTEN} for every table on each tick against a
-     * database that may be gone, and makes {@code UNLISTEN} a no-op from here on. A {@code LISTEN} lasts only as long as
-     * its database session, so it ends with the connection anyway - while each {@code UNLISTEN} after a failed poll had to
-     * open a new connection first, one connection timeout per table when the database is unreachable.
+     * Stops polling and closes the LISTEN connection. The registered tables are kept, so a later {@link #start()}
+     * LISTENs to them again.<br>
+     * It waits for a {@link #listenToNotificationsFor(String, Class)} that is borrowing the connection from the pool, but
+     * not while holding the listener's monitor, and {@link #start()} opens its connection outside the monitor too, so
+     * {@link #shutdownStarting(ShutdownContext)} is not held up behind that wait.
      */
     @Override
-    public void shutdownStarting(ShutdownContext shutdown) {
-        this.shutdown = requireNonNull(shutdown, "No shutdown provided");
-        var future = scheduledFuture;
-        if (future != null) {
-            future.cancel(true);
-        }
-    }
-
-    private void unlisten(String tableName) {
-        requireNonBlank(tableName, "No tableName provided");
-        if (shutdown != null) {
-            log.debug("Shutting down - not issuing UNLISTEN for '{}', the LISTEN ends with the session", tableName);
-            return;
-        }
-        log.info("Removing table change LISTENER for '{}'", tableName);
-        PostgresqlUtil.checkIsValidTableOrColumnName(tableName);
-        try {
-            getHandle(null).execute("UNLISTEN " + resolveTableChangeChannelName(tableName));
-        } catch (Exception e) {
-            if (IOExceptionUtil.isIOException(e)) {
-                log.debug("Failed to unlisten table '{}'", tableName, e);
-            } else {
-                throw new RuntimeException(msg("Failed to unlisten table '{}'", tableName), e);
-            }
-        }
-    }
-
-    private Stream<PGNotification> filterDuplicateNotifications(PGNotification[] notifications) {
-        if (filterDuplicateNotifications && notifications.length > 1 && notificationFilterChain.hasDuplicationFilters()) {
-            var duplicationKeys       = new HashSet<String>();
-            var filteredNotifications = new ArrayList<PGNotification>();
-
-            for (var notification : notifications) {
-                var parameterJson  = notification.getParameter();
-                var duplicationKey = notificationFilterChain.extractDuplicationKey(parameterJson);
-                if (duplicationKey.isEmpty() || duplicationKeys.add(duplicationKey.get())) {
-                    filteredNotifications.add(notification);
-                }
-            }
-
-            int originalCount = notifications.length;
-            int filteredCount = filteredNotifications.size();
-            int reducedCount  = originalCount - filteredCount;
-            log.debug("Reduced notifications from {} to {} (reduction by {}). UniqueNames: {}", originalCount, filteredCount, reducedCount, duplicationKeys);
-
-            return filteredNotifications.stream();
-        }
-        return Arrays.stream(notifications);
-    }
-
-    private void pollForNotifications() {
-        log.trace("Polling for notifications related to {} tables: {}",
-                  listenForNotificationsRelatedToTables.size(),
-                  listenForNotificationsRelatedToTables.keySet());
-
-        if (scheduledFuture == null || scheduledFuture.isCancelled() || scheduledFuture.isDone()) {
-            log.trace("Skipping polling since scheduledFuture is missing, cancelled or done");
-            return;
-        }
-
-        if (listenForNotificationsRelatedToTables.isEmpty()) return;
-
-        Handle handle = null;
-        try {
-            handle = getHandle(handleCreated -> {
-                for (String tableName : listenForNotificationsRelatedToTables.keySet()) {
-                    try {
-                        listen(tableName);
-                    } catch (Exception e) {
-                        // Log as error to avoid breaking the scheduler
-                        log.error("Failed to add change listener for table '{}' during creation of new Handle", tableName, e);
-                    }
-                }
-            });
-
-            var connection    = handle.getConnection().unwrap(PGConnection.class);
-            var notifications = connection.getNotifications();
-            if (notifications.length > 0) {
-                AtomicLong notificationsPublished = new AtomicLong();
-                if (log.isDebugEnabled()) {
-                    log.debug("Received '{}' Notification(s) for tables: {}", notifications.length, Arrays.stream(notifications).map(PGNotification::getName).collect(Collectors.toSet()));
-                }
-                filterDuplicateNotifications(notifications)
-                        .map(notification -> {
-                            var payloadType = listenForNotificationsRelatedToTables.get(notification.getName());
-                            if (payloadType == null) {
-                                log.error(msg("Couldn't find a concrete {} type for notifications related to table '{}'",
-                                              TableChangeNotification.class.getSimpleName(),
-                                              notification.getName()));
-                                return null;
-                            }
-                            try {
-                                return jsonSerializer.deserialize(notification.getParameter(), payloadType);
-                            } catch (Throwable e) {
-                                rethrowIfCriticalError(e);
-                                log.error(msg("Failed to deserialize notification payload '{}' to concrete {} related to table '{}'",
-                                              notification.getParameter(),
-                                              payloadType.getName(),
-                                              notification.getName()),
-                                          e);
-                                return null;
-                            }
-                        })
-                        .filter(Objects::nonNull)
-                        .forEach(event -> {
-                            notificationsPublished.getAndIncrement();
-                            eventBus.publish(event);
-                        });
-                log.debug("Finished publishing '{}' Notification(s)", notificationsPublished.get());
-            } else {
-                log.trace("Didn't receive any Notifications");
-            }
-        } catch (Exception e) {
-            if (IOExceptionUtil.isIOException(e)) {
-                log.debug(msg("Failed while polling for notifications"),
-                          e);
-            } else {
-                log.error(msg("Failed while polling for notifications"),
-                          e);
-            }
-            try {
-                if (handle != null) {
-                    handle.close();
-                }
-            } catch (Exception ex) {
-                if (IOExceptionUtil.isIOException(e)) {
-                    log.debug(msg("Failed to close the polling listener Handle"),
-                              e);
-                } else {
-                    log.error(msg("Failed to close the polling listener Handle"),
-                              e);
-                }
-            } finally {
-                handleReference.set(null);
-            }
-        }
-    }
-
-    private synchronized Handle getHandle(Consumer<Handle> onHandleCreated) {
-        try {
-            var handle = handleReference.get();
-            if (handle == null) {
-                handleReference.set(handle = jdbi.open());
-                handle.getConnection().setAutoCommit(true);
-                handle.getConnection().setReadOnly(true);
-                handle.getConnection().setTransactionIsolation(Connection.TRANSACTION_READ_COMMITTED);
-                if (onHandleCreated != null) {
-                    onHandleCreated.accept(handle);
-                }
-            }
-            return handle;
-        } catch (SQLException e) {
-            throw new RuntimeException("Failed to acquire a Handle", e);
-        }
-    }
-
-    @Override
-    public void start() {
-        if (!started) {
-            log.info("Starting MultiTableChangeListener");
-            started = true;
-        }
-    }
-
-    @Override
     public void stop() {
-        if (started) {
-            stopListeners();
+        DetachedPolling detached;
+        synchronized (this) {
+            if (!started) {
+                return;
+            }
             started = false;
+            // Detached under the same monitor that start() takes, so a start() racing this stop() cannot find the old
+            // pollTask still set, skip scheduling, and then have it cancelled - started but not polling. The connection
+            // is not touched here: the generation bumped here keeps a racing start() off the old one
+            detached = detachPolling();
         }
-    }
-
-    private void stopListeners() {
-        log.info("Stopping MultiTableChangeListener");
-        try {
-            if (scheduledFuture != null) {
-                log.debug("Cancelling scheduledFuture");
-                scheduledFuture.cancel(true);
-                log.debug("Cancelled scheduledFuture");
-            }
-        } catch (Exception e) {
-            log.error("Failed to cancel scheduledFuture", e);
-        } finally {
-            scheduledFuture = null;
-        }
-
-        for (String tableName : listenForNotificationsRelatedToTables.keySet()) {
-            try {
-                unlisten(tableName);
-            } catch (Exception e) {
-                log.error("Failed to unlisten table '{}'", tableName, e);
-            }
-        }
-
-        if (executorService != null) {
-            log.debug("Shutting down scheduled executor service");
-            executorService.shutdownNow();
-            executorService = null;
-            log.debug("Shutdown Scheduled Executor service");
-        }
-        log.info("Stopped MultiTableChangeListener");
+        awaitPollThreadAndCloseConnection(detached);
     }
 
     @Override
@@ -491,10 +510,426 @@ public final class MultiTableChangeListener<T extends TableChangeNotification> i
 
     @Override
     public void close() {
-        if (started) {
-            log.info("Ignoring call to close as MultiTableChangeListener was started using Lifecycle methods");
+        DetachedPolling detached;
+        synchronized (this) {
+            if (started) {
+                log.info("Ignoring call to close as MultiTableChangeListener was started using Lifecycle methods");
+                return;
+            }
+            closed = true;
+            detached = detachPolling();
+        }
+        awaitPollThreadAndCloseConnection(detached);
+    }
+
+    /**
+     * A listener that is never started through {@link Lifecycle} - the try-with-resources usage in the class Javadoc - starts
+     * polling the first time a table is registered. Before 0.60.1 the constructor started polling, which made
+     * {@link #stop()} followed by {@link #start()} impossible to resume.
+     */
+    private void startPollingIfNotLifecycleManaged() {
+        synchronized (this) {
+            if (!lifecycleManaged && !closed && pollTask == null && shutdown == null) {
+                log.debug("Not started through Lifecycle - starting to poll on the first table registration");
+                startPolling();
+            }
+        }
+    }
+
+    /**
+     * Caller holds {@code this}. Only bookkeeping: the LISTEN connection is opened by the caller after it has released the
+     * monitor, see {@link #openListenConnectionOutsideMonitor(long)}
+     */
+    private void startPolling() {
+        if (pollTask != null) {
+            return;
+        }
+        if (shutdown != null) {
+            log.debug("Shutting down - not starting to poll");
+            return;
+        }
+        pollingActive = true;
+        executorService = Executors.newSingleThreadScheduledExecutor(runnable -> {
+            var thread = new Thread(runnable, pollThreadName);
+            thread.setDaemon(true);
+            return thread;
+        });
+        var generation = pollGeneration;
+        pollTask = executorService.scheduleWithFixedDelay(() -> pollForNotifications(generation),
+                                                          pollingInterval.toMillis(),
+                                                          pollingInterval.toMillis(),
+                                                          TimeUnit.MILLISECONDS);
+    }
+
+    /**
+     * What one {@link #stop()}/{@link #close()} took away from the listener under the monitor, for
+     * {@link #awaitPollThreadAndCloseConnection(DetachedPolling)} to shut down outside it
+     *
+     * @param executor   the poll executor, {@code null} if polling was never scheduled
+     * @param generation the {@link #pollGeneration} the stop started: every LISTEN connection opened in an older one
+     *                   belongs to the run it ended
+     */
+    private record DetachedPolling(ScheduledExecutorService executor, long generation) {
+    }
+
+    /**
+     * Caller holds {@code this} - and only the bookkeeping happens here: cancel the poll task, take the executor and bump
+     * {@link #pollGeneration}. The LISTEN connection is taken under {@code connectionLock} by
+     * {@link #awaitPollThreadAndCloseConnection(DetachedPolling)}, after the monitor is released: a
+     * {@link #listenToNotificationsFor(String, Class)} holds {@code connectionLock} while it borrows a connection from the
+     * pool, which can take as long as the pool's connection timeout, and waiting for that inside the monitor would block
+     * every other {@code synchronized} section of the listener - {@link #shutdownStarting(ShutdownContext)} included.<br>
+     * A {@link #start()} that runs before the stop has finished schedules its own poll task. The bumped generation keeps
+     * it off the old connection: it opens - and keeps - its own, and the stop closes only connections of the generations
+     * it ended.<br>
+     * The poll task is cancelled with an interrupt, so a poll holding {@code connectionLock} is interrupted before the stop
+     * waits for the lock (its connection work is bounded by the network timeout and the liveness-probe timeout anyway). A
+     * poll that is past its connection work keeps running on the detached executor; {@link #pollGeneration} keeps it off
+     * the connection of a later {@link #start()}.
+     */
+    private DetachedPolling detachPolling() {
+        log.info("Stopping MultiTableChangeListener");
+        pollingActive = false;
+        if (pollTask != null) {
+            pollTask.cancel(true);
+            pollTask = null;
+        }
+        var executor = executorService;
+        executorService = null;
+        return new DetachedPolling(executor, ++pollGeneration);
+    }
+
+    /**
+     * Outside the monitor: taking the connection, waiting for the poll thread and closing the connection can all block.
+     * It closes only connections opened before the stop's generation - never one a {@link #start()} that ran meanwhile
+     * opened, so that start keeps the connection it opened and LISTENs on, the guarantee its Javadoc gives
+     */
+    private void awaitPollThreadAndCloseConnection(DetachedPolling detached) {
+        List<Handle> detachedHandles;
+        synchronized (connectionLock) {
+            retireConnectionIfOlderThan(detached.generation());
+            detachedHandles = List.copyOf(retiredHandles);
+            retiredHandles.clear();
+        }
+        var executor = detached.executor();
+        if (executor != null) {
+            executor.shutdownNow();
+            try {
+                if (!executor.awaitTermination(POLL_THREAD_TERMINATION_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)) {
+                    log.debug("The poll thread did not finish within {}", POLL_THREAD_TERMINATION_TIMEOUT);
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
+        detachedHandles.forEach(this::closeConnection);
+        log.info("Stopped MultiTableChangeListener");
+    }
+
+    // -- Polling ---------------------------------------------------------------------------------------------------------
+
+    private void pollForNotifications(long generation) {
+        if (!pollingActive) {
+            log.trace("Skipping polling since polling has stopped");
+            return;
+        }
+        if (listenForNotificationsRelatedToTables.isEmpty()) return;
+        log.trace("Polling for notifications related to {} tables: {}",
+                  listenForNotificationsRelatedToTables.size(),
+                  listenForNotificationsRelatedToTables.keySet());
+
+        PGNotification[] notifications;
+        synchronized (connectionLock) {
+            if (generation != pollGeneration) {
+                log.trace("Skipping polling since this poll task was stopped");
+                return;
+            }
+            try {
+                var connection = openConnectionIfNeeded(generation);
+                if (connection == null) {
+                    return;
+                }
+                probeLivenessIfDue(connection);
+                notifications = connection.getConnection().unwrap(PGConnection.class).getNotifications();
+            } catch (Throwable e) {
+                rethrowIfCriticalError(e);
+                connectionFailed("polling for notifications", e);
+                return;
+            }
+        }
+
+        if (notifications == null || notifications.length == 0) {
+            log.trace("Didn't receive any Notifications");
+            return;
+        }
+        if (log.isDebugEnabled()) {
+            log.debug("Received '{}' Notification(s) for tables: {}", notifications.length, Arrays.stream(notifications).map(PGNotification::getName).collect(Collectors.toSet()));
+        }
+        var notificationsPublished = 0;
+        for (var notification : filterDuplicateNotifications(notifications).toList()) {
+            var event = deserialize(notification);
+            if (event == null) {
+                continue;
+            }
+            try {
+                eventBus.publish(event);
+                notificationsPublished++;
+            } catch (Throwable e) {
+                rethrowIfCriticalError(e);
+                log.error(msg("Failed to publish notification related to table '{}'", notification.getName()), e);
+            }
+        }
+        log.debug("Finished publishing '{}' Notification(s)", notificationsPublished);
+    }
+
+    private T deserialize(PGNotification notification) {
+        var payloadType = listenForNotificationsRelatedToTables.get(channelNameOf(notification));
+        if (payloadType == null) {
+            // Notifications already buffered when the table was unlistened
+            log.debug("Ignoring a notification on channel '{}', which is no longer listened to", notification.getName());
+            return null;
+        }
+        try {
+            return jsonSerializer.deserialize(notification.getParameter(), payloadType);
+        } catch (Throwable e) {
+            rethrowIfCriticalError(e);
+            log.error(msg("Failed to deserialize notification payload '{}' to concrete {} related to table '{}'",
+                          notification.getParameter(),
+                          payloadType.getName(),
+                          notification.getName()),
+                      e);
+            return null;
+        }
+    }
+
+    /**
+     * Removes duplicate notifications from one poll batch.<br>
+     * Duplicates are detected <b>per channel</b>: two notifications are duplicates only when they arrived on the same channel and
+     * the {@link NotificationDuplicationFilter}'s extract the same key from both. A notification for which no key can be
+     * extracted - including one whose payload is not JSON - is never treated as a duplicate and is always kept, as is every
+     * notification on a channel the {@link ChannelDeduplicationPolicy} does not de-duplicate.
+     */
+    private Stream<PGNotification> filterDuplicateNotifications(PGNotification[] notifications) {
+        if (filterDuplicateNotifications && notifications.length > 1 && notificationFilterChain.hasDuplicationFilters()) {
+            var duplicationKeysPerChannel = new HashMap<String, Set<String>>();
+            var filteredNotifications     = new ArrayList<PGNotification>();
+
+            for (var notification : notifications) {
+                var channel = channelNameOf(notification);
+                if (!channelDeduplicationPolicy.isDeduplicated(channel)) {
+                    filteredNotifications.add(notification);
+                    continue;
+                }
+                var duplicationKey = extractDuplicationKey(notification);
+                if (duplicationKey.isEmpty() ||
+                        duplicationKeysPerChannel.computeIfAbsent(channel, _channel -> new HashSet<>())
+                                                 .add(duplicationKey.get())) {
+                    filteredNotifications.add(notification);
+                }
+            }
+
+            if (log.isDebugEnabled()) {
+                int originalCount = notifications.length;
+                int filteredCount = filteredNotifications.size();
+                log.debug("Reduced notifications from {} to {} (reduction by {}). Unique keys per channel: {}", originalCount, filteredCount, originalCount - filteredCount, duplicationKeysPerChannel);
+            }
+
+            return filteredNotifications.stream();
+        }
+        return Arrays.stream(notifications);
+    }
+
+    /**
+     * @return the duplication key for the notification, or empty if it has none - which is also the answer for a payload that
+     * is not JSON. A malformed payload must never cost the rest of the poll batch: it is deserialized (and fails, and is logged)
+     * on its own like any other notification.
+     */
+    private Optional<String> extractDuplicationKey(PGNotification notification) {
+        var parameter = notification.getParameter();
+        if (parameter == null || parameter.isBlank()) {
+            return Optional.empty();
+        }
+        try {
+            return notificationFilterChain.extractDuplicationKey(parameter);
+        } catch (Exception e) {
+            log.trace("No duplication key for notification on channel '{}' - the payload could not be read as JSON: '{}'", notification.getName(), parameter, e);
+            return Optional.empty();
+        }
+    }
+
+    private static String channelNameOf(PGNotification notification) {
+        return notification.getName().toLowerCase(Locale.ROOT);
+    }
+
+    // -- The LISTEN connection - every method below but closeConnection(Handle) is called with connectionLock held -------
+
+    /**
+     * @param generation the {@link #pollGeneration} the caller acts in, read before {@link #pollingActive}
+     * @return the LISTEN connection of {@code generation}, or {@code null} if there is none. A connection of an older
+     * generation belongs to a stopped run: it is moved to {@link #retiredHandles} for the stop that ended that run, never
+     * returned
+     */
+    private Handle currentConnection(long generation) {
+        retireConnectionIfOlderThan(generation);
+        return handle;
+    }
+
+    /**
+     * Moves {@link #handle} to {@link #retiredHandles} if it was opened before {@code generation}
+     */
+    private void retireConnectionIfOlderThan(long generation) {
+        if (handle != null && handleGeneration < generation) {
+            retiredHandles.add(handle);
+            handle = null;
+        }
+    }
+
+    /**
+     * @param generation the {@link #pollGeneration} the caller acts in, read before {@link #pollingActive}; a connection
+     *                   this opens is stamped with it
+     * @return the open LISTEN connection of {@code generation}, opening it - and LISTENing to every registered channel on it
+     * - if there is none; {@code null} if polling is not active, because only the poll loop may own a connection
+     */
+    private Handle openConnectionIfNeeded(long generation) throws SQLException {
+        var current = currentConnection(generation);
+        if (current != null) {
+            return current;
+        }
+        if (!pollingActive) {
+            return null;
+        }
+        var newHandle = listenerJdbi.open();
+        try {
+            var connection = newHandle.getConnection();
+            // Notifications are only delivered to a session outside a transaction
+            if (!connection.getAutoCommit()) {
+                connection.setAutoCommit(true);
+            }
+            connection.setNetworkTimeout(Runnable::run, (int) LISTEN_CONNECTION_NETWORK_TIMEOUT.toMillis());
+            // LISTEN is per session: a new connection must re-register every channel, not just the one being added
+            for (var channel : listenForNotificationsRelatedToTables.keySet()) {
+                newHandle.execute("LISTEN " + channel);
+            }
+        } catch (Throwable e) {
+            closeBrokenConnection(newHandle);
+            throw e;
+        }
+        handle = newHandle;
+        handleGeneration = generation;
+        lastLivenessCheckNanos = System.nanoTime();
+        if (connectionLossReported) {
+            log.info("Re-established the LISTEN connection - listening to {} table(s) again: {}",
+                     listenForNotificationsRelatedToTables.size(),
+                     listenForNotificationsRelatedToTables.keySet());
+            connectionLossReported = false;
         } else {
-            stopListeners();
+            log.debug("Opened the LISTEN connection - listening to {} table(s): {}",
+                      listenForNotificationsRelatedToTables.size(),
+                      listenForNotificationsRelatedToTables.keySet());
+        }
+        return handle;
+    }
+
+    /**
+     * A non-blocking read for notifications never fails on a half-open connection - the peer is gone, but nothing says so -
+     * so without a probe the listener would wait for notifications on it for ever.
+     */
+    private void probeLivenessIfDue(Handle connection) throws SQLException {
+        if (livenessCheckInterval.isZero()) {
+            return;
+        }
+        var now = System.nanoTime();
+        if (now - lastLivenessCheckNanos < livenessCheckInterval.toNanos()) {
+            return;
+        }
+        lastLivenessCheckNanos = now;
+        var timeoutSeconds = (int) Math.max(1, Math.min(MAX_LIVENESS_CHECK_TIMEOUT_SECONDS, livenessCheckInterval.toSeconds()));
+        if (!connection.getConnection().isValid(timeoutSeconds)) {
+            throw new SQLException(msg("The LISTEN connection did not answer a liveness probe within {} second(s)", timeoutSeconds), "08006");
+        }
+    }
+
+    /**
+     * Closes the connection after a failure and reports the loss, rate-limited: the first loss, and the first after each
+     * {@code connectionLossLogInterval}, at the configured level; the ones in between at DEBUG. The next poll re-opens it.
+     */
+    private void connectionFailed(String whileDoing, Throwable cause) {
+        var failedHandle = handle;
+        handle = null;
+        if (failedHandle != null) {
+            closeBrokenConnection(failedHandle);
+        }
+        if (!pollingActive || shutdown != null) {
+            log.debug("LISTEN connection failed while {} - polling has stopped", whileDoing, cause);
+            return;
+        }
+        var now = System.nanoTime();
+        if (!anyConnectionLossLogged || now - lastConnectionLossLoggedNanos >= connectionLossLogInterval.toNanos()) {
+            log.atLevel(connectionLossLogLevel)
+               .setCause(cause)
+               .log("MultiTableChangeListener lost its LISTEN connection while {} - no notifications are received for the {} table(s) {} " +
+                            "until it is re-established, which is retried every {} ms{}",
+                    whileDoing,
+                    listenForNotificationsRelatedToTables.size(),
+                    listenForNotificationsRelatedToTables.keySet(),
+                    pollingInterval.toMillis(),
+                    connectionLossesSinceLastReport > 0 ? msg(" ({} more connection failure(s) since the last report)", connectionLossesSinceLastReport) : "");
+            anyConnectionLossLogged = true;
+            lastConnectionLossLoggedNanos = now;
+            connectionLossesSinceLastReport = 0;
+            connectionLossReported = true;
+        } else {
+            connectionLossesSinceLastReport++;
+            log.debug("LISTEN connection failed again while {}", whileDoing, cause);
+        }
+    }
+
+    /**
+     * Normal close of a connection a stop took away: {@code UNLISTEN *} first, so a connection that goes
+     * back to a pool does not carry LISTENs - and a growing backlog of notifications - to its next borrower. Skipped when
+     * shutting down: the database may be gone, and the pool is closed right after.<br>
+     * Needs no {@code connectionLock}: once detached, nothing but this method references the connection.
+     */
+    private void closeConnection(Handle detachedHandle) {
+        if (detachedHandle == null) {
+            return;
+        }
+        if (shutdown == null) {
+            try {
+                detachedHandle.execute("UNLISTEN *");
+            } catch (Throwable e) {
+                rethrowIfCriticalError(e);
+                log.debug("Failed to UNLISTEN before closing the LISTEN connection", e);
+                closeBrokenConnection(detachedHandle);
+                return;
+            }
+        }
+        try {
+            detachedHandle.close();
+        } catch (Throwable e) {
+            rethrowIfCriticalError(e);
+            log.debug("Failed to close the LISTEN connection", e);
+        }
+    }
+
+    /**
+     * Closes the physical connection, not just the {@link Handle}: a pool would otherwise take back a connection that is
+     * half-open, or that still LISTENs.
+     */
+    private static void closeBrokenConnection(Handle brokenHandle) {
+        try {
+            if (brokenHandle.getConnection().unwrap(PGConnection.class) instanceof Connection physicalConnection) {
+                physicalConnection.close();
+            }
+        } catch (Throwable e) {
+            rethrowIfCriticalError(e);
+            log.debug("Failed to close the physical LISTEN connection", e);
+        }
+        try {
+            brokenHandle.close();
+        } catch (Throwable e) {
+            rethrowIfCriticalError(e);
+            log.debug("Failed to close the LISTEN connection Handle", e);
         }
     }
 }

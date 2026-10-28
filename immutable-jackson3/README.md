@@ -183,8 +183,9 @@ public class ValidatedOrder {
 | Setting | Value | Purpose |
 |---------|-------|---------|
 | Field visibility | `ANY` | Serialize all fields regardless of access modifier |
-| Getter/setter detection | `NONE` | Use fields only, not getters/setters |
+| Getter, `is`-getter and setter detection | `NONE` | Use fields only, not getters, `is`-getters or setters |
 | Unknown properties | Ignored | Don't fail on extra JSON fields |
+| Missing primitives | Default value | A missing primitive reads as `0`/`false` instead of failing |
 | Empty beans | Allowed | Serialize objects with no properties |
 | Transient marker | Propagated | Respect `transient` keyword |
 | Date format | ISO-8601 | Timestamps as strings, not numbers |

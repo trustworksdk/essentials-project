@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+    <modelVersion>4.0.0</modelVersion>
+    <groupId>com.example.ledger</groupId>
+    <artifactId>ledger</artifactId>
+    <version>0.0.1-SNAPSHOT</version>
+    <properties>
+        <java.version>25</java.version>
+        <kotlin.version>2.2.21</kotlin.version>
+        <essentials.version>${platform.essentials}</essentials.version>
+    </properties>
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-dependencies</artifactId>
+                <version>4.0.8</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+    <dependencies>
+        <dependency>
+            <groupId>dk.trustworks.essentials.components</groupId>
+            <artifactId>spring-boot-starter-postgresql-event-store</artifactId>
+            <version>${essentials.version}</version>
+        </dependency>
+    </dependencies>
+</project>

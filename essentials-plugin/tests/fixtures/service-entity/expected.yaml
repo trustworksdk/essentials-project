@@ -10,7 +10,8 @@
 #   runs          which command runs against this fixture, with which argument
 #   lanes         gate 14 per bounded context: code signals, declared lanes, verdict
 #   must_find     every entry must appear in the report (matched on file, plus symbol when given)
-#   must_not_find a finding under any listed gate at that file/symbol fails the run ("*" = any gate)
+#   must_not_find a finding under any listed gate at that line (file/symbol when no line) fails the run
+#                 ("*" = any gate); a finding drawn from another line of the same file does not
 #   skipped       gates the report must name as skipped or out of scope, never silently omit
 #   tolerated     findings that may appear or not; neither counts for or against the run
 #   reader        syntactic facts a source reader must extract (handlers, mappings, endpoint bindings)
@@ -76,7 +77,11 @@ must_find:
   line: 16
   anchor: List<ShippingOrder> findByShipped(boolean shipped);
   symbol: ShippingOrders.findByShipped
-  what: A finder on the write repository whose only caller is a read path; it belongs to views/order_status.
+  what: >-
+    A screen-shaped finder on the write repository (rules/slice-design.md names findByShipped(boolean) as the
+    example) that no write path calls; views/order_status already declares its own findByShipped on
+    OrderStatusQueries, so the read side is being served from the write model. Saying it has no caller and
+    should be deleted is the same finding.
 - id: '4'
   gate: 15c
   ess: ESS-G15c
@@ -123,7 +128,8 @@ must_find:
   symbol: OrderStatusQueries.findById
   what: >-
     A projection return type on a method named after a CRUD base method: the base captures it and the caller gets
-    a ClassCastException. It has no caller, so it must be found from the declaration. Fix: rename to findOrderStatusById.
+    a ClassCastException. It has no caller, so it must be found from the declaration. Fix: rename to
+    findOrderStatusById, or delete it, since findByOrderId already serves the lookup; either fix counts.
 - id: '9'
   gate: 18a
   ess: ESS-G18a
@@ -171,7 +177,10 @@ must_not_find:
   line: 14
   anchor: List<ShippingOrder> findByIdIn(List<String> ids);
   symbol: ShippingOrders.findByIdIn
-  why: 'Its only caller, AutoShipProcessor.shipBatch, loads the batch to mutate it: the write path.'
+  why: >-
+    Gate 15(b) is a finder whose callers are view slices or API handlers. Its only caller is
+    AutoShipProcessor.shipBatch, an automation that loads the batch to dispatch ShipOrder for each row: the
+    write path. A separate remark that shipBatch itself has no caller or trigger is not a 15(b) finding.
 - id: T3b
   not_gates:
   - 15c
@@ -253,7 +262,10 @@ must_not_find:
   - '2'
   - '16'
   file: src/main/java/com/example/shipping/use_cases/
-  why: There is no use_cases/_shared/ here.
+  what: a use_cases/_shared/ directory that should not exist on this lane, or one below the promotion bar
+  why: >-
+    There is no use_cases/_shared/ here. Finding 6 (gate 16, RegisterShippingOrderAPI returning the @Entity) sits
+    under use_cases/ and is correct; only a _shared/ finding fails this check.
 - id: T11
   not_gates:
   - 8c
@@ -298,7 +310,17 @@ must_not_find:
 skipped:
 - gate: '10'
   why: 'Service-entity lane: no versioned read model. Named as skipped, not silently absent.'
-tolerated: []
+tolerated:
+- id: TOL-find-by-status
+  gates:
+  - '*'
+  file: src/main/java/com/example/shipping/views/order_status/OrderStatusQueries.java
+  line: 14
+  anchor: List<OrderStatusView> findByStatus(String status);
+  what: >-
+    findByStatus(String) derives a query on a status property ShippingOrder does not have, so Spring Data would
+    refuse it at startup. True of the source, not what this fixture grades; reporting it or not counts neither
+    way.
 manifests:
   valid: 4
   tier: service-entity

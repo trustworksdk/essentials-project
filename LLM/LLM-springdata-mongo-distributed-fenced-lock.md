@@ -62,7 +62,7 @@ import dk.trustworks.essentials.components.foundation.transaction.UnitOfWorkFact
 MongoFencedLockManager lockManager = MongoFencedLockManager.builder()
     .setMongoTemplate(mongoTemplate)                          // Required
     .setUnitOfWorkFactory(unitOfWorkFactory)                  // Required
-    .setLockManagerInstanceId("node-01")                      // Optional, defaults to hostname
+    .setLockManagerInstanceId("node-01")                      // Optional, defaults to <hostname>:<pid>
     .setLockTimeOut(Duration.ofSeconds(10))                   // Optional, default 10s
     .setLockConfirmationInterval(Duration.ofSeconds(3))       // Optional, default 3s
     .setFencedLocksCollectionName("my_locks")                 // Optional, default "fenced_locks"
@@ -77,7 +77,7 @@ MongoFencedLockManager lockManager = MongoFencedLockManager.builder()
 |--------|------|---------|-------------|
 | `mongoTemplate` | `MongoTemplate` | Required | Spring Data MongoDB template |
 | `unitOfWorkFactory` | `UnitOfWorkFactory<ClientSessionAwareUnitOfWork>` | Required | Transaction management |
-| `lockManagerInstanceId` | `String` | Hostname | Unique ID for this manager instance |
+| `lockManagerInstanceId` | `String` | `<hostname>:<pid>` (bare hostname before 0.60.1) | Unique ID for this manager instance; Spring: `essentials.fenced-lock-manager.instance-id` |
 | `lockTimeOut` | `Duration` | 10 seconds | Lock expiration without confirmation |
 | `lockConfirmationInterval` | `Duration` | 3 seconds | Heartbeat interval |
 | `fencedLocksCollectionName` | `String` | `"fenced_locks"` | Collection name ⚠️ NoSQL injection risk |
@@ -93,8 +93,8 @@ Duration confirmationInterval = lockTimeout.dividedBy(3);  // 10 seconds
 
 // Instance ID best practices
 import dk.trustworks.essentials.shared.network.Network;
-String instanceId = Network.hostName();                    // Use hostname (default)
-String instanceId = "service-" + UUID.randomUUID();        // Or unique ID
+String instanceId = FencedLockManagerSettings.defaultLockManagerInstanceId(); // <hostname>:<pid> (the default)
+String instanceId = System.getenv("POD_NAME");             // Or a stable, readable unique ID
 ```
 
 ## Database Schema
@@ -135,11 +135,12 @@ All `FencedLockManager` API methods inherited from foundation. See [LLM-foundati
 import dk.trustworks.essentials.components.foundation.fencedlock.LockName;
 
 // Short-running locks with automatic release
-try (var handle = lockManager.acquireLock(
-        LockName.of("order-processor")) {
+try (var handle = lockManager.acquireLock(LockName.of("order-processor"))) {
     processOrders(handle.getCurrentToken());
-} 
+}
 ```
+
+`FencedLock.close()` calls `release()` but is declared `throws Exception`, so the enclosing method must catch or declare `Exception`. Where it cannot, use `try`/`finally` with `lock.release()`.
 
 ### Pattern: Try-Acquire (Non-Blocking)
 
@@ -152,7 +153,7 @@ if (lock.isPresent()) {
     try {
         processOrders(lock.get().getCurrentToken());
     } finally {
-        lockManager.releaseLock(lock.get());
+        lock.get().release();
     }
 }
 ```
@@ -190,6 +191,8 @@ boolean heldByMe = lockManager.isLockedByThisLockManagerInstance(LockName.of("my
 // Check if another instance holds the lock
 boolean heldByOther = lockManager.isLockAcquiredByAnotherLockManagerInstance(LockName.of("my-lock"));
 ```
+
+The manager predicates read the stored owner id and ignore the fence token; `FencedLock.isLockedByThisLockManagerInstance()` reads the lock object and can be one confirmation interval stale. Details: [LLM-foundation.md § Pattern: Lock Status Queries](./LLM-foundation.md#pattern-lock-status-queries).
 
 ## Spring Integration
 
@@ -397,9 +400,15 @@ MongoClient client = MongoClients.create(
 .setLockManagerInstanceId("service-instance")
 
 // ✅ RIGHT - Each instance has unique ID
-.setLockManagerInstanceId(Network.hostName())
+.setLockManagerInstanceId(null)                           // default: <hostname>:<pid>
+.setLockManagerInstanceId(System.getenv("POD_NAME"))
 .setLockManagerInstanceId("node-" + UUID.randomUUID())
+
+// ⚠️ Not unique when two JVMs share a host or two containers share a hostname
+.setLockManagerInstanceId(Network.hostName())
 ```
+
+The id never decides mutual exclusion — acquire, confirm and release are compare-and-set updates on the fence token — but it is what the lock table, the admin API and `isLockedByThisLockManagerInstance()` report, so a shared id makes both instances look like the holder.
 
 ### ⚠️ Confirmation Interval vs Timeout
 
@@ -441,17 +450,24 @@ nobody commits or aborts. That transaction keeps the lock document write-locked,
 hand-over after such an outage to take up to that long instead of `lockTimeOut`; nothing is lost, and it recovers by
 itself.
 
+### ⚠️ A Lock Excludes Other JVMs, Not Other Callers in This JVM
+
+Ownership is per lock-manager instance, not per caller or thread. While this manager holds a lock, a second `tryAcquireLock`/`acquireLock` for the same name in the same JVM returns the **same** `FencedLock`, and `release()` by either caller releases it for both. Guard same-JVM callers that must not overlap yourself — see [LLM-foundation.md § Ownership is per lock-manager instance](./LLM-foundation.md#ownership-is-per-lock-manager-instance-not-per-caller-or-thread).
+
 ### ⚠️ Always Release Locks
 
 ```java
 // ❌ WRONG - Lock not released on exception
 FencedLock lock = lockManager.acquireLock(lockName);
 doWork(lock.getCurrentToken());
-lockManager.releaseLock(lock);  // Never called if doWork() throws
+lock.release();  // Never called if doWork() throws
 
-// ✅ RIGHT - Try-with-resources
-try (var handle = lockManager.acquireLock(lockName)) {
-    doWork(handle.getCurrentToken());
+// ✅ RIGHT - try/finally (or try-with-resources, see "Try-With-Resources" above)
+FencedLock lock = lockManager.acquireLock(lockName);
+try {
+    doWork(lock.getCurrentToken());
+} finally {
+    lock.release();
 }
 ```
 
@@ -477,7 +493,7 @@ MongoUtil.checkIsValidCollectionName(collectionName);
 | **Technology** | Spring Data MongoDB | JDBI + JDBC |
 | **UnitOfWork** | `ClientSessionAwareUnitOfWork` | `HandleAwareUnitOfWork` |
 | **Transactions** | MongoDB transactions | SQL transactions |
-| **Requirements** | MongoDB 4.0+ (replica set) | PostgreSQL 9.5+ |
+| **Requirements** | MongoDB 4.0+ (replica set) | PostgreSQL 15+ |
 | **Index Type** | MongoDB compound indexes | B-tree indexes |
 | **Schema Init** | Automatic collection/index creation | Automatic table creation |
 | **Query Language** | MongoDB query DSL | SQL |

@@ -52,19 +52,9 @@ import java.util.*;
  */
 interface BatchReadableOwner extends LeasedOwner {
 
-    /**
-     * The queue this owner's rows live in. A pump serves several; a batched statement binds one.
-     */
-    short queueId();
-
-    /**
-     * This owner's queue-scoped counters, which are NOT the pump's.
-     * <p>
-     * {@code ShardRuntime} builds its own {@link ShardOwnerMetrics} for the pumps, so anything a pump
-     * counts on its own handle is invisible to {@code queue.metrics()} — the same shape of mistake as
-     * binding the pump's queue id. Work done on a queue's behalf is counted on that queue.
-     */
-    ShardOwnerMetrics ownerMetrics();
+    // queueId() and ownerMetrics() live on LeasedOwner: the pump also needs them for owners that are not
+    // batch-readable, to count a failing takeover on the queue it belongs to. A batched statement binds one
+    // queue id.
 
     /**
      * Where this owner's next cursor read would start.
@@ -81,6 +71,14 @@ interface BatchReadableOwner extends LeasedOwner {
      * {@link #pumpOnce(java.sql.Connection)} and then discarded.
      *
      * @param cursorRows        rows above {@link #batchReadCursor()}, empty if there were none
+     * @param cursorLimit       the per-shard row limit the cursor read was issued with: the PUMP's
+     *                          {@code readBatchSize}, which is the {@link ShardRuntime}'s and can differ from
+     *                          the owner's own (a runtime keeps its first borrower's settings, and a queue
+     *                          given a runtime keeps its own). {@code cursorRows} holding this many rows means
+     *                          the read may have stopped short of the backlog, and the owner's watermark then
+     *                          advances no further than the last row returned, so this must be the limit the
+     *                          read used and never the owner's: compared against a larger one, a truncated read
+     *                          passes for a complete one and the watermark steps over rows it never read
      * @param sweptRows         rows from the head, or {@code null} when no sweep was requested —
      *                          "did not sweep" and "swept and found nothing" are different, and only
      *                          the second may reset the sweep backoff
@@ -88,6 +86,7 @@ interface BatchReadableOwner extends LeasedOwner {
      *                          only when a sweep was requested
      */
     void applyBatchRead(List<ShardOwnedStorage.OrderedRow> cursorRows,
+                        int cursorLimit,
                         List<ShardOwnedStorage.OrderedRow> sweptRows,
                         OptionalLong nextVisibleMillis);
 }

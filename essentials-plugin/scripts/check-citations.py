@@ -76,6 +76,12 @@ tests/citations/**                   this script's own self-test samples, which 
 tests/golden/**                      renderer output (scripts/init-render.py --update-golden): it
                                      carries every pin it rendered by design, and init-render.py
                                      --check fails it the moment it differs from a fresh render
+references/stack/migrations/**       release-move notes (scripts/migration-plan.py): they name the release
+                                     pair and cite its notes by path, line and quoted token, all of which
+                                     carry versions; a pin appears there by name only, which
+                                     migration-plan.py --check enforces
+tests/migration-plan/**              that script's sample projects and golden plans: the projects pin what a
+                                     user's project pinned, the goldens hold the plan's targets
 references/init-assets/project/contracts/openapi.json.template, the `"openapi"` line only
                                      the OpenAPI document-format version springdoc writes, which
                                      equals the springdoc pin by coincidence; JSON has no comment
@@ -84,6 +90,9 @@ references/init-assets/project/contracts/openapi.json.template, the `"openapi"` 
                                      the plugin's release version, which is the essentials.version pin
                                      plus an optional -N by design (the plugin-docs CI job holds it to
                                      the pin); JSON has no comment for a cite-ok marker
+capabilities.json, a `"since"` value only (on a line holding no other version)
+                                     the plugin release that first offered a capability: a plugin
+                                     version, like plugin.json's, which starts with the pin by design
 
 Usage
 -----
@@ -119,6 +128,7 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -133,13 +143,16 @@ BINDINGS = {
 # Not scanned at all: the two sources (S1 names the baseline on purpose) and the files the module
 # docstring justifies.
 EXEMPT_FILES = {PINS, CONTRACT, "CHANGELOG.md"}
-EXEMPT_DIRS = ("references/llm/", "tests/fixtures/", "tests/citations/", "tests/golden/")
+EXEMPT_DIRS = ("references/llm/", "tests/fixtures/", "tests/citations/", "tests/golden/",
+               "references/stack/migrations/", "tests/migration-plan/")
 # Single lines that hold a version which is not a pin, by file (see the module docstring).
 NOT_A_PIN = {
     "references/init-assets/project/contracts/openapi.json.template":
         re.compile(r'^\s*"openapi"\s*:\s*"[\d.]+"\s*,?\s*$'),
     ".claude-plugin/plugin.json":
         re.compile(r'^\s*"version"\s*:\s*"[\d.]+(-\d+)?"\s*,?\s*$'),
+    "capabilities.json":
+        re.compile(r'^\s*(?:"[\w.-]+"\s*:\s*\{\s*)?"since"\s*:\s*"\d+\.\d+\.\d+(-\d+)?"(?!.*\d+\.\d+\.\d+).*$'),
 }
 
 # Not scanned for law-section: a release record cites the law as it stood, the LLM docs never cite it.
@@ -511,13 +524,29 @@ def check_text(rel, text, patterns, contract, prose, restatement_rule=True, law=
     return findings
 
 
+def git_ignored(root: Path):
+    """Paths under ROOT that git ignores, relative to it (directories end in /); empty outside a work tree.
+
+    Local output such as evals/results/ quotes the pins it measured; it is never committed, so it is
+    never a citation."""
+    try:
+        r = subprocess.run(["git", "-C", str(root), "ls-files", "-oi", "--exclude-standard", "--directory"],
+                           capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return ()
+    return tuple(line for line in r.stdout.splitlines() if line) if r.returncode == 0 else ()
+
+
 def scan(root: Path, patterns, contract, law):
     findings = []
+    ignored = git_ignored(root)
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS)
         for filename in sorted(filenames):
             path = Path(dirpath) / filename
             rel = path.relative_to(root).as_posix()
+            if any(rel == i or (i.endswith("/") and rel.startswith(i)) for i in ignored):
+                continue
             pin_rules = not (rel in EXEMPT_FILES or rel.startswith(EXEMPT_DIRS))
             law_rule = not (rel in LAW_EXEMPT_FILES or rel.startswith(LAW_EXEMPT_DIRS))
             if not (pin_rules or law_rule):
@@ -608,8 +637,9 @@ rules:
 output:  path:line: rule: message   (path relative to ROOT)
 allow:   <!-- cite-ok: reason --> on the flagged line or the line above it
 exempt:  stack-pins.md, stack-contract.md, CHANGELOG.md, references/llm/**,
-         tests/fixtures/**, tests/citations/**, tests/golden/**, the seed spec's
-         "openapi" line, plugin.json's "version" line; the three binding docs in references/stack/ are exempt
+         tests/fixtures/**, tests/citations/**, tests/golden/**, references/stack/migrations/**,
+         tests/migration-plan/**, the seed spec's
+         "openapi" line, plugin.json's "version" line, capabilities.json's "since" values; the three binding docs in references/stack/ are exempt
          from restated-requirement only. law-section exempts only CHANGELOG.md,
          references/llm/** and tests/citations/**
 exit:    0 clean, 1 findings, 2 usage error (bad arguments, unreadable pins/contract)

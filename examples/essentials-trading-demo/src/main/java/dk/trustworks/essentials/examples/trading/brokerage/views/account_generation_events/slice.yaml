@@ -7,6 +7,7 @@ status: live
 summary: Serve the raw event stream of one books generation of a trading account, straight from the event store.
 generator: essentials
 language: java
+lane: aggregate
 
 serves: [GetAccountGenerationEvents]
 endpoints:
@@ -20,6 +21,7 @@ invariants:
     enforcedBy: AccountGenerationEventsQuery
 forbidden:
   - cross-slice-internal:brokerage
+tier: cqrs-es
 tests:
   unit: { present: false }
   integration: { present: false }

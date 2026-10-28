@@ -97,7 +97,7 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  * - backfillFlux: Generates a flux of events during backfill, supporting pagination and optional gap handling.
  * - backfillOnePageAndEmit: Processes a single page of backfill operations, with support for emitting events to a consumer.
  */
-public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> implements ConfigurableEventStore<CONFIG> {
+public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> implements ConfigurableEventStore<CONFIG>, AwaitedGapInspector {
 
     private static final Logger log = LoggerFactory.getLogger(CdcEventStore.class);
 
@@ -162,6 +162,13 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
      * ends to the next one of the same subscriber and aggregate type - see {@code newDeliveryTracker}
      */
     private final GapMiddlesAwaitedAcrossSubscribes                           gapMiddlesAwaitedAcrossSubscribes = new GapMiddlesAwaitedAcrossSubscribes();
+    /**
+     * The delivery trackers of the subscriptions running now, per subscriber and aggregate type - asked by
+     * {@link #isAwaitedAsGap}, as nothing else knows about the middle of a wide gap a running subscription found itself.
+     * Added when a subscription starts handing events on, removed when it ends ({@code DeliveryGate}); a set, so a new
+     * subscribe of the subscriber that starts before the old one's end has run cannot hide either tracker
+     */
+    private final ConcurrentMap<SubscriberAndAggregateType, Set<CdcDeliveryTracker>> runningDeliveryTrackers = new ConcurrentHashMap<>();
 
     /**
      * Create a {@link CdcEventStoreBuilder} that names every argument and accepts both plain values and
@@ -257,6 +264,23 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
             backfillToLiveTransitionTimer = null;
         }
         validateDeprecatedLiveDrainStallThreshold(eventBusProperties);
+        warnIfDelegateIsNoAwaitedGapInspector(delegate);
+    }
+
+    /**
+     * While CDC is not active the delegate serves the subscriptions, and only the delegate knows about the middles of
+     * wide gaps its polls await in memory only: if it cannot be asked ({@link AwaitedGapInspector}), {@link #isAwaitedAsGap}
+     * cannot tell about those, so {@code awaitProcessed} can return early - logged once, when this event store is built,
+     * in the words of the processor's own start-time WARN
+     */
+    private static void warnIfDelegateIsNoAwaitedGapInspector(ConfigurableEventStore<?> delegate) {
+        if (!(delegate instanceof AwaitedGapInspector)) {
+            log.warn("If you call awaitProcessed on a processor over this CdcEventStore, it can report an event as processed before the processor handled it while CDC is not active: " +
+                             "the event store '{}' that this CdcEventStore decorates does not implement {}, so awaitProcessed cannot tell whether an event a subscription moved past " +
+                             "while it was uncommitted (a gap) is still to be handled. To fix it, have the EventStore that decorates the PostgresqlEventStore implement {} " +
+                             "and forward to its delegate. An application that never calls awaitProcessed can ignore this",
+                     delegate.getClass().getName(), AwaitedGapInspector.class.getSimpleName(), AwaitedGapInspector.class.getSimpleName());
+        }
     }
 
     /**
@@ -367,7 +391,48 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
         var gapHandler = subscriptionId.map(eventStreamGapHandler::gapHandlerFor);
         return new DeliveryGate(newDeliveryTracker(aggregateType, fromInclusiveGlobalOrder, subscriptionId, gapHandler),
                                 aggregateType,
+                                subscriptionId,
                                 gapHandler);
+    }
+
+    private record SubscriberAndAggregateType(SubscriberId subscriberId, AggregateType aggregateType) {
+    }
+
+    /**
+     * {@code tracker}'s subscription of {@code subscriberId} to {@code aggregateType} hands events on from now on, until
+     * {@link #deliveryTrackerEnded} - {@link #isAwaitedAsGap} asks it meanwhile
+     */
+    void deliveryTrackerRunning(SubscriberId subscriberId, AggregateType aggregateType, CdcDeliveryTracker tracker) {
+        // Added inside compute, so an end of the key's last other tracker cannot forget the set in between
+        runningDeliveryTrackers.compute(new SubscriberAndAggregateType(subscriberId, aggregateType), (key, trackers) -> {
+            var running = trackers != null ? trackers : ConcurrentHashMap.<CdcDeliveryTracker>newKeySet();
+            running.add(tracker);
+            return running;
+        });
+    }
+
+    /**
+     * {@code tracker}'s subscription ended - see {@link #deliveryTrackerRunning}. Forgets the entry with its last tracker
+     */
+    void deliveryTrackerEnded(SubscriberId subscriberId, AggregateType aggregateType, CdcDeliveryTracker tracker) {
+        runningDeliveryTrackers.computeIfPresent(new SubscriberAndAggregateType(subscriberId, aggregateType), (key, trackers) -> {
+            trackers.remove(tracker);
+            return trackers.isEmpty() ? null : trackers;
+        });
+    }
+
+    /**
+     * @return how many subscriber and aggregate type pairs a running subscription's tracker is kept for
+     */
+    int runningDeliveryTrackerCount() {
+        return runningDeliveryTrackers.size();
+    }
+
+    /**
+     * @return the middles of wide gaps handed from a subscription that ends to the next - for tests
+     */
+    GapMiddlesAwaitedAcrossSubscribes gapMiddlesAwaitedAcrossSubscribes() {
+        return gapMiddlesAwaitedAcrossSubscribes;
     }
 
     /**
@@ -386,8 +451,11 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
                                         DeliveryGate deliveryGate,
                                         Optional<Tenant> onlyIncludeEventIfItBelongsToTenant,
                                         Optional<AcknowledgementRegistrations> acknowledgement) {
-        return handOnToTheSubscriber(source, aggregateType, deliveryGate, onlyIncludeEventIfItBelongsToTenant, acknowledgement)
+        var handedOn = handOnToTheSubscriber(source, aggregateType, deliveryGate, onlyIncludeEventIfItBelongsToTenant, acknowledgement)
                 .doFinally(signal -> deliveryGate.subscriptionEnded());
+        // Only once the end that undoes it is in place - called while subscribing, so it does run
+        deliveryGate.subscriptionStarted();
+        return handedOn;
     }
 
     private Flux<PersistedEvent> handOnToTheSubscriber(Flux<PersistedEvent> source,
@@ -915,6 +983,7 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
     private final class DeliveryGate implements DeliveryRecorder {
         private final CdcDeliveryTracker                        tracker;
         private final AggregateType                             aggregateType;
+        private final Optional<SubscriberId>                    subscriberId;
         private final Optional<SubscriptionGapHandler>          gapHandler;
         /**
          * The gap fills let through whose gap is resolved once the subscriber is done with them - the protocol the
@@ -927,9 +996,10 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
          */
         private volatile SubscriberAcknowledgement              delegateAcknowledgement = SubscriberAcknowledgement.create();
 
-        private DeliveryGate(CdcDeliveryTracker tracker, AggregateType aggregateType, Optional<SubscriptionGapHandler> gapHandler) {
+        private DeliveryGate(CdcDeliveryTracker tracker, AggregateType aggregateType, Optional<SubscriberId> subscriberId, Optional<SubscriptionGapHandler> gapHandler) {
             this.tracker = tracker;
             this.aggregateType = aggregateType;
+            this.subscriberId = subscriberId;
             this.gapHandler = gapHandler.filter(handler -> recordsGaps());
             this.gapFillsBeingHandedOn = this.gapHandler.map(handler -> new GapFillsAwaitingAcknowledgement(handler,
                                                                                                          aggregateType,
@@ -1043,6 +1113,15 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
         }
 
         /**
+         * The subscription starts handing events on: until it ends, {@link #isAwaitedAsGap} asks its tracker too - about
+         * the middles of wide gaps it finds itself, which only the tracker knows about while it runs. Only a subscription
+         * with a subscriber id, as only one can be asked about
+         */
+        void subscriptionStarted() {
+            subscriberId.ifPresent(id -> deliveryTrackerRunning(id, aggregateType, tracker));
+        }
+
+        /**
          * The subscription ends - cancelled, completed or failed: the gaps the tracker gave up on since the last event
          * delivered are recorded now ({@link #recordGivenUpGaps()}), or a subscription stopped while idle left them to a
          * later one to wait for again. Runs on the thread that ends it - for a cancel, the one that stops the
@@ -1052,12 +1131,17 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
          * First, and always, the middles of wide gaps the tracker still awaits in memory only - and the fills from them
          * the subscriber is not done with - are left for the subscriber's next subscription on this instance
          * ({@link CdcDeliveryTracker#handOverMiddlesAwaitedInMemoryOnly()}), which starts at the resume point, above them.
-         * A cancel runs this before the subscription that is stopped or resumed subscribes again.
+         * A cancel runs this before the subscription that is stopped or resumed subscribes again. Only after the hand-over
+         * does {@link #isAwaitedAsGap} stop asking the tracker, so there is no moment neither of them answers for a middle.
          */
         void subscriptionEnded() {
-            // In memory only, so whatever the thread: the middles of wide gaps still awaited, for the next subscription
-            tracker.handOverMiddlesAwaitedInMemoryOnly();
-            gapMiddlesAwaitedAcrossSubscribes.subscribeEnded(tracker.earlierMiddles());
+            try {
+                // In memory only, so whatever the thread: the middles of wide gaps still awaited, for the next subscription
+                tracker.handOverMiddlesAwaitedInMemoryOnly();
+                gapMiddlesAwaitedAcrossSubscribes.subscribeEnded(tracker.earlierMiddles());
+            } finally {
+                subscriberId.ifPresent(id -> deliveryTrackerEnded(id, aggregateType, tracker));
+            }
             if (gapHandler.isEmpty()) return;
             if (unitOfWorkFactory.getCurrentUnitOfWork().isPresent()) {
                 log.debug("[{}-{}] Subscription ended inside a unit of work - not recording the gaps given up on since the last event delivered",
@@ -1629,6 +1713,64 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
     public void forgetGapMiddlesAwaitedInMemory(SubscriberId subscriberId, AggregateType aggregateType) {
         gapMiddlesAwaitedAcrossSubscribes.forget(subscriberId, aggregateType);
         eventStore.forgetGapMiddlesAwaitedInMemory(subscriberId, aggregateType);
+    }
+
+    /**
+     * True when {@code globalEventOrder} lies in the middle of a wide gap a CDC subscription of the subscriber took over
+     * from an earlier one, or left for the next ({@link GapMiddlesAwaitedAcrossSubscribes}); when the subscriber's running
+     * CDC subscription still awaits it - a gap its {@link CdcDeliveryTracker} waits for, the middle of a wide gap it found
+     * itself and awaits in memory only among them, or a fill from such a middle the subscriber is not done with
+     * ({@link CdcDeliveryTracker#isAwaited}); when it is one of the subscriber's transient gaps recorded by this event
+     * store's gap handler, the one its CDC subscriptions record gaps with; or when the delegate - which serves the
+     * subscription while CDC is not active - is an {@link AwaitedGapInspector} that awaits it. A delegate that is no
+     * {@link AwaitedGapInspector} is reported with a WARN when this event store is built: then the middles of wide gaps
+     * its polls await in memory only go unanswered, so the answer is complete only while CDC is active.
+     * <p>
+     * The transient gaps are read once per call: when the delegate reports this event store's own gap handler as the one
+     * its answer reads them from ({@link AwaitedGapInspector#transientGapsReadFrom()}, compared by identity) - a
+     * {@link PostgresqlEventStore} as wired by default, or a decorator that forwards to one - this one does not read them
+     * too. A delegate that reports another gap handler, or none (the default), has them read here as well: the answer is
+     * the same, only the read may be duplicated.
+     * <p>
+     * Asks a running subscription's tracker under the tracker's monitor, which its delivering threads take for every event
+     * - briefly, and never the bus thread's.
+     */
+    @Override
+    public boolean isAwaitedAsGap(SubscriberId subscriberId, AggregateType aggregateType, GlobalEventOrder globalEventOrder) {
+        requireNonNull(subscriberId, "No subscriberId provided");
+        requireNonNull(aggregateType, "No aggregateType provided");
+        requireNonNull(globalEventOrder, "No globalEventOrder provided");
+        return gapMiddlesAwaitedAcrossSubscribes.isAwaited(subscriberId, aggregateType, globalEventOrder.longValue()) ||
+                isAwaitedByARunningSubscription(subscriberId, aggregateType, globalEventOrder.longValue()) ||
+                (recordsGaps() && !delegateReadsTheSameTransientGaps() &&
+                        eventStreamGapHandler.gapHandlerFor(subscriberId).getTransientGapsFor(aggregateType).contains(globalEventOrder)) ||
+                (eventStore instanceof AwaitedGapInspector delegate && delegate.isAwaitedAsGap(subscriberId, aggregateType, globalEventOrder));
+    }
+
+    /**
+     * @return whether the delegate's {@link #isAwaitedAsGap} answer already covers the transient gaps of this event store's
+     * own gap handler - asked on every call, as a decorating delegate forwards the question to whatever it decorates
+     */
+    private boolean delegateReadsTheSameTransientGaps() {
+        return eventStore instanceof AwaitedGapInspector delegate &&
+                delegate.transientGapsReadFrom().filter(gapHandler -> gapHandler == eventStreamGapHandler).isPresent();
+    }
+
+    /**
+     * @return this event store's gap handler, when it records gaps - {@link #isAwaitedAsGap} answers from its transient
+     * gaps, read here or by the delegate - else whatever the delegate reports, as {@link #isAwaitedAsGap} forwards to it
+     */
+    @Override
+    public Optional<EventStreamGapHandler<?>> transientGapsReadFrom() {
+        if (recordsGaps()) {
+            return Optional.of(eventStreamGapHandler);
+        }
+        return eventStore instanceof AwaitedGapInspector delegate ? delegate.transientGapsReadFrom() : Optional.empty();
+    }
+
+    private boolean isAwaitedByARunningSubscription(SubscriberId subscriberId, AggregateType aggregateType, long globalEventOrder) {
+        var trackers = runningDeliveryTrackers.get(new SubscriberAndAggregateType(subscriberId, aggregateType));
+        return trackers != null && trackers.stream().anyMatch(tracker -> tracker.isAwaited(globalEventOrder));
     }
 
     @Override

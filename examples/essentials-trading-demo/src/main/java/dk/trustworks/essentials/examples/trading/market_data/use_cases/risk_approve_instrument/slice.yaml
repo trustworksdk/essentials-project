@@ -1,4 +1,4 @@
-schemaVersion: "1.1"
+schemaVersion: "1.4"
 slice: market_data.risk_approve_instrument
 kind: automation
 bc: market_data
@@ -7,6 +7,7 @@ status: live
 summary: Send every newly registered instrument through an external risk assessment and record the answer, calling the risk service outside any transaction.
 generator: essentials
 language: java
+lane: aggregate
 
 consumes: [InstrumentRegistered]
 publishes: [InstrumentRiskApproved, InstrumentRiskRejected]
@@ -25,6 +26,8 @@ invariants:
     enforcedBy: RiskApprovalProperties
 forbidden:
   - cross-slice-internal:market_data
+tier: cqrs-es
+flow: instrument-lifecycle
 tests:
   unit: { present: false }
   integration: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/market_data/InstrumentRiskApprovalTest.java" }

@@ -30,11 +30,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class LeaseOverrunTest {
 
     private static ShardOwnerSettings withLease(Duration leaseTtl) {
-        var d = ShardOwnerSettings.defaults();
-        return new ShardOwnerSettings(d.readBatchSize(), d.ackBatchSize(), d.ackFlushInterval(), d.chaseDelay(),
-                                      d.holeExpiry(), d.sweepInterval(), d.maxHolesPerChase(), d.keyConcurrency(),
-                                      d.pollBackstop(), d.maxSweepInterval(), d.pumpThreads(), d.shedGrace(),
-                                      leaseTtl, d.watermarkCap());
+        return ShardOwnerSettings.builder().setLeaseTtl(leaseTtl).build();
     }
 
     @Test

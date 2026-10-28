@@ -27,9 +27,11 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import java.nio.charset.StandardCharsets;
+import java.sql.SQLException;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static ch.qos.logback.classic.Level.WARN;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -123,6 +125,38 @@ class ShardOwnedCompetingConsumerIT {
                           everything.addAll(deliveredToSecond);
                           assertThat(everything).hasSize(MESSAGES);
                       });
+        }
+    }
+
+    /**
+     * A {@code consume()} made by a {@link QueueObserver} told of the first subscription's first acquisition runs on that
+     * subscription's thread while it is still starting, and registers its pair first. It finds nothing registered, so the
+     * warning must come from the outer {@code consume()}, decided from what is registered once its starts have run - not
+     * from whether the queue had a subscription when it began, which left two competing subscriptions with no warning.
+     */
+    @Test
+    void a_consume_an_observer_makes_while_the_first_consume_is_starting_is_still_warned_about() throws Exception {
+        var nestedConsumed = new AtomicBoolean();
+        try (var queue = new PostgresqlMessageQueue(dataSource, QUEUE_ID, SHARD_COUNT, "competing")) {
+            queue.addObserver(new QueueObserver() {
+                @Override
+                public void shardOwnershipChanged(int shard, boolean acquired) {
+                    if (acquired && nestedConsumed.compareAndSet(false, true)) {
+                        try {
+                            queue.consume((messageId, key, payload, payloadType) -> { }, ConsumerOptions.defaults());
+                        } catch (SQLException e) {
+                            throw new IllegalStateException(e);
+                        }
+                    }
+                }
+            });
+            queue.consume((messageId, key, payload, payloadType) -> { }, ConsumerOptions.defaults());
+
+            assertThat(nestedConsumed).as("premise: the observer made its consume() while the first one was starting").isTrue();
+            assertThat(warnings()).hasSize(1);
+            assertThat(warnings().get(0)).contains("COMPETING")
+                                         .contains("already has 1 consumer(s)")
+                                         .contains("instance 'competing' is being added");
         }
     }
 

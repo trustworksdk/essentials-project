@@ -31,9 +31,24 @@ class LongRangeTest {
         var range = LongRange.EMPTY_RANGE;
         assertThat(range.isClosedRange()).isTrue();
         assertThat(range.isOpenRange()).isFalse();
+        assertThat(range.isEmpty()).isTrue();
         assertThat(range.covers(-1)).isFalse();
-        assertThat(range.covers(0)).isTrue();
+        // Order 0 is the first event: an empty range must not cover it, nor equal LongRange.only(0)
+        assertThat(range.covers(0)).isFalse();
         assertThat(range.covers(1)).isFalse();
+        assertThat(range.stream()).isEmpty();
+        assertThat(range).isNotEqualTo(LongRange.only(0));
+        assertThat(LongRange.empty()).isSameAs(LongRange.EMPTY_RANGE);
+    }
+
+    @Test
+    void test_isEmpty() {
+        assertThat(LongRange.between(5, 4).isEmpty()).isTrue();
+        assertThat(LongRange.from(5, 0).isEmpty()).isTrue();
+        assertThat(LongRange.between(5, 5).isEmpty()).isFalse();
+        assertThat(LongRange.only(0).isEmpty()).isFalse();
+        assertThat(LongRange.from(0).isEmpty()).isFalse();
+        assertThat(LongRange.from(Long.MAX_VALUE).isEmpty()).isFalse();
     }
     @Test
     void test_between() {

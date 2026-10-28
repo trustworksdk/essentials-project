@@ -1,0 +1,220 @@
+--- a/src/main/java/com/example/library/lending/automations/loan_reminders/slice.yaml
++++ b/src/main/java/com/example/library/lending/automations/loan_reminders/slice.yaml
+@@ -1,4 +1,4 @@
+-schemaVersion: "1.3"
++schemaVersion: "1.4"
+ slice: lending.loan_reminders
+ kind: automation
+ bc: lending
+@@ -10,5 +10,7 @@
+ lane: decider
+ consumes: [BookBorrowed]
+ dispatches: [ScheduleReminder]
++tier: cqrs-es
++flow: reminders
+ tests:
+   integration: { present: false }
+--- a/src/main/java/com/example/library/lending/external_systems/catalogue_feed/slice.yaml
++++ b/src/main/java/com/example/library/lending/external_systems/catalogue_feed/slice.yaml
+@@ -1,4 +1,4 @@
+-schemaVersion: "1.3"
++schemaVersion: "1.4"
+ slice: lending.catalogue_feed
+ kind: translation
+ bc: lending
+@@ -12,5 +12,10 @@
+ direction: inbound
+ consumes: [CatalogueEntryReceived]
+ dispatches: [RegisterCopy]
++tier: cqrs-es
++maps:
++  - from: CatalogueEntryReceived
++    to: RegisterCopy
++flow: catalogue-feed
+ tests:
+   contract: { present: false }
+--- a/src/main/java/com/example/library/lending/use_cases/borrow_book/slice.yaml
++++ b/src/main/java/com/example/library/lending/use_cases/borrow_book/slice.yaml
+@@ -1,5 +1,5 @@
+ # Lending: borrowing a copy.
+-schemaVersion: "1.2"
++schemaVersion: "1.4"
+ slice: lending.borrow_book
+ kind: command
+ bc: lending
+@@ -22,6 +22,46 @@
+ forbidden:
+   - cross-slice-internal:lending
+ 
++tier: cqrs-es
++invariants:
++  - text: A loan lasts at least one day
++    enforcedBy: BorrowBook
++  - text: A copy that is out on loan cannot be borrowed again
++    enforcedBy: BorrowBookDecider#handle
++flow: reminders
++scenarios:
++  - name: lends an available copy
++    given: []
++    when:
++      command: BorrowBook
++      with:
++        copyId: c-1
++        memberId: m-7
++        loanDays: 14
++    then:
++      - event: BookBorrowed
++        with:
++          copyId: c-1
++          memberId: m-7
++          loanDays: 14
++    test: BorrowBookDeciderTest#lendsAnAvailableCopy
++  - name: a copy out on loan is not lent twice
++    given:
++      - event: BookBorrowed
++        with:
++          copyId: c-1
++          memberId: m-7
++          loanDays: 14
++    when:
++      command: BorrowBook
++      with:
++        copyId: c-1
++        memberId: m-9
++        loanDays: 7
++    then:
++      error: IllegalStateException
++    test: BorrowBookDeciderTest#refusesASecondLoan
++
+ # --- Testing ---
+ tests:
+   unit: { present: true }   # the decider test
+--- a/src/main/java/com/example/library/lending/use_cases/register_copy/slice.yaml
++++ b/src/main/java/com/example/library/lending/use_cases/register_copy/slice.yaml
+@@ -1,4 +1,4 @@
+-schemaVersion: "1.3"
++schemaVersion: "1.4"
+ slice: lending.register_copy
+ kind: command
+ bc: lending
+@@ -12,5 +12,7 @@
+ publishes: [CopyRegistered]
+ writes: [Copy]
+ invariants: []
++tier: cqrs-es
++flow: catalogue-feed
+ tests:
+   unit: { present: false }
+--- a/src/main/java/com/example/library/lending/use_cases/return_book/slice.yaml
++++ b/src/main/java/com/example/library/lending/use_cases/return_book/slice.yaml
+@@ -1,10 +1,10 @@
+-schemaVersion: "1.3"
++schemaVersion: "1.4"
+ slice: lending.return_book
+ kind: command
+ bc: lending
+ owner: circulation
+ status: live
+-summary: TODO one sentence, present tense.
++summary: Takes a borrowed copy back onto the shelf.
+ generator: essentials
+ language: java
+ tier: cqrs-es
+@@ -15,5 +15,9 @@
+   - { method: POST, path: "/api/lending/returns", auth: user }
+ writes: [Copy]
+ scenarios: []
++invariants:
++  - text: Only a copy on loan can be returned
++    enforcedBy: ReturnBookDecider#handle
++flow: return-book
+ tests:
+   unit: { present: true }
+--- a/src/main/java/com/example/library/lending/use_cases/schedule_reminder/slice.yaml
++++ b/src/main/java/com/example/library/lending/use_cases/schedule_reminder/slice.yaml
+@@ -12,5 +12,31 @@
+ handles: [ScheduleReminder]
+ publishes: [ReminderScheduled]
+ writes: [Copy]
++tier: cqrs-es
++invariants:
++  - text: A reminder is never planned more than 30 days ahead
++    enforcedBy: ScheduleReminderDecider#handle
++scenarios:
++  - name: plans a reminder
++    given: []
++    when:
++      command: ScheduleReminder
++      with:
++        copyId: c-1
++        dayOffset: 3
++    then:
++      - event: ReminderScheduled
++    test: ScheduleReminderTest#plansAReminder
++  - name: never plans far ahead
++    given: []
++    when:
++      command: ScheduleReminder
++      with:
++        copyId: c-1
++        dayOffset: 45
++    then:
++      error: IllegalArgumentException
++      message: A reminder is never planned more than 30 days ahead
++    test: ScheduleReminderTest#neverPlansFarAhead
+ tests:
+   unit: { present: true }
+--- a/src/main/java/com/example/library/lending/views/loans_on_shelf/slice.yaml
++++ b/src/main/java/com/example/library/lending/views/loans_on_shelf/slice.yaml
+@@ -1,4 +1,4 @@
+-schemaVersion: "1.3"
++schemaVersion: "1.4"
+ slice: lending.loans_on_shelf
+ kind: view
+ bc: lending
+@@ -17,6 +17,15 @@
+     aggregateTypes: [Copies]
+     from: [BookBorrowed, BookReturned]   # every event this view projects
+     store: document-db
++    consistency: eventual
+   - { name: ShelfCountProjection, aggregateTypes: [Copies], from: [BookReturned] }
++summary: Lists every copy that is out on loan, with the member holding it.
++tier: cqrs-es
++featureFlag:
++  property: library.shelf.enabled
++  havingValue: "true"
++flow:
++  - reminders
++  - return-book
+ tests:
+   integration: { present: false }
+--- a/src/main/kotlin/com/example/library/accounts/use_cases/open_account/slice.yaml
++++ b/src/main/kotlin/com/example/library/accounts/use_cases/open_account/slice.yaml
+@@ -4,11 +4,18 @@
+ bc: accounts
+ owner: membership
+ status: live
+-summary: TODO one sentence, present tense.
++summary: "Registers a new member: one account, #1 per person."
+ generator: essentials
+ language: kotlin
+ handles: [OpenAccount]
+ publishes: [AccountOpened]
+ writes: [Member]
++invariants:
++  - text: A member is at least 16 years old
++    enforcedBy: OpenAccountHandler#handle
++  - text: A member opens one account only
++    enforcedBy: OpenAccountHandler#handle
++  - text: Staff accounts are opened by the administration
++    enforcedBy: OpenAccountHandler#handle
+ tests:
+   unit: { present: false }
+would write src/main/java/com/example/library/lending/automations/loan_reminders/slice.yaml: tier, flow
+would write src/main/java/com/example/library/lending/external_systems/catalogue_feed/slice.yaml: tier, maps, flow
+would write src/main/java/com/example/library/lending/use_cases/borrow_book/slice.yaml: tier, invariants, flow, scenarios
+would write src/main/java/com/example/library/lending/use_cases/register_copy/slice.yaml: tier, flow
+would write src/main/java/com/example/library/lending/use_cases/return_book/slice.yaml: summary, invariants, flow
+would write src/main/java/com/example/library/lending/use_cases/schedule_reminder/slice.yaml: tier, invariants, scenarios
+would write src/main/java/com/example/library/lending/views/loans_on_shelf/slice.yaml: summary, tier, featureFlag, flow, consistency
+would write src/main/kotlin/com/example/library/accounts/use_cases/open_account/slice.yaml: summary, invariants

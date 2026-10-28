@@ -5,7 +5,8 @@ type: llm
 
 The agent's final message is the report `/essentials:slice-check` printed for a test project. Paths in it are relative to the project root, and a report may cite a file by path, by `path:line`, or by its type or directory name.
 
-PASS unless the report raises a finding under gate 14 (Write-style lane (§R5)) about `src/main/java/com/example/multi/payments/use_cases/request_payment/slice.yaml`.
+PASS unless the report raises a finding under gate 14 (Write-style lane (§R5)) about `src/main/java/com/example/multi/payments/use_cases/request_payment/slice.yaml` line 11, `lane: decider` (or what that line declares), described as: request_payment's declared lane flagged as the wrong side, the one to change; naming it as the side that matches the code, inside the payments two-lane finding, does not count.
+Only a finding drawn from that code fails this check; match it by content, not only the line number. A finding about another line of the same file (for example a correct one drawn from a different guard or method) does not.
 Why that would be wrong: request_payment declares the lane the code has; the wrong side of ML-3 is capture_payment.
 A mention that is not a finding does not fail this check: the file listed as passing, cited as evidence for a different finding, or named in a lane or inventory summary.
 These are tolerated and do not fail this check either:

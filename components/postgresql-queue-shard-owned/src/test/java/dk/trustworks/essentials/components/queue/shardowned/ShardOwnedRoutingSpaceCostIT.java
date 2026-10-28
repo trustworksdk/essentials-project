@@ -29,6 +29,8 @@ import dk.trustworks.essentials.components.queue.shardowned.spi.QueueName;
 import java.time.Duration;
 import java.util.concurrent.TimeUnit;
 
+import static dk.trustworks.essentials.components.queue.shardowned.SingleRowQueries.queryForLong;
+
 /**
  * What a LARGER ordered routing space actually costs, now that the per-unit lease renewal is gone.
  * <p>
@@ -151,13 +153,8 @@ class ShardOwnedRoutingSpaceCostIT {
     }
 
     private long transactions() throws Exception {
-        try (var connection = dataSource.getConnection();
-             var statement = connection.prepareStatement(
-                     "SELECT xact_commit + xact_rollback FROM pg_stat_database WHERE datname = current_database()");
-             var resultSet = statement.executeQuery()) {
-            resultSet.next();
-            return resultSet.getLong(1);
-        }
+        return queryForLong(dataSource, "Reading the transaction count of the current database from pg_stat_database",
+                            "SELECT xact_commit + xact_rollback FROM pg_stat_database WHERE datname = current_database()");
     }
 
     private long leaseRowUpdates() throws Exception {

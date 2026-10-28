@@ -32,14 +32,14 @@ essentials.durable-queues.batched-fetch-switch-threshold=4
 
 ### Behaviour difference to be aware of before enabling
 
-Per-queue fetching is **ordered-priority**: it runs the ordered query first and only falls back to the
-unordered query when the ordered query returned nothing. Batched fetching numbers ordered and unordered
-candidates in a single **oldest-first** window, capped at the queue's available worker slots.
+Per-queue fetching is **ordered-first**: it runs the ordered query first and fills the slots it left with
+unordered messages. (Up to 0.60.0 it ran the unordered query only when the ordered query returned nothing.)
+Batched fetching numbers ordered and unordered candidates in a single **oldest-first** window, capped at the
+queue's available worker slots.
 
-So on a queue carrying both ordered and unordered messages, enabling batched fetching changes which messages
-get delivered, not just how they are queried. Ordered messages lose their priority; in exchange, unordered
-messages can no longer starve behind a steady stream of ordered ones. Per-key ordering guarantees are
-unaffected - the per-key barrier applies under both strategies.
+So on a queue carrying both ordered and unordered messages and fewer free slots than eligible messages, enabling
+batched fetching changes which messages get delivered first, not just how they are queried: ordered messages lose
+their precedence. Per-key ordering guarantees are unaffected - the per-key barrier applies under both strategies.
 
 ## Run
 

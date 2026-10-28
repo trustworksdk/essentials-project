@@ -20,6 +20,7 @@
 | **GroupId** | `dk.trustworks.essentials` (core), `dk.trustworks.essentials.components` (components)  |
 | **License** | Apache 2.0                                                                             |
 | **Spring Boot** | 4.1.x (Jackson 3 + Jakarta EE 11; Spring Boot 3.x is not supported)                    |
+| **PostgreSQL** | 15+ from 0.60.1: the majors the PostgreSQL community still patches (README § Version Compatibility) |
 | **Philosophy** | Zero-dependency core, `provided` scope integrations                                    |
 | **Scope** | Intra-service coordination (same service, shared DB)                                   |
 
@@ -78,6 +79,12 @@ Consolidated view of all component modules [LLM-components.md](LLM-components.md
 | **springdata-mongo-queue** | Durable queues with Spring Data MongoDB | [LLM-springdata-mongo-queue.md](LLM-springdata-mongo-queue.md) |
 | **kotlin-eventsourcing** | Kotlin DSL for event sourcing | [LLM-kotlin-eventsourcing.md](LLM-kotlin-eventsourcing.md) |
 | **admin-api-spec** / **spring-boot-starter-admin-api** | HTTP admin/monitoring API over the admin SPIs | [LLM-admin-api.md](LLM-admin-api.md) |
+
+**Three decider families**, which are not interchangeable and do not compose (each has its own command-handler
+adapter and accepts only its own type): Java `aggregates.decider.Decider<C,E,ERR,S>` (typed errors,
+`CommandHandler.deciderBasedCommandHandler`), Java `EventStreamDecider`/`EventStreamEvolver`
+(`EventStreamDeciderCommandHandlerAdapter`) in **eventsourced-aggregates**, and Kotlin `Decider<C,E>`/`Evolver`
+(`DeciderCommandHandlerAdapter`) in **kotlin-eventsourcing**.
 
 ### Spring Boot Starters
 
@@ -213,7 +220,7 @@ Store-and-forward pattern:
 Domain modeling:
 - `StatefulAggregate` - State from events
 - `Aggregate` - Modern aggregate pattern
-- `Decider` / `EventStreamDecider` + `EventStreamEvolver` - Functional style
+- `Decider` (typed errors) / `EventStreamDecider` + `EventStreamEvolver` - Functional style; two separate families, plus Kotlin's `Decider`/`Evolver` (see the note under the Components table)
 - `AggregateRepository` / `StatefulAggregateRepository` - Load/save
 
 ### Database Schema Harness
@@ -334,7 +341,7 @@ public class OrderProcessor {
             try {
                 performCleanup(lock.getCurrentToken());
             } finally {
-                locks.releaseLock(lock);
+                lock.release();   // FencedLock is also AutoCloseable; close() calls release()
             }
         });
     }

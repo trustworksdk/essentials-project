@@ -244,5 +244,9 @@
       "what": "dispatch argument",
       "reason": "type not statically known: translator.toCommand(event)"
     }
-  ]
+  ],
+  "tests": {
+    "roots": [],
+    "classes": []
+  }
 }

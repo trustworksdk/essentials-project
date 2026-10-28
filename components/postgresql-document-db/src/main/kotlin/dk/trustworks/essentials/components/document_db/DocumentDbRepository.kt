@@ -25,6 +25,7 @@ import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwa
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWorkFactory
 import dk.trustworks.essentials.components.foundation.types.RandomIdGenerator
 import dk.trustworks.essentials.kotlin.types.StringValueType
+import dk.trustworks.essentials.types.CharSequenceType
 import org.jdbi.v3.core.Jdbi
 import java.util.function.Function
 import kotlin.reflect.KClass
@@ -268,11 +269,16 @@ interface DocumentDbRepository<ENTITY : VersionedEntity<ID, ENTITY>, ID> {
 
     /**
      * Get an entity by its ID
+     *
+     * Use [findById] where a missing entity is a normal case - e.g. in a projection, where an event can arrive before the
+     * row it updates exists.
      * @param id The ID of the entity to get
-     * @return the entity with the given ID or throws an exception if not found
+     * @return the entity with the given ID
+     * @throws DocumentEntityNotFoundException if no entity with the given ID exists (a [NullPointerException] subtype,
+     * so code written against the bare `NullPointerException` this method threw before 0.60.1 still catches it)
      */
     fun getById(id: ID): ENTITY {
-        return findById(id)!!
+        return findById(id) ?: throw DocumentEntityNotFoundException(entityConfiguration().entityClass().java, id)
     }
 
     /**
@@ -495,8 +501,24 @@ interface DocumentDbRepository<ENTITY : VersionedEntity<ID, ENTITY>, ID> {
  *
  * This approach ensures that updates do not overwrite changes made by other processes.
  * Exception thrown if an entity has be changed
+ *
+ * Unchecked (a [RuntimeException]), so Java callers can catch it by name around [DocumentDbRepository.save]/[DocumentDbRepository.update],
+ * which declare no `throws` clause, and so a Spring `@Transactional` boundary rolls back on it by default.
  */
-class OptimisticLockingException(message: String) : Exception(message)
+class OptimisticLockingException(message: String) : RuntimeException(message)
+
+/**
+ * Thrown by [DocumentDbRepository.getById] when no entity with the requested id exists.
+ *
+ * It extends [NullPointerException] only for compatibility: before 0.60.1 `getById` was `findById(id)!!` and threw a bare
+ * `NullPointerException`, so code that caught that keeps working. Catch [DocumentEntityNotFoundException] in new code, or
+ * use [DocumentDbRepository.findById], which returns `null`.
+ *
+ * @param entityType the entity class that was looked up
+ * @param id the id that was not found
+ */
+class DocumentEntityNotFoundException(val entityType: Class<*>, val id: Any?) :
+    NullPointerException("No '${entityType.name}' entity with id '$id' exists")
 
 /**
  * Serializer for an [Id] annotated property within a [VersionedEntity],
@@ -510,6 +532,7 @@ typealias IdSerializer<ID> = (ID) -> String
 
 private val stringIdSerializer: IdSerializer<String> = { it }
 private val stringValueTypeIdSerializer: IdSerializer<StringValueType<*>> = { it.value }
+private val charSequenceTypeIdSerializer: IdSerializer<CharSequenceType<*>> = { it.toString() }
 
 /**
  * Create a new [DocumentDbRepositoryFactory] which can create [DocumentDbRepository] capable of persisting
@@ -601,6 +624,41 @@ class DocumentDbRepositoryFactory(
     }
 
     /**
+     * Create a new [DocumentDbRepository] (based on [PostgresqlDocumentDbRepository]) instance for the given [VersionedEntity] [entityClass],
+     * where the [Id] annotated property is a Java [CharSequenceType] (e.g. `class OrderId extends CharSequenceType<OrderId>`).
+     * The id is stored as its [CharSequenceType.toString] value.
+     *
+     * [create] only accepts a Kotlin [StringValueType] id; use this factory for a [CharSequenceType] id instead of a raw-typed
+     * `create(...)` call (which compiles, but fails at runtime) or a hand-written [createForCompositeId] serializer.
+     *
+     * @param entityClass The entity class implementation (e.g. a data class such as an Order, Product, etc.)
+     * @return The [PostgresqlDocumentDbRepository]
+     * @see PostgresqlDocumentDbRepository
+     */
+    fun <ENTITY : VersionedEntity<ID, ENTITY>, ID : CharSequenceType<ID>> createForCharSequenceTypeId(
+        entityClass: KClass<ENTITY>
+    ): DocumentDbRepository<ENTITY, ID> {
+        return PostgresqlDocumentDbRepository(
+            unitOfWorkFactory,
+            entityClass,
+            jsonSerializer,
+            charSequenceTypeIdSerializer as IdSerializer<ID>
+        )
+    }
+
+    /**
+     * Java-friendly overload of [createForCharSequenceTypeId] that accepts [Class]:
+     * ```java
+     * DocumentDbRepository<OrderView, OrderId> repository = repositoryFactory.createForCharSequenceTypeId(OrderView.class);
+     * ```
+     */
+    fun <ENTITY : VersionedEntity<ID, ENTITY>, ID : CharSequenceType<ID>> createForCharSequenceTypeId(
+        entityClass: Class<ENTITY>
+    ): DocumentDbRepository<ENTITY, ID> {
+        return createForCharSequenceTypeId(entityClass.kotlin)
+    }
+
+    /**
      * Create a new [DocumentDbRepository] (based on [PostgresqlDocumentDbRepository]) instance for the given [entityClass]
      * where the [Id] annotated property within the [VersionedEntity] isn't of type [String]/[StringValueType]
      *
@@ -682,7 +740,7 @@ data class Index<T>(
     init {
         PostgresqlUtil.checkIsValidTableOrColumnName(name)
         require(properties.isNotEmpty()) { "You have to specify at least 1 property" }
-        properties.forEach { PostgresqlUtil.checkIsValidTableOrColumnName(it.name()) }
+        properties.forEach { checkIsValidJsonPropertyName(it.name(), "Index '$name'") }
     }
 
     companion object {

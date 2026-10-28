@@ -37,8 +37,8 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * Loads and mutates, so there is no {@code save} call: the {@code UnitOfWork} persists the applied events on commit.
  * Only {@code initialize_price} constructs a new aggregate.
  * <p>
- * Uses {@code getPrice}, not {@code findPrice}, so a tick for an instrument whose price stream was never initialized
- * fails rather than quietly opening one at an arbitrary price.
+ * Uses {@code getPrice}, which loads and fails on a missing stream, so a tick for an instrument whose price stream was
+ * never initialized fails rather than quietly opening one at an arbitrary price.
  */
 @Service
 public class UpdatePriceHandler extends AnnotatedCommandHandler {

@@ -27,11 +27,14 @@ import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 
+import java.io.File;
+import java.nio.file.*;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.CopyOnWriteArrayList;
 
+import static dk.trustworks.essentials.components.queue.shardowned.SingleRowQueries.queryForInt;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -149,6 +152,26 @@ class ShardOwnedCrossHostPartitionIT {
     }
 
     /**
+     * The node runs this test's own classpath, so every classpath entry must exist at the same path inside its
+     * container. Each entry is bind-mounted read-only where it is, with the local Maven repository mounted once for
+     * every jar in it. This was a hardcoded {@code /workspace} and {@code ~/.m2}, which only fit a checkout at
+     * {@code /workspace}: from anywhere else - a worktree, a CI checkout - the node found none of the project's classes
+     * and exited before it was ready.
+     */
+    private static GenericContainer<?> withClasspathMounted(GenericContainer<?> container) {
+        var mavenRepository = Path.of(System.getProperty("user.home"), ".m2").toAbsolutePath().normalize();
+        var roots           = new TreeSet<String>();
+        for (var entry : System.getProperty("java.class.path").split(File.pathSeparator)) {
+            var path = Path.of(entry).toAbsolutePath().normalize();
+            if (Files.exists(path)) {
+                roots.add(path.startsWith(mavenRepository) ? mavenRepository.toString() : path.toString());
+            }
+        }
+        roots.forEach(root -> container.withFileSystemBind(root, root, BindMode.READ_ONLY));
+        return container;
+    }
+
+    /**
      * One arm: start a node in its own container, let it take the shards, cut it off at the network,
      * and time both sides of what follows.
      */
@@ -157,11 +180,8 @@ class ShardOwnedCrossHostPartitionIT {
         var jdbcUrl = "jdbc:postgresql://" + databaseIp + ":" + PostgreSQLContainer.POSTGRESQL_PORT
                       + "/" + postgres.getDatabaseName() + urlSuffix;
 
-        try (var node = new GenericContainer<>(NODE_IMAGE)
+        try (var node = withClasspathMounted(new GenericContainer<>(NODE_IMAGE))
                 .withNetwork(network)
-                .withFileSystemBind("/workspace", "/workspace", BindMode.READ_ONLY)
-                .withFileSystemBind(System.getProperty("user.home") + "/.m2",
-                                    System.getProperty("user.home") + "/.m2", BindMode.READ_ONLY)
                 .withCommand("java", "-cp", System.getProperty("java.class.path"),
                              ShardOwnedNodeMain.class.getName(),
                              jdbcUrl, postgres.getUsername(), postgres.getPassword(),
@@ -249,15 +269,8 @@ class ShardOwnedCrossHostPartitionIT {
     }
 
     private int shardsHeldBy(String instanceId) throws Exception {
-        try (var connection = dataSource.getConnection();
-             var statement = connection.prepareStatement(
-                     "SELECT count(*) FROM shard_queue_lease WHERE lane = 'unordered' AND owner = ?")) {
-            statement.setString(1, instanceId);
-            try (var resultSet = statement.executeQuery()) {
-                resultSet.next();
-                return resultSet.getInt(1);
-            }
-        }
+        return queryForInt(dataSource, "Counting the unordered lease rows held by " + instanceId,
+                           "SELECT count(*) FROM shard_queue_lease WHERE lane = 'unordered' AND owner = ?", instanceId);
     }
 
     private static long millisSince(long startNanos) {
@@ -265,14 +278,7 @@ class ShardOwnedCrossHostPartitionIT {
     }
 
     private static ShardOwnerSettings shortLease() {
-        var defaults = ShardOwnerSettings.defaults();
-        return new ShardOwnerSettings(defaults.readBatchSize(), defaults.ackBatchSize(),
-                                      defaults.ackFlushInterval(), defaults.chaseDelay(),
-                                      defaults.holeExpiry(), defaults.sweepInterval(),
-                                      defaults.maxHolesPerChase(), defaults.keyConcurrency(),
-                                      defaults.pollBackstop(), defaults.maxSweepInterval(),
-                                      defaults.pumpThreads(), defaults.shedGrace(),
-                                      Duration.ofSeconds(3), defaults.watermarkCap());
+        return ShardOwnerSettings.builder().setLeaseTtl(Duration.ofSeconds(3)).build();
     }
 
     private record Arm(String arm, Long takeoverMillis, Long noticedMillis) {

@@ -27,6 +27,7 @@ import org.slf4j.*;
 import java.util.*;
 import java.util.stream.Collectors;
 
+import static dk.trustworks.essentials.components.foundation.postgresql.PostgresqlSchemaStatements.createIndexUnlessPresent;
 import static dk.trustworks.essentials.shared.FailFast.*;
 import static dk.trustworks.essentials.shared.MessageFormatter.NamedArgumentBinding.arg;
 import static dk.trustworks.essentials.shared.MessageFormatter.bind;
@@ -156,7 +157,12 @@ public class CdcInboxRepository implements EssentialsSchemaContributor {
     @Override
     public List<SchemaChange> contribute(SchemaContext context) {
         return List.of(SchemaChange.repeatable("cdc-inbox-table", cdcSql.getCdcTableName(), cdcSql.buildCreateCdcTableSql()),
-                       SchemaChange.repeatable("cdc-inbox-status-index", cdcSql.getCdcTableName(), cdcSql.getCreateCdcIndexSql()));
+                       // Only when missing: CREATE INDEX IF NOT EXISTS alone locks the table on every start - see PostgresqlSchemaStatements
+                       SchemaChange.repeatable("cdc-inbox-status-index",
+                                               cdcSql.getCdcTableName(),
+                                               createIndexUnlessPresent(cdcSql.getCdcTableName(),
+                                                                        cdcSql.getCdcIndexName(),
+                                                                        cdcSql.getCreateCdcIndexSql())));
     }
 
     /**

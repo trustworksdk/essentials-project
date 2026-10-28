@@ -11,7 +11,7 @@ target/
 
 ## Trustworks Essentials framework knowledge
 
-<!-- essentials-init: essentials 0.60.0 -->
+<!-- essentials-init: essentials 0.60.1 -->
 
 For ANY question about Trustworks Essentials APIs, modules, or patterns, **always consult the `essentials-docs` skill** from the `essentials` plugin. It auto-loads on Essentials-related questions and on code signals (imports of `dk.trustworks.essentials.*`, type names like `StatefulAggregate`, `DurableQueues`, `EventStore`, `FencedLock`, `Inbox`, `Outbox`, `UnitOfWork`, `Decider`, `EventProcessor`).
 
@@ -19,7 +19,7 @@ Do **not** search the web or guess — Essentials has its own opinionated patter
 
 If the `essentials` plugin is not installed in this Claude Code session, add its marketplace with `/plugin marketplace add trustworksdk/essentials-project`, then run `/plugin install essentials@essentials-marketplace`.
 
-The comment above records the Essentials version this project was scaffolded against. Run **`/essentials:upgrade`** to bring the project up to what the installed plugin ships — a refreshed slice-rules pointer, the slice-manifest lint gate, and a conformance check against the current stack contract (S1–S11). It reports before it writes, and it never touches source or version pins.
+The comment above records the Essentials version this project was scaffolded against. Run **`/essentials:upgrade`** to bring the project up to what the installed plugin ships — a refreshed slice-rules pointer, the slice-manifest lint gate, and a conformance check against the current stack contract (S1–S11). It reports before it writes, and on an older Essentials release it also offers the move to the plugin's: `essentials.version` and only the pins that release requires, under a decision note you approve, on its own branch.
 
 ## Project pins (do not invent — these are fixed by `/essentials:init`)
 
@@ -355,6 +355,12 @@ services:
             <!-- Context startup fails with NoClassDefFoundError for a tools.jackson class. A Boot 4 web starter brings it through spring-boot-starter-jackson, so this bites a headless application -->
             <groupId>tools.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
+        </dependency>
+        <dependency>
+            <!-- Context startup fails: creating the persistence mapper throws IllegalStateException naming org.objenesis:objenesis (Essentials 0.60.1 and later). On 0.60.0, startup and every write succeed, then the first read of a persisted object (an event, a queue message, a document) fails with NoClassDefFoundError for an org/objenesis class. The starters bring immutable-jackson3, and Essentials registers its module in the persistence mapper whenever it is on the classpath. Tests hide it: Mockito brings objenesis in test scope. Spring Boot does not manage its version — set it from objenesis.version -->
+            <groupId>org.objenesis</groupId>
+            <artifactId>objenesis</artifactId>
+            <version>${objenesis.version}</version>
         </dependency>
 
         <!-- ===== Development: starts backend/compose.yml on spring-boot:run ===== -->
@@ -752,7 +758,7 @@ esac
     <parent>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
-        <version>4.1.1</version>
+        <version>4.1.2</version>
         <relativePath/>
     </parent>
 
@@ -770,9 +776,9 @@ esac
         <java.version>25</java.version>
         <!-- Spring Boot manages Kotlin too; this property is what overrides it. Load-bearing on a Java
              project as well: postgresql-document-db is written in Kotlin (S2.1). -->
-        <kotlin.version>2.4.20</kotlin.version>
+        <kotlin.version>2.4.21</kotlin.version>
         <!-- One property drives every Essentials artifact (S1). -->
-        <essentials.version>0.60.0</essentials.version>
+        <essentials.version>0.60.1</essentials.version>
         <springdoc.version>3.1.1</springdoc.version>
         <!-- Spring Boot's parent already manages Testcontainers, Mockito, AssertJ, Awaitility and the MongoDB
              driver. A BOM imported below would be inert for them (the parent's management wins), so their
@@ -785,6 +791,8 @@ esac
         <jdbi3-bom.version>3.55.0</jdbi3-bom.version>
         <spring-modulith.version>2.0.7</spring-modulith.version>
         <jqwik.version>1.9.3</jqwik.version>
+        <!-- Not managed by Spring Boot either: a plain dependency of the backend (S2.1). -->
+        <objenesis.version>3.6</objenesis.version>
     </properties>
 
     <dependencyManagement>
@@ -830,4 +838,4 @@ When using any planner/implementer tooling at this workspace level: either `cd g
 
 For full project context, framework-knowledge auto-loading (the `essentials-docs` skill), conventions, and commands, see **`golden/CLAUDE.md`** — that file is the project-level source of truth.
 === HOOK maven-wrapper (cwd .) ===
-mvn -N -B -q org.apache.maven.plugins:maven-wrapper-plugin:3.3.4:wrapper -Dmaven=3.9.16 -Dtype=only-script
+mvn -N -B -q org.apache.maven.plugins:maven-wrapper-plugin:3.3.4:wrapper -Dmaven=3.10.0 -Dtype=only-script

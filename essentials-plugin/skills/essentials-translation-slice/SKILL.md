@@ -124,11 +124,29 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/render-slice.py render --lang <language> -
     --set owner=<owner>
 ```
 
-Exit 2 means nothing was written: relay the message and stop. The script writes the `both` shape into
-`<bc>/external_systems/<externalSystem>/`. **Then prune for `direction`**: delete the files the table
-marks for it, set `direction` in `slice.yaml`, and remove the manifest lines and translator method of
-the half you deleted (the external message and its `maps` entry for outbound, the internal event and
-its `maps` entry for inbound — Step 5). Then fill the TODOs the JSON lists under `todos`.
+Exit 2 means nothing was written: relay the message and stop.
+
+**Exit 4 means the shell may not write the project** (a read-only filesystem, or a sandbox that lets
+the Write tool write but not Bash). Nothing was written. Do not stop, and never render a file by hand;
+take the emit fallback (`slice-authoring.md` §4b):
+
+1. Run the same command with `--emit` added, once. It writes nothing; its JSON report lists every file
+   in `files` with `path` (relative to `<projectRoot>`), `action` and `content`. If the output is too
+   large to read whole, run it again with `--only <path>` for each path in `files`: that prints the one
+   file's content, raw.
+2. Write every file with the Write tool at `<projectRoot>/<path>`, `content` verbatim: no edit, and no
+   TODO filled on the way. Never import or patch `render-slice.py`.
+3. Then run the same command with `verify` in place of `render` and without `--emit`. Exit 0: the slice is
+   rendered; go on from the emitted report as after a plain render. Exit 1 names each file `missing` or
+   `differs`: report them and stop. Never repair one by hand.
+
+Say in the final report, in one line, that the files were written through the emit fallback.
+
+The script writes the `both` shape into `<bc>/external_systems/<externalSystem>/`. **Then prune for
+`direction`**: delete the files the table marks for it, set `direction` in `slice.yaml`, and remove the
+manifest lines and translator method of the half you deleted (the external message and its `maps` entry
+for outbound, the internal event and its `maps` entry for inbound — Step 5). Then fill the TODOs the
+JSON lists under `todos`.
 
 | Template | Skip when |
 |---|---|

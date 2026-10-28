@@ -181,6 +181,21 @@ public class DefaultShardOwnedQueuesApi implements ShardOwnedQueuesApi {
     }
 
     @Override
+    public ApiShardOwnedKeptUnitReleases releaseKeptOrderedUnit(Object principal, QueueName queueName, String instanceId, int unit) {
+        validateQueueWriterRole(principal);
+        requireNonNull(queueName, "No queueName provided");
+        requireTrue(instanceId != null && !instanceId.isBlank(), "No instanceId provided - the instance id the WARN that reported the unit kept names");
+        return call("release kept ordered unit " + unit + " of instance '" + instanceId + "' of queue '" + queueName.value() + "'",
+                    () -> {
+                        var queue = queues.findQueue(queueName);
+                        if (queue.isEmpty()) {
+                            return ApiShardOwnedKeptUnitReleases.NONE;
+                        }
+                        return ApiShardOwnedKeptUnitReleases.from(queueName, queue.get().releaseKeptOrderedUnit(instanceId, unit));
+                    });
+    }
+
+    @Override
     public long purgeQueue(Object principal, QueueName queueName) {
         validateQueueWriterRole(principal);
         requireNonNull(queueName, "No queueName provided");

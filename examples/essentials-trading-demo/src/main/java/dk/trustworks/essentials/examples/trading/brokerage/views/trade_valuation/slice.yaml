@@ -1,4 +1,4 @@
-schemaVersion: "1.1"
+schemaVersion: "1.4"
 slice: brokerage.trade_valuation
 kind: view
 bc: brokerage
@@ -7,6 +7,7 @@ status: live
 summary: Value one trade against the latest market price, from a read model that projects both the trade's lifecycle and market_data's price events.
 generator: essentials
 language: java
+lane: aggregate
 
 serves: [GetTradeValuation]
 endpoints:
@@ -15,9 +16,10 @@ reads:
   - { name: TradeValuation }
 projections:
   - name: TradeValuationProjection
+    aggregateTypes: [Trades, InstrumentPrices]
     from: [TradePlaced, TradeExecuted, SettlementRequested, TradeSettled, PriceInitialized, PriceUpdated]
     consistency: eventual
-    store: jdbc
+    store: postgresql
 invariants:
   - id: INV-TV-1
     text: "The market price is projected from market_data's price events, never fetched by calling into market_data's write model"
@@ -34,6 +36,10 @@ invariants:
 forbidden:
   - cross-slice-internal:brokerage
   - cross-bc-writemodel:market_data
+tier: cqrs-es
+flow:
+  - market-prices
+  - trade-lifecycle
 tests:
   unit: { present: false }
   integration: { present: false }

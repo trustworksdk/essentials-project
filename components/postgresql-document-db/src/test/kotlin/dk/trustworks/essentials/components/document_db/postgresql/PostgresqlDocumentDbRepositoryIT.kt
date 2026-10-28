@@ -232,6 +232,23 @@ class DocumentDbRepositoryImplIT {
     }
 
     @Test
+    fun `getById of a missing entity names the entity type and the id`() {
+        val missingId = OrderId("no-such-order")
+
+        assertThatThrownBy { orderRepository.getById(missingId) }
+            .isInstanceOf(DocumentEntityNotFoundException::class.java)
+            // Still a NullPointerException, so a caller that caught the bare NPE getById used to throw keeps working
+            .isInstanceOf(NullPointerException::class.java)
+            .hasMessageContaining(Order::class.qualifiedName)
+            .hasMessageContaining("no-such-order")
+            .satisfies({ e ->
+                val notFound = e as DocumentEntityNotFoundException
+                assertThat(notFound.entityType).isEqualTo(Order::class.java)
+                assertThat(notFound.id).isEqualTo(missingId)
+            })
+    }
+
+    @Test
     fun `Test saving the same entity twice results in Optimistic Locking Exception`() {
         val orderId = OrderId.random()
         val orderToSave = Order(

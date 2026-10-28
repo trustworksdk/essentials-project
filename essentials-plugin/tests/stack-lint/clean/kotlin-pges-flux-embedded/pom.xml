@@ -4,7 +4,7 @@
     <parent>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
-        <version>4.1.0</version>
+        <version>4.1.99</version> <!-- above the stack-pins.md Boot patch on purpose; a synthetic patch no pin lands on -->
         <relativePath/>
     </parent>
     <groupId>com.example.golden</groupId>
@@ -17,7 +17,7 @@
     <properties>
         <java.version>26</java.version>
         <essentials.version>DEV-SNAPSHOT</essentials.version>
-        <kotlin.version>2.3.0</kotlin.version>
+        <kotlin.version>2.4.99</kotlin.version> <!-- above the stack-pins.md kotlin.version on purpose; synthetic -->
         <springdoc.version>3.0.0</springdoc.version>
     </properties>
 </project>

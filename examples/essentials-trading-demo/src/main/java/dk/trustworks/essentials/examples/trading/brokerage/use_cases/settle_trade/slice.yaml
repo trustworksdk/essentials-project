@@ -1,4 +1,4 @@
-schemaVersion: "1.1"
+schemaVersion: "1.4"
 slice: brokerage.settle_trade
 kind: automation
 bc: brokerage
@@ -7,9 +7,10 @@ status: live
 summary: Drive an executed trade through settlement to the end, issuing each step's command from the previous step's event, so a trade's settlement is one causation tree.
 generator: essentials
 language: java
+lane: aggregate
 
-handles: [TradeExecuted, SettlementRequested, SettlementCreated, ClearingRequested, ClearingConfirmed, SettlementMarkedSettled, SettlementReconciled]
-sends: [RequestSettlement, CreateSettlement, RequestClearing, ConfirmClearing, MarkSettlementSettled, ReconcileSettlement, MarkTradeSettled, ApplyTradeSettlement, CloseSettlement]
+consumes: [TradeExecuted, SettlementRequested, SettlementCreated, ClearingRequested, ClearingConfirmed, SettlementMarkedSettled, SettlementReconciled, TradePlaced, TradeSettled, SettlementClosed]
+dispatches: [RequestSettlement, CreateSettlement, RequestClearing, ConfirmClearing, MarkSettlementSettled, ReconcileSettlement, MarkTradeSettled, ApplyTradeSettlement, CloseSettlement]
 publishes: []
 writes: []
 reads: []
@@ -26,6 +27,12 @@ invariants:
     enforcedBy: SettleTradeProcessor
 forbidden:
   - cross-slice-internal:brokerage
+tier: cqrs-es
+featureFlag:
+  property: trading-demo.simulation.trade-lifecycle
+  havingValue: automated
+  matchIfMissing: true
+flow: trade-lifecycle
 tests:
   unit: { present: false }
   integration: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/brokerage/SettleTradeAutomationTest.java" }

@@ -547,15 +547,31 @@ public final class PostgresqlUtil {
         // Qualified name?
         if (tableOrColumnName.contains(".")) {
             if (!isValidQualifiedSqlIdentifier(tableOrColumnName)) {
-                throw new InvalidTableOrColumnNameException(msg("Invalid qualified table or column name: '{}'{}. Names must start with a letter or underscore, followed by letters, digits, or underscores.",
-                                                                tableOrColumnName, context != null ? (" in context: " + context) : ""));
+                throw new InvalidTableOrColumnNameException(msg("Invalid qualified table or column name: '{}'{}. {}",
+                                                                tableOrColumnName, context != null ? (" in context: " + context) : "", invalidNameReason(tableOrColumnName.split("\\."))));
             }
         } else {
             if (!isValidSqlIdentifier(tableOrColumnName)) {
-                throw new InvalidTableOrColumnNameException(msg("Invalid table or column name: '{}'{}. Names must start with a letter or underscore, followed by letters, digits, or underscores.",
-                                                                tableOrColumnName, context != null ? (" in context: " + context) : ""));
+                throw new InvalidTableOrColumnNameException(msg("Invalid table or column name: '{}'{}. {}",
+                                                                tableOrColumnName, context != null ? (" in context: " + context) : "", invalidNameReason(tableOrColumnName)));
             }
         }
+    }
+
+    /**
+     * Explains why {@link #isValidSqlIdentifier(String)} rejected a name. A reserved keyword is named as the cause only when
+     * it is the cause - i.e. every part is well-formed and within {@link #MAX_IDENTIFIER_LENGTH}, and one of them is in
+     * {@link #RESERVED_NAMES} - because "must start with a letter or underscore" is no help to someone who named a table {@code order}.
+     */
+    private static String invalidNameReason(String... nameParts) {
+        for (var part : nameParts) {
+            if (part.length() <= MAX_IDENTIFIER_LENGTH
+                    && VALID_SQL_IDENTIFIER_CHARACTERS_PATTERN.matcher(part).matches()
+                    && RESERVED_NAMES.contains(part.toUpperCase(Locale.ROOT))) {
+                return msg("'{}' is a reserved SQL keyword and cannot be used as a table or column name - choose another name.", part);
+            }
+        }
+        return msg("Names must start with a letter or underscore, followed by letters, digits, or underscores, and be at most {} characters long.", MAX_IDENTIFIER_LENGTH);
     }
 
 

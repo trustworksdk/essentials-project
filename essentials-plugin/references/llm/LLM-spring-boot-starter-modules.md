@@ -38,6 +38,25 @@
 - Event Store includes PostgreSQL starter transitively
 - Admin UI includes Event Store starter transitively
 
+### Web stack: WebMvc, not WebFlux
+
+The PostgreSQL and MongoDB starters are **blocking**: their components use JDBC (through `Jdbi`) and a blocking `MongoTemplate`. A `UnitOfWork` and a Spring transaction are bound to the thread that started them (`ThreadLocal`/`TransactionSynchronizationManager`), so they do not follow a reactive chain from one thread to the next.
+
+**Default: Spring WebMvc with virtual threads** (`spring.threads.virtual.enabled=true`). Request handling is then plain blocking code, and `@Transactional`/`usingUnitOfWork(...)` work as everywhere else in these docs.
+
+**Under WebFlux**, run the whole UnitOfWork as one blocking call on `boundedElastic`, never split it across operators:
+
+```java
+@PostMapping("/orders/{id}/confirm")
+Mono<OrderConfirmation> confirm(@PathVariable OrderId id) {
+    return Mono.fromCallable(() -> unitOfWorkFactory.withUnitOfWork(() ->
+                   orders.confirm(id)))                         // repository, event store, queue: one thread, one transaction
+               .subscribeOn(Schedulers.boundedElastic());
+}
+```
+
+A UnitOfWork opened in one operator and used in another (`flatMap`, `publishOn`, a second `fromCallable`) runs on another thread, where the UnitOfWork is not active: work there opens its own transaction or fails with `NoActiveUnitOfWorkException`. The Admin API starter requires WebMvc.
+
 ---
 
 ## Auto-Configured Beans
@@ -46,7 +65,7 @@
 
 Package: `dk.trustworks.essentials.components.boot.autoconfigure.postgresql`
 
-See [spring-boot-starter-postgresql README](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/spring-boot-starter-postgresql/README.md#auto-configured-beans) for full list.
+See [spring-boot-starter-postgresql README](https://github.com/trustworksdk/essentials-project/blob/0.60.1/components/spring-boot-starter-postgresql/README.md#auto-configured-beans) for full list.
 
 **Core Infrastructure:**
 - `Jdbi` - JDBI with PostgresPlugin + TransactionAwareDataSourceProxy
@@ -67,8 +86,9 @@ See [spring-boot-starter-postgresql README](https://github.com/trustworksdk/esse
 
 **Serialization:**
 - `EssentialTypesJacksonModule` - Jackson 3 support for types (bean, so Spring Boot also registers it on its **web** `JsonMapper`)
-- `EssentialsImmutableJacksonModule` - Immutable support (when enabled; also a bean for the web mapper)
+- `EssentialsImmutableJacksonModule` - Immutable support. On the persistence mapper by default (`essentials.immutable-jackson-module-enabled=false` removes it); a bean - and so on Boot's web mapper - only with an explicit `essentials.immutable-jackson-module-enabled=true`, because on the web mapper it changes HTTP request binding (0.60.1)
 - `JSONSerializer` - `EssentialsObjectMappers.createJSONSerializer()` (Jackson 3; when JSONEventSerializer not on classpath). Deliberately does **not** collect `JacksonModule` beans from the context — those are usually web-layer modules and would silently change the persisted format. Need extra persistence modules? Define your own `JSONSerializer` bean; the starter backs off
+- Wire-format check (0.60.1): every `JSONSerializer`/`JSONEventSerializer` bean backed by a `Jackson3JSONSerializer`, yours included, is probed at creation with `EssentialsObjectMappers.findWireFormatDeviations(mapper)`; a mapper that does not reproduce the persisted format logs one ERROR banner per bean naming each deviation. `essentials.json.wire-format-check=warn|fail|off` (default `warn`) - see [JSON Wire-Format Check](#json-wire-format-check). Build your mapper with `EssentialsObjectMappers.createJackson3ObjectMapper(extraModules...)` and it passes
 
 **Scheduler:**
 - `EssentialsScheduler` - Distributed scheduler (when enabled)
@@ -91,7 +111,7 @@ See [spring-boot-starter-postgresql README](https://github.com/trustworksdk/esse
 
 Package: `dk.trustworks.essentials.components.boot.autoconfigure.mongodb`
 
-See [spring-boot-starter-mongodb README](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/spring-boot-starter-mongodb/README.md#auto-configured-beans) for full list.
+See [spring-boot-starter-mongodb README](https://github.com/trustworksdk/essentials-project/blob/0.60.1/components/spring-boot-starter-mongodb/README.md#auto-configured-beans) for full list.
 
 **Core Infrastructure:**
 - `MongoTransactionManager` - Transaction manager (ReadConcern.SNAPSHOT, WriteConcern.ACKNOWLEDGED)
@@ -111,7 +131,7 @@ See [spring-boot-starter-mongodb README](https://github.com/trustworksdk/essenti
 
 Package: `dk.trustworks.essentials.components.boot.autoconfigure.postgresql.eventstore`
 
-See [spring-boot-starter-postgresql-event-store README](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/spring-boot-starter-postgresql-event-store/README.md#auto-configured-beans) for full list.
+See [spring-boot-starter-postgresql-event-store README](https://github.com/trustworksdk/essentials-project/blob/0.60.1/components/spring-boot-starter-postgresql-event-store/README.md#auto-configured-beans) for full list.
 
 **Includes:** All PostgreSQL starter beans
 
@@ -142,7 +162,7 @@ See [spring-boot-starter-postgresql-event-store README](https://github.com/trust
 - `RecordExecutionTimeEventStoreInterceptor` - Performance logging
 - `MeasurementEventStoreSubscriptionObserver` - Subscription metrics
 - `EventStoreSubscriptionMonitorManager` - Subscription health monitoring (runs every 1m by default)
-- `SubscriberGlobalOrderMicrometerMonitor` - Micrometer gauge for subscriber position (only when `management.tracing.enabled=true`)
+- `SubscriberGlobalOrderMicrometerMonitor` - gauge `DurableSubscriptions_EventOrder_Diff`: events each subscriber has yet to read (`head - resumePoint + 1`, `0` when caught up). Recorded whenever a `MeterRegistry` is present (0.60.1; before only with `management.tracing.enabled=true`). A resume point ahead of the head (reset/restored DB - the subscriber skips events) reads `0` and logs a WARN
 - `SubscriptionStoppedMicrometerMonitor` - gauge `essentials.eventstore.subscription.stopped` (`1` while a subscription is stopped by its `SubscriptionErrorPolicy`, and through its automatic resumes until the failed event is handled) - the alerting signal for a halted projection; wired whenever a `MeterRegistry` is present
 
 **Admin APIs:**
@@ -174,7 +194,7 @@ public class EssentialsAdminApiAutoConfiguration
 
 ### PostgreSQL Starter
 
-See [spring-boot-starter-postgresql README](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/spring-boot-starter-postgresql/README.md#configuration-properties) for complete documentation.
+See [spring-boot-starter-postgresql README](https://github.com/trustworksdk/essentials-project/blob/0.60.1/components/spring-boot-starter-postgresql/README.md#configuration-properties) for complete documentation.
 
 #### FencedLock
 
@@ -183,6 +203,7 @@ Prefix: `essentials.fenced-lock-manager`
 | Property | Default | Notes |
 |----------|---------|-------|
 | `fenced-locks-table-name` | `fenced_locks` | Table name - see [Security](#security) |
+| `instance-id` | `<hostname>:<pid>` | Lock holder id shown in the lock table, admin API and logs; must be unique per instance. Since 0.60.1 (before: bare hostname, so two JVMs on one host looked like one holder) |
 | `lock-time-out` | `15s` | Must be > `lock-confirmation-interval` |
 | `lock-confirmation-interval` | `4s` | Heartbeat frequency |
 | `release-acquired-locks-in-case-of-i-o-exceptions-during-lock-confirmation` | `false` | Local release on I/O error |
@@ -194,16 +215,16 @@ Prefix: `essentials.durable-queues`
 | Property | Default | Notes |
 |----------|---------|-------|
 | `shared-queue-table-name` | `durable_queues` | Table name - see [Security](#security) |
-| `message-handling-timeout` | `30s` | Single-op mode only |
+| `message-handling-timeout` | `30s` | Unacknowledged delivery becomes deliverable again after this |
 | `use-centralized-message-fetcher` | `true` | Recommended |
 | `centralized-message-fetcher-polling-interval` | `20ms` | Base interval |
 | `centralized-polling-delay-back-off-factor` | `1.5` | Backoff multiplier |
 | `polling-delay-interval-increment-factor` | `0.5` | Legacy (centralized=false) |
 | `max-polling-interval` | `2s` | Max backoff |
 | `verbose-tracing` | `false` | Include all ops in traces |
-| `shared-queue-statistics-table-name` | `durable_queues_statistics` | Stats table - see [Security](#security) |
-| `enable-queue-statistics-ttl` | `false` | Auto-cleanup stats |
-| `queue-statistics-ttl-duration` | `90` | Days |
+| `require-active-unit-of-work-for-enqueue` | `false` | `true`: an enqueue (`queueMessage`/`queueMessages`, so `Outbox.sendMessage`, `sendAndDontWait`) outside a `UnitOfWork`/Spring transaction throws `NoActiveUnitOfWorkException`. `false`: it commits on its own and WARNs once per call site, within a budget of 32 innermost application frames with up to 4 callers each. Shard-owned engine reads it too |
+
+Removed in 0.60.0, ignored if set (since 0.60.1 an ERROR is logged at startup per key, and the metadata marks them `error`): `transactional-mode` (every queue operation is its own transaction - a `fully-transactional` setup changed semantics, trap `ESS-103`), `use-ordered-unordered-query`, `enable-queue-statistics`, `shared-queue-statistics-table-name`, `enable-queue-statistics-ttl`, `queue-statistics-ttl-duration`. MongoDB starter: `transactional-mode`.
 
 #### MultiTableChangeListener
 
@@ -213,6 +234,7 @@ Prefix: `essentials.multi-table-change-listener`
 |----------|---------|
 | `polling-interval` | `50ms` |
 | `filter-duplicate-notifications` | `true` |
+| `dedicated-connection` | `false` - `true` opens the LISTEN connection outside the pool, from the same `spring.datasource.*` URL/credentials (since 0.60.1) |
 
 #### EventBus
 
@@ -283,7 +305,63 @@ Prefix: `essentials`
 | `life-cycles.start-life-cycles` | `true` | Auto-start Lifecycle beans |
 | `life-cycles.shutdown-timeout` | `10s` | Shutdown budget for stopping Lifecycle beans; bounded, best-effort DB cleanup during shutdown |
 | `reactive-bean-post-processor-enabled` | `true` | Auto-register handlers |
-| `immutable-jackson-module-enabled` | `true` | Enable immutable deserialization |
+| `immutable-jackson-module-enabled` | `true` | `EssentialsImmutableJacksonModule` (Objenesis fallback for types Jackson cannot construct; reading only - the JSON written is identical). The default `true` applies to the persistence `JSONSerializer`/`JSONEventSerializer` only. Boot's web `JsonMapper` gets the module (as a bean, when Objenesis is present) only when the property is set to `true` explicitly - there it makes a request body Jackson cannot construct bind with `null` fields instead of failing with a 400. `false` leaves it out of both. Before 0.60.1 the persistence mapper ignored the property |
+
+#### JSON Wire-Format Check
+
+| Property | Default | Effect |
+|----------|---------|--------|
+| `essentials.json.wire-format-check` | `warn` | Probes every `JSONSerializer` bean backed by a `Jackson3JSONSerializer` (incl. the event store's `JSONEventSerializer`, and your replacement bean) as it is created. `warn`: one ERROR banner per bean whose mapper deviates from the persisted format, listing each deviation; `fail`: the bean's creation fails, and the context with it; `off`: no check. Boot's web `JsonMapper` is never checked |
+
+What it probes (behaviour, not configuration): field access, getter and `is`-getter visibility, ISO-8601 dates,
+numeric `Duration` (`30.000000000`), a missing primitive reading as its default (`FAIL_ON_NULL_FOR_PRIMITIVES` off),
+unknown properties ignored, untyped floats as `BigDecimal`, and with `types-jackson3` present, value types as JSON
+primitives. Shared by every starter: `EssentialsStartupChecksAutoConfiguration` (foundation).
+
+#### Run Report
+
+Since 0.60.1, every starter (shared `EssentialsStartupChecksAutoConfiguration`, foundation) gives each application
+context an `EssentialsRunReport` bean and logs it as **one block on `ApplicationReadyEvent`**: at ERROR if any
+finding is an error, at WARN if any is a warning, otherwise one INFO line `Essentials startup report: no findings`.
+The block lists the findings grouped by severity, each with its fix. Every check still logs where it runs, so nothing
+is lost without the block. Logger `dk.trustworks.essentials.components.foundation.startup.EssentialsRunReport`.
+
+The report keeps collecting while the application runs, and logs twice more:
+
+- **New findings, periodically** - every `essentials.run-report.new-findings-interval` (`Duration`, default `5m`;
+  `0` or negative turns it off), one block `Essentials report, N new findings since the last report` with only the
+  findings not logged before, at the highest severity among them, each with how often and when it was seen. Nothing is
+  logged when nothing is new.
+- **The run report, on shutdown** - when the context closes, once: `Essentials run report` with every finding of the
+  run, each with its count and first/last-seen time. A shutdown log can be lost (SIGTERM then kill, a log shipper
+  already stopped), which is why the periodic one exists.
+
+Identical findings are kept once with a count; at most 500 distinct findings are kept, further ones are only counted.
+
+| Finding | Severity | Fix it points at |
+|---|---|---|
+| A removed `essentials.*` property is still set (also logged as an ERROR at once) | ERROR | Remove the property; the guidance names its replacement |
+| A `JSONSerializer`/`JSONEventSerializer` bean does not reproduce the persisted JSON format (`essentials.json.wire-format-check=warn`) | ERROR | Build the mapper with `EssentialsObjectMappers.createJackson3ObjectMapper(...)` |
+| A `ViewEventProcessor` handles part of a sealed event type and neither handles nor ignores the rest | WARN | `@MessageHandler`, or `@IgnoresEventTypes` on the view |
+| A sealed command type permits commands no `EventStreamDecider` handles | WARN | Add a decider |
+| A command type would be handled by more than one handler or decider | WARN | Register it with exactly one decider |
+| `ShardOwnedDurableQueues` built without a `UnitOfWorkFactory` | WARN | `setUnitOfWorkFactory(...)` |
+| An incomplete `RedeliveryPolicy` was built | WARN | The builder setters named |
+| A message was enqueued outside a `UnitOfWork` - at start-up or at runtime | WARN | Enqueue in a `UnitOfWork`/transaction |
+| `essentials.schema.mode=emit` / `validate`: what the script or the validation covers | INFO | Register every `AggregateType` at start-up |
+
+- **What reaches it:** findings raised on the thread that refreshes the context (bean creation, the start of the
+  `Lifecycle` beans) always. A finding raised after the refresh or on another thread (an `ApplicationRunner`, a
+  runtime enqueue, a processor started later) reaches it only while its context is the **only** one open in the JVM -
+  true in production; in a test JVM with several contexts open it is only logged by its check.
+- **What does not:** a check that stops the application - a missing provided library such as Objenesis,
+  `wire-format-check=fail`, a failed schema `validate`. The failure is the report.
+- **When it prints:** on `ApplicationReadyEvent`; an application stopped after `ApplicationStartedEvent` without
+  becoming ready (`essentials.schema.mode=emit`) prints it as the context closes. A context not started by
+  `SpringApplication` (`ApplicationContextRunner`) prints nothing - read the `EssentialsRunReport` bean
+  (`getFindings()`).
+- One report per context, never shared: two contexts in one JVM never see each other's findings - and neither gets
+  the runtime findings while both are open. Not exposed over the admin API or actuator.
 
 #### Database Schema
 
@@ -300,14 +378,21 @@ Prefix: `essentials.schema` - what happens to the schema every Essentials compon
 - Beans: `SchemaApplier` (selected by `mode`, `@ConditionalOnMissingBean`) and `EssentialsSchemaHarnessRunner`, which
   applies every `EssentialsSchemaContributor` bean after all singletons exist and before lifecycles start. Your own
   contributor beans are applied with them.
-- Outside `create`: registering an `AggregateType` whose table is not in the ledger throws in `validate`; a
+- Outside `create`: registering an `AggregateType` whose table is not in the ledger throws in `validate` (the
+  `SchemaValidationException` names the `AggregateType` and its table, and the type stays unregistered, so a retry
+  validates again); a
   `ClosingBooksSetup` bean needs `.setSchemaOwnership(essentialsComponentsProperties.getSchema().getMode().schemaOwnership())`;
   the shard-owned engine creates each queue's sequences itself and so needs `CREATE` rights at runtime.
 - DBA flow: run once with `emit`, have the script run by a user with DDL rights, deploy with `validate`.
+- `emit` covers what is registered by the time the application has started: register every `AggregateType` at
+  startup (event-store configuration or a singleton bean). One registered from an `ApplicationRunner`, a `@Lazy` bean
+  or on demand is missing from the script (with `emit.exit=true` it never runs) and fails `validate` later. The
+  script header (`-- Contents:`) and the emit log line list every module's objects, event-stream tables with their
+  `AggregateType`; a registration after the exit was triggered is logged at WARN.
 
 ### MongoDB Starter
 
-See [spring-boot-starter-mongodb README](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/spring-boot-starter-mongodb/README.md#configuration-properties) for complete documentation.
+See [spring-boot-starter-mongodb README](https://github.com/trustworksdk/essentials-project/blob/0.60.1/components/spring-boot-starter-mongodb/README.md#configuration-properties) for complete documentation.
 
 #### FencedLock
 
@@ -316,6 +401,7 @@ Prefix: `essentials.fenced-lock-manager`
 | Property | Default | Notes |
 |----------|---------|-------|
 | `fenced-locks-collection-name` | `fenced_locks` | Collection name - see [Security](#security) |
+| `instance-id` | `<hostname>:<pid>` | Lock holder id shown in the lock table, admin API and logs; must be unique per instance. Since 0.60.1 (before: bare hostname, so two JVMs on one host looked like one holder) |
 | `lock-time-out` | `12s` | Must be > `lock-confirmation-interval` |
 | `lock-confirmation-interval` | `5s` | Heartbeat frequency |
 | `release-acquired-locks-in-case-of-i-o-exceptions-during-lock-confirmation` | `false` | Local release on I/O error |
@@ -327,10 +413,11 @@ Prefix: `essentials.durable-queues`
 | Property | Default | Notes |
 |----------|---------|-------|
 | `shared-queue-collection-name` | `durable_queues` | Collection name - see [Security](#security) |
-| `message-handling-timeout` | `30s` | Single-op mode only |
+| `message-handling-timeout` | `30s` | Unacknowledged delivery becomes deliverable again after this |
 | `polling-delay-interval-increment-factor` | `0.5` | Backoff factor |
 | `max-polling-interval` | `2s` | Max backoff |
 | `verbose-tracing` | `false` | Include all ops in traces |
+| `require-active-unit-of-work-for-enqueue` | `false` | `true`: an enqueue (`queueMessage`/`queueMessages`, so `Outbox.sendMessage`, `sendAndDontWait`) outside a `UnitOfWork`/Spring transaction throws `NoActiveUnitOfWorkException`. `false`: it commits on its own and WARNs once per call site, within a budget of 32 innermost application frames with up to 4 callers each. |
 
 **Note:** No centralized message fetcher (PostgreSQL-only feature)
 
@@ -338,7 +425,7 @@ Prefix: `essentials.durable-queues`
 
 ### Event Store Starter
 
-See [spring-boot-starter-postgresql-event-store README](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/spring-boot-starter-postgresql-event-store/README.md#configuration-properties) for complete documentation.
+See [spring-boot-starter-postgresql-event-store README](https://github.com/trustworksdk/essentials-project/blob/0.60.1/components/spring-boot-starter-postgresql-event-store/README.md#configuration-properties) for complete documentation.
 
 **Includes:** All PostgreSQL starter config
 
@@ -359,11 +446,11 @@ Prefix: `essentials.eventstore`
 - `false`: Events published at BeforeCommit/AfterCommit (batch)
 - `true`: Also published immediately after `appendToStream()` (individual)
 
-See [postgresql-event-store: Flush Publishing](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/postgresql-event-store/README.md#flush-publishing)
+See [postgresql-event-store: Flush Publishing](https://github.com/trustworksdk/essentials-project/blob/0.60.1/components/postgresql-event-store/README.md#flush-publishing)
 
 #### Gap Handling
 
-Full section: [starter README: Gap Handling](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/spring-boot-starter-postgresql-event-store/README.md#gap-handling). Mechanics, gap types: [postgresql-event-store README](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/postgresql-event-store/README.md#gap-handling), [LLM-postgresql-event-store.md](LLM-postgresql-event-store.md#gap-handling). `spring-postgresql-event-store` wires no gap handling.
+Full section: [starter README: Gap Handling](https://github.com/trustworksdk/essentials-project/blob/0.60.1/components/spring-boot-starter-postgresql-event-store/README.md#gap-handling). Mechanics, gap types: [postgresql-event-store README](https://github.com/trustworksdk/essentials-project/blob/0.60.1/components/postgresql-event-store/README.md#gap-handling), [LLM-postgresql-event-store.md](LLM-postgresql-event-store.md#gap-handling). `spring-postgresql-event-store` wires no gap handling.
 
 - `use-event-stream-gap-handler=true` (default): `PostgresqlEventStore` is built on the `EventStreamGapHandler` bean; `false`: on `NoEventStreamGapHandler` (bean still created, CDC beans take it)
 - Default bean `EventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration>` is `@ConditionalOnMissingBean`: `PostgresqlEventStreamGapHandler(unitOfWorkFactory, schemaOwnership)` = 60 s transient-gap cache refresh, 120 s permanent-gap threshold, default per-poll selection
@@ -395,7 +482,7 @@ EventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration> eventSt
 
 #### CDC
 
-Prefix: `essentials.eventstore.cdc`. **Disabled by default** (`enabled=false`; every CDC bean is gated on `enabled=true`, no `matchIfMissing`): no slot, no publication changes, no tailer, polling as before. Opt in with `essentials.eventstore.cdc.enabled=true`; then `mode=auto` (falls back to polling if CDC cannot start), `delivery-mode=inbox`, `plugin=pgoutput`. All properties carry descriptions and defaults in the starter's `spring-configuration-metadata.json`. Details: [starter README: CDC Configuration](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/spring-boot-starter-postgresql-event-store/README.md#cdc-configuration-hybrid-logical-replication), [LLM-postgresql-event-store.md](LLM-postgresql-event-store.md).
+Prefix: `essentials.eventstore.cdc`. **Disabled by default** (`enabled=false`; every CDC bean is gated on `enabled=true`, no `matchIfMissing`): no slot, no publication changes, no tailer, polling as before. Opt in with `essentials.eventstore.cdc.enabled=true`; then `mode=auto` (falls back to polling if CDC cannot start), `delivery-mode=inbox`, `plugin=pgoutput`. All properties carry descriptions and defaults in the starter's `spring-configuration-metadata.json`. Details: [starter README: CDC Configuration](https://github.com/trustworksdk/essentials-project/blob/0.60.1/components/spring-boot-starter-postgresql-event-store/README.md#cdc-configuration-hybrid-logical-replication), [LLM-postgresql-event-store.md](LLM-postgresql-event-store.md).
 
 #### Event Causation
 
@@ -558,7 +645,7 @@ Classes:
 1. Uses `ObjectId` values (e.g., `random()` uses `ObjectId.get().toString()`)
 2. Used as Map keys (MongoDB stores as `ObjectId` internally)
 
-See [types-springdata-mongo](https://github.com/trustworksdk/essentials-project/blob/0.60.0/types-springdata-mongo/README.md)
+See [types-springdata-mongo](https://github.com/trustworksdk/essentials-project/blob/0.60.1/types-springdata-mongo/README.md)
 
 ### Event Store PersistableEventMapper
 
@@ -704,7 +791,7 @@ public PostgresqlDurableQueues postgresqlDurableQueues(...) {
     <groupId>dk.trustworks.essentials.components</groupId>
     <artifactId>spring-boot-starter-postgresql</artifactId>
 </dependency>
-<!-- Required: spring-boot-starter-jdbc, jdbi3-core, jdbi3-postgres, postgresql, tools.jackson.core:jackson-databind (Jackson 3), reactor-core -->
+<!-- Required: spring-boot-starter-jdbc, jdbi3-core, jdbi3-postgres, postgresql, tools.jackson.core:jackson-databind (Jackson 3), reactor-core, org.objenesis:objenesis -->
 ```
 
 ### MongoDB Starter
@@ -713,7 +800,7 @@ public PostgresqlDurableQueues postgresqlDurableQueues(...) {
     <groupId>dk.trustworks.essentials.components</groupId>
     <artifactId>spring-boot-starter-mongodb</artifactId>
 </dependency>
-<!-- Required: spring-boot-starter-data-mongodb, tools.jackson.core:jackson-databind (Jackson 3), reactor-core -->
+<!-- Required: spring-boot-starter-data-mongodb, tools.jackson.core:jackson-databind (Jackson 3), reactor-core, org.objenesis:objenesis -->
 ```
 
 ### Event Store Starter
@@ -724,6 +811,8 @@ public PostgresqlDurableQueues postgresqlDurableQueues(...) {
 </dependency>
 <!-- Includes spring-boot-starter-postgresql transitively -->
 ```
+
+Every third-party library above is `provided` upstream, by design - declare each in compile scope. A missing one fails startup; since 0.60.1 the starters' `MissingDependencyFailureAnalyzer` (foundation, registered in their `META-INF/spring.factories`) turns the `NoClassDefFoundError`/`ClassNotFoundException` into a report naming the Maven coordinates to add. Objenesis used to fail only at the first read of a persisted object; since 0.60.1 the persistence mapper refuses to be created without it (`IllegalStateException` naming `org.objenesis:objenesis`). Spring Boot does not manage the objenesis version.
 
 ### Admin UI Starter
 ```xml
@@ -761,7 +850,7 @@ public PostgresqlDurableQueues postgresqlDurableQueues(...) {
 - [reactive](./LLM-reactive.md) - LocalEventBus, CommandBus
 
 **README Links:**
-- [PostgreSQL Starter](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/spring-boot-starter-postgresql/README.md)
-- [MongoDB Starter](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/spring-boot-starter-mongodb/README.md)
-- [Event Store Starter](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/spring-boot-starter-postgresql-event-store/README.md)
+- [PostgreSQL Starter](https://github.com/trustworksdk/essentials-project/blob/0.60.1/components/spring-boot-starter-postgresql/README.md)
+- [MongoDB Starter](https://github.com/trustworksdk/essentials-project/blob/0.60.1/components/spring-boot-starter-mongodb/README.md)
+- [Event Store Starter](https://github.com/trustworksdk/essentials-project/blob/0.60.1/components/spring-boot-starter-postgresql-event-store/README.md)
 - [Admin API](LLM-admin-api.md)

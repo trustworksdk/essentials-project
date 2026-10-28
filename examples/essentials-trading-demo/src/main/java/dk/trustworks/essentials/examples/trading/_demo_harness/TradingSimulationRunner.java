@@ -48,13 +48,13 @@ import dk.trustworks.essentials.examples.trading.brokerage.use_cases.release_fun
 import dk.trustworks.essentials.examples.trading.brokerage.use_cases.request_clearing.RequestClearing;
 import dk.trustworks.essentials.examples.trading.brokerage.use_cases.request_settlement.RequestSettlement;
 import dk.trustworks.essentials.examples.trading.brokerage.use_cases.reserve_funds.ReserveFunds;
+import dk.trustworks.essentials.examples.trading.market_data.aggregates.InstrumentPrices;
 import dk.trustworks.essentials.examples.trading.market_data.aggregates.Instruments;
 import dk.trustworks.essentials.examples.trading.market_data.types.Symbol;
 import dk.trustworks.essentials.examples.trading.market_data.use_cases.initialize_price.InitializePrice;
 import dk.trustworks.essentials.examples.trading.market_data.use_cases.register_instrument.RegisterInstrument;
 import dk.trustworks.essentials.examples.trading.market_data.use_cases.rename_instrument.RenameInstrument;
 import dk.trustworks.essentials.examples.trading.market_data.use_cases.update_price.UpdatePrice;
-import dk.trustworks.essentials.examples.trading.market_data.views.latest_price.LatestPriceQuery;
 import dk.trustworks.essentials.reactive.command.CommandBus;
 import dk.trustworks.essentials.types.Amount;
 import org.slf4j.Logger;
@@ -122,13 +122,13 @@ public class TradingSimulationRunner implements ApplicationRunner {
     private final CommandBus                                          commandBus;
     private final TradingAccountClosingBooksPolicy                    closingBooksPolicy;
     private final AggregateLifecycleApi                               aggregateLifecycleApi;
-    private final LatestPriceQuery                                    latestPriceQuery;
     private final DirectInstrumentPriceService                        directInstrumentPriceService;
     private final EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory;
     private final TradingAccounts                                     tradingAccounts;
     private final Trades                                              trades;
     private final Settlements                                         settlements;
     private final Instruments                                         instruments;
+    private final InstrumentPrices                                    instrumentPrices;
     private final TradeSettlementStatusQuery                          tradeSettlementStatusQuery;
     private final Clock                                               clock;
 
@@ -136,16 +136,16 @@ public class TradingSimulationRunner implements ApplicationRunner {
                                    CommandBus commandBus,
                                    TradingAccountClosingBooksPolicy closingBooksPolicy,
                                    AggregateLifecycleApi aggregateLifecycleApi,
-                                   LatestPriceQuery latestPriceQuery,
                                    DirectInstrumentPriceService directInstrumentPriceService,
                                    EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory,
                                    TradingAccounts tradingAccounts,
                                    Trades trades,
                                    Settlements settlements,
                                    Instruments instruments,
+                                   InstrumentPrices instrumentPrices,
                                    TradeSettlementStatusQuery tradeSettlementStatusQuery) {
-        this(properties, commandBus, closingBooksPolicy, aggregateLifecycleApi, latestPriceQuery,
-             directInstrumentPriceService, unitOfWorkFactory, tradingAccounts, trades, settlements, instruments,
+        this(properties, commandBus, closingBooksPolicy, aggregateLifecycleApi,
+             directInstrumentPriceService, unitOfWorkFactory, tradingAccounts, trades, settlements, instruments, instrumentPrices,
              tradeSettlementStatusQuery, Clock.systemUTC());
     }
 
@@ -153,26 +153,26 @@ public class TradingSimulationRunner implements ApplicationRunner {
                                    CommandBus commandBus,
                                    TradingAccountClosingBooksPolicy closingBooksPolicy,
                                    AggregateLifecycleApi aggregateLifecycleApi,
-                                   LatestPriceQuery latestPriceQuery,
                                    DirectInstrumentPriceService directInstrumentPriceService,
                                    EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory,
                                    TradingAccounts tradingAccounts,
                                    Trades trades,
                                    Settlements settlements,
                                    Instruments instruments,
+                                   InstrumentPrices instrumentPrices,
                                    TradeSettlementStatusQuery tradeSettlementStatusQuery,
                                    Clock clock) {
         this.properties = requireNonNull(properties, "No properties provided");
         this.commandBus = requireNonNull(commandBus, "No commandBus provided");
         this.closingBooksPolicy = requireNonNull(closingBooksPolicy, "No closingBooksPolicy provided");
         this.aggregateLifecycleApi = requireNonNull(aggregateLifecycleApi, "No aggregateLifecycleApi provided");
-        this.latestPriceQuery = requireNonNull(latestPriceQuery, "No latestPriceQuery provided");
         this.directInstrumentPriceService = requireNonNull(directInstrumentPriceService, "No directInstrumentPriceService provided");
         this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory provided");
         this.tradingAccounts = requireNonNull(tradingAccounts, "No tradingAccounts provided");
         this.trades = requireNonNull(trades, "No trades provided");
         this.settlements = requireNonNull(settlements, "No settlements provided");
         this.instruments = requireNonNull(instruments, "No instruments provided");
+        this.instrumentPrices = requireNonNull(instrumentPrices, "No instrumentPrices provided");
         this.tradeSettlementStatusQuery = requireNonNull(tradeSettlementStatusQuery, "No tradeSettlementStatusQuery provided");
         this.clock = requireNonNull(clock, "No clock provided");
     }
@@ -437,27 +437,26 @@ public class TradingSimulationRunner implements ApplicationRunner {
      * <p>
      * It has to be strongly consistent. The brokerage read models are projected asynchronously, so a
      * projection-backed probe could answer "absent" on a restart against a populated database, and this runner would
-     * then seed a second time on top of existing data. The four repository wrappers are therefore consulted directly,
-     * through their {@code findX} methods and inside one read-only unit of work. {@code LatestPriceQuery} is already
-     * strongly consistent — it reads the price aggregate — so the price half goes through the view slice.
+     * then seed a second time on top of existing data. The five repository wrappers are therefore consulted directly,
+     * through their {@code findX} methods and inside one read-only unit of work. That includes {@code InstrumentPrices}:
+     * the {@code market_data.latest_price} view is eventually consistent too.
      */
     private SeedState seedDataState() {
         var firstSeedInstrument = TradingSimulationIds.INSTRUMENT_SEEDS.get(0);
         var firstInstrumentId   = firstSeedInstrument.instrumentId();
 
         var hasDirectPrice = directInstrumentPriceService.findLatestPrice(firstInstrumentId).isPresent();
-        var hasPrice       = latestPriceQuery.findLatestPrice(firstInstrumentId).isPresent();
-
         var probe = unitOfWorkFactory.withUnitOfWork(uow -> new AggregateProbe(
                 instruments.findInstrument(firstInstrumentId).isPresent(),
+                instrumentPrices.findPrice(firstInstrumentId).isPresent(),
                 tradingAccounts.findAccount(firstDemoAccountId()).isPresent(),
                 trades.findTrade(firstDemoTradeId()).isPresent(),
                 settlements.findSettlement(firstDemoSettlementId()).isPresent()));
 
-        if (probe.hasInstrument() && hasDirectPrice && hasPrice && probe.hasAccount() && probe.hasTrade() && probe.hasSettlement()) {
+        if (probe.hasInstrument() && hasDirectPrice && probe.hasPrice() && probe.hasAccount() && probe.hasTrade() && probe.hasSettlement()) {
             return SeedState.COMPLETE;
         }
-        if (probe.hasInstrument() || hasDirectPrice || hasPrice || probe.hasAccount() || probe.hasTrade() || probe.hasSettlement()) {
+        if (probe.hasInstrument() || hasDirectPrice || probe.hasPrice() || probe.hasAccount() || probe.hasTrade() || probe.hasSettlement()) {
             return SeedState.LEGACY_OR_PARTIAL;
         }
         return SeedState.NONE;
@@ -513,8 +512,9 @@ public class TradingSimulationRunner implements ApplicationRunner {
         return SettlementId.forTrade(firstDemoTradeId());
     }
 
-    /** What {@link #seedDataState()} found in the four aggregate stores, gathered in one unit of work. */
+    /** What {@link #seedDataState()} found in the five aggregate stores, gathered in one unit of work. */
     private record AggregateProbe(boolean hasInstrument,
+                                  boolean hasPrice,
                                   boolean hasAccount,
                                   boolean hasTrade,
                                   boolean hasSettlement) {

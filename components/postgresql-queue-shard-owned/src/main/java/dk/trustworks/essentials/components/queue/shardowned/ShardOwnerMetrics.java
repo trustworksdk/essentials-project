@@ -19,6 +19,7 @@ package dk.trustworks.essentials.components.queue.shardowned;
 import dk.trustworks.essentials.components.queue.shardowned.spi.QueueObserver;
 
 import java.util.*;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
@@ -58,6 +59,16 @@ public final class ShardOwnerMetrics {
 
     public final LongAdder     delivered                        = new LongAdder();
     public final LongAdder     cursorReads                      = new LongAdder();
+    /**
+     * Heartbeats that found the membership row last refreshed by another process: two live processes share this
+     * instance id. See {@code ShardOwnedStorage.heartbeat}
+     */
+    public final LongAdder     sharedInstanceIdHeartbeats       = new LongAdder();
+    /**
+     * Rows the unordered lane's cursor reads returned. Divided by {@code delivered} this is the read amplification:
+     * rows carried over the wire, payloads included, per message dispatched
+     */
+    public final LongAdder     cursorRowsRead                   = new LongAdder();
     public final LongAdder     holesObserved                    = new LongAdder();
     public final LongAdder     holesResolved                    = new LongAdder();
     public final LongAdder     holesAbandoned                   = new LongAdder();
@@ -65,6 +76,21 @@ public final class ShardOwnerMetrics {
     public final LongAdder     holeResolutionNanos              = new LongAdder();
     public final LongAdder     headSweeps                       = new LongAdder();
     public final LongAdder     sweepRecoveries                  = new LongAdder();
+    /**
+     * Ordered lane only: the part of {@code sweepRecoveries} the cursor had already passed. A row the head sweep found
+     * that this owner held neither as read nor as awaiting acknowledgement, with a {@code seq} at or below the safe
+     * watermark at the moment the sweep's rows were applied - so no later cursor read would have returned it.
+     * <p>
+     * {@code sweepRecoveries} also counts a row that committed between a pass's cursor read and its sweep (two
+     * statements, two snapshots), which the next cursor read would have found anyway; this counter does not. What it
+     * does count: a row the watermark stepped over (a defect, or a write transaction that outlived {@code watermarkCap},
+     * see {@code watermarkCapped}), a row that was not yet visible when the cursor passed it (a delayed message, a
+     * retry or requested redelivery still in its backoff), and a message this owner put back for another delivery (a
+     * retry that came due, a handler interrupted) when the sweep reaches it before it is delivered again. On traffic
+     * with none of those, it is zero unless the watermark stepped over a row. On {@link #snapshot()} only, not on
+     * {@code QueueStatistics}, which is the admin API's published shape.
+     */
+    public final LongAdder     sweepRecoveriesBehindCursor      = new LongAdder();
     /**
      * Ordered lane only. The hole counters above describe the unordered lane's mechanism; the ordered
      * lane replaced it with a safe watermark and these describe that one.
@@ -74,7 +100,9 @@ public final class ShardOwnerMetrics {
      * {@code watermarkCapped} counts advances forced by the wall-clock cap instead — an advance the
      * horizon had not authorised, which is the ordered lane's remaining exposure to a late commit and
      * therefore the number to watch. A non-zero value means some transaction outlived
-     * {@code watermarkCap}, exactly as an abandoned hole outlived {@code holeExpiry}.
+     * {@code watermarkCap}, exactly as an abandoned hole outlived {@code holeExpiry}. An advance past
+     * one capped candidate counts once, even when reads full at their row limit spread it over several
+     * passes.
      */
     /**
      * Statements actually issued for the ordered lane's reads, as against {@code cursorReads}, which
@@ -99,11 +127,134 @@ public final class ShardOwnerMetrics {
     public final LongAdder     ackFlushes                       = new LongAdder();
     public final LongAdder     handlerFailures                  = new LongAdder();
     /**
-     * Rows whose attempt count a new owner bumped on takeover. The fast path never writes an
-     * attempt count, so this is the only thing standing between a JVM-killing handler and an
-     * infinite redelivery loop — which makes it worth counting rather than only logging.
+     * Rows whose attempt count was charged for a delivery whose outcome was never recorded: by a new owner on an unclean
+     * takeover, by an ordered owner releasing its unit past {@code stuckHandlerTimeout} - a shed or a dead pump's hand-back -
+     * with a message in a handler longer than {@code stuckHandlerTimeout}, or on request with a message in a handler
+     * ({@code OrderedShardOwner.chargeKeysInHandlerBeforeRelease}), and by an
+     * unordered owner releasing its shard - a shed, a dead pump's hand-back or a stop - with a message in a handler longer
+     * than {@code stuckHandlerTimeout} ({@code ShardOwner.chargeInHandlerBeforeRelease}), as the next owner of a released
+     * unit charges nothing. The fast path never writes an attempt count, so this is the only
+     * thing standing between a JVM-killing - or forever hanging - handler and an infinite redelivery loop, which makes it
+     * worth counting rather than only logging. Counted on the metrics of the owner that charged.
      */
     public final LongAdder     takeoverAttemptBumps             = new LongAdder();
+    /**
+     * Takeovers ({@code onTakeover}) that failed with the connection still healthy: a statement the
+     * database refused, or an unchecked exception. Each is retried {@code ShardPump.TAKEOVER_RETRY_NANOS}
+     * (200 ms) later, with no limit, so a takeover that keeps failing raises this by about five a second. See
+     * {@link #shardsAwaitingTakeover} for how many shards are stuck now.
+     */
+    public final LongAdder     takeoverFailures                 = new LongAdder();
+    /**
+     * Shards this instance holds a lease on but does not serve, because their takeover has failed and
+     * has not yet completed. Alert on it being above zero, next to {@code QueueHealth.unownedShards()}.
+     * <p>
+     * {@code unownedShards} cannot see these shards: it reads the lease table, and a shard here is
+     * leased. The heartbeat keeps renewing the lease, so no other instance takes the shard either, and
+     * it delivers nothing until the cause clears. A failure caused by data (a trigger or constraint
+     * refusing the takeover's dead-letter move) does not clear on its own. The ERROR log, at most one a
+     * minute per subscription (these metrics: one per queue unless a queue has several), names one shard and
+     * the cause and counts the subscription's others; every shard is logged at
+     * DEBUG, and this count is exact. Rises on a shard's first failed takeover and falls when the takeover
+     * completes, or when the lease ends once the pump next reaches the database. A lease that ends while
+     * the pump is reconnecting stays counted here until then. Meanwhile {@code unownedShards} shows the
+     * shard only if the lease was released and nobody has taken it yet; if another instance took it over,
+     * the shard counts as owned there, and this count is one too high until the pump reconnects. It falls
+     * when the pump stops with its runtime, but not as soon as the pump thread dies (on a critical error) while
+     * the runtime runs: the death is logged at ERROR, every shard on the pump is counted in
+     * {@link #shardsOnDeadPumps}, and its queue's heartbeat hands the lease back. A dead pump's shard stops
+     * counting in both when its lease is handed back, or when that runtime stops.
+     * <p>
+     * Readable through {@link ShardOwnedQueue#metrics()}. A {@code PostgresqlMessageQueue} keeps its
+     * metrics private; for a queue used through {@code MessageQueue} the same transitions reach
+     * {@link QueueObserver#takeoverStalled}, which {@code MicrometerQueueObserver} publishes as
+     * {@code essentials.queue.shards.awaiting.takeover}.
+     */
+    public final AtomicInteger shardsAwaitingTakeover           = new AtomicInteger();
+    /**
+     * Delivery passes ({@code pumpOnce}) for a shard that failed with the connection still healthy: a statement the
+     * database refused, or an unchecked exception or non-critical {@code Error} from the engine. Not a handler failing, which is
+     * {@link #handlerFailures}. The checks that decide whether the shard is pumped at all ({@code leaseHeld},
+     * {@code deliveryPermitted}, {@code needsAttention}) count here too when they throw, paced the same way. The shard
+     * stays leased and its pass is tried again 200 ms later at the earliest
+     * ({@code ShardPump.PUMP_RETRY_NANOS}), with no limit, while the pump's other shards keep their own rate. So a shard
+     * whose reads or acknowledgements are permanently refused delivers nothing while this rises by up to about five a
+     * second per failing shard, whatever the pump's pass rate - and,
+     * like a stalled takeover, {@code QueueHealth.unownedShards()} cannot see it because the shard is leased. Alert on
+     * its rate. The ERROR log, at most one a minute per subscription (these metrics: one per queue unless a queue has
+     * several), names one shard and the cause; every failure is logged at DEBUG, and a shard whose pass succeeds again after
+     * failing gets an INFO if its run of failures logged that ERROR, a DEBUG otherwise. See {@code PumpFailures}.
+     * <p>
+     * Readable only through {@link ShardOwnedQueue#metrics()}. A {@code PostgresqlMessageQueue} keeps its metrics private
+     * and no {@code QueueObserver} callback reports a failing pass (unlike {@link #shardsAwaitingTakeover}, which reaches
+     * {@code QueueObserver.takeoverStalled}), so for a queue used through {@code MessageQueue} (the Spring starter, the
+     * {@code DurableQueues} adapter) the {@code ShardPump} ERROR log is the only signal: at most one a minute per
+     * subscription, naming one shard.
+     */
+    public final LongAdder     pumpFailures                     = new LongAdder();
+    /**
+     * Ordered-lane batched reads (one statement per queue per pass, for two or more attentive shards) that failed. Each
+     * shard then reads for itself in its own pass, so nothing stops delivering because of this alone, but the read is tried
+     * again on the next pass: a read the database keeps refusing (a revoked grant) rises with every pass, and the shards'
+     * own reads usually fail too, under {@link #pumpFailures}. Logged at WARN with the stack trace at most once a minute per
+     * subscription (these metrics: one per queue unless a queue has several), naming the queue and the shards read for,
+     * every failure at DEBUG, and when the batched read succeeds again on a pump an INFO if its run of failures there
+     * logged that WARN, a DEBUG otherwise. See {@code PumpFailures}.
+     * <p>
+     * Readable only through {@link ShardOwnedQueue#metrics()}. A {@code PostgresqlMessageQueue} keeps its metrics private
+     * and no {@code QueueObserver} callback reports this, so for a queue used through {@code MessageQueue} (the Spring
+     * starter, the {@code DurableQueues} adapter) the {@code ShardPump} WARN log is the only signal: at most one a minute
+     * per subscription.
+     */
+    public final LongAdder     batchedReadFailures              = new LongAdder();
+    /**
+     * Pump passes that ended because something outside the pump's per-shard guards threw: an unchecked exception or a
+     * non-critical {@code Error} from the connection pool, from the pump's own bookkeeping, or from an owner's
+     * {@code parkDeadlineMillis}. One owner's {@code pumpOnce}, {@code onTakeover} or selection checks
+     * ({@code leaseHeld}, {@code deliveryPermitted}, {@code needsAttention}) throwing is not counted here: that is the
+     * owner's alone ({@link #pumpFailures}, {@link #takeoverFailures}). The pump treats it like a lost connection: it
+     * reconnects 200 ms later, runs every shard's takeover again (safe, it runs on every reconnect) and goes on serving.
+     * Counted on the metrics of every queue the pump serves, since a pass is not one queue's, and on the runtime's own. A
+     * pump that is stopping counts nothing here: it logs the throw at WARN and exits.
+     * <p>
+     * What a steadily rising count costs depends on where it is thrown. A pool that keeps failing ends every pass before
+     * any shard on the pump delivers: while it persists, the pump delivers nothing, for every shard it serves. An owner's
+     * {@code parkDeadlineMillis} is asked only on a pass that delivered nothing, after every attentive shard was pumped:
+     * while it keeps throwing, every idle pass ends in a reconnect that reruns every shard's takeover, about five times a
+     * second, and a message arriving meanwhile waits up to 200 ms for the reconnect instead of being woken for. The ERROR
+     * log is at most once a minute per pump, every failure at DEBUG, an INFO when a pass completes again. See
+     * {@code ShardPump.serve}.
+     * <p>
+     * Readable only through {@link ShardOwnedQueue#metrics()}. A {@code PostgresqlMessageQueue} keeps its metrics private
+     * and no {@code QueueObserver} callback reports this, so for a queue used through {@code MessageQueue} (the Spring
+     * starter, the {@code DurableQueues} adapter) the ERROR log is the only signal.
+     */
+    public final LongAdder     pumpLoopFailures                 = new LongAdder();
+    /**
+     * Shards of this queue that sit on a pump thread that has died and whose lease this instance has not handed back yet:
+     * counted from the death (or from being handed to the dead pump after it, when no live one was left or the pump died
+     * between placing and registering the shard) until the queue's heartbeat releases the lease, or the queue or the
+     * runtime stops. A pump dies only on a critical error ({@code VirtualMachineError}, {@code LinkageError}): everything
+     * else it reconnects from ({@link #pumpLoopFailures}). Nothing restarts it, so it ends the owners on it, and the
+     * heartbeat hands their leases back to the cluster - an unordered shard on the next tick, an ordered unit once no key
+     * is in one of its handlers, or once a key has been in its handler longer than {@code stuckHandlerTimeout}, when the
+     * unit is released with every key still in a handler (once the wait outlasts {@code shedGrace}, a WARN names the unit
+     * and its keys still in a handler, once per unit). Another instance, or a live
+     * pump here, then takes the shard over under a new fence; what was handled and not acknowledged is redelivered. So
+     * this is normally above zero for one heartbeat after a death; alert on it staying there, next to
+     * {@link #shardsAwaitingTakeover}. {@code QueueHealth.unownedShards()} cannot see these shards while they are counted,
+     * because they are still leased. Shards acquired after the death go to the runtime's live pumps and are not counted;
+     * with no live pump left this instance acquires nothing, so its shards stay unowned once handed back, where
+     * {@code unownedShards} does see them.
+     * <p>
+     * Readable only through {@link ShardOwnedQueue#metrics()}. A {@code PostgresqlMessageQueue} keeps its metrics private
+     * and no {@code QueueObserver} callback reports a dead pump (unlike {@link #shardsAwaitingTakeover}, which reaches
+     * {@code QueueObserver.takeoverStalled}), so for a queue used through {@code MessageQueue} (the Spring starter, the
+     * {@code DurableQueues} adapter) the pump's ERROR log is the only signal of the death; the hand-back that follows
+     * reaches the observer as ownership changes ({@code QueueObserver.shardOwnershipChanged}). Whether to add one is open:
+     * {@code docs/durable-queue-shard-owned.md} §18.3.
+     */
+    public final AtomicInteger shardsOnDeadPumps                = new AtomicInteger();
     /**
      * Messages whose handler returned while the thread was interrupted. Not acknowledged, because an
      * interrupted handler cannot be assumed to have finished — see {@code ShardOwner.deliver}.
@@ -140,13 +291,15 @@ public final class ShardOwnerMetrics {
      */
     public final LongAdder     shedsStarted                     = new LongAdder();
     /**
-     * Sheds that quiesced and released, so another instance could take the shard.
+     * Sheds that ended ready for the release, so another instance could take the shard: quiesced, or with a key still in
+     * a handler once that key had been there longer than {@code stuckHandlerTimeout} ({@link ShardOwnerSettings}).
      */
     public final LongAdder     shedsCompleted                   = new LongAdder();
     /**
      * Sheds abandoned because a key was still in a handler when the grace ran out. The shard stays
-     * here: unbalanced beats reordered. A non-zero count means handlers run longer than
-     * {@link ShardOwnerSettings#shedGrace}, not that anything is broken.
+     * here: unbalanced beats reordered - until a key has been in its handler longer than
+     * {@code stuckHandlerTimeout}, when a shed releases it ({@link #shedsCompleted}). A non-zero count means
+     * handlers run longer than {@link ShardOwnerSettings#shedGrace}, not that anything is broken.
      */
     public final LongAdder     shedsAbandoned                   = new LongAdder();
     public final LongAdder     retriesScheduled                 = new LongAdder();
@@ -166,10 +319,38 @@ public final class ShardOwnerMetrics {
      */
     public final LongAdder     readsSkippedByHandoff            = new LongAdder();
     /**
-     * Acknowledgements the fence clause rejected because the lease had moved on.
+     * Acknowledgements the fence clause rejected because the lease had moved on. Counted only by the refused flush that
+     * moves its owner's lease row to {@code RELEASED} ({@link LeasedOwner.LeaseRow}): a flush refused once the row is
+     * {@code RELEASED} already - released by this instance, as by a stop whose flush returned after its kept unit was
+     * given up and released, or found taken by an earlier check or write - counts nothing, and nor does one refused after
+     * a release of the row failed with no error answer from the database (a lost connection or a timed-out read,
+     * {@link LeaseRowState#mayHaveGoneThrough}; {@link LeasedOwner#markReleaseInDoubt()}): that release may have gone
+     * through on the server, as one whose answer the network wait bound of a kept unit's hand-back or release on request
+     * stopped waiting for can.
      */
     public final LongAdder     fencedOutAcks                    = new LongAdder();
     public final LongAdder     leaseRenewals                    = new LongAdder();
+    /**
+     * Units taken away by another instance while this instance still held their lease row. Counted once per loss, by the
+     * call that moved the owner's lease row to {@code RELEASED}:
+     * <ul>
+     *     <li>An owner still serving its unit is counted by whichever finds the loss first: the heartbeat's lease check, or
+     *     the owner's own takeover attempt charge being refused by its fence. A loss its refused acknowledgement finds
+     *     first is counted in {@link #fencedOutAcks} instead.</li>
+     *     <li>An owner whose pump died, its lease row not yet handed back, is counted by the lease check alone: a dead pump
+     *     runs no takeover.</li>
+     *     <li>An owner {@code stop()} has ended is counted by neither, whether or not another instance has taken its unit:
+     *     a unit the stop gave up is not a lost lease. The lease check leaves a run's owners alone once a stop has taken
+     *     the run out, which it does before it drains and ends them (so a loss the lease check would find during that
+     *     drain is not counted either), and a refused takeover charge counts only an owner still serving its unit.</li>
+     *     <li>An owner a release of whose lease row failed with no error answer from the database (a lost connection or a
+     *     timed-out read, {@link LeaseRowState#mayHaveGoneThrough}) is counted by neither
+     *     ({@link LeasedOwner#markReleaseInDoubt()}): that release may have gone through on the server, the unit given up
+     *     by this instance itself; the lease check logs such units at INFO, not in its "lost to another instance" WARN. A
+     *     release the database refused with an error of its own, which it rolled back, is not marked, so a later loss of
+     *     that owner's unit still counts.</li>
+     * </ul>
+     */
     public final LongAdder     leasesLost                       = new LongAdder();
     /**
      * Connections lost underneath an owner and reconnected. Routine in production; not fatal.
@@ -182,6 +363,13 @@ public final class ShardOwnerMetrics {
      * instance never had to rebalance".
      */
     public final LongAdder     shardsAcquired                   = new LongAdder();
+    /**
+     * Units this instance no longer holds, one per acquisition counted in {@link #shardsAcquired}: released (to rebalance,
+     * handed back from a dead pump, or by {@code stop()}), found taken by another instance, or given up by {@code stop()}
+     * without a release (an ordered unit kept because a key was still in its handler, or a release that failed). So
+     * {@code shardsAcquired - shardsReleased} is the units held, and zero once every consumer counting here has stopped with
+     * {@code stop()}; {@code stopAbruptly()}, which stands in for a crash, counts no releases.
+     */
     public final LongAdder     shardsReleased                   = new LongAdder();
     /**
      * Dispatch attempts skipped because that key already had a message in flight.
@@ -215,6 +403,116 @@ public final class ShardOwnerMetrics {
     public final LongAdder     deliveryPauses                   = new LongAdder();
 
     /**
+     * Where {@link #keptUnitsInHandler()} reads from: one source per {@link ShardOwnedQueue} these metrics are given to,
+     * each counting its own kept units, from the queue's {@code start()} for as long as the queue is started or has a kept
+     * unit with a key in a handler ({@link KeptUnitsInHandlerSource#finished}). A subscription's two lanes share these
+     * metrics, so both register. A finished source is dropped by the next read of {@link #keptUnitsInHandler()} and the
+     * next registration: metrics shared through {@code ShardOwnedQueueBuilder.setMetrics} by queues built and closed over
+     * time hold the queues that run, or whose kept handler does, and not every queue ever built on them.
+     */
+    private final Set<KeptUnitsInHandlerSource> keptUnitsInHandlerSources = ConcurrentHashMap.newKeySet();
+
+    /**
+     * Ordered units a stop kept because a key was still in its handler {@code shedGrace} after the stop began, and whose
+     * key is in that handler still: read now from the queues these metrics belong to, not counted up and down. Normally
+     * zero; above zero for as long as such a handler runs. While one does, no run of that queue takes the unit and a
+     * {@code PostgresqlMessageQueue} keeps the subscription's instance id out of use - until the handler has run longer
+     * than {@code stuckHandlerTimeout} ({@link ShardOwnerSettings}), after which a run of that queue - the one running then,
+     * or the next - or a subscription registering under the instance id takes the unit over, and the id is free again; or
+     * until the unit is released on request ({@code MessageQueue.releaseKeptOrderedUnit}), after which an instance below its
+     * fair share may take it under a new fence, and the id is free again. A unit taken over at the bound still counts here while its old handler runs on, since that handler
+     * still holds a thread and may still be running the key beside its new owner. So does an ordered unit a fair-share shed,
+     * or the hand-back from a dead pump, released with a key still in a handler because that key had been there longer than
+     * {@code stuckHandlerTimeout} - each such release logged at WARN, naming the unit, its keys and how long - for as long
+     * as that handler runs on, and so does a unit released on request while its handler runs on. Alert on it staying above zero, next to
+     * {@link #shardsAwaitingTakeover}: {@code QueueHealth.unownedShards()} cannot see such a unit while this instance is
+     * live, as its lease row names it. A WARN names each unit, its keys and how long they have run, once its handler has
+     * run longer than {@code leaseTtl}, and then at most once a minute per unit, from each heartbeat or start of the
+     * queue, and each {@code consume()} of a {@code PostgresqlMessageQueue} waiting for the instance id, that finds it
+     * still in its handler: a queue stopped for good and asked by nothing logs no more of it, which this count still
+     * shows.
+     * <p>
+     * Readable only through {@link ShardOwnedQueue#metrics()} and {@link #snapshot()}: a {@code PostgresqlMessageQueue}
+     * keeps its metrics private, and no {@code QueueObserver} callback reports it, so for a queue used through
+     * {@code MessageQueue} the WARN is the signal.
+     */
+    public int keptUnitsInHandler() {
+        var count = 0;
+        for (var source : keptUnitsInHandlerSources) {
+            var kept = source.keptUnitsInHandler();
+            if (kept == 0 && !source.isStarted()) {
+                dropIfFinished(source);
+            } else {
+                count += kept;
+            }
+        }
+        return count;
+    }
+
+    /**
+     * Have {@link #keptUnitsInHandler()} count what {@code source} counts, until {@code source} is
+     * {@link KeptUnitsInHandlerSource#finished finished}; first drop every source registered here that is finished by now.
+     * Called by a {@link ShardOwnedQueue} these metrics are given to whenever it may stop being finished: as its
+     * {@code start()} installs a run, as a stop writes the units it keeps, and as it adds a unit released with a key still in
+     * a handler - each time after the write, which is what makes the drop safe ({@link #dropIfFinished}). Registering a
+     * source already registered changes nothing.
+     */
+    void countKeptUnitsInHandler(KeptUnitsInHandlerSource source) {
+        requireNonNull(source, "No source provided");
+        for (var registered : keptUnitsInHandlerSources) {
+            if (!registered.equals(source) && registered.finished()) {
+                dropIfFinished(registered);
+            }
+        }
+        keptUnitsInHandlerSources.add(source);
+    }
+
+    /**
+     * Drop {@code source}, found {@link KeptUnitsInHandlerSource#finished finished}, and add it again should it no longer be
+     * finished once it is out. A queue registers after each write that may make it unfinished
+     * ({@link #countKeptUnitsInHandler}): a registration before the removal is followed by this second look, which sees
+     * the write, and one after it adds the source back itself. So no source is left out while it is started or counts a
+     * kept unit.
+     */
+    private void dropIfFinished(KeptUnitsInHandlerSource source) {
+        keptUnitsInHandlerSources.remove(source);
+        if (!source.finished()) {
+            keptUnitsInHandlerSources.add(source);
+        }
+    }
+
+    /**
+     * How many sources {@link #keptUnitsInHandler()} reads from now, read without dropping any - for a test to see that
+     * queues built and closed on these metrics do not stay registered.
+     */
+    int keptUnitsInHandlerSourceCount() {
+        return keptUnitsInHandlerSources.size();
+    }
+
+    /**
+     * What one {@link ShardOwnedQueue} adds to {@link #keptUnitsInHandler()}.
+     */
+    interface KeptUnitsInHandlerSource {
+        /**
+         * How many ordered units the queue keeps whose key is in a handler now.
+         */
+        int keptUnitsInHandler();
+
+        /**
+         * Whether the queue is started.
+         */
+        boolean isStarted();
+
+        /**
+         * Whether the queue is not started and counts no kept unit: a queue that stays so adds nothing to
+         * {@link #keptUnitsInHandler()} until it registers again.
+         */
+        default boolean finished() {
+            return !isStarted() && keptUnitsInHandler() == 0;
+        }
+    }
+
+    /**
      * Handler invocations that ran longer than {@code leaseTtl}.
      * <p>
      * Non-zero means the lease is shorter than the work: should this instance lose its liveness while
@@ -233,6 +531,33 @@ public final class ShardOwnerMetrics {
 
     /** Keys blocked since that WARN was last logged, which the next one reports as a count. */
     final LongAdder blockedKeysSinceLastWarning = new LongAdder();
+
+    /**
+     * Rate limit for the ERROR that reports a stalled takeover, per subscription rather than per shard: what makes one
+     * shard's takeover fail usually makes them all fail. These metrics are one subscription's (one per queue unless a queue
+     * has several), and every pump serving the subscription shares this window. {@link ErrorWindow#NEVER_TAKEN} until the
+     * first, and again once no shard of the subscription is awaiting its takeover. See {@code TakeoverStalls}.
+     */
+    final java.util.concurrent.atomic.AtomicLong nextTakeoverStallErrorNanos =
+            new java.util.concurrent.atomic.AtomicLong(ErrorWindow.NEVER_TAKEN);
+
+    /**
+     * Rate limit for the ERROR that reports a failing delivery pass, per subscription rather than per shard, for the same
+     * reason as {@link #nextTakeoverStallErrorNanos}: these metrics are one subscription's (one per queue unless a queue
+     * has several), and every pump serving the subscription shares this window. {@link ErrorWindow#NEVER_TAKEN} until
+     * the first. See {@code PumpFailures}.
+     */
+    final java.util.concurrent.atomic.AtomicLong nextPumpFailureErrorNanos =
+            new java.util.concurrent.atomic.AtomicLong(ErrorWindow.NEVER_TAKEN);
+
+    /**
+     * Rate limit for the WARN that reports a failing ordered-lane batched read ({@link #batchedReadFailures}), per
+     * subscription, since these metrics are one subscription's (one per queue unless a queue has several): every pump
+     * serving the subscription issues its own batched read, and they share this window. {@link ErrorWindow#NEVER_TAKEN} until the first. See
+     * {@code PumpFailures}.
+     */
+    final java.util.concurrent.atomic.AtomicLong nextBatchedReadWarningNanos =
+            new java.util.concurrent.atomic.AtomicLong(ErrorWindow.NEVER_TAKEN);
 
     /**
      * The operator-facing subset, as a stable shape.
@@ -262,15 +587,24 @@ public final class ShardOwnerMetrics {
         var snapshot = new LinkedHashMap<String, Object>();
         snapshot.put("delivered", delivered.sum());
         snapshot.put("cursorReads", cursorReads.sum());
+        snapshot.put("sharedInstanceIdHeartbeats", sharedInstanceIdHeartbeats.sum());
+        snapshot.put("cursorRowsRead", cursorRowsRead.sum());
         snapshot.put("holesObserved", holesObserved.sum());
         snapshot.put("holesResolved", holesResolved.sum());
         snapshot.put("holesAbandoned", holesAbandoned.sum());
         snapshot.put("holeChaseQueries", holeChaseQueries.sum());
         snapshot.put("headSweeps", headSweeps.sum());
         snapshot.put("sweepRecoveries", sweepRecoveries.sum());
+        snapshot.put("sweepRecoveriesBehindCursor", sweepRecoveriesBehindCursor.sum());
         snapshot.put("ackFlushes", ackFlushes.sum());
         snapshot.put("handlerFailures", handlerFailures.sum());
         snapshot.put("takeoverAttemptBumps", takeoverAttemptBumps.sum());
+        snapshot.put("takeoverFailures", takeoverFailures.sum());
+        snapshot.put("shardsAwaitingTakeover", shardsAwaitingTakeover.get());
+        snapshot.put("pumpFailures", pumpFailures.sum());
+        snapshot.put("batchedReadFailures", batchedReadFailures.sum());
+        snapshot.put("pumpLoopFailures", pumpLoopFailures.sum());
+        snapshot.put("shardsOnDeadPumps", shardsOnDeadPumps.get());
         snapshot.put("abandonedOnInterrupt", abandonedOnInterrupt.sum());
         snapshot.put("orderViolations", orderViolations.sum());
         snapshot.put("keysBlockedByDeadLetter", keysBlockedByDeadLetter.sum());
@@ -295,6 +629,7 @@ public final class ShardOwnerMetrics {
         snapshot.put("maxConcurrentKeys", maxConcurrentKeys.get());
         snapshot.put("surplusInstances", surplusInstances.get());
         snapshot.put("deliveryPauses", deliveryPauses.sum());
+        snapshot.put("keptUnitsInHandler", keptUnitsInHandler());
         snapshot.put("orderedReadStatements", orderedReadStatements.sum());
         snapshot.put("horizonProbes", horizonProbes.sum());
         snapshot.put("watermarkAdvances", watermarkAdvances.sum());

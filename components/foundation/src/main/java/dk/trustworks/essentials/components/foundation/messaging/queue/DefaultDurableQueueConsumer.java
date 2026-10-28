@@ -25,7 +25,7 @@ import dk.trustworks.essentials.shared.concurrent.ThreadFactoryBuilder;
 import org.slf4j.*;
 import reactor.core.publisher.Mono;
 
-import java.time.Duration;
+import java.time.*;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.function.Consumer;
@@ -135,8 +135,12 @@ public abstract class DefaultDurableQueueConsumer<DURABLE_QUEUES extends Durable
 
     }
 
+    /**
+     * Synchronized with {@link #stop()}: the queues start a consumer both from their own {@code start()} and from
+     * {@code consumeFromQueue} once started, without coordinating, and two starts at once must schedule the pollers once
+     */
     @Override
-    public void start() {
+    public synchronized void start() {
         if (!started) {
 
             LOG.info("[{}] {} - Starting {} DurableQueueConsumer threads with polling interval {} ms",
@@ -164,7 +168,7 @@ public abstract class DefaultDurableQueueConsumer<DURABLE_QUEUES extends Durable
     }
 
     @Override
-    public void stop() {
+    public synchronized void stop() {
         if (started) {
             LOG.info("[{}] {} - Stopping DurableQueueConsumer",
                      queueName,
@@ -280,6 +284,9 @@ public abstract class DefaultDurableQueueConsumer<DURABLE_QUEUES extends Durable
 
                 // Define a placeholder for the Runnable that will be assigned appropriately later
                 Runnable[] resultRunnable = new Runnable[1];
+                // Read before the claim reads its own now, so a message due by this time was looked for - see
+                // QueuePollingOptimizer#queuePollingReturnedNoMessages(Instant)
+                var claimedNoLaterThan = Instant.now();
 
                 // Execute the Mono immediately for getting the message
                 Mono<Optional<QueuedMessage>> messageMono = Mono.fromCallable(() -> {
@@ -333,10 +340,11 @@ public abstract class DefaultDurableQueueConsumer<DURABLE_QUEUES extends Durable
                                   queuedMessage.getId());
                         // Assign the Runnable returned by handleMessage
                         if (!started) {
-                            LOG.trace("[{}] {} - Consumer was stopped right before Handle Next Message ReadyForDelivery with id '{}'",
+                            LOG.debug("[{}] {} - Consumer was stopped right before Handle Next Message ReadyForDelivery with id '{}'; releasing the message",
                                       queueName,
                                       consumeFromQueue.consumerName,
                                       queuedMessage.getId());
+                            releaseUndeliveredMessage(queuedMessage);
                         } else {
                             resultRunnable[0] = handleMessage(queuedMessage);
                         }
@@ -345,7 +353,7 @@ public abstract class DefaultDurableQueueConsumer<DURABLE_QUEUES extends Durable
                                   queueName,
                                   consumeFromQueue.consumerName,
                                   durableQueues.getClass().getSimpleName());
-                        queuePollingOptimizer.queuePollingReturnedNoMessages();
+                        queuePollingOptimizer.queuePollingReturnedNoMessages(claimedNoLaterThan);
                     }
                 });
 
@@ -401,7 +409,11 @@ public abstract class DefaultDurableQueueConsumer<DURABLE_QUEUES extends Durable
         }
         var handlerStartedAtNanos = System.nanoTime();
         try {
-            var operation = new HandleQueuedMessage(queuedMessage, consumeFromQueue.queueMessageHandler);
+            var operation = HandleQueuedMessage.builder()
+                                               .setMessage(queuedMessage)
+                                               .setMessageHandler(consumeFromQueue.queueMessageHandler)
+                                               .setConsumerStarted(this::isStarted)
+                                               .build();
             newInterceptorChainForOperation(operation,
                                             interceptors,
                                             (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
@@ -425,7 +437,19 @@ public abstract class DefaultDurableQueueConsumer<DURABLE_QUEUES extends Durable
                           consumeFromQueue.consumerName,
                           queuedMessage.getTotalDeliveryAttempts(),
                           queuedMessage.getRedeliveryAttempts());
-                durableQueues.acknowledgeMessageAsHandled(queuedMessage.getId());
+                if (operation.getAcknowledgedWithHandler() == null) {
+                    // Not already acknowledged by an interceptor inside the handler's transaction
+                    if (ConsumerQueueWrites.returnedInterruptedByStop(started)) {
+                        // A handler that returned while stop() had interrupted it may not have finished its work:
+                        // hand the message back rather than delete it unprocessed - see ConsumerQueueWrites
+                        LOG.info("[{}:{}] {} - Handler returned while interrupted by the consumer stopping; returning the message for redelivery instead of acknowledging it",
+                                 queueName,
+                                 queuedMessage.getId(),
+                                 consumeFromQueue.consumerName);
+                        return retryMessage(queuedMessage, ConsumerQueueWrites.returnedInterruptedByStopCause(), Duration.ZERO);
+                    }
+                    ConsumerQueueWrites.withInterruptFlagCleared(() -> durableQueues.acknowledgeMessageAsHandled(queuedMessage.getId()));
+                }
                 // After the acknowledgement, so the count means "delivered and removed", not "the handler returned"
                 durableQueues.getMessageObserver()
                              .messageHandled(queuedMessage, Duration.ofNanos(System.nanoTime() - handlerStartedAtNanos));
@@ -434,6 +458,18 @@ public abstract class DefaultDurableQueueConsumer<DURABLE_QUEUES extends Durable
             }
         } catch (Throwable e) {
             rethrowIfCriticalError(e);
+            if (!started) {
+                // stop() interrupts the delivery threads, so this failure may be that interrupt rather than anything the
+                // message did. Classifying it could dead-letter a message that never had a fair attempt: hand it back, and
+                // let whichever consumer takes it next classify its next failure. Same rule as CentralizedMessageFetcher.
+                // retryMessage writes with the interrupt flag cleared, as every queue write here does - see ConsumerQueueWrites.
+                LOG.info("[{}:{}] {} - Handler failed after the consumer began stopping; returning the message for redelivery. Error: {}",
+                         queueName,
+                         queuedMessage.getId(),
+                         consumeFromQueue.consumerName,
+                         e.getMessage());
+                return retryMessage(queuedMessage, e, Duration.ZERO);
+            }
             var decision         = MessageDeliveryClassifier.classify(queuedMessage, e, consumeFromQueue.getRedeliveryPolicy());
             var isPermanentError = decision.outcome() == MessageDeliveryOutcome.PERMANENT_ERROR;
             if (decision.isDeadLetter()) {
@@ -457,7 +493,7 @@ public abstract class DefaultDurableQueueConsumer<DURABLE_QUEUES extends Durable
                 }
 
                 try {
-                    durableQueues.markAsDeadLetterMessage(queuedMessage.getId(), e);
+                    ConsumerQueueWrites.withInterruptFlagCleared(() -> durableQueues.markAsDeadLetterMessage(queuedMessage.getId(), e));
                     durableQueues.getMessageObserver().messageDeadLettered(queuedMessage, e, decision.outcome());
                     orderedMessageDeliveryThreads.remove(Thread.currentThread());
                     return () -> queuePollingOptimizer.queuePollingReturnedMessage(queuedMessage);
@@ -489,6 +525,27 @@ public abstract class DefaultDurableQueueConsumer<DURABLE_QUEUES extends Durable
         }
     }
 
+    /**
+     * Return a message the poll claimed after this consumer began stopping, so no handler ever ran it. Without this it
+     * stayed marked as being delivered until the stuck-message reset, a whole {@code messageHandlingTimeout} later.
+     * It is released without charging a redelivery attempt - the same rule as {@code CentralizedMessageFetcher}.
+     * The write runs with the interrupt flag cleared, because {@link #stop()} interrupts the polling thread and the
+     * MongoDB driver refuses a connection on an interrupted thread. A failure is only logged: the stuck-message reset
+     * still returns the message.
+     */
+    private void releaseUndeliveredMessage(QueuedMessage queuedMessage) {
+        try {
+            ConsumerQueueWrites.withInterruptFlagCleared(() -> durableQueues.releaseUndeliveredMessage(queuedMessage.getId(), Duration.ZERO));
+        } catch (Throwable e) {
+            rethrowIfCriticalError(e);
+            LOG.warn(msg("[{}:{}] {} - Failed to release the undelivered message; it is redelivered after the messageHandlingTimeout",
+                         queueName,
+                         queuedMessage.getId(),
+                         consumeFromQueue.consumerName),
+                     e);
+        }
+    }
+
     private Runnable retryMessage(QueuedMessage queuedMessage, Throwable e, Duration redeliveryDelay) {
         if (MESSAGE_HANDLING_FAILURE_LOG.isDebugEnabled()) {
             MESSAGE_HANDLING_FAILURE_LOG.debug(msg("[{}:{}] {} - Will redeliver {} message with redeliveryDelay '{}'. Number of Redelivery-Attempts so far: {}",
@@ -503,9 +560,9 @@ public abstract class DefaultDurableQueueConsumer<DURABLE_QUEUES extends Durable
         }
         try {
             // Don't update the polling optimizer as the message stays in the queue
-            durableQueues.retryMessage(queuedMessage.getId(),
-                                       e,
-                                       redeliveryDelay);
+            ConsumerQueueWrites.withInterruptFlagCleared(() -> durableQueues.retryMessage(queuedMessage.getId(),
+                                                                                          e,
+                                                                                          redeliveryDelay));
             if (e != null) {
                 // A null cause means the handler asked for redelivery, which messageRedeliveryRequested already reported
                 durableQueues.getMessageObserver().messageRetried(queuedMessage, e, redeliveryDelay);
@@ -536,6 +593,14 @@ public abstract class DefaultDurableQueueConsumer<DURABLE_QUEUES extends Durable
     @Override
     public void messageAdded(QueuedMessage queuedMessage) {
         queuePollingOptimizer.messageAdded(queuedMessage);
+    }
+
+    /**
+     * @return the {@link QueuePollingOptimizer} deciding when this consumer polls - e.g. to tell it, through
+     * {@link QueuePollingOptimizer#messageScheduledFor(Instant)}, when a message on its queue becomes deliverable
+     */
+    public QueuePollingOptimizer getQueuePollingOptimizer() {
+        return queuePollingOptimizer;
     }
 
     @Override

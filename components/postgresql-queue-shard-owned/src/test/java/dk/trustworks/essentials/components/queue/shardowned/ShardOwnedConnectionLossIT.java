@@ -28,6 +28,7 @@ import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.CopyOnWriteArrayList;
 
+import static dk.trustworks.essentials.components.queue.shardowned.SingleRowQueries.queryForInt;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -102,7 +103,12 @@ class ShardOwnedConnectionLossIT {
                               .as("every shard must resume delivering after its connection was cut")
                               .isEqualTo(50L));
 
+            // remaining() borrows from the same pool, which can still hold a connection this test terminated:
+            // the first borrow then fails, as the engine's own reads did, and the next one gets a fresh connection
             Awaitility.await().atMost(Duration.ofSeconds(30))
+                      .ignoreExceptionsMatching(e -> e instanceof SQLException sql
+                                                     && sql.getSQLState() != null
+                                                     && (sql.getSQLState().startsWith("08") || sql.getSQLState().equals("57P01")))
                       .untilAsserted(() -> assertThat(queue.remaining()).isZero());
         }
     }
@@ -111,14 +117,8 @@ class ShardOwnedConnectionLossIT {
      * Terminate every backend except this test's own connection.
      */
     private int terminateOtherBackends() throws SQLException {
-        try (var connection = dataSource.getConnection();
-             var statement = connection.prepareStatement(
-                     "SELECT count(pg_terminate_backend(pid)) FROM pg_stat_activity"
-                     + " WHERE datname = current_database() AND pid <> pg_backend_pid()")) {
-            try (var resultSet = statement.executeQuery()) {
-                resultSet.next();
-                return resultSet.getInt(1);
-            }
-        }
+        return queryForInt(dataSource, "Terminating the other backends",
+                           "SELECT count(pg_terminate_backend(pid)) FROM pg_stat_activity"
+                           + " WHERE datname = current_database() AND pid <> pg_backend_pid()");
     }
 }

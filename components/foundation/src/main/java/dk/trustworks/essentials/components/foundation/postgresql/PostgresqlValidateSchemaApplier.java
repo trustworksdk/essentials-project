@@ -86,10 +86,10 @@ public final class PostgresqlValidateSchemaApplier implements SchemaApplier {
                 checked++;
                 var recordedChecksum = recorded.get(ChangeKey.of(changeSet, change));
                 if (recordedChecksum == null) {
-                    problems.add(msg("'{}' change '{}' on '{}': not applied", changeSet.moduleId(), change.changeId(), change.objectName()));
+                    problems.add(msg("'{}' change '{}' on '{}'{}: not applied", changeSet.moduleId(), change.changeId(), change.objectName(), describedAs(change)));
                 } else if (!recordedChecksum.equals(change.checksum())) {
-                    problems.add(msg("'{}' change '{}' on '{}': applied with other statements{} (recorded checksum {}, now {})",
-                                     changeSet.moduleId(), change.changeId(), change.objectName(),
+                    problems.add(msg("'{}' change '{}' on '{}'{}: applied with other statements{} (recorded checksum {}, now {})",
+                                     changeSet.moduleId(), change.changeId(), change.objectName(), describedAs(change),
                                      change.repeatable() ? "" : " - a one-shot change edited after it was applied, ship it under a new change id",
                                      recordedChecksum, change.checksum()));
                 }
@@ -102,5 +102,9 @@ public final class PostgresqlValidateSchemaApplier implements SchemaApplier {
                                                 problems);
         }
         log.info("Validated {} schema change(s) in {} change set(s) against ledger '{}'", checked, changeSets.size(), schemaHistoryTableName);
+    }
+
+    private static String describedAs(SchemaChange change) {
+        return change.description().isEmpty() ? "" : " (" + change.description() + ")";
     }
 }

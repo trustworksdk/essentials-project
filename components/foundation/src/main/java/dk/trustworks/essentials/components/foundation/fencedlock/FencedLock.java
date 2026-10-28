@@ -63,6 +63,14 @@ public interface FencedLock extends AutoCloseable {
 
     /**
      * Release/Unlock the lock. Only works if {@link #isLockedByThisLockManagerInstance()} is true
+     * <p>
+     * The lock belongs to the {@link FencedLockManager} instance, not to the caller: every caller in this JVM that acquired the
+     * same {@link LockName} through the same lock manager holds this same {@link FencedLock}, and this call releases it for all of
+     * them. See {@link FencedLockManager}.
+     * <p>
+     * With a {@link DBFencedLockManager}, only that instance - the one the acquire returned, or passed to {@link LockCallback#lockAcquired(FencedLock)} - releases the lock: releasing
+     * another instance for the same {@link LockName} (the copy {@link FencedLockManager#lookupLock(LockName)} returns, or an
+     * instance lost and since acquired again as a new one) does nothing.
      */
     void release();
 

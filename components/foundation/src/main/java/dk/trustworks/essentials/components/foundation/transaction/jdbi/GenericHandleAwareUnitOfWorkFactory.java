@@ -23,6 +23,7 @@ import org.slf4j.*;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicReference;
 
+import static dk.trustworks.essentials.shared.Exceptions.rethrowIfCriticalError;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 import static dk.trustworks.essentials.shared.MessageFormatter.msg;
 
@@ -199,6 +200,9 @@ public abstract class GenericHandleAwareUnitOfWorkFactory<UOW extends HandleAwar
                 }
 
                 log.trace("Committing Managed UnitOfWork: {}", info());
+                // Taken before close(), which clears the registered resources. Iterating the live map afterwards
+                // meant no afterCommit callback ever ran with this factory
+                var callbackResources = snapshotOf(unitOfWorkLifecycleCallbackResources);
                 try {
                     handle.commit();
                 } catch (Exception e) {
@@ -208,18 +212,24 @@ public abstract class GenericHandleAwareUnitOfWorkFactory<UOW extends HandleAwar
                     unitOfWorkFactory.removeUnitOfWork();
                 }
                 status = UnitOfWorkStatus.Committed;
-                unitOfWorkLifecycleCallbackResources.forEach((key, resources) -> {
-                    try {
-                        log.trace("AfterCommit: Calling {} with {} associated resource(s)",
-                                  key.getClass().getName(),
-                                  resources.size());
-                        key.afterCommit(this, resources);
-                    } catch (RuntimeException e) {
-                        log.error(msg("Failed {} failed during afterCommit", key.getClass().getName()), e);
-                    }
-                });
-
-                afterCommitting();
+                // The transaction is committed, so nothing a callback throws may stop the rest from running - least of all
+                // afterCommitting(), which publishes the committed events in-memory. Only a critical error propagates,
+                // and only once afterCommitting() has run
+                try {
+                    callbackResources.forEach((key, resources) -> {
+                        try {
+                            log.trace("AfterCommit: Calling {} with {} associated resource(s)",
+                                      key.getClass().getName(),
+                                      resources.size());
+                            key.afterCommit(this, resources);
+                        } catch (Throwable e) {
+                            rethrowIfCriticalError(e);
+                            log.error(msg("Failed {} failed during afterCommit", key.getClass().getName()), e);
+                        }
+                    });
+                } finally {
+                    afterCommitting();
+                }
             } else if (status == UnitOfWorkStatus.MarkedForRollbackOnly) {
                 rollback();
             } else {
@@ -242,40 +252,55 @@ public abstract class GenericHandleAwareUnitOfWorkFactory<UOW extends HandleAwar
                     log.debug(description);
                 }
 
-                unitOfWorkLifecycleCallbackResources.entrySet().forEach(unitOfWorkLifecycleCallbackListEntry -> {
-                    try {
-                        log.trace("BeforeRollback: Calling {} with {} associated resource(s)",
-                                  unitOfWorkLifecycleCallbackListEntry.getKey().getClass().getName(),
-                                  unitOfWorkLifecycleCallbackListEntry.getValue().size());
-                        unitOfWorkLifecycleCallbackListEntry.getKey().beforeRollback(this, unitOfWorkLifecycleCallbackListEntry.getValue(), cause);
-                    } catch (RuntimeException e) {
-                        log.error(msg("Failed {} failed during beforeRollback", unitOfWorkLifecycleCallbackListEntry.getKey().getClass().getName()), e);
-                    }
-                });
-
-                beforeRollback(cause);
-
+                Map<UnitOfWorkLifecycleCallback<Object>, List<Object>> callbackResources;
                 try {
-                    handle.rollback();
-                } catch (Exception e) {
-                    // Ignore
-                }
-                status = UnitOfWorkStatus.RolledBack;
-                close();
+                    unitOfWorkLifecycleCallbackResources.entrySet().forEach(unitOfWorkLifecycleCallbackListEntry -> {
+                        try {
+                            log.trace("BeforeRollback: Calling {} with {} associated resource(s)",
+                                      unitOfWorkLifecycleCallbackListEntry.getKey().getClass().getName(),
+                                      unitOfWorkLifecycleCallbackListEntry.getValue().size());
+                            unitOfWorkLifecycleCallbackListEntry.getKey().beforeRollback(this, unitOfWorkLifecycleCallbackListEntry.getValue(), cause);
+                        } catch (Throwable e) {
+                            rethrowIfCriticalError(e);
+                            log.error(msg("Failed {} failed during beforeRollback", unitOfWorkLifecycleCallbackListEntry.getKey().getClass().getName()), e);
+                        }
+                    });
 
-                unitOfWorkLifecycleCallbackResources.entrySet().forEach(unitOfWorkLifecycleCallbackListEntry -> {
+                    beforeRollback(cause);
+                } finally {
+                    // Even a critical error from a beforeRollback callback must not leave the transaction open
                     try {
-                        log.trace("AfterRollback: Calling {} with {} associated resource(s)",
-                                  unitOfWorkLifecycleCallbackListEntry.getKey().getClass().getName(),
-                                  unitOfWorkLifecycleCallbackListEntry.getValue().size());
-                        unitOfWorkLifecycleCallbackListEntry.getKey().afterRollback(this, unitOfWorkLifecycleCallbackListEntry.getValue(), cause);
-                    } catch (RuntimeException e) {
-                        log.error(msg("Failed {} failed during afterRollback", unitOfWorkLifecycleCallbackListEntry.getKey().getClass().getName()), e);
+                        handle.rollback();
+                    } catch (Exception e) {
+                        // Ignore
                     }
-                });
+                    status = UnitOfWorkStatus.RolledBack;
+                    // Taken before close(), which clears the registered resources - see commit()
+                    callbackResources = snapshotOf(unitOfWorkLifecycleCallbackResources);
+                    close();
+                    // Removed before the afterRollback callbacks run, as commit() does: a callback that opens a UnitOfWork -
+                    // e.g. to write a compensating change - must get a new one, not join this rolled-back one, whose
+                    // handle is closed
+                    unitOfWorkFactory.removeUnitOfWork();
+                }
 
-                afterRollback(cause);
-                unitOfWorkFactory.removeUnitOfWork();
+                // As in commit(): a callback that throws does not stop the others or afterRollback(cause); only a
+                // critical error propagates, and only once afterRollback(cause) has run
+                try {
+                    callbackResources.entrySet().forEach(unitOfWorkLifecycleCallbackListEntry -> {
+                        try {
+                            log.trace("AfterRollback: Calling {} with {} associated resource(s)",
+                                      unitOfWorkLifecycleCallbackListEntry.getKey().getClass().getName(),
+                                      unitOfWorkLifecycleCallbackListEntry.getValue().size());
+                            unitOfWorkLifecycleCallbackListEntry.getKey().afterRollback(this, unitOfWorkLifecycleCallbackListEntry.getValue(), cause);
+                        } catch (Throwable e) {
+                            rethrowIfCriticalError(e);
+                            log.error(msg("Failed {} failed during afterRollback", unitOfWorkLifecycleCallbackListEntry.getKey().getClass().getName()), e);
+                        }
+                    });
+                } finally {
+                    afterRollback(cause);
+                }
             } else {
                 close();
                 unitOfWorkFactory.removeUnitOfWork();

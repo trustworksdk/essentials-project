@@ -21,6 +21,10 @@ not infer types: a handler typed as a generic stays that name, and a sealed pare
 to the subtypes declared inside ROOT. WebFlux functional `RouterFunction` routes are reported as not
 analysed. Anything it cannot read is listed under `unparsed` — never skipped, never guessed.
 
+The facts mode also indexes the project's tests (`tests`), so a manifest's `scenarios[].test` can be
+resolved: every type declared under a test source root, and on each the methods carrying a JUnit 5
+test annotation, matched by simple name — a composed annotation of your own is not followed.
+
 Judgement stays with the command that calls it: the service-entity lane criterion ("state loaded,
 mutated and saved in place"), gate 11(a), and every judgement field in
 `references/slice/manifest-reconciliation.md` §1.
@@ -30,7 +34,8 @@ Usage
     slice-source.py [ROOT] [--json] [--check] [--bc NAME]... [--quiet]
 
     ROOT        directory to scan (default: the current directory)
-    --json      emit JSON on stdout (facts, or findings with --check)
+    --json      emit JSON on stdout (facts, or findings with --check); the facts carry the test
+                index under `tests`
     --check     compare every slice.yaml with its source: gates 6 (endpoints and query
                 discriminators, per handler; raw-scalar ids at the API edge), 11(b) (handled
                 events declared) and the signal-count rows of 14 (write-style lane). Needs pyyaml.
@@ -42,8 +47,8 @@ Exit codes
     0   nothing to report: no findings, nothing unparsed, nothing unverified
     1   findings (--check)
     2   could not run — ROOT not a directory, bad arguments, --check without pyyaml
-    3   incomplete, NOT a pass: no findings, but some source was unparsed or (with --check)
-        some check had nothing to run against
+    3   incomplete, NOT a pass: no findings, but some source was unparsed (in the facts mode,
+        test source included) or (with --check) some check had nothing to run against
 
 Dependencies
 ------------
@@ -65,6 +70,10 @@ FORMAT = 1
 ROLES = {"use_cases": "command", "views": "view", "automations": "automation", "external_systems": "translation"}
 SKIP_DIRS = {"target", "build", "node_modules", "dist"}
 NON_MAIN_SOURCE_SETS = {"test", "tests", "it", "integrationTest", "testFixtures", "intTest", "jmh"}
+# the non-main source sets that hold tests (plus any `src/*Test`); fixtures and benchmarks hold none
+TEST_SOURCE_SETS = NON_MAIN_SOURCE_SETS - {"testFixtures", "jmh"}
+TEST_LANG_DIRS = ("java", "kotlin")
+TEST_ANNS = {"Test", "ParameterizedTest", "RepeatedTest", "TestFactory", "TestTemplate"}
 SOURCE_EXT = {".java": "java", ".kt": "kotlin"}
 NOT_SLICE_FILES = {"slice.yaml", "CLAUDE.md"}
 
@@ -1103,8 +1112,8 @@ def rel(path, root):
 
 
 def walk(root):
-    """Main source files and slice manifests under root."""
-    sources, manifests, dirs = [], [], []
+    """Main source files, slice manifests and test source roots under root."""
+    sources, manifests, dirs, test_roots = [], [], [], []
     for dirpath, dirnames, filenames in os.walk(root):
         here = Path(dirpath)
         keep = []
@@ -1112,6 +1121,8 @@ def walk(root):
             if d.startswith(".") or d in SKIP_DIRS:
                 continue
             if here.name == "src" and (d in NON_MAIN_SOURCE_SETS or d.endswith("Test")):
+                if d in TEST_SOURCE_SETS or d.endswith("Test"):
+                    test_roots.extend(here / d / lang for lang in TEST_LANG_DIRS if (here / d / lang).is_dir())
                 continue
             keep.append(d)
         dirnames[:] = sorted(keep)
@@ -1122,7 +1133,16 @@ def walk(root):
                 manifests.append(p)
             elif p.suffix in SOURCE_EXT:
                 sources.append(p)
-    return sources, manifests, dirs
+    return sources, manifests, dirs, sorted(test_roots)
+
+
+def walk_tests(test_root):
+    """Java and Kotlin files under one test source root."""
+    out = []
+    for dirpath, dirnames, filenames in os.walk(test_root):
+        dirnames[:] = sorted(d for d in dirnames if not d.startswith(".") and d not in SKIP_DIRS)
+        out.extend(Path(dirpath) / f for f in sorted(filenames) if Path(f).suffix in SOURCE_EXT)
+    return out
 
 
 class BC:
@@ -1157,7 +1177,7 @@ class Project:
     def __init__(self, root, root_arg, bcs_filter, yaml_mod):
         self.root, self.root_arg, self.yaml = root, root_arg, yaml_mod
         self.unparsed, self.unresolved = [], []
-        sources, manifest_paths, dirs = walk(root)
+        sources, manifest_paths, dirs, self.test_roots = walk(root)
         self.files = []
         for p in sources:
             try:
@@ -1476,6 +1496,63 @@ class Project:
                 return self.value(f, *args[n])
         return None
 
+    # -- test index --------------------------------------------------------------------------------
+
+    def tests(self):
+        """Every type under a test source root, with its JUnit test methods. A file the lexer cannot read is
+        listed under `unparsed` and contributes no class: an index with a hole in it must say so."""
+        classes = []
+        for test_root in self.test_roots:
+            for p in walk_tests(test_root):
+                try:
+                    text = p.read_text(encoding="utf-8", errors="replace")
+                except OSError as exc:
+                    self.unparsed.append(self._u(p, None, "test source file", f"unreadable: {exc}"))
+                    continue
+                f = SrcFile(p, rel(p, self.root), SOURCE_EXT[p.suffix], text)
+                if f.error is not None:
+                    self.unparsed.append(self._u(p, f.error.line, "test source file", f.error.reason))
+                    continue
+                classes.extend(self._test_classes(f))
+        return {"roots": [rel(r, self.root) for r in self.test_roots],
+                "classes": sorted(classes, key=lambda c: (c["path"], c["name"]))}
+
+    def _test_classes(self, f):
+        out, attached = [], set()
+        for td in f.types:
+            attached.update(id(a) for a in td.anns)
+            if td.kind == "annotation" or f.method_at(td.kw) is not None:  # a local class is never discovered
+                continue
+            names, outer = [td.name], td.outer
+            while outer is not None:
+                names.append(outer.name)
+                outer = outer.outer
+            methods = []
+            for m in td.methods:
+                if not any(a.simple in TEST_ANNS for a in m.anns):
+                    continue
+                attached.update(id(a) for a in m.anns)
+                methods.append({"name": m.name, "line": m.line, "displayName": self._display_name(f, m)})
+            out.append({"name": ".".join(reversed(names)), "path": f.rel,
+                        "methods": sorted(methods, key=lambda x: (x["line"], x["name"]))})
+        for _, a in sorted(f.anns_at.items()):
+            if a.simple in TEST_ANNS and id(a) not in attached:
+                self.unparsed.append(self._u(f.path, a.line, f"@{a.simple}",
+                                             "not on a method of a named class the reader could read"))
+        return out
+
+    def _display_name(self, f, m):
+        ann = next((a for a in m.anns if a.simple == "DisplayName"), None)
+        if ann is None:
+            return None
+        value = self.arg(f, ann, "value")
+        if value is not None and value.kind == "str":
+            return value.v
+        owner = m.owner.name if m.owner else ""
+        self.unparsed.append(self._u(f.path, ann.line, f"@DisplayName on {owner}.{m.name}",
+                                     f"not a readable string: {value.text if value else ''}"))
+        return None
+
     # -- per-slice facts ---------------------------------------------------------------------------
 
     def slice_facts(self, s):
@@ -1677,8 +1754,60 @@ class Project:
         out["raw"] = {k: str(v) for k, v in raw.items()}
         facts["schedules"].append(out)
 
+    def _call_args(self, f, lp):
+        """The top-level argument token ranges [(a, b), …] of the call whose `(` is at lp."""
+        rp, out = f.match[lp], []
+        a = k = lp + 1
+        while k < rp:
+            if f.is_op(k, ","):
+                out.append((a, k))
+                a = k + 1
+            k = f.match[k] + 1 if f.toks[k].k == "op" and f.toks[k].t in "([{" else k + 1
+        if a < rp:
+            out.append((a, rp))
+        return out
+
+    def _assigned_name(self, f, i):
+        """The variable or field that the call at token i is assigned to, through its receiver chain:
+        `x = inboxes.…`, `this.x = …`, `Inbox x = …`, Kotlin `val x: Inbox = …`. None when it is not assigned."""
+        k = i
+        while k >= 2 and f.toks[k - 1].t in (".", "?.") and f.is_id(k - 2):
+            k -= 2
+        if not f.is_op(k - 1, "="):
+            return None
+        j = k - 2
+        if f.kotlin and f.is_id(j) and f.is_op(j - 1, ":") and f.is_id(j - 2):
+            return f.toks[j - 2].t  # `val inbox: Inbox = …`
+        return f.toks[j].t if f.is_id(j) else None
+
+    def _inboxes(self, f):
+        """The inboxes this file creates and assigns, as two sets of names: those created with
+        `getOrCreateInbox(config, <a CommandBus>)` — the overload that sends every message the inbox
+        receives to that command bus — and those created with a message consumer of their own."""
+        forwarding, other = set(), set()
+        for i, t in enumerate(f.toks):
+            if t.k != "id" or t.t != "getOrCreateInbox" or not f.is_op(i + 1, "("):
+                continue
+            name = self._assigned_name(f, i)
+            if name is None:
+                continue
+            args = self._call_args(f, i + 1)
+            bus = False
+            if len(args) == 2 and args[1][1] - args[1][0] == 1 and f.is_id(args[1][0]):
+                arg = f.toks[args[1][0]].t
+                typ = self._local_type(f, args[1][0], arg)
+                if typ is None:  # a field, or a Kotlin primary-constructor parameter
+                    td = f.enclosing_type(i)
+                    typ = next((p.type for p in [*f.props, *(td.params if td else [])]
+                                if p.name == arg and p.type is not None), None)
+                base = typ.base if isinstance(typ, TypeRef) else typ
+                bus = bool(COMMAND_BUS.search(base.rsplit(".", 1)[-1] if base else arg))
+            (forwarding if bus else other).add(name)
+        return forwarding, other - forwarding
+
     def _calls(self, f, facts, bc_events):
         toks = f.toks
+        inboxes, other_inboxes = self._inboxes(f)
         for i, t in enumerate(toks):
             if t.k != "id":
                 continue
@@ -1686,11 +1815,21 @@ class Project:
             if not f.is_op(lp, "("):
                 continue
             recv = toks[i - 2] if i >= 2 and toks[i - 1].t in (".", "?.") else None
+            if recv is not None and recv.t == ")" and f.match.get(i - 2, 0) > 0:
+                recv = toks[f.match[i - 2] - 1]  # a getter's result: `getCommandBus().send(…)` in an EventProcessor
             name = t.t
             if name in ("send", "sendAsync", "sendAndDontWait") and recv is not None and (
                     (recv.k == "id" and COMMAND_BUS.search(recv.t)) or name != "send"):
                 self._call_arg(f, lp, facts["dispatches"], name, "dispatch argument",
                                lambda td: "use_cases" in td.file.path.parts)
+            elif name == "addMessageReceived" and recv is not None and recv.k == "id":
+                if recv.t in inboxes:
+                    self._call_arg(f, lp, facts["dispatches"], "inbox.addMessageReceived", "dispatch argument",
+                                   lambda td: "use_cases" in td.file.path.parts)
+                elif recv.t not in other_inboxes:
+                    self.unresolved.append(self._u(f.path, t.line, "inbox target",
+                                                   f"`{recv.t}` is not created in this file, so whether it forwards "
+                                                   f"to a command bus is not known"))
             elif name == "publish" and recv is not None and recv.k == "id" and EVENT_BUS.search(recv.t):
                 self._call_arg(f, lp, facts["publishes"], "eventBus.publish", "published event",
                                lambda td: td.name in bc_events)
@@ -2090,6 +2229,7 @@ def build_messages(project, slice_facts):
 
 def facts_json(project):
     slice_facts = [(s, project.slice_facts(s)) for s in project.slices]
+    tests = project.tests()
     bcs = []
     for bc in project.bcs:
         lane = lane_facts(project, bc)
@@ -2105,6 +2245,7 @@ def facts_json(project):
         "messages": build_messages(project, slice_facts),
         "unparsed": sorted(project.unparsed, key=_loc_key),
         "unresolved": sorted(_dedupe(project.unresolved), key=_loc_key),
+        "tests": tests,
     }
 
 
@@ -2187,8 +2328,10 @@ def _check_handled_events(project, s, facts, findings, unverified, broken=False)
         unverified.append({"slice": s.id, "gate": "11(b) handled events", "id": "ESS-G11b",
                            "file": na["file"], "reason": na["reason"] + f" (line {na['line']}); its event type is not "
                                                                         f"compared with the manifest"})
-    # an inbound translation's `consumes` names the external message its ingress receives, which 11(b) does not read;
-    # only the BC's own events need a handler to check against
+    # an inbound translation's `consumes` also names the external messages its ingress receives; those are checked
+    # against the ingress handlers below, so only the BC's own events need an event handler to check against
+    if s.kind == "translation" and s.doc.get("direction") in (None, "inbound", "both"):
+        _check_inbound_messages(project, s, facts, declared, findings, unverified)
     internal = declared & project.bc_event_names(s.bc)
     if internal and not handlers and not anonymous and not broken:
         unverified.append({"slice": s.id, "gate": "11(b) handled events", "id": "ESS-G11b",
@@ -2221,6 +2364,34 @@ def _check_handled_events(project, s, facts, findings, unverified, broken=False)
         findings.append(finding(
             "Should-fix", "11(b) handled events", s.id, h["file"], h["line"],
             f"{h['class']}.{h['method']}({msg['written']}) handles {name}{how}, which is not declared in {field}",
+            "the code is right and the manifest is stale — `/essentials:slice-check --fix-manifests` "
+            "(manifest-reconciliation.md §2)"))
+
+
+def _check_inbound_messages(project, s, facts, declared, findings, unverified):
+    """A translation's ingress handlers — `@KafkaListener`, `@RabbitListener`, `@JmsListener` — receive the external
+    messages its `consumes` must name: the payload type, or each concrete subtype of it declared in the project."""
+    for h in facts["handlers"]:
+        msg = h["message"]
+        if h["role"] != "inbound" or not msg or h["envelope"]:
+            continue
+        name = msg["name"]
+        where = f"{h['class']}.{h['method']}({msg['written']})"
+        if name not in project.types_by_name:
+            unverified.append({"slice": s.id, "gate": "11(b) handled events", "id": "ESS-G11b", "file": h["file"],
+                               "reason": f"@{h['annotation']} {where} (line {h['line']}) receives {name}, which is not "
+                                         f"declared in the project, so the external message it carries is not "
+                                         f"compared with consumes"})
+            continue
+        leaves = _concrete_subtypes(project, name) or {name}
+        missing = sorted(leaves - declared)
+        if not missing:
+            continue
+        what = (f"receives {name}, which is" if leaves == {name}
+                else f"receives the supertype {name}; its subtypes {', '.join(missing)} are")
+        findings.append(finding(
+            "Should-fix", "11(b) handled events", s.id, h["file"], h["line"],
+            f"@{h['annotation']} {where} {what} not declared in consumes",
             "the code is right and the manifest is stale — `/essentials:slice-check --fix-manifests` "
             "(manifest-reconciliation.md §2)"))
 
@@ -2525,6 +2696,10 @@ def print_facts(data, quiet):
             print(f"  NOT ANALYSED  {na['file']}:{na['line']}  {na['reason']}", file=out)
     for bc in data["bcs"]:
         print(f"lane      {bc['name']}: {bc['lane']['detected']}", file=out)
+    if data["tests"]["roots"]:
+        methods = sum(len(c["methods"]) for c in data["tests"]["classes"])
+        print(f"tests     {len(data['tests']['classes'])} class(es), {methods} test method(s) under "
+              f"{', '.join(data['tests']['roots'])}", file=out)
     print(f"\n{len(data['slices'])} slice(s), {data['sourceFiles']} source file(s), {len(data['messages'])} message(s), "
           f"{len(data['unparsed'])} unparsed, {len(data['unresolved'])} unresolved.", file=out)
     if not data["manifestsRead"]:

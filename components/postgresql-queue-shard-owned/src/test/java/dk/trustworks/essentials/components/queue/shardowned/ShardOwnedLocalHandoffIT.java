@@ -111,9 +111,12 @@ class ShardOwnedLocalHandoffIT {
     void a_message_pre_claimed_by_a_dead_owner_is_delivered_by_the_next_one() throws Exception {
         var firstReceived = new CopyOnWriteArrayList<String>();
         var first = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "instance-1");
-        var shortLease = new ShardOwnerSettings(500, 200, Duration.ofMillis(1), Duration.ofMillis(2),
-                                                Duration.ofMillis(300), Duration.ofMillis(100),
-                                                1_000, 8, Duration.ofMillis(50), Duration.ofSeconds(30), 2, Duration.ofSeconds(5), Duration.ofMillis(1000), Duration.ofSeconds(60));
+        var shortLease = ShardOwnerSettings.builder()
+                                           .setHoleExpiry(Duration.ofMillis(300))
+                                           .setSweepInterval(Duration.ofMillis(100))
+                                           .setPollBackstop(Duration.ofMillis(50))
+                                           .setLeaseTtl(Duration.ofMillis(1000))
+                                           .build();
         // A handler that never returns: messages are handed off and dispatched, never acknowledged.
         first.startConsuming((messageId, payload, payloadType) -> {
             firstReceived.add(new String(payload, StandardCharsets.UTF_8));

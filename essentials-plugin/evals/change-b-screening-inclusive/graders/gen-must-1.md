@@ -5,5 +5,5 @@ type: llm
 
 The agent received this change request in a software project: "Bug: an order of exactly 100 units gets through screening, but the limit is meant to be inclusive — 100 or more must be cancelled.". Grade its final reply.
 
-PASS if the reply shows this: Fixes the comparison inside the screen_order automation and reports the change by slice id and file, without a confirmation round (a one-line fix that changes no structure, SKILL.md Step 3).
+PASS if the reply shows this: Fixes the comparison inside the screen_order automation and reports the change by slice id and file, without asking for confirmation first (a fix that changes no structure, SKILL.md Step 3). Also updating text that states the old exclusive rule (the cancel reason, a comment, the manifest summary, the slice CLAUDE.md) is fine and does not make it more than that fix.
 FAIL otherwise.

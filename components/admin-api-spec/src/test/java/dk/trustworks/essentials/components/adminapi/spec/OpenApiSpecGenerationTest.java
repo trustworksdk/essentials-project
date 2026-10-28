@@ -133,6 +133,22 @@ class OpenApiSpecGenerationTest {
     }
 
     /**
+     * The shard-owned engine's {@code QueueName} is a record, not a {@code CharSequenceType}, so without its own mapping
+     * it reflected as an object wrapping {@code value} - unlike every other queue name in the contract, and unlike
+     * {@code GET /shard-owned-queues}, which lists the same names as strings.
+     */
+    @Test
+    void shard_owned_queue_names_are_strings_like_every_other_queue_name() {
+        var schemas = OpenApiSpecGenerator.buildOpenApi().getComponents().getSchemas();
+
+        assertThat(List.of("ApiShardOwnedQueueStatus", "ApiShardOwnedQueueStatistics", "ApiShardOwnedMessage", "ApiShardOwnedKeptUnitRelease"))
+                .allSatisfy(schema -> assertThat(((Schema<?>) schemas.get(schema).getProperties().get("queueName")).getType())
+                        .as("%s.queueName", schema)
+                        .isEqualTo("string"));
+        assertThat(schemas).doesNotContainKey("QueueName");
+    }
+
+    /**
      * Guards against silently dropped metadata: a {@code nullable} annotation set directly on a {@code $ref} property
      * serializes away entirely, because OpenAPI 3.0 ignores every sibling of {@code $ref}.
      */

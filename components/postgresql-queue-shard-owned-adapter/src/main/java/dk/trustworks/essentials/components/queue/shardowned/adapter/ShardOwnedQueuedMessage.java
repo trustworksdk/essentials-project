@@ -198,17 +198,13 @@ public final class ShardOwnedQueuedMessage implements QueuedMessage {
 
     /**
      * Records a handler's request to be redelivered later.
-     *
-     * <h2>The delay is not honoured on the push path, and that is a deviation worth stating</h2>
-     * The adapter reads this flag after the handler returns and, if set, fails the delivery so the
-     * engine reschedules it. The engine then applies <em>its</em> backoff from the redelivery policy —
-     * it has no way to accept a per-message delay from inside a handler, because the handler is never
-     * told which message it is holding, so there is no id to schedule against.
      * <p>
-     * So the message <em>is</em> redelivered, at the policy's next interval rather than at
-     * {@code deliveryDelay}, and the attempt counts against the policy's budget. A handler that needs
-     * an exact delay has to use {@code retryMessage(queueEntryId, …)} from the pull path, where the id
-     * is known.
+     * The adapter reads this flag after the handler returns and, if set, ends the delivery with the
+     * engine's {@code RedeliveryRequested} outcome. The engine schedules the message at
+     * {@code deliveryDelay} and never dead-letters it because of the request. Unlike a manual
+     * redelivery in the classic {@code DurableQueues}, the request is not counted: it does not raise
+     * {@link #getRedeliveryAttempts()}, and it does not use up the {@code RedeliveryPolicy}'s
+     * redeliveries for a later failure.
      */
     @Override
     public void markForRedeliveryIn(Duration deliveryDelay) {

@@ -4,22 +4,29 @@ kind: view
 bc: market_data
 owner: market-data-team
 status: live
-summary: Serve the current price of one instrument, read strongly-consistently from the InstrumentPrice aggregate.
+summary: Serve the current price of one instrument from an eventually-consistent, replayable read model projected from the price events.
 generator: essentials
 language: java
+lane: aggregate
 
 serves: [GetLatestPrice]
 endpoints:
   - { method: GET, path: "/api/admin/instrument-prices/{instrumentId}", auth: anonymous }
 reads:
   - { name: LatestPrice }
-projections: []
+projections:
+  - name: LatestPriceProjection
+    aggregateTypes: [InstrumentPrices]
+    from: [PriceInitialized, PriceUpdated]
+    consistency: eventual
+    store: postgresql
 invariants:
-  - id: INV-LP-1
-    text: "The read is strongly consistent: it loads the InstrumentPrice aggregate inside a read-only transaction rather than a projected model, because the demo's bootstrap uses this query to decide whether seed data already exists and an eventually-consistent answer would let it seed twice"
-    enforcedBy: LatestPriceQuery
+  - id: INV-LP-2
+    text: "A row never moves back to an older price: each write is guarded by the EventOrder the row was last written from"
+    enforcedBy: LatestPriceProjection
 forbidden:
   - cross-slice-internal:market_data
+tier: cqrs-es
 tests:
   unit: { present: false }
   integration: { present: false }

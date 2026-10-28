@@ -28,6 +28,7 @@ import java.time.Duration;
 public final class FixedBackoffBuilder {
     private Duration                    redeliveryDelay;
     private int                         maximumNumberOfRedeliveries;
+    private boolean                     maximumNumberOfRedeliveriesSet;
     private MessageDeliveryErrorHandler deliveryErrorHandler = MessageDeliveryErrorHandler.alwaysRetry();
 
 
@@ -38,6 +39,7 @@ public final class FixedBackoffBuilder {
 
     public FixedBackoffBuilder setMaximumNumberOfRedeliveries(int maximumNumberOfRedeliveries) {
         this.maximumNumberOfRedeliveries = maximumNumberOfRedeliveries;
+        this.maximumNumberOfRedeliveriesSet = true;
         return this;
     }
 
@@ -46,14 +48,38 @@ public final class FixedBackoffBuilder {
         return this;
     }
 
+    /**
+     * Build the policy.
+     * <p>
+     * A setting that was never given is logged in one WARN naming the setter to call (QL-3): an unset delay (which
+     * still fails, as before), {@code setMaximumNumberOfRedeliveries} not called (it silently means 0 redeliveries).
+     * <b>From 0.61 these make {@code build()} throw an {@link IllegalArgumentException}</b>; in 0.60.x the policy is
+     * built exactly as before.
+     *
+     * @return the policy
+     */
     public RedeliveryPolicy build() {
-        return RedeliveryPolicy.builder()
-                               .setInitialRedeliveryDelay(redeliveryDelay)
-                               .setFollowupRedeliveryDelay(redeliveryDelay)
-                               .setFollowupRedeliveryDelayMultiplier(1.0d)
-                               .setMaximumFollowupRedeliveryDelayThreshold(redeliveryDelay)
-                               .setMaximumNumberOfRedeliveries(maximumNumberOfRedeliveries)
-                               .setDeliveryErrorHandler(deliveryErrorHandler)
-                               .build();
+        checks().warnIfIncomplete();
+        // The constructor, not RedeliveryPolicy.builder(): that builder runs the same checks and would WARN a second time
+        return new RedeliveryPolicy(redeliveryDelay,
+                                    redeliveryDelay,
+                                    1.0d,
+                                    redeliveryDelay,
+                                    maximumNumberOfRedeliveries,
+                                    deliveryErrorHandler);
+    }
+
+    /**
+     * The checks {@link #build()} runs, applied to this builder's current settings.
+     * <p>
+     * Package-private rather than private only so {@code RedeliveryPolicyBuilderChecksTest} can assert the problems
+     * found without capturing the WARN {@link #build()} logs; nothing outside this package calls it.
+     *
+     * @return the checks, already run against this builder's current settings
+     */
+    RedeliveryPolicyBuilderChecks checks() {
+        return new RedeliveryPolicyBuilderChecks(FixedBackoffBuilder.class)
+                .delay(redeliveryDelay, "setRedeliveryDelay")
+                .maximumNumberOfRedeliveries(maximumNumberOfRedeliveriesSet);
     }
 }

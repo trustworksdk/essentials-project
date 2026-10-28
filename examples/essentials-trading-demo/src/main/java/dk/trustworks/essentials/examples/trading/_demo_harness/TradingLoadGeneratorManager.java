@@ -100,10 +100,10 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * </ul>
  *
  * <h2>Every read is a view slice</h2>
- * Prices come from {@code market_data.latest_price}, which reads the aggregate and is strongly consistent. Account
- * existence and the comparison scenario's read passes come from {@code brokerage.account_statement}, which is a
- * projection and is <em>eventually</em> consistent -- see {@link #seedDataIsAvailable()} and
- * {@link #runTradingAccountScenario}.
+ * Prices come from {@code market_data.latest_price}; account existence and the comparison scenario's read passes
+ * from {@code brokerage.account_statement}. Both are projections and <em>eventually</em> consistent -- see
+ * {@link #seedDataIsAvailable()} and {@link #runTradingAccountScenario}. A trade priced from a view that has not yet
+ * caught up with the last tick uses the price before it, which a simulator can live with.
  */
 public class TradingLoadGeneratorManager implements Lifecycle {
     private static final Logger log = LoggerFactory.getLogger(TradingLoadGeneratorManager.class);
@@ -561,11 +561,10 @@ public class TradingLoadGeneratorManager implements Lifecycle {
     /**
      * Whether the bootstrap has finished seeding.
      *
-     * <p>The price half reads {@code market_data.latest_price}, which is strongly consistent. The account half reads
-     * the {@code brokerage.account_statement} projection, which is not -- so immediately after bootstrap this can
-     * still answer "no" for a moment while the projection catches up, and the generator logs that it is waiting. The
-     * pre-slice version rehydrated the account aggregate here and saw it at once. Latched once observed, so the
-     * projection read happens a handful of times at startup rather than on every tick.
+     * <p>Both halves read projections -- {@code market_data.latest_price} and {@code brokerage.account_statement} --
+     * so immediately after bootstrap this can still answer "no" for a moment while they catch up, and the generator
+     * logs that it is waiting. The pre-slice version rehydrated the aggregates here and saw them at once. Latched once
+     * observed, so the projection reads happen a handful of times at startup rather than on every tick.
      */
     private boolean seedDataIsAvailable() {
         if (seedDataObserved.get()) {

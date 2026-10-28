@@ -1,4 +1,4 @@
-schemaVersion: "1.1"
+schemaVersion: "1.4"
 slice: brokerage.trade_settlement_status
 kind: view
 bc: brokerage
@@ -7,6 +7,7 @@ status: live
 summary: Join each trade to its settlement's lifecycle state in one projected read model, and serve one settlement from it.
 generator: essentials
 language: java
+lane: aggregate
 
 serves: [ListTradeSettlements, GetSettlementStatus]
 endpoints:
@@ -16,9 +17,10 @@ reads:
   - { name: TradeSettlementStatus }
 projections:
   - name: TradeSettlementStatusProjection
+    aggregateTypes: [Trades, Settlements]
     from: [TradePlaced, TradeExecuted, SettlementRequested, TradeSettled, SettlementCreated, ClearingRequested, ClearingConfirmed, SettlementMarkedSettled, SettlementReconciled, SettlementClosed]
     consistency: eventual
-    store: jdbc
+    store: postgresql
 invariants:
   - id: INV-TSS-1
     text: "Either stream may arrive first, so both entry points upsert and the settlement side sets only the columns a settlement knows"
@@ -34,6 +36,8 @@ invariants:
     enforcedBy: SettlementStatusView
 forbidden:
   - cross-slice-internal:brokerage
+tier: cqrs-es
+flow: trade-lifecycle
 tests:
   unit: { present: false }
   integration: { present: false }

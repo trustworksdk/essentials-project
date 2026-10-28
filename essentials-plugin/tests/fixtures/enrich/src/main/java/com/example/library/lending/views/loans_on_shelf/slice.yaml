@@ -1,0 +1,22 @@
+schemaVersion: "1.3"
+slice: lending.loans_on_shelf
+kind: view
+bc: lending
+owner: circulation
+status: live
+generator: essentials
+language: java
+lane: decider
+serves: [LoansOnShelf]
+endpoints:
+  - { method: GET, path: "/api/lending/loans", auth: user }
+reads:
+  - { name: LoansOnShelfView }
+projections:
+  - name: LoansOnShelfProjection
+    aggregateTypes: [Copies]
+    from: [BookBorrowed, BookReturned]   # every event this view projects
+    store: document-db
+  - { name: ShelfCountProjection, aggregateTypes: [Copies], from: [BookReturned] }
+tests:
+  integration: { present: false }

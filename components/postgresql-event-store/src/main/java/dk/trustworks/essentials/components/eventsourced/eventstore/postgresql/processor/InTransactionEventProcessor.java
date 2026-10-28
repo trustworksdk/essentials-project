@@ -21,7 +21,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ev
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.AggregateIdSerializer;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.EventJSON;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.EventStoreSubscriptionManager;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.EventType;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.*;
 import dk.trustworks.essentials.components.foundation.Lifecycle;
 import dk.trustworks.essentials.components.foundation.causation.CausationContext;
 import dk.trustworks.essentials.components.foundation.fencedlock.*;
@@ -36,7 +36,9 @@ import dk.trustworks.essentials.components.foundation.types.SubscriberId;
 import dk.trustworks.essentials.reactive.Handler;
 import dk.trustworks.essentials.reactive.command.*;
 import org.slf4j.*;
+import reactor.core.publisher.Mono;
 
+import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.CopyOnWriteArrayList;
 
@@ -167,6 +169,7 @@ public abstract class InTransactionEventProcessor implements Lifecycle {
     private PatternMatchingMessageHandler   patternMatchingHandlerDelegate;
     private List<MessageHandlerInterceptor> messageHandlerInterceptors;
     private boolean                         useExclusively;
+    private UnhandledEventTypes             unhandledEventTypes;
 
     /**
      * Create a new {@link InTransactionEventProcessor} instance
@@ -266,12 +269,19 @@ public abstract class InTransactionEventProcessor implements Lifecycle {
             }
 
             started = true;
-            log.info("⚙️ [{}] Starting InTransactionEventProcessor - will subscribe '{}' to events related to these AggregatesType's: {}",
-                     processorName,
-                     useExclusively ? "exclusively" : "non-exclusively",
-                     subscribeToEventsRelatedTo);
+            // subscribeEachOrUnsubscribe unsubscribes what it created, and nothing else is left to undo. Left not started,
+            // so start() may be called again - see AbstractEventProcessor#startOrRollBack
+            AbstractEventProcessor.startOrRollBack(() -> {
+                log.info("⚙️ [{}] Starting InTransactionEventProcessor - will subscribe '{}' to events related to these AggregatesType's: {}",
+                         processorName,
+                         useExclusively ? "exclusively" : "non-exclusively",
+                         subscribeToEventsRelatedTo);
+                UnhandledEventTypes.logHandledMessageTypes(processorName, this);
+                unhandledEventTypes = new UnhandledEventTypes(processorName, eventStore, this, patternMatchingHandlerDelegate, UnhandledEventTypes.Reporting.DEBUG);
 
-            subscribeInTransaction(subscribeToEventsRelatedTo);
+                // Assigned only once every subscribe succeeded, so eventStoreSubscriptions holds the (unsubscribed) ones of an earlier run until then
+                eventStoreSubscriptions = AbstractEventProcessor.subscribeEachOrUnsubscribe(subscribeToEventsRelatedTo, this::createEventStoreSubscription);
+            }, () -> { }, () -> started = false);
         }
     }
 
@@ -282,7 +292,8 @@ public abstract class InTransactionEventProcessor implements Lifecycle {
             log.info("⚙️ [{}] Stopping InTransactionEventProcessor",
                      getProcessorName());
 
-            eventStoreSubscriptions.forEach(Lifecycle::stop);
+            // Unsubscribed, not just stopped, so start() subscribes anew - see AbstractEventProcessor#unsubscribeEach
+            AbstractEventProcessor.unsubscribeEach(eventStoreSubscriptions);
         }
     }
 
@@ -290,12 +301,6 @@ public abstract class InTransactionEventProcessor implements Lifecycle {
     public boolean isStarted() {
         return started;
     }
-
-    private void subscribeInTransaction(List<AggregateType> subscribeToEventsRelatedTo) {
-        eventStoreSubscriptions = subscribeToEventsRelatedTo.stream()
-                                                            .map(this::createEventStoreSubscription).toList();
-    }
-
 
     private EventStoreSubscription createEventStoreSubscription(AggregateType aggregateType) {
         var subscriberId = SubscriberId.of(getProcessorName() + ":" + aggregateType + ":sync");
@@ -325,6 +330,10 @@ public abstract class InTransactionEventProcessor implements Lifecycle {
     }
 
     private void invokeHandler(PersistedEvent event, UnitOfWork unitOfWork, AggregateType aggregateType, SubscriberId subscriberId) {
+        if (unhandledEventTypes != null) {
+            // Reported only: an ignored event is still handed to the delegate, which ignores it, exactly as before
+            unhandledEventTypes.reportIfUnhandled(event);
+        }
         try {
             log.debug("[{}-{}] Processing event: {} using unit of work '{}'", subscriberId, aggregateType, event, unitOfWork.info());
             var message = OrderedMessage.of(event.event().deserialize(),
@@ -358,6 +367,60 @@ public abstract class InTransactionEventProcessor implements Lifecycle {
      */
     public boolean isUseExclusively() {
         return useExclusively;
+    }
+
+    /**
+     * The counterpart of {@link AbstractEventProcessor#awaitProcessed(AggregateType, GlobalEventOrder, Duration)}, so
+     * code that awaits processors can treat every processor type alike: it returns at once.
+     * <p>
+     * An {@link InTransactionEventProcessor} handles an event inside the {@link UnitOfWork} that appends it, so once that
+     * {@link UnitOfWork} has committed the event has been handled - and a handler that failed rolled the append back with
+     * it. There is no resume point to pass and no queue to drain. Called inside the appending {@link UnitOfWork}, before
+     * it commits, the event is handled when it commits (or earlier, when the event store flushes it).
+     *
+     * @param aggregateType    the aggregate type the event belongs to - one this processor {@link #reactsToEventsRelatedToAggregateTypes() reacts to}
+     * @param globalEventOrder the event's {@link GlobalEventOrder}
+     * @param timeout          not used - nothing is awaited
+     * @throws IllegalArgumentException if this processor doesn't react to events of the aggregate type
+     */
+    public void awaitProcessed(AggregateType aggregateType, GlobalEventOrder globalEventOrder, Duration timeout) {
+        requireValidAwaitProcessedArguments(aggregateType, globalEventOrder, timeout);
+    }
+
+    /**
+     * See {@link #awaitProcessed(AggregateType, GlobalEventOrder, Duration)}: completes at once
+     *
+     * @param event   the event
+     * @param timeout not used - nothing is awaited
+     */
+    public void awaitProcessed(PersistedEvent event, Duration timeout) {
+        requireNonNull(event, "No event provided");
+        awaitProcessed(event.aggregateType(), event.globalEventOrder(), timeout);
+    }
+
+    /**
+     * See {@link #awaitProcessed(AggregateType, GlobalEventOrder, Duration)}: completes at once
+     *
+     * @param aggregateType    the aggregate type the event belongs to
+     * @param globalEventOrder the event's {@link GlobalEventOrder}
+     * @param timeout          not used - nothing is awaited
+     * @return an empty {@link Mono}
+     * @throws IllegalArgumentException if this processor doesn't react to events of the aggregate type (thrown on call, not signalled)
+     */
+    public Mono<Void> awaitProcessedAsync(AggregateType aggregateType, GlobalEventOrder globalEventOrder, Duration timeout) {
+        requireValidAwaitProcessedArguments(aggregateType, globalEventOrder, timeout);
+        return Mono.empty();
+    }
+
+    private void requireValidAwaitProcessedArguments(AggregateType aggregateType, GlobalEventOrder globalEventOrder, Duration timeout) {
+        requireNonNull(aggregateType, "No aggregateType provided");
+        requireNonNull(globalEventOrder, "No globalEventOrder provided");
+        requireNonNull(timeout, "No timeout provided");
+        var reactsTo = reactsToEventsRelatedToAggregateTypes();
+        if (reactsTo == null || !reactsTo.contains(aggregateType)) {
+            throw new IllegalArgumentException(msg("[{}] Cannot await the processing of a '{}' event: the processor reacts to events of {}, not of '{}'",
+                                                   getProcessorName(), aggregateType, reactsTo, aggregateType));
+        }
     }
 
     private AggregateIdSerializer resolveAggregateIdSerializer(AggregateType aggregateType) {

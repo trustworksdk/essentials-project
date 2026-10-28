@@ -23,6 +23,8 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import java.time.Duration;
 import java.util.*;
 
+import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
+
 /**
  * Configuration for the shard-owned queue engine, under {@code essentials.shard-owned-queue}.
  * <p>
@@ -59,11 +61,11 @@ public class ShardOwnedQueueProperties {
     private boolean initializeSchema = true;
 
     /**
-     * Identifies this process among the instances competing for a queue's shards. Defaults to the
-     * hostname, matching how the fenced lock manager and the scheduler identify an instance.
+     * Identifies this process among the instances competing for a queue's shards. Defaults to
+     * {@code <hostname>:<pid>}, the fenced lock manager's default (the bare hostname before 0.60.1).
      * <p>
-     * Set it where the hostname is <em>not</em> unique per process — several instances on one host,
-     * or a container platform that does not give each one its own. Two processes sharing an id look
+     * Set it where that is <em>not</em> unique per process — containers that share a hostname and
+     * all run as pid 1 — or where a stable, readable id matters. Two processes sharing an id look
      * like one to the fair-share rebalance, which halves the shards each of them is allowed to hold.
      */
     /**
@@ -173,6 +175,51 @@ public class ShardOwnedQueueProperties {
      * advancing past it. Deliberately far above {@code holeExpiry} — see {@link ShardOwnerSettings}.
      */
     private Duration watermarkCap = Duration.ofSeconds(60);
+    /**
+     * How long a message may be in its handler before the queue treats the handler as stuck and stops waiting for it.
+     * Default 15 minutes: set it above the longest time a handler really takes, as
+     * {@code essentials.durable-queues.message-handling-timeout} is set for the classic durable queues. Must be positive.
+     * Applies to every queue but those named in {@code stuck-handler-timeouts}.
+     * <p>
+     * Applied to the three waits for an ordered unit's handler, each of which, unbounded, lasted as long as the handler ran
+     * - until the process restarted for one that never returned. An ordered unit a stop kept because a key was still in its
+     * handler {@code shed-grace} after the stop began: a restart of that queue - and a new subscription wanting the old
+     * one's instance id - waits for that handler, and past the bound takes the unit over under a new fence, the stuck
+     * handler's acknowledgement refused. A fair-share shed of an ordered unit, and the hand-back of an ordered unit whose
+     * pump died, which wait for the keys in their handlers: past the bound each releases the unit with every key still in a
+     * handler - the one past the bound and any other still running. Each time the queue stops waiting it logs one WARN,
+     * and the message in that handler is charged an attempt, and dead-lettered if that brings it to its maximum attempts
+     * (a shed or a hand-back releases a message in a handler for less than this bound uncharged); otherwise the unit's next owner delivers the message of each key still in a handler again, possibly beside its
+     * handler, so those keys may run in two handlers at once.
+     * <p>
+     * The unordered lane waits for no handler - a fair-share shed and a dead pump's hand-back release a shard at once, a
+     * stop once {@code shed-grace} has run out - but a message in a handler longer than this bound when its shard is
+     * released is charged an attempt first, and dead-lettered if that brings it to its maximum attempts; one in a handler
+     * for less is released uncharged.
+     * <p>
+     * <b>A behaviour change from 0.60.0,</b> where a restart took the kept unit back at once: it now waits for the handler
+     * up to this bound, then takes the unit over; a fair-share shed, which waited however long the handler ran, now
+     * releases the unit past this bound, and so does the dead-pump hand-back, new in 0.60.1. A queue whose handlers legitimately run longer than 15 minutes must
+     * raise it, for that queue in {@code stuck-handler-timeouts} or for all here.
+     */
+    // Literal, not ShardOwnerSettings.DEFAULT_STUCK_HANDLER_TIMEOUT, so the configuration metadata carries the default:
+    // the processor reads an initializer it can evaluate, not a constant of another class. ShardOwnedQueuePropertiesTest
+    // keeps the two equal.
+    private Duration stuckHandlerTimeout = Duration.ofMinutes(15);
+    /**
+     * Per-queue {@code stuck-handler-timeout}, as {@code name: duration}, for a queue whose handlers run longer (or
+     * shorter) than the rest. A name absent here gets {@code stuck-handler-timeout}. Keyed by the queue's name - for a
+     * queue the {@code DurableQueues} adapter uses, the framework's name, such as {@code Inbox:orders}; a name with
+     * characters relaxed binding would drop, such as {@code :}, goes in brackets:
+     * {@code stuck-handler-timeouts.[Inbox:orders]: 2h}.
+     * <p>
+     * A key must equal the queue's name exactly, case included; a key matching no queue is not an error, and the queue it
+     * meant takes {@code stuck-handler-timeout}. A map key bound from an environment variable arrives in lower case, so an
+     * environment variable cannot set this for a queue whose name has an upper-case letter: set it in a properties or YAML
+     * file, where brackets keep the name as written. Each queue built with its own bound logs it at INFO, and once the
+     * application is ready one WARN names every key no queue had been built under by then.
+     */
+    private Map<String, Duration> stuckHandlerTimeouts = new LinkedHashMap<>();
 
     /**
      * Micrometer meters per queue, under {@code essentials.shard-owned-queue.metrics}.
@@ -253,7 +300,28 @@ public class ShardOwnedQueueProperties {
         return new ShardOwnerSettings(readBatchSize, ackBatchSize, ackFlushInterval, chaseDelay,
                                       holeExpiry, sweepInterval, maxHolesPerChase, keyConcurrency,
                                       pollBackstop, maxSweepInterval, pumpThreads,
-                                      shedGrace, leaseTtl, watermarkCap);
+                                      shedGrace, leaseTtl, watermarkCap, stuckHandlerTimeout);
+    }
+
+    public Duration getStuckHandlerTimeout() {
+        return stuckHandlerTimeout;
+    }
+
+    public void setStuckHandlerTimeout(Duration stuckHandlerTimeout) {
+        this.stuckHandlerTimeout = stuckHandlerTimeout;
+    }
+
+    /**
+     * Read-only. Binding still works: Spring Boot merges into the map a getter returns and, when that one refuses, binds a
+     * new map through the setter.
+     */
+    public Map<String, Duration> getStuckHandlerTimeouts() {
+        return Collections.unmodifiableMap(stuckHandlerTimeouts);
+    }
+
+    /** Copied, so the caller's map changing afterwards does not change these properties. */
+    public void setStuckHandlerTimeouts(Map<String, Duration> stuckHandlerTimeouts) {
+        this.stuckHandlerTimeouts = new LinkedHashMap<>(requireNonNull(stuckHandlerTimeouts, "No stuckHandlerTimeouts provided"));
     }
 
     public Duration getWatermarkCap() {

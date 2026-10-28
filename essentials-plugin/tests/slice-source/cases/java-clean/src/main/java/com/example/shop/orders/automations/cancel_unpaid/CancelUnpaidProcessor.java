@@ -36,11 +36,12 @@ public class CancelUnpaidProcessor extends EventProcessor {
         todos.remember(event.id());
     }
 
-    /** RULE (schedule, dispatches): milliseconds become ISO-8601; a constructed command is dispatched. */
+    /** RULE (schedule, dispatches): milliseconds become ISO-8601; a constructed command is dispatched, sent
+        through the bus a getter returns. */
     @Scheduled(fixedDelay = 900000, initialDelay = 60000)
     void sweep() {
         for (var id : todos.overdue()) {
-            getCommandBus().sendAndDontWait(new CancelOrder(id, "unpaid"));
+            getCommandBus().send(new CancelOrder(id, "unpaid"));
         }
     }
 }

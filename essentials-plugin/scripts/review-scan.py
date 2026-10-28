@@ -20,8 +20,16 @@ candidate   the match is where the trap usually lives, but whether it bites need
             a reason; this script never guesses.
 
 What it never does: read a line the diff does not add, write a file, or run anything but read-only git.
+
 Comments are stripped before matching (Java/Kotlin `//` and `/* */`, YAML/properties `#`, XML
 `<!-- -->`); documentation and patch files are not scanned; main-code-only signatures skip test roots.
+
+`--tree` is sugar for the diff of a whole tree against the empty tree: every file under PATH becomes one
+hunk in which every line is added, so "added lines only" still holds and a project is scanned as one
+change that wrote all of it — what a release move needs (`scripts/migration-plan.py` runs it), never what
+`/essentials:review` does with a change. In a git work tree the files are the tracked ones plus
+the untracked ones `.gitignore` does not exclude (`git ls-files`); any other directory is walked, minus
+VCS metadata and dependency or build output (WALK_SKIP). Binary and non-UTF-8 files are skipped.
 
 Context beyond the diff
 -----------------------
@@ -34,19 +42,23 @@ Usage
 -----
     review-scan.py --diff <file|->     [--root DIR] [--json] [--fail-on LEVEL] [--traps PATH]
     review-scan.py --base <ref> [--head <ref>] [--root DIR] [--json] [--fail-on LEVEL] [--traps PATH]
+    review-scan.py --tree [PATH]       [--json] [--fail-on LEVEL] [--traps PATH]
     review-scan.py --signatures [--json]
     review-scan.py --self-test
 
     --diff      a unified diff (`git diff`, `git diff -U0`, `diff -u`); `-` reads stdin
     --base      read-only git: `git diff --merge-base <ref>` against the working tree (tracked files,
                 committed and uncommitted), or against `--head <ref>` when given
+    --tree      every file under PATH (default: .) as added lines — the empty-tree diff of that tree; PATH is
+                also the context root, so --root does not apply
     --root      the tree the diff applies to (default: git top level with --base, else the current
                 directory); used only to read context, never written
     --fail-on   lowest severity that makes the exit code 1: advisory (default), should-fix, blocking
     --traps     the catalogue (default: ../references/llm/LLM-traps.md beside this script)
 
 Exit codes: 0 no finding at or above --fail-on · 1 findings · 2 could not run (unreadable or
-malformed diff, git failure, catalogue missing, a signature id not active in the catalogue).
+malformed diff, git failure, --tree PATH not a directory, catalogue missing, a signature id not active in the
+catalogue).
 --self-test: 0 every fixture expectation met · 1 not.
 
 Standard library only; Python 3.11+.
@@ -56,7 +68,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
+import shutil
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -227,6 +241,65 @@ SIGNATURES = [
               "KotlinValueTypeConverter constructed in main code",
               ("types-spring-web/src/main/java/dk/trustworks/essentials/types/spring/web/EssentialsWebMvcConfigurer.java:55, "
                "EssentialsWebFluxConfigurer.java:51, KotlinValueTypeConverterRegistrar.java:55 (already registered)",)),
+    # The 0.50 -> 0.60 move. The 0.50 side is the `0.50.0` tag of this repository.
+    Signature("ess-094-jackson-flavor-property", "ESS-094", "confirmed", "Advisory",
+              "essentials.jackson.flavor / essentials.types-jackson.artifactId / essentials.immutable-jackson.artifactId "
+              "in a pom.xml (Should-fix where an Essentials <artifactId> is taken from one)",
+              ("docs/MIGRATION-0.60.md:38-39 (the -Pjackson2/-Pjackson3 profiles and the three properties are gone)",
+               "0.50.0 tag pom.xml:98-100 (where they were defined); no 0.60 pom.xml names them (grep of every pom.xml)")),
+    Signature("ess-095-jackson-module-bean", "ESS-095", "candidate", "Should-fix",
+              "a @Bean method returning a Jackson module (JacksonModule, SimpleModule, Module, KotlinModule, …) in main code",
+              ("components/spring-boot-starter-postgresql/.../postgresql/EssentialsComponentsConfiguration.java:468-478 "
+               "(jsonSerializer() takes no modules; JacksonModule beans deliberately not collected)",
+               "components/spring-boot-starter-postgresql-event-store/.../eventstore/EventStoreConfiguration.java:630-639",
+               "0.50.0 tag postgresql/EssentialsComponentsConfiguration.java:426 (jsonSerializer(List<Module>) collected them)")),
+    Signature("ess-119-queued-message-counts", "ESS-119", "candidate", "Should-fix",
+              "QueuedMessageCounts constructed in .java/.kt (tests included)",
+              ("components/foundation/src/main/java/dk/trustworks/essentials/components/foundation/messaging/queue/"
+               "QueuedMessageCounts.java:43-47 (five components; docs/MIGRATION-0.60.md:380-397)",)),
+    Signature("ess-120-cdc-live-drain-stall-threshold", "ESS-120", "confirmed", "Advisory",
+              "essentials.eventstore.cdc.event-bus.live-drain-stall-threshold in config",
+              ("components/postgresql-event-store/src/main/java/dk/trustworks/essentials/components/eventsourced/"
+               "eventstore/postgresql/cdc/CdcProperties.java:57 (eventBus), :983-995 (@Deprecated(forRemoval), "
+               "has no effect)",
+               "cdc/CdcEventStore.java:259-269 (only checked to be non-negative)",
+               "components/spring-boot-starter-postgresql-event-store/.../eventstore/EssentialsEventStoreProperties.java:60,77 "
+               "(prefix essentials.eventstore, field cdc)", "docs/MIGRATION-0.60.md:934")),
+    Signature("ess-121-jackson-api-removed", "ESS-121", "confirmed", "Blocking",
+              "an import or a qualified call of the 0.50 Jackson-flavour API in .java/.kt (mechanical where the guide's "
+              "replacement is a pure token swap)",
+              ("docs/MIGRATION-0.60.md:45-55 (the rename table)",
+               "0.50.0 tag: JacksonJSONSerializer (foundation/json), JacksonJSONEventSerializer (serializer/json), "
+               "WalMessageFilters.java:43 (createForActiveJacksonFlavor(Supplier) only), Jackson3WalMessageFilter.java:49-61, "
+               "EssentialsJacksonModules.java:57,69,77, EssentialsObjectMappers.java:55, EssentialsJSONEventSerializers.java:39",
+               "0.60: EssentialsJSONEventSerializers.java:37 create() (same JSONEventSerializer return), "
+               "EssentialsJacksonModules.java:51 modules() (same List<tools.jackson.databind.JacksonModule> as 0.50's "
+               "jackson3Modules()), DefaultWalMessageFilter.java:55 (Supplier constructor); none of the 0.50 names in any "
+               "src/main (grep)")),
+    Signature("ess-121-jackson2-at-essentials-api", "ESS-121", "candidate", "Blocking",
+              "a Jackson 2 databind import, or JsonNode.asText(), in a file using NotificationDuplicationFilter, "
+              "NotificationFilterChain or createDefaultObjectMapper()",
+              ("components/foundation/src/main/java/dk/trustworks/essentials/components/foundation/postgresql/"
+               "NotificationDuplicationFilter.java:40 (extractDuplicationKey(tools.jackson JsonNode))",
+               "components/postgresql-queue/.../DurableQueuesSerialization.java:106, "
+               "components/springdata-mongo-queue/.../MongoDurableQueues.java:1330 (return tools.jackson ObjectMapper)",
+               "docs/MIGRATION-0.60.md:57-62 (asText() -> asString())")),
+    Signature("ess-122-ordered-unordered-query", "ESS-122", "confirmed", "Blocking",
+              ".setUseOrderedUnorderedQuery(…) / .isUseOrderedUnorderedQuery in .java/.kt; "
+              "essentials.durable-queues.use-ordered-unordered-query in config (Advisory)",
+              ("0.50.0 tag postgresql-queue PostgresqlDurableQueuesBuilder.java:260, PostgresqlDurableQueues.java:595, "
+               "spring-boot-starter-postgresql EssentialsComponentsProperties.java:709-720",
+               "0.60: no useOrderedUnorderedQuery in any components/*/src/main (grep); "
+               "postgresql/EssentialsComponentsProperties.java:293-590 (DurableQueuesProperties)",
+               "docs/MIGRATION-0.60.md:94-105")),
+    Signature("ess-123-removed-constructor", "ESS-123", "candidate", "Blocking",
+              "DefaultWalMessageFilter(…) with two arguments, PostgresqlEventStreamGapHandler(…) whose first argument "
+              "names an event store (confirmed and mechanical where the second argument is a lambda)",
+              ("components/postgresql-event-store/src/main/java/dk/trustworks/essentials/components/eventsourced/"
+               "eventstore/postgresql/cdc/filter/DefaultWalMessageFilter.java:55,69,79 (Supplier; the "
+               "(JSONEventSerializer, Map|Collection) forms survive, (JSONEventSerializer, Supplier) does not)",
+               "eventstore/postgresql/gap/PostgresqlEventStreamGapHandler.java:126,138,161,174 (no PostgresqlEventStore "
+               "parameter)", "docs/MIGRATION-0.60.md:579-583")),
 ]
 BY_CHECK = {s.check: s for s in SIGNATURES}
 
@@ -242,6 +315,8 @@ QUEUE_STATISTICS_KEYS = ("enable-queue-statistics", "shared-queue-statistics-tab
 LOCK_TIMEOUT_KEY = "essentials.fenced-lock-manager.lock-time-out"
 LOCK_CONFIRM_KEY = "essentials.fenced-lock-manager.lock-confirmation-interval"
 LOCK_DEFAULTS = {LOCK_TIMEOUT_KEY: 15.0, LOCK_CONFIRM_KEY: 4.0}   # seconds; see the ess-050 evidence
+ORDERED_UNORDERED_KEY = "essentials.durable-queues.use-ordered-unordered-query"
+LIVE_DRAIN_KEY = "essentials.eventstore.cdc.event-bus.live-drain-stall-threshold"
 
 
 def canon(key: str) -> str:
@@ -492,6 +567,29 @@ def blank_strings(code: str) -> str:
     return STRING_LITERAL.sub('""', code)
 
 
+def split_args(rest: str) -> list[tuple[int, str]] | None:
+    """The top-level arguments of a call, from the text after its `(` on the same line: [(offset, text), …],
+    the offset relative to `rest`. None when the call does not close on this line."""
+    out, depth, start, quote = [], 0, 0, None
+    for i, ch in enumerate(rest):
+        if quote:
+            if ch == quote and rest[i - 1] != "\\":
+                quote = None
+        elif ch in "\"'":
+            quote = ch
+        elif ch in "([{":
+            depth += 1
+        elif ch in ")]}" and depth > 0:
+            depth -= 1
+        elif ch == ")":
+            out.append((start, rest[start:i]))
+            return out if any(a.strip() for _, a in out) else []
+        elif ch == "," and depth == 0:
+            out.append((start, rest[start:i]))
+            start = i + 1
+    return None
+
+
 def strip_hash(text: str) -> str:
     """YAML: drop a `#` comment that starts the line or follows whitespace, outside quotes."""
     q, i = None, 0
@@ -604,7 +702,7 @@ def config_keys(path: str, seq: list[Line]) -> list[Key]:
 
 
 WATCHED = ([LOCK_TIMEOUT_KEY, LOCK_CONFIRM_KEY, "essentials.reactive-bean-post-processor-enabled",
-            "essentials.durable-queues.transactional-mode"]
+            "essentials.durable-queues.transactional-mode", ORDERED_UNORDERED_KEY, LIVE_DRAIN_KEY]
            + ["essentials.durable-queues." + k for k in QUEUE_STATISTICS_KEYS]
            + ["spring.data.mongodb." + k for k in MONGO_MOVED])
 WATCHED_CANON = [canon(k) for k in WATCHED]
@@ -712,6 +810,10 @@ class Scan:
             return "ess-050-lock-confirmation"
         if c == canon("essentials.durable-queues.transactional-mode"):
             return "ess-103-transactional-mode"
+        if c == canon(ORDERED_UNORDERED_KEY):
+            return "ess-122-ordered-unordered-query"
+        if c == canon(LIVE_DRAIN_KEY):
+            return "ess-120-cdc-live-drain-stall-threshold"
         return "ess-089-reactive-bpp-disabled"
 
     def key_rules(self, path, no, key, value, flat, literal):
@@ -753,6 +855,20 @@ class Scan:
                      "delete the key" + ("; export what you still need from the statistics table before upgrading" if enabling else ""),
                      [] if literal else [{"op": "delete-config-key", "file": path, "line": no, "key": key}],
                      mechanical=literal is None, severity="Should-fix" if enabling else None, match=key)
+        elif c == canon(ORDERED_UNORDERED_KEY):
+            self.add("ess-122-ordered-unordered-query", path, no,
+                     f"`{key}` binds to nothing — the unified claim query is removed and the ordered/unordered pair "
+                     "is the only claim path" + ("; with `false` the queue now runs that pair" if (value or "").strip().lower() == "false" else ""),
+                     "delete the key",
+                     [] if literal else [{"op": "delete-config-key", "file": path, "line": no, "key": key}],
+                     mechanical=literal is None, severity="Advisory", match=key)
+        elif c == canon(LIVE_DRAIN_KEY):
+            self.add("ess-120-cdc-live-drain-stall-threshold", path, no,
+                     f"`{key}` has no effect — a subscription under CDC no longer waits for a missing global order, "
+                     "and essentials.cdc.backfill_live.stall_detected stays 0",
+                     "delete the key, and any alert on essentials.cdc.backfill_live.stall_detected",
+                     [] if literal else [{"op": "delete-config-key", "file": path, "line": no, "key": key}],
+                     mechanical=literal is None, match=key)
 
     def lock_rule(self, path, lock: dict, whole: bool):
         added = [k for k in lock.values() if k.added]
@@ -828,6 +944,23 @@ class Scan:
     DOCDB_ID = re.compile(r"@(?:dk\.trustworks\.essentials\.components\.document_db\.annotations\.)?Id\b(?!\s*\()")
     FIELD = re.compile(r"^\s*((?:(?:private|protected|public|static|final|transient|volatile)\s+)*)"
                        r"[\w.<>\[\],? ]+?\s+\w+\s*(?:=[^;]*)?;\s*$")
+    # 0.50 -> 0.60 (MIGRATION-0.60.md § Removed and renamed API and the sections after it)
+    IMPORT = re.compile(r"^\s*import\s+(static\s+)?([\w.]+?)(\.\*)?\s*(?:as\s+\w+\s*)?;?\s*$")
+    J2_DATABIND_IMPORT = re.compile(r"^\s*import\s+com\.fasterxml\.jackson\.databind\.(?!annotation\.)[\w.*]+")
+    NOTIFICATION_API = re.compile(r"\b(NotificationDuplicationFilter|NotificationFilterChain|createDefaultObjectMapper)\b")
+    AS_TEXT = re.compile(r"\.\s*asText\s*\(\s*\)")
+    FLAVOR_CALL = re.compile(r"(?<![\w.])(EssentialsJSONEventSerializers|EssentialsJacksonModules|EssentialsObjectMappers|"
+                             r"WalMessageFilters)\s*\.\s*(createForActiveJacksonFlavor|jackson3Modules|jackson2Modules|"
+                             r"isJackson3Flavor|createJackson2ObjectMapper)\s*\(")
+    SET_ORDERED_UNORDERED = re.compile(r"\.\s*setUseOrderedUnorderedQuery\s*\(\s*([\w.]*)\s*\)")
+    IS_ORDERED_UNORDERED = re.compile(r"\.\s*isUseOrderedUnorderedQuery\b")
+    QUEUED_COUNTS = re.compile(r"(?<![\w.])(?<!record )(?<!class )(?:new\s+)?QueuedMessageCounts\s*\(")
+    WAL_FILTER_CTOR = re.compile(r"(?<![\w.])(?:new\s+)?DefaultWalMessageFilter\s*\(")
+    GAP_HANDLER_CTOR = re.compile(r"(?<![\w.])(?:new\s+)?PostgresqlEventStreamGapHandler\s*\(")
+    MODULE_TYPES = r"(?:JacksonModule|SimpleModule|Module|KotlinModule|JavaTimeModule|Jdk8Module|ParameterNamesModule)"
+    MODULE_BEAN = re.compile(r"(?:\bfun\s+\w+\s*\([^)]*\)\s*:\s*[\w.]*" + MODULE_TYPES + r"\b"
+                             r"|^\s*(?:(?:public|protected|private|static|final)\s+)*[\w.]*" + MODULE_TYPES
+                             + r"\s+\w+\s*\()")
 
     def source_file(self, fd: FileDiff, ctx: Context):
         main = not is_test(fd.path)
@@ -843,6 +976,10 @@ class Scan:
         docdb_id = any(self.DOCDB_ID_IMPORT.match(c) for c in all_code)
         order = [ln.no for ln in ctx.all_lines()]
         nxt = {a: b for a, b in zip(order, order[1:])}
+        coded = [n for n in order if code.get(n, "").strip()]
+        prev = {b: coded[max(0, i - 3):i] for i, b in enumerate(coded)}     # up to three code lines before
+        notification_api = any(self.NOTIFICATION_API.search(blank_strings(c)) for c in all_code)
+        dup_filter = any("NotificationDuplicationFilter" in blank_strings(c) for c in all_code)
         added = {ln.no for ln in fd.added()}
 
         for ln in fd.added():
@@ -894,8 +1031,16 @@ class Scan:
                          "AppendToStream.builder()", mechanical=False, match=m.group(0) + "…Optional")
             if java and docdb_id and self.DOCDB_ID.search(c):
                 self.docdb_id(fd, ln, c, code, nxt, added)
+            self.upgrade_060(fd, ln, c, java, notification_api, dup_filter)
             if not main:
                 continue
+            if self.MODULE_BEAN.search(c) and any("@Bean" in code.get(n, "") for n in (*prev.get(ln.no, ()), ln.no)):
+                self.add("ess-095-jackson-module-bean", fd.path, ln.no,
+                         "a Jackson module bean — the 0.60 starters register module beans on Boot's web JsonMapper only, "
+                         "never on the persistence mapper; persisted JSON that relied on it changes shape",
+                         "if events, queue payloads or documents need this module, define your own JSONSerializer / "
+                         "JSONEventSerializer bean carrying it (the starter backs off); a web-only module is fine",
+                         mechanical=False, match=c.strip())
             m = self.MAPPER.search(c)
             if m:
                 self.add("ess-052-hand-built-mapper", fd.path, ln.no,
@@ -938,6 +1083,136 @@ class Scan:
                          "already register it when kotlin-reflect is present",
                          "drop it if one of those configurers is @Import-ed", mechanical=False, match=m.group(0))
 
+    REMOVED_TYPES = {
+        "dk.trustworks.essentials.components.foundation.json.JacksonJSONSerializer":
+            "use EssentialsObjectMappers.createJSONSerializer(), or new Jackson3JSONSerializer(<tools.jackson ObjectMapper>)",
+        "dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.JacksonJSONEventSerializer":
+            "use EssentialsJSONEventSerializers.create(), or new Jackson3JSONEventSerializer(<tools.jackson ObjectMapper>)",
+        "dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.filter.Jackson3WalMessageFilter":
+            "use DefaultWalMessageFilter(Supplier) — wrap a fixed Map or Collection of table names as () -> tables",
+        "dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.filter.WalMessageFilters":
+            "use DefaultWalMessageFilter",
+    }
+    WAL_FILTERS = "dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.filter.WalMessageFilters"
+    FLAVOR_MEMBERS = {
+        ("EssentialsJSONEventSerializers", "createForActiveJacksonFlavor"): "create",
+        ("EssentialsJacksonModules", "jackson3Modules"): "modules",
+        ("WalMessageFilters", "createForActiveJacksonFlavor"): "DefaultWalMessageFilter",
+        ("EssentialsObjectMappers", "createJackson2ObjectMapper"): None,
+        ("EssentialsJacksonModules", "jackson2Modules"): None,
+        ("EssentialsJacksonModules", "isJackson3Flavor"): None,
+    }
+    FLAVOR_FIX = {
+        "createJackson2ObjectMapper": "use EssentialsObjectMappers.createJackson3ObjectMapper(...), which returns a "
+                                      "tools.jackson ObjectMapper",
+        "jackson2Modules": "removed — EssentialsJacksonModules.modules() lists the Jackson 3 modules",
+        "isJackson3Flavor": "removed — Jackson 3 is the only flavour; drop the branch",
+    }
+    FLAVOR_PACKAGES = ("dk.trustworks.essentials.components.foundation.json.",
+                       "dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.")
+
+    def upgrade_060(self, fd: FileDiff, ln: Line, c: str, java: bool, notification_api: bool, dup_filter: bool):
+        """The 0.50 -> 0.60 API removals a line can pin down (ESS-119, -121, -122, -123)."""
+        m = self.IMPORT.match(c)
+        if m:
+            fqn, static = m.group(2), bool(m.group(1))
+            hit = next((t for t in self.REMOVED_TYPES if fqn == t or (static and fqn.startswith(t + "."))), None)
+            member = None
+            if hit is None and static and fqn.startswith(self.FLAVOR_PACKAGES):
+                owner, _, name = fqn.rpartition(".")
+                member = (owner.rsplit(".", 1)[-1], name) if (owner.rsplit(".", 1)[-1], name) in self.FLAVOR_MEMBERS else None
+            if hit is not None:
+                swap = hit == self.WAL_FILTERS and not static
+                ops = ([{"op": "replace-text", "file": fd.path, "line": ln.no, "from": "cdc.filter.WalMessageFilters",
+                         "to": "cdc.filter.DefaultWalMessageFilter"}] if swap else [])
+                self.add("ess-121-jackson-api-removed", fd.path, ln.no,
+                         f"imports {hit.rsplit('.', 1)[1]}, which 0.60 removed with the Jackson 2 flavour",
+                         self.REMOVED_TYPES[hit], ops, mechanical=swap, match=fqn)
+            elif member is not None:
+                self.add("ess-121-jackson-api-removed", fd.path, ln.no,
+                         f"statically imports {member[0]}.{member[1]}, which 0.60 removed",
+                         f"import {member[0]}.{self.FLAVOR_MEMBERS[member]} instead" if self.FLAVOR_MEMBERS[member]
+                         and member[0] != "WalMessageFilters" else self.FLAVOR_FIX.get(member[1], "use DefaultWalMessageFilter"),
+                         mechanical=False, match=fqn)
+            if notification_api and self.J2_DATABIND_IMPORT.match(c):
+                self.add("ess-121-jackson2-at-essentials-api", fd.path, ln.no,
+                         "a Jackson 2 databind type beside NotificationDuplicationFilter / NotificationFilterChain / "
+                         "createDefaultObjectMapper() — in 0.60 those take and return the tools.jackson types",
+                         "import tools.jackson.databind.… instead, and replace asText() with asString()",
+                         mechanical=False, match=c.strip())
+            return
+        for m in self.FLAVOR_CALL.finditer(c):
+            owner, name = m.group(1), m.group(2)
+            if (owner, name) not in self.FLAVOR_MEMBERS:
+                continue
+            to = self.FLAVOR_MEMBERS[(owner, name)]
+            if to == "DefaultWalMessageFilter":
+                new = ("new " if java else "") + "DefaultWalMessageFilter("
+                fix = f"replace with {new}…) — the same Supplier argument"
+            elif to is not None:
+                new = f"{owner}.{to}("
+                fix = f"replace with {new}) — same arguments, same return type"
+            else:
+                new, fix = None, self.FLAVOR_FIX[name]
+            self.add("ess-121-jackson-api-removed", fd.path, ln.no,
+                     f"{owner}.{name}(...) is removed in 0.60",
+                     fix, [{"op": "replace-text", "file": fd.path, "line": ln.no, "from": m.group(0), "to": new}] if new else [],
+                     mechanical=new is not None, match=m.group(0))
+        if dup_filter and self.AS_TEXT.search(c):
+            self.add("ess-121-jackson2-at-essentials-api", fd.path, ln.no,
+                     "JsonNode.asText() in a NotificationDuplicationFilter — 0.60 hands it a tools.jackson JsonNode, "
+                     "where asText() is replaced by asString()",
+                     "replace asText() with asString()", mechanical=False, match="asText()")
+        m = self.SET_ORDERED_UNORDERED.search(c)
+        if m:
+            before = c[:m.start()].rstrip()
+            ok = (before == "" or before.endswith(")")) and m.group(1) != ""
+            self.add("ess-122-ordered-unordered-query", fd.path, ln.no,
+                     "setUseOrderedUnorderedQuery(...) no longer exists — the unified claim query and its flag are removed",
+                     "delete the call; there is no replacement",
+                     [{"op": "replace-text", "file": fd.path, "line": ln.no, "from": m.group(0), "to": ""}] if ok else [],
+                     mechanical=ok, match=m.group(0))
+        m = self.IS_ORDERED_UNORDERED.search(c)
+        if m:
+            self.add("ess-122-ordered-unordered-query", fd.path, ln.no,
+                     "isUseOrderedUnorderedQuery() no longer exists — the ordered/unordered pair is the only claim path",
+                     "drop the check; the answer is always the pair", mechanical=False, match=m.group(0))
+        m = self.QUEUED_COUNTS.search(c)
+        counts_args = split_args(c[m.end():]) if m else None
+        if m and not re.search(r"\b(?:instanceof|case|is)\s+(?:[\w.]+\.)?QueuedMessageCounts\s*\($", c[:m.end()]) \
+                and not (counts_args is not None and len(counts_args) >= 5):
+            self.add("ess-119-queued-message-counts", fd.path, ln.no,
+                     "constructs a QueuedMessageCounts — 0.60 adds numberOfMessagesBeingDelivered and "
+                     "oldestReadyMessageTimestamp, so a three-argument call stops compiling and an equality assertion "
+                     "against a hand-built value no longer holds",
+                     "pass the two new components, or assert on the components you care about instead of equality",
+                     mechanical=False, match=m.group(0))
+        m = self.WAL_FILTER_CTOR.search(c)
+        if m:
+            args = split_args(c[m.end():])
+            if args is not None and len(args) >= 2:
+                lam = re.match(r"\s*(\(\s*\)\s*->|\{|[\w.]*::)", args[1][1])
+                second = args[1][1]
+                first = c[m.end():m.end() + args[1][0] + len(second) - len(second.lstrip())]
+                self.add("ess-123-removed-constructor", fd.path, ln.no,
+                         "DefaultWalMessageFilter(serializer, …) — 0.60 removed the (JSONEventSerializer, Supplier) form"
+                         + ("" if lam else "; (JSONEventSerializer, Map) and (JSONEventSerializer, Collection) remain"),
+                         "drop the serializer argument: DefaultWalMessageFilter(supplier)" if lam else
+                         "if the second argument is a Supplier, drop the serializer: DefaultWalMessageFilter(supplier)",
+                         [{"op": "replace-text", "file": fd.path, "line": ln.no, "from": m.group(0) + first,
+                           "to": m.group(0)}] if lam and '"' not in first else [],
+                         mechanical=bool(lam) and '"' not in first, kind="confirmed" if lam else None,
+                         match=m.group(0) + first)
+        m = self.GAP_HANDLER_CTOR.search(c)
+        if m:
+            args = split_args(c[m.end():])
+            if args is not None and len(args) >= 2 and re.search(r"(?i)event_?store", args[0][1]):
+                self.add("ess-123-removed-constructor", fd.path, ln.no,
+                         "PostgresqlEventStreamGapHandler(eventStore, …) — 0.60 removed the constructors taking the "
+                         "event store; it was never used",
+                         "drop the event-store argument: PostgresqlEventStreamGapHandler(unitOfWorkFactory, …)",
+                         mechanical=False, match=m.group(0) + args[0][1].strip())
+
     def docdb_id(self, fd, ln, c, code, nxt, added):
         m = self.DOCDB_ID.search(c)
         if m is None:
@@ -970,37 +1245,65 @@ class Scan:
     # -- build files --------------------------------------------------------------------------
 
     J2_ARTIFACT = re.compile(r"<artifactId>\s*(types-jackson|immutable-jackson)\s*</artifactId>")
+    FLAVOR_PROP = re.compile(r"<(essentials\.jackson\.flavor|essentials\.(?:types|immutable)-jackson\.artifactId)>")
+    FLAVOR_REF = re.compile(r"<artifactId>\s*(\$\{essentials\.(types|immutable)-jackson\.artifactId\})\s*</artifactId>")
+
+    @staticmethod
+    def enclosing(seq, xml, i):
+        """(element, first line, groupId) of the element around the <artifactId> on seq[i]."""
+        nos = [ln.no for ln in seq]
+        opener, start = None, None
+        for j in range(i, -1, -1):
+            t = xml.get(nos[j], "")
+            o = re.search(r"<(dependency|exclusion|plugin|parent)>", t)
+            if o and (j < i or t.find(o.group(0)) < t.find("<artifactId>")):
+                opener, start = o.group(1), nos[j]
+                break
+            if j < i and re.search(r"</(dependency|exclusion|plugin|parent)>", t):
+                break
+        group = None
+        for j in range(i - 1 if start is None else nos.index(start), len(seq)):
+            t = xml.get(nos[j], "")
+            g = re.search(r"<groupId>\s*([^<\s]+)\s*</groupId>", t)
+            if g:
+                group = g.group(1)
+                break
+            if re.search(r"</(dependency|exclusion)>", t):
+                break
+        return opener, start, group
 
     def pom_file(self, fd: FileDiff, ctx: Context):
         for seq in ctx.sequences():
             xml = strip_xml(seq)
-            nos = [ln.no for ln in seq]
             for i, ln in enumerate(seq):
                 if not ln.added:
                     continue
-                m = self.J2_ARTIFACT.search(xml.get(ln.no, ""))
+                text = xml.get(ln.no, "")
+                m = self.FLAVOR_PROP.search(text)
+                if m:
+                    self.add("ess-094-jackson-flavor-property", fd.path, ln.no,
+                             f"`{m.group(1)}` is a 0.50 Jackson-flavour property — no 0.60 POM reads it",
+                             "delete the property (and any -Pjackson2/-Pjackson3 your build passes for it)",
+                             mechanical=False, match=m.group(0))
+                m = self.FLAVOR_REF.search(text)
+                if m:
+                    opener, start, group = self.enclosing(seq, xml, i)
+                    if opener in ("dependency", None) and group in ("dk.trustworks.essentials", None):
+                        a = f"{m.group(2)}-jackson3"
+                        confirmed = group == "dk.trustworks.essentials" and start is not None
+                        self.add("ess-094-jackson-flavor-property", fd.path, ln.no,
+                                 f"the artifactId comes from `{m.group(1)}`, a 0.50 Jackson-flavour property — 0.60 has "
+                                 f"one Jackson module, {a}; set to the Jackson 2 module it fails at startup",
+                                 f"depend on {a} by name",
+                                 [{"op": "set-artifact-id", "pom": fd.path, "line": start, "groupId": "dk.trustworks.essentials",
+                                   "from": m.group(1), "to": a}] if confirmed else [],
+                                 mechanical=confirmed, severity="Should-fix", match=m.group(0))
+                m = self.J2_ARTIFACT.search(text)
                 if not m:
                     continue
-                opener, start = None, None
-                for j in range(i, -1, -1):
-                    t = xml.get(nos[j], "")
-                    o = re.search(r"<(dependency|exclusion|plugin|parent)>", t)
-                    if o and (j < i or t.find(o.group(0)) < t.find("<artifactId>")):
-                        opener, start = o.group(1), nos[j]
-                        break
-                    if j < i and re.search(r"</(dependency|exclusion|plugin|parent)>", t):
-                        break
+                opener, start, group = self.enclosing(seq, xml, i)
                 if opener in ("exclusion", "plugin", "parent"):
                     continue
-                group = None
-                for j in range(i - 1 if start is None else nos.index(start), len(seq)):
-                    t = xml.get(nos[j], "")
-                    g = re.search(r"<groupId>\s*([^<\s]+)\s*</groupId>", t)
-                    if g:
-                        group = g.group(1)
-                        break
-                    if re.search(r"</(dependency|exclusion)>", t):
-                        break
                 if group is not None and group != "dk.trustworks.essentials":
                     continue
                 confirmed = group == "dk.trustworks.essentials" and start is not None
@@ -1054,13 +1357,61 @@ def diff_from_git(root: Path, base: str, head: str | None):
     return top, text, untracked
 
 
-def scan_text(text: str, root: Path | None) -> Scan:
-    files = parse_diff(text)
-    validate_diff(text, files)
+# Directories a tree walk never enters when PATH is not a git work tree: VCS metadata, dependency and build output.
+WALK_SKIP = {".git", ".hg", ".svn", "node_modules", "target", "build", "dist", "out", ".gradle", ".mvn", ".idea",
+             ".vscode", ".next", ".venv", "__pycache__"}
+
+
+def tree_files(root: Path) -> tuple[list[FileDiff], str]:
+    """Every text file under ROOT as a FileDiff whose lines are all added — what `git diff <empty tree>` of that
+    tree would say. A git work tree lists its tracked and untracked-but-not-ignored files (`git ls-files`, so
+    .gitignore holds); any other directory is walked, skipping WALK_SKIP. Unreadable and binary files are skipped."""
+    lister = "walk"
+    paths: list[str] = []
+    inside = subprocess.run(["git", "-C", str(root), "rev-parse", "--is-inside-work-tree"], capture_output=True,
+                            text=True, check=False) if shutil.which("git") else None
+    if inside is not None and inside.returncode == 0 and inside.stdout.strip() == "true":
+        lister = "git"
+        out = git(root, "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", ".")
+        paths = sorted({p for p in out.split("\0") if p})
+    else:
+        for d, dirs, names in os.walk(root):
+            dirs[:] = sorted(x for x in dirs if x not in WALK_SKIP)
+            rel = Path(d).relative_to(root)
+            paths.extend((rel / n).as_posix() for n in sorted(names))
+    files = []
+    for rel in paths:
+        p = root / rel
+        if not p.is_file() or p.is_symlink():
+            continue
+        try:
+            data = p.read_bytes()
+        except OSError:
+            continue
+        if b"\0" in data:
+            continue
+        try:
+            lines = data.decode("utf-8").splitlines()
+        except UnicodeDecodeError:
+            continue
+        fd = FileDiff(rel)
+        if lines:
+            fd.hunks.append([Line(i, s, True) for i, s in enumerate(lines, 1)])
+        files.append(fd)
+    return files, lister
+
+
+def scan_files(files: list[FileDiff], root: Path | None) -> Scan:
     s = Scan(root).run(files)
     s.changed = len(files)
     s.findings.sort(key=lambda f: (SEVERITY_RANK[f.severity or f.sig().severity], f.file, f.line, f.check))
     return s
+
+
+def scan_text(text: str, root: Path | None) -> Scan:
+    files = parse_diff(text)
+    validate_diff(text, files)
+    return scan_files(files, root)
 
 
 def check_catalogue(traps):
@@ -1222,6 +1573,7 @@ def main(argv=None) -> int:
     src = parser.add_mutually_exclusive_group()
     src.add_argument("--diff", metavar="FILE|-")
     src.add_argument("--base", metavar="REF")
+    src.add_argument("--tree", metavar="PATH", nargs="?", const=".")
     parser.add_argument("--head", metavar="REF")
     parser.add_argument("--root", metavar="DIR")
     parser.add_argument("--json", action="store_true")
@@ -1240,6 +1592,17 @@ def main(argv=None) -> int:
             return list_signatures(traps, args.json, out)
         if args.head and not args.base:
             raise UsageError("--head needs --base")
+        if args.tree is not None:
+            if args.root:
+                raise UsageError("--tree takes the tree as its argument; --root does not apply")
+            tree = Path(args.tree)
+            if not tree.is_dir():
+                raise UsageError(f"--tree {tree} is not a directory")
+            files, lister = tree_files(tree)
+            scan = scan_files(files, tree)
+            doc = report(scan, traps, {"mode": "tree", "root": str(tree.resolve()), "lister": lister}, args.json, out)
+            floor = SEVERITY_RANK[FAIL_ON[args.fail_on]]
+            return 1 if any(SEVERITY_RANK[f["severity"]] <= floor for f in doc["findings"]) else 0
         if args.base:
             top, text, untracked = diff_from_git(Path(args.root or "."), args.base, args.head)
             root = None if args.head else top
@@ -1253,7 +1616,7 @@ def main(argv=None) -> int:
             root = Path(args.root) if args.root else Path(".")
             source = {"mode": "diff", "diff": args.diff, "root": str(root.resolve())}
         else:
-            raise UsageError("give --diff <file|->, --base <ref>, --signatures or --self-test")
+            raise UsageError("give --diff <file|->, --base <ref>, --tree [PATH], --signatures or --self-test")
         if root is not None and not root.is_dir():
             raise UsageError(f"--root {root} is not a directory")
         scan = scan_text(text, root)

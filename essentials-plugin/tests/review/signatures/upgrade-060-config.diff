@@ -1,0 +1,34 @@
+# review-scan signature fixture: ESS-122 / ESS-120 configuration keys the 0.60 move leaves behind
+# use-ordered-unordered-query binds to nothing and live-drain-stall-threshold has no effect: both are deleted
+# mechanically, in .properties and in nested YAML. Their neighbours under the same prefixes still bind.
+# expect: backend/src/main/resources/application.properties:1 ess-122-ordered-unordered-query confirmed Advisory mechanical
+# expect-not: backend/src/main/resources/application.properties:2 ess-122-ordered-unordered-query
+# expect: backend/src/main/resources/application.properties:3 ess-120-cdc-live-drain-stall-threshold confirmed Advisory mechanical
+# expect-not: backend/src/main/resources/application.properties:4 ess-120-cdc-live-drain-stall-threshold
+# expect-not: backend/src/main/resources/application.properties:5 ess-122-ordered-unordered-query
+# expect: backend/src/main/resources/application-cdc.yml:5 ess-120-cdc-live-drain-stall-threshold confirmed Advisory mechanical
+# expect-not: backend/src/main/resources/application-cdc.yml:6 ess-120-cdc-live-drain-stall-threshold
+# expect: backend/src/main/resources/application-cdc.yml:8 ess-122-ordered-unordered-query confirmed Advisory mechanical
+diff --git a/backend/src/main/resources/application.properties b/backend/src/main/resources/application.properties
+new file mode 100644
+--- /dev/null
++++ b/backend/src/main/resources/application.properties
+@@ -0,0 +1,5 @@
++essentials.durable-queues.use-ordered-unordered-query=false
++essentials.durable-queues.use-centralized-message-fetcher=true
++essentials.eventstore.cdc.event-bus.live-drain-stall-threshold=3m
++essentials.eventstore.cdc.enabled=true
++# essentials.durable-queues.use-ordered-unordered-query=true
+diff --git a/backend/src/main/resources/application-cdc.yml b/backend/src/main/resources/application-cdc.yml
+new file mode 100644
+--- /dev/null
++++ b/backend/src/main/resources/application-cdc.yml
+@@ -0,0 +1,8 @@
++essentials:
++  eventstore:
++    cdc:
++      event-bus:
++        live-drain-stall-threshold: 2m
++      enabled: true
++  durable-queues:
++    use-ordered-unordered-query: true

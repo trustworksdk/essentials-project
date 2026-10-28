@@ -25,6 +25,7 @@ import reactor.core.scheduler.Schedulers;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
@@ -78,24 +79,40 @@ public final class LocalCommandBus extends AbstractCommandBus {
         var commandHandler = findCommandHandlerCapableOfHandling(command);
         log.debug("sendAndDontWait command of type '{}' to {} '{}'", command.getClass().getName(), CommandHandler.class.getSimpleName(), commandHandler.toString());
         // The handler runs on a Reactor worker (publishOn fuses with fromCallable), so context is captured here, on the sending thread
-        Mono.fromCallable(propagateContext(() -> CommandBusInterceptorChain.newInterceptorChain(command,
-                                                                               commandHandler,
-                                                                               interceptors,
-                                                                               (interceptor, commandBusInterceptorChain) -> {
-                                                                                   interceptor.interceptSendAndDontWait(command, commandBusInterceptorChain);
-                                                                                   return null;
-                                                                               },
-                                                                               _cmd -> {
-                                                                                   try {
-                                                                                       return commandHandler.handle(_cmd);
-                                                                                   } catch (Exception e) {
-                                                                                       sendAndDontWaitErrorHandler.handleError(e,
-                                                                                                                               _cmd,
-                                                                                                                               commandHandler);
-                                                                                       return null;
-                                                                                   }
-                                                                               })
-                                                          .proceed()))
+        Mono.fromCallable(propagateContext(() -> {
+                var handlerFailure = new AtomicReference<Exception>();
+                try {
+                    CommandBusInterceptorChain.newInterceptorChain(command,
+                                                                   commandHandler,
+                                                                   interceptors,
+                                                                   (interceptor, commandBusInterceptorChain) -> {
+                                                                       interceptor.interceptSendAndDontWait(command, commandBusInterceptorChain);
+                                                                       return null;
+                                                                   },
+                                                                   _cmd -> {
+                                                                       try {
+                                                                           return commandHandler.handle(_cmd);
+                                                                       } catch (Exception e) {
+                                                                           // Let the failure unwind through the interceptors, so e.g. a UnitOfWork interceptor rolls back
+                                                                           // what the handler wrote, and only then hand it to the error handler (below)
+                                                                           handlerFailure.set(e);
+                                                                           throw e;
+                                                                       }
+                                                                   })
+                                              .proceed();
+                } catch (Exception e) {
+                    var failure = handlerFailure.get();
+                    if (failure == null) {
+                        // Not a command handler failure (e.g. an interceptor failed) - not the error handler's to handle
+                        throw e;
+                    }
+                    // The handler's own exception, not whatever an interceptor wrapped it in on the way out
+                    sendAndDontWaitErrorHandler.handleError(failure,
+                                                            command,
+                                                            commandHandler);
+                }
+                return null;
+            }))
             .publishOn(Schedulers.boundedElastic())
             .subscribe();
     }

@@ -1,4 +1,4 @@
-schemaVersion: "1.1"
+schemaVersion: "1.4"
 slice: banking.open_account
 kind: command
 bc: banking
@@ -7,6 +7,7 @@ status: live
 summary: Open a new bank account with a zero balance.
 generator: essentials
 language: java
+lane: aggregate
 
 handles: [OpenAccount]
 publishes: [AccountOpened]
@@ -24,6 +25,31 @@ invariants:
     enforcedBy: Account
 forbidden:
   - cross-slice-internal:banking
+tier: cqrs-es
+flow: open-account
+scenarios:
+  - name: an account is opened with a zero balance
+    when:
+      command: OpenAccount
+      with:
+        accountNumber: "001122334"
+    then:
+      - event: AccountOpened
+        with:
+          accountNumber: "001122334"
+    test: OpenAccountIT#an_account_is_opened_with_a_zero_balance
+  - name: opening the same account twice is a no op
+    given:
+      - event: AccountOpened
+        with:
+          accountNumber: "001122335"
+    when:
+      command: OpenAccount
+      with:
+        accountNumber: "001122335"
+    then:
+      nothing: true
+    test: OpenAccountIT#opening_the_same_account_twice_is_a_no_op
 tests:
   unit: { present: false }
   integration: { present: true }

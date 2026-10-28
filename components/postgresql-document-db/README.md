@@ -90,7 +90,7 @@ The `@DocumentEntity.tableName`, entity property names, and `Index.name` are use
 
 **Mitigations:**
 - `PostgresqlDocumentDbRepository` calls `PostgresqlUtil#checkIsValidTableOrColumnName(String)` for basic validation at startup
-- Entity property names are validated via `EntityConfiguration.checkPropertyNames()`
+- Entity property names and JSON path segments are validated via `EntityConfiguration.checkPropertyNames()`: identifier characters and at most 63 characters. Unlike the table name they may be SQL reserved words (`order`, `user`, `values`, ...) since 0.60.1, because they reach SQL only as quoted JSON path segments, JDBI bind names and prefixed index names
 - This provides initial defense but does **NOT** guarantee complete SQL injection protection
 
 **Developer Responsibility:**
@@ -422,12 +422,13 @@ val repositoryFactory = DocumentDbRepositoryFactory(
 
 ### Creating Repositories
 
-The factory provides three methods for creating repositories, depending on your ID type strategy. Each method returns a fully configured `DocumentDbRepository` ready for use.
+The factory provides four methods for creating repositories, depending on your ID type strategy. Each method returns a fully configured `DocumentDbRepository` ready for use.
 
 | Method | Use Case |
 |--------|----------|
 | `create(entityClass)` | Entities with `StringValueType` IDs (recommended) |
 | `createForStringId(entityClass)` | Entities with plain `String` IDs |
+| `createForCharSequenceTypeId(entityClass)` | Entities with a Java `CharSequenceType` ID (e.g. `OrderId extends CharSequenceType<OrderId>`) |
 | `createForCompositeId(entityClass, idSerializer)` | Entities with composite or custom ID types |
 
 **For `StringValueType` IDs (recommended):**
@@ -649,7 +650,7 @@ Multiple methods for retrieving entities, depending on your needs:
 | Method | Returns | When to Use |
 |--------|---------|-------------|
 | `findById(id)` | `Entity?` | When the entity might not exist (returns `null` if not found) |
-| `getById(id)` | `Entity` | When the entity must exist (throws exception if not found) |
+| `getById(id)` | `Entity` | When the entity must exist (throws `DocumentEntityNotFoundException`, naming entity type and id, if not found) |
 | `existsById(id)` | `Boolean` | When you only need to check existence without loading the entity |
 | `findAll()` | `List<Entity>` | Load all entities (use with caution on large tables) |
 | `findAllById(ids)` | `List<Entity>` | Load multiple entities by their IDs in a single query |

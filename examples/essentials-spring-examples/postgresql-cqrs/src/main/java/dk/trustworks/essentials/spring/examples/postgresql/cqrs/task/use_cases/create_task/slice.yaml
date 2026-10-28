@@ -1,4 +1,4 @@
-schemaVersion: "1.1"
+schemaVersion: "1.4"
 slice: task.create_task
 kind: command
 bc: task
@@ -7,6 +7,7 @@ status: live
 summary: Create a task, optionally carrying an initial comment.
 generator: essentials
 language: java
+lane: aggregate
 
 handles: [CreateTask]
 publishes: [TaskCreated]
@@ -15,6 +16,8 @@ endpoints:
   - { method: POST, path: /tasks/create, auth: anonymous }
 forbidden:
   - cross-slice-internal:task
+tier: cqrs-es
+flow: create-task
 tests:
   unit: { present: false }
   integration: { present: true }

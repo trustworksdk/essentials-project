@@ -1,0 +1,22 @@
+schemaVersion: "1.4"
+slice: shipping.nightly_reship
+kind: automation
+bc: shipping
+owner: shipping-team
+status: live
+summary: Re-ship orders the carrier has not collected by the end of the day.
+generator: essentials
+language: java
+tier: cqrs-es
+lane: decider
+schedule: { cron: "0 0 2 * * *", note: "after the carrier's last collection" }
+dispatches: [ShipOrder]
+scenarios:
+  - name: nothing is stuck
+    when: { schedule: true }
+    then: { nothing: true }
+forbidden:
+  - cross-slice-internal:shipping
+tests:
+  unit: { present: false }
+  integration: { present: false }

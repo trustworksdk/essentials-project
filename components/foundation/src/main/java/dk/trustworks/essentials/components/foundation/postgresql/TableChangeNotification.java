@@ -23,6 +23,11 @@ import java.util.Objects;
 
 /**
  * Represents a base notification, which is a change to a given table caused by a specific {@link SqlOperation}
+ * <p>
+ * {@link #equals(Object)} compares the concrete class, the table name and the operation, and is null-safe: a payload
+ * without {@code table_name} deserializes to a notification that can still be compared and put in a {@link java.util.Set}.
+ * It does not compare the state a subclass adds; <b>a subclass that carries state must override {@link #equals(Object)}
+ * and {@link #hashCode()}</b>, or two notifications about different rows of the same table compare equal.
  */
 public abstract class TableChangeNotification {
     @JsonProperty(ListenNotify.TABLE_NAME)
@@ -41,14 +46,15 @@ public abstract class TableChangeNotification {
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
-        if (!(o instanceof TableChangeNotification)) return false;
+        // getClass(), not instanceof: two different notification types about the same table are different notifications
+        if (o == null || getClass() != o.getClass()) return false;
         TableChangeNotification that = (TableChangeNotification) o;
-        return tableName.equals(that.tableName) && operation == that.operation;
+        return Objects.equals(tableName, that.tableName) && operation == that.operation;
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(tableName, operation);
+        return Objects.hash(getClass(), tableName, operation);
     }
 
     public String getTableName() {

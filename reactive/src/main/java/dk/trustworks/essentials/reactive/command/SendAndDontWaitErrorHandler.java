@@ -28,9 +28,13 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  */
 public interface SendAndDontWaitErrorHandler {
     /**
-     * Handle an exception that occurred while processing a Command sent using {@link CommandBus#sendAndDontWait(Object)}/{@link CommandBus#sendAndDontWait(Object, Duration)}
+     * Handle an exception that occurred while processing a Command sent using {@link CommandBus#sendAndDontWait(Object)}/{@link CommandBus#sendAndDontWait(Object, Duration)}<br>
+     * Since 0.60.1 this is called <b>after</b> the command handler's exception has unwound through every
+     * {@link dk.trustworks.essentials.reactive.command.interceptor.CommandBusInterceptor}, so a transaction an interceptor opened around the handler
+     * (e.g. a UnitOfWork) has already been rolled back - or marked rollback-only, if it joined an outer one - whether or not this
+     * handler rethrows. Exceptions thrown by an interceptor itself, rather than by the command handler, are not passed to this handler.
      *
-     * @param exception      the exception that occurred during {@link CommandBus#sendAndDontWait(Object)}/{@link CommandBus#sendAndDontWait(Object, Duration)}
+     * @param exception      the exception the command handler threw (never a wrapper an interceptor added on the way out) during {@link CommandBus#sendAndDontWait(Object)}/{@link CommandBus#sendAndDontWait(Object, Duration)}
      * @param commandMessage the command message that caused the exception (can be wrapped in an infrastructure wrapper, such as a Message/QueuedMessage, depending on which transport channel is used)
      * @param commandHandler the command handler that can handle the command
      */

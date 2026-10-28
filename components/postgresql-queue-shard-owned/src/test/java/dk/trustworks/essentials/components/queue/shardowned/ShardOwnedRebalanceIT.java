@@ -16,18 +16,26 @@
 
 package dk.trustworks.essentials.components.queue.shardowned;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.spi.*;
+import ch.qos.logback.core.read.ListAppender;
 import com.zaxxer.hikari.*;
 import dk.trustworks.essentials.components.queue.shardowned.*;
+import dk.trustworks.essentials.components.queue.shardowned.spi.QueueObserver;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.*;
+import org.slf4j.LoggerFactory;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import java.nio.charset.StandardCharsets;
+import java.sql.SQLException;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.*;
 
+import static dk.trustworks.essentials.components.queue.shardowned.SingleRowQueries.*;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -45,9 +53,12 @@ class ShardOwnedRebalanceIT {
     private static final int   SHARD_COUNT = 8;
 
     /** Short lease, so a heartbeat and a rebalance happen several times inside the test window. */
-    private static final ShardOwnerSettings FAST = new ShardOwnerSettings(
-            500, 200, Duration.ofMillis(1), Duration.ofMillis(2),
-            Duration.ofMillis(300), Duration.ofMillis(100), 1_000, 8, Duration.ofMillis(50), Duration.ofSeconds(30), 2, Duration.ofSeconds(5), Duration.ofMillis(1000), Duration.ofSeconds(60));
+    private static final ShardOwnerSettings FAST = ShardOwnerSettings.builder()
+                                                                     .setHoleExpiry(Duration.ofMillis(300))
+                                                                     .setSweepInterval(Duration.ofMillis(100))
+                                                                     .setPollBackstop(Duration.ofMillis(50))
+                                                                     .setLeaseTtl(Duration.ofMillis(1000))
+                                                                     .build();
 
     @Container
     static PostgreSQLContainer postgres = LabPostgres.create();
@@ -155,5 +166,492 @@ class ShardOwnedRebalanceIT {
                               .as("every message must arrive at least once")
                               .isEqualTo(50L));
         }
+    }
+
+    /**
+     * A shard given up to the fair share whose lease release fails stays with its owner, served, and is released once the
+     * release succeeds.
+     * <p>
+     * The owner was ended before its lease was released, so a failed release left it ended with the lease still naming
+     * this instance. The next heartbeat dropped it as a lost lease, and the shard was then served by nobody: no other
+     * instance may take a lease a live instance holds, and this one, at its fair share, took nothing more. The release is
+     * made to fail by a trigger, every time, until the trigger is dropped; a sequence the trigger draws from before it
+     * raises (a sequence is not rolled back) proves the release was attempted, and retried.
+     */
+    @Test
+    void an_unordered_shard_whose_shed_release_fails_stays_served_until_the_release_succeeds() throws Exception {
+        var firstReceived  = new CopyOnWriteArrayList<String>();
+        var secondReceived = new CopyOnWriteArrayList<String>();
+        try (var first = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "shed-fail-1")) {
+            first.startConsuming((messageId, payload, payloadType) -> firstReceived.add(new String(payload, StandardCharsets.UTF_8)),
+                                 FAST, SHARD_COUNT);
+            Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(first.shardsHeld()).isEqualTo(SHARD_COUNT));
+
+            failUnorderedLeaseReleases(true);
+            try (var second = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "shed-fail-2")) {
+                try {
+                    second.startConsuming((messageId, payload, payloadType) -> secondReceived.add(new String(payload, StandardCharsets.UTF_8)),
+                                          FAST, SHARD_COUNT);
+                    Awaitility.await().atMost(Duration.ofSeconds(10)).until(() -> releaseAttempts() >= 2);
+
+                    // Several more heartbeats (a third of the 1 s lease each), every release failing, sampled throughout.
+                    var until = System.nanoTime() + Duration.ofMillis(1_500).toNanos();
+                    while (System.nanoTime() < until) {
+                        assertThat(unitsLeasedTo("shed-fail-1")).as("premise: every release failed").isEqualTo(SHARD_COUNT);
+                        assertThat(first.shardsHeld()).as("every shard leased to the first is still served by it").isEqualTo(SHARD_COUNT);
+                        Thread.sleep(50);
+                    }
+                    assertThat(first.metrics().shardsReleased.sum()).as("no release has succeeded").isZero();
+                    assertThat(second.shardsHeld()).as("premise: nothing was free to take").isZero();
+
+                    var payloads = new ArrayList<byte[]>();
+                    for (var index = 0; index < SHARD_COUNT * 5; index++) {
+                        payloads.add(("held-" + index).getBytes(StandardCharsets.UTF_8));
+                    }
+                    first.enqueue(payloads, 1);
+                    Awaitility.await().atMost(Duration.ofSeconds(20)).untilAsserted(
+                            () -> assertThat(new HashSet<>(firstReceived)).as("every shard delivers while its release keeps failing")
+                                                                          .hasSize(SHARD_COUNT * 5));
+                } finally {
+                    failUnorderedLeaseReleases(false);
+                }
+
+                Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> {
+                    assertThat(first.shardsHeld()).isEqualTo(SHARD_COUNT / 2);
+                    assertThat(second.shardsHeld()).isEqualTo(SHARD_COUNT / 2);
+                    assertThat(unitsLeasedTo("shed-fail-1")).as("the first's leases match what it serves").isEqualTo(SHARD_COUNT / 2);
+                });
+            }
+        }
+    }
+
+    /**
+     * An unordered shard whose shed release failed with no error answer from the database - SQL state {@code 08006}, which
+     * the engine cannot tell from a connection lost mid-statement, so the release is in doubt - is released on a later tick
+     * even once the fair share has risen to keep it, and a takeover of the unit after that is a lost lease: counted in
+     * {@code leasesLost} and logged in the "lost to another instance" WARN. The shed only retried the release while the run
+     * was over its fair share, so with the other instance gone the owner served on with its release in doubt for good, and
+     * read every later takeover as its own release: INFO, no {@code leasesLost}. The trigger raising {@code 08006} rolls the
+     * release back, so the row still names the first instance until the trigger is dropped.
+     * <p>
+     * While that release keeps failing, the first still takes the shards the departed instance released: a failed release of
+     * an owner in doubt is that owner's alone, and a tick with no excess to shed goes on to the acquire step. Those failed
+     * retries log one WARN with the stack trace inside the minute, the rest at DEBUG; each used to log a WARN with its stack
+     * trace on every tick.
+     */
+    @Test
+    void an_unordered_shard_whose_shed_release_failed_in_doubt_is_released_once_the_fair_share_rose_and_a_later_takeover_is_a_lost_lease() throws Exception {
+        var refusedUnit = SHARD_COUNT - 1;
+        var queueIds    = new short[]{QUEUE_ID};
+        var logged      = captureQueueLog();
+        try (var first = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "in-doubt-1")) {
+            first.startConsuming((messageId, payload, payloadType) -> { }, FAST, SHARD_COUNT);
+            Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(first.shardsHeld()).isEqualTo(SHARD_COUNT));
+
+            var refusalsStartedAt = System.nanoTime();
+            LeaseReleaseRefusals.failLeaseReleasesInDoubtOf(dataSource, queueIds, "unordered", refusedUnit);
+            // Read while the refusal is still in place: once it is dropped, the first may release the shard and take it again
+            // under a new fence before a read after the drop.
+            long fenceWhileInDoubt;
+            try {
+                try (var second = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "in-doubt-2")) {
+                    second.startConsuming((messageId, payload, payloadType) -> { }, FAST, SHARD_COUNT);
+                    // The shed releases the shards before the refused one, the last held, and the second takes them.
+                    Awaitility.await().atMost(Duration.ofSeconds(10)).until(
+                            () -> LeaseReleaseRefusals.releasesRefused(dataSource, QUEUE_ID, refusedUnit) >= 1
+                                    && second.shardsHeld() == SHARD_COUNT / 2 - 1);
+                    assertThat(ownerOf(refusedUnit)).as("premise: the refused release was rolled back").isEqualTo("in-doubt-1");
+                }
+                // The second has stopped and deregistered: the first's fair share is every shard, the refused one included.
+                // Two more refusals, so at least one is from a tick that began after the stop.
+                var refusedAtStop = LeaseReleaseRefusals.releasesRefused(dataSource, QUEUE_ID, refusedUnit);
+                Awaitility.await("the shard whose release is in doubt is still shed with the fair share risen to keep it")
+                          .atMost(Duration.ofSeconds(10))
+                          .until(() -> LeaseReleaseRefusals.releasesRefused(dataSource, QUEUE_ID, refusedUnit) >= refusedAtStop + 2);
+
+                // The release that keeps failing does not keep the first from the shards the second released: a tick that
+                // sheds only an owner in doubt goes on to the acquire step. Ended before it, the first held five shards for as
+                // long as the release failed, and the three the second left were owned by nobody.
+                Awaitility.await("the first takes the shards the second left while the release stays in doubt")
+                          .atMost(Duration.ofSeconds(10))
+                          .until(() -> unitsLeasedTo("in-doubt-1") == SHARD_COUNT);
+                assertThat(first.shardsHeld()).as("every shard served, the one in doubt included").isEqualTo(SHARD_COUNT);
+                fenceWhileInDoubt = fenceOf(refusedUnit);
+                var refusedAfterAcquiring = LeaseReleaseRefusals.releasesRefused(dataSource, QUEUE_ID, refusedUnit);
+                Awaitility.await("the release in doubt is still retried after the acquire step ran")
+                          .atMost(Duration.ofSeconds(10))
+                          .until(() -> LeaseReleaseRefusals.releasesRefused(dataSource, QUEUE_ID, refusedUnit) > refusedAfterAcquiring);
+                assertThat(ownerOf(refusedUnit)).as("premise: every release of it was rolled back").isEqualTo("in-doubt-1");
+                assertThat(fenceOf(refusedUnit)).as("premise: not taken again while the release is refused").isEqualTo(fenceWhileInDoubt);
+                assertThat(System.nanoTime() - refusalsStartedAt).as("premise: the retries all failed inside one minute").isLessThan(ErrorWindow.EVERY_NANOS);
+                var retriesFailed = LeaseReleaseRefusals.releasesRefused(dataSource, QUEUE_ID, refusedUnit) - 1;
+                assertThat(retriesFailed).as("premise: the release in doubt failed on several ticks").isGreaterThanOrEqualTo(3);
+                synchronized (logged) {
+                    var failedRetryLines = logged.list.stream()
+                                                      .filter(event -> event.getFormattedMessage().startsWith("Instance in-doubt-1 could not release unordered shard " + refusedUnit + " on queue"))
+                                                      .toList();
+                    // Logged as that shard's alone, and once a minute: a WARN with the stack trace on every tick, a third of the
+                    // lease TTL apart, for as long as the release kept failing flooded the log.
+                    assertThat(failedRetryLines.stream().filter(event -> event.getLevel() == Level.WARN))
+                            .as("one WARN for the failed retries of the release in doubt, inside the minute")
+                            .singleElement()
+                            .satisfies(event -> {
+                                assertThat(event.getThrowableProxy()).as("with its stack trace").isNotNull();
+                                assertThat(event.getFormattedMessage()).contains("(1 failed release attempt(s) of it since its last WARN, or since it was first retried");
+                            });
+                    assertThat(failedRetryLines.stream().filter(event -> event.getLevel() == Level.DEBUG))
+                            .as("the later failed retries at DEBUG, without a stack trace")
+                            .hasSizeGreaterThanOrEqualTo(2)
+                            .allMatch(event -> event.getThrowableProxy() == null);
+                }
+            } finally {
+                LeaseReleaseRefusals.failLeaseReleasesOf(dataSource, queueIds, "unordered", refusedUnit, false);
+            }
+
+            // Released at last, and taken again by the first under a new fence: a fresh owner, with no release of it in doubt.
+            Awaitility.await("the first releases the shard and takes it again").atMost(Duration.ofSeconds(10))
+                      .until(() -> "in-doubt-1".equals(ownerOf(refusedUnit)) && fenceOf(refusedUnit) > fenceWhileInDoubt
+                              && first.shardsHeld() == SHARD_COUNT);
+            var metrics = first.metrics();
+            assertThat(metrics.leasesLost.sum()).as("premise: nothing lost yet").isZero();
+            var fenceBeforeTakeover = fenceOf(refusedUnit);
+
+            // Another instance takes the unit under a new fence, as a takeover after a missed heartbeat would.
+            takeAs(refusedUnit, "in-doubt-intruder");
+            Awaitility.await("the lease check finds the unit taken").atMost(Duration.ofSeconds(10)).until(() -> metrics.leasesLost.sum() > 0);
+            // The intruder has no membership row, so the first takes the unit back: by then the check that found the loss is done.
+            Awaitility.await("the first takes the unit back").atMost(Duration.ofSeconds(10))
+                      .until(() -> "in-doubt-1".equals(ownerOf(refusedUnit)) && fenceOf(refusedUnit) > fenceBeforeTakeover + 1);
+
+            assertThat(metrics.leasesLost.sum()).as("the takeover is one lost lease").isEqualTo(1L);
+            synchronized (logged) {
+                assertThat(logged.list).as("logged in the lost-to-another-instance WARN")
+                                       .anyMatch(event -> event.getLevel() == Level.WARN
+                                               && event.getFormattedMessage().startsWith("Instance in-doubt-1 lost 1 unordered unit(s) [" + refusedUnit + "]"));
+                assertThat(logged.list).as("not read as given up by a release in doubt")
+                                       .noneMatch(event -> event.getFormattedMessage().contains("no longer held under their fences after a release"));
+            }
+        } finally {
+            releaseQueueLog(logged);
+        }
+    }
+
+    /**
+     * An unordered shard whose shed release the database refused with an error of its own - SQL state {@code P0001}, a
+     * {@code RAISE EXCEPTION}, which rolled the release back - is not a release in doubt, so a takeover of the unit while
+     * the owner still serves it is a lost lease: counted in {@code leasesLost} and logged in the "lost to another instance"
+     * WARN, not in the INFO for units given up by a release that may have gone through. {@code releaseLeaseRows} marks a
+     * failed release in doubt only when {@code LeaseRowState.mayHaveGoneThrough} says so; marked on every failure, the
+     * owner read this takeover as its own release. The refusal stays on while the unit is taken, so a refused release is
+     * the only kind the owner has seen.
+     */
+    @Test
+    void an_unordered_shard_whose_shed_release_the_database_refused_counts_a_later_takeover_as_a_lost_lease() throws Exception {
+        var refusedUnit = SHARD_COUNT - 1;
+        var queueIds    = new short[]{QUEUE_ID};
+        var logged      = captureQueueLog();
+        try (var first = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "refused-1")) {
+            first.startConsuming((messageId, payload, payloadType) -> { }, FAST, SHARD_COUNT);
+            Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(first.shardsHeld()).isEqualTo(SHARD_COUNT));
+
+            LeaseReleaseRefusals.failLeaseReleasesOf(dataSource, queueIds, "unordered", refusedUnit, true);
+            try {
+                try (var second = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "refused-2")) {
+                    second.startConsuming((messageId, payload, payloadType) -> { }, FAST, SHARD_COUNT);
+                    // The shed releases the shards before the refused one, the last held, and the second takes them.
+                    Awaitility.await().atMost(Duration.ofSeconds(10)).until(
+                            () -> LeaseReleaseRefusals.releasesRefused(dataSource, QUEUE_ID, refusedUnit) >= 1
+                                    && second.shardsHeld() == SHARD_COUNT / 2 - 1);
+                    assertThat(ownerOf(refusedUnit)).as("premise: the refused release was rolled back").isEqualTo("refused-1");
+                }
+                // The second has stopped and deregistered: the first's fair share is every shard, so the refused shard, not
+                // in doubt, is no longer shed. Wait until a whole tick has run after the stop, so no shed of it races the
+                // takeover below: each tick renews at most SHARD_COUNT leases in its lease check, before its rebalance, so
+                // more than two ticks' worth of renewals means a third tick's lease check began, after the rebalance of a
+                // tick that began after the stop.
+                var metrics        = first.metrics();
+                var renewalsAtStop = metrics.leaseRenewals.sum();
+                Awaitility.await("a whole heartbeat tick ran after the stop").atMost(Duration.ofSeconds(10))
+                          .until(() -> metrics.leaseRenewals.sum() > renewalsAtStop + 2L * SHARD_COUNT);
+                assertThat(ownerOf(refusedUnit)).as("premise: the refused shard is still the first's").isEqualTo("refused-1");
+                assertThat(metrics.leasesLost.sum()).as("premise: nothing lost yet").isZero();
+                var fenceBeforeTakeover = fenceOf(refusedUnit);
+
+                // Another instance takes the unit under a new fence, as a takeover after a missed heartbeat would.
+                takeAs(refusedUnit, "refused-intruder");
+                Awaitility.await("the lease check finds the unit taken").atMost(Duration.ofSeconds(10)).until(() -> metrics.leasesLost.sum() > 0);
+                // The intruder has no membership row, so the first takes the unit back: by then the check that found the loss is done.
+                Awaitility.await("the first takes the unit back").atMost(Duration.ofSeconds(10))
+                          .until(() -> "refused-1".equals(ownerOf(refusedUnit)) && fenceOf(refusedUnit) > fenceBeforeTakeover + 1);
+
+                assertThat(metrics.leasesLost.sum()).as("the takeover is one lost lease").isEqualTo(1L);
+                synchronized (logged) {
+                    assertThat(logged.list).as("logged in the lost-to-another-instance WARN")
+                                           .anyMatch(event -> event.getLevel() == Level.WARN
+                                                   && event.getFormattedMessage().startsWith("Instance refused-1 lost 1 unordered unit(s) [" + refusedUnit + "]"));
+                    assertThat(logged.list).as("not read as given up by a release in doubt")
+                                           .noneMatch(event -> event.getFormattedMessage().contains("no longer held under their fences after a release"));
+                }
+            } finally {
+                LeaseReleaseRefusals.failLeaseReleasesOf(dataSource, queueIds, "unordered", refusedUnit, false);
+            }
+        } finally {
+            releaseQueueLog(logged);
+        }
+    }
+
+    /**
+     * The heartbeat's unordered shed releases the whole excess before it tells the observer of any of it, so an observer
+     * that throws for the first release leaves no shard of the excess held. Told inside the loop, it ended the shed at
+     * that first shard, and the rest stayed held until the next heartbeat. The observer reads the first instance's lease
+     * rows when it is first told of a release.
+     */
+    @Test
+    void an_observer_throwing_for_the_first_shed_release_leaves_none_of_the_excess_held() throws Exception {
+        var leasedWhenFirstTold = new AtomicInteger(-1);
+        var observer = new QueueObserver() {
+            @Override
+            public void shardOwnershipChanged(int shard, boolean acquired) {
+                if (!acquired && leasedWhenFirstTold.compareAndSet(-1, -2)) {
+                    try {
+                        leasedWhenFirstTold.set(unitsLeasedTo("observer-throws-1"));
+                    } catch (Exception e) {
+                        throw new IllegalStateException(e);
+                    }
+                    throw new IllegalStateException("simulated observer failure releasing unordered shard " + shard);
+                }
+            }
+        };
+        try (var first = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "observer-throws-1", new ShardOwnerMetrics(observer))) {
+            first.startConsuming((messageId, payload, payloadType) -> { }, FAST, SHARD_COUNT);
+            Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(first.shardsHeld()).isEqualTo(SHARD_COUNT));
+
+            try (var second = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "observer-throws-2")) {
+                second.startConsuming((messageId, payload, payloadType) -> { }, FAST, SHARD_COUNT);
+
+                Awaitility.await().atMost(Duration.ofSeconds(10)).until(() -> leasedWhenFirstTold.get() >= 0);
+                assertThat(leasedWhenFirstTold.get()).as("the shed had released the whole excess when the observer was first told")
+                                                     .isEqualTo(SHARD_COUNT / 2);
+                Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> {
+                    assertThat(first.shardsHeld()).isEqualTo(SHARD_COUNT / 2);
+                    assertThat(second.shardsHeld()).isEqualTo(SHARD_COUNT / 2);
+                });
+                assertThat(first.metrics().shardsReleased.sum()).as("every shed shard was counted released, the one the observer threw for too")
+                                                               .isEqualTo(SHARD_COUNT / 2);
+            }
+        }
+    }
+
+    /**
+     * A release that fails part-way through the unordered shed is the failure the heartbeat tick ends with, even when the
+     * observer then throws for a shard the shed released before it: the {@code Rebalance failed} WARN logs the database
+     * error, with the observer's failure added to it as suppressed. The observer was told from the loop's {@code finally},
+     * and its failure replaced the database error, so the WARN never named what left the rest of the excess held.
+     * The release of the last shard is refused; the shed releases the shards before it first.
+     */
+    @Test
+    void a_shed_release_that_fails_is_the_logged_failure_when_the_observer_throws_for_an_earlier_release() throws Exception {
+        var observerThrows = new AtomicBoolean(true);
+        var toldReleased   = new CopyOnWriteArrayList<Integer>();
+        var observer = new QueueObserver() {
+            @Override
+            public void shardOwnershipChanged(int shard, boolean acquired) {
+                if (!acquired && observerThrows.get()) {
+                    toldReleased.add(shard);
+                    throw new IllegalStateException("simulated observer failure releasing unordered shard " + shard);
+                }
+            }
+        };
+        var refusedUnit = SHARD_COUNT - 1;
+        var logged      = captureQueueLog();
+        try (var first = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "masked-shed-1", new ShardOwnerMetrics(observer))) {
+            first.startConsuming((messageId, payload, payloadType) -> { }, FAST, SHARD_COUNT);
+            Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(first.shardsHeld()).isEqualTo(SHARD_COUNT));
+
+            LeaseReleaseRefusals.failLeaseReleasesOf(dataSource, new short[]{QUEUE_ID}, "unordered", refusedUnit, true);
+            try (var second = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "masked-shed-2")) {
+                second.startConsuming((messageId, payload, payloadType) -> { }, FAST, SHARD_COUNT);
+
+                Awaitility.await().atMost(Duration.ofSeconds(10)).until(
+                        () -> LeaseReleaseRefusals.releasesRefused(dataSource, QUEUE_ID, refusedUnit) >= 1 && !toldReleased.isEmpty());
+                assertThat(toldReleased).as("premise: the observer threw for a shard the shed released before the refused one")
+                                        .doesNotContain(refusedUnit);
+
+                Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(
+                        () -> assertThat(rebalanceFailures(logged)).as("the tick that told the observer logged the refused release, with "
+                                                                               + "the observer's failure added to it")
+                                                                   .anyMatch(failure -> carries(failure, "simulated failure releasing",
+                                                                                                "simulated observer failure releasing")));
+                assertThat(rebalanceFailures(logged)).as("no tick logged the observer's failure in place of the database error")
+                                                     .noneMatch(failure -> failure instanceof IllegalStateException);
+            } finally {
+                observerThrows.set(false);
+                LeaseReleaseRefusals.failLeaseReleasesOf(dataSource, new short[]{QUEUE_ID}, "unordered", refusedUnit, false);
+            }
+        } finally {
+            releaseQueueLog(logged);
+        }
+    }
+
+    /**
+     * The heartbeat tick's unordered acquire loop, the same: an acquire statement that fails after the loop has adopted
+     * shards is the failure the tick ends with, and the observer's failure for one of those shards is added to it as
+     * suppressed rather than logged in its place. The first instance stops, so the second's next tick acquires every
+     * shard in order, and the last one's acquisition is refused.
+     */
+    @Test
+    void an_acquire_that_fails_is_the_logged_failure_when_the_observer_throws_for_an_earlier_acquisition() throws Exception {
+        var observerThrows = new AtomicBoolean(true);
+        var toldAcquired   = new CopyOnWriteArrayList<Integer>();
+        var observer = new QueueObserver() {
+            @Override
+            public void shardOwnershipChanged(int shard, boolean acquired) {
+                if (acquired && observerThrows.get()) {
+                    toldAcquired.add(shard);
+                    throw new IllegalStateException("simulated observer failure acquiring unordered shard " + shard);
+                }
+            }
+        };
+        var refusedUnit = SHARD_COUNT - 1;
+        var logged      = captureQueueLog();
+        try (var first = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "masked-acquire-1")) {
+            first.startConsuming((messageId, payload, payloadType) -> { }, FAST, SHARD_COUNT);
+            Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(first.shardsHeld()).isEqualTo(SHARD_COUNT));
+
+            LeaseAcquisitionRefusals.failLeaseAcquisitionsOf(dataSource, "unordered", refusedUnit, "masked-acquire-2", true);
+            try (var second = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "masked-acquire-2", new ShardOwnerMetrics(observer))) {
+                second.startConsuming((messageId, payload, payloadType) -> { }, FAST, SHARD_COUNT);
+                assertThat(second.shardsHeld()).as("premise: nothing was free when the second started").isZero();
+                // Every shard free at once, rather than only the first's shed excess: the second's next tick then acquires
+                // them in order and reaches the refused one with the others adopted.
+                first.close();
+
+                Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(
+                        () -> assertThat(rebalanceFailures(logged)).as("a tick that told the observer logged the refused acquisition, with "
+                                                                               + "the observer's failure added to it")
+                                                                   .anyMatch(failure -> carries(failure, "simulated failure acquiring",
+                                                                                                "simulated observer failure acquiring")));
+                assertThat(LeaseAcquisitionRefusals.acquisitionsRefused(dataSource)).as("premise: the acquisition was refused").isPositive();
+                assertThat(toldAcquired).as("premise: the observer threw for a shard the loop adopted before the refused one")
+                                        .isNotEmpty()
+                                        .doesNotContain(refusedUnit);
+            } finally {
+                observerThrows.set(false);
+                LeaseAcquisitionRefusals.failLeaseAcquisitionsOf(dataSource, "unordered", refusedUnit, "masked-acquire-2", false);
+            }
+        } finally {
+            releaseQueueLog(logged);
+        }
+    }
+
+    /**
+     * Capture what {@link ShardOwnedQueue} logs, its heartbeat's {@code Rebalance failed} WARN among it.
+     */
+    static ListAppender<ILoggingEvent> captureQueueLog() {
+        var logged = new ListAppender<ILoggingEvent>();
+        logged.start();
+        ((ch.qos.logback.classic.Logger) LoggerFactory.getLogger(ShardOwnedQueue.class)).addAppender(logged);
+        return logged;
+    }
+
+    static void releaseQueueLog(ListAppender<ILoggingEvent> logged) {
+        ((ch.qos.logback.classic.Logger) LoggerFactory.getLogger(ShardOwnedQueue.class)).detachAppender(logged);
+    }
+
+    /**
+     * The failure of every heartbeat tick whose rebalance failed, in the order they were logged.
+     */
+    static List<Throwable> rebalanceFailures(ListAppender<ILoggingEvent> logged) {
+        // The appender adds under its own monitor (AppenderBase.doAppend), from the heartbeat thread.
+        synchronized (logged) {
+            return logged.list.stream()
+                              .filter(event -> "Rebalance failed".equals(event.getMessage()) && event.getThrowableProxy() instanceof ThrowableProxy)
+                              .map(event -> ((ThrowableProxy) event.getThrowableProxy()).getThrowable())
+                              .toList();
+        }
+    }
+
+    /**
+     * Whether {@code failure} is the database error whose message contains {@code databaseError}, with an observer's
+     * failure whose message starts with {@code observerFailure} added to it as suppressed.
+     */
+    static boolean carries(Throwable failure, String databaseError, String observerFailure) {
+        return failure instanceof SQLException
+                && failure.getMessage().contains(databaseError)
+                && Arrays.stream(failure.getSuppressed())
+                         .anyMatch(suppressed -> suppressed instanceof IllegalStateException && suppressed.getMessage().startsWith(observerFailure));
+    }
+
+    /**
+     * Make every release of an unordered lease row fail, as a database error would, or stop doing so. A trigger rather than
+     * a revoked grant: the test's role owns the table, and an owner keeps every privilege. Each refused release first draws
+     * from {@code release_attempts}, which {@link #releaseAttempts()} reads.
+     */
+    private void failUnorderedLeaseReleases(boolean fail) throws Exception {
+        try (var connection = dataSource.getConnection(); var statement = connection.createStatement()) {
+            if (fail) {
+                statement.execute("DROP SEQUENCE IF EXISTS release_attempts");
+                statement.execute("CREATE SEQUENCE release_attempts");
+                statement.execute("CREATE OR REPLACE FUNCTION fail_unordered_lease_release() RETURNS trigger AS $$ BEGIN "
+                                          + "IF NEW.lane = 'unordered' AND NEW.owner IS NULL AND OLD.owner IS NOT NULL THEN "
+                                          + "PERFORM nextval('release_attempts'); "
+                                          + "RAISE EXCEPTION 'simulated failure releasing unordered shard %', OLD.shard; END IF; "
+                                          + "RETURN NEW; END $$ LANGUAGE plpgsql");
+                statement.execute("CREATE TRIGGER fail_unordered_lease_release BEFORE UPDATE ON " + ShardOwnedSchema.LEASE_TABLE
+                                          + " FOR EACH ROW EXECUTE FUNCTION fail_unordered_lease_release()");
+            } else {
+                statement.execute("DROP TRIGGER IF EXISTS fail_unordered_lease_release ON " + ShardOwnedSchema.LEASE_TABLE);
+            }
+        }
+    }
+
+    /**
+     * How many unordered lease releases the trigger has refused.
+     */
+    private long releaseAttempts() throws Exception {
+        return queryForLong(dataSource, "Reading the release_attempts sequence",
+                            "SELECT CASE WHEN is_called THEN last_value ELSE 0 END FROM release_attempts");
+    }
+
+    /**
+     * Point unordered shard {@code shard}'s lease row at {@code instanceId} under a new fence, as a takeover would.
+     */
+    private void takeAs(int shard, String instanceId) throws Exception {
+        try (var connection = dataSource.getConnection();
+             var statement = connection.prepareStatement("UPDATE " + ShardOwnedSchema.LEASE_TABLE
+                                                                 + " SET owner = ?, lease_until = NULL, fence = fence + 1"
+                                                                 + " WHERE queue_id = ? AND lane = 'unordered' AND shard = ?")) {
+            statement.setString(1, instanceId);
+            statement.setShort(2, QUEUE_ID);
+            statement.setInt(3, shard);
+            assertThat(statement.executeUpdate()).as("premise: shard %d has a lease row", shard).isEqualTo(1);
+        }
+    }
+
+    /**
+     * The instance unordered shard {@code shard}'s lease row names, {@code null} when it names none.
+     */
+    private String ownerOf(int shard) throws Exception {
+        try (var connection = dataSource.getConnection();
+             var statement = connection.prepareStatement("SELECT owner FROM " + ShardOwnedSchema.LEASE_TABLE
+                                                                 + " WHERE queue_id = ? AND lane = 'unordered' AND shard = ?")) {
+            statement.setShort(1, QUEUE_ID);
+            statement.setInt(2, shard);
+            try (var rows = statement.executeQuery()) {
+                return rows.next() ? rows.getString(1) : null;
+            }
+        }
+    }
+
+    private long fenceOf(int shard) throws Exception {
+        return queryForLong(dataSource, "Reading the fence of unordered shard " + shard,
+                            "SELECT fence FROM " + ShardOwnedSchema.LEASE_TABLE + " WHERE queue_id = ? AND lane = 'unordered' AND shard = ?",
+                            QUEUE_ID, shard);
+    }
+
+    private int unitsLeasedTo(String instanceId) throws Exception {
+        return queryForInt(dataSource, "Counting the unordered lease rows held by " + instanceId,
+                           "SELECT count(*) FROM " + ShardOwnedSchema.LEASE_TABLE + " WHERE queue_id = ? AND lane = 'unordered' AND owner = ?",
+                           QUEUE_ID, instanceId);
     }
 }

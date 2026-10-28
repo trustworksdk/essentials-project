@@ -1,0 +1,25 @@
+schemaVersion: "1.4"
+slice: shipping.ship_on_payment
+kind: automation
+bc: shipping
+owner: shipping-team
+status: live
+summary: Ship an order once its payment is charged.
+generator: essentials
+language: java
+tier: cqrs-es
+lane: decider
+flow: checkout
+consumes: [PaymentCharged]
+dispatches: [ShipOrder]
+scenarios:
+  - name: ships a paid order
+    when: { event: PaymentCharged, with: { paymentId: p-1, orderId: o-1 } }
+    then:
+      - command: ShipOrder
+        with: { orderId: o-1 }
+forbidden:
+  - cross-slice-internal:shipping
+tests:
+  unit: { present: false }
+  integration: { present: false }

@@ -1,4 +1,4 @@
-schemaVersion: "1.1"
+schemaVersion: "1.4"
 slice: brokerage.deposit_cash
 kind: command
 bc: brokerage
@@ -7,6 +7,7 @@ status: live
 summary: Book cash into a trading account's currently open books generation.
 generator: essentials
 language: java
+lane: aggregate
 
 handles: [DepositCash]
 # AccountBooksClosed/TradingAccountOpened are emitted when the ON_ACCESS closing-books policy rolls the
@@ -26,6 +27,8 @@ invariants:
     enforcedBy: CashDeposited
 forbidden:
   - cross-slice-internal:brokerage
+tier: cqrs-es
+flow: trading-account
 tests:
   unit: { present: false }
   integration: { present: false }

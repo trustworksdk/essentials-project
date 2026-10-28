@@ -41,6 +41,7 @@ public final class ShardOwnedQueueBuilder {
     private ShardOwnerMetrics metrics;
     private int               parallelConsumers   = 8;
     private boolean           localHandoffEnabled = true;
+    private ShardOwnedQueue.AdoptionHook adoptionHook = ShardOwnedQueue.AdoptionHook.NONE;
 
     public ShardOwnedQueueBuilder setDataSource(DataSource dataSource) {
         this.dataSource = dataSource;
@@ -108,6 +109,15 @@ public final class ShardOwnedQueueBuilder {
         return this;
     }
 
+    /**
+     * What a test does to each adoption of a unit into a run ({@link ShardOwnedQueue.AdoptionHook}); left unset, nothing.
+     * Package-private: no caller outside this package's tests has a use for it, and setting it here, rather than on a
+     * built queue, keeps it fixed for the queue's life.
+     */
+    ShardOwnedQueueBuilder setAdoptionHook(ShardOwnedQueue.AdoptionHook adoptionHook) {
+        this.adoptionHook = requireNonNull(adoptionHook, "No adoptionHook provided");
+        return this;
+    }
 
     /**
      * Identify the queue by name. Its id and shard count then come from the registry, so a caller has
@@ -143,9 +153,8 @@ public final class ShardOwnedQueueBuilder {
 
     public ShardOwnedQueue build() {
         resolveQueueName();
-        var queue = metrics != null
-                    ? new ShardOwnedQueue(dataSource, queueId, shardCount, instanceId, metrics)
-                    : new ShardOwnedQueue(dataSource, queueId, shardCount, instanceId);
+        var queue = new ShardOwnedQueue(dataSource, queueId, shardCount, instanceId,
+                                        metrics != null ? metrics : new ShardOwnerMetrics(), adoptionHook);
         if (runtime != null) {
             queue.useRuntime(runtime);
         }

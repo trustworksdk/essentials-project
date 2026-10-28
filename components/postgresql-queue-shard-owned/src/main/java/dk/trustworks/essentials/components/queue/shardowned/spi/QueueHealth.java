@@ -30,6 +30,17 @@ package dk.trustworks.essentials.components.queue.shardowned.spi;
  * {@code unownedShards} is therefore the number to alert on. In steady state it is zero; it is briefly
  * non-zero while shards move between instances, and persistently non-zero means messages are sitting
  * in shards nobody is reading.
+ * <p>
+ * It does not see a shard that is leased but not served. An instance whose takeover of a shard keeps
+ * failing on a healthy connection (say, a trigger or constraint refusing the takeover's dead-letter
+ * move) keeps the lease and retries without limit, and the shard delivers nothing meanwhile. The
+ * instance logs that at ERROR at most once a minute per subscription (one per queue unless the queue is
+ * consumed twice in one process), naming one stalled shard and counting the others, and every failed attempt
+ * at DEBUG. It also counts the shard in {@code ShardOwnerMetrics.shardsAwaitingTakeover} (read through the
+ * engine-level {@code ShardOwnedQueue.metrics()}) and reports it to {@link QueueObserver#takeoverStalled},
+ * which reaches a {@link MessageQueue}'s observers; {@code MicrometerQueueObserver} publishes it as
+ * {@code essentials.queue.shards.awaiting.takeover}, bound by the Spring starter to every queue, the
+ * {@code DurableQueues} adapter's included. Alert on that being above zero alongside this one.
  *
  * @param shardCount     shards configured for this queue, per lane
  * @param unorderedOwned unordered shards with a live lease right now

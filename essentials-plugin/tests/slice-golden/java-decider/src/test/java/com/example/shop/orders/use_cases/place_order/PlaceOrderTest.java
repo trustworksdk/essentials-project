@@ -37,5 +37,5 @@ class PlaceOrderTest {
     }
 
     // TODO: one test per invariant enforced by PlaceOrderDecider.
-    // Rejections use .thenThrows(SomeException.class).
+    // Rejections use .thenFailsWithExceptionType(SomeException.class).
 }

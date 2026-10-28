@@ -1,0 +1,30 @@
+# Written by a planner before any code exists (generator: sdd); the code is rendered from it with
+# render-slice.py render --manifest. Every key the render does not own must survive byte for byte.
+schemaVersion: "1.4"
+slice: orders.place_order
+kind: command
+bc: orders
+owner: checkout-team
+status: planned
+summary: Places an order for a known customer.
+generator: sdd
+language: kotlin
+tier: cqrs                            # the planner's guess; the render derives it from the lane
+flow: checkout
+requirements: [REQ-ORDERS-1, REQ-ORDERS-2]
+
+handles: [PlaceOrder]
+publishes: [OrderPlaced]
+endpoints:
+  - { method: POST, path: "/api/orders", auth: user }
+writes: [Order]
+
+scenarios:
+  - name: places an order
+    when:
+      command: PlaceOrder
+      with: { orderId: o-1, customerId: c-7 }
+    then:
+      - event: OrderPlaced
+        with: { orderId: o-1 }
+x-sdd-task: T-0042

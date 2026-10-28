@@ -48,6 +48,8 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  *   <li><b>Administrative operations are not deliveries.</b> {@code deleteMessage} and {@code purgeQueue} do not
  *       notify. Counting them is how the trigger removed in 0.60 reported a 100 000-row purge as 100 000 delivered
  *       messages, each with a delivery latency measured to the moment of the purge.</li>
+ *   <li><b>Releasing a message no handler saw is not a delivery outcome.</b> {@code DurableQueues.releaseUndeliveredMessage}
+ *       (a claimed message handed back unseen when a consumer stops) does not notify, so it is not counted as a retry.</li>
  * </ul>
  */
 public interface DurableQueueMessageObserver {

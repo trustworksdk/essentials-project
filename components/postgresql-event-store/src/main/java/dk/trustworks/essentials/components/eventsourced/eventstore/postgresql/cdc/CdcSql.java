@@ -64,8 +64,18 @@ public class CdcSql {
                     """, arg("tableName", cdcTableName));
     }
 
+    /**
+     * @return the name of the inbox table's {@code (slot_name, status, inbox_id)} index, as written (unquoted) in
+     * {@link #getCreateCdcIndexSql()} - the one source for it, so a check for the index looks for the name the
+     * statement creates
+     */
+    public String getCdcIndexName() {
+        return "idx_" + cdcTableName + "_inbox_status";
+    }
+
     public String getCreateCdcIndexSql() {
-        return bind("CREATE INDEX IF NOT EXISTS idx_{:tableName}_inbox_status ON {:tableName} (slot_name, status, inbox_id)",
+        return bind("CREATE INDEX IF NOT EXISTS {:indexName} ON {:tableName} (slot_name, status, inbox_id)",
+                    arg("indexName", getCdcIndexName()),
                     arg("tableName", cdcTableName));
     }
 }

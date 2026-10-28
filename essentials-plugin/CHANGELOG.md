@@ -3,6 +3,417 @@
 Each entry is a release, headed by its `plugin.json` version: the Essentials release the plugin
 targets, with a `-N` suffix for plugin-only releases.
 
+## 0.60.1 — targets Essentials 0.60.1
+- **`/essentials:slice-map-html` — the Slice Atlas.** A new command writes one self-contained page
+  (no server, no CDN, opens from `file://`) that shows the whole slice architecture from the manifests,
+  computed entirely by scripts — no model tokens go into the drawing. Five lenses:
+  - **Atlas** — semantic zoom from bounded contexts, to journeys linked by events, to a classic Event
+    Modeling board per journey (trigger, command and view, and one event lane per stream), with each
+    slice's given / when / then scenarios at the deepest zoom, or its invariants and test kinds when it
+    declares none.
+  - **Diff** — what changed against a baseline: on a feature branch the merge base with the default
+    branch, or `--diff <ref>`. Added, removed and changed slices, edges and messages, and the issues the
+    change introduced or fixed.
+  - **Lineage** — pick a field and see every command, event and read model that carries it; a
+    read-model column no inbound event supplies is flagged.
+  - **Coupling matrix** — slices against the aggregates and read models they write, own and read,
+    with cross-context coupling off the diagonal, and a context × context event matrix.
+  - **Metro map** — each journey a coloured line, shared slices as interchanges.
+
+  Every lens shares an issues dock that flies to the issue and marks it, search, a detail card (manifest,
+  payloads, read-model table, scenarios, the slice's `CLAUDE.md`), and the whole view in the URL hash, so
+  a link in a PR comment reopens it. Light and dark follow the system with a toggle, in the Trustworks
+  palette. A map with unparsed manifests is still written — each one a red error card under an
+  "incomplete" banner — and exits 1. The page is built by the new `slice-index.py atlas`, which CI can run
+  directly (`--before-map` takes a cached baseline map).
+- **`/essentials:slice-map --html` is retired**: given the flag, slice-map says the page moved and runs
+  `/essentials:slice-map-html` with the same path. `--md` stays, and `slice-index.py html` keeps its
+  page and its refusal to write an incomplete map.
+- **Manifest schema 1.4: optional `flow:` and `scenarios:`.** `flow:` names the journey (or journeys) a
+  slice serves; a slice without one is grouped by cause and effect. `scenarios:` is the slice's
+  specification by example — given / when / then over the slice's own messages, ending in emitted
+  messages, an error (`{ error, message }`), `{ nothing: true }` or a view's read-model rows — with an
+  optional `test:` naming the test that runs it. New slice-lint gate `1(d) scenario` checks that a
+  scenario names only messages its own manifest declares. Both fields are human- or generator-owned:
+  `/essentials:slice-check --fix-manifests` never writes them. A project's schema copy older than 1.4
+  rejects them, so a generator checks the copy first and otherwise sends the user to
+  `/essentials:upgrade` (`manifest-guide.md` §3).
+- **Schema 1.4: `x-` extension keys on every object, and a version gate for unknown keys.** A key
+  starting with `x-` is valid on the root and on every mapping a manifest holds — endpoint, projection,
+  schedule, seam, scenario, step, `then` — at any `schemaVersion`; before, nested `x-` keys failed. The
+  schema declares the version it implements (`x-manifestVersion`). Any other unknown key fails gate 1(b)
+  on a manifest stamped at or below it, as before, and is tolerated on one stamped with a newer `1.x`:
+  slice-lint prints it as a note (`notes` in `--json`) and exits 0. The projection near-synonyms
+  `subscribesTo`, `handles`, `table` and `kind` are the exception and fail at every stamp, so a stamp
+  written ahead of the project's schema copy cannot switch that guard off. The gate is in the schema
+  itself, so any JSON Schema 2020-12 validator agrees. Unknown-key findings name the key (`endpoints/0:
+  unknown key 'rateLimit'`), and the unknown-root-key hint, which never fired, now does. The Slice Atlas
+  no longer annotates `x-` keys in scenarios as unknown.
+- **Schema 1.4: optional `requirements`** — the requirement ids a slice implements, as the project's
+  requirement source names them (`requirements: [REQ-ORDERS-12]`). The schema checks the shape only (a
+  non-empty list of distinct, non-empty strings); a toolchain that keeps a requirement trace checks the ids.
+  Human- or generator-owned like `flow`: no slice skill writes it, `/essentials:slice-enrich` never proposes
+  it, and a manifest carrying it is stamped `"1.4"`. A generator now checks the project's schema copy for an
+  `x-manifestVersion` of `"1.4"` or later, rather than for a `scenarios` property, before writing `flow`,
+  `scenarios` or `requirements`. A slice-lint note on a copy without `x-manifestVersion` names "the
+  project's schema copy" rather than reading "schema this copy's".
+- **An integration contract for another plugin's agent: `capabilities.json` and `references/sdd-contract.md`.**
+  A static `capabilities.json` at the plugin root (`contractVersion` 1) lists what another plugin may drive
+  without a person answering questions; sdd reads it with `jq` before handing over. It advertises
+  `init.preset`, `slice.render.agent` (interface 1), `slice.render.tests-none`, `slice.render.manifest`,
+  `slice.render.report` and `schema.sdd-keys`. `tests/scripts/test_capabilities.py` checks each value
+  against the code. The marks a rendered project carries (the `CLAUDE.md` stamp, the rules pointer, the
+  slice layout, …) are now a documented contract too. Run by hand, every command behaves as before.
+- **`/essentials:init --preset <file> --report <file>`.** The preset answers any of the ten answer keys,
+  plus `targetMode`/`targetDir`, up front. A bad value is asked as if it were absent and an unknown key is
+  ignored; the report lists both. The JSON report says what was rendered, or where the command stopped.
+  The new `scripts/init-report.py` validates the preset with `init-render.py`'s own checks and writes the
+  report.
+- **`render-slice.py render` is a versioned interface (1)**, with three additions:
+  - `--tests none` writes no stub tests and stamps the manifest's `tests:` block `present: false`.
+  - `--manifest <slice.yaml>` renders from a manifest someone wrote before any code. Its identity must
+    agree with the flags, and its contracts supply the inputs `--set` did not. The slice directory (and,
+    with `--new-bc`, the BC directory) may already hold orientation files, and every `CLAUDE.md` there is
+    kept. The manifest is merged block by block: the derived keys are rewritten, and `flow`, `scenarios`,
+    `requirements`, `summary`, `x-*` and every other key the render does not own keep their exact bytes.
+  - The `--json` report adds `interface`, `reportVersion`, `essentialsVersion`, `tier`, `slice`, `tests`,
+    `inputSources`, `files` with roles, `kept`, `manifest`, `behaviours` (what the rendered code already
+    does, from the new `references/slice/templates/behaviours.json`) and `stubTests` (every stub test,
+    with the behaviours it covers).
+
+  New golden `tests/slice-golden/kotlin-decider-manifest` renders and compiles an sdd-style plan.
+- **Fixed: a render that failed part-way left files behind.** `render-slice.py` exited 2, documented as
+  "writes nothing", even when a write or a `--wire` edit failed after earlier files were written. Every write
+  and edit now goes through a transaction, which is undone on any failure, crashes included.
+- **Fixed: a service-entity command slice's endpoint always failed.** The `command_service_entity` API
+  (Java and Kotlin) sent its command with a freshly generated `<Aggregate>Id.random()`, but the handler
+  loads an existing entity by that id, so every POST to a newly scaffolded slice ended in
+  `No <Entity> …` (a 500). The request now carries the id of the entity to change (`<aggregate>Id` in the body),
+  the endpoint keeps its `POST <apiPath>` route, and the manifest is unchanged. A slice scaffolded
+  before keeps the old body: give its request the id field by hand.
+- **Fixed: every command of a service-entity command slice failed with a `NullPointerException`.** The
+  handler template (Java and Kotlin) was `@Transactional`, so Spring proxied it, and the `CommandBus` called
+  the final `AnnotatedCommandHandler.handle` on the uninitialised proxy. The annotation is gone: the bus
+  already runs the handler inside a unit of work that is a Spring-managed transaction, and a behaviour check
+  now shows it: a publish that fails after the save rolls the save back. A slice scaffolded before keeps the
+  annotation: delete `@Transactional` and its import from the handler by hand.
+- **`behaviours.json` statuses are tested.** Every `implemented` behaviour now has an integration test
+  under `tests/slice-compile/behaviours/` that the CI slices build runs against the rendered, untouched
+  skeleton, and `test_behaviours_catalog.py` fails an `implemented` entry without one. It also fails a
+  golden composition that renders an `implemented` behaviour without running its test, unless
+  `tests/slice-compile/overlay.py` exempts it with the reason: the `--manifest` render sdd drives
+  (`kotlin-decider-manifest`) now runs its own checks, and only the two-bounded-context compositions,
+  which run a boot check, are exempt. Five Kotlin entries the tests showed false are `placeholder` now,
+  so sdd's test author writes failing tests for them:
+  `automation.records-progress` and `automation.idempotent-redelivery` (the placeholder `Any()` command
+  throws before the TodoList is saved), and the service-entity view's `view.query-endpoint`,
+  `view.query-by-id` and `view.strongly-consistent-read` (the closed projection cannot build an entity
+  whose constructor takes a property the view does not select, the scaffold's own entity included).
+- **Rendering into an existing bounded context reads its names.** `AggregateType`, `Aggregates`,
+  `Aggregate` and `Entity` come from the BC's scaffold when they are not passed and it names exactly one
+  of each; before, the render refused with "no value for AggregateType". A new BC still needs them passed.
+- `/essentials:slice-map`'s closed list of checks gains the completeness rule (a read-model column no
+  inbound event carries) and the scenario and adoption checks (a `given` event nothing publishes, an
+  unknown field, a `test:` that resolves to no test, a malformed scenario, no `flow:`, no scenarios). All
+  are `info`/`warn` annotations: still no R1–R5 gates and no severities. The map JSON gains
+  `slices[].flows`, `scenarios`, `schedule` and `doc`, and `processes`, `issues` and `lineage`
+  (`commands/slice-map.md` §6).
+- `slice-source.py --json` gains a top-level `tests` key — the test classes under the project's test
+  source roots with their JUnit 5 test methods and `@DisplayName`s — which resolves a scenario's `test:`.
+  An unreadable test file is listed under `unparsed`, so the facts mode can now exit 3 on test source
+  alone.
+- `render-check.py` also renders the Atlas pages: each lens mounts with no console error, an issue
+  focuses its target, a deep link restores the view, a broken manifest is an error card.
+- **Atlas boards and previews.** Board cards use the classic Event Modeling colours, blue for commands,
+  orange for events and green for views, tuned to the Trustworks palette in both themes. A card names its
+  fields, columns or endpoints, ending in "+N fields" when they do not fit. A command dispatched from
+  another journey is drawn once, where it is handled, not as a second card. Hovering a card, context,
+  process or scenario shows a compact form of the detail pane. Double-clicking a Metro station (or
+  Shift+Enter) opens it in the Atlas lens. A Matrix context band too small for its name turns rather
+  than cutting it: row bands lie across, and a narrow column band stands up. The Matrix headers grow
+  to fit a long slice or target name, up to a cap; past it the tooltip has the whole name.
+- **Copy fix prompt.** The issues dock copies a prompt for all, error, warning or info issues, grouped
+  by the command that fixes them: `/essentials:slice-check <bc> --fix-manifests` for manifest repairs,
+  `/essentials:slice-check <bc>` for what needs an audit, and `/essentials:slice-enrich --bc <bc>` for
+  the absent `flow` and scenarios. Each issue in the map JSON gains `fix: {route, bc}`. Where the
+  clipboard is blocked, the prompt opens in a dialog to copy by hand.
+- **One Atlas page per application.** On a folder holding several applications, each with its own build
+  file, `slice-index.py atlas` stops (exit 2) and names them, because slice ids are only unique within
+  one application. `--per-app DIR` writes one page per application plus an `index.html`; `map --per-app`
+  and `--before-map-dir` do the same for CI baselines. `slice-index.py apps` lists the applications.
+- **`/essentials:slice-enrich`.** Catches older `slice.yaml` manifests up on `flow`, `scenarios`,
+  `summary`, `invariants`, `tier`, projection `consistency`, `featureFlag` and translation `maps`. The new
+  `scripts/slice-enrich.py propose` finds the evidence: journeys from cause and effect, scenarios from
+  `GivenWhenThenScenario` tests, invariants from guard messages, summaries from Javadoc and KDoc, and
+  `@ConditionalOnProperty`. The model drafts only from that evidence and the user accepts per journey and
+  per slice. `slice-enrich.py apply` then writes only absent fields, keeping every other byte, and stamps
+  schema 1.4 when it writes `flow` or `scenarios`. It refuses a field that became present, and a result
+  that adds a schema error. `--dry-run` writes nothing.
+- **The manifest reconciliation law** (`references/slice/manifest-reconciliation.md` §1): an absent
+  human-owned field may be drafted from evidence and written once a person accepts it, never over a
+  value. `--fix-manifests` still writes none of them. `commands/slice-check.md` Step 4 now states how a
+  bounded context's `tier` is resolved, which `--adopt-tier` and slice-enrich share. `manifest-guide.md`
+  §3 documents the `featureFlag` shape `{ property, havingValue, matchIfMissing }`.
+- **Docs: repeatable index and column changes in your own schema contributor.** `LLM-foundation.md`
+  § Database Schema Harness and the new trap `ESS-128`: `CREATE INDEX IF NOT EXISTS` and
+  `ADD COLUMN IF NOT EXISTS` lock their table even when the index or column exists, so every start of
+  another instance stalls the writers and can deadlock with them. Wrap them with
+  `PostgresqlSchemaStatements` (Essentials' next release).
+- **Fixed:** `LLM-eventsourced-aggregates.md` and the Java command test template showed
+  `.thenThrows(...)`, which `GivenWhenThenScenario` does not have. They now use
+  `thenFailsWithExceptionType(...)`.
+- **Fixed:** `slice-source.py` missed a command sent through a getter's bus, `getCommandBus().send(...)`,
+  the form an `EventProcessor` uses, so such an automation showed no `dispatches`.
+- **Fixed:** `slice-source.py` missed a command forwarded through an `Inbox`:
+  `addMessageReceived(cmd)` now counts as a dispatch when the same file creates that inbox with
+  `getOrCreateInbox(config, commandBus)`, the overload that sends what the inbox receives to the bus; an
+  inbox created elsewhere is listed as unresolved. Gate 11(b) also holds an inbound translation's
+  `@KafkaListener`, `@RabbitListener` and `@JmsListener` payload types, or their concrete subtypes, to
+  its `consumes`.
+- **Docs:** `LLM-immutable-jackson.md`, `LLM-types-jackson.md` and `ESS-023` in `LLM-traps.md` now say
+  the Essentials mappers hide `is`-getters as well as getters and setters, and read a missing primitive
+  as its default, matching the framework fix in the next Essentials release.
+- **Fixed: generated projects lacked objenesis.** `immutable-jackson3` declares it `provided`, so the
+  application must, and S2.1 did not list it: a project from `/essentials:init` started and wrote,
+  then failed its first read of an event, queue message or document with `NoClassDefFoundError`. S2.1
+  now lists `org.objenesis:objenesis`, the generated backend POM declares it at `objenesis.version`, and
+  `stack-lint` reports a project without it as `s2.1-objenesis` (Blocking).
+- **Docs for the next Essentials release (0.60.1).** The LLM docs describe the 0.60.1 fixes and additions,
+  each labelled "since 0.60.1": `awaitProcessed` and `AppendedEvents` for integration tests, `@IgnoresEventTypes`
+  and the unhandled-event-type WARN on views, the startup report, the wire-format check and removed-property
+  errors, the `MultiTableChangeListener` builder, the enqueue-outside-a-unit-of-work guard, redelivery-policy
+  warnings, shard-owned ordering across a handover, `hostname:pid` lock-manager and shard-owned ids, the
+  document DB fixes (unchecked `OptimisticLockingException`, private `@Id`, `getById`, reserved words), and the
+  empty `LongRange`. `LLM-traps.md` gains `ESS-124` (per-instance fenced-lock ownership) and `ESS-125`
+  (a view skipping an event type).
+- **More docs for Essentials 0.60.1.** The LLM docs and the view-slice skill cover where a processor
+  subscription starts, stable processor names across instances, what a failing processor handler must do,
+  testing asynchronous projections with `awaitProcessed`, snapshot support per aggregate pattern, the three decider
+  families, what a throwing command handler does to the UnitOfWork (including the 0.60.1 `sendAndDontWait`
+  rollback) and why its exception arrives wrapped, the UnitOfWork usage rule, hand-opened Jdbi handles, the two
+  lock-ownership predicates, the document-DB constructor rule and version contract, blocking starters under
+  WebFlux, omitted primitives in request bodies, and hand-built `WebTestClient`s. Wrong examples are fixed: the
+  protected `releaseLock(lock)` and a `SendCommandException` constructor that does not exist. `LLM-traps.md`
+  gains `ESS-126` (catching a command handler's exception inside `@Transactional` commits its writes) and
+  `ESS-127` (a processor handler that catches and logs loses the event).
+- **Docs follow three framework changes for Essentials 0.60.1.** `AppendedEvents` now lives in
+  `postgresql-event-store` (`dk.trustworks.essentials.components.eventsourced.eventstore.postgresql`) and records
+  every append, not only an `EventStreamDecider`'s; the view-slice skill's testing guidance names the new import.
+  `CommandBus` lists its handlers and warns about a command type handled twice (`LLM-reactive.md`). The startup report
+  is now the run report, `EssentialsRunReport`: runtime findings, a periodic block of new ones
+  (`essentials.run-report.new-findings-interval`) and the complete report on shutdown.
+- **Fixed: `/essentials:slice-enrich` suggested a hand edit for a value `apply` refused.** When `apply` refuses a
+  `consistency` on a projection written as a flow mapping, the report now gives the refusal as worded and no
+  workaround; before, it could tell the user to add the value by hand or rewrite the projection in block style.
+- **Eval graders name the trap's line.** A must-not-find grader generated by `evals/build.py` now names the line and
+  anchor of the trap, not only its file, so a correct finding drawn from another line of the same file no longer fails
+  it (`slice-enrich-library` went from split votes to 1.00 over three runs). The enrich, multi-lane and review
+  service-entity trap descriptions are tightened to match. The review service-entity case now expects the two
+  checks stack-lint itself reports as not run on that fixture (`s1-boot-line`, the frontend checks) under "Not run",
+  and tolerates `setShipped` named inside the `setCancelled` row, where the new guard makes it a second bypass.
+- **Docs follow the durable-queue changes for Essentials 0.60.1** (`LLM-postgresql-queue.md`,
+  `LLM-postgresql-queue-shard-owned.md`). A handled message is acknowledged inside the handler's transaction, and a
+  failing acknowledgement is classified like a handler exception; a builder-made `PostgresqlDurableQueues` is wired
+  like the starter, with its own change listener, and is `AutoCloseable`; the polling-optimizer defaults and due-time
+  polling; stale statistics on a draining queue table; the ordered-claim statement switch, its threshold and the
+  timeout a probe of the other statement runs under; handlers that hold a connection. Shard-owned: attempt counts
+  survive a change of owner, a requested redelivery is not an attempt, and a WARN names
+  `essentials.shard-owned-queue.instance-id` when two live processes share an id; `Subscription.unsubscribe()` ends a
+  subscription, and so does `close()` now, which calls it, where `stop()` keeps it registered for the queue's
+  `start()`, so consuming anew needs an unsubscribe or a close first; the queue's `isStarted()` reads whether the
+  queue is marked started, not whether a subscription runs, so a manager that stops only what reports itself started
+  (`DefaultLifecycleManager`) skips a partly started queue; a stop that finds an ordered key still in its handler past
+  `shedGrace` keeps that unit, and the subscription's instance id, until that handler has returned and the unit has
+  been handed back (its acknowledgement flushed, its lease released, so its next owner charges no attempt and
+  delivers nothing again), or for another instance until the lease TTL runs out; an operator can release such a
+  unit sooner on the instance that kept it, with `MessageQueue.releaseKeptOrderedUnit(instanceId, unit)` or the
+  admin API's `POST /shard-owned-queues/{queueName}/ordered-units/{unit}/release-kept?instanceId=…`, naming the
+  instance id the kept-unit WARN printed - only a unit a subscription under that id kept is released - accepting that
+  the messages still in a handler are delivered again, possibly beside those handlers; nothing forwards the request to
+  another process, so behind a load balancer send it to the process that kept the unit, at its own address (a pod
+  address, `kubectl port-forward`), and the answer's `answeredBy`, the instance ids of the process that answered, shows
+  whether it got there; and a new Gotcha lists what a `QueueObserver` calling the queue back from
+  `shardOwnershipChanged` gets - a `consume()` from a release a stop tells, or from one a failed start tells while it
+  stops the lanes it had started, returns a subscription
+  registered but not started, now with a WARN; a `Subscription.start()` there starts neither lane and WARNs, even with
+  both lanes running, and a queue `start()` starts nothing and WARNs, bar one case: finding the queue marked started
+  while a failed `consume()` or `Subscription.start()` stops its lanes, it returns at once, as that call leaves the
+  queue started. `ShardOwnerSettings` is built with `ShardOwnerSettings.builder()`, which starts from `defaults()`, or
+  `settings.toBuilder()`, which starts from existing settings, so only the settings that differ are named.
+  MongoDB (`LLM-springdata-mongo-queue.md`): due-time polling, and the backoff defaults stated correctly (50% of the
+  polling interval per empty poll, capped at 20× the polling interval).
+- **Docs: the shard-owned queue's `stuckHandlerTimeout` for Essentials 0.60.1** (`LLM-postgresql-queue-shard-owned.md`).
+  A restarted queue, or the next `consume()` wanting the instance id, no longer takes back at once an ordered unit a
+  stop kept for a key still in its handler: it waits for that handler up to `stuckHandlerTimeout` (default 15
+  minutes, per queue, `essentials.shard-owned-queue.stuck-handler-timeout` and `stuck-handler-timeouts.<queue>`),
+  then takes the unit over under a new fence, and that key may run in two handlers at once. A WARN once the handler
+  outlasts `leaseTtl`, at most once a minute per unit, and `ShardOwnerMetrics.keptUnitsInHandler()`. An ordered
+  unit released with a message still in a handler that has not returned - by a fair-share shed or a dead pump's
+  hand-back past `stuckHandlerTimeout`, or on request with `MessageQueue.releaseKeptOrderedUnit` - charges that
+  message an attempt before the release and dead-letters it at `maxAttempts`, so a message whose handler hangs on
+  every delivery reaches the dead-letter table once the queue has stopped waiting for it `maxAttempts` times. The
+  shed and the hand-back charge only a message in a handler longer than `stuckHandlerTimeout`, and release a younger
+  one uncharged; a release on request charges every message in a handler. An
+  unordered shard, released without waiting for its handlers - by a fair-share shed, a dead pump's hand-back or a
+  `stop()` once `shedGrace` has run out - charges each message in a handler longer than `stuckHandlerTimeout` the same
+  way and dead-letters it at `maxAttempts`; a message in a handler for less is released uncharged. A handler that
+  returns before the charge has taken its message is left alone by it, and the `QueueObserver` is told of the
+  charge's dead letters after its database statements, so `deliveryFailed` for a message may arrive before its
+  `deadLettered`.
+- **Docs: supported PostgreSQL is 15+.** `LLM.md` states the floor (the majors the PostgreSQL community still patches)
+  and the fenced-lock and shard-owned docs point at it instead of the old 9.5+ and 13+.
+- **Docs: `shared` helpers for Essentials 0.60.1** (`LLM-shared.md`). § Exceptions lists `ROOT_CAUSE_PREFIX`,
+  `prependRootCauseSummary`, `forEachThenThrowFirst` and `forEachCollectingFailures`, with examples for stopping
+  every part and undoing a failed start, and `addSuppressedOnce`, their add-each-failure-once rule on its own;
+  § Locks documents `Locks.lockWarningOnce`, a lock wait, like `lock()`, that warns once `warnAfter` has passed
+  without the lock instead of blocking silently, then waits in `lock()` itself, keeping a fair lock's queue order, and
+  `Locks.tryLockDeferringPendingInterrupt`, a bounded wait that an interrupt pending on entry does not cut short.
+- **Docs: the shard-owned schema contributor moved into the engine for Essentials 0.60.1**
+  (`LLM-postgresql-queue-shard-owned.md`). `ShardOwnedSchemaContributor` is now
+  `dk.trustworks.essentials.components.queue.shardowned.ShardOwnedSchemaContributor`; the adapter module's class of
+  that name is deprecated and delegates to it.
+- **Platform floors the Essentials build runs on, and a warning against Jackson 3.2.** `stack-pins.md` moves
+  `spring-boot-starter-parent` 4.1.1 → 4.1.2, `kotlin.version` 2.4.20 → 2.4.21 and Maven 3.9.16 → 3.10.0, the
+  versions the Essentials repository now builds and tests with, so `/essentials:init` renders them. Spring Boot
+  4.1.2 manages Tomcat 11.0.27 and Netty 4.2.19.Final, which carry the CVE fixes (Tomcat CVE-2026-66299 among
+  them) Essentials had overridden 4.1.1's managed versions for. `stack-lint` gains four checks, and
+  `/essentials:upgrade` offers each finding on its own, never silently and never as part of the Essentials
+  upgrade (Group D): `s1-boot-patch` (Advisory) — Spring Boot on the 4.1 line but below 4.1.2; `s1-kotlin-patch`
+  (Advisory) — a Kotlin compiler at or above the 2.3 floor but below 2.4.21; `s11-maven-wrapper` (Advisory) — a
+  Maven wrapper that downloads a Maven older than 3.10.0 (not run without a wrapper); `s3.1-jackson3-override`
+  (Should-fix) — `jackson-bom.version`, the `tools.jackson:jackson-bom` import or a `tools.jackson` artifact
+  overridden to Jackson 3.2 or newer. Jackson 3.2 reads a primitive record component absent from the document as
+  `0`/`false` even with `FAIL_ON_NULL_FOR_PRIMITIVES` enabled, so `EssentialsObjectMappers.findWireFormatDeviations`
+  stops reporting that drift, and Essentials 0.60.x is built and tested only on the Jackson 3.1.x Spring Boot
+  manages; the fix is to remove the override. The stack contract states the floors (S1, S11) and the Jackson 3
+  rule (S3.1), and `stack-pins.md` gains a non-pin `Jackson 3` row naming the managed minor, which the check reads.
+  Each floor fires only below its pin, and never beside `s1-boot-line` or `s1-kotlin-compiler-floor`.
+- **`/essentials:upgrade` now moves a project to the plugin's Essentials release, code included.** A
+  project on an older release (`essentials.version` below the pin) gets a new Group D: the move is
+  planned by the new `scripts/migration-plan.py` from the release's migration notes
+  (`references/stack/migrations/0.50-to-0.60.json`), shown as a decision note — the pins it moves,
+  marked Essentials or platform, the findings it closes, the code migrations and their risks, and the
+  checklist of behaviour changes — and applied only after you approve it. The note is printed, or
+  written to a path you choose (it offers `docs/adr/` when the project has one), and is the ADR. It
+  moves `essentials.version` and only the platform pins the release requires, after one question
+  (Move all / Stop / Show impact), on an `essentials-<version>` branch it creates, with a commit per
+  step if you want one. Then it applies the stack-contract findings that hold only on the new release,
+  the API migrations `review-scan.py --tree` finds, and the compile errors that remain — call site by
+  call site, each confirmed, in slice source too but never structurally — verifying each step and
+  gating the move on the project's full build (Docker required). Behaviour changes no compiler sees
+  come back as a checklist with their `ESS` ids, never applied; workarounds the release makes
+  removable are offered one at a time. A failing step is named, mapped to its symptom and offered for
+  revert; the branch you started from is untouched. `--check` prints the whole plan and needs neither
+  Docker nor a clean tree. Upgrade still never moves a pin the release does not require.
+- **Upgrade detection for 0.50 → 0.60** — `review-scan.py --tree` scans a whole project (the
+  empty-tree diff), with new signatures for the 0.60 compile breaks and removed keys, and new traps
+  `ESS-119` to `ESS-123` in `LLM-traps.md` § Upgrading: `QueuedMessageCounts`' new components, the
+  CDC `live-drain-stall-threshold` key, the Jackson 2 API renames, `useOrderedUnorderedQuery`, and the
+  0.50 `forRemoval` constructors.
+- **Standalone Next.js and Create React App frontends are judged correctly** — S8's standalone checks
+  assumed Vite: they matched only `import.meta.env.VITE_API_BASE_URL` in a file named `custom-fetch.ts`
+  and a hard-coded Orval output path, so a Next.js frontend doing exactly what S8 asks got findings
+  whose fixes would break it. `stack-lint.py` now accepts any `import.meta.env.*` or `process.env.*`
+  read that prefixes the request URL, finds the mutator and the generated paths from `orval.config.*`
+  (reported as not run when that config is computed), reports the tooling it found
+  (`facts.frontendTooling`) and names that tooling's variable in its fix text. S8 is worded for any
+  tooling, with Vite as the example.
+- **CORS origins bound with `@Value`** — `s8-standalone-cors-value` claimed "startup fails" for every
+  such key; that holds only for a list. It stays Blocking for a YAML sequence or an indexed key (with a
+  `:default`, it says the default is bound silently instead); a scalar, or a key no `application*` file
+  sets, is now the Should-fix `s8-standalone-cors-value-scalar`.
+- **`slice-lint.py` no longer passes when it validated nothing** — a run that could not import
+  `jsonschema` and found nothing exits 2, as `/essentials:slice-check` already documented, instead of
+  0. `--allow-skip-schema` accepts a parse-only pass explicitly; `--require-schema` is still accepted,
+  as a no-op, so existing hooks and CI keep parsing.
+- **Refreshing the lint gate no longer turns CI red unannounced** — `slice-lint.py --baseline <json>`
+  reports only the findings a previous `--json` run did not. `/essentials:slice-check` gate 12 and
+  `/essentials:upgrade` measure what a refreshed copy would add before offering it, say "the refresh
+  adds N findings in `<files>`", and offer the manifest fixes first; a committed baseline also works as
+  a CI ratchet. The gate-14 hint no longer suggests a `tier` value it cannot know: `cqrs-es` when the
+  bounded context is event-sourced, otherwise remove `tier`.
+- **The pre-commit hook works in a project below the repository root** — it assumed git root =
+  project root, so in a nested project the hook never ran, and a missing script let commits through.
+  It now finds its project from its own path, lints only manifests staged inside it, and **blocks**
+  on findings, on a missing `scripts/slice-lint.py`, and when the linter exits 2. Contributors need
+  `uv`, or `python3` with `pyyaml` and `jsonschema`; only a machine with neither `uv` nor `python3`
+  still commits unchecked. `/essentials:init` activates it with a repository-relative `core.hooksPath`,
+  or offers a forwarder line when another hook setup exists, and the project README gives every other
+  clone the command. `/essentials:upgrade` reports a hook git never runs as installed but inactive and
+  offers the same activation.
+- **Leftovers of the forked-app OpenAPI pipeline are reported** — `s7-spec-generation` went silent once
+  a test wrote the spec, so `springdoc-openapi-maven-plugin`, a start/stop execution or
+  `application-openapi.*` left behind was never reported again. New Advisory checks
+  `s7-forked-pipeline` and `s7-key-order` (`springdoc.writer-with-order-by-keys: true` missing), and
+  `/essentials:upgrade` removes the residue as a checklist, warning to commit the spec's one-time
+  reformat on its own.
+- **The version stamp's format, named** — projects scaffolded before the plugin's first release carry
+  `<!-- essentials-init: v<semver> -->`; `/essentials:upgrade` replaces it with
+  `<!-- essentials-init: essentials <version> -->`, the Essentials release rather than a plugin
+  version. Tooling that parses the stamp needs the new form; upgrade now names any file outside
+  `CLAUDE.md` that mentions `essentials-init:` before it replaces the stamp.
+- **Framework-knowledge block refresh** — `/essentials:upgrade` now compares the project
+  `CLAUDE.md`'s framework-knowledge section with the plugin's and offers to replace that section alone
+  when it differs, keeping the project's stamp; before, it only checked that the heading existed.
+
+- **Pins Essentials 0.60.1.** `essentials.version` is `0.60.1` in `stack-pins.md`, so `/essentials:init` generates
+  0.60.1 projects and `/essentials:upgrade` plans the move from 0.60.0 by the new
+  `references/stack/migrations/0.60-to-0.60.json`: a compile step for the three 0.60.1 compile breaks, a review
+  checklist of the behaviour changes that compile clean, and the `essentials.schema.mode=validate` re-`emit` before
+  the first start. Six new traps back it, `ESS-131`–`ESS-136`, under "0.60.1 changes that compile and still bite".
+- **S2.1's objenesis row** says what Essentials 0.60.1 does without objenesis — context startup fails, naming
+  `org.objenesis:objenesis` — and keeps the 0.60.0 behaviour (the first read fails) for a project still on 0.60.0;
+  the generated backend POM comment and `stack-lint`'s `s2.1-objenesis` message follow it.
+- **The docs name two 0.60.1 additions they missed:** `DurableQueues.releaseUndeliveredMessage` in
+  `LLM-foundation.md`'s `DurableQueues` API, and the `Root cause:` summary a shard-owned dead letter's error now starts
+  with in `LLM-postgresql-queue-shard-owned.md` § Gotchas.
+
+- **Commands work where the shell cannot write.** A sandbox that denies Bash every write (Claude Code 2.1.311's
+  `claude plugin eval` does, and a read-only mount or an unwritable `TMPDIR` does the same) used to break the
+  commands that hand one script's output to the next through a scratch file. `/essentials:review`, `slice-map`,
+  `slice-map-html`, `slice-enrich`, `slice-check`, `init` and `upgrade` no longer write scratch files: script
+  inputs go through a pipe, standard input (`-`) or process substitution, and `slice-map-html --diff` reads its
+  baseline from `git archive` in memory when no temporary directory can be made (slices, edges and messages are
+  compared; issues are not). Where `uv run` fails on a read-only cache, the commands run the scripts with
+  `python3`, and `/essentials:doctor` reports that uv as `cache read-only → python3 fallback`, a warning rather
+  than a stop.
+- **Writers fail closed, and a verified fallback writes instead.** `render-slice.py render`,
+  `slice-enrich.py apply`, `slice-index.py atlas`, `init-render.py` and `init-report.py write` check every target
+  before their first write and exit 4 on a read-only filesystem or a denied write (EROFS/EACCES), writing nothing.
+  - Slices: the kind skills then run `render --emit`, which prints every file's exact content (`--only <path>`
+    prints one, and a re-run part-way accepts only existing files identical to its output), write each
+    file verbatim with the Write tool, and the new read-only `render-slice.py verify`
+    must match them byte for byte before the slice counts as rendered (`slice-authoring.md` §4b; capability
+    `slice.render.emit`, `sdd-contract.md` §2.6). A rendered file is still never written freehand.
+  - `/essentials:slice-enrich` does the same with `slice-enrich.py apply --emit` and `slice-enrich.py verify`,
+    and gains the Write tool for that alone; the model still never edits a `slice.yaml` itself.
+  - `/essentials:init` writes its `--report` the same way (`init-report.py write --emit` / `--verify`). A
+    project directory the shell cannot write stops it with `status: stopped` before the first file.
+  - The Slice Atlas page is too large for that: on exit 4 `slice-index.py atlas` still prints the page's
+    summary line with its issue counts as `NOT written`, and the command asks for a writable `--out`.
+    `/essentials:upgrade` names a lint-gate install it could not write under what remains.
+- **Fixed: `/essentials:review` hid the change's own findings when it could not extract the base tree.** With no
+  writable temporary directory, every whole-tree finding was counted as pre-existing, so findings on lines the
+  change added were counted, not listed, in a report that still read as complete. The review now lists a
+  whole-tree finding on an added line as the change's own and names the skipped base comparison under Not run.
+  The report also copies the scripts' own Not run entries next to any limit of the run, and no longer calls a
+  tree "clean".
+- **`essentials-change` fires on bug reports and on changed rules or limits**, not only on feature requests. It
+  asks for a yes before growing a slice even when the request names the exact endpoint or field to add; it no
+  longer asks "new slice or extend?" when the slice law's own test already answers it (a view keyed differently
+  from the existing one, for example); and its plan for a new slice names the bounded context's lane.
+- **`/essentials:slice-check`: a bounded context with no lane is not judged under a guessed one.** A context with
+  two write styles, or entities beside the event store, lists its lane-dependent gates under "Gates not run",
+  and conflicting declared lanes show on its lane line. A finder that loads rows for writing is no longer
+  reported as read-side drift (gate 15(b)), and a project with no test tree reports its untested view slices
+  instead of "Input missing".
+- **`/essentials:slice-discover` numbers its findings by payoff tier.** Lane-specific findings
+  (`discovery-heuristics.md` §7) come after the lane tier, unnumbered; a sole-writer finding names every writer;
+  the cohesion tier names every god file with its slice count; and primitive ids are summarised once per
+  bounded context.
+- **Eval cases corrected.** Expectations in the change-router, slice-check, slice-discover and slice-enrich
+  fixtures that marked correct replies down are reworded or re-rated, and their graders regenerated.
+
 ## 0.60.0-5 — targets Essentials 0.60.0
 - **Framework docs: 0.50.1 was never released** — the event-store reference now says the polling
   transaction leak (a connection left `idle in transaction` when a subscription was disposed after an

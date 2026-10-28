@@ -22,7 +22,7 @@ everything else: their command type, their one API file, their handler and their
 | `use_cases/initialize_price` | command | Opens the price stream at a starting price |
 | `use_cases/update_price` | command | Records a price tick. The authoritative write path |
 | `use_cases/risk_approve_instrument` | automation | Runs a newly registered instrument through an external risk assessment and records the answer. The demo's `UnitOfWorkMode.NONE` example |
-| `views/latest_price` | view | Serves the current price of one instrument. Aggregate-backed, strongly consistent |
+| `views/latest_price` | view | Serves the current price of one instrument. Projection-backed, eventually consistent |
 | `views/instrument_details` | view | Lists instruments and serves one by id, from a projection. Includes risk status |
 
 ## Two aggregates, one id
@@ -42,26 +42,24 @@ in the demo are compared against.
 
 ## The authoritative price store is the aggregate
 
-`InstrumentPrice` is the authority for latest price. Anything that needs the current market price — the
-trade path, the trade-valuation read model — reads it, directly or through a slice that does.
+`InstrumentPrice` is the authority for latest price. The trade path loads it; a read model that needs the
+current market price projects `PriceInitialized` / `PriceUpdated`, as `views/latest_price` and
+`brokerage.trade_valuation` both do.
 
 The demo also has a direct-write JDBC latest-price table. That is a **benchmark comparison artifact**: its
 only purpose is to be timed against the aggregate path. It lives in the demo harness, not in this context,
 so the trade path cannot reach it by accident. Do not move it here, and do not make anything in this context
 read it.
 
-## `InstrumentPrice.latestPrice()` is a deliberate exception
+## `views/latest_price` is an ordinary eventually-consistent view
 
-Aggregate state is private everywhere else in the demo, and read models project events rather than reading
-the write model. `InstrumentPrice.latestPrice()` is public on purpose, and `views/latest_price` is the only
-caller: that slice answers the current price **strongly consistently**, because the demo's bootstrap uses it
-to decide whether seed data already exists, and an eventually-consistent "absent" would let it seed on top
-of a populated database. A projection there would also be a single column keyed by the same id, rebuilt from
-the same two events, permanently one hop behind the aggregate it copies.
-
-It is not a precedent. Nothing else on `InstrumentPrice` is public, and nothing on `Instrument` is. Any read
-that wants price *history*, or prices *across* instruments, is a different read model and projects — which is
-exactly what `brokerage.trade_valuation` does.
+Aggregate state is private, and read models project events rather than reading the write model.
+`LatestPriceProjection` is a `ViewEventProcessor`, like every other view here, so it can be replayed: a new
+subscription starts at the first price event, and a subscription reset truncates the table and rebuilds it.
+It once read a public `InstrumentPrice.latestPrice()`, and later projected in the appending transaction, both
+to give the demo bootstrap's "already seeded?" probe a strongly-consistent answer. Neither is needed: the
+probe asks `InstrumentPrices.findPrice(...)`, a write-side existence check, and nothing reads this view
+strongly consistently. Do not add the accessor back, and do not move the projection back in-transaction.
 
 ## Every mutating method is an idempotent no-op
 

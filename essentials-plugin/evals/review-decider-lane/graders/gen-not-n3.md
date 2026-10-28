@@ -5,7 +5,8 @@ type: llm
 
 The agent's final message is the report `/essentials:review` printed for a test project. Paths in it are relative to the project root, and a report may cite a file by path, by `path:line`, or by its type or directory name.
 
-PASS unless the report raises a finding under gate 10 (Projection idempotency) or gate 11b (Manifest ↔ code) about `orders/views/expedited_orders/ExpeditedOrdersProjection.kt`, described as: a handler inferred from the class comment.
+PASS unless the report raises a finding under gate 10 (Projection idempotency) or gate 11b (Manifest ↔ code) about `orders/views/expedited_orders/ExpeditedOrdersProjection.kt` line 14, `@MessageHandler` whose parameter type matches it` (or what that line declares), described as: a handler inferred from the class comment.
+Only a finding drawn from that code fails this check; match it by content, not only the line number. A finding about another line of the same file (for example a correct one drawn from a different guard or method) does not.
 Why that would be wrong: The comment names @MessageHandler; prose is not a handler. The one real handler is R6.
 A mention that is not a finding does not fail this check: the file listed as passing, cited as evidence for a different finding, or named in a lane or inventory summary.
 FAIL only if such a finding is present.

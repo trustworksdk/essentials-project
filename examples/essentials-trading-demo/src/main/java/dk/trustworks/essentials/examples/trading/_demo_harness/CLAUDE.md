@@ -12,7 +12,7 @@ What lives here is the machinery that makes the demo demonstrate something:
 | `TradingLoadGeneratorManager` | Generates continuous runtime traffic, plus on-demand bursts and two benchmark scenarios |
 | `TradingLoadGeneratorController` | The harness's own admin API |
 | `TradingDashboard*` | The lightweight status screen and its SSE stream |
-| `DirectInstrumentPriceService` | A deliberately **non**-event-sourced latest-price table, written with raw JDBC, whose only purpose is to be benchmarked against the `market_data` aggregate path |
+| `DirectInstrumentPriceService` | A deliberately **non**-event-sourced latest-price table, written with plain SQL through the `UnitOfWork`'s Jdbi handle, whose only purpose is to be benchmarked against the `market_data` aggregate path |
 | `QueueLoadGenerator` | Drives the **shard-owned queue engine** on both lanes at once — sustained trickle plus on-demand spikes — and checks per-key ordering as messages arrive |
 | `QueueLoadGeneratorController` | `/api/admin/queue-load` — status, start/stop, `POST /spike?size=N`, `POST /faults?retries=N&poison=M&failures=K`, `POST /faults/blocked-key?behind=N` |
 
@@ -40,11 +40,11 @@ Being outside the boundary check is not permission to reach into the contexts:
 ## Exception 1: the bootstrap idempotency probe
 
 `TradingSimulationRunner.seedDataState()` — and nothing else in this package — may inject `TradingAccounts`,
-`Trades`, `Settlements` and `Instruments`, and may call their `findX(…)` methods. It must be **strongly
+`Trades`, `Settlements`, `Instruments` and `InstrumentPrices`, and may call their `findX(…)` methods. It must be **strongly
 consistent**: the brokerage projections are eventually consistent, so on a restart against a populated database
 a projection-backed probe could answer "absent" while the data is there, and the runner would seed a second time
-on top of existing data. The price half of the probe uses `LatestPriceQuery`, which reads the price aggregate and
-is already strongly consistent.
+on top of existing data. That goes for the price half too: `market_data.latest_price` is a projection, so the
+probe asks `InstrumentPrices.findPrice(…)` rather than `LatestPriceQuery`.
 
 The probe reads *existence*, never a field, and it runs once at startup.
 

@@ -95,17 +95,21 @@ Findings — all eight must appear:
 Dismissed: **ESS-064** at `_loadtest/LoadHarness.java:26` — a read-only row count for the load report;
 there is no write and no Spring transaction to join.
 
-Pre-existing, counted and never listed: the 13 stack-lint findings the fixture already has (S2.1 and
+Pre-existing, counted and never listed: the 14 stack-lint findings the fixture already has (S2.1 and
 others), and every finding `tests/fixtures/service-entity/TEST-GUIDE.md` lists — including `setShipped`
 and the command-typed constructor in `ShippingOrder.java`, a file the patch edits, and slice-source's raw id on
 `ShipOrderAPI.ship`, which the base run reports too.
+
+Not run: two groups that `stack-lint.py` itself reports as not run on this tree — `s1-boot-line` (the POM has
+no Spring Boot parent or BOM import) and the frontend checks `s8-*` / `s11-skip-frontend` (no frontend). The
+report names both; it must not call every check run.
 
 Traps — none of these may be reported: ESS-S3.1 as a row of its own; gate 6 on `CancelShipmentAPI.java`;
 anything on unchanged lines of `ShippingOrder.java`, or in `ShippingOrders.java`, `ShippingCommand.java`
 or `OrderStatusQueries.java`; ESS-080 on the JPA `@Id`; gate 4 on `cancel_shipment` writing
 `ShippingOrder`; gate 10 anywhere (not on this lane); ESS-064 as a finding; the pre-existing raw id on the unchanged `ShipOrderAPI.java`.
 
-Tolerated: ESS-086 named beside finding 4; gate 9's post-processor note beside finding 2; a missing-test
+Tolerated: ESS-086 named beside finding 4; `setShipped` named inside finding 7's row (the new guard makes it a second bypass); gate 9's post-processor note beside finding 2; a missing-test
 Should-fix on `cancel_shipment`; an Advisory on the `config/` package inside the bounded context.
 
 ### `--fix` (manual)

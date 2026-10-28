@@ -17,6 +17,7 @@
 package dk.trustworks.essentials.components.foundation.fencedlock;
 
 import dk.trustworks.essentials.components.foundation.transaction.UnitOfWork;
+import dk.trustworks.essentials.shared.Exceptions;
 
 import java.time.*;
 import java.util.*;
@@ -138,9 +139,17 @@ public class DBFencedLock implements FencedLock {
         return Duration.between(lockLastConfirmedTimestamp, ZonedDateTime.now()).abs();
     }
 
+    /**
+     * Marks this lock as released, then calls {@link LockCallback#lockReleased(FencedLock)} on every registered callback.
+     * <p>
+     * The lock is marked released before any callback runs, so a callback that throws cannot leave it reporting itself
+     * as locked. Every callback is called even when an earlier one throws; the first failure is then rethrown, with the
+     * later ones added to it as suppressed (see {@link Exceptions#forEachThenThrowFirst(Iterable, java.util.function.Consumer)},
+     * which also describes how a critical error is handled).
+     */
     public void markAsReleased() {
-        lockCallbacks.forEach(lockCallback -> lockCallback.lockReleased(this));
         lockedByLockManagerInstanceId = null;
+        Exceptions.forEachThenThrowFirst(lockCallbacks, lockCallback -> lockCallback.lockReleased(this));
     }
 
     DBFencedLock markAsConfirmed(OffsetDateTime confirmedTimestamp) {

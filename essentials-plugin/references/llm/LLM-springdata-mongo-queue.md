@@ -1,6 +1,6 @@
 # MongoDB Queue - LLM Reference
 
-> **Foundation**: [LLM-foundation.md](./LLM-foundation.md#durablequeues-messaging) | **Developer docs**: [README](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/springdata-mongo-queue/README.md)
+> **Foundation**: [LLM-foundation.md](./LLM-foundation.md#durablequeues-messaging) | **Developer docs**: [README](https://github.com/trustworksdk/essentials-project/blob/0.60.1/components/springdata-mongo-queue/README.md)
 
 ## TOC
 - [Quick Facts](#quick-facts)
@@ -114,7 +114,20 @@ separate single-document operations, so a handler failure can never roll back th
 
 With a `SpringMongoTransactionAwareUnitOfWorkFactory` (`setUnitOfWorkFactory`, requires a replica set) each message is
 handled inside a `UnitOfWork` of its own, and a `queueMessage` called inside a caller's `UnitOfWork` joins it - the
-enqueue commits or rolls back with the caller's writes, which is what an Outbox relies on.
+enqueue commits or rolls back with the caller's writes, which is what an Outbox relies on. A plain Spring
+`@Transactional`/`TransactionTemplate` on the `MongoTransactionManager` is joined too.
+
+An enqueue **outside** any `UnitOfWork` or Spring transaction commits on its own and is not undone by a later
+rollback of the caller's work - e.g. `Outbox.sendMessage` called before the business transaction starts. The first
+enqueue from a call site logs a WARN with its stack trace, for up to 4 call sites per innermost application frame and up to 32 such
+frames per `DurableQueues`; past that budget enqueues are not logged, so a silent enqueue is not proof of a transaction. A call site is the
+first three stack frames outside Essentials, the JDK, Reactor, Kotlin and Spring, so two callers of one application wrapper (a gateway
+around `Outbox.sendMessage`) are two call sites, but they share that wrapper's budget of 4. Opt in to failing instead with
+`setRequireActiveUnitOfWorkForEnqueue(true)` on the builder, or in Spring Boot
+`essentials.durable-queues.require-active-unit-of-work-for-enqueue=true`: such an enqueue then throws
+`NoActiveUnitOfWorkException` and queues nothing. A plain Spring `@Transactional`/`TransactionTemplate` counts as
+active. `Inbox.addMessageReceived` opens a `UnitOfWork` itself and is unaffected; `DurableLocalCommandBus.sendAndDontWait`
+outside a transaction is not. Dead-letter enqueues are never checked.
 
 ## Document Schema
 
@@ -157,7 +170,8 @@ Auto-created on `start()`:
 ### SimpleQueuePollingOptimizer
 Linear backoff - only option for MongoDB.
 
-**Algorithm**: `delay += increment` on empty poll, reset on message/notification.
+**Algorithm**: `delay += increment` on empty poll, reset on message/notification. Since 0.60.1 it also polls when a
+retry, delayed enqueue or delayed resurrection made by this node comes due, instead of sleeping past it.
 
 ```java
 // Base package: dk.trustworks.essentials.components.foundation.messaging.queue
@@ -181,8 +195,10 @@ MongoDurableQueues.builder()
 | `maxDelayMs` | Cap (5000ms) |
 
 **Defaults** (if no factory):
-- `delayIncrementMs` = 50% of `messageHandlingTimeout`
-- `maxDelayMs` = 20× `messageHandlingTimeout`
+- `delayIncrementMs` = 50% of the consumer's polling interval
+- `maxDelayMs` = 20× the consumer's polling interval
+
+Before 0.60.1 the builder ignored `setQueuePollingOptimizerFactory`, so these defaults always applied.
 
 ### Change Streams
 Automatically enabled on `start()` - triggers immediate polling on message arrival.
@@ -366,7 +382,7 @@ See [LLM-spring-boot-starter-modules.md](./LLM-spring-boot-starter-modules.md#mo
 
 `sharedQueueCollectionName` used directly in MongoDB operations.
 
-See [README Security](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/springdata-mongo-queue/README.md#security) for full details.
+See [README Security](https://github.com/trustworksdk/essentials-project/blob/0.60.1/components/springdata-mongo-queue/README.md#security) for full details.
 
 **Quick rules**:
 ```java
@@ -420,7 +436,7 @@ public DurableQueues testDurableQueues(MongoTemplate mongoTemplate) {
 
 ## Performance Tuning
 
-See [README](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/springdata-mongo-queue/README.md) for:
+See [README](https://github.com/trustworksdk/essentials-project/blob/0.60.1/components/springdata-mongo-queue/README.md) for:
 - Connection pool configuration
 - Parallel consumer tuning
 - Polling optimization strategies

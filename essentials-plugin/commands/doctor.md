@@ -20,7 +20,7 @@ user's permission either; it prints the command and leaves running it to them.
 ## Step 1 — Run the script
 
 The argument is a profile: `init`, `review`, `slice` (add-slice, the slice skills, slice-check,
-slice-map), `docs` (the docs skill's search and the slice law), or `all`, the default. Anything else:
+slice-map, slice-map-html), `docs` (the docs skill's search and the slice law), or `all`, the default. Anything else:
 say which values exist and stop.
 
 ```bash
@@ -31,7 +31,8 @@ say which values exist and stop.
 essentials plugin installed."
 
 The output is the answer. One line per requirement: its status (`ok`, `MISSING`, `TOO OLD`,
-`NOT RUNNING`, `FALLBACK` — uv absent but python3 can run the scripts —, `PARTIAL`, `UNKNOWN`), what was
+`NOT RUNNING`, `FALLBACK` — uv absent, or its cache read-only, but python3 can run the scripts —, `PARTIAL`,
+`UNKNOWN`), what was
 found, what is needed, and after `—` what degrades without it and how (`STOP`, `NOT RUN`,
 `COMPILE-ONLY`, `SKIPPED`, `FALLBACK`). The last line says `OK` or `BLOCKED`; exit 1 means some command
 in the profile stops. **Take it verbatim**: do not re-probe a tool the script already reported, and do
@@ -62,12 +63,17 @@ paragraph in plain language:
 | git | `xcode-select --install`, or `brew install git` | the distribution's `git` |
 | ripgrep | `brew install ripgrep` | the distribution's `ripgrep` |
 
+A uv line reading `cache read-only → python3 fallback` is not an install problem: uv is there, but this shell
+cannot write its cache (a read-only mount, or a sandbox such as `claude plugin eval` whose Bash may not write), so
+every `uv run` fails. It is a warning, not a stop: the commands run their scripts with `python3` instead. Say so,
+and only if the user wants uv there, name `UV_CACHE_DIR` pointed at a writable directory; no install hint.
+
 A JDK that is installed but not first on the `PATH` or in `JAVA_HOME` is a `TOO OLD` line too: say
 that `JAVA_HOME` is what Maven uses, and how to point it at the newer JDK.
 
 ## Step 3 — Close
 
-One line: either "nothing here stops a command in <profile>" with the count of degraded lines, or the
+One line: either "nothing here stops a command in `<profile>`" with the count of degraded lines, or the
 blocking requirements with the one install that unblocks most (python3 3.11+ unblocks every profile).
 Suggest re-running `/essentials:doctor` after installing. Nothing else: no offer to install, no edit to
 any file, no build.

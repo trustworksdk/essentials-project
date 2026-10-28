@@ -48,7 +48,7 @@ import java.util.*;
  *     <tr><th>Operation</th><th>Role (or {@code ESSENTIALS_ADMIN})</th></tr>
  *     <tr><td>reads</td><td>{@code QUEUE_READER}</td></tr>
  *     <tr><td>message payloads</td><td>{@code QUEUE_PAYLOAD_READER}, additionally</td></tr>
- *     <tr><td>delete, retry, dead-letter, resurrect, purge</td><td>{@code QUEUE_WRITER}</td></tr>
+ *     <tr><td>delete, retry, dead-letter, resurrect, release a kept unit, purge</td><td>{@code QUEUE_WRITER}</td></tr>
  * </table>
  * A reader without {@code QUEUE_PAYLOAD_READER} still gets the message — its id, key, attempt count,
  * timestamps and last error — with {@code payload} null. That is the shape most administration needs,
@@ -164,6 +164,48 @@ public interface ShardOwnedQueuesApi {
      * @return how many messages were put back; zero if the key has no dead letters
      */
     int resurrectDeadLettersForKey(Object principal, QueueName queueName, String key);
+
+    /**
+     * Release an ordered unit a stop kept because a key of it was still in its handler, without waiting for that handler
+     * any longer: the way out of a handler known to be hung before the queue's {@code stuckHandlerTimeout} ends the wait
+     * (see {@link MessageQueue#releaseKeptOrderedUnit}).
+     * <p>
+     * <b>Accepts reordering and duplicate delivery for that key</b>: each message still in a handler is charged an
+     * attempt before the release, and dead-lettered if that brings it to {@code maxAttempts}, and whoever takes the unit
+     * next delivers the rest again, possibly while those handlers still run them. Each entry of the answer names how many
+     * messages were charged ({@code charged}) and the keys dead-lettered ({@code deadLetteredKeys}): such a key is blocked
+     * behind its dead letter until it is resurrected ({@link #resurrectDeadLettersForKey}) or deleted. Only a unit a stop of a subscription
+     * running under {@code instanceId} kept, and whose lease row still names that instance id, is touched; every other
+     * unit - one of the same number a subscription under another instance id kept included - is left alone. Kept units
+     * live in the memory of the process whose stop kept them, so call the instance named in the WARN that reported the
+     * unit kept, with the instance id that WARN names: any other process, or another instance id, releases nothing, and
+     * the answer's {@code answeredBy} names the instance ids the answering process has for the queue.
+     * <p>
+     * The request is not passed on to that process through the database, deliberately: the kept owner, its fence and the
+     * keys in its handler exist only in that process's memory, the lane whose stop kept the unit runs no heartbeat while
+     * it stays stopped - and an ended subscription's lanes never run again - so nothing would pick up a recorded request,
+     * and the answer - outcome, keys in a handler, keys the charge dead-lettered - is
+     * what the operator's follow-up is decided from, so it is given at once. Behind a load balancer, send the request to
+     * that process's own address (a pod address, or a tunnel such as {@code kubectl port-forward}) rather than the
+     * balancer's. Design notes: {@code docs/durable-queue-shard-owned.md} §13.7 and §18.3.
+     * <p>
+     * A default method, so an implementation of this interface written before it existed still compiles: the default
+     * releases nothing and answers {@link ApiShardOwnedKeptUnitReleases#NONE}. {@link DefaultShardOwnedQueuesApi}
+     * implements it.
+     *
+     * @param instanceId the instance id that WARN names - the subscription's, which may carry a suffix
+     * @param unit       the ordered unit, as that WARN names it
+     * @return the instance ids that answered, and what was done: one entry per subscription of the queue in the answering
+     * process running under {@code instanceId} that had kept the unit, none when none had; both empty when no queue is
+     * registered under that name
+     * @throws MessageQueueException when {@link MessageQueue#releaseKeptOrderedUnit} throws its {@link java.sql.SQLException},
+     *                               which is the cause. A request whose charge gave up waiting for another release of the
+     *                               unit's lease row does not throw: its entry carries the outcome
+     *                               {@link KeptUnitRelease.Outcome#CLAIM_WAIT_TIMED_OUT} - nothing released, ask again
+     */
+    default ApiShardOwnedKeptUnitReleases releaseKeptOrderedUnit(Object principal, QueueName queueName, String instanceId, int unit) {
+        return ApiShardOwnedKeptUnitReleases.NONE;
+    }
 
     /**
      * Delete everything in a queue: both lanes and its dead letters.

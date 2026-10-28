@@ -368,18 +368,19 @@ public class StarterAutoConfigurationIT {
 
     /**
      * The stopped-subscription gauge is the alerting signal for a halted projection, so - like the
-     * {@code stopped_by_error_policy} counter - it must not depend on {@code management.tracing.enabled}, which gates
-     * {@link SubscriberGlobalOrderMicrometerMonitor}.
+     * {@code stopped_by_error_policy} counter - it must not depend on {@code management.tracing.enabled}. Since 0.60.1
+     * neither does the lag gauge of {@link SubscriberGlobalOrderMicrometerMonitor} (N-9).
      */
     @Test
-    void the_subscription_stopped_monitor_is_wired_without_tracing() {
+    void the_subscription_monitors_are_wired_without_tracing() {
         contextRunner
                 .withBean(MeterRegistry.class, SimpleMeterRegistry::new)
                 .run(ctx -> {
                     assertThat(ctx).hasSingleBean(SubscriptionStoppedMicrometerMonitor.class);
-                    assertThat(ctx).doesNotHaveBean(SubscriberGlobalOrderMicrometerMonitor.class);
+                    assertThat(ctx).hasSingleBean(SubscriberGlobalOrderMicrometerMonitor.class);
                     assertThat(ctx.getBeansOfType(EventStoreSubscriptionMonitor.class).values())
-                            .containsExactly(ctx.getBean(SubscriptionStoppedMicrometerMonitor.class));
+                            .containsExactlyInAnyOrder(ctx.getBean(SubscriptionStoppedMicrometerMonitor.class),
+                                                       ctx.getBean(SubscriberGlobalOrderMicrometerMonitor.class));
                 });
     }
 

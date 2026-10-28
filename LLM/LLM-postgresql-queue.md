@@ -103,15 +103,53 @@ Created via `PostgresqlDurableQueues.builder()`.
 | `useCentralizedMessageFetcher` | `boolean` | `true` | Centralized vs per-consumer |
 | `centralizedMessageFetcherPollingInterval` | `Duration` | 20ms | Polling interval |
 | `queuePollingOptimizerFactory` | `Function<ConsumeFromQueue,QueuePollingOptimizer>` | null | For `DefaultDurableQueueConsumer` |
-| `centralizedQueuePollingOptimizerFactory` | `Function<QueueName,QueuePollingOptimizer>` | null | For `CentralizedMessageFetcher` |
-| `multiTableChangeListener` | `MultiTableChangeListener` | null | LISTEN/NOTIFY support |
+| `centralizedQueuePollingOptimizerFactory` | `Function<QueueName,QueuePollingOptimizer>` | `CentralizedQueuePollingOptimizer` (interval, ×1.5, 2 s cap) | For `CentralizedMessageFetcher`; only used with a listener |
+| `multiTableChangeListener` | `MultiTableChangeListener` | created by `build()` | LISTEN/NOTIFY support |
+| `createMultiTableChangeListener` | `boolean` | `true` | `false`: no listener and no backoff, as before 0.60.1 |
 
 ## Transactions
 
-Every queue operation runs in its own transaction: queueing, fetching, acknowledging, retrying and dead-lettering are
-separate, so a failing handler can never roll back its own retry count. (0.60 removed `TransactionalMode`; its
-`FullyTransactional` mode broke exactly that.) A `queueMessage` called inside a caller's `UnitOfWork` joins it, so the
-enqueue commits or rolls back with the caller's writes - which is what an Outbox relies on.
+Queue operations run in their own transactions: queueing, fetching, retrying and dead-lettering are separate, so a
+failing handler can never roll back its own retry count. (0.60 removed `TransactionalMode`; its `FullyTransactional`
+mode broke exactly that.) A `queueMessage` called inside a caller's `UnitOfWork` joins it, so the enqueue commits or
+rolls back with the caller's writes - which is what an Outbox relies on. With the starter's
+`SpringTransactionAwareJdbiUnitOfWorkFactory` a plain Spring `@Transactional`/`TransactionTemplate` is joined too.
+
+The one exception, since 0.60.1: a successfully handled message is acknowledged inside the handler's own transaction.
+The handler's writes and the acknowledgement commit together or not at all, and a message costs one connection
+checkout and one commit instead of two (measured on its own: about +10% drain throughput through a 10-connection
+pool, without LISTEN/NOTIFY). The acknowledgement is the handler's last statement, but `beforeCommit` callbacks
+(event-store appends, in-transaction handlers) still run after it, holding the queue row's lock until the commit.
+If the acknowledgement or the commit fails, the handler's writes roll back and the failure is classified like a
+handler exception: it uses a redelivery attempt and goes through the permanent-error list, so an
+`IllegalArgumentException` thrown by a `DurableQueuesInterceptor` on `AcknowledgeMessageAsHandled` - which now runs
+inside the handler's transaction - dead-letters the message on its first delivery. The acknowledgement stays
+separate, as before, for a handler that requests redelivery, one that marks its unit of work rollback-only (its
+message is still consumed), and a handler that owns its unit-of-work boundary - every `EventProcessor` handler,
+whatever its `UnitOfWorkMode`, and an `Inbox` with a `UnitOfWorkBoundaryOwningMessageConsumer`, which between them
+cover every `UnitOfWorkMode.NONE` handler. A handler that returns with the interrupt flag set is acknowledged in its
+transaction only while its consumer is known to be started (it re-set the flag for a reason of its own). While its
+consumer is stopping it may have given up part-way, so its unit of work is marked rollback-only - its writes are
+discarded - and the consumer hands the message back for redelivery instead of acknowledging it; the rollback is not a
+handler failure, so it is never classified or dead-lettered (the hand-back counts one redelivery attempt). When the
+operation does not know the consumer's state, its writes commit and the message is left to the consumer
+unacknowledged. The rollback reaches only a handler run in the queue's own unit of work: a boundary-owning handler
+keeps whatever it committed before returning and is still handed back, so the redelivery runs it again on top of its
+own partial writes - it must be idempotent across a partial run. A crash before the commit still redelivers, so
+handlers should stay idempotent.
+
+An enqueue **outside** any `UnitOfWork` or Spring transaction commits on its own and is not undone by a later
+rollback of the caller's work - e.g. `Outbox.sendMessage` called before the business transaction starts. The first
+enqueue from a call site logs a WARN with its stack trace, for up to 4 call sites per innermost application frame and
+up to 32 such frames per `DurableQueues`; past that budget enqueues are not logged, so a silent enqueue is not proof
+of a transaction. A call site is the first three stack frames outside Essentials, the JDK, Reactor, Kotlin and
+Spring, so two callers of one application wrapper (a gateway around `Outbox.sendMessage`) are two call sites, but
+they share that wrapper's budget of 4. Opt in to failing instead with `setRequireActiveUnitOfWorkForEnqueue(true)` on
+the builder, or in Spring Boot `essentials.durable-queues.require-active-unit-of-work-for-enqueue=true`: such an
+enqueue then throws `NoActiveUnitOfWorkException` and queues nothing. A plain Spring
+`@Transactional`/`TransactionTemplate` counts as active. `Inbox.addMessageReceived` opens a `UnitOfWork` itself and
+is unaffected; `DurableLocalCommandBus.sendAndDontWait` outside a transaction is not. Dead-letter enqueues are never
+checked.
 
 ## Polling Mechanisms
 
@@ -157,7 +195,23 @@ Continuous polling at fixed intervals wastes DB resources when queues are idle. 
 
 1. **Message found** → Reset to initial (fast) polling interval
 2. **No message found** → Increase delay using backoff strategy
-3. **Message added** → LISTEN/NOTIFY immediately resets to fast polling (requires `MultiTableChangeListener`)
+3. **Message added** → resets to fast polling. A message queued by this node resets its own consumer when the
+   transaction commits, whether it is consumed through the centralized message fetcher or polls on its own
+   (`useCentralizedMessageFetcher(false)`, since 0.60.1). A message queued by another node resets it through
+   LISTEN/NOTIFY.
+
+4. **Message due later** → a retry, delayed enqueue or delayed resurrection made by this node tells the optimizer
+   when the message becomes deliverable, and the queue is polled then instead of sleeping past it (since 0.60.1;
+   before, a retry on a backed-off queue could arrive a whole backoff cap late). A delayed message enqueued by
+   another node still waits at most the cap.
+
+**The builder is wired like the Spring Boot starter.** Since 0.60.1, `PostgresqlDurableQueues.builder()` creates a
+`MultiTableChangeListener` when none is set (LISTEN/NOTIFY on the queue table, polled every 50 ms; it holds one
+connection, is started and stopped with the queues, and is released by `close()`), and the default
+`CentralizedQueuePollingOptimizer` uses the starter's values: start at the polling interval, ×1.5 per empty poll,
+±10% jitter, capped at 2 s. A builder-made instance therefore behaves like a Spring one.
+`.setCreateMultiTableChangeListener(false)` keeps the old wiring: no LISTEN/NOTIFY and no backoff, every queue polled
+every interval - a queue only backs off where something can wake it.
 
 ### SimpleQueuePollingOptimizer
 
@@ -193,7 +247,7 @@ import dk.trustworks.essentials.components.foundation.messaging.queue.SimpleQueu
 import dk.trustworks.essentials.components.foundation.messaging.queue.CentralizedQueuePollingOptimizer;
 
 .setUseCentralizedMessageFetcher(true)
-.setMultiTableChangeListener(multiTableChangeListener)  // Required
+.setMultiTableChangeListener(multiTableChangeListener)  // Optional: wakes the queue when another node enqueues
 .setCentralizedQueuePollingOptimizerFactory(queueName ->
     new CentralizedQueuePollingOptimizer(
         queueName,
@@ -220,11 +274,12 @@ PostgreSQL NOTIFY triggers immediate polling when messages arrive.
 ```java
 import dk.trustworks.essentials.components.foundation.postgresql.MultiTableChangeListener;
 
-var multiTableChangeListener = new MultiTableChangeListener<>(
-    jdbi,
-    Duration.ofMillis(100),
-    jsonSerializer
-);
+var multiTableChangeListener = MultiTableChangeListener.builder()
+    .setJdbi(jdbi)
+    .setJsonSerializer(jsonSerializer)
+    .setEventBus(eventBus)
+    .setPollingInterval(Duration.ofMillis(100))
+    .build();
 
 var durableQueues = PostgresqlDurableQueues.builder()
     .setUnitOfWorkFactory(unitOfWorkFactory)
@@ -446,6 +501,63 @@ PostgresqlDurableQueues.builder()
     .build();
 ```
 
+### Saturated queues are refilled, not held to the polling interval
+
+The `CentralizedMessageFetcher` claims at most a queue's free worker slots per poll. Up to 0.60.0 it polled once per
+interval, so a queue handled at most `parallelConsumers / pollingInterval` messages per second however fast its handler
+was (400 msg/s for 8 consumers at 20 ms). Since 0.60.1, a queue whose poll filled every free slot is polled again as
+soon as half its workers are free, so throughput is bounded by the handler and the database. Measured: 2 000 messages,
+8 consumers, 200 ms polling drained in 3.3 s, against 50 s before.
+
+### Stale statistics on a draining queue table
+
+A queue table that drains to empty and is then analyzed (by autovacuum or by hand) records `reltuples = 0` while
+keeping its pages. When the next burst arrives, the planner expects no rows. The claim statements, the opt-in batched
+fetch's included, select the rows to update by primary-key array, so the unordered claim stays fast (4 ms instead of
+185 ms at 20 000 queued messages; a batched poll over two such queues 111 ms instead of 37.6 s). Since 0.60.1 the batched fetch
+also takes each queue's candidates under that queue's slot limit instead of sorting every queue's whole backlog. It
+still reads a polled queue's ordered messages once per poll, because it hands out ordered heads by
+`next_delivery_ts` and no index serves that order, so a large ordered backlog costs it more than the per-queue
+claims. The ordered claim's per-key barrier can still be planned badly in that state. If ordered queues
+regularly drain and refill, keep the table's statistics fresh with per-table autovacuum settings:
+
+```sql
+ALTER TABLE durable_queues SET (autovacuum_analyze_scale_factor = 0, autovacuum_analyze_threshold = 1000);
+```
+
+### Handlers that hold connections while waiting on something else
+
+A handler runs inside a unit of work, and its transaction takes a pooled connection when it begins: in a Spring
+application the transaction manager does that, not Essentials. A handler that spends most of its time on a slow
+call to another system therefore holds a connection it is not using. With more consumers than connections, the other
+handlers then queue on the pool. Two remedies, in order of preference:
+
+- **`@MessageHandler(unitOfWork = UnitOfWorkMode.NONE)`** for the handlers that make the slow call: they run with no
+  unit of work and no connection, and open their own transaction for the database part afterwards. See
+  [Blocking I/O in a Message Handler](LLM-foundation.md#blocking-io-in-a-message-handler-unitofworkmode).
+- **Spring's `LazyConnectionDataSourceProxy`** around the application's `DataSource`: a transaction then takes its
+  connection at its first statement rather than when it begins. This is an application-wide choice that affects
+  every transaction, so Essentials does not make it for you.
+
+A successful handler's transaction always ends with the acknowledgement (since 0.60.1), so it needs a connection
+at some point; laziness only shortens how long it is held.
+
+### Ordered queues whose backlog sits on few keys
+
+The ordered claim takes each key's head: its lowest `key_order`, which blocks the rest of the key. The default
+statement walks candidates until it has as many heads as there are free slots. With fewer heads than that (a few
+keys with many messages each, the typical event-processor shape), it never stops early and probes every queued
+message on every poll: 180 ms at 20 keys × 1 000 messages.
+
+Since 0.60.1 such a queue switches to a second statement that finds each key's head with one index probe per key:
+0.4 ms for the same backlog. It switches back when the queue has many keys, where that statement is the slow one
+(114 ms at 20 000 keys of one message each, against 1.6 ms). The switch happens per queue, after three slow claims in
+a row (over 10 ms; `setOrderedClaimSlowThreshold(Duration)` on the builder), and only to the statement last measured
+as faster, so a slow round trip to the database does not make a queue alternate. A queue stuck on a slow statement
+re-measures the other one now and then. Both statements claim the same messages. A claim that tries the other
+statement runs under a transaction-local `statement_timeout` of the claim that caused the switch (at least the slow
+threshold), and is cancelled when it runs past it: on stale statistics (below) the head scan took 41 s at 20 000 keys.
+
 ## Security
 
 ### ⚠️ Critical: SQL Injection Risk
@@ -489,9 +601,9 @@ See [README Security](../components/postgresql-queue/README.md#security) for ful
 
 | Issue | Wrong | Right |
 |-------|-------|-------|
-| Expecting the handler's writes and the acknowledgement to commit together | Relying on a handler rollback to un-acknowledge | Idempotent handler - a retried delivery repeats it |
+| Assuming exactly-once because the handler's writes and the acknowledgement commit together | Non-idempotent handler | Idempotent handler - a crash before the commit still redelivers |
 | SQL injection via table name | `.setSharedQueueTableName(request.getParameter("table"))` | `.setSharedQueueTableName("message_queue")` |
-| Optimizer without listener | `.setQueuePollingOptimizerFactory(...)` alone | `.setMultiTableChangeListener(...).setQueuePollingOptimizerFactory(...)` |
+| Traditional-consumer optimizer without listener (ignored) | `.setUseCentralizedMessageFetcher(false).setQueuePollingOptimizerFactory(...)` alone | Add `.setMultiTableChangeListener(...)`, or use the centralized fetcher, whose optimizer works without one |
 | Aggressive polling without optimization | `.setCentralizedMessageFetcherPollingInterval(Duration.ofMillis(1))` | Add optimizer + reasonable interval |
 
 ## Integration

@@ -21,7 +21,7 @@ import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
 import java.time.Duration;
-import java.util.List;
+import java.util.*;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
@@ -39,6 +39,10 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  *   <li><b>Exactly One Handler:</b> Every command must have one, and only one, {@link CommandHandler}.</li>
  *   <li>If <b>no handler is found</b>, a {@link NoCommandHandlerFoundException} is thrown.</li>
  *   <li>If <b>more than one handler is found</b>, a {@link MultipleCommandHandlersFoundException} is thrown.</li>
+ *   <li>Because that only surfaces when such a command is sent, {@link AbstractCommandBus} (and with it {@link LocalCommandBus})
+ *       logs a WARN when a {@link CommandHandler} is added that makes a command type handled by more than one
+ *       {@link CommandHandler} - see {@link #findCommandTypesHandledByMoreThanOneCommandHandler(CommandHandler)}.
+ *       It does not fail the registration.</li>
  * </ul>
  *
  * <h2>Command Processing and Return Values</h2>
@@ -264,4 +268,82 @@ public interface CommandBus {
      * @return true if the {@link CommandBus} already contains the commandHandler, otherwise false
      */
     boolean hasCommandHandler(CommandHandler commandHandler);
+
+    /**
+     * The {@link CommandHandler}s registered on this {@link CommandBus} - for infrastructure (diagnostics, startup
+     * checks, admin tooling), not for routing commands, which is what {@link #findCommandHandlerCapableOfHandling(Object)}
+     * is for.
+     * <p>
+     * The default implementation returns an empty list, for an implementation that does not track its handlers: a
+     * caller then cannot tell which handlers are registered, and must not read the empty list as "no handlers".
+     * {@link AbstractCommandBus} (and with it {@link LocalCommandBus} and {@code DurableLocalCommandBus}) returns every
+     * registered {@link CommandHandler}, in registration order.
+     *
+     * @return an immutable snapshot of the registered {@link CommandHandler}s - later registrations and removals are not
+     * reflected in it
+     */
+    default List<CommandHandler> getCommandHandlers() {
+        return List.of();
+    }
+
+    /**
+     * The registered {@link CommandHandler}s that {@link CommandHandler#canHandle(Class) can handle} the given command
+     * type. Unlike {@link #findCommandHandlerCapableOfHandling(Object)} this neither throws when there is no or more than
+     * one such {@link CommandHandler}, nor caches the result - it is meant for infrastructure that checks the
+     * registrations.
+     * <p>
+     * The default implementation filters {@link #getCommandHandlers()}, so it returns an empty list for an
+     * implementation that does not track its handlers.
+     *
+     * @param commandType the command type
+     * @return the {@link CommandHandler}s that can handle the command type, in registration order
+     */
+    default List<CommandHandler> findCommandHandlersCapableOfHandling(Class<?> commandType) {
+        requireNonNull(commandType, "No commandType provided");
+        return getCommandHandlers().stream()
+                                   .filter(commandHandler -> commandHandler.canHandle(commandType))
+                                   .toList();
+    }
+
+    /**
+     * The command types that the given {@link CommandHandler} and at least one other registered {@link CommandHandler}
+     * {@link CommandHandler#canHandle(Class) can handle} - every send of such a command fails with a
+     * {@link MultipleCommandHandlersFoundException}. When the given {@link CommandHandler} is not registered, the result
+     * is what its registration would cause.
+     * <p>
+     * A {@link CommandHandler} only offers {@link CommandHandler#canHandle(Class)}, so the command types checked are those
+     * that the given and the registered {@link CommandHandler}s declare in {@link CommandHandler#handledCommandTypes()}.
+     * An overlap on a command type that no {@link CommandHandler} declares is not found.
+     * <p>
+     * Calls {@link CommandHandler#canHandle(Class)} of the registered {@link CommandHandler}s, and propagates what it throws.
+     * The default implementation uses {@link #getCommandHandlers()}, so it finds nothing for an implementation that does
+     * not track its handlers.
+     *
+     * @param commandHandler the {@link CommandHandler} whose overlaps with the registered {@link CommandHandler}s to find
+     * @return per command type (in the order checked), the {@link CommandHandler}s that can handle it - only command
+     * types handled by more than one {@link CommandHandler}, the given one among them; empty when there are none
+     */
+    default Map<Class<?>, List<CommandHandler>> findCommandTypesHandledByMoreThanOneCommandHandler(CommandHandler commandHandler) {
+        requireNonNull(commandHandler, "No commandHandler provided");
+        var commandHandlers = new ArrayList<>(getCommandHandlers());
+        if (!commandHandlers.contains(commandHandler)) {
+            commandHandlers.add(commandHandler);
+        }
+        // The given handler's own types first, so its overlaps are reported in the order it declares them
+        var candidateCommandTypes = new LinkedHashSet<Class<?>>(commandHandler.handledCommandTypes());
+        commandHandlers.forEach(registered -> candidateCommandTypes.addAll(registered.handledCommandTypes()));
+
+        var commandTypesHandledMoreThanOnce = new LinkedHashMap<Class<?>, List<CommandHandler>>();
+        for (var commandType : candidateCommandTypes) {
+            if (commandHandler.canHandle(commandType)) {
+                var capable = commandHandlers.stream()
+                                             .filter(registered -> registered.canHandle(commandType))
+                                             .toList();
+                if (capable.size() > 1) {
+                    commandTypesHandledMoreThanOnce.put(commandType, capable);
+                }
+            }
+        }
+        return commandTypesHandledMoreThanOnce;
+    }
 }

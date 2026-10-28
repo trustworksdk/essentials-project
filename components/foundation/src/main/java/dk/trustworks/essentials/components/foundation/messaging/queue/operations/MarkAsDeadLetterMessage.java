@@ -18,7 +18,6 @@ package dk.trustworks.essentials.components.foundation.messaging.queue.operation
 
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
 import dk.trustworks.essentials.components.foundation.transaction.UnitOfWork;
-import dk.trustworks.essentials.shared.Exceptions;
 import dk.trustworks.essentials.shared.interceptor.InterceptorChain;
 
 import java.time.Duration;
@@ -62,7 +61,7 @@ public final class MarkAsDeadLetterMessage {
      * @param causeForBeingMarkedAsDeadLetter the optional reason for the message being marked as a Dead Letter Message
      */
     public MarkAsDeadLetterMessage(QueueEntryId queueEntryId, Throwable causeForBeingMarkedAsDeadLetter) {
-        this(queueEntryId, causeForBeingMarkedAsDeadLetter != null ? Exceptions.getStackTrace(causeForBeingMarkedAsDeadLetter) : null);
+        this(queueEntryId, causeForBeingMarkedAsDeadLetter != null ? DeliveryErrorDescription.describe(causeForBeingMarkedAsDeadLetter) : null);
     }
 
     /**
@@ -95,7 +94,7 @@ public final class MarkAsDeadLetterMessage {
      * @param causeForBeingMarkedAsDeadLetter the reason for the message being marked as a Dead Letter Message
      */
     public void setCauseForBeingMarkedAsDeadLetter(Throwable causeForBeingMarkedAsDeadLetter) {
-        this.causeForBeingMarkedAsDeadLetter = causeForBeingMarkedAsDeadLetter != null ? Exceptions.getStackTrace(causeForBeingMarkedAsDeadLetter) : null;
+        this.causeForBeingMarkedAsDeadLetter = causeForBeingMarkedAsDeadLetter != null ? DeliveryErrorDescription.describe(causeForBeingMarkedAsDeadLetter) : null;
     }
 
     /**

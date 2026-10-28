@@ -19,14 +19,15 @@ package dk.trustworks.essentials.examples.trading.brokerage.views.account_statem
 import dk.trustworks.essentials.components.eventsourced.aggregates.api.AggregateLifecycleApi;
 import dk.trustworks.essentials.components.eventsourced.aggregates.api.ApiClosingBooksGeneration;
 import dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks.GenerationState;
+import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWork;
+import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWorkFactory;
 import dk.trustworks.essentials.examples.trading.brokerage.aggregates.TradingAccounts;
 import dk.trustworks.essentials.examples.trading.brokerage.types.OwnerId;
 import dk.trustworks.essentials.examples.trading.brokerage.types.PeriodId;
 import dk.trustworks.essentials.examples.trading.brokerage.types.TradingAccountGenerationId;
 import dk.trustworks.essentials.examples.trading.brokerage.types.TradingAccountId;
 import dk.trustworks.essentials.types.Amount;
-import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.core.RowMapper;
+import org.jdbi.v3.core.mapper.RowMapper;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -41,6 +42,10 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * Both interrogate {@code projection_trading_account_statement}, which is what §R2 scopes a view slice by. The second
  * one additionally reads the framework's closing-books lifecycle metadata — that is not a second read model, it is
  * event-store bookkeeping nothing in this application projects, so it does not fork the slice.
+ * <p>
+ * The row reads go through {@code unitOfWorkFactory.withUnitOfWork(uow -> uow.handle()…)}, which joins the read-only
+ * Spring transaction {@code @Transactional(readOnly = true)} opens — the Spring-aware {@code UnitOfWorkFactory} binds
+ * its {@code UnitOfWork} to it — so the overview's lifecycle lookups and its row read share one read-only transaction.
  */
 @Service
 public class AccountStatementQuery {
@@ -51,41 +56,42 @@ public class AccountStatementQuery {
     private static final String DEMO_ADMIN_PRINCIPAL = "demo-admin";
 
     private static final RowMapper<AccountStatement> ROW_MAPPER =
-            (rs, rowNum) -> new AccountStatement(TradingAccountId.of(rs.getString("logical_account_id")),
-                                                 OwnerId.of(rs.getString("owner_id")),
-                                                 PeriodId.of(rs.getString("period_id")),
-                                                 rs.getInt("current_generation"),
-                                                 rs.getInt("generation_count"),
-                                                 Amount.of(rs.getBigDecimal("cash_balance")),
-                                                 Amount.of(rs.getBigDecimal("reserved_funds")),
-                                                 Amount.of(rs.getBigDecimal("realized_pnl")),
-                                                 rs.getBoolean("books_closed"));
+            (rs, ctx) -> new AccountStatement(TradingAccountId.of(rs.getString("logical_account_id")),
+                                              OwnerId.of(rs.getString("owner_id")),
+                                              PeriodId.of(rs.getString("period_id")),
+                                              rs.getInt("current_generation"),
+                                              rs.getInt("generation_count"),
+                                              Amount.of(rs.getBigDecimal("cash_balance")),
+                                              Amount.of(rs.getBigDecimal("reserved_funds")),
+                                              Amount.of(rs.getBigDecimal("realized_pnl")),
+                                              rs.getBoolean("books_closed"));
 
-    private final JdbcTemplate          jdbcTemplate;
-    private final AggregateLifecycleApi aggregateLifecycleApi;
+    private final HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory;
+    private final AggregateLifecycleApi                                         aggregateLifecycleApi;
 
-    public AccountStatementQuery(JdbcTemplate jdbcTemplate,
+    public AccountStatementQuery(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
                                  AggregateLifecycleApi aggregateLifecycleApi) {
-        this.jdbcTemplate = requireNonNull(jdbcTemplate, "No jdbcTemplate provided");
+        this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory provided");
         this.aggregateLifecycleApi = requireNonNull(aggregateLifecycleApi, "No aggregateLifecycleApi provided");
     }
 
     @Transactional(readOnly = true)
     public List<AccountStatement> accountStatements() {
-        return jdbcTemplate.query("""
-                                          SELECT logical_account_id,
-                                                 owner_id,
-                                                 period_id,
-                                                 current_generation,
-                                                 generation_count,
-                                                 cash_balance,
-                                                 reserved_funds,
-                                                 realized_pnl,
-                                                 books_closed
-                                          FROM projection_trading_account_statement
-                                          ORDER BY logical_account_id
-                                          """,
-                                  ROW_MAPPER);
+        return unitOfWorkFactory.withUnitOfWork(uow -> uow.handle().createQuery("""
+                                                                                    SELECT logical_account_id,
+                                                                                           owner_id,
+                                                                                           period_id,
+                                                                                           current_generation,
+                                                                                           generation_count,
+                                                                                           cash_balance,
+                                                                                           reserved_funds,
+                                                                                           realized_pnl,
+                                                                                           books_closed
+                                                                                    FROM projection_trading_account_statement
+                                                                                    ORDER BY logical_account_id
+                                                                                    """)
+                                                                   .map(ROW_MAPPER)
+                                                                   .list());
     }
 
     /**
@@ -125,23 +131,22 @@ public class AccountStatementQuery {
     }
 
     private Optional<AccountStatement> findAccountStatement(TradingAccountId accountId) {
-        return jdbcTemplate.query("""
-                                          SELECT logical_account_id,
-                                                 owner_id,
-                                                 period_id,
-                                                 current_generation,
-                                                 generation_count,
-                                                 cash_balance,
-                                                 reserved_funds,
-                                                 realized_pnl,
-                                                 books_closed
-                                          FROM projection_trading_account_statement
-                                          WHERE logical_account_id = ?
-                                          """,
-                                  ROW_MAPPER,
-                                  accountId.toString())
-                           .stream()
-                           .findFirst();
+        return unitOfWorkFactory.withUnitOfWork(uow -> uow.handle().createQuery("""
+                                                                                    SELECT logical_account_id,
+                                                                                           owner_id,
+                                                                                           period_id,
+                                                                                           current_generation,
+                                                                                           generation_count,
+                                                                                           cash_balance,
+                                                                                           reserved_funds,
+                                                                                           realized_pnl,
+                                                                                           books_closed
+                                                                                    FROM projection_trading_account_statement
+                                                                                    WHERE logical_account_id = :logicalAccountId
+                                                                                    """)
+                                                                   .bind("logicalAccountId", accountId.toString())
+                                                                   .map(ROW_MAPPER)
+                                                                   .findOne());
     }
 
     /**

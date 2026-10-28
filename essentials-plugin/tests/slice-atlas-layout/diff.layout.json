@@ -1,0 +1,988 @@
+{
+ "atlas": {
+  "bounds": {
+   "h": 1664,
+   "w": 2624,
+   "x": 0,
+   "y": 0
+  },
+  "bridges": [
+   {
+    "events": [
+     "OrderPlaced"
+    ],
+    "from": "orders",
+    "to": "payments"
+   }
+  ],
+  "cards": [
+   {
+    "ghost": false,
+    "h": 88,
+    "id": "~orders.place_order@orders|orders.place_order|trigger|POST /api/orders",
+    "lane": "trigger",
+    "name": "POST /api/orders",
+    "portal": false,
+    "role": "trigger",
+    "segment": "~orders.place_order@orders",
+    "slice": "orders.place_order",
+    "w": 168,
+    "x": 228,
+    "y": 160
+   },
+   {
+    "ghost": false,
+    "h": 88,
+    "id": "~orders.place_order@orders|orders.place_order|command|PlaceOrder",
+    "lane": "action",
+    "name": "PlaceOrder",
+    "portal": false,
+    "role": "command",
+    "segment": "~orders.place_order@orders",
+    "slice": "orders.place_order",
+    "w": 168,
+    "x": 228,
+    "y": 272
+   },
+   {
+    "ghost": false,
+    "h": 88,
+    "id": "~orders.place_order@orders|orders.place_order|event|OrderPlaced",
+    "lane": "stream:Order",
+    "name": "OrderPlaced",
+    "portal": false,
+    "role": "event",
+    "segment": "~orders.place_order@orders",
+    "slice": "orders.place_order",
+    "w": 168,
+    "x": 228,
+    "y": 384
+   },
+   {
+    "ghost": true,
+    "h": 88,
+    "id": "~unattached:orders@orders|orders.cancel_order|trigger|POST /api/orders/{id}/cancel",
+    "lane": "trigger",
+    "name": "POST /api/orders/{id}/cancel",
+    "portal": false,
+    "role": "trigger",
+    "segment": "~unattached:orders@orders",
+    "slice": "orders.cancel_order",
+    "w": 168,
+    "x": 228,
+    "y": 856
+   },
+   {
+    "ghost": true,
+    "h": 88,
+    "id": "~unattached:orders@orders|orders.cancel_order|command|CancelOrder",
+    "lane": "action",
+    "name": "CancelOrder",
+    "portal": false,
+    "role": "command",
+    "segment": "~unattached:orders@orders",
+    "slice": "orders.cancel_order",
+    "w": 168,
+    "x": 228,
+    "y": 968
+   },
+   {
+    "ghost": true,
+    "h": 88,
+    "id": "~unattached:orders@orders|orders.cancel_order|event|OrderCancelled",
+    "lane": "stream:Order",
+    "name": "OrderCancelled",
+    "portal": false,
+    "role": "event",
+    "segment": "~unattached:orders@orders",
+    "slice": "orders.cancel_order",
+    "w": 168,
+    "x": 228,
+    "y": 1080
+   },
+   {
+    "ghost": false,
+    "h": 88,
+    "id": "~payments.refund_payment@payments|payments.refund_payment|trigger|POST /api/payments/{id}/refund",
+    "lane": "trigger",
+    "name": "POST /api/payments/{id}/refund",
+    "portal": false,
+    "role": "trigger",
+    "segment": "~payments.refund_payment@payments",
+    "slice": "payments.refund_payment",
+    "w": 168,
+    "x": 836,
+    "y": 160
+   },
+   {
+    "ghost": false,
+    "h": 88,
+    "id": "~payments.refund_payment@payments|payments.refund_payment|command|RefundPayment",
+    "lane": "action",
+    "name": "RefundPayment",
+    "portal": false,
+    "role": "command",
+    "segment": "~payments.refund_payment@payments",
+    "slice": "payments.refund_payment",
+    "w": 168,
+    "x": 836,
+    "y": 272
+   },
+   {
+    "ghost": false,
+    "h": 88,
+    "id": "~payments.refund_payment@payments|payments.refund_payment|event|PaymentRefunded",
+    "lane": "stream:Payment",
+    "name": "PaymentRefunded",
+    "portal": false,
+    "role": "event",
+    "segment": "~payments.refund_payment@payments",
+    "slice": "payments.refund_payment",
+    "w": 168,
+    "x": 836,
+    "y": 384
+   },
+   {
+    "ghost": false,
+    "h": 88,
+    "id": "~unattached:payments@payments|payments.start_payment|automation|start_payment",
+    "lane": "trigger",
+    "name": "start_payment",
+    "portal": false,
+    "role": "automation",
+    "segment": "~unattached:payments@payments",
+    "slice": "payments.start_payment",
+    "w": 168,
+    "x": 836,
+    "y": 648
+   },
+   {
+    "ghost": false,
+    "h": 88,
+    "id": "~unattached:payments@payments|payments.charge_payment|command|ChargePayment",
+    "lane": "action",
+    "name": "ChargePayment",
+    "portal": false,
+    "role": "command",
+    "segment": "~unattached:payments@payments",
+    "slice": "payments.charge_payment",
+    "w": 168,
+    "x": 1044,
+    "y": 760
+   },
+   {
+    "ghost": false,
+    "h": 88,
+    "id": "~unattached:payments@payments|payments.charge_payment|event|PaymentCharged",
+    "lane": "stream:Payment",
+    "name": "PaymentCharged",
+    "portal": false,
+    "role": "event",
+    "segment": "~unattached:payments@payments",
+    "slice": "payments.charge_payment",
+    "w": 168,
+    "x": 1044,
+    "y": 872
+   },
+   {
+    "ghost": false,
+    "h": 88,
+    "id": "~unattached:payments@payments|payments.charge_payment|event|PaymentFailed",
+    "lane": "stream:Payment",
+    "name": "PaymentFailed",
+    "portal": false,
+    "role": "event",
+    "segment": "~unattached:payments@payments",
+    "slice": "payments.charge_payment",
+    "w": 168,
+    "x": 1044,
+    "y": 972
+   },
+   {
+    "ghost": false,
+    "h": 88,
+    "id": "~unattached:payments@payments|payments.payment_list|trigger|GET /api/payments",
+    "lane": "trigger",
+    "name": "GET /api/payments",
+    "portal": false,
+    "role": "trigger",
+    "segment": "~unattached:payments@payments",
+    "slice": "payments.payment_list",
+    "w": 168,
+    "x": 1252,
+    "y": 648
+   },
+   {
+    "ghost": false,
+    "h": 88,
+    "id": "~unattached:payments@payments|payments.payment_list|view|payment_list_view",
+    "lane": "action",
+    "name": "payment_list_view",
+    "portal": false,
+    "role": "view",
+    "segment": "~unattached:payments@payments",
+    "slice": "payments.payment_list",
+    "w": 168,
+    "x": 1252,
+    "y": 760
+   },
+   {
+    "ghost": true,
+    "h": 88,
+    "id": "~unattached:payments@payments|payments.retry_payment|automation|retry_payment",
+    "lane": "trigger",
+    "name": "retry_payment",
+    "portal": false,
+    "role": "automation",
+    "segment": "~unattached:payments@payments",
+    "slice": "payments.retry_payment",
+    "w": 168,
+    "x": 1460,
+    "y": 648
+   },
+   {
+    "ghost": false,
+    "h": 88,
+    "id": "~unattached:reminders@reminders|reminders.send_reminder|command|SendReminder",
+    "lane": "action",
+    "name": "SendReminder",
+    "portal": false,
+    "role": "command",
+    "segment": "~unattached:reminders@reminders",
+    "slice": "reminders.send_reminder",
+    "w": 168,
+    "x": 1956,
+    "y": 272
+   },
+   {
+    "ghost": false,
+    "h": 88,
+    "id": "~unattached:reminders@reminders|reminders.send_reminder|event|ReminderSent",
+    "lane": "stream:Reminder",
+    "name": "ReminderSent",
+    "portal": false,
+    "role": "event",
+    "segment": "~unattached:reminders@reminders",
+    "slice": "reminders.send_reminder",
+    "w": 168,
+    "x": 1956,
+    "y": 384
+   },
+   {
+    "ghost": false,
+    "h": 88,
+    "id": "~unattached:reminders@reminders|reminders.schedule_next|automation|schedule_next",
+    "lane": "trigger",
+    "name": "schedule_next",
+    "portal": false,
+    "role": "automation",
+    "segment": "~unattached:reminders@reminders",
+    "slice": "reminders.schedule_next",
+    "w": 168,
+    "x": 2164,
+    "y": 160
+   }
+  ],
+  "contexts": [
+   {
+    "h": 1280,
+    "id": "orders",
+    "w": 512,
+    "x": 64,
+    "y": 64
+   },
+   {
+    "h": 1536,
+    "id": "payments",
+    "w": 1024,
+    "x": 672,
+    "y": 64
+   },
+   {
+    "h": 768,
+    "id": "reminders",
+    "w": 768,
+    "x": 1792,
+    "y": 64
+   }
+  ],
+  "edges": [
+   {
+    "cross": false,
+    "from": "~orders.place_order@orders|orders.place_order|command|PlaceOrder",
+    "kind": "publishes",
+    "to": "~orders.place_order@orders|orders.place_order|event|OrderPlaced"
+   },
+   {
+    "cross": true,
+    "from": "~orders.place_order@orders|orders.place_order|event|OrderPlaced",
+    "kind": "feeds",
+    "to": "~unattached:payments@payments|payments.start_payment|automation|start_payment"
+   },
+   {
+    "cross": false,
+    "from": "~orders.place_order@orders|orders.place_order|trigger|POST /api/orders",
+    "kind": "handles",
+    "to": "~orders.place_order@orders|orders.place_order|command|PlaceOrder"
+   },
+   {
+    "cross": false,
+    "from": "~payments.refund_payment@payments|payments.refund_payment|command|RefundPayment",
+    "kind": "publishes",
+    "to": "~payments.refund_payment@payments|payments.refund_payment|event|PaymentRefunded"
+   },
+   {
+    "cross": false,
+    "from": "~payments.refund_payment@payments|payments.refund_payment|trigger|POST /api/payments/{id}/refund",
+    "kind": "handles",
+    "to": "~payments.refund_payment@payments|payments.refund_payment|command|RefundPayment"
+   },
+   {
+    "cross": false,
+    "from": "~unattached:orders@orders|orders.cancel_order|command|CancelOrder",
+    "kind": "publishes",
+    "to": "~unattached:orders@orders|orders.cancel_order|event|OrderCancelled"
+   },
+   {
+    "cross": false,
+    "from": "~unattached:orders@orders|orders.cancel_order|trigger|POST /api/orders/{id}/cancel",
+    "kind": "handles",
+    "to": "~unattached:orders@orders|orders.cancel_order|command|CancelOrder"
+   },
+   {
+    "cross": false,
+    "from": "~unattached:payments@payments|payments.charge_payment|command|ChargePayment",
+    "kind": "publishes",
+    "to": "~unattached:payments@payments|payments.charge_payment|event|PaymentCharged"
+   },
+   {
+    "cross": false,
+    "from": "~unattached:payments@payments|payments.charge_payment|command|ChargePayment",
+    "kind": "publishes",
+    "to": "~unattached:payments@payments|payments.charge_payment|event|PaymentFailed"
+   },
+   {
+    "cross": false,
+    "from": "~unattached:payments@payments|payments.charge_payment|event|PaymentCharged",
+    "kind": "feeds",
+    "to": "~unattached:payments@payments|payments.payment_list|view|payment_list_view"
+   },
+   {
+    "cross": false,
+    "from": "~unattached:payments@payments|payments.charge_payment|event|PaymentFailed",
+    "kind": "feeds",
+    "to": "~unattached:payments@payments|payments.payment_list|view|payment_list_view"
+   },
+   {
+    "cross": false,
+    "from": "~unattached:payments@payments|payments.charge_payment|event|PaymentFailed",
+    "kind": "feeds",
+    "to": "~unattached:payments@payments|payments.retry_payment|automation|retry_payment"
+   },
+   {
+    "cross": false,
+    "from": "~unattached:payments@payments|payments.payment_list|trigger|GET /api/payments",
+    "kind": "handles",
+    "to": "~unattached:payments@payments|payments.payment_list|view|payment_list_view"
+   },
+   {
+    "cross": false,
+    "from": "~unattached:payments@payments|payments.retry_payment|automation|retry_payment",
+    "kind": "dispatches",
+    "to": "~unattached:payments@payments|payments.charge_payment|command|ChargePayment"
+   },
+   {
+    "cross": false,
+    "from": "~unattached:payments@payments|payments.start_payment|automation|start_payment",
+    "kind": "dispatches",
+    "to": "~unattached:payments@payments|payments.charge_payment|command|ChargePayment"
+   },
+   {
+    "cross": false,
+    "from": "~unattached:reminders@reminders|reminders.schedule_next|automation|schedule_next",
+    "kind": "dispatches",
+    "to": "~unattached:reminders@reminders|reminders.send_reminder|command|SendReminder"
+   },
+   {
+    "cross": false,
+    "from": "~unattached:reminders@reminders|reminders.send_reminder|command|SendReminder",
+    "kind": "publishes",
+    "to": "~unattached:reminders@reminders|reminders.send_reminder|event|ReminderSent"
+   },
+   {
+    "cross": false,
+    "from": "~unattached:reminders@reminders|reminders.send_reminder|event|ReminderSent",
+    "kind": "feeds",
+    "to": "~unattached:reminders@reminders|reminders.schedule_next|automation|schedule_next"
+   }
+  ],
+  "links": [
+   {
+    "cross": true,
+    "events": [
+     "OrderPlaced"
+    ],
+    "from": "~orders.place_order@orders",
+    "to": "~unattached:payments@payments"
+   }
+  ],
+  "scenarioBoxes": [
+   {
+    "h": 272,
+    "segment": "~orders.place_order@orders",
+    "slice": "orders.place_order",
+    "w": 192,
+    "x": 216,
+    "y": 496
+   },
+   {
+    "h": 64,
+    "segment": "~unattached:orders@orders",
+    "slice": "orders.cancel_order",
+    "w": 192,
+    "x": 216,
+    "y": 1192
+   },
+   {
+    "h": 64,
+    "segment": "~payments.refund_payment@payments",
+    "slice": "payments.refund_payment",
+    "w": 192,
+    "x": 824,
+    "y": 496
+   },
+   {
+    "h": 64,
+    "segment": "~unattached:payments@payments",
+    "slice": "payments.start_payment",
+    "w": 192,
+    "x": 824,
+    "y": 1084
+   },
+   {
+    "h": 412,
+    "segment": "~unattached:payments@payments",
+    "slice": "payments.charge_payment",
+    "w": 192,
+    "x": 1032,
+    "y": 1084
+   },
+   {
+    "h": 64,
+    "segment": "~unattached:payments@payments",
+    "slice": "payments.payment_list",
+    "w": 192,
+    "x": 1240,
+    "y": 1084
+   },
+   {
+    "h": 64,
+    "segment": "~unattached:payments@payments",
+    "slice": "payments.retry_payment",
+    "w": 192,
+    "x": 1448,
+    "y": 1084
+   },
+   {
+    "h": 64,
+    "segment": "~unattached:reminders@reminders",
+    "slice": "reminders.send_reminder",
+    "w": 192,
+    "x": 1944,
+    "y": 496
+   },
+   {
+    "h": 64,
+    "segment": "~unattached:reminders@reminders",
+    "slice": "reminders.schedule_next",
+    "w": 192,
+    "x": 2152,
+    "y": 496
+   }
+  ],
+  "segments": [
+   {
+    "bc": "orders",
+    "columns": [
+     {
+      "portal": false,
+      "slice": "orders.place_order",
+      "w": 192,
+      "x": 216
+     }
+    ],
+    "h": 672,
+    "id": "~orders.place_order@orders",
+    "lanes": [
+     {
+      "h": 112,
+      "id": "trigger",
+      "label": "Trigger",
+      "y": 148
+     },
+     {
+      "h": 112,
+      "id": "action",
+      "label": "Command · View",
+      "y": 260
+     },
+     {
+      "h": 112,
+      "id": "stream:Order",
+      "label": "Events · Order",
+      "y": 372
+     }
+    ],
+    "process": "~orders.place_order",
+    "w": 336,
+    "x": 88,
+    "y": 112
+   },
+   {
+    "bc": "orders",
+    "columns": [
+     {
+      "portal": false,
+      "slice": "orders.cancel_order",
+      "w": 192,
+      "x": 216
+     }
+    ],
+    "h": 464,
+    "id": "~unattached:orders@orders",
+    "lanes": [
+     {
+      "h": 112,
+      "id": "trigger",
+      "label": "Trigger",
+      "y": 844
+     },
+     {
+      "h": 112,
+      "id": "action",
+      "label": "Command · View",
+      "y": 956
+     },
+     {
+      "h": 112,
+      "id": "stream:Order",
+      "label": "Events · Order",
+      "y": 1068
+     }
+    ],
+    "process": "~unattached:orders",
+    "w": 336,
+    "x": 88,
+    "y": 808
+   },
+   {
+    "bc": "payments",
+    "columns": [
+     {
+      "portal": false,
+      "slice": "payments.refund_payment",
+      "w": 192,
+      "x": 824
+     }
+    ],
+    "h": 464,
+    "id": "~payments.refund_payment@payments",
+    "lanes": [
+     {
+      "h": 112,
+      "id": "trigger",
+      "label": "Trigger",
+      "y": 148
+     },
+     {
+      "h": 112,
+      "id": "action",
+      "label": "Command · View",
+      "y": 260
+     },
+     {
+      "h": 112,
+      "id": "stream:Payment",
+      "label": "Events · Payment",
+      "y": 372
+     }
+    ],
+    "process": "~payments.refund_payment",
+    "w": 336,
+    "x": 696,
+    "y": 112
+   },
+   {
+    "bc": "payments",
+    "columns": [
+     {
+      "portal": false,
+      "slice": "payments.start_payment",
+      "w": 192,
+      "x": 824
+     },
+     {
+      "portal": false,
+      "slice": "payments.charge_payment",
+      "w": 192,
+      "x": 1032
+     },
+     {
+      "portal": false,
+      "slice": "payments.payment_list",
+      "w": 192,
+      "x": 1240
+     },
+     {
+      "portal": false,
+      "slice": "payments.retry_payment",
+      "w": 192,
+      "x": 1448
+     }
+    ],
+    "h": 912,
+    "id": "~unattached:payments@payments",
+    "lanes": [
+     {
+      "h": 112,
+      "id": "trigger",
+      "label": "Trigger",
+      "y": 636
+     },
+     {
+      "h": 112,
+      "id": "action",
+      "label": "Command · View",
+      "y": 748
+     },
+     {
+      "h": 212,
+      "id": "stream:Payment",
+      "label": "Events · Payment",
+      "y": 860
+     }
+    ],
+    "process": "~unattached:payments",
+    "w": 960,
+    "x": 696,
+    "y": 600
+   },
+   {
+    "bc": "reminders",
+    "columns": [
+     {
+      "portal": false,
+      "slice": "reminders.send_reminder",
+      "w": 192,
+      "x": 1944
+     },
+     {
+      "portal": false,
+      "slice": "reminders.schedule_next",
+      "w": 192,
+      "x": 2152
+     }
+    ],
+    "h": 464,
+    "id": "~unattached:reminders@reminders",
+    "lanes": [
+     {
+      "h": 112,
+      "id": "trigger",
+      "label": "Trigger",
+      "y": 148
+     },
+     {
+      "h": 112,
+      "id": "action",
+      "label": "Command · View",
+      "y": 260
+     },
+     {
+      "h": 112,
+      "id": "stream:Reminder",
+      "label": "Events · Reminder",
+      "y": 372
+     }
+    ],
+    "process": "~unattached:reminders",
+    "w": 544,
+    "x": 1816,
+    "y": 112
+   }
+  ]
+ },
+ "matrix": {
+  "bcMatrix": {
+   "bcs": [
+    "orders",
+    "payments",
+    "reminders"
+   ],
+   "counts": [
+    [
+     0,
+     1,
+     0
+    ],
+    [
+     0,
+     2,
+     0
+    ],
+    [
+     0,
+     0,
+     1
+    ]
+   ],
+   "events": [
+    [
+     [],
+     [
+      "OrderPlaced"
+     ],
+     []
+    ],
+    [
+     [],
+     [
+      "PaymentCharged",
+      "PaymentFailed"
+     ],
+     []
+    ],
+    [
+     [],
+     [],
+     [
+      "ReminderSent"
+     ]
+    ]
+   ]
+  },
+  "cells": [
+   {
+    "c": 0,
+    "cross": false,
+    "r": 0,
+    "v": "W"
+   },
+   {
+    "c": 1,
+    "cross": false,
+    "r": 1,
+    "v": "W"
+   },
+   {
+    "c": 2,
+    "cross": false,
+    "r": 1,
+    "v": "W"
+   },
+   {
+    "c": 3,
+    "cross": false,
+    "r": 2,
+    "v": "O"
+   },
+   {
+    "c": 5,
+    "cross": false,
+    "r": 3,
+    "v": "W"
+   }
+  ],
+  "cols": [
+   {
+    "bc": "orders",
+    "kind": "command",
+    "slice": "orders.place_order"
+   },
+   {
+    "bc": "payments",
+    "kind": "command",
+    "slice": "payments.charge_payment"
+   },
+   {
+    "bc": "payments",
+    "kind": "command",
+    "slice": "payments.refund_payment"
+   },
+   {
+    "bc": "payments",
+    "kind": "view",
+    "slice": "payments.payment_list"
+   },
+   {
+    "bc": "payments",
+    "kind": "automation",
+    "slice": "payments.start_payment"
+   },
+   {
+    "bc": "reminders",
+    "kind": "command",
+    "slice": "reminders.send_reminder"
+   },
+   {
+    "bc": "reminders",
+    "kind": "automation",
+    "slice": "reminders.schedule_next"
+   }
+  ],
+  "rows": [
+   {
+    "bc": "orders",
+    "id": "Order",
+    "kind": "aggregate"
+   },
+   {
+    "bc": "payments",
+    "id": "Payment",
+    "kind": "aggregate"
+   },
+   {
+    "bc": "payments",
+    "id": "payment_list_view",
+    "kind": "read-model"
+   },
+   {
+    "bc": "reminders",
+    "id": "Reminder",
+    "kind": "aggregate"
+   }
+  ]
+ },
+ "metro": {
+  "bounds": {
+   "h": 200,
+   "w": 320,
+   "x": 0,
+   "y": 0
+  },
+  "lines": [
+   {
+    "color": 0,
+    "derived": true,
+    "points": [
+     [
+      40,
+      40
+     ]
+    ],
+    "process": "~orders.place_order"
+   },
+   {
+    "color": 8,
+    "derived": true,
+    "points": [
+     [
+      40,
+      80
+     ]
+    ],
+    "process": "~payments.refund_payment"
+   },
+   {
+    "color": 1,
+    "derived": true,
+    "points": [
+     [
+      120,
+      120
+     ],
+     [
+      200,
+      120
+     ],
+     [
+      280,
+      120
+     ]
+    ],
+    "process": "~unattached:payments"
+   },
+   {
+    "color": 3,
+    "derived": true,
+    "points": [
+     [
+      40,
+      160
+     ],
+     [
+      120,
+      160
+     ]
+    ],
+    "process": "~unattached:reminders"
+   }
+  ],
+  "stations": [
+   {
+    "interchange": false,
+    "lines": [
+     "~orders.place_order"
+    ],
+    "slice": "orders.place_order",
+    "x": 40,
+    "y": 40
+   },
+   {
+    "interchange": false,
+    "lines": [
+     "~payments.refund_payment"
+    ],
+    "slice": "payments.refund_payment",
+    "x": 40,
+    "y": 80
+   },
+   {
+    "interchange": false,
+    "lines": [
+     "~unattached:reminders"
+    ],
+    "slice": "reminders.send_reminder",
+    "x": 40,
+    "y": 160
+   },
+   {
+    "interchange": false,
+    "lines": [
+     "~unattached:payments"
+    ],
+    "slice": "payments.start_payment",
+    "x": 120,
+    "y": 120
+   },
+   {
+    "interchange": false,
+    "lines": [
+     "~unattached:reminders"
+    ],
+    "slice": "reminders.schedule_next",
+    "x": 120,
+    "y": 160
+   },
+   {
+    "interchange": false,
+    "lines": [
+     "~unattached:payments"
+    ],
+    "slice": "payments.charge_payment",
+    "x": 200,
+    "y": 120
+   },
+   {
+    "interchange": false,
+    "lines": [
+     "~unattached:payments"
+    ],
+    "slice": "payments.payment_list",
+    "x": 280,
+    "y": 120
+   }
+  ]
+ },
+ "version": 1
+}

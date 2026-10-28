@@ -102,4 +102,20 @@ class ListenNotifyTest {
                                    ListenNotify.listen(mock(Jdbi.class), "1 OR TRUE", Duration.ofSeconds(2)))
                 .isInstanceOf(InvalidTableOrColumnNameException.class);
     }
+
+    @Test
+    void schema_qualified_tableName_is_rejected_by_every_entry_point() {
+        var qualified = "myschema.orders";
+        assertThatThrownBy(() -> ListenNotify.resolveTableChangeChannelName(qualified))
+                .isInstanceOf(InvalidTableOrColumnNameException.class)
+                .hasMessageContaining("Schema-qualified");
+        assertThatThrownBy(() -> ListenNotify.addChangeNotificationTriggerToTable(mock(Handle.class), qualified, List.of(ListenNotify.SqlOperation.INSERT)))
+                .isInstanceOf(InvalidTableOrColumnNameException.class);
+        assertThatThrownBy(() -> ListenNotify.changeNotificationTriggerStatements(qualified, List.of(ListenNotify.SqlOperation.INSERT)))
+                .isInstanceOf(InvalidTableOrColumnNameException.class);
+        assertThatThrownBy(() -> ListenNotify.removeChangeNotificationTriggerFromTable(mock(Handle.class), qualified))
+                .isInstanceOf(InvalidTableOrColumnNameException.class);
+        assertThatThrownBy(() -> ListenNotify.listen(mock(Jdbi.class), qualified, Duration.ofSeconds(2)))
+                .isInstanceOf(InvalidTableOrColumnNameException.class);
+    }
 }

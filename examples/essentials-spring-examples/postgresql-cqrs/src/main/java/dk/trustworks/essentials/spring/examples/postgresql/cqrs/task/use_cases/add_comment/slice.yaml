@@ -1,4 +1,4 @@
-schemaVersion: "1.1"
+schemaVersion: "1.4"
 slice: task.add_comment
 kind: command
 bc: task
@@ -7,6 +7,7 @@ status: live
 summary: Add a comment to an existing task.
 generator: essentials
 language: java
+lane: aggregate
 
 handles: [AddComment]
 publishes: [CommentAdded]
@@ -19,6 +20,8 @@ invariants:
   - { id: INV-AC-1, text: "A comment (taskId + content + createdAt) is applied at most once per task", enforcedBy: Task }
 forbidden:
   - cross-slice-internal:task
+tier: cqrs-es
+flow: create-task
 tests:
   unit: { present: false }
   integration: { present: true }

@@ -71,7 +71,11 @@ public interface UnitOfWorkFactory<UOW extends UnitOfWork> {
     // Return value, WITH UnitOfWork access
     <R> R withUnitOfWork(CheckedFunction<UOW, R> function);
 
-    UOW getRequiredUnitOfWork();  // Throws if no active UnitOfWork
+    // Framework-internal - see "Usage rule" below
+    UOW getRequiredUnitOfWork();      // Throws NoActiveUnitOfWorkException if no active UnitOfWork
+    UOW getOrCreateNewUnitOfWork();   // Caller must start/commit/roll back itself
+
+    // Read-only probe: is a UnitOfWork bound to this thread?
     Optional<UOW> getCurrentUnitOfWork();
 }
 
@@ -107,6 +111,12 @@ public interface UnitOfWorkLifecycleCallback<RESOURCE_TYPE> {
     default boolean hasPendingChanges(RESOURCE_TYPE resource) { return true; }
 }
 ```
+
+### Usage rule
+
+- **Application code** opens or joins a transaction with `unitOfWorkFactory.usingUnitOfWork(...)`/`withUnitOfWork(...)`, or with Spring `@Transactional`/`TransactionTemplate`. These join an active UnitOfWork or Spring transaction, or start one and commit or roll it back.
+- **Framework-internal**: `getOrCreateNewUnitOfWork()`, `getRequiredUnitOfWork()` and a UnitOfWork's own `start()`/`commit()`/`rollback()`. Need the UnitOfWork itself (a JDBI `Handle`, `markAsRollbackOnly`)? Take it as the lambda parameter: `usingUnitOfWork(uow -> …)`, `withUnitOfWork(uow -> …)`.
+- **`getCurrentUnitOfWork()` is a read-only probe** ("is a UnitOfWork bound to this thread?"), never a way to decide whether to join or open one — `withUnitOfWork` already decides that. Under a Spring-aware factory it is empty inside a plain `@Transactional` method until something has used the factory, so it does not answer "is a transaction active?" either.
 
 ### Implementations
 
@@ -144,28 +154,40 @@ public void processOrder(Order order) {
     // Spring tx active - NO explicit usingUnitOfWork needed
     orderRepository.save(order);  // Spring Data participates
 
-    // DurableQueues calls getRequiredUnitOfWork() internally
-    // which auto-creates UnitOfWork joining Spring tx
+    // Joins the Spring tx: the enqueue commits or rolls back with the save
     durableQueues.queueMessage(queueName, new OrderProcessedEvent(order.getId()));
 }
 ```
 
+A `DurableQueues` enqueue joins an active UnitOfWork or Spring transaction, or runs on its own (PostgreSQL through `withUnitOfWork`, MongoDB as a plain `MongoTemplate` write). An enqueue outside both therefore commits on its own and is not rolled back with the caller's work. The first one from a call site WARNs, with its stack trace, within a budget: up to 32 innermost application frames per `DurableQueues` instance, each logging up to 4 of its callers, and past that nothing more is logged (callers of one wrapper share that wrapper's 4; a call site is the first three stack frames outside Essentials, the JDK, Reactor, Kotlin and Spring, so callers behind your own wrapper around `Outbox.sendMessage` count separately); `essentials.durable-queues.require-active-unit-of-work-for-enqueue=true` (builder: `setRequireActiveUnitOfWorkForEnqueue(true)`) makes it throw `NoActiveUnitOfWorkException` instead — see [LLM-postgresql-queue.md § Transactions](./LLM-postgresql-queue.md#transactions).
+
 **When to use explicit `usingUnitOfWork` / `withUnitOfWork`:**
 1. No transaction exists - starts new transaction
 2. Need return value - use `withUnitOfWork`
+3. Need the UnitOfWork itself - take it as the lambda parameter:
 
-**Accessing current UnitOfWork:**
 ```java
-UnitOfWork uow = unitOfWorkFactory.getRequiredUnitOfWork();
-uow.markAsRollbackOnly(exception);
+unitOfWorkFactory.usingUnitOfWork(uow -> {
+    uow.markAsRollbackOnly(exception);
+});
 
-// For JDBI - access Handle
-HandleAwareUnitOfWork handleUow = (HandleAwareUnitOfWork) unitOfWorkFactory.getRequiredUnitOfWork();
-Handle handle = handleUow.handle();
-
-Optional<UnitOfWork> maybeUow = unitOfWorkFactory.getCurrentUnitOfWork();
+// For JDBI - access the Handle (joins an active UnitOfWork or @Transactional, or starts one)
+int rows = unitOfWorkFactory.withUnitOfWork(uow -> uow.handle()
+        .createUpdate("UPDATE orders SET status = :status WHERE id = :id")
+        .bind("status", status)
+        .bind("id", orderId)
+        .execute());
 ```
-**Note**: `getRequiredUnitOfWork()` throws `NoActiveUnitOfWorkException` if called outside a Spring managed transaction - use `usingUnitOfWork`/`withUnitOfWork` to create one first.
+`withUnitOfWork(uow -> …)` gives the same UnitOfWork `getRequiredUnitOfWork()` would return inside a transaction, and opens one where `getRequiredUnitOfWork()` would throw `NoActiveUnitOfWorkException`.
+
+### Hand-opened `Jdbi` handles (PostgreSQL starter)
+
+The `Jdbi` bean of `spring-boot-starter-postgresql` wraps the `DataSource` in Spring's `TransactionAwareDataSourceProxy`, and the starter's Spring-aware UnitOfWork factories open their handles from that same `Jdbi`. A handle you open yourself (`jdbi.useHandle(...)`, `jdbi.withHandle(...)`, `jdbi.open()`) therefore behaves like this:
+
+- **Inside an active UnitOfWork or Spring transaction** it gets the transaction's connection and joins it: its writes commit or roll back with the transaction.
+- **With no UnitOfWork or Spring transaction active** it gets its own pooled connection and every statement auto-commits. Such a write is not atomic with any queue, inbox or outbox operation, so it gets none of their guarantees.
+
+Prefer `unitOfWorkFactory.usingUnitOfWork(uow -> uow.handle()…)`: it joins an active transaction and opens one when none is active.
 
 ## DurableQueues (Messaging)
 
@@ -196,6 +218,11 @@ public interface DurableQueues {
 
     // Consume
     DurableQueueConsumer consumeFromQueue(ConsumeFromQueue config);
+    // Hand a claimed message that never reached a handler back to the queue (since 0.60.1): not a delivery attempt,
+    // so getRedeliveryAttempts() and getLastDeliveryError() are untouched; empty when it is no longer being delivered.
+    // The consumers call it when they stop. A default method falling back to retryMessage - a custom DurableQueues
+    // should override it.
+    Optional<QueuedMessage> releaseUndeliveredMessage(QueueEntryId queueEntryId, Duration deliveryDelay);
 
     // Dead Letter operations
     Optional<QueuedMessage> resurrectDeadLetterMessage(QueueEntryId id, Duration delay);
@@ -263,6 +290,12 @@ RedeliveryPolicy.exponentialBackoff(
     8                        // max retries
 )
 ```
+
+**With a builder (`RedeliveryPolicy.exponentialBackoff()`, `.linearBackoff()`, `.fixedBackoff()`, `.builder()`), call
+every setter except `setDeliveryErrorHandler`.** An unset `setMaximumNumberOfRedeliveries` silently means **0**
+redeliveries (the first failure dead-letters the message) and an unset multiplier means no growth. Since 0.60.1
+`build()` logs one WARN naming each missing or out-of-range setter (delays, multiplier < 1.0, maximum redeliveries not
+set explicitly - pass `0` if you mean it); from 0.61 it throws `IllegalArgumentException` instead.
 
 ### MessageDeliveryErrorHandler
 
@@ -508,6 +541,7 @@ WHERE id = :id AND last_fence_token <= :token
 ```java
 // dk.trustworks.essentials.components.foundation.fencedlock.FencedLockManager
 public interface FencedLockManager extends Lifecycle {
+    Optional<FencedLock> lookupLock(LockName lockName);   // snapshot of the stored row
     FencedLock acquireLock(LockName lockName);
     Optional<FencedLock> tryAcquireLock(LockName lockName);
     Optional<FencedLock> tryAcquireLock(LockName lockName, Duration timeout);
@@ -517,12 +551,18 @@ public interface FencedLockManager extends Lifecycle {
     boolean isLockedByThisLockManagerInstance(LockName lockName);
     boolean isLockAcquiredByAnotherLockManagerInstance(LockName lockName);
     String getLockManagerInstanceId();
+    default boolean isLockConfirmationEnded() { return false; }   // DB-backed managers: true once the lock confirmation ended (critical error) until stop()+start(); see FencedLockEvents.LockConfirmationEnded
 }
 
 // dk.trustworks.essentials.components.foundation.fencedlock.FencedLock
 public interface FencedLock extends AutoCloseable {
-    long getCurrentToken();
+    LockName getName();
+    Long getCurrentToken();
+    String getLockedByLockManagerInstanceId();
+    boolean isLocked();
+    boolean isLockedByThisLockManagerInstance();
     void release();
+    default void close() throws Exception { release(); }
 }
 ```
 
@@ -535,21 +575,31 @@ public interface FencedLock extends AutoCloseable {
 
 **Rule**: `lockConfirmationInterval` should be 2-3x smaller than `lockTimeOut`.
 
+### Ownership is per lock-manager instance, not per caller or thread
+
+A `FencedLock` excludes **other lock-manager instances** (other JVMs), never other callers in the same JVM:
+
+- While this `FencedLockManager` holds a lock, a second `tryAcquireLock`/`acquireLock` for the same `LockName` — from another component, another thread or the same thread — succeeds at once and returns the **same** `FencedLock` instance. It is not refused as busy.
+- There is no acquire count: `release()` by **either** caller releases the lock for both, and another node can then take it while the first caller is still working.
+- `isLockedByThisLockManagerInstance()` (on the lock or the manager) answers for the manager instance, so it is `true` for every caller in the JVM.
+
+Two callers in one JVM that share a lock name and must not overlap (a `@Scheduled` run and a manual trigger of the same job, two schedulers using one name) need their own in-process guard in front of the lock — see [Singleton Worker Pattern](#singleton-worker-pattern). An exclusive acquire is planned as an additive API.
+
 ### Usage
 
 ```java
-// Synchronous
+// Synchronous - close() calls release(), but is declared `throws Exception`: catch or declare it, or use try/finally
 try (FencedLock lock = lockManager.acquireLock(LockName.of("MyLock"))) {
     performCriticalWork();
 }
 
-// Pattern: Try-Acquire (Non-Blocking)
+// Pattern: Try-Acquire (Non-Blocking) - excludes other JVMs only, see "Ownership is per lock-manager instance"
 Optional<FencedLock> lock = lockManager.tryAcquireLock(LockName.of("order-processor"));
 if (lock.isPresent()) {
     try {
         processOrders(lock.get().getCurrentToken());
     } finally {
-        lockManager.releaseLock(lock.get());
+        lock.get().release();
     }
 }
 
@@ -568,6 +618,13 @@ lockManager.acquireLockAsync(LockName.of("ScheduledTask"), new LockCallback() {
 });
 ```
 
+**Async acquiring across a lock manager `stop()`/`start()`** (the database-backed `PostgresqlFencedLockManager` and `MongoFencedLockManager`):
+
+- `stop()` cancels each async acquiring but keeps its registration (the lock name and its `LockCallback`); `start()` resumes every registration not cancelled with `cancelAsyncLockAcquiring`, with the callback it holds, and logs each one at WARN. Call `cancelAsyncLockAcquiring(lockName)` in your component's own stop, or the next `start()` gives the lock to the old callback again.
+- While the lock manager is started, a repeated `acquireLockAsync` for a lock name registered since the last `start()`, or with the kept callback itself, does nothing and keeps the registered callback. One with another callback for a registration a `stop()` kept replaces it, as `cancelAsyncLockAcquiring` followed by `acquireLockAsync` would: the lock, when this instance holds it, is released first (which calls `lockReleased` on every callback registered with the lock, the old callback included when its resumed acquiring acquired it; any other caller in this JVM holding the same lock loses it too, see [Ownership is per lock-manager instance](#ownership-is-per-lock-manager-instance-not-per-caller-or-thread)), and after that the old callback is not called again. A failure of that release (a `lockReleased` callback throwing, say) is logged and the new callback is registered all the same; a critical error is rethrown. While it is stopped, a call with another callback replaces the registered one (no lock is held then) and `start()` schedules it; a call for a name with no registration registers nothing.
+
+**Lock confirmation ended:** when a critical error ends the scheduled lock confirmation, the lock manager releases locally every lock it holds (`lockReleased` is called and `LockReleased` published; the database rows are not released and expire after the lock timeout, so another instance can take a lock only after that) and publishes `FencedLockEvents.LockConfirmationEnded`; from then on `isLockConfirmationEnded()` returns `true` while `isStarted()` is still `true`. Until the lock manager is stopped and started again (or the application restarted), `tryAcquireLock` returns empty, `acquireLock` throws `IllegalStateException` and an async acquiring acquires nothing. No starter registers a health indicator for this state; call `isLockConfirmationEnded()` from your own.
+
 ### Pattern: Lock Status Queries
 
 ```java
@@ -581,9 +638,20 @@ boolean heldByMe = lockManager.isLockedByThisLockManagerInstance(LockName.of("my
 boolean heldByOther = lockManager.isLockAcquiredByAnotherLockManagerInstance(LockName.of("my-lock"));
 ```
 
+The two `isLockedByThisLockManagerInstance` predicates answer from different sources:
+
+| Predicate | Reads | Can be wrong when |
+|---|---|---|
+| `FencedLockManager.isLockedByThisLockManagerInstance(LockName)` | The lock row in the database | It compares the stored owner id with `getLockManagerInstanceId()` and ignores the fence token and the last-confirmed timestamp. A row left by a crashed process with the same instance id (a fixed `essentials.fenced-lock-manager.instance-id`) reads `true` until the lock is acquired again. A failed lookup returns `false` (logged at DEBUG) |
+| `FencedLock.isLockedByThisLockManagerInstance()` | The `FencedLock` object only, no database call | The object changes only when this manager confirms or releases the lock, so it can still read `true` up to one `lockConfirmationInterval` after another instance took the lock over — longer while the database is unreachable and `releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation` is `false` (the default). A lock from `lookupLock` is a snapshot and never changes |
+
+`isLockAcquired` and `isLockAcquiredByAnotherLockManagerInstance` use the same database lookup as the manager predicate. Use the predicates for status and reporting. To guard work, hold the acquired `FencedLock` and pass its token downstream (see [Fence Tokens](#the-solution-fence-tokens)).
+
 ## Common Use Cases
 
 ### Singleton Worker Pattern
+
+The fenced lock makes the work run on one JVM at a time. It does **not** stop a second caller in the *same* JVM: that caller gets the same lock back, and its `release()` frees the lock under the first one (see [Ownership is per lock-manager instance](#ownership-is-per-lock-manager-instance-not-per-caller-or-thread)). If anything else in the JVM can start the same work under the same lock name — a manual trigger, an admin endpoint, a second schedule — put an in-process guard in front of the lock:
 
 ```java
 import org.springframework.scheduling.annotation.Scheduled;
@@ -591,32 +659,54 @@ import org.springframework.stereotype.Component;
 
 @Component
 public class ScheduledWorker {
+    private final AtomicBoolean running = new AtomicBoolean();   // exclusion inside this JVM - not a ReentrantLock,
+                                                                  // a nested call on the same thread must be refused too
+
     @Scheduled(fixedDelay = 30000)
-    public void processOrders() {
-        Optional<FencedLock> lock = lockManager.tryAcquireLock(LockName.of("order-processor"));
-        if (lock.isPresent()) {
-            try {
-                processOrderBatch(lock.get().getCurrentToken());
-            } finally {
-                lockManager.releaseLock(lock.get());
+    public void processOrders() {                                  // also called by a manual trigger
+        if (!running.compareAndSet(false, true)) {
+            return;                                                // already running in this JVM
+        }
+        try {
+            Optional<FencedLock> lock = lockManager.tryAcquireLock(LockName.of("order-processor"));  // exclusion across JVMs
+            if (lock.isPresent()) {
+                try {
+                    processOrderBatch(lock.get().getCurrentToken());
+                } finally {
+                    lock.get().release();
+                }
             }
+        } finally {
+            running.set(false);
         }
     }
 }
 ```
 
+A lone `@Scheduled(fixedDelay = …)` method never overlaps itself, so the guard is only redundant when that method is the lock name's sole user.
+
 ### Leadership Election
 
 ```java
-@Component
-public class LeaderElection {
-    private volatile boolean isLeader = false;
-    @Autowired private FencedLockManager lockManager;
+import org.springframework.context.SmartLifecycle;
+import org.springframework.stereotype.Component;
 
-    @PostConstruct
-    public void startElection() {
+@Component
+public class LeaderElection implements SmartLifecycle {          // Spring's SmartLifecycle at its default phase - see below
+    private static final LockName LEADER_LOCK = LockName.of("service-leader");
+
+    private final    FencedLockManager lockManager;
+    private volatile boolean           isLeader = false;
+    private volatile boolean           running  = false;
+
+    public LeaderElection(FencedLockManager lockManager) {
+        this.lockManager = lockManager;
+    }
+
+    @Override
+    public void start() {                                         // runs after the lifecycle manager has started the lock manager
         lockManager.acquireLockAsync(
-            LockName.of("service-leader"),
+            LEADER_LOCK,
             new LockCallback() {
                 @Override
                 public void lockAcquired(FencedLock lock) {
@@ -631,9 +721,24 @@ public class LeaderElection {
                 }
             }
         );
+        running = true;
+    }
+
+    @Override
+    public void stop() {                                          // runs before the lock manager stops
+        running = false;
+        lockManager.cancelAsyncLockAcquiring(LEADER_LOCK);        // releases the lock when this instance holds it; without this
+                                                                  // the lock manager's next start() gives the lock to this callback again
+    }
+
+    @Override
+    public boolean isRunning() {
+        return running;
     }
 }
 ```
+
+Why `SmartLifecycle` at the default phase, and not `@PostConstruct`: the starters' `DefaultLifecycleManager` starts every Essentials `Lifecycle` bean not started yet, the lock manager included, in its own `start()` at phase `Integer.MAX_VALUE - 1` (unless it is set to start none of them: `essentials.life-cycles.start-life-cycles=false` under either starter, or `essentials.schema.mode=emit` under `spring-boot-starter-postgresql`), and a `SmartLifecycle` at `SmartLifecycle.DEFAULT_PHASE` (`Integer.MAX_VALUE`) starts after it and stops before it. `@PostConstruct` runs before either, and `spring-boot-starter-postgresql` starts the lock manager when it creates it only in `essentials.schema.mode=create`. So under `spring-boot-starter-postgresql` outside `create`, with the lifecycle manager starting none of them, nothing starts the lock manager and this example elects no leader either: with `start-life-cycles=false`, start the lock manager yourself before this bean starts; in `emit` mode no `Lifecycle` bean is started, by design. An `acquireLockAsync` for a lock name with no registration, made while the lock manager is not started, registers nothing and logs only at DEBUG: no leader is ever elected, and nothing above DEBUG says so. Do not implement Essentials' `Lifecycle` here instead: `DefaultLifecycleManager` starts those beans one after another in the order the application context returns them, so nothing makes this one start after the lock manager.
 
 ### Implementations
 
@@ -882,6 +987,19 @@ commandBus.sendAndDontWait(new SendReminderCommand(customerId), Duration.ofHours
 OrderId result = commandBus.send(new CreateOrderCommand(...));
 ```
 
+### When a queued command's handler throws
+
+The `SendAndDontWaitErrorHandler` decides retry, not rollback (since 0.60.1). The handler's exception first unwinds
+through the interceptors - `UnitOfWorkControllingCommandBusInterceptor` (both Spring Boot starters add it) rolls back
+what the handler wrote, or marks the queue consumer's `UnitOfWork` rollback-only - and the error handler is then called
+once with the handler's own exception. The default `RethrowingSendAndDontWaitErrorHandler` rethrows, so the queue
+redelivers per the `RedeliveryPolicy`; a handler that does not rethrow drops the command, and the message is
+acknowledged with nothing committed. Before 0.60.1 a non-rethrowing error handler committed the handler's partial
+writes. Keep the interceptor when building the bus by hand: without it nothing marks the PostgreSQL queue consumer's
+`UnitOfWork` (which the handler's writes join) rollback-only, so a non-rethrowing error handler still lets it commit.
+Since 0.60.1 `start()` logs one WARN for a bus that has a non-rethrowing error handler and no such interceptor. Details:
+[LLM-reactive.md § When a handler throws](./LLM-reactive.md#when-a-handler-throws-rejections).
+
 ### Commands are persisted
 
 A command sent with `sendAndDontWait` is stored as JSON in the durable-queue table (the command object is the queued
@@ -934,7 +1052,7 @@ component creates its own schema as it is constructed.
 |---|---|
 | `EssentialsSchemaContributor` | `moduleId()`, `order()` (`SchemaOrder` constants), `contribute(SchemaContext)` → `List<SchemaChange>`. Never executes DDL |
 | `DynamicSchemaContributor` | For objects registered at any time (a table per `AggregateType`). `contribute` describes what is registered so far; `attach(SchemaChangeSink)` receives each later registration's changes |
-| `SchemaChange` | `repeatable(changeId, objectName, statements...)` - runs every time, checksum tracked; `once(...)` - runs once per `(module, changeId, objectName)`, edited-after-applied fails startup |
+| `SchemaChange` | `repeatable(changeId, objectName, statements...)` - runs every time, checksum tracked; `once(...)` - runs once per `(module, changeId, objectName)`, edited-after-applied fails startup. `.describedAs("AggregateType 'Orders'")` (0.60.1) labels the object in the emitted script, the emit log line and validate errors - not part of the ledger key or checksum |
 | `SchemaOwnership` | `COMPONENT` (default): the component applies its own schema on construction. `HARNESS`: it leaves it to a harness |
 | `SchemaMode` | `CREATE` / `VALIDATE` / `EMIT` / `EXTERNAL`; `schemaOwnership()` is `COMPONENT` only for `CREATE` |
 | `EssentialsSchemaHarness` | `new EssentialsSchemaHarness(applier, context, contributors).apply()` - orders by `order()` then `moduleId()`, drops a change described identically twice, rejects one described differently |
@@ -976,6 +1094,12 @@ As a Spring bean it is applied with the Essentials ones. Rules that hold everywh
 - `objectName` is a validated identifier and part of the ledger key; for an index change use its table.
 - Keep repeatable changes repeatable: prefer `IF [NOT] EXISTS` over `once(...)`. `once` is for what must not run
   twice (a backfill, a type change); editing a `once` change after release fails startup - ship a new change id.
+- A repeatable index or column on a table running instances write to: wrap the statement in
+  `PostgresqlSchemaStatements.createIndexUnlessPresent(table, index, sql)` / `addColumnUnlessPresent(table, column,
+  sql)`. `CREATE INDEX IF NOT EXISTS` takes SHARE and `ADD COLUMN IF NOT EXISTS` ACCESS EXCLUSIVE on the table *even
+  when it exists*, held until the module's schema transaction commits: every start blocks the writers, and with two
+  tables in one module it can deadlock with them. The wrappers check the catalog first and lock nothing when present.
+  `SchemaReapplyLockProbe` (`foundation-test`) asserts it in an IT.
 - DDL outside a contributor fails the `EssentialsSchemaRules` guard in `foundation-test` - see
   [LLM-foundation-test.md](./LLM-foundation-test.md).
 
@@ -1004,11 +1128,26 @@ String json = serializer.serialize(order);
 byte[] bytes = serializer.serializeAsBytes(order);
 Order order = serializer.deserialize(json, Order.class);
 Object event = serializer.deserialize(json, "com.example.OrderCreatedEvent");
+
+// Without immutable-jackson3's Objenesis fallback (reading only; written JSON identical) (0.60.1)
+tools.jackson.databind.ObjectMapper noImmutable = EssentialsObjectMappers.createJackson3ObjectMapper(false);
+
+// Does a mapper Essentials did not build reproduce the persisted format? (0.60.1) Empty = yes
+List<WireFormatDeviation> deviations = EssentialsObjectMappers.findWireFormatDeviations(someMapper);
 ```
+
+`findWireFormatDeviations` checks behaviour, not configuration: it writes and reads small probe types and compares
+with the 0.50 bytes - field access, getter / `is`-getter visibility, ISO-8601 dates, numeric `Duration`, a missing
+primitive reading as its default, unknown properties ignored, untyped floats as `BigDecimal`, and value types as JSON
+primitives when `types-jackson3` is present. Each `WireFormatDeviation` carries `aspect`, `expected`, `actual`. The
+Spring Boot starters run it on every `Jackson3JSONSerializer`-backed serializer bean (`essentials.json.wire-format-check`,
+[starters](./LLM-spring-boot-starter-modules.md#json-wire-format-check)).
 
 ⚠️ `EssentialsJacksonModules.modules()` (used by `EssentialsObjectMappers`) throws `IllegalStateException` when a
 0.50-era Jackson 2 `types-jackson` / `immutable-jackson` jar is on the classpath (same FQCNs, wrong Jackson major) —
-depend on `types-jackson3` / `immutable-jackson3`.
+depend on `types-jackson3` / `immutable-jackson3`. Since 0.60.1 it also throws when `immutable-jackson3` is present but
+`org.objenesis:objenesis` is not (provided by design, so the application declares it): without it every read of a
+persisted object would fail with `NoClassDefFoundError: org/objenesis/...` after a normal startup.
 
 ⚠️ Under Jackson 3 a constructor parameter **name** is part of the JSON contract. Jackson 3 reads parameter names from
 the bytecode (classes compiled with `-parameters`, and Kotlin) and uses a class's constructor as a properties-based
@@ -1044,6 +1183,38 @@ public DefaultLifecycleManager lifecycleManager() {
     );
 }
 ```
+
+### Run report (startup, runtime, shutdown)
+
+Since 0.60.1. `EssentialsRunReport` (`dk.trustworks.essentials.components.foundation.startup`) collects the findings
+of the Essentials checks so they can be printed as one block at start-up, and again, complete, when the application
+stops. Every check still logs where it runs; it also calls `EssentialsRunReport.addToCurrent(finding)`, which adds
+to the report bound to the **current thread**; when none is bound (after start-up, another thread) to the **run
+report** - the report registered with `registerAsRunReport()` - but only while **exactly one** is registered in the JVM;
+otherwise it does nothing. There is no JVM-wide report (a test JVM runs many contexts at once, so with 0 or 2+
+registered a runtime finding is only logged by its check). The Spring Boot starters create, bind, register and print one
+per context - see [LLM-spring-boot-starter-modules.md § Run Report](LLM-spring-boot-starter-modules.md#run-report).
+Without Spring:
+
+```java
+var report = new EssentialsRunReport();             // keeps 500 distinct findings; new EssentialsRunReport(n) for another cap
+try (var binding = report.bindToCurrentThread()) {     // close on the same thread; bindings nest
+    // build and start the Essentials components
+}
+report.log();   // one block: ERROR if any error finding, WARN if any warning, else INFO "no findings"
+var registration = report.registerAsRunReport();       // later findings, any thread, reach it while it is the only one
+scheduler.scheduleWithFixedDelay(report::logNewFindings, 5, 5, TimeUnit.MINUTES);   // only what was not logged before; nothing if nothing new
+// on shutdown
+report.logRunReport();   // every finding of the run, with count and first/last seen
+registration.close();
+List<EssentialsRunReport.Finding> findings = report.getFindings();       // Finding(severity, source, message, fix)
+List<EssentialsRunReport.Occurrences> seen = report.getOccurrences();     // Occurrences(finding, count, firstSeen, lastSeen)
+```
+
+Identical findings (equal severity, source, message and fix) are kept once, with a count and first/last-seen time.
+Beyond the cap further distinct findings are only counted (`getOverflowCount()`), so a noisy runtime finding cannot
+grow memory. A shutdown log can be lost (SIGTERM followed by a kill, a log shipper already gone) - that is what
+`logNewFindings()` is for.
 
 ### PostgreSQL Utilities
 
@@ -1110,6 +1281,17 @@ MultiTableChangeListener<TableChangeNotification> listener = MultiTableChangeLis
 listener.listenToNotificationsFor("orders", OrderNotification.class);
 listener.start();
 ```
+
+Required: `setJdbi`, `setJsonSerializer`, `setEventBus`. Optional (default): `setPollingInterval` (50 ms), `setFilterDuplicateNotifications` (true), `setChannelDeduplicationPolicy` (`ChannelDeduplicationPolicy.allChannels()`), `setLivenessCheckInterval` (10 s, `Duration.ZERO` disables), `setConnectionLossLogLevel` (WARN), `setConnectionLossLogInterval` (1 min), `setPollThreadName`, `setListenerJdbi(Jdbi)` / `setListenerDataSource(DataSource)` (LISTEN connection outside the app pool). The 5-argument constructor still works.
+
+Behaviour (0.60.1+):
+- Holds one LISTEN connection for as long as it polls, borrowed from `setJdbi`'s pool unless a listener `Jdbi`/`DataSource` is set (starter: `essentials.multi-table-change-listener.dedicated-connection=true`).
+- Probes it with `Connection.isValid()` every liveness interval - catches a half-open socket. A lost connection logs at WARN (rate-limited) and is reopened on the next poll; the new connection re-LISTENs every registered table.
+- Delivery is **at most once**: notifications sent while no connection listens are lost. Treat them as wake-up hints, never as the data.
+- Polling starts in `start()`; `stop()` closes the connection and `start()` resumes. A listener never `start()`ed polls from its first `listenToNotificationsFor`.
+- Channel names are lower-cased (`Locale.ROOT`): `"Orders"` and `"orders"` are the same channel.
+- Duplicates are filtered per channel, only when a `NotificationDuplicationFilter` is registered; a payload with no key (or not JSON) is never dropped as a duplicate.
+- `TableChangeNotification.equals` compares class, table name and operation only - a subclass with state must override `equals`/`hashCode`.
 
 ### MongoDB Utilities
 

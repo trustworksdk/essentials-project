@@ -1,4 +1,4 @@
-schemaVersion: "1.1"
+schemaVersion: "1.4"
 slice: brokerage.close_books_and_open_next_period
 kind: command
 bc: brokerage
@@ -7,6 +7,7 @@ status: live
 summary: Roll a trading account's books - seal the current generation and open the next one.
 generator: essentials
 language: java
+lane: aggregate
 
 handles: [CloseBooksAndOpenNextPeriod]
 publishes: [AccountBooksClosed, TradingAccountOpened]
@@ -27,6 +28,8 @@ invariants:
     enforcedBy: TradingAccount
 forbidden:
   - cross-slice-internal:brokerage
+tier: cqrs-es
+flow: trading-account
 tests:
   unit: { present: false }
   integration: { present: false }

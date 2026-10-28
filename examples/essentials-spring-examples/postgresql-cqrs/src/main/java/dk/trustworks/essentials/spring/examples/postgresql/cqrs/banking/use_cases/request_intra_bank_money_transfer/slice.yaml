@@ -1,4 +1,4 @@
-schemaVersion: "1.1"
+schemaVersion: "1.4"
 slice: banking.request_intra_bank_money_transfer
 kind: command
 bc: banking
@@ -7,6 +7,7 @@ status: live
 summary: Accept a request to move money between two accounts in the same bank.
 generator: essentials
 language: java
+lane: aggregate
 
 handles: [RequestIntraBankMoneyTransfer]
 publishes: [IntraBankMoneyTransferRequested]
@@ -25,6 +26,8 @@ invariants:
     enforcedBy: RequestIntraBankMoneyTransferHandler
 forbidden:
   - cross-slice-internal:banking
+tier: cqrs-es
+flow: money-transfer
 tests:
   unit: { present: false }
   integration: { present: true }

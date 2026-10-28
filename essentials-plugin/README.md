@@ -9,10 +9,12 @@ Claude Code plugin for the **Trustworks Essentials** Java/Kotlin framework.
 - **Stack contract** — `references/stack/` specifies what an Essentials *application* must provide for slice code to run at all, as numbered requirements **S1–S11**: baseline and pins, module selection per persistence profile, the serialization contract (the silent-failure area — the web and persistence mappers, constructor parameter names as a JSON contract), the typed edge, persistence and transactions, contract-first API generation, frontend mode, security posture, testing, and packaging. It is language-neutral; `kotlin-spring-boot.md` and `java-spring-boot.md` carry only the bindings that differ, `frontend-react.md` specifies the **embedded vs standalone** React/TypeScript modes, and `stack-pins.md` is the single place a version number may appear. Where the slice law governs how code inside a bounded context is arranged, this governs the application around it.
 - **`/essentials:init` command** — `AskUserQuestion`-driven project scaffolder. The questions are the model's; the writing is a script's: `scripts/init-render.py` renders a **deterministic** project from the plugin's template tree `references/init-assets/project/`, with the stack contract applied and every version read from `stack-pins.md` — two runs with the same answers give the same bytes, the committed goldens in `tests/golden/init/` show them, and the Essentials repository's CI builds them against the framework. Produces a Spring Boot + **WebFlux or WebMvc** + Maven project in **Kotlin or Java** with an optional React frontend in either integration mode, three DB profiles (PG event-sourced, PG CRUD, MongoDB), optional Docker Compose, an optional slice-manifest lint gate, three wiring tests (a Testcontainers context test per DB profile, a CORS preflight test for a standalone frontend, and a frontend base-URL test), and a customised project `CLAUDE.md` — then lints it against S1–S11, builds it and starts its Spring context before handing it over.
 - **Slice-design capability** — `rules/slice-design.md` is the standalone law for vertical slices: four kinds (command, view, automation, translation), the JVM directory vocabulary, and the R1–R5 anti-god-class rules — including R5's **three** sanctioned write styles, so a codebase has a legal shape in the law whichever it uses: per-slice deciders (the default), one aggregate per bounded context, or a **state-stored entity with no event store at all** — plus a lane-independent **Spring Data repository-surface rule**: repositories extend the bare `Repository` marker rather than `JpaRepository`/`MongoRepository`, read shapes are closed interface projections rather than the entity, and no query method is named after a CRUD base method (`findById` is captured by the base implementation, which silently discards the declared projection type). It depends on no other plugin. `/essentials:add-slice` (plus four per-kind commands) scaffolds a slice's source, `slice.yaml` manifest, per-slice `CLAUDE.md`, test, and Spring wiring from concrete Java **and** Kotlin templates, rendered by `scripts/render-slice.py` and picked from the bounded context's lane — **all three §R5 write styles in Java**, including the aggregate lane, and two in Kotlin; automation and translation slices are scaffolded on the two event-sourced lanes. `/essentials:slice-check` audits a project that already follows the law with lane-conditional gates, the mechanical ones run by `scripts/slice-lint.py` (manifests) and `scripts/slice-source.py` (syntactic facts of the Java and Kotlin sources); and `/essentials:slice-discover` is its brownfield counterpart — it infers bounded contexts and candidate slices from a codebase that does not, ranks findings by payoff, and hands off to `slice-check` once manifests exist.
-- **`/essentials:slice-map` command** — the orientation view for a project already on the law, which neither of the other two provides: `slice-check` audits and `slice-discover` infers, but nothing answered *"what is here, where is X implemented, how does this connect?"*. Built by `scripts/slice-index.py` from every `slice.yaml`, with packages, files, payload keys and read-model columns added by `scripts/slice-source.py` — it never reads a method body for meaning — and derives five sections: contexts with their slices; a **message-flow graph** (commands in → slice → events out → the slices that react, plus the commands an automation dispatches and the external systems a translation slice bridges); the publisher → event → consumer flow indexed by event; write targets (multiple writers on one target called out first) with cross-context reads and their mandatory `via:` reader; and an endpoint → slice index. Prints by default; `--html <file>` renders a single self-contained page where the graph pans, zooms to the cursor, maximises to full screen, isolates a node's one-hop neighbourhood on click, filters by slice kind and message type with one chip each, and dims to the same query box that filters every other view. Hovering any node gives a card with its package, class list, endpoints, messages in and out, invariants and what enforces each, tests, and any divergence flag. `--view graph` prints the same graph as indented chains in the terminal. Stamps the git HEAD SHA, runs eight cheap divergence checks so the map is not fiction, and grades nothing — declared structure is not audited structure.
-- **`/essentials:upgrade` command** — the other half of `init`, and the thing `init` never does: bring an **existing** project up to what the installed plugin ships. It is an audit that offers repairs, not a regeneration — it never diffs the project against the template tree `init` renders from (a project diverges from its render the day work starts), so every finding is derived from the project's own files plus the current stack contract, the decidable half by `scripts/stack-lint.py`. Three groups: the two files that leave the plugin (the slice-rules pointer, and the slice-manifest lint gate — **installed here** when the project predates it, which is the case `/essentials:slice-check` gate 12 structurally cannot see); the orientation files (the `CLAUDE.md` framework-knowledge block, the workspace pointer, the version stamp); and conformance against **S1–S11**, led by the S2.1 set — the requirements that compile cleanly and then kill context startup under a message naming nothing relevant. Reports everything before writing anything, offers each fix individually, and re-runs the context-start check when it changed a dependency or a config class. `--check` is a report-only dry run. It never regenerates a skeleton, never edits slice source, never re-asks the init questions, and **never moves a version pin** — a pin move is an upgrade decision that wants an ADR, not a side effect of catching up — except a Kotlin compiler too old for the project's own Java baseline, which does not compile. It reads the project's own Essentials version and keeps apart, as applying with the Essentials upgrade, every finding whose fix would break an application still on its older release.
+- **`/essentials:slice-map` command** — the orientation view for a project already on the law, which neither of the other two provides: `slice-check` audits and `slice-discover` infers, but nothing answered *"what is here, where is X implemented, how does this connect?"*. Built by `scripts/slice-index.py` from every `slice.yaml`, with packages, files, payload keys and read-model columns added by `scripts/slice-source.py` — it never reads a method body for meaning — and derives five sections: contexts with their slices; a **message-flow graph** (commands in → slice → events out → the slices that react, plus the commands an automation dispatches and the external systems a translation slice bridges); the publisher → event → consumer flow indexed by event; write targets (multiple writers on one target called out first) with cross-context reads and their mandatory `via:` reader; and an endpoint → slice index. Prints by default; `--view graph` prints the same graph as indented chains in the terminal. Stamps the git HEAD SHA, runs a closed set of cheap checks — eight divergence checks so the map is not fiction, plus the completeness and scenario checks — and grades nothing — declared structure is not audited structure.
+- **`/essentials:slice-map-html` command** — the same map as a page: the Slice Atlas, one self-contained HTML file written by `scripts/slice-index.py atlas`. Five lenses: the Atlas (semantic zoom from contexts to journeys to an Event Modeling board per journey, with each slice's given / when / then scenarios at the deepest level), Diff against a git baseline (the merge base with the default branch on a feature branch), field Lineage, a Coupling matrix and a Metro map — plus an issues dock that flies to each issue, search, and the whole view in the URL hash. Journeys come from the optional manifest field `flow:` or are derived from cause and effect; scenarios from `scenarios:` (schema 1.4). Everything is computed in Python, so the page is identical on every run and CI can publish it with no model involved. A map with unparsed manifests is still written, each one a red error card. A folder holding several applications (each with its own build file) gets one page per application plus an index page (`--per-app`), because slice ids are only unique within one application.
+- **`/essentials:slice-enrich` command** — catches existing `slice.yaml` manifests up on the human-owned fields they lack (`flow`, `scenarios`, `summary`, `invariants`, `tier`, and `consistency`, `featureFlag` and `maps` where the code evidences them). `scripts/slice-enrich.py` finds the evidence, the model drafts only from it, you accept per journey and per slice, and the script writes only absent fields. `--dry-run` writes nothing.
+- **`/essentials:upgrade` command** — the other half of `init`, and the thing `init` never does: bring an **existing** project up to what the installed plugin ships. It is an audit that offers repairs, not a regeneration — it never diffs the project against the template tree `init` renders from (a project diverges from its render the day work starts), so every finding is derived from the project's own files plus the current stack contract, the decidable half by `scripts/stack-lint.py`. Four groups: the two files that leave the plugin (the slice-rules pointer, and the slice-manifest lint gate — **installed here** when the project predates it, which is the case `/essentials:slice-check` gate 12 structurally cannot see, activated when git never runs it, and refreshed only after measuring what the newer copy would add to the project's hook and CI); the orientation files (the `CLAUDE.md` framework-knowledge block, the workspace pointer, the version stamp); conformance against **S1–S11**, led by the S2.1 set — the requirements that compile cleanly and then kill context startup under a message naming nothing relevant; and, for a project on an older Essentials release, **the Essentials upgrade**. That move is planned by `scripts/migration-plan.py` from the release's migration notes, approved as a decision note (the ADR, printed or written where you say), and applied on an `essentials-<version>` branch in the release's order: `essentials.version` and only the platform pins the release requires, the findings that hold only on the new release, the API migrations the scripts and then the compiler pin down — call site by call site, each confirmed, in slice source too but never structurally — each step verified and the whole move gated by the project's full build. Behaviour changes no compiler sees come back as a checklist, never applied. Reports everything before writing anything and offers each fix individually. `--check` is a report-only dry run that prints the whole plan. It never regenerates a skeleton, never restructures slice source, never re-asks the init questions, and **never moves a pin the release does not require** — except a Kotlin compiler too old for the project's own Java baseline, which does not compile, and, offered one at a time, the floors the Essentials build itself runs on: the Spring Boot patch within the project's line, the Kotlin compiler and the Maven wrapper's Maven. It also warns against overriding Jackson 3 to a newer minor than Spring Boot manages.
 - **`/essentials:review` command** — review a change — the current branch, a ref, a pull request by number, or a path — against the traps index (`LLM-traps.md`), the stack contract and the slice law. The deterministic half runs as scripts (`review-scan.py` for trap signatures in the added lines, `stack-lint.py`, `slice-lint.py`, `slice-source.py`); the model judges only what they cannot see. Every finding carries an id with a link to the section that owns it: `ESS-NNN` for a trap, `ESS-S<n>` for a stack requirement, `ESS-G<gate>` for a slice-law gate. Findings the change did not introduce are counted, not listed. Reports by default; `--fix` applies the mechanical fixes the scripts describe, one at a time, each confirmed.
-- **`/essentials:doctor` command** — checks this machine for the tools the commands run (Requirements, below) and says what each missing one costs: a command that stops, a gate that is not run, a compile-only smoke build, a slower fallback. `scripts/doctor.sh` does the probing, for one command's profile (`init`, `review`, `slice`, `docs`) or all of them; it is bash, because the first thing it detects is a missing Python, and `init`, `review`, `slice-check` and `slice-map` run it as their preflight. Explains each gap with an install hint for the OS; installs nothing.
+- **`/essentials:doctor` command** — checks this machine for the tools the commands run (Requirements, below) and says what each missing one costs: a command that stops, a gate that is not run, a compile-only smoke build, a slower fallback. `scripts/doctor.sh` does the probing, for one command's profile (`init`, `review`, `slice`, `docs`) or all of them; it is bash, because the first thing it detects is a missing Python, and `init`, `review`, `slice-check`, `slice-map`, `slice-map-html` and `slice-enrich` run it as their preflight. Explains each gap with an install hint for the OS; installs nothing.
 - **`/essentials:intro` command** — read-only orientation. Detects whether the current repository already uses Essentials, then prints the docs skill, `/essentials:init` and what it sets up, the framework's core principles, and what is deliberately absent. Runs no build and scaffolds nothing.
 
 ## Install
@@ -36,8 +38,9 @@ default — turn it on in the `/plugin` Marketplaces tab, or refresh with
 Run `/essentials:doctor` to check them on this machine: it lists each one with the version found and what a missing one costs.
 
 - **Python 3.11 or newer** for every command that runs a script. The deterministic checks are scripts, and a command without them stops or marks its gates not run rather than guessing.
-- **[`uv`](https://docs.astral.sh/uv/)** for the scripts that need `pyyaml` or `jsonschema` (`slice-lint.py`, `slice-source.py`, `slice-index.py`). Each pins its dependencies in PEP 723 inline metadata, and the commands run them with `uv run --script`, which installs exactly those versions. Without `uv`, `python3 <script>` works where those packages are already installed (or `pipx run <script>`, which reads the same metadata). `init-render.py`, `render-slice.py`, `slice-law.py`, `stack-lint.py`, `review-scan.py` and `check-citations.py` are standard library only.
+- **[`uv`](https://docs.astral.sh/uv/)** for the scripts that need `pyyaml` or `jsonschema` (`slice-lint.py`, `slice-source.py`, `slice-index.py`, `slice-enrich.py`). Each pins its dependencies in PEP 723 inline metadata, and the commands run them with `uv run --script`, which installs exactly those versions. Without `uv`, `python3 <script>` works where those packages are already installed (or `pipx run <script>`, which reads the same metadata). `init-render.py`, `init-report.py`, `render-slice.py`, `slice-law.py`, `stack-lint.py`, `review-scan.py`, `migration-plan.py` and `check-citations.py` are standard library only.
 - **For `/essentials:init`'s smoke build:** the JDK `references/stack/stack-pins.md` pins, Maven, and Docker (without Docker the result is compile-only and says so); `npm` to check a frontend.
+- **For `/essentials:upgrade`'s Essentials upgrade:** git (it works on its own branch), the pinned JDK, Maven and Docker — its gate starts the Spring context, so without Docker it does not start; `--check` needs none of them.
 - **git for `/essentials:review`'s base-ref and `--pr` modes.** Outside a git repository only `<path>` mode works.
 
 ## Usage
@@ -52,7 +55,7 @@ Prints what the plugin offers and what `/essentials:init` sets up. Read-only.
 
 ```
 /essentials:doctor            # every requirement below, and what each missing one costs
-/essentials:doctor slice      # only what add-slice, slice-check and slice-map run (also: init, review, docs)
+/essentials:doctor slice      # only what add-slice, slice-check, slice-map, slice-map-html and slice-enrich run (also: init, review, docs)
 ```
 
 Checks the tools the commands run (§ Requirements). Read-only; it suggests installs and never runs one.
@@ -99,10 +102,11 @@ In a project that is on the slice law, `essentials-change` picks this up, says w
 /essentials:slice-map --bc orders          # one bounded context
 /essentials:slice-map --view graph         # just the message chains
 /essentials:slice-map --view endpoints     # just the endpoint → slice index
-/essentials:slice-map --html target/map.html
+/essentials:slice-map-html                 # the Slice Atlas page; asks where to write it
+/essentials:slice-enrich --dry-run         # draft flows and scenarios for older manifests; writes nothing
 ```
 
-Built from the `slice.yaml` manifests, so it is fast on a large project and complete on a small one. `--html` writes a self-contained page — no server, no CDN, works from `file://` — to a path **you** name; the command suggests `target/` (already git-ignored) for the throwaway case and asks before writing. Read-only always: it reports manifest drift and repairs none of it.
+Built from the `slice.yaml` manifests, so it is fast on a large project and complete on a small one. `/essentials:slice-map-html` writes a self-contained page — no server, no CDN, works from `file://` — to a path **you** agree to; it suggests `target/` (already git-ignored) and asks before writing. On a feature branch its Diff lens shows what the branch changed. Read-only always: both report manifest drift and repair none of it.
 
 ### Reviewing a change
 
@@ -134,6 +138,8 @@ The command interactively asks for:
 
 Then `scripts/init-render.py` renders the project from those answers: the contract's S1–S11 applied (dependencies, compiler configuration, the config classes, the contract-first OpenAPI pipeline with a seed `contracts/openapi.json`, the frontend mode), the slice-rules pointer, the wiring tests, and a project `CLAUDE.md` with a strong directive pointing future Claude sessions back to this plugin's `essentials-docs` skill. A `CLAUDE.md` or `README.md` you already have is merged, overwritten or kept, as you choose (merge is the default). The Maven wrapper is generated with pinned versions.
 
+Another plugin's agent can drive it: `--preset <file>` answers some of the questions up front (a bad value is asked as if absent, never a reason to stop) and `--report <file>` writes a JSON report of what was rendered, or where the command stopped. Run by hand with no arguments, it asks every question.
+
 **Then it lints the result with `scripts/stack-lint.py`, builds it, and starts the Spring context.** That last part is the point: the contract's most expensive requirements — above all the starters' non-transitive framework dependencies (S2.1) — compile cleanly and fail at context startup. A scaffold that has only been compiled has not been checked. After that, `mvn verify` regenerates `contracts/openapi.json`; commit it, because the frontend build reads the committed copy.
 
 **No example bounded context is scaffolded.** The generated project gets an empty package and a pointer to `/essentials:add-slice`, which emits a slice matching the project's actual lane. The worked `orders` context at `tests/fixtures/worked-example/` is this plugin's own test fixture, not user-facing content. The generated `CLAUDE.md` carries **"Slicing & anti-god-class rules"** and **"When to write PBT"** sections.
@@ -143,15 +149,17 @@ Then `scripts/init-render.py` renders the project from those answers: the contra
 ### Catching an existing project up with the plugin
 
 ```
-/essentials:upgrade --check      # report only — writes nothing, asks nothing
-/essentials:upgrade              # report, then offer each fix individually
+/essentials:upgrade --check      # report only, the whole Essentials upgrade plan included — writes nothing, asks nothing
+/essentials:upgrade              # report, offer each fix individually, then the Essentials upgrade when the project is behind
 ```
 
-`/essentials:init` runs once and nothing afterwards pulls plugin changes into the project: the two copied files go stale, capabilities added later (the slice-manifest lint gate) are never offered, and a project created before a contract requirement existed stays silently non-conformant. `/essentials:upgrade` is the only thing that closes that gap.
+`/essentials:init` runs once and nothing afterwards pulls plugin changes into the project: the two copied files go stale, capabilities added later (the slice-manifest lint gate) are never offered, a project created before a contract requirement existed stays silently non-conformant, and the project stays on its Essentials release while the plugin moves on. `/essentials:upgrade` is the only thing that closes that gap.
 
-It reports in three groups — plugin copies, orientation files, and S1–S11 conformance (`scripts/stack-lint.py`'s findings plus the checks that need judgement) — with `slice-check`'s severity vocabulary (Blocking / Should-fix / Advisory), then offers each fix on its own with Apply / Skip / Show me first. When it changes a dependency, a compiler flag or a config class, it re-runs the context-start check, because that is precisely the class of edit that compiles and then fails at startup. It is **idempotent**: a second run right after a first reports nothing to do.
+It reports in four groups — plugin copies, orientation files, S1–S11 conformance (`scripts/stack-lint.py`'s findings plus the checks that need judgement), and, on an older Essentials release, the upgrade plan — with `slice-check`'s severity vocabulary (Blocking / Should-fix / Advisory), then offers each fix on its own with Apply / Skip / Show me first. When it changes a dependency, a compiler flag or a config class, it re-runs the context-start check, because that is precisely the class of edit that compiles and then fails at startup. It is **idempotent**: a second run right after a first reports nothing to do.
 
-Out of scope by design: slice source (that is `/essentials:slice-check`), the skeleton, the init questions, and **version pins** — catching up with the plugin is not the same decision as moving onto a new Spring Boot or Essentials version, and the second one wants an ADR.
+**Moving to the plugin's Essentials release** needs a clean working tree and Docker. The command prints a decision note — the pins it moves (Essentials or platform) with the reason the release gives for each, the findings it closes, the code migrations and their risks, and the checklist of behaviour changes — and your approval of it is the first confirmation; write it to a path of your choosing, such as the project's `docs/adr/`, and it is the ADR. One question then moves the pins (Move all / Stop / Show impact), and the command creates an `essentials-<version>` branch, asks once whether to commit each step, and works through the release's steps, each verified, ending with the project's full build. A failure names the step that broke and offers to revert it; the branch stays, and the branch you started from is untouched.
+
+Out of scope by design: slice structure (that is `/essentials:slice-check`; the upgrade edits slice source only at a call site the release's API change breaks), the skeleton, the init questions, and **pins the release does not require** — catching up with the plugin is not the same decision as moving onto a newer Spring Boot or library version.
 
 ## Layout
 
@@ -162,6 +170,8 @@ essentials-plugin/
 ├── CHANGELOG.md
 ├── CLAUDE.md                    (maintainer instructions: what moves together, the invariants,
 │                                 the pre-commit checks and the release checklist)
+├── capabilities.json            (what another plugin's agent may drive, read statically; the
+│                                 contract is references/sdd-contract.md)
 ├── rules/
 │   └── slice-design.md          (THE SLICE LAW — standalone, cited never restated; its sections
 │                                 carry lane / kind / store scope lines for slice-law.py)
@@ -172,26 +182,39 @@ essentials-plugin/
 │   ├── essentials-view-slice/
 │   ├── essentials-automation-slice/
 │   └── essentials-translation-slice/
-├── commands/                    (13: init, upgrade, intro, doctor, review, add-slice, 4 per-kind,
-│                                 slice-check, slice-discover, slice-map)
+├── commands/                    (15: init, upgrade, intro, doctor, review, add-slice, 4 per-kind,
+│                                 slice-check, slice-discover, slice-enrich, slice-map, slice-map-html)
 ├── scripts/                     (the deterministic half of the commands. Python 3.11+; the three
 │   │                             needing pyyaml/jsonschema pin them in PEP 723 metadata for
 │   │                             `uv run --script`. Exit 0 clean / 1 findings / 2 could not run;
 │   │                             each --help says more)
 │   ├── init-render.py           (/essentials:init's renderer: answers → project, byte-reproducible;
 │   │                             goldens in tests/golden/init/)
+│   ├── init-report.py           (/essentials:init --preset / --report: which preset keys are usable,
+│   │                             and the report another plugin reads; value sets from init-render.py)
 │   ├── render-slice.py          (deterministic slice rendering + wiring for the kind skills;
 │   │                             goldens in tests/slice-golden/)
 │   ├── slice-lint.py            (manifest parse / schema / sole-ownership / tier lint — gates 1, 3,
 │   │                             4 and 14 tier for slice-check; the copy /essentials:init and
 │   │                             /essentials:upgrade install into a project as a CI / pre-commit gate)
-│   ├── slice-source.py          (syntactic facts from Java/Kotlin sources; --check backs
-│   │                             slice-check gates 6, 11(b), 14)
-│   ├── slice-index.py           (slice-map's data, terminal graph, locate queries and HTML page)
+│   ├── slice-source.py          (syntactic facts from Java/Kotlin sources and the test index;
+│   │                             --check backs slice-check gates 6, 11(b), 14)
+│   ├── slice-index.py           (slice-map's data, the Atlas page (atlas), terminal graph, locate
+│   │                             queries and the html page)
+│   ├── slice_atlas.py           (the Atlas data: journeys, issues, lineage, diff, page assembly;
+│   │                             imported by slice-index.py, no CLI)
+│   ├── slice_atlas_layout.py    (the Atlas coordinates for every lens: board, metro, matrix;
+│   │                             imported by slice-index.py, no CLI)
+│   ├── slice-enrich.py          (/essentials:slice-enrich: propose drafts absent human-owned fields
+│   │                             from evidence; apply writes the accepted ones, absent fields only;
+│   │                             goldens in tests/slice-enrich/)
 │   ├── slice-law.py             (prints the slice law's sections for one lane, kind and project —
 │   │                             how the slice skills load it; --check holds the byte budgets)
 │   ├── stack-lint.py            (the decidable half of S1–S11: ESS-S findings with fix descriptors)
-│   ├── review-scan.py           (trap signatures in a diff's added lines: ESS-NNN findings)
+│   ├── review-scan.py           (trap signatures in a diff's added lines: ESS-NNN findings;
+│   │                             --tree scans a whole tree)
+│   ├── migration-plan.py        (the ordered release-move plan for a project, from
+│   │                             references/stack/migrations/: pins, steps, findings, checklist)
 │   ├── doctor.sh                (bash, not Python: which required tools are here and what each
 │   │                             missing one costs, per command profile; --json for scripts)
 │   └── check-citations.py       (plugin lint: a pin or S-requirement restated outside
@@ -205,13 +228,18 @@ essentials-plugin/
 │   ├── design/                  (essentials-design.md — the design guide: aggregate
 │   │                             boundaries, event design, error handling, anti-patterns)
 │   ├── stack/                   (the application stack contract S1-S11 + Kotlin/Java bindings,
-│   │                             the embedded-vs-standalone frontend spec, and stack-pins.md)
+│   │                             the embedded-vs-standalone frontend spec, stack-pins.md, and
+│   │                             migrations/ — release-move notes: order, pin names, ids, citations)
 │   ├── slice/                   (slice-model.md, slice-authoring.md, change-procedure.md,
 │   │                             manifest-guide.md, manifest-reconciliation.md, api-provenance.md,
 │   │                             discovery-heuristics.md, slice-yaml.schema.json,
-│   │                             slice-map-template.html, and templates/{java,kotlin}/ — the
-│   │                             slice templates across the decider, aggregate and
-│   │                             service-entity lanes)
+│   │                             slice-map-template.html, atlas/ — the Slice Atlas page (atlas.html
+│   │                             and one lens-<n>-<id>.js per lens, inlined by slice-index.py atlas),
+│   │                             and templates/{java,kotlin}/ — the slice templates across the
+│   │                             decider, aggregate and service-entity lanes — with
+│   │                             templates/behaviours.json, what each family's code already does)
+│   ├── sdd-contract.md          (the entry points another plugin's agent drives: render-slice.py
+│   │                             render interface 1, init --preset/--report, the project marks)
 │   └── init-assets/project/     (the /essentials:init template tree + manifest.json, rendered by
 │                                 scripts/init-render.py; versions come only from stack-pins.md)
 ├── tests/                       (the maintainers' expected results; nothing here reaches a project)
@@ -221,10 +249,17 @@ essentials-plugin/
 │   │                             decider-lane orders context, the "already has manifests" case;
 │   │                             service-entity; aggregate-lane; multi-lane — gate 14's
 │   │                             multi-lane branch; brownfield-layered — the slice-discover
-│   │                             input; slice-map — the page renderer's data and render-check.py;
-│   │                             change-router — the change router's cases. Only service-entity,
-│   │                             brownfield-layered and change-router/essentials-not-on-law carry
-│   │                             a pom.xml, so the commands can detect the stack from it; the
+│   │                             input; slice-map — the html page's data and render-check.py,
+│   │                             which also renders the Atlas pages; atlas — the Slice Atlas
+│   │                             input (three contexts, two journeys, scenarios, Java and JUnit
+│   │                             stubs, one unparseable manifest); atlas-multi — two applications
+│   │                             sharing slice ids, for the per-application pages; enrich — the
+│   │                             slice-enrich input (manifests lacking the human-owned fields,
+│   │                             evidence and traps in sources and tests); slice-atlas — sample.json, a
+│   │                             hand-written Atlas data + layout sample; change-router — the
+│   │                             change router's cases. Only service-entity,
+│   │                             brownfield-layered, atlas-multi and change-router/essentials-not-on-law
+│   │                             carry a pom.xml, so the commands can detect the stack from it; the
 │   │                             first and last pin no dependency version, and brownfield-layered's
 │   │                             Spring Boot 3 parent is part of the legacy code it models)
 │   ├── golden/init/             (the nine answer cells as rendered .tree goldens, and the six
@@ -232,13 +267,15 @@ essentials-plugin/
 │   ├── init-overlay/            (CI-only wiring tests added to the nine cells)
 │   ├── slice-golden/            (rendered slice compositions, byte-diffed by render-slice.py check)
 │   ├── slice-compile/           (which composition or fixture builds on which host; the two-BC
-│   │                             boot test)
-│   ├── slice-source/, slice-index/, slice-law/, stack-lint/
+│   │                             boot test; the behaviour checks of behaviours.json)
+│   ├── slice-source/, slice-index/, slice-atlas-layout/, slice-enrich/, slice-law/, stack-lint/
 │   │                            (each script's cases and goldens)
 │   ├── review/                  (review-scan's signature diffs; judgement patches over two fixtures)
+│   ├── migration-plan/          (sample projects and their golden plans)
 │   ├── citations/               (check-citations --self-test input)
-│   └── scripts/                 (the unittest suites: slice-lint, render-slice, slice-source,
-│                                 slice-index, slice-law, review-scan, search.sh, doctor.sh)
+│   └── scripts/                 (the unittest suites: slice-lint, the init pre-commit hook,
+│                                 render-slice, slice-source, slice-index, slice-atlas,
+│                                 slice-atlas-layout, slice-enrich, slice-law, review-scan, search.sh, doctor.sh)
 └── evals/                       (claude plugin eval suite for the model-judgement steps —
                                   maintainer, before release; see evals/README.md)
 ```

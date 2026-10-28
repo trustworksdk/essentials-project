@@ -1,6 +1,6 @@
 # Shared - LLM Reference
 
-> Zero-dependency utilities and functional primitives for Java 25+. See [README.md](https://github.com/trustworksdk/essentials-project/blob/0.60.0/shared/README.md) for detailed explanations.
+> Zero-dependency utilities and functional primitives for Java 25+. See [README.md](https://github.com/trustworksdk/essentials-project/blob/0.60.1/shared/README.md) for detailed explanations.
 
 ## TOC
 - [Quick Facts](#quick-facts)
@@ -80,6 +80,12 @@ Throwable getRootCause(Throwable e)
 boolean doesStackTraceContainExceptionOfType(Throwable e, Class<?> exceptionType)
 boolean isCriticalError(Throwable t)
 <T extends Throwable> void rethrowIfCriticalError(T t)
+String ROOT_CAUSE_PREFIX                                    // "Root cause: " (since 0.60.1)
+String prependRootCauseSummary(Throwable t, String description)                                   // since 0.60.1
+<T> void forEachThenThrowFirst(Iterable<? extends T> items, Consumer<? super T> action)            // since 0.60.1
+<T> Throwable forEachCollectingFailures(Iterable<? extends T> items, Consumer<? super T> action,
+                                        Throwable failure)                                         // since 0.60.1
+void addSuppressedOnce(Throwable holder, Throwable suppressed)                                    // since 0.60.1
 
 // Usage - Root cause
 Throwable root = Exceptions.getRootCause(e);
@@ -96,7 +102,30 @@ try {
     Exceptions.rethrowIfCriticalError(t);  // Rethrows if VirtualMachineError/ThreadDeath/LinkageError
     // Handle recoverable
 }
+
+// Lead a stored/logged description of a wrapped exception with its root cause
+String text = Exceptions.prependRootCauseSummary(e, Exceptions.getStackTrace(e));
+// "Root cause: java.sql.SQLException: <message>" + line separator + text; text unchanged when e has no cause
+
+// Fan one operation out over independent parts (List<Lifecycle> parts): stop every part, even when an earlier
+// stop throws, then throw the first failure as it was thrown, every later distinct one added to it as suppressed
+Exceptions.forEachThenThrowFirst(parts, Lifecycle::stop);
+
+// Undo a failed start: stop every part, adding each stop's failure to the start's failure, then throw that
+try {
+    parts.forEach(Lifecycle::start);
+} catch (Throwable e) {                    // Throwable: a checked exception thrown sneakily (Kotlin) is undone too
+    Exceptions.rethrowIfCriticalError(e);
+    Exceptions.forEachCollectingFailures(parts, Lifecycle::stop, e);  // returns e
+    throw e;
+}
 ```
+
+- `forEachThenThrowFirst` / `forEachCollectingFailures` collect a `RuntimeException`, a non-critical `Error` (an `AssertionError`, say) and a checked exception the action throws without declaring it (`sneakyThrow`, or from Kotlin) alike. A critical error (`isCriticalError`) is rethrown at once, the items after it not run, with the failure collected so far added to it as suppressed.
+- A failure is added once, by identity: an instance thrown for several items, or one the failure already carries as suppressed, is not added again.
+- `addSuppressedOnce(holder, suppressed)` is that rule on its own, for a cleanup loop of your own: it adds `suppressed` unless it is `holder` itself (where `Throwable.addSuppressed` throws `IllegalArgumentException`) or `holder` already carries it, both by identity.
+- `forEachCollectingFailures` returns `failure` when it is not null, else the action's first failure (later ones suppressed on it), else null - it does not throw the action's non-critical failures, so the caller throws the result with its own type.
+- The root-cause summary is the root cause's `toString()` verbatim, so it spans several lines when that message does (PostgreSQL `Detail:` / `Where:` lines): do not take only the first line as the whole root cause.
 
 ### Lifecycle
 
@@ -834,6 +863,53 @@ ExecutorService executor = Executors.newScheduledThreadPool(10,
 );
 ```
 
+### Locks
+
+**Class**: `dk.trustworks.essentials.shared.concurrent.Locks`
+
+```java
+import dk.trustworks.essentials.shared.concurrent.Locks;
+
+// API
+static void lockWarningOnce(Lock lock, Duration warnAfter, BooleanSupplier warn)
+
+// Usage: wait for the lock as long as it takes, but say so once
+Locks.lockWarningOnce(lifecycleLock, Duration.ofSeconds(2), () -> {
+    log.warn("Still waiting to start after {}: a stop is still running", Duration.ofSeconds(2));
+    return true;   // warned - never called again
+});
+try {
+    // ...
+} finally {
+    lifecycleLock.unlock();
+}
+```
+
+- Waits like `ReentrantLock.lock()`: an interrupt does not end the wait; it is deferred and set on the thread again once the lock is held. After `warn` has returned `true` that is the lock's own `lock()` doing it: every `java.util.concurrent.locks` lock (and `StampedLock`'s views) does; the `Lock` interface does not promise it.
+- `warn` is called on the waiting thread once `warnAfter` has passed without the lock, then after each further `warnAfter` until it returns `true` (return `false` when there is nothing to say yet). An interrupt does not restart the `warnAfter` it falls in.
+- Fair locks: until `warn` has returned `true` the wait is a timed `tryLock` per `warnAfter`, and each one that runs out gives up the thread's place in a fair lock's queue. Once `warn` has returned `true` the wait is `lock.lock()` itself and keeps its place.
+- An exception from `warn` escapes, the lock not taken, the interrupt set again.
+
+```java
+// API
+static boolean tryLockDeferringPendingInterrupt(Lock lock, Duration wait)
+
+// Usage: take the lock a few milliseconds at a time, looking at who holds it between tries
+while (!Locks.tryLockDeferringPendingInterrupt(lifecycleLock, Duration.ofMillis(10))) {
+    // read the holder again; maybe hand the work to it and return
+}
+try {
+    // ...
+} finally {
+    lifecycleLock.unlock();
+}
+```
+
+- A timed `tryLock` of up to `wait` (zero: one try, honouring a fair lock's queue); `true` = the lock is held, the caller unlocks it.
+- An interrupt pending on entry is cleared for the wait: it does not cut the wait short, and a free lock is taken (a plain timed `tryLock` throws at once on a pending interrupt, free lock or not).
+- An interrupt arriving during the wait ends it — for a lock whose timed `tryLock` can be interrupted, as every `java.util.concurrent.locks` lock's (and `StampedLock`'s views') can; the `Lock` interface does not promise it: `false`, the lock not taken.
+- Either way the interrupt is set on the thread again before it returns. `wait` must not be negative; one too long to count in nanoseconds waits `Long.MAX_VALUE` ns.
+
 ---
 
 ## Messages
@@ -953,6 +1029,7 @@ static String hostName()  // Get local hostname
 | FailFast | Thread-safe (stateless) |
 | Exceptions | Thread-safe (stateless) |
 | MessageFormatter | Thread-safe (stateless) |
+| Locks | Thread-safe (stateless) |
 | Reflector | Thread-safe (concurrent caching) |
 | Tuple types | Thread-safe (immutable) |
 | Either | Thread-safe (immutable) |
@@ -980,7 +1057,7 @@ static String hostName()  // Get local hostname
 
 ## See Also
 
-- [README.md](https://github.com/trustworksdk/essentials-project/blob/0.60.0/shared/README.md) - Full human-friendly documentation
+- [README.md](https://github.com/trustworksdk/essentials-project/blob/0.60.1/shared/README.md) - Full human-friendly documentation
 - [LLM-types.md](./LLM-types.md) - Semantic types built on shared utilities
 - [LLM-reactive.md](./LLM-reactive.md) - LocalEventBus and LocalCommandBus
 - [LLM-foundation.md](./LLM-foundation.md) - UnitOfWork, FencedLock, DurableQueues

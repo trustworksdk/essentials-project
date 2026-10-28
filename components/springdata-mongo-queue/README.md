@@ -296,4 +296,4 @@ See [Foundation - DurableQueues](../foundation/README.md#durablequeues-messaging
 | **Notifications** | Change Streams | LISTEN/NOTIFY |
 | **Locking** | `findAndModify()` | `FOR UPDATE SKIP LOCKED` |
 | **Polling** | Per-consumer threads | Centralized or per-consumer |
-| **Requirements** | MongoDB 4.0+ (replica set) | PostgreSQL 9.5+ |
+| **Requirements** | MongoDB 4.0+ (replica set) | PostgreSQL 15+ |
